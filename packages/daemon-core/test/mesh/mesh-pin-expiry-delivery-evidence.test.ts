@@ -45,7 +45,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 import { notifyCoordinatorOfActionableSkip } from '../../src/mesh/mesh-skip-notify.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask } from '../../src/mesh/mesh-work-queue.js'
 import { createSessionDelivery, updateSessionDeliveryStatus } from '../../src/mesh/mesh-delivery-policy.js'
-import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
+import { drainPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
 
 const NODE_ID = 'node_pin_evidence'
 const SESSION_ID = 'sess-pinned-worker'

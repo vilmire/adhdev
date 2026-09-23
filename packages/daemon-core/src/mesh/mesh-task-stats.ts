@@ -8,12 +8,20 @@
  * estimated numbers.
  */
 
-// Stage 4A roster entry 1: this tail read is served from the seqscribe replica
-// when the mesh passes the readiness gate, and from the ledger otherwise. The
-// read is lossless either way — every field below (kind, timestamp, taskId) is
-// a projected field. See mesh-read-model-consumers.ts for the argument.
-import { readTaskStatsEntries, type ProjectedLedgerView } from './mesh-read-model-consumers.js';
+// C3 `own` read (wiring-unification C-W3): the coordinator owns every attempt
+// it dispatched, so task lifecycle comes from this daemon's own writer on the
+// topic index (task_dispatched records) plus the turn tables (terminals).
+import { meshTopicIndexFor, readOwnTaskLifecycle, type MeshIndexView } from './mesh-topic-index.js';
+import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { meshPublisherWriterId } from '../seqscribe/mesh-publisher.js';
 import { getQueue } from './mesh-work-queue.js';
+
+type ProjectedLedgerView = MeshIndexView;
+
+function readTaskStatsEntries(meshId: string, tail: number): ProjectedLedgerView[] {
+    const store = MeshRuntimeStore.getInstance();
+    return readOwnTaskLifecycle(meshTopicIndexFor(store.db), store.turnStore(), meshId, { ownWriter: meshPublisherWriterId(), tail });
+}
 
 export interface MeshTaskStats {
     taskId: string;

@@ -45,7 +45,7 @@ import {
 import { __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { newMeshGraphOutboxId } from '../../src/mesh/mesh-graph-types.js';
-import { buildPendingEventFingerprint } from '../../src/mesh/mesh-events-pending.js';
+import { defaultNoticeEventId } from '../../src/mesh/turn-ledger/deliver.js';
 
 function meshId(tag: string): string {
     return `mesh_gatenotify_${tag}_${randomUUID().slice(0, 8)}`;
@@ -143,19 +143,22 @@ describe('mesh graph gate notify', () => {
         expect(drainMeshGraphOutbox(mesh)).toBe(0);
     });
 
-    it('fingerprints gate pages per gateId, never per mesh', () => {
+    it('dedupes gate pages per gateId, never per mesh (the notice eventId)', () => {
+        // C-W3: the pending-event fingerprint is gone; a notice dedupes on its
+        // eventId (the turn_events PK). The default id hashes gateId in.
         const mesh = meshId('fingerprint');
+        const at = Date.now();
         const pageFor = (gateId: string) => ({
             event: 'mesh:graph_gate_awaiting',
             meshId: mesh,
             nodeLabel: 'land',
             metadataEvent: { source: 'mesh_graph_outbox', taskId: gateId, gateId },
-            queuedAt: Date.now(),
+            queuedAt: at,
         });
-        const a = buildPendingEventFingerprint(pageFor('gate-a') as any);
-        const b = buildPendingEventFingerprint(pageFor('gate-b') as any);
+        const a = defaultNoticeEventId(pageFor('gate-a'), at);
+        const b = defaultNoticeEventId(pageFor('gate-b'), at);
         expect(a).not.toBe(b);
-        // Same gate paged twice while undrained collapses to one slot.
-        expect(buildPendingEventFingerprint(pageFor('gate-a') as any)).toBe(a);
+        // Same gate paged twice collapses to one row.
+        expect(defaultNoticeEventId(pageFor('gate-a'), at)).toBe(a);
     });
 });

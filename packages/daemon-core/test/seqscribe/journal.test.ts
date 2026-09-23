@@ -66,11 +66,16 @@ function tmpDir(name: string): string {
     return dir;
 }
 
-async function openNode(name: string, env: NodeJS.ProcessEnv): Promise<SeqscribeNodeHandle> {
+async function openNode(
+    name: string,
+    env: NodeJS.ProcessEnv,
+    opts: { localAuthority?: boolean } = {},
+): Promise<SeqscribeNodeHandle> {
     const handle = openSeqscribeNode({
         dbPath: join(tmpDir(name), 'seq.db'),
         env,
         storedFleetSecret: null,
+        ...opts,
     });
     handles.push(handle);
     return handle;
@@ -181,7 +186,10 @@ describe('assistant.journal API', () => {
     });
 
     it('throws a clear error when appending on an authority-less node', async () => {
-        const handle = await openNode('provisional', {});
+        // C7-3: no fleet secret no longer means no authority at all (a local
+        // one is minted by default) — pin the true authority-less case
+        // explicitly to keep testing this rejection path.
+        const handle = await openNode('provisional', {}, { localAuthority: false });
         expect(handle.authorityEnabled).toBe(false);
         await expect(appendAssistantJournal(handle, 'note', {})).rejects.toThrow(/fleet secret/);
     });

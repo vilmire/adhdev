@@ -19,10 +19,9 @@ vi.mock('../../src/config/config.js', () => ({
 
 import {
     findRecentTerminalLedgerEvidence,
-    hasDispatchAfterTerminal,
     hasUnterminalDirectDispatchLedgerEntry,
     findTerminalLedgerEvidenceForTask,
-} from '../../src/mesh/mesh-events-stale.js';
+} from '../../src/mesh/mesh-dispatch-ledger-reads.js';
 import { __clearMeshLedgerForTests, appendLedgerEntry, readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
 
 function burySession(meshId: string, n = 260) {
@@ -65,46 +64,6 @@ describe('mesh-events-stale — LEDGER-KIND-TAIL-BLINDSPOT', () => {
         it('returns null when no terminal exists for the session', () => {
             burySession(meshId, 10);
             expect(findRecentTerminalLedgerEvidence({ meshId, sessionId: 'sess-none' })).toBeNull();
-        });
-    });
-
-    describe('hasDispatchAfterTerminal', () => {
-        it('★finds a task_dispatched entry after the terminal anchor, buried beyond the 200-entry tail window', () => {
-            const sessionId = 'sess-redispatch';
-            const terminal = appendLedgerEntry(meshId, {
-                kind: 'task_completed',
-                nodeId: 'node-a',
-                sessionId,
-                payload: { taskId: 'task-1', success: true },
-            } as any);
-            appendLedgerEntry(meshId, {
-                kind: 'task_dispatched',
-                nodeId: 'node-a',
-                sessionId,
-                payload: { taskId: 'task-2', source: 'direct' },
-            } as any);
-            burySession(meshId);
-
-            expect(hasDispatchAfterTerminal(meshId, sessionId, terminal.id)).toBe(true);
-        });
-
-        it('returns false when the only dispatch is BEFORE the terminal anchor', () => {
-            const sessionId = 'sess-no-redispatch';
-            appendLedgerEntry(meshId, {
-                kind: 'task_dispatched',
-                nodeId: 'node-a',
-                sessionId,
-                payload: { taskId: 'task-1', source: 'direct' },
-            } as any);
-            const terminal = appendLedgerEntry(meshId, {
-                kind: 'task_completed',
-                nodeId: 'node-a',
-                sessionId,
-                payload: { taskId: 'task-1', success: true },
-            } as any);
-            burySession(meshId, 10);
-
-            expect(hasDispatchAfterTerminal(meshId, sessionId, terminal.id)).toBe(false);
         });
     });
 

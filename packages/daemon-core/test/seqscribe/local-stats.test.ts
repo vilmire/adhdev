@@ -40,35 +40,38 @@ function runtime(withTranscript: boolean): SeqscribeRuntime {
   } as unknown as SeqscribeRuntime
 }
 
-const terminalRedrive = () => ({ redelivered: 3, skipped: 1, quarantined: 0 })
+const meshDelivery = () => ({ delivered: 3, deferred: 1, escalated: 0 })
 
 describe('buildLocalSeqscribeStats — transcript counter wiring (§8 unit 2)', () => {
   beforeEach(() => summarize.mockClear())
 
   it('returns null without a runtime (no node) — "no seqscribe" stays distinguishable', () => {
-    expect(buildLocalSeqscribeStats(null, { terminalRedrive })).toBeNull()
+    expect(buildLocalSeqscribeStats(null, { meshDelivery })).toBeNull()
     expect(summarize).not.toHaveBeenCalled()
   })
 
   it('forwards the transcript counters into summarizeSeqscribeStats, keyed off the SERVICE', () => {
-    buildLocalSeqscribeStats(runtime(true), { terminalRedrive })
+    buildLocalSeqscribeStats(runtime(true), { meshDelivery })
     const opts = summarize.mock.calls[0][1] as any
     // `active` follows the service, not the mode (mode `shadow` still publishes).
     expect(opts.transcript).toMatchObject({ active: true, published: 7, publishFailed: 1, ptyDirtyCoalesced: 5, sourcePending: 3 })
     expect(opts.transcriptLatency).toEqual({ lat: 1 })
-    expect(opts.terminalRedrive).toEqual({ redelivered: 3, skipped: 1, quarantined: 0 })
+    expect(opts.meshDelivery).toEqual({ delivered: 3, deferred: 1, escalated: 0 })
+    // The retired Stage 5a redrive / Stage 4A read-routing blocks are gone.
+    expect(opts.terminalRedrive).toBeUndefined()
+    expect(opts.readRouting).toBeUndefined()
     expect(opts.authorityEnabled).toBe(true)
   })
 
   it('★passes the WHOLE parity counter object, never a narrowed subset, with local diagnostics on', () => {
-    buildLocalSeqscribeStats(runtime(true), { terminalRedrive })
+    buildLocalSeqscribeStats(runtime(true), { meshDelivery })
     const opts = summarize.mock.calls[0][1] as any
     expect(opts.transcriptParity).toBe(parityCounters)
     expect(opts.includeLocalDiagnostics).toBe(true)
   })
 
   it('omits the transcript block (not active:false) when no publisher is armed', () => {
-    buildLocalSeqscribeStats(runtime(false), { terminalRedrive })
+    buildLocalSeqscribeStats(runtime(false), { meshDelivery })
     const opts = summarize.mock.calls[0][1] as any
     expect(opts.transcript).toBeUndefined()
     expect(opts.transcriptParity).toBe(parityCounters)

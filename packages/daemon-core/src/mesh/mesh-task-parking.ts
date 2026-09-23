@@ -1,6 +1,6 @@
 import { LOG } from '../logging/logger.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
-import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { noteTargetPinCleared } from './mesh-turn-ledger.js';
 import { traceMeshEventDrop } from '../shared/mesh-event-trace.js';
 import { getMachineId } from '../config/config.js';
@@ -192,7 +192,7 @@ export function notifyCoordinatorOfParkedTaskDropped(
     try {
         const targetCoordinatorDaemonId = readNonEmptyString(getMachineId());
         const targetCoordinatorSessionId = readNonEmptyString(task.sourceCoordinatorSessionId);
-        queuePendingMeshCoordinatorEvent({
+        notifyMeshCoordinator({
             event: 'mesh:dispatch_blocked',
             meshId,
             nodeLabel,

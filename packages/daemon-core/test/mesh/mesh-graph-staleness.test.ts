@@ -34,11 +34,11 @@ vi.mock('../../src/config/config.js', () => ({
 }));
 
 const queued = vi.hoisted(() => ({ events: [] as any[] }));
-vi.mock('../../src/mesh/mesh-events-pending.js', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../../src/mesh/mesh-events-pending.js')>();
+vi.mock('../../src/mesh/turn-ledger/deliver.js', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../src/mesh/turn-ledger/deliver.js')>();
     return {
         ...actual,
-        queuePendingMeshCoordinatorEvent: vi.fn((event: any) => {
+        notifyMeshCoordinator: vi.fn((event: any) => {
             queued.events.push(event);
             return true;
         }),

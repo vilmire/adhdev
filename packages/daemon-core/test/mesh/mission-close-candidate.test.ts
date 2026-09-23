@@ -40,14 +40,14 @@ import {
 import {
     enqueueTask,
     claimNextTask,
-    updateTaskStatus,
+    updateTaskStatus, __writeTaskStatusForTests,
     __clearMeshQueueForTests,
     __resetMeshRuntimeStoreForTests,
 } from '../../src/mesh/mesh-work-queue.js';
 import {
     getPendingMeshCoordinatorEvents,
     __clearMeshPendingEventsForTests,
-} from '../../src/mesh/mesh-events-pending.js';
+} from '../helpers/pending-notices.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 
 function setMesh(meshId: string): void {
@@ -90,11 +90,11 @@ describe('G3 — mission_close_candidate detection', () => {
         expect(maybeEmitMissionCloseCandidate(meshId, mission.id)).toBe(false);
         expect(closeCandidateEvents(meshId)).toHaveLength(0);
 
-        updateTaskStatus(meshId, a.id, 'completed');
+        __writeTaskStatusForTests(meshId, a.id, 'completed');
         expect(maybeEmitMissionCloseCandidate(meshId, mission.id)).toBe(false); // b still pending
         expect(closeCandidateEvents(meshId)).toHaveLength(0);
 
-        updateTaskStatus(meshId, b.id, 'completed');
+        __writeTaskStatusForTests(meshId, b.id, 'completed');
         // Now all-terminal → first call emits.
         expect(maybeEmitMissionCloseCandidate(meshId, mission.id)).toBe(true);
         const events = closeCandidateEvents(meshId);
@@ -115,7 +115,7 @@ describe('G3 — mission_close_candidate detection', () => {
         const a = enqueueTask(meshId, 'only task', { missionId: mission.id,
     difficulty: 'medium',
 });
-        updateTaskStatus(meshId, a.id, 'completed');
+        __writeTaskStatusForTests(meshId, a.id, 'completed');
         maybeEmitMissionCloseCandidate(meshId, mission.id);
         expect(getMeshMission(meshId, mission.id)?.status).toBe('active');
     });
@@ -126,7 +126,7 @@ describe('G3 — mission_close_candidate detection', () => {
         const a = enqueueTask(meshId, 'task', { missionId: mission.id,
     difficulty: 'medium',
 });
-        updateTaskStatus(meshId, a.id, 'completed');
+        __writeTaskStatusForTests(meshId, a.id, 'completed');
         expect(maybeEmitMissionCloseCandidate(meshId, mission.id)).toBe(false);
         expect(closeCandidateEvents(meshId)).toHaveLength(0);
     });
@@ -144,7 +144,7 @@ describe('G3 — mission_close_candidate detection', () => {
         const a = enqueueTask(meshId, 'task A', { missionId: mission.id,
     difficulty: 'medium',
 });
-        updateTaskStatus(meshId, a.id, 'completed');
+        __writeTaskStatusForTests(meshId, a.id, 'completed');
         expect(maybeEmitMissionCloseCandidate(meshId, mission.id)).toBe(true);
         expect(getMeshMission(meshId, mission.id)?.closeCandidateEmittedAt).toBeTruthy();
 
@@ -156,7 +156,7 @@ describe('G3 — mission_close_candidate detection', () => {
         expect(getMeshMission(meshId, mission.id)?.closeCandidateEmittedAt).toBeFalsy();
 
         // Re-completing all tasks nudges again (fresh idempotency edge).
-        updateTaskStatus(meshId, b.id, 'completed');
+        __writeTaskStatusForTests(meshId, b.id, 'completed');
         expect(maybeEmitMissionCloseCandidate(meshId, mission.id)).toBe(true);
         // The pending-event dedup fingerprint is time-based for this event, so the second
         // emit is a distinct event; assert at least the marker re-armed.
@@ -175,9 +175,9 @@ describe('G3 — mission_close_candidate detection', () => {
         const c = enqueueTask(meshId, 'C', { missionId: mission.id,
     difficulty: 'medium',
 });
-        updateTaskStatus(meshId, a.id, 'completed');
-        updateTaskStatus(meshId, b.id, 'failed');
-        updateTaskStatus(meshId, c.id, 'cancelled');
+        __writeTaskStatusForTests(meshId, a.id, 'completed');
+        __writeTaskStatusForTests(meshId, b.id, 'failed');
+        __writeTaskStatusForTests(meshId, c.id, 'cancelled');
         const agg = summarizeMissionTasks(meshId, mission.id);
         expect(isMissionAllTasksTerminal(agg)).toBe(true);
         expect(maybeEmitMissionCloseCandidate(meshId, mission.id)).toBe(true);
@@ -193,7 +193,7 @@ describe('G3 — mission_close_candidate detection', () => {
 });
         claimNextTask(meshId, 'node-1', 'session-1');
         // Terminal transition through updateTaskStatus schedules the async detection.
-        updateTaskStatus(meshId, a.id, 'completed');
+        __writeTaskStatusForTests(meshId, a.id, 'completed');
         // The detection runs via a dynamic import microtask; flush the microtask queue.
         await new Promise(resolve => setTimeout(resolve, 0));
         const events = closeCandidateEvents(meshId);

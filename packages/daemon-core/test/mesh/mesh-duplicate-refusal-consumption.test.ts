@@ -276,14 +276,20 @@ describe('D3 — a duplicate-dispatch refusal is consumption evidence', () => {
             expect(refusalBlock).not.toMatch(/updateSessionDeliveryStatus\(delivery\.id,\s*'delivered'\)/);
         });
 
-        it('promotes the durable attempt link, and does so AFTER the rebind', () => {
-            // Ordering is load-bearing: recordTurnAck's session-binding guard ignores
-            // evidence from a session the attempt does not name, so promoting before
-            // the rebind would silently record nothing.
-            const rebindAt = handlerSrc.indexOf('const rebind = rebindAttemptToLiveHolder(');
-            const promoteAt = handlerSrc.indexOf('recordDuplicateDispatchConsumption({');
-            expect(rebindAt).toBeGreaterThan(-1);
-            expect(promoteAt).toBeGreaterThan(rebindAt);
+        it('reports the refusal to the turn ledger as ONE duplicate_dispatch_refusal naming this attempt (C2, C-W4)', () => {
+            // The pre-C handler did two ordered writes (rebind, then promote); the
+            // ordering was load-bearing because the promotion ignored a session the
+            // attempt did not name. The ledger's R25 does both in one transition, and
+            // only when holderAttemptId is THIS attempt (holder_is_this_attempt) — so
+            // the handler must stamp it, and must not call the retired legacy writers.
+            const block = handlerSrc.slice(
+                handlerSrc.indexOf('DUP-REFUSAL-IS-CONSUMPTION (attempt half, C2)'),
+                handlerSrc.indexOf('dispatch_duplicate_rebound'),
+            );
+            expect(block).not.toBe('');
+            expect(block).toMatch(/kind:\s*'duplicate_dispatch_refusal'/);
+            expect(block).toMatch(/holderAttemptId:\s*ctx\.attemptRef\.attemptId/);
+            expect(handlerSrc).not.toMatch(/rebindAttemptToLiveHolder\(|recordDuplicateDispatchConsumption\(/);
         });
     });
 

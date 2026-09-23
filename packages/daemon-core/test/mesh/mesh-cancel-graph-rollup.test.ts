@@ -67,7 +67,7 @@ import {
     cancelTask,
     enqueueTask,
     getQueue,
-    updateTaskStatus,
+    updateTaskStatus, __writeTaskStatusForTests,
 } from '../../src/mesh/mesh-work-queue.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import type { MeshTaskGraphEdgeRow, MeshTaskGraphNodeRow } from '../../src/mesh/mesh-graph-types.js';
@@ -203,7 +203,7 @@ describe('cancelTask rolls the graph (injection guard)', () => {
         try {
             const { graphId, nodeA, taskA } = buildOneNodeGraph(id);
             const spy = vi.spyOn(graphRunner, 'commitTaskTerminalAndAdvanceGraph');
-            updateTaskStatus(id, taskA.id, 'failed');
+            __writeTaskStatusForTests(id, taskA.id, 'failed');
             expect(node(graphId, nodeA).state).toBe('failed');
             expect(graphStatus(graphId)).toBe('failed');
             // Failure still routes with its own source — the fix added a caller, it
@@ -308,7 +308,7 @@ describe('over-correction guards — cancel settles, it does not release success
 
             // ★ THE RECOVERY INVARIANT: retrying the cancelled predecessor releases B
             //   exactly as it would have before this change.
-            updateTaskStatus(id, taskA.id, 'completed', { force: true } as any);
+            __writeTaskStatusForTests(id, taskA.id, 'completed', { force: true } as any);
             expect(node(graphId, nodeA).state).toBe('completed');
             expect(getQueue(id).find(t => t.id === taskB.id)?.status).toBe('pending');
             expect(node(graphId, nodeB).state).not.toBe('cancelled');

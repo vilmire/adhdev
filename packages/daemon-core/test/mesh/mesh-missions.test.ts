@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach } from 'vitest';
+import { describe, expect, it, afterEach, vi } from 'vitest';
 import { randomUUID } from 'crypto';
 import {
     upsertMeshMission,
@@ -11,11 +11,18 @@ import {
     buildMissionPromptSection,
     GOAL_PREVIEW_MAX,
 } from '../../src/mesh/mesh-missions.js';
-import { enqueueTask, updateTaskStatus, claimNextTask, recordDirectDispatchTask, updateSessionTaskStatus, getQueue, __clearMeshQueueForTests } from '../../src/mesh/mesh-work-queue.js';
+import { enqueueTask, updateTaskStatus, __writeTaskStatusForTests, claimNextTask, recordDirectDispatchTask, updateSessionTaskStatus, getQueue, __clearMeshQueueForTests } from '../../src/mesh/mesh-work-queue.js';
 import { computeMeshMissionStats } from '../../src/mesh/mesh-task-stats.js';
 import { appendLedgerEntry } from '../../src/mesh/mesh-ledger.js';
 import { buildCoordinatorSystemPrompt } from '../../src/mesh/coordinator-prompt.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
+import { meshTopicIndexFor, MESH_RECORD_APPEND_KIND } from '../../src/mesh/mesh-topic-index.js';
+
+const OWN_WRITER = 'w-own';
+vi.mock('../../src/seqscribe/mesh-publisher.js', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../../src/seqscribe/mesh-publisher.js')>()),
+    meshPublisherWriterId: () => OWN_WRITER,
+}));
 import type { LocalMeshEntry } from '../../src/repo-mesh-types.js';
 
 function makeMesh(meshId: string): LocalMeshEntry {
@@ -88,7 +95,7 @@ describe('M3 — mission persistence', () => {
         enqueueTask(meshId, 'unrelated task', { difficulty: 'medium' });
 
         claimNextTask(meshId, 'node-1', 'session-1');
-        updateTaskStatus(meshId, a.id, 'failed'); // blocks B under default policy
+        __writeTaskStatusForTests(meshId, a.id, 'failed'); // blocks B under default policy
 
         const agg = summarizeMissionTasks(meshId, mission.id);
         expect(agg.total).toBe(2);
@@ -286,16 +293,22 @@ describe('getMeshStatusMissionSummaries — withStats merges operational rollups
         MeshRuntimeStore.resetForTests();
     });
 
+    // Wiring-unification C-W3: own lifecycle = own writer's task_dispatched on
+    // the mesh_topic_index + the committed turn attempt (see mesh-task-stats).
+    let seq = 0;
     function dispatchAndComplete(taskId: string, dispatchedAt: string, terminalAt: string) {
         const store = MeshRuntimeStore.getInstance();
-        store.appendLedgerEntry({
-            id: randomUUID(), meshId, timestamp: dispatchedAt, kind: 'task_dispatched',
-            sessionId: 'session-1', payload: { taskId, source: 'queue' },
+        const at = Date.parse(dispatchedAt);
+        const end = Date.parse(terminalAt);
+        const id = randomUUID();
+        meshTopicIndexFor(store.db).ingest({
+            meshId, writer: OWN_WRITER, seq: ++seq, kind: MESH_RECORD_APPEND_KIND,
+            payload: { id, timestamp: dispatchedAt, ledgerKind: 'task_dispatched', nodeId: null, sessionId: 'session-1', providerType: null, taskId,
+                payload: { taskId, source: 'queue' }, v: 2, k: 'mesh.record', eventId: id, at },
         });
-        store.appendLedgerEntry({
-            id: randomUUID(), meshId, timestamp: terminalAt, kind: 'task_completed',
-            sessionId: 'session-1', payload: { taskId },
-        });
+        store.db.prepare(`INSERT INTO turn_attempts (attempt_id, scope, mesh_id, task_id, session_id, owner_daemon_id, state, accepted_at, terminal_outcome, terminal_reason, terminal_at, created_at, updated_at)
+            VALUES (?, 'mesh_queue', ?, ?, 'session-1', 'd-self', 'completed', ?, 'completed', 'turn_end', ?, ?, ?)`)
+            .run(randomUUID(), meshId, taskId, at, end, at, end);
     }
 
     it('omits stats by default; includes the rollup when withStats:true', () => {
@@ -303,7 +316,7 @@ describe('getMeshStatusMissionSummaries — withStats merges operational rollups
         const a = enqueueTask(meshId, 'task A', { missionId: mission.id,
     difficulty: 'medium',
 });
-        updateTaskStatus(meshId, a.id, 'completed');
+        __writeTaskStatusForTests(meshId, a.id, 'completed');
         dispatchAndComplete(a.id, '2026-06-17T10:00:00.000Z', '2026-06-17T10:00:30.000Z');
 
         const withoutStats = getMeshStatusMissionSummaries(meshId) as any[];
@@ -326,7 +339,7 @@ describe('getMeshStatusMissionSummaries — withStats merges operational rollups
         const a = enqueueTask(meshId, 'task A', { missionId: mission.id,
     difficulty: 'medium',
 });
-        updateTaskStatus(meshId, a.id, 'completed');
+        __writeTaskStatusForTests(meshId, a.id, 'completed');
         dispatchAndComplete(a.id, '2026-06-17T10:00:00.000Z', '2026-06-17T10:00:10.000Z');
 
         const direct = computeMeshMissionStats(meshId, mission.id);

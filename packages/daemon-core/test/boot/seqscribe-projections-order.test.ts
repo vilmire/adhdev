@@ -21,9 +21,8 @@ vi.mock('../../src/seqscribe/mesh-publisher.js', () => ({
     return 0
   },
 }))
-vi.mock('../../src/seqscribe/mesh-read-model.js', () => ({
-  configureMeshReadModel: rec('readModel'),
-  pruneStaleConsumersAtBoot: () => { calls.push('prune') },
+vi.mock('../../src/seqscribe/mesh-turn-consumer.js', () => ({
+  pruneRetiredMeshConsumers: () => { calls.push('prune'); return 0 },
 }))
 vi.mock('../../src/seqscribe/fleet-status-shadow.js', () => ({ configureFleetStatusShadow: rec('fleetShadow') }))
 vi.mock('../../src/seqscribe/fleet-status-parity.js', () => ({ configureFleetStatusParity: rec('fleetParity') }))
@@ -34,13 +33,6 @@ vi.mock('../../src/seqscribe/transcript-publish-runtime.js', () => ({ createLive
 vi.mock('../../src/seqscribe/transcript-activation.js', () => ({ releaseSessionTranscriptTopic: () => {} }))
 vi.mock('../../src/seqscribe/transcript-bus-subscriber.js', () => ({
   subscribeTranscriptProjection: () => { calls.push('transcriptBus'); return () => calls.push('transcriptBus.off') },
-}))
-vi.mock('../../src/seqscribe/mesh-terminal-redrive-consumer.js', () => ({
-  configureTerminalRedrive: rec('redrive'),
-  ensureTerminalRedriveConsumersAtBoot: () => 0,
-}))
-vi.mock('../../src/mesh/mesh-terminal-redrive.js', () => ({
-  REDRIVE_CONSUMER: 'redrive', REDRIVE_ENV: 'X', consumeRedriveEntry: () => {}, isTerminalRedriveEnabled: () => true,
 }))
 vi.mock('../../src/config/mesh-config.js', () => ({ listMeshesReadOnly: () => [{ id: 'm1' }] }))
 
@@ -73,14 +65,16 @@ describe('armSeqscribeProjections', () => {
     const steps: string[] = []
     const s6 = armSeqscribeProjections(s5, { onStep: s => steps.push(s) })
     expect(steps).toEqual([
-      'arm:slot', 'arm:publisher', 'arm:read-model', 'arm:fleet-shadow', 'arm:fleet-parity',
-      'arm:transcript', 'arm:activate-topics', 'arm:prune-consumers', 'arm:terminal-redrive',
+      'arm:slot', 'arm:publisher', 'arm:fleet-shadow', 'arm:fleet-parity',
+      'arm:transcript', 'arm:activate-topics', 'arm:prune-consumers',
     ])
-    // Publisher before topic activation / prune / redrive; shadow before parity.
-    // No mesh parity loop (C7-6: one write path, nothing to compare).
+    // Publisher before topic activation / prune; shadow before parity. No read
+    // model (C7-2), no redrive (the S7 turn.deliver cursor is redelivery), no
+    // mesh parity loop (C7-6). The retired cursors are pruned BEFORE S7 arms
+    // the turn cursors.
     expect(calls).toEqual([
-      'publisher(node)', 'readModel(node)', 'fleetShadow(node)', 'fleetParity(node)',
-      'transcript(deps)', 'transcriptBus', 'activateTopics', 'prune', 'redrive(node)',
+      'publisher(node)', 'fleetShadow(node)', 'fleetParity(node)',
+      'transcript(deps)', 'transcriptBus', 'activateTopics', 'prune',
     ])
     expect(seqscribeSlot.current()).toBe(rt)
     expect(rt.projections()).toMatchObject({ transcript: { fake: 'service' } })
@@ -95,19 +89,19 @@ describe('armSeqscribeProjections', () => {
     steps.length = 0
     s6.disarmProjections()
     expect(steps).toEqual([
-      'disarm:attach', 'disarm:terminal-redrive', 'disarm:transcript',
-      'disarm:fleet-parity', 'disarm:fleet-shadow', 'disarm:read-model', 'disarm:publisher', 'disarm:slot',
+      'disarm:attach', 'disarm:transcript',
+      'disarm:fleet-parity', 'disarm:fleet-shadow', 'disarm:publisher', 'disarm:slot',
     ])
     // fleet parity detaches before its shadow; the publisher detaches last but the slot.
     expect(calls).toEqual([
-      'redrive(null)', 'transcriptBus.off', 'transcript(null)',
-      'fleetParity(null)', 'fleetShadow(null)', 'readModel(null)', 'publisher(null)',
+      'transcriptBus.off', 'transcript(null)',
+      'fleetParity(null)', 'fleetShadow(null)', 'publisher(null)',
     ])
     expect(seqscribeSlot.current()).toBeNull()
     expect(rt.projections()).toBeNull()
     // Idempotent.
     s6.disarmProjections()
-    expect(steps).toHaveLength(8)
+    expect(steps).toHaveLength(6)
   })
 
   it('a known mesh whose events topic cannot be defined fails the stage (C7-1) and unwinds what it armed', () => {

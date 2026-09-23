@@ -71,7 +71,7 @@ import {
     __resetMeshRuntimeStoreForTests,
     enqueueTask,
     getQueue,
-    updateTaskStatus,
+    updateTaskStatus, __writeTaskStatusForTests,
 } from '../../src/mesh/mesh-work-queue.js';
 import { buildMeshGraphViews } from '../../src/mesh/mesh-graph-view.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
@@ -165,7 +165,7 @@ function buildGateGraph(mesh: string, opts: GateGraphOpts = {}) {
 
 /** Open the gate by completing A; returns the gate row. */
 function openGate(id: string, g: ReturnType<typeof buildGateGraph>) {
-    updateTaskStatus(id, g.taskA.id, 'completed');
+    __writeTaskStatusForTests(id, g.taskA.id, 'completed');
     return gs().getGate(g.gateId)!;
 }
 
@@ -188,7 +188,7 @@ describe('gate opening — upstream completion stops the graph at the gate', () 
         const id = meshId('open');
         try {
             const g = buildGateGraph(id, { gateSpec: { deadline_seconds: 3600 } });
-            updateTaskStatus(id, g.taskA.id, 'completed');
+            __writeTaskStatusForTests(id, g.taskA.id, 'completed');
 
             const gate = gs().getGate(g.gateId)!;
             expect(gate.state).toBe('awaiting_coordinator');
@@ -219,7 +219,7 @@ describe('gate opening — upstream completion stops the graph at the gate', () 
             openGate(id, g);
             // C completes after the gate opened — B's worker inputs are now fully
             // settled, but the gate edge must still stop materialization.
-            updateTaskStatus(id, g.taskC!.id, 'completed');
+            __writeTaskStatusForTests(id, g.taskC!.id, 'completed');
 
             const entryB = getQueue(id).find(t => t.id === g.taskB!.id)!;
             expect(entryB.status).toBe('pending');

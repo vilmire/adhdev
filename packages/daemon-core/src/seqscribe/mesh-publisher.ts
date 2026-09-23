@@ -458,30 +458,57 @@ export function projectMeshRecord(entry: MeshRecordEntry): JsonValue {
  * memory guard (ERROR-logged, counted — never silent).
  */
 export function publishMeshRecord(meshId: string, entry: MeshRecordEntry): boolean {
+    const started = startMeshRecord(meshId, entry);
+    if (!started) return false;
+    started.catch(() => undefined); // fire-and-forget: the rejection is already logged + counted
+    return true;
+}
+
+/**
+ * `publishMeshRecord` with the append coordinate: resolves to the entry's
+ * `[topic, writer, seq]` once appended, or null when nothing was started (no
+ * node armed / refused / topic unavailable) or the append was rejected (both
+ * ERROR-logged and counted exactly as `publishMeshRecord`). Never rejects.
+ */
+export async function publishMeshRecordAwaited(meshId: string, entry: MeshRecordEntry): Promise<EntryId | null> {
+    const started = startMeshRecord(meshId, entry);
+    if (!started) return null;
+    try {
+        return await started;
+    } catch {
+        return null;
+    }
+}
+
+/** Start one `mesh.record` append (slot-bounded, tracked); null when refused before starting. */
+function startMeshRecord(meshId: string, entry: MeshRecordEntry): Promise<EntryId> | null {
     try {
         const node = activeNode;
-        if (!node) return false;
+        if (!node) return null;
         const topic = ensureEventsTopic(node, meshId);
-        if (!topic) return false;
+        if (!topic) return null;
         const payload = projectMeshRecord(entry);
         assertSize(topic, MESH_EVENT_ENTRY_KIND, payload);
         if (slots.waiting() >= MESH_RECORD_MAX_WAITING) {
             counters.recordsRefused++;
             LOG.error('Seqscribe', `mesh.record refused: ${slots.waiting()} publishes waiting for a slot (topic stalled?) ledgerKind=${entry.kind} mesh=${meshId}`);
-            return false;
+            return null;
         }
-        void track(appendWithSlot(node, topic, MESH_EVENT_ENTRY_KIND, payload).then(
-            () => { counters.recordsWritten++; },
+        const appended = appendWithSlot(node, topic, MESH_EVENT_ENTRY_KIND, payload).then(
+            (id) => { counters.recordsWritten++; return id; },
             (error: unknown) => {
                 counters.recordsFailed++;
                 LOG.error('Seqscribe', `mesh.record append rejected topic=${topic} ledgerKind=${entry.kind}: ${errorMessage(error)}`);
+                throw error;
             },
-        ));
-        return true;
+        );
+        // Tracked for flushMeshPublisher; the tracked copy never surfaces an unhandled rejection.
+        void track(appended.catch(() => undefined));
+        return appended;
     } catch (error) {
         counters.recordsFailed++;
         LOG.error('Seqscribe', `mesh.record publish failed ledgerKind=${entry.kind}: ${errorMessage(error)}`);
-        return false;
+        return null;
     }
 }
 
@@ -500,70 +527,6 @@ export function meshPublisherInflight(): { inflight: number; waiting: number } {
     return { inflight: slots.inflight(), waiting: slots.waiting() };
 }
 
-// ─── legacy read-side aliases (deleted with C-W3's read-model/readiness) ──
-//
-// `mesh-read-readiness.ts` and `local-stats.ts` (C-W3 deletion/rewrite
-// targets) still ask these questions. They are answered HONESTLY for the new
-// world rather than kept as the old flag:
-//   · the write leg is "active" iff a node is armed;
-//   · the read cut-over is OFF: with the backfill deleted, the replica no
-//     longer receives mcp-server appends until C-W6 routes them over IPC, so
-//     every switched read stays on the ledger until C-W3 replaces the read
-//     model with `mesh_topic_index`. Fail-closed on the read path, as before.
-
-/** @deprecated C-W3 removes the read model; true iff the publisher has a node. */
-export function isMeshDualWriteActive(): boolean {
-    return activeNode !== null;
-}
-
-let forcedReadPrimary = false;
-
-/**
- * @deprecated C7-2 retires the read cut-over gate: false in production (reads
- * stay on the complete ledger — see the section note). Only the readiness
- * gate's own tests flip it, until C-W3 deletes mesh-read-readiness.
- */
-export function isMeshReadPrimary(): boolean {
-    return forcedReadPrimary && activeNode !== null;
-}
-
-/** TESTS ONLY — exercise the (deprecated) readiness gate while it still exists. */
-export function __forceMeshReadPrimaryForTests(on: boolean): void {
-    forcedReadPrimary = on;
-}
-
-/** @deprecated shape kept for local-stats' `dualWrite` bucket until C-W3 rewrites it. */
-export function meshDualWriteCounters(): { written: number; failed: number; dropped: number; backfilled: number; oversized: number; topicErrors: number } {
-    return {
-        written: counters.recordsWritten + counters.published,
-        failed: counters.recordsFailed + counters.publishFailed,
-        dropped: counters.recordsRefused,
-        backfilled: 0,
-        oversized: counters.oversized,
-        topicErrors: counters.topicErrors,
-    };
-}
-
-// `tests/seqscribe-convergence.test.mjs` switched to the publisher names
-// (C-W2 REQUESTED EDIT, done); `recordMeshEventShadow` had no other caller and
-// is removed. The three below stay: `tests/seqscribe-read-primary.test.mjs`
-// and `tests/seqscribe-read-stage4b.test.mjs` still drive the write leg
-// through these old names deliberately — they exercise the Stage 4A/4B read
-// model, which C-W3 removes together with these tests, so the rename is left
-// for that deletion rather than done piecemeal here.
-/** @deprecated use configureMeshPublisher. */
-export function configureMeshDualWrite(node: SeqscribeNodeHandle | null, _env?: NodeJS.ProcessEnv): void {
-    configureMeshPublisher(node);
-}
-/** @deprecated use meshPublisherInflight. */
-export function meshDualWriteInflight(): number {
-    return slots.inflight() + slots.waiting();
-}
-/** @deprecated use __resetMeshPublisherForTests. */
-export function __resetMeshDualWriteForTests(): void {
-    __resetMeshPublisherForTests();
-}
-
 /** Reset all module state. TESTS ONLY (listeners live on node handles; see onTopicActivated). */
 export function __resetMeshPublisherForTests(): void {
     activeNode = null;
@@ -572,6 +535,5 @@ export function __resetMeshPublisherForTests(): void {
     slots.reset();
     outstanding.clear();
     warnedOnce.clear();
-    forcedReadPrimary = false;
     for (const key of Object.keys(counters) as Array<keyof MeshPublisherCounters>) counters[key] = 0;
 }

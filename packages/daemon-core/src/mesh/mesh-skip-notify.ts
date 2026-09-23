@@ -6,7 +6,7 @@ import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
-import { queuePendingMeshCoordinatorEvent, retractPendingDispatchBlockedEvent } from './mesh-events-pending.js';
+import { notifyMeshCoordinator, retractDispatchBlockedNotices } from './turn-ledger/deliver.js';
 import { isWorktreeBootstrapStaleRunning } from './worktree-bootstrap-config.js';
 import { isWithinCloneBootstrapGraceDurable } from './mesh-clone-grace.js';
 import { getMachineId } from '../config/config.js';
@@ -410,8 +410,7 @@ export function retractActionableSkipIfPreviouslyNotified(meshId: string, taskId
     const dedupKey = `${meshId}:${taskId}`;
     if (!lastActionableSkipNotified.delete(dedupKey)) return; // nothing was paged → nothing to retract
     try {
-        const coordinatorDaemonId = readNonEmptyString(getMachineId()) || undefined;
-        const removed = retractPendingDispatchBlockedEvent(meshId, taskId, coordinatorDaemonId);
+        const removed = retractDispatchBlockedNotices(meshId, taskId);
         if (removed > 0) {
             LOG.info('MeshQueue', `Retracted ${removed} stale dispatch-blocked event(s) for task ${taskId} (mesh ${meshId}) — its blocker resolved`);
         }
@@ -700,7 +699,7 @@ export function notifyCoordinatorOfActionableSkip(meshId: string, taskId: string
                 : 'This is an actionable blocker — it will NOT clear on its own; the task stays pending until you resolve it.';
     const coordinatorMessage = `[System] A queued mesh task${nodeLabel ? ` for node ${nodeLabel}` : ''} is not being dispatched because ${summary}. ${nextAction} ${closing}`;
     try {
-        queuePendingMeshCoordinatorEvent({
+        notifyMeshCoordinator({
             event: 'mesh:dispatch_blocked',
             meshId,
             nodeLabel: nodeLabel || meshId,

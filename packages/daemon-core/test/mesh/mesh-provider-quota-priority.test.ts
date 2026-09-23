@@ -61,7 +61,7 @@ import { ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON } from '../../src/mesh/mesh-quota
 import { SLOT_MODEL_BUSY_SKIP_REASON } from '../../src/mesh/slot-model-enforcement.js';
 import { buildAutoLaunchRoutingDecision } from '../../src/mesh/mesh-routing-decision.js';
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
-import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js';
+import { drainPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js';
 import { getLogLevel, LOG } from '../../src/logging/logger.js';
 import { DEFAULT_QUOTA_ROUTING_POLICY } from '../../src/repo-mesh-types.js';
 

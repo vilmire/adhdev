@@ -11,7 +11,7 @@
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
-import { cancelTask, recordDirectDispatchTask, reclaimStrandedAssignedTask, requeueTask } from './mesh-work-queue.js';
+import { cancelTask, recordDirectDispatchTask, requeueTask } from './mesh-work-queue.js';
 
 // ── Direct Dispatch Tracking ─────────────────────────────────────────────────
 // Persists direct (non-queue) task dispatches so buildMeshActiveWork can read

@@ -32,7 +32,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 
 import { triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
-import { getPendingMeshCoordinatorEvents, __clearMeshPendingEventsForTests } from '../../src/mesh/mesh-events-pending.js'
+import { getPendingMeshCoordinatorEvents, __clearMeshPendingEventsForTests } from '../helpers/pending-notices.js'
 import { noteRecentlyClonedNode, __resetCloneBootstrapGraceForTests } from '../../src/mesh/mesh-clone-grace.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
 

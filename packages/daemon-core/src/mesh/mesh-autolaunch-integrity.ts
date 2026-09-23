@@ -39,7 +39,7 @@ import { canonicalDaemonId, daemonIdsEquivalent, sessionIdsEquivalent } from '@a
 import { getQueue, getQueueEntryById } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
-import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, recordAutoLaunchEvent } from './mesh-queue-observability.js';
 import { sessionHasActiveAssignment } from './mesh-scheduling-fitness.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -260,7 +260,7 @@ export function sweepAutoLaunchOrphanSessions(components: DaemonComponents, mesh
         });
         LOG.warn('MeshQueue', `AUTOLAUNCH-ORPHAN-SWEEP: session ${sessionId}${nodeId ? ` on node ${nodeId}` : ''} (mesh ${meshId}) was auto-launched for task ${originTaskId} but ${detail}; it is idle with no work and will not self-recover.`);
         try {
-            queuePendingMeshCoordinatorEvent({
+            notifyMeshCoordinator({
                 event: 'mesh:dispatch_blocked',
                 meshId,
                 nodeLabel: nodeId || meshId,

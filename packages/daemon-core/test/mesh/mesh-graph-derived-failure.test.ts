@@ -48,7 +48,7 @@ import {
     enqueueTask,
     getQueue,
     requeueTask,
-    updateTaskStatus,
+    updateTaskStatus, __writeTaskStatusForTests,
 } from '../../src/mesh/mesh-work-queue.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { __resetMeshGraphTransitionRunnerForTests } from '../../src/mesh/mesh-graph-transition-runner.js';
@@ -202,7 +202,7 @@ describe('C3 queue derived failure (design :522-538)', () => {
         try {
             const a = enqueue(id, 'A');
             const b = enqueue(id, 'B', { dependsOn: [a.id] });
-            updateTaskStatus(id, a.id, 'failed');
+            __writeTaskStatusForTests(id, a.id, 'failed');
             const afterFail = getQueue(id).find(t => t.id === b.id)!;
             expect(afterFail.status).toBe('pending');
             expect(afterFail.blockedReason).toBeUndefined();
@@ -212,7 +212,7 @@ describe('C3 queue derived failure (design :522-538)', () => {
             requeueTask(id, a.id, { force: true });
             expect(getQueue(id).find(t => t.id === b.id)!.blockedReason).toBeUndefined();
             expect(claimNextTask(id, 'n1', 's1')?.id).toBe(a.id);
-            updateTaskStatus(id, a.id, 'completed');
+            __writeTaskStatusForTests(id, a.id, 'completed');
             expect(claimNextTask(id, 'n2', 's2')?.id).toBe(b.id);
         } finally {
             cleanup(id);
@@ -226,14 +226,14 @@ describe('C3 queue derived failure (design :522-538)', () => {
             const a = enqueue(id, 'A');
             const b = enqueue(id, 'B', { dependsOn: [a.id] });
             const c = enqueue(id, 'C', { dependsOn: [b.id] });
-            updateTaskStatus(id, a.id, 'failed');
+            __writeTaskStatusForTests(id, a.id, 'failed');
             expect(getQueue(id).find(t => t.id === b.id)!.status).toBe('cancelled');
             expect(getQueue(id).find(t => t.id === c.id)!.status).toBe('cancelled');
             expect(getQueue(id).find(t => t.id === b.id)!.cancelReason).toBe(`dependency_failed:${a.id}`);
             expect(getQueue(id).find(t => t.id === b.id)!.dependsOn).toEqual([a.id]);
 
             requeueTask(id, a.id, { force: true });
-            updateTaskStatus(id, a.id, 'completed');
+            __writeTaskStatusForTests(id, a.id, 'completed');
             expect(getQueue(id).find(t => t.id === b.id)!.status).toBe('cancelled');
             expect(claimNextTask(id, 'n1', 's1')).toBeNull();
         } finally {
@@ -249,7 +249,7 @@ describe('C3 graph skip vs failure are distinct (design :356-369 vs :522-538)', 
         const id = meshId('fail_not_skip');
         try {
             const g = buildTwoNodeGraph(id, { policy: 'block' });
-            updateTaskStatus(id, g.taskA.id, 'failed', { reason: 'worker_crash' } as any);
+            __writeTaskStatusForTests(id, g.taskA.id, 'failed', { reason: 'worker_crash' } as any);
             const gs = MeshRuntimeStore.getInstance().graphStore();
             expect(gs.getNode(g.graphId, g.nodeA)!.state).toBe('failed');
             expect(gs.getNode(g.graphId, g.nodeB)!.state).toBe('declared');
@@ -278,7 +278,7 @@ describe('C3 graph skip vs failure are distinct (design :356-369 vs :522-538)', 
                 policy: 'block',
                 bRunIf: { run_if: { from: 'a', select: '/worker_result/decision', op: 'eq', value: 'needs_fix' } },
             });
-            updateTaskStatus(id, g.taskA.id, 'completed', {
+            __writeTaskStatusForTests(id, g.taskA.id, 'completed', {
                 envelope: { workerResult: { decision: 'no_action' } },
             } as any);
             const gs = MeshRuntimeStore.getInstance().graphStore();
@@ -307,7 +307,7 @@ describe('C3 graph skip vs failure are distinct (design :356-369 vs :522-538)', 
         const id = meshId('graph_cancel');
         try {
             const g = buildTwoNodeGraph(id, { policy: 'cancel' });
-            updateTaskStatus(id, g.taskA.id, 'failed');
+            __writeTaskStatusForTests(id, g.taskA.id, 'failed');
             const gs = MeshRuntimeStore.getInstance().graphStore();
             expect(gs.getNode(g.graphId, g.nodeB)!.state).toBe('cancelled');
             expect(gs.getNode(g.graphId, g.nodeB)!.skipReason).toBeUndefined();

@@ -68,7 +68,7 @@ import {
     enqueueTask,
     getQueue,
     taskDependenciesSatisfied,
-    updateTaskStatus,
+    updateTaskStatus, __writeTaskStatusForTests,
 } from '../../src/mesh/mesh-work-queue.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { LOG } from '../../src/logging/logger.js';
@@ -521,7 +521,7 @@ describe('delayed workspace_ref binding (design :441-478)', () => {
                 workspaces: [{ ref: 'fix_workspace', source_node_id: 'local-base', base_revision: 'main' }],
             });
 
-            updateTaskStatus(id, taskA.id, 'completed');
+            __writeTaskStatusForTests(id, taskA.id, 'completed');
             const nodeBRow = gs.getNode(graphId, nodeB)!;
             expect(nodeBRow.state).not.toBe('materialized');
             const entryB = getQueue(id).find(t => t.id === taskB.id)!;

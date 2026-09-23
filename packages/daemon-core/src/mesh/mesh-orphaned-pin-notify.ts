@@ -3,7 +3,7 @@ import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { getQueue } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
-import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { getMachineId } from '../config/config.js';
 
 // ---------------------------------------------------------------------------
@@ -177,7 +177,7 @@ export function notifyCoordinatorOfOrphanedPins(
 
     LOG.warn('MeshQueue', `CANCEL-ORPHANS-PINNED-TASK: stopping session ${stoppedSessionId} (mesh ${meshId}) orphaned ${orphans.length} pinned pending task(s): ${orphans.map(o => o.taskId).join(', ')}`);
     try {
-        queuePendingMeshCoordinatorEvent({
+        notifyMeshCoordinator({
             event: 'mesh:dispatch_blocked',
             meshId,
             nodeLabel,

@@ -214,6 +214,37 @@ describe('createDaemonHostRuntime', () => {
         expect(rt.createSnapshot).toHaveBeenCalledWith({ workspace: '/repo', reason: 'after_agent_work', sessionId: 's1' });
     });
 
+    it('P-II item 1: topic flushes are edge-driven only — no background interval fires extra flushes', () => {
+        vi.useFakeTimers();
+        try {
+            const rt = fakeRuntime();
+            const { transport, calls } = fakeTransport();
+            const host = createDaemonHostRuntime(rt.runtime, transport);
+            vi.spyOn(host.topics, 'hasSubscriptions').mockReturnValue(true);
+            const flushNow = vi.spyOn(host.topics, 'flushNow').mockResolvedValue(undefined);
+            const invalidate = vi.spyOn(host.topics, 'invalidate').mockResolvedValue(undefined);
+
+            // N = 3 modal/prompt edges → exactly 3 session.modal flushNow calls.
+            rt.bus.emit({ kind: 'modal', sessionId: 's1', at: 0, modal: null });
+            rt.bus.emit({ kind: 'prompt', sessionId: 's1', at: 0, prompt: null, transport: null });
+            rt.bus.emit({ kind: 'mesh_state', at: 0, meshId: 'mesh_a' });
+            expect(flushNow.mock.calls.map((c) => c[0])).toEqual(['session.modal', 'session.modal', 'daemon.metadata']);
+            expect(invalidate).not.toHaveBeenCalled();
+
+            // Advancing well past several 2-2.5s legacy-timer periods AND the 60s
+            // reconciliation period must not add a single extra flush/invalidate
+            // call — the reconciliation tick only WARNs, it never flushes.
+            vi.advanceTimersByTime(180_000);
+            expect(flushNow).toHaveBeenCalledTimes(3);
+            expect(invalidate).not.toHaveBeenCalled();
+            expect(calls.commands).toEqual([]);
+
+            host.stop();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('startDevSupport starts the DevServer and turns on provider hot reload (providerLoader.watch)', async () => {
         const rt = fakeRuntime();
         const host = createDaemonHostRuntime(rt.runtime, fakeTransport().transport);

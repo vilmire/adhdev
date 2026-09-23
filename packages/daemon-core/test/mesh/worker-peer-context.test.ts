@@ -9,7 +9,22 @@ import {
 } from '../../src/mesh/worker-mcp-isolation'
 import { __resetHandoffNotesForTest, storeHandoffNote } from '../../src/mesh/worker-handoff-notes'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
-import { appendLedgerEntry } from '../../src/mesh/mesh-ledger'
+import { meshTopicIndexFor, MESH_RECORD_APPEND_KIND } from '../../src/mesh/mesh-topic-index'
+
+// Wiring-unification C-W3: sibling lifecycle facts come from the durable
+// mesh_topic_index (fed by the `mesh.index` cursor). Seed it directly, as a
+// peer daemon's `mesh.record` entry would land there.
+let indexSeq = 0
+function appendLedgerEntry(meshId: string, e: { kind: string; taskId?: string; nodeId?: string; payload?: Record<string, unknown> }): void {
+  const seq = ++indexSeq
+  const at = Date.now() + seq
+  const id = `led-peer-${seq}`
+  meshTopicIndexFor(MeshRuntimeStore.getInstance().db).ingest({
+    meshId, writer: 'w-peer', seq, kind: MESH_RECORD_APPEND_KIND,
+    payload: { id, timestamp: new Date(at).toISOString(), ledgerKind: e.kind, nodeId: e.nodeId ?? null, sessionId: null, providerType: null,
+      taskId: e.taskId ?? null, payload: e.payload ?? {}, v: 2, k: 'mesh.record', eventId: id, at },
+  })
+}
 
 beforeEach(() => {
   __resetWorkerTaskTokensForTest()

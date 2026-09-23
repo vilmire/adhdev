@@ -33,7 +33,7 @@ import {
   buildReclaimedPinnedNotice,
   notifyCoordinatorOfPinnedReclaim,
 } from '../../src/mesh/mesh-dispatch-failed-notify.js'
-import { drainPendingMeshCoordinatorEvents, __clearMeshPendingEventsForTests } from '../../src/mesh/mesh-events-pending.js'
+import { drainPendingMeshCoordinatorEvents, __clearMeshPendingEventsForTests } from '../helpers/pending-notices.js'
 
 const COORDINATOR_DAEMON_ID = 'test-machine'
 const NODE_ID = 'node_main'

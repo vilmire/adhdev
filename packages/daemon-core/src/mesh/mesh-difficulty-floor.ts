@@ -4,7 +4,7 @@ import { getQueueEntryById, recordTaskAutoLaunch, type MeshWorkQueueEntry } from
 // (its old isDifficultyFloorWaitReason dependency moved here with the wait-clock guard),
 // so this edge cannot cycle.
 import { AUTO_LAUNCH_AWAIT_CLAIM_MS, autoLaunchWriteWouldClobberWinner } from './mesh-autolaunch-integrity.js';
-import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { isModelAllowedBySlot, SLOT_MODEL_BUSY_SKIP_REASON } from './slot-model-enforcement.js';
 import { ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON } from './mesh-quota-routing.js';
 import { isMeshTaskDifficulty, normalizeNodeCapabilitySlots, type MeshTaskDifficulty, type NodeCapabilitySlot } from '@adhdev/mesh-shared';
@@ -211,7 +211,7 @@ export function handleDifficultyFloorSkip(args: {
     const coordinatorMessage = capacityStall
         ? `[System] Queued task ${args.taskId} has waited ${waitedMinutes} minutes because every capable slot has stayed at capacity (${args.reason}). It remains pending and will still be claimed automatically the moment a slot frees. Check whether the occupying sessions are genuinely working or stuck; consider re-targeting the task to another node rather than widening a mesh-wide cap.`
         : `[System] Queued task ${args.taskId} has waited ${waitedMinutes} minutes because no available slot meets its ${difficulty} difficulty floor. It remains pending and was not downgraded. Ask the user whether to grant an explicit task-scoped downgrade; do not change a mesh-wide policy.`;
-    const queued = queuePendingMeshCoordinatorEvent({
+    const queued = notifyMeshCoordinator({
         event: 'mesh:dispatch_blocked',
         meshId: args.meshId,
         nodeLabel: args.nodeId || args.meshId,

@@ -4,12 +4,21 @@
  * This is observation-only logging — these tests assert the trace surface, not any
  * decision behaviour.
  */
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { LOG } from '../../src/logging/logger.js';
-import { meshEventTraceKey, traceMeshEventStage, traceMeshEventDrop } from '../../src/shared/mesh-event-trace.js';
+import {
+  meshEventTraceKey,
+  traceMeshEventStage,
+  traceMeshEventDrop,
+  __resetMeshEventDropStreaksForTests,
+} from '../../src/shared/mesh-event-trace.js';
 
 describe('mesh-event-trace (EVTTRACE)', () => {
-  afterEach(() => vi.restoreAllMocks());
+  beforeEach(() => __resetMeshEventDropStreaksForTests());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __resetMeshEventDropStreaksForTests();
+  });
 
   it('builds a correlation key carrying every provided anchor', () => {
     const key = meshEventTraceKey({
@@ -61,5 +70,99 @@ describe('mesh-event-trace (EVTTRACE)', () => {
     const lines = [...info.mock.calls, ...warn.mock.calls].map(c => c[1] as string);
     expect(lines).toHaveLength(3);
     for (const line of lines) expect(line).toContain('task=task_777');
+  });
+});
+
+// ─── per-(reason, anchor) streak dedup (2026-09-23 preview log review) ──────
+// EvtTrace WARN volume: one (reason, taskId) pair repeated every ~4s in bursts
+// (5,758 combined WARN lines for 3 reasons over 8 days; worst observed case 12
+// hits in 20s for one task). traceMeshEventDrop was a bare unconditional
+// LOG.warn with no dedup. Fix is generic at the module level — keyed on
+// (reason, anchor), not on any specific reason string — so it applies to every
+// drop reason, including ones that don't exist yet.
+describe('traceMeshEventDrop streak dedup', () => {
+  beforeEach(() => __resetMeshEventDropStreaksForTests());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __resetMeshEventDropStreaksForTests();
+  });
+
+  it('the FIRST drop for a (reason, anchor) key still logs WARN immediately', () => {
+    const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
+    const debugSpy = vi.spyOn(LOG, 'debug').mockImplementation(() => {});
+    traceMeshEventDrop('stale_task_terminal', { taskId: 'task_1' });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(debugSpy).not.toHaveBeenCalled();
+  });
+
+  it('repeats of the SAME (reason, anchor) within the flush window log DEBUG, not WARN', () => {
+    const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
+    const debugSpy = vi.spyOn(LOG, 'debug').mockImplementation(() => {});
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    traceMeshEventDrop('stale_task_terminal', { taskId: 'task_1' }); // 1st: WARN
+    now.mockReturnValue(1_004_000); // +4s, well inside the 5min flush window
+    traceMeshEventDrop('stale_task_terminal', { taskId: 'task_1' });
+    now.mockReturnValue(1_008_000);
+    traceMeshEventDrop('stale_task_terminal', { taskId: 'task_1' });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(debugSpy).toHaveBeenCalledTimes(2);
+    now.mockRestore();
+  });
+
+  it('a DIFFERENT reason for the SAME task is its own streak (not collapsed together)', () => {
+    const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
+    traceMeshEventDrop('stale_task_terminal', { taskId: 'task_1' });
+    traceMeshEventDrop('reclaim_deferred_unknown_verdict', { taskId: 'task_1' });
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('the SAME reason for a DIFFERENT task is its own streak (not collapsed together)', () => {
+    const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
+    traceMeshEventDrop('stale_task_terminal', { taskId: 'task_1' });
+    traceMeshEventDrop('stale_task_terminal', { taskId: 'task_2' });
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to sessionId, then nodeId, when taskId is absent — same fallback order as meshEventTraceKey', () => {
+    const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
+    const debugSpy = vi.spyOn(LOG, 'debug').mockImplementation(() => {});
+    traceMeshEventDrop('meshId_required', { sessionId: 'sess_9' });
+    traceMeshEventDrop('meshId_required', { sessionId: 'sess_9' }); // same anchor → streak repeat
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(debugSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-surfaces at WARN with a repeat count once the flush window elapses, and keeps DEBUG-ing after', () => {
+    const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
+    const debugSpy = vi.spyOn(LOG, 'debug').mockImplementation(() => {});
+    const now = vi.spyOn(Date, 'now').mockReturnValue(0);
+    traceMeshEventDrop('stale_task_terminal', { taskId: 'task_1' }); // WARN #1 (streak start)
+    now.mockReturnValue(60_000);
+    traceMeshEventDrop('stale_task_terminal', { taskId: 'task_1' }); // DEBUG
+    now.mockReturnValue(120_000);
+    traceMeshEventDrop('stale_task_terminal', { taskId: 'task_1' }); // DEBUG
+    now.mockReturnValue(5 * 60_000 + 1); // just past the 5min flush window
+    traceMeshEventDrop('stale_task_terminal', { taskId: 'task_1' }); // WARN #2 (flush)
+    now.mockReturnValue(5 * 60_000 + 5_000);
+    traceMeshEventDrop('stale_task_terminal', { taskId: 'task_1' }); // DEBUG again
+
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(debugSpy).toHaveBeenCalledTimes(3);
+    const flushLine = warn.mock.calls[1][1] as string;
+    expect(flushLine).toContain('[drop:stale_task_terminal]');
+    expect(flushLine).toContain('repeated 2x');
+    expect(flushLine).toContain('4 total this streak');
+    now.mockRestore();
+  });
+
+  it('does not delay visibility: the very first line of a brand-new streak is always WARN, never DEBUG', () => {
+    const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
+    const debugSpy = vi.spyOn(LOG, 'debug').mockImplementation(() => {});
+    traceMeshEventDrop('unroutable', { taskId: 'task_new' });
+    expect(warn).toHaveBeenCalledOnce();
+    expect(debugSpy).not.toHaveBeenCalled();
+    const [, msg] = warn.mock.calls[0] as [string, string];
+    expect(msg).toContain('[drop:unroutable]');
+    expect(msg).not.toContain('repeated');
   });
 });

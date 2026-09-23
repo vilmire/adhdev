@@ -24,7 +24,7 @@ import {
     MESH_TASK_GRAPH_MAX_TASKS,
     claimNextTask,
     getQueue,
-    updateTaskStatus,
+    updateTaskStatus, __writeTaskStatusForTests,
 } from '../../src/mesh/mesh-work-queue.js';
 
 // G5: atomic task-graph enqueue. The batch is all-or-nothing (one better-sqlite3
@@ -139,7 +139,7 @@ describe('enqueueTaskGraph (G5 atomic batch)', () => {
         // A different node still cannot claim the dependent while the root is unfinished.
         expect(claimNextTask(meshId, 'node_b', 'session_b')).toBeNull();
 
-        updateTaskStatus(meshId, root.id, 'completed');
+        __writeTaskStatusForTests(meshId, root.id, 'completed');
         const second = claimNextTask(meshId, 'node_b', 'session_b');
         expect(second?.id).toBe(dependent.id);
     });

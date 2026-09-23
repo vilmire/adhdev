@@ -20,7 +20,7 @@
  * per window while undrained, and page again in the next window if still stale.
  */
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { isTerminalWorkspaceSagaState } from './mesh-graph-workspace-bind.js';
 import type { MeshGraphGateRow, MeshTaskGraphRow, MeshTaskGraphNodeRow } from './mesh-graph-types.js';
 
@@ -139,7 +139,7 @@ function deadWorkspaceAdvice(sagaState: string): string {
 
 /**
  * Page the coordinator for every stale graph/gate in one mesh. Read-only over
- * graph state; the only side effect is queuePendingMeshCoordinatorEvent.
+ * graph state; the only side effect is notifyMeshCoordinator.
  * Cheap by construction: active/waiting_gate graphs are a small set, and node
  * lists are only loaded for the graphs that are actually stale.
  */
@@ -203,7 +203,7 @@ function queueGraphReminder(
         `Graph ${graph.graphId} (${graph.status}) has not advanced for ${age}. `
         + `Frontier: ${frontierSummary(nodes)}.${gatePart}${workspacePart} `
         + 'Inspect with mesh_graph_view; resume the work, release/abandon its gates, or cancel dead tasks so the graph can settle.';
-    return queuePendingMeshCoordinatorEvent({
+    return notifyMeshCoordinator({
         event: 'mesh:graph_stale',
         meshId: graph.meshId,
         nodeLabel: graph.graphId.slice(0, 8),
@@ -230,7 +230,7 @@ function queueGateReminder(gate: MeshGraphGateRow, nowMs: number, updatedAtMs: n
         `Coordinator gate ${gateSummary(gate)} on graph ${gate.graphId} has been waiting for ${age}. `
         + `${gate.instructions ? `Instructions: ${gate.instructions} ` : ''}`
         + `Claim it with mesh_graph_gate_claim (gateId: ${gate.gateId}) and release with evidence, or abandon it if the work is obsolete. Downstream tasks stay blocked until then.`;
-    return queuePendingMeshCoordinatorEvent({
+    return notifyMeshCoordinator({
         event: 'mesh:graph_gate_stale',
         meshId: gate.meshId,
         nodeLabel: gate.ref || gate.gateId.slice(0, 8),

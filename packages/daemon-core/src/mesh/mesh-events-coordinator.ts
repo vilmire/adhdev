@@ -1,8 +1,6 @@
-// Re-export barrel (A-4 split). This module was split into three domain files —
-// classification predicates (mesh-event-classify), queue task assignment / dispatch /
-// auto-launch (mesh-queue-assignment), and forward-event handling / relay metadata /
-// dedup (mesh-event-forwarding). The barrel preserves the exact original public export
-// surface so every existing importer is unchanged. The acyclic layering is:
+// Re-export barrel: classification predicates (mesh-event-classify), queue task
+// assignment / dispatch / auto-launch (mesh-queue-assignment) and the mesh
+// provider-event path (mesh-event-forwarding). Layering (acyclic):
 //   mesh-event-classify (leaf) ← mesh-queue-assignment ← mesh-event-forwarding
 
 export {
@@ -31,5 +29,5 @@ export {
     handleMeshForwardEvent,
     resolveForwardEventMeshId,
     setupMeshEventForwarding,
-    shouldRequeueHollowCompletion,
+    isHollowCompletion,
 } from './mesh-event-forwarding.js';

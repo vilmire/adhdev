@@ -333,10 +333,35 @@ describe('armBeacon — lifecycle against a real node', () => {
             meshIds: ['mesh_abc123'],
             env: withAuthority ? { ADHDEV_SEQSCRIBE_FLEET_SECRET: 'beacon-test-secret' } : {},
             storedFleetSecret: null,
+            // C7-3: `withAuthority=false` here means "test the metadata-only,
+            // authority-off shape" (this file's own topic-scope assertions
+            // depend on it) — opt out of the default local authority so that
+            // shape still exists to test, rather than getting a local
+            // authority's content topics for free.
+            localAuthority: withAuthority,
             ...(constants ? { constants } : {}),
         });
         return handle;
     }
+
+    it('C-W6: counts exactly one getFailed per failed GET round trip, not two', async () => {
+        // Regression for the double-count bug the C-W3 audit found: rawQuery's
+        // own catch AND doGet's outer catch (wrapping queryWithSplitRetry,
+        // which calls rawQuery) both incremented counters.getFailed for the
+        // SAME failure — a single GET failure looked like two, which is what
+        // turned a true ~27% worst-window failure rate into a misread ~58%.
+        const node = open();
+        const fake = makeFakeTransport({ failGet: true });
+
+        const beacon = armBeacon(node, fake.transport, { env: {} });
+        expect(beacon).not.toBeNull();
+        await settle();
+
+        expect(fake.gets.length).toBeGreaterThanOrEqual(1);
+        expect(beacon!.counters().getFailed).toBe(fake.gets.length);
+        expect(beacon!.counters().get).toBe(0);
+        beacon!.stop();
+    });
 
     it('pushes a projected report on arm and requests the metadata scope', async () => {
         const node = open();

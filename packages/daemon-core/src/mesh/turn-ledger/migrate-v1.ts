@@ -6,7 +6,8 @@
 // before; this migration introduces it). Idempotent and crash-safe:
 //
 //   0. `beforeFold` hook — the legacy `*.pending-events.jsonl` import
-//      (mesh-events-pending-migration.ts) runs first so its rows fold too.
+//      (`importLegacyPendingEventsJsonl` below, C-W3: inlined here from the
+//      deleted mesh-events-pending-migration.ts) runs first so its rows fold too.
 //   1. EXPORT every legacy table (rollback audit) as one JSONL file, one row
 //      per line with a `_table` discriminator, BEFORE any mutation.
 //   2. Per mesh, ONE transaction with MOVE semantics (insert new rows, delete
@@ -34,8 +35,9 @@
 // survive verbatim in the export file only. Unmapped reasons are counted.
 // ---------------------------------------------------------------------------
 
-import { closeSync, mkdirSync, openSync, writeSync } from 'fs';
-import { dirname } from 'path';
+import { randomUUID } from 'crypto';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeSync } from 'fs';
+import { dirname, join } from 'path';
 import type { Database as DatabaseHandle } from 'better-sqlite3';
 import {
     MESH_TOPIC_PROTOCOL_VERSION,
@@ -196,6 +198,93 @@ export function exportLegacyTurnTables(db: DatabaseHandle, path: string): number
         closeSync(fd);
     }
     return written;
+}
+
+// ─── step 0: the legacy `*.pending-events.jsonl` import ─────────────────────
+//
+// Before SQLite became the pending-event store, every coordinator event was
+// also written to `<ledgerDir>/<meshId>[-<daemonId>].pending-events.jsonl`.
+// A machine upgrading across that cut can still hold UNDELIVERED events in
+// such a file. They are claimed (atomic rename), parsed line by line (a corrupt
+// line is skipped, never fatal), inserted into the legacy inbox table so the
+// fold's step g turns every undrained one into a `turn.notify` — and the file
+// is unlinked. A partial failure restores the file for the next boot.
+
+const PENDING_EVENTS_JSONL_SUFFIX = '.pending-events.jsonl';
+
+export interface PendingEventsJsonlImportResult {
+    filesScanned: number;
+    eventsImported: number;
+    linesSkipped: number;
+    filesRemoved: number;
+    filesRetained: number;
+}
+
+export function importLegacyPendingEventsJsonl(db: DatabaseHandle, ledgerDir: string): PendingEventsJsonlImportResult {
+    const result: PendingEventsJsonlImportResult = { filesScanned: 0, eventsImported: 0, linesSkipped: 0, filesRemoved: 0, filesRetained: 0 };
+    if (!tableExists(db, 'mesh_pending_events') || !existsSync(ledgerDir)) return result;
+    let names: string[];
+    try {
+        names = readdirSync(ledgerDir);
+    } catch {
+        return result;
+    }
+    const insert = db.prepare(`INSERT OR IGNORE INTO mesh_pending_events
+        (id, mesh_id, coordinator_daemon_id, event, payload, fingerprint, queued_at, protocol_version, event_id, scope, dispatched_by, intended_for)
+        VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`);
+    for (const name of names) {
+        if (!name.endsWith(PENDING_EVENTS_JSONL_SUFFIX) || name.length <= PENDING_EVENTS_JSONL_SUFFIX.length) continue;
+        const path = join(ledgerDir, name);
+        result.filesScanned++;
+        const claimed = `${path}.migrating`;
+        try {
+            renameSync(path, claimed);
+        } catch {
+            continue; // another process claimed it, or it vanished
+        }
+        let content: string;
+        try {
+            content = readFileSync(claimed, 'utf-8');
+        } catch {
+            try { renameSync(claimed, path); } catch { /* best-effort restore */ }
+            result.filesRetained++;
+            continue;
+        }
+        let allImported = true;
+        for (const line of content.split('\n')) {
+            if (!line.trim()) continue;
+            let event: Record<string, unknown>;
+            try {
+                event = parseObject(line);
+            } catch {
+                event = {};
+            }
+            const meshId = typeof event.meshId === 'string' ? event.meshId : '';
+            const eventName = typeof event.event === 'string' ? event.event : '';
+            if (!meshId || !eventName) { result.linesSkipped++; continue; }
+            const text = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
+            try {
+                insert.run(
+                    randomUUID(), meshId, text(event.targetCoordinatorDaemonId), eventName, JSON.stringify(event),
+                    typeof event.queuedAt === 'number' ? event.queuedAt : Date.now(),
+                    text(event.protocolVersion), text(event.eventId), text(event.scope),
+                    event.dispatchedBy ? JSON.stringify(event.dispatchedBy) : null,
+                    event.intendedFor ? JSON.stringify(event.intendedFor) : null,
+                );
+                result.eventsImported++;
+            } catch {
+                allImported = false;
+            }
+        }
+        if (!allImported) {
+            try { renameSync(claimed, path); } catch { /* best-effort restore */ }
+            result.filesRetained++;
+            continue;
+        }
+        try { unlinkSync(claimed); } catch { /* imported; a leftover .migrating file is inert */ }
+        result.filesRemoved++;
+    }
+    return result;
 }
 
 /** `turn-ledger-premigrate-<ts>.jsonl` next to the ledger (caller supplies the dir). */
@@ -468,7 +557,12 @@ function migrateMesh(db: DatabaseHandle, store: TurnStore, meshId: string, opts:
             report.pendingUndrained++;
             const eventId = `migrated_pending:${row.id}`;
             const target = row.coordinator_daemon_id && isEvidenceIdentifier(row.coordinator_daemon_id) ? row.coordinator_daemon_id : opts.ownerDaemonId;
-            const targetSession = row.intended_for && isEvidenceIdentifier(row.intended_for) ? row.intended_for : undefined;
+            // `intended_for` holds a JSON-serialized CoordinatorIdentity, not a bare
+            // session id; the payload's top-level anchor is the pre-v2 fallback.
+            const intended = parseObject(row.intended_for);
+            const sessionCandidate = typeof intended.sessionId === 'string' ? intended.sessionId
+                : typeof payload.targetCoordinatorSessionId === 'string' ? payload.targetCoordinatorSessionId : undefined;
+            const targetSession = sessionCandidate && isEvidenceIdentifier(sessionCandidate) ? sessionCandidate : undefined;
             const entry: MeshTopicEntry = {
                 v: MESH_TOPIC_PROTOCOL_VERSION, eventId, at: row.queued_at, k: 'turn.notify', notify: 'mesh_event', targetDaemonId: target,
                 ...(targetSession ? { targetSessionId: targetSession } : {}),

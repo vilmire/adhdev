@@ -6,7 +6,7 @@ import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { quotaSpreadBonusByProvider, type QuotaFactsContext } from './mesh-quota-routing.js';
-import { hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
+import { hasUnterminalDirectDispatchLedgerEntry } from './mesh-dispatch-ledger-reads.js';
 import { decideSlotForModel, isModelAllowedBySlot } from './slot-model-enforcement.js';
 import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
 import { getMesh } from '../config/mesh-config.js';

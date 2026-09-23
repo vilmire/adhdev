@@ -18,7 +18,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { publishMeshRecord, type MeshRecordEntry } from '../seqscribe/mesh-publisher.js';
+import { publishMeshRecord, publishMeshRecordAwaited, type MeshRecordEntry } from '../seqscribe/mesh-publisher.js';
 
 /** Scalars a record may carry (anything else in `payload` is dropped by the projection). */
 export interface MeshRecordScalars {
@@ -39,10 +39,9 @@ export interface MeshRecordResult {
     published: boolean;
 }
 
-/** Record one non-turn mesh event on `mesh.<meshId>.events` (`mesh.record`). Never throws. */
-export function meshRecord(meshId: string, kind: string, scalars: MeshRecordScalars = {}): MeshRecordResult {
+function buildMeshRecordEntry(kind: string, scalars: MeshRecordScalars): MeshRecordEntry {
     const eventId = scalars.id ?? randomUUID();
-    const entry: MeshRecordEntry = {
+    return {
         id: eventId,
         timestamp: new Date(scalars.at ?? Date.now()).toISOString(),
         kind,
@@ -52,7 +51,31 @@ export function meshRecord(meshId: string, kind: string, scalars: MeshRecordScal
         ...(scalars.taskId ? { taskId: scalars.taskId } : {}),
         ...(scalars.payload ? { payload: scalars.payload } : {}),
     };
-    return { eventId, published: publishMeshRecord(meshId, entry) };
+}
+
+/** Record one non-turn mesh event on `mesh.<meshId>.events` (`mesh.record`). Never throws. */
+export function meshRecord(meshId: string, kind: string, scalars: MeshRecordScalars = {}): MeshRecordResult {
+    const entry = buildMeshRecordEntry(kind, scalars);
+    return { eventId: entry.id, published: publishMeshRecord(meshId, entry) };
+}
+
+export interface MeshRecordAppendResult {
+    eventId: string;
+    /** The entry's append coordinate on `mesh.<meshId>.events`; null when it was not appended (no node / refused / rejected). */
+    appended: { topic: string; writer: string; seq: number } | null;
+}
+
+/**
+ * `meshRecord`, awaiting the append so the caller gets the real coordinate
+ * (the `mesh_record` IPC response's `seq`). Never rejects.
+ */
+export async function meshRecordAppended(meshId: string, kind: string, scalars: MeshRecordScalars = {}): Promise<MeshRecordAppendResult> {
+    const entry = buildMeshRecordEntry(kind, scalars);
+    const id = await publishMeshRecordAwaited(meshId, entry);
+    return {
+        eventId: entry.id,
+        appended: id ? { topic: String(id[0]), writer: String(id[1]), seq: Number(id[2]) } : null,
+    };
 }
 
 /** Publish an already-built ledger entry under its own id (appendLedgerEntry's replication leg). */

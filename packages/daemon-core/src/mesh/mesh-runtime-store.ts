@@ -30,7 +30,6 @@ import {
 // same pattern as mesh-tools-internal.ts / mesh-tools.ts.
 import { notifyLedgerBulkChange, type MeshTurnAttemptRow, type MeshTurnHeldSuspensionRow } from './mesh-runtime-store-turn-rows.js';
 import { selectTurnEventsForTask, selectTurnEventsByKind, deleteTurnEventsByKindOlderThan, pruneTerminalTurnAttemptsWithCascade, upsertHandoffNoteText, selectHandoffNoteText, deleteHandoffNoteTextOlderThan, type TurnEventRow, type HandoffNoteTextRow } from './mesh-turn-event-queries.js';
-import { selectUnsettledTerminalQueueRowsAndAttempts } from './mesh-unsettled-terminal-queries.js';
 // TURN-LEDGER pure move (file-size gate): the Stage 5 turn-attempt / turn-event /
 // held-suspension persistence lives in mesh-runtime-store-turn-attempts.ts; the
 // class methods below delegate with `this` as `self` (router.ts → router-refine.ts
@@ -45,9 +44,9 @@ import {
     type MeshTurnAttemptInsert, type MeshTurnAttemptStageOpts,
     type MeshTurnEventInsert, type MeshHeldTurnSuspensionInsert,
 } from './mesh-runtime-store-turn-attempts.js';
-// Pure move (file-size gate): the schema DDL + column migrations, the G2 event
-// ledger and the G3 pending-coordinator-event persistence now live in
-// mesh-runtime-store-schema.ts / -ledger.ts / -pending-events.ts. The class keeps
+// Pure move (file-size gate): the schema DDL + column migrations and the G2 event
+// ledger now live in mesh-runtime-store-schema.ts / -ledger.ts (the G3
+// pending-coordinator-event store retired with C-W3 — notices are turn_events). The class keeps
 // thin delegating wrappers below so the public surface and every existing call
 // site are unchanged — same `self`-passing pattern as the turn-attempt extraction.
 import {
@@ -60,13 +59,6 @@ import {
     deleteLedgerEntries, hasLedgerEntry, ledgerEntryCount, importLedgerEntries, readLedgerSlice,
     readLedgerEntryHeads, readLedgerKindCounts,
 } from './mesh-runtime-store-ledger.js';
-import {
-    insertPendingEvent, drainPendingEvents, peekPendingEvents, recentDrainedPendingEvents,
-    recentDrainedPendingEventPayloads, hasPendingEventFingerprint, hasDrainedEventId,
-    drainedEventIdsForMesh, pendingEventCount, markPendingEventsDrainedById,
-    requeueDrainedPendingEventByFingerprint, updatePendingEventPayloadByFingerprint,
-    requeueDrainedPendingEventById, deletePendingEventsById, prunePendingEvents,
-} from './mesh-runtime-store-pending-events.js';
 
 let DatabaseCtor: typeof BetterSqlite3 | undefined;
 
@@ -287,7 +279,17 @@ export class MeshRuntimeStore {
     /** C3 one-way fold of the legacy turn/outbox/ledger tables (user_version 0 → 1). Boot calls it once. */
     runTurnLedgerMigrationV1(opts: Omit<TurnLedgerMigrationOptions, 'exportPath'> & { exportPath?: string | null }): TurnLedgerMigrationReport {
         const nowMs = opts.nowMs ?? Date.now();
-        return migrateTurnLedgerV1(this.db, { ...opts, nowMs, exportPath: opts.exportPath === undefined ? turnLedgerExportPath(getLedgerDir(), nowMs) : opts.exportPath });
+        const report = migrateTurnLedgerV1(this.db, { ...opts, nowMs, exportPath: opts.exportPath === undefined ? turnLedgerExportPath(getLedgerDir(), nowMs) : opts.exportPath });
+        // Transitional (wiring-unification C integration): the schema step still
+        // CREATEs the legacy tables on every open, because writers of three of
+        // them remain (mesh_event_ledger — appendLedgerEntry; mesh_session_delivery
+        // — createSessionDelivery; mesh_direct_dispatches — the direct-dispatch
+        // store; see the C report's runnability list). Every later open recreates
+        // the dropped tables EMPTY; re-running the schema step here gives the
+        // migrating boot that same state instead of "no such table" throws until
+        // the next restart. Drop the legacy CREATEs with their last writer.
+        if (report.droppedTables.length > 0) this.migrate();
+        return report;
     }
 
     // ── Schema DDL + column migrations ───────────────────────────────────────
@@ -1860,126 +1862,6 @@ export class MeshRuntimeStore {
     } {
         return readLedgerSlice(this, meshId, opts);
     }
-    // ── G3: Pending Coordinator Events ──────────────────────────────────────
-    // Implementation lives in ./mesh-runtime-store-pending-events.ts
-    // (behavior-preserving code move, file-size gate). Thin delegators keep the
-    // public surface and every call site unchanged.
-
-    insertPendingEvent(event: {
-        id: string;
-        meshId: string;
-        coordinatorDaemonId?: string | null;
-        event: string;
-        payload?: unknown;
-        fingerprint?: string | null;
-        queuedAt: number;
-        // v2 envelope columns (B2a) — all optional so v1 callers/rows are unaffected.
-        // dispatchedBy / intendedFor are pre-serialized CoordinatorIdentity JSON.
-        protocolVersion?: string | null;
-        eventId?: string | null;
-        scope?: string | null;
-        dispatchedBy?: string | null;
-        intendedFor?: string | null;
-    }): boolean {
-        return insertPendingEvent(this, event);
-    }
-
-    /**
-     * Drain undrained pending events for a mesh, atomically marking them drained.
-     * When `opts.onlyEvents` is supplied, ONLY rows whose `event` is in that set are
-     * drained — the rest stay queued (drained=0) for a later drain. This is how the
-     * reconcile loop force-drains terminal/force-inject events into a *generating*
-     * coordinator while leaving non-force progress events for the coordinator's next
-     * idle transition. Filtering happens inside the same transaction as the
-     * drained=1 marking, so force-drain + a concurrent full drain can never both
-     * consume the same row.
-     */
-    drainPendingEvents(
-        meshId: string,
-        coordinatorDaemonId?: string | null | ReadonlyArray<string>,
-        // `drainedBy` (REFINE-EVENT-SESSION-SCOPED-UNICAST) is the pre-serialized
-        // drainer CoordinatorIdentity JSON, recorded on the rows this call consumes so
-        // a mis-delivered unicast is auditable after the fact instead of inferred.
-        // Omitted → the column stays NULL, exactly as before (no behaviour change).
-        opts?: { onlyEvents?: ReadonlySet<string>; drainedBy?: string | null },
-    ): Array<{ id: string; event: string; payload: unknown }> {
-        return drainPendingEvents(this, meshId, coordinatorDaemonId, opts);
-    }
-
-    /** Non-destructive peek — returns undrained events without marking them drained. */
-    peekPendingEvents(meshId: string, coordinatorDaemonId?: string | null | ReadonlyArray<string>): Array<{ id: string; event: string; payload: unknown }> {
-        return peekPendingEvents(this, meshId, coordinatorDaemonId);
-    }
-
-    /**
-     * REFINE-EVENT-SESSION-SCOPED-UNICAST — drain attribution audit. Returns the most
-     * recent pending-event rows for a mesh with WHO drained each one, so a suspected
-     * mis-delivery ("my refine result went to another coordinator session") is answered
-     * from the ledger instead of inferred from timing. `drainedBy` is the serialized
-     * drainer CoordinatorIdentity, or null when the row is still queued, was drained
-     * before this column existed, or was drained by a caller that passed no identity.
-     */
-    recentDrainedPendingEvents(meshId: string, limit = 100): Array<{
-        id: string;
-        event: string;
-        scope: string | null;
-        intendedFor: string | null;
-        drainedBy: string | null;
-        drained: boolean;
-        queuedAt: number;
-        drainedAt: number | null;
-    }> {
-        return recentDrainedPendingEvents(this, meshId, limit);
-    }
-
-    /**
-     * ENTER-LOSS layer ③ (boot-time composer-residue sweep) — recently-DRAINED
-     * pending-event rows across ALL meshes, payloads included. The sweep matches
-     * each payload's coordinatorMessage against the composer text of restored
-     * idle sessions: an event is marked drained BEFORE its body is written to the
-     * PTY (the consume-before-submit ordering this incident class exploits), so a
-     * body stranded in a composer by a mid-submit daemon death is identifiable
-     * ONLY from these drained rows — the undrained queue no longer holds it.
-     * Drained rows are soft-marked (retained until mesh deletion), so this reads
-     * history, not live queue state.
-     */
-    recentDrainedPendingEventPayloads(sinceEpochMs: number, limit = 200): Array<{
-        id: string;
-        meshId: string;
-        event: string;
-        payload: unknown;
-        drainedAt: number;
-    }> {
-        return recentDrainedPendingEventPayloads(this, sinceEpochMs, limit);
-    }
-
-    hasPendingEventFingerprint(meshId: string, fingerprint: string): boolean {
-        return hasPendingEventFingerprint(this, meshId, fingerprint);
-    }
-
-    /**
-     * B3a — v2 eventId idempotency. Returns true when a row with this event_id has
-     * ALREADY been drained (drained = 1) for the mesh. Drained rows are retained
-     * (soft-marked, not deleted until mesh deletion), so this is a durable, restart-
-     * surviving dedup: a v2 event whose eventId was already consumed is skipped on
-     * re-delivery even when its content fingerprint differs. Scoped by mesh_id +
-     * the partial event_id index (idx_mesh_pending_events_event_id).
-     */
-    hasDrainedEventId(meshId: string, eventId: string): boolean {
-        return hasDrainedEventId(this, meshId, eventId);
-    }
-
-    /**
-     * B3a — snapshot of the v2 event_ids ALREADY drained (drained = 1) for the mesh.
-     * Taken BEFORE a drain call marks the current batch drained=1, so the resulting
-     * set names only PRIOR drains — the re-delivery dedup baseline. (Reading it after
-     * the drain would self-match the batch's own freshly-drained rows.) Non-v2 rows
-     * have a NULL event_id and are excluded by the index/WHERE.
-     */
-    drainedEventIdsForMesh(meshId: string): Set<string> {
-        return drainedEventIdsForMesh(this, meshId);
-    }
-
     // ── M3: Mission Records ─────────────────────────────────────────────────
 
     upsertMission(mission: {
@@ -2081,193 +1963,6 @@ export class MeshRuntimeStore {
         return this.db.prepare('DELETE FROM mesh_missions WHERE mesh_id = ?').run(meshId).changes;
     }
 
-    /** Remove all pending-event rows (drained included) for a mesh — mesh deletion / test cleanup. */
-    clearPendingEventsForMesh(meshId: string): number {
-        const changes = this.db.prepare('DELETE FROM mesh_pending_events WHERE mesh_id = ?').run(meshId).changes;
-        // DUPNOTIF-DURABLE (gap_b): the terminal-completion dedup record deliberately
-        // OUTLIVES its pending row (that is the whole point — the row is deleted by
-        // retention/outbox expiry while the same completion can still be re-produced).
-        // It is still per-mesh pending-event state, so a "clear this mesh's pending
-        // events" must take it too; otherwise a cleared mesh keeps suppressing
-        // completions for tasks whose rows are gone. Namespaced `pending::<fingerprint>`,
-        // so this cannot touch the mesh-event-forwarding completion fingerprints sharing
-        // the table.
-        this.db.prepare(
-            `DELETE FROM mesh_completion_fingerprints WHERE mesh_id = ? AND fingerprint LIKE 'pending::%'`
-        ).run(meshId);
-        return changes;
-    }
-
-    pendingEventCount(meshId: string): number {
-        return pendingEventCount(this, meshId);
-    }
-
-    /**
-     * Mark specific pending-event rows drained by id (ack). Used by the
-     * unresolved-delegate durable-forward outbox: an event is peeked (not drained)
-     * while its push to the coordinator is unconfirmed, then marked drained ONLY
-     * after the push is acked. A failed push leaves the row undrained so the next
-     * reconcile tick retries it. Returns the number of rows newly marked drained.
-     */
-    markPendingEventsDrainedById(ids: ReadonlyArray<string>): number {
-        return markPendingEventsDrainedById(this, ids);
-    }
-
-    /**
-     * STRICT-ROUTE-HOLD-DURABILITY: return an ALREADY-DRAINED row to the queue
-     * (drained=1 → drained=0), in place, by fingerprint.
-     *
-     * Why this exists (the rc.33 defect): a strict-routed completion whose originating
-     * coordinator session is not currently live is "held" by re-queuing it. That
-     * re-queue used to call the normal insert path, which CANNOT work for a held
-     * event — three independent suppressors reject it:
-     *
-     *   1. `idx_mesh_pending_events_fingerprint` is UNIQUE on (mesh_id, fingerprint)
-     *      with NO `drained` qualifier, and insertPendingEvent uses INSERT OR IGNORE.
-     *      The just-drained row still occupies that fingerprint, so the "fresh
-     *      undrained copy" is silently ignored — changes = 0, no row added.
-     *   2. hasPendingCoordinatorEventDuplicate → hasPendingEventFingerprint queries
-     *      `drained = 0`, so it does NOT see the drained original and reports no
-     *      duplicate — the caller believes the re-queue succeeded.
-     *   3. Even if a copy did land, the v2 eventId is already in
-     *      drainedEventIdsForMesh(), so routeV2EventsForDrainer would skip it as
-     *      already-delivered on the next drain.
-     *
-     * The pre-restart hold only ever worked because the in-memory reconcile loop
-     * re-read the event; nothing durable was written. A restart inside the 60s TTL
-     * therefore lost the completion permanently (observed: task ec6c901a — exactly
-     * one row, drained=1, and zero lines in the JSONL mirror).
-     *
-     * Flipping the EXISTING row back to drained=0 is the only correct move: it keeps
-     * the unique fingerprint (no duplicate row can ever be created), removes the
-     * eventId from the drained-baseline so the v2 idempotency filter stops swallowing
-     * it, and makes the hold survive a process restart. queued_at is deliberately
-     * PRESERVED so the strict TTL keeps measuring the event's true age across holds
-     * and cannot be refreshed into an immortal row.
-     *
-     * Returns true when a drained row was found and returned to the queue.
-     */
-    requeueDrainedPendingEventByFingerprint(meshId: string, fingerprint: string): boolean {
-        return requeueDrainedPendingEventByFingerprint(this, meshId, fingerprint);
-    }
-
-    /**
-     * COORD-GENERATION-HANDOFF (defect 3): rewrite a queued row's payload in place,
-     * used to strip the `targetCoordinatorSessionId` of a coordinator confirmed dead
-     * so the event falls through to daemon-level delivery.
-     *
-     * Why a payload rewrite is required rather than just re-queuing: the in-memory
-     * event the caller holds is a COPY. requeueDrainedPendingEventByFingerprint flips
-     * `drained` but never touches `payload`, so without this the dead session stamp
-     * survives in SQLite and the very next drain re-reads it, re-enters the strict-
-     * unmatched branch, and the event loops on every 4s tick until the TTL kills it —
-     * i.e. the reattribution would silently not stick.
-     *
-     * Scoped by fingerprint + drained = 0, so it can only ever touch the row this
-     * caller just returned to the queue. `queued_at` and `fingerprint` are untouched:
-     * the row keeps its identity (no duplicate can be created, all fingerprint-keyed
-     * dedup continues to match) and its true age.
-     *
-     * Returns true when a queued row was found and rewritten.
-     */
-    updatePendingEventPayloadByFingerprint(meshId: string, fingerprint: string, payload: unknown): boolean {
-        return updatePendingEventPayloadByFingerprint(this, meshId, fingerprint, payload);
-    }
-
-    /**
-     * ENTER-LOSS layer ③ (composer-residue recovery) — the row-id twin of
-     * requeueDrainedPendingEventByFingerprint, with identical semantics: flip the
-     * EXISTING drained row back to drained=0 IN PLACE. Never a re-insert — the
-     * UNIQUE (mesh_id, fingerprint) index stays occupied by this very row, so no
-     * duplicate can be created and the DUPNOTIF suppressors are never in play.
-     * `queued_at` is preserved (age keeps measuring from the original enqueue) and
-     * `drained_by` is cleared with `drained_at` (the previous drainer is no longer
-     * the consumer of record).
-     *
-     * The sweep identifies residue from `recentDrainedPendingEventPayloads`, which
-     * returns row ids — an id is a strictly more precise handle than the
-     * fingerprint (fingerprints can be NULL on legacy rows), hence this variant.
-     * Returns true when a drained row was found and returned to the queue.
-     */
-    requeueDrainedPendingEventById(rowId: string): boolean {
-        return requeueDrainedPendingEventById(this, rowId);
-    }
-
-    /**
-     * Hard-delete pending-event rows by id (including the dedup fingerprint history).
-     * Used to expire an unresolved-delegate outbox entry that has exhausted its retry
-     * budget — fully removing it frees the fingerprint so a genuinely new completion
-     * for the same task could be re-queued later. Returns the number of rows deleted.
-     */
-    deletePendingEventsById(ids: ReadonlyArray<string>): number {
-        return deletePendingEventsById(this, ids);
-    }
-
-    /**
-     * Retention prune for mesh_pending_events. This table has no lifecycle GC of its
-     * own: a drained row is soft-marked (drained=1) and RETAINED — deliberately, so
-     * drainedEventIdsForMesh() has a durable v2-eventId dedup baseline — and an
-     * undrained row queued for a coordinator that never returned (a dead/evicted
-     * coordinator identity) stays drained=0 forever. Both accumulate without bound
-     * (observed: tens of thousands of rows, mostly stale). This is the missing
-     * retention step. Two independent windows:
-     *
-     *   - drained rows older than `drainedOlderThanMs`: the coordinator consumed them
-     *     long ago; the only thing they still back is the eventId re-delivery guard,
-     *     which is only meaningful for the recent past (a re-delivery of a week-old
-     *     event cannot occur — its producer session is long gone). Safe to delete.
-     *   - UNDRAINED rows older than `undrainedOlderThanMs` (a much wider window):
-     *     these are orphaned events for a coordinator identity that never drained
-     *     them. Kept wide so a genuinely-offline-but-returning coordinator still
-     *     receives its backlog; only genuinely unrecoverable orphans are swept.
-     *     TERMINAL events named in `neverExpireEvents` are exempt from this window
-     *     outright — see that option's doc below.
-     *
-     * Both windows key off `queued_at` (always present) — `drained_at` can be NULL on
-     * legacy rows. Returns the number of rows deleted, split by which window matched:
-     * `drainedExpired` (already-delivered rows past the dedup-useful window — not a
-     * drop, the coordinator already got these) and `undrainedExpired` (rows that were
-     * NEVER delivered — a genuine silent drop, same shape as the retired JSONL trim's
-     * `pending_trim_dropped`). `undrainedRows` carries the id/meshId/event/payload of
-     * every undrained-expired row BEFORE deletion so the caller can mirror it to the
-     * mesh ledger as `event_held` (recoverable via mesh_requeue_held_events) instead of
-     * losing it silently — this is the observability gap the retired trim used to cover
-     * and the SQLite-only cutover left open. Best-effort / idempotent: running it
-     * repeatedly with nothing to prune is a cheap no-op.
-     */
-    prunePendingEvents(opts: {
-        drainedOlderThanMs: number;
-        undrainedOlderThanMs: number;
-        /**
-         * TERMINAL-NEVER-EXPIRES. Event names that are EXEMPT from the undrained
-         * window entirely — never age-expired, however old they get. Caller-supplied
-         * (the store must not own mesh event taxonomy) and matched by exact event
-         * name, never by prefix/substring: a substring match would be a silent
-         * over-match the moment a new event name happens to contain one of these.
-         *
-         * The undrained window exists to sweep orphans whose information is
-         * re-derivable — a `refine:*` lifecycle marker, an `agent:ready` — for a
-         * coordinator identity that never returned. A terminal completion is the
-         * opposite: its finalSummary/worker result exists ONLY in this row, so
-         * expiring it destroys the single copy of a worker's output. Bounding table
-         * growth is not worth that, and terminal rows are naturally bounded anyway
-         * (one per dispatched task, not a per-tick lifecycle stream). Exempt rows are
-         * excluded from the delete AND from `undrainedRows`, so they are neither
-         * deleted nor mirrored — they simply stay queued and deliverable.
-         */
-        neverExpireEvents?: ReadonlySet<string>;
-    }): {
-        drainedExpired: number;
-        undrainedExpired: number;
-        undrainedRows: Array<{ id: string; meshId: string; event: string; payload: unknown }>;
-        /** Undrained rows past the window that were KEPT because their event name is
-         *  in `neverExpireEvents`. Observability only — a non-zero value means the
-         *  terminal exemption actively prevented a data-destroying expiry. */
-        terminalExempt: number;
-    } {
-        return prunePendingEvents(this, opts);
-    }
-
     // ── TURN-LEDGER (Stage 5): authoritative turn attempts ───────────────────
     // Implementation lives in ./mesh-runtime-store-turn-attempts.ts (behavior-
     // preserving code move, file-size gate). Kept here as thin delegators so the
@@ -2296,7 +1991,6 @@ export class MeshRuntimeStore {
 
     /** Turn events for one task, oldest first. SQL: mesh-turn-event-queries.ts. */
     listTurnEventsForTask(meshId: string, taskId: string): Omit<TurnEventRow, 'taskId'>[] { return selectTurnEventsForTask(this.db, meshId, taskId); }
-    getUnsettledTerminalQueueRowsAndAttempts(meshId: string, outcomes: string[]) { return selectUnsettledTerminalQueueRowsAndAttempts(this.db, meshId, outcomes); }
 
     /** By-KIND turn-event queries. SQL + index rationale: mesh-turn-event-queries.ts. */
     listTurnEventsByKind(meshId: string, kind: string, limit = 200): TurnEventRow[] { return selectTurnEventsByKind(this.db, meshId, kind, limit); }

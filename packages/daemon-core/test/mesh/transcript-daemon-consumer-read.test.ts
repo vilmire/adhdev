@@ -343,7 +343,7 @@ describe('§8 unit 7 — roster id 4 cutover (reprobeWorkerStatus)', () => {
     // the two properties the roster note promises: the replica answer is the
     // snapshot's own status, and a decline runs the IDENTICAL legacy read.
     async function loadReprobe() {
-        return (await import('../../src/mesh/mesh-remote-event-pull.js')).reprobeWorkerStatus;
+        return (await import('../../src/mesh/turn-ledger/probe.js')).reprobeWorkerStatus;
     }
 
     const readArgs = { sessionId: SESSION, targetSessionId: SESSION, tailLimit: 1 };

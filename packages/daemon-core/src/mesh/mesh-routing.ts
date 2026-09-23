@@ -1,6 +1,6 @@
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { getActiveDirectDispatches } from './mesh-work-queue.js';
-import { hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
+import { hasUnterminalDirectDispatchLedgerEntry } from './mesh-dispatch-ledger-reads.js';
 import { appendLedgerEntry, readLedgerEntries } from './mesh-ledger.js';
 import { LOG } from '../logging/logger.js';
 import { readNonEmptyString } from './mesh-events-utils.js';

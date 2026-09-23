@@ -10,7 +10,7 @@ const dispatchMocks = vi.hoisted(() => ({
 vi.mock('../../src/mesh/mesh-work-queue.js', () => ({
   getActiveDirectDispatches: dispatchMocks.getActiveDirectDispatches,
 }))
-vi.mock('../../src/mesh/mesh-events-stale.js', () => ({
+vi.mock('../../src/mesh/mesh-dispatch-ledger-reads.js', () => ({
   hasUnterminalDirectDispatchLedgerEntry: dispatchMocks.hasUnterminalDirectDispatchLedgerEntry,
 }))
 

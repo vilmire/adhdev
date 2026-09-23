@@ -10,40 +10,36 @@
  * Arm order (each step's reason is the old boot comment it replaces):
  *   1. mesh publisher (wiring-unification C7-1; was the dual-write shadow) —
  *      before any mesh ledger append / meshRecord (S7+).
- *   2. mesh read model — registers no consumer until a mesh is first queried.
- *   3. fleet.status shadow, then 4. fleet.status parity (only arms over an
+ *   2. fleet.status shadow, then 3. fleet.status parity (only arms over an
  *      active shadow).
- *   5. transcript projection + its bus subscriber (+ the registry's claim release).
- *   6. activate known mesh topics — needs the armed publisher node. NOT a
+ *   4. transcript projection + its bus subscriber (+ the registry's claim release).
+ *   5. activate known mesh topics — needs the armed publisher node. NOT a
  *      tryStep: a known mesh whose events topic cannot be defined is a mesh
  *      boot failure (C7-1), so the error propagates out of the stage.
- *   7. prune stale durable consumers.
- *   8. terminal redrive — after the prune, so registration never races the GC.
+ *   6. prune retired durable cursors (the Stage 4A read model, the Stage 3
+ *      parity nonces, the Stage 5a terminal redrive — C3 correction 4), BEFORE
+ *      S7 registers the turn cursors (`turn.ingest` / `turn.deliver` /
+ *      `mesh.index`, `seqscribe/mesh-turn-consumer.ts`), which need the turn
+ *      ledger S7 constructs.
  *
- * The mesh parity loop (old step 9) is no longer armed: with one write path
- * there is no second store to compare (C7-6); its module is a C-W3 deletion.
+ * Gone with C-W3: the in-memory read model and its readiness gate (C7-2 — the
+ * durable `mesh_topic_index` replaces them), the parity loop (C7-6) and the
+ * terminal redrive (the `turn.deliver` cursor IS redelivery).
  */
 
 import { LOG } from '../../logging/logger.js';
 import { listMeshesReadOnly } from '../../config/mesh-config.js';
 import { resolveJsonlSourcePath } from '../../providers/spec/native-history-executor.js';
 import { activateMeshTopicsAtBoot, configureMeshPublisher } from '../../seqscribe/mesh-publisher.js';
-import { configureMeshReadModel, pruneStaleConsumersAtBoot } from '../../seqscribe/mesh-read-model.js';
 import { configureFleetStatusShadow } from '../../seqscribe/fleet-status-shadow.js';
 import { configureFleetStatusParity } from '../../seqscribe/fleet-status-parity.js';
 import { configureTranscriptProjection } from '../../seqscribe/transcript-publisher.js';
 import { createLiveTranscriptPublisher } from '../../seqscribe/transcript-publish-runtime.js';
 import { releaseSessionTranscriptTopic } from '../../seqscribe/transcript-activation.js';
 import { subscribeTranscriptProjection } from '../../seqscribe/transcript-bus-subscriber.js';
-import { configureTerminalRedrive, ensureTerminalRedriveConsumersAtBoot } from '../../seqscribe/mesh-terminal-redrive-consumer.js';
+import { pruneRetiredMeshConsumers } from '../../seqscribe/mesh-turn-consumer.js';
 import { bindSeqscribeRuntime } from '../../seqscribe/runtime-slot.js';
 import type { SeqscribeRuntime } from '../../seqscribe/runtime.js';
-import {
-    REDRIVE_CONSUMER,
-    REDRIVE_ENV,
-    consumeRedriveEntry,
-    isTerminalRedriveEnabled,
-} from '../../mesh/mesh-terminal-redrive.js';
 import type { Disposer } from '../daemon-components.js';
 import type { CommandPlaneStage, ProjectionsStage } from './types.js';
 
@@ -79,13 +75,10 @@ function armProjections(rt: SeqscribeRuntime, s5: CommandPlaneStage, hooks: ArmS
     step('slot');
     undo.push(['slot', () => bindSeqscribeRuntime(null)]);
 
-    // 1–4. Mesh publisher, read model, fleet.status shadow + parity.
+    // 1–3. Mesh publisher, fleet.status shadow + parity.
     tryStep('Seqscribe', 'mesh publisher', () => configureMeshPublisher(node));
     step('publisher');
     undo.push(['publisher', () => configureMeshPublisher(null)]);
-    tryStep('Seqscribe', 'mesh read model', () => configureMeshReadModel(node));
-    step('read-model');
-    undo.push(['read-model', () => configureMeshReadModel(null)]);
     tryStep('Seqscribe', 'fleet.status shadow', () => configureFleetStatusShadow(node));
     step('fleet-shadow');
     undo.push(['fleet-shadow', () => configureFleetStatusShadow(null)]);
@@ -93,7 +86,7 @@ function armProjections(rt: SeqscribeRuntime, s5: CommandPlaneStage, hooks: ArmS
     step('fleet-parity');
     undo.push(['fleet-parity', () => { configureFleetStatusParity(null); }]);
 
-    // 5. Transcript projection (§8 unit 3). Releasing the in-memory claim on
+    // 4. Transcript projection (§8 unit 3). Releasing the in-memory claim on
     // session removal lets a later session reuse a colliding sanitized segment.
     s5.sessionRegistry.setTranscriptTopicRelease((rawSessionId) => releaseSessionTranscriptTopic(rt.transcriptClaims, rawSessionId));
     const transcriptOwnerDaemonId = node.daemonId ?? node.writerId;
@@ -142,7 +135,7 @@ function armProjections(rt: SeqscribeRuntime, s5: CommandPlaneStage, hooks: ArmS
         s5.sessionRegistry.setTranscriptTopicRelease(null);
     }]);
 
-    // 6. Define the events/handoff pair for meshes we already know, instead of
+    // 5. Define the events/handoff pair for meshes we already know, instead of
     // waiting for a local write — a consume-only node never makes one, and
     // without it `mutualFull` stays false and sync silently skips the topic.
     // ★ Not a tryStep (C7-1): the events topic is the ONLY mesh event path, so
@@ -164,39 +157,14 @@ function armProjections(rt: SeqscribeRuntime, s5: CommandPlaneStage, hooks: ArmS
     }
     step('activate-topics');
 
-    // 7. GC durable cursors older builds left behind (each holds a topic's
-    // archive floor open). Best-effort by construction.
-    tryStep('Seqscribe', 'stale consumer prune', () => pruneStaleConsumersAtBoot());
+    // 6. GC the retired durable cursors (each holds its topic's archive floor
+    // open). Best-effort; runs before S7 registers the turn cursors, so no
+    // prune can race a live registration.
+    tryStep('Seqscribe', 'retired consumer prune', () => { pruneRetiredMeshConsumers(node); });
     step('prune-consumers');
 
-    // 8. Terminal-notification redrive — the SOLE re-arm path for
-    // coordinator-bound terminal notifications since Stage 5c-1 removed the turn
-    // outbox; `=off` is a kill switch, not a rollback.
-    tryStep('MeshRedrive', 'terminal redrive', () => {
-        if (isTerminalRedriveEnabled(process.env)) {
-            configureTerminalRedrive(node, {
-                consumerName: REDRIVE_CONSUMER,
-                // Throwing holds the durable cursor; resolving advances it.
-                handler: ({ meshId, entry }) => { consumeRedriveEntry(meshId, entry); },
-            });
-            const registered = ensureTerminalRedriveConsumersAtBoot();
-            LOG.info('MeshRedrive', `terminal redrive armed on ${registered} mesh topic(s) — sole terminal-notification re-arm path`);
-        } else {
-            LOG.warn(
-                'MeshRedrive',
-                `terminal redrive DISABLED by ${REDRIVE_ENV}=off — no terminal-notification `
-                + 're-arm backstop exists on this daemon (the turn outbox it replaced was removed '
-                + 'in Stage 5c-1). Completions lost between the reducer commit and the pending '
-                + 'queue will not be recovered.',
-            );
-        }
-    });
-    step('terminal-redrive');
-    // Unsubscribes the registrations; durable cursors persist so the next boot resumes.
-    undo.push(['terminal-redrive', () => configureTerminalRedrive(null)]);
-
     // No parity loop (C7-6): one write path, nothing to compare.
-    rt.attachProjections({ transcript, parityLoop: null });
+    rt.attachProjections({ transcript });
     undo.push(['attach', () => rt.attachProjections(null)]);
 
     let disarmed = false;

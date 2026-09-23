@@ -1,22 +1,73 @@
 import { existsSync } from 'fs';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
-import { getMachineId } from '../config/config.js';
 import { listMeshes } from '../config/mesh-config.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
-import { normalizeMeshWorkspaceForCompare, meshNodeIdMatches, normalizeMeshNodeId, expandDaemonIdForms } from '@adhdev/mesh-shared';
+import { normalizeMeshWorkspaceForCompare, meshNodeIdMatches, normalizeMeshNodeId } from '@adhdev/mesh-shared';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, readObjectRecord } from './mesh-node-identity.js';
-import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents } from './mesh-events-pending.js';
+import { meshNoticeRuntime } from './turn-ledger/deliver.js';
 import { isWorktreeBootstrapStaleRunning } from './worktree-bootstrap-config.js';
 import { getMeshWithCache, isIdleSessionState, nodeHasActiveMeshWork, isLocalAutoLaunchNode } from './mesh-queue-assignment.js';
-import {
-    DEFAULT_AUTO_FF_SCAN_BASE_MS,
-    resolveAutoFastForwardScanBaseMs,
-    resolveAutoFastForwardScanMaxMs,
-    AUTO_FF_SCAN_BACKOFF_MULTIPLIER,
-    resolveAutoFastForwardCallTimeoutMs,
-} from './mesh-reconcile-config.js';
+import { resolveTunedReconcileMs } from './mesh-tuned-env.js';
+
+// ── cadence tunables (moved from mesh-reconcile-config.ts, deleted in C4) ──
+// P6 (2026-09-23 IPC-load audit, finding 6): the continuous auto-ff scan used to
+// run INSIDE the 4s reconcile tick, awaited serially — one P2P dry-run per remote
+// base node, every ~4s subject only to a 45s per-node cooldown. Measured: 15,177
+// of 16,040 logged P2P mesh sends over ~3.5 days (94.6%, ~4,300/day, ~1.2s each),
+// 23% of daemon log lines, and the 13-34s event-loop spikes coincided with this
+// traffic. Two changes:
+//   1. The scan now runs on its OWN scheduler (see startContinuousAutoFastForwardScheduler
+//      in mesh-auto-fast-forward.ts) — never awaited by the reconcile tick — so a
+//      slow/degraded peer cannot stall queue-claim or event-pull phases.
+//   2. Per-node backoff GROWS when a dry-run reports nothing to do (no upstream
+//      movement), instead of re-polling every fixed interval forever. This is the
+//      dominant cost: most dry-runs are no-ops (nothing changed since last scan).
+
+// Base interval between successive scans of a single node's backoff cursor. Same
+// order of magnitude as the historical 45s cooldown, so a genuinely-behind node is
+// still caught up within roughly one tick of it falling behind. Only a node whose
+// LAST scan was a confirmed no-op backs off past this floor.
+export const DEFAULT_AUTO_FF_SCAN_BASE_MS = 45_000; // 45s
+
+// Ceiling for the exponential backoff below. 10 minutes bounds the worst-case
+// staleness of a long-idle, never-changing remote base node while still keeping
+// the eventual catch-up latency well inside a normal work session.
+export const DEFAULT_AUTO_FF_SCAN_MAX_MS = 10 * 60_000; // 10m
+
+// Multiplier applied per consecutive confirmed-no-op round: 45s → 90s → 180s →
+// 360s → 600s(capped). Any round that finds real movement (or executes an ff)
+// resets the node back to the base interval — see noteAutoFastForwardScanResult.
+export const AUTO_FF_SCAN_BACKOFF_MULTIPLIER = 2;
+
+export function resolveAutoFastForwardScanBaseMs(): number {
+    // Floor 5s so a mis-set env cannot turn this into a busy-loop; ceiling 5min so
+    // the base itself cannot be tuned past the max below (resolveAutoFastForwardScanMaxMs
+    // still wins as the hard ceiling regardless).
+    return resolveTunedReconcileMs('MESH_AUTO_FF_SCAN_BASE_MS', DEFAULT_AUTO_FF_SCAN_BASE_MS, 5_000, 5 * 60_000);
+}
+
+export function resolveAutoFastForwardScanMaxMs(): number {
+    // Floor = the base default, so the ceiling can never be tuned below the floor
+    // it bounds; ceiling 1h so a mis-set env cannot disable catch-up altogether.
+    return resolveTunedReconcileMs('MESH_AUTO_FF_SCAN_MAX_MS', DEFAULT_AUTO_FF_SCAN_MAX_MS, DEFAULT_AUTO_FF_SCAN_BASE_MS, 60 * 60_000);
+}
+
+// Per-call budget for a single remote fast_forward_mesh_node dry-run dispatch.
+// Bounds a slow/degraded peer so it cannot stall the scheduler tick for other
+// nodes — see runAutoFastForwardScanTick's per-node Promise.race in
+// mesh-auto-fast-forward.ts. Below the historical measured ~1.2s typical
+// round-trip there would be false timeouts on a healthy peer, so the floor
+// leaves ample headroom.
+export const DEFAULT_AUTO_FF_CALL_TIMEOUT_MS = 8_000; // 8s
+
+export function resolveAutoFastForwardCallTimeoutMs(): number {
+    // Floor 2s (still >> the ~1.2s measured healthy round-trip) so the timeout
+    // cannot be tuned into spurious failures; ceiling 60s so a mis-set env cannot
+    // let one stuck peer occupy the scheduler for a full minute per node.
+    return resolveTunedReconcileMs('MESH_AUTO_FF_CALL_TIMEOUT_MS', DEFAULT_AUTO_FF_CALL_TIMEOUT_MS, 2_000, 60_000);
+}
 
 // ---------------------------------------------------------------------------
 // Idle auto fast-forward throttle state
@@ -556,35 +607,33 @@ export function startContinuousAutoFastForwardScheduler(
 export async function runPendingCoordinatorCatchupScan(components: DaemonComponents, mesh: any): Promise<void> {
     const meshId = readNonEmptyString(mesh?.id);
     if (!meshId) return;
-    const localIds = expandDaemonIdForms([
-        readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId),
-        readNonEmptyString(getMachineId()),
-    ]);
-    let markers: Awaited<ReturnType<typeof drainPendingMeshCoordinatorEvents>> = [];
+    // C2 (wiring-unification): the markers are `turn.notify{mesh_event}` rows the
+    // Refinery addressed to this daemon (the pending-events table is gone). A
+    // marker is claimed only after its action ran; a busy node leaves it for a
+    // later idle tick (the legacy re-queue).
+    const runtime = meshNoticeRuntime.current();
+    if (!runtime) return;
+    let control: ReturnType<typeof runtime.controlNotices>;
     try {
-        markers = drainPendingMeshCoordinatorEvents(
-            meshId,
-            localIds.length > 0 ? localIds : undefined,
-            { onlyEvents: new Set(['coordinator_catchup']) },
-        );
+        control = runtime.controlNotices(meshId, 'coordinator_catchup');
     } catch (e: any) {
-        LOG.warn('MeshReconcile', `Coordinator-catchup drain failed for mesh ${meshId}: ${e?.message || e}`);
+        LOG.warn('MeshReconcile', `Coordinator-catchup read failed for mesh ${meshId}: ${e?.message || e}`);
         return;
     }
-    if (markers.length === 0) return;
-    const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
-    for (const marker of markers) {
-        const meta = (marker.metadataEvent || {}) as Record<string, unknown>;
+    if (control.notices.length === 0) return;
+    for (const marker of control.notices) {
+        const meta = marker.metadataEvent;
         const nodeId = readNonEmptyString(marker.nodeId) || readNonEmptyString(meta.nodeId as string);
         const workspace = readNonEmptyString(marker.workspace) || readNonEmptyString(meta.workspace as string);
         const baseBranch = readNonEmptyString(meta.baseBranch as string);
-        if (!workspace) continue;
-        // Busy node → re-queue and defer to the next idle tick (never advance a base a
-        // session is actively working on).
-        if (nodeId && nodeHasActiveMeshWork(components, meshId, nodeId)) {
-            try { queuePendingMeshCoordinatorEvent(marker); } catch { /* best-effort re-queue */ }
+        if (!workspace) {
+            control.take(marker);
             continue;
         }
+        // Busy node → leave the marker and defer to the next idle tick (never
+        // advance a base a session is actively working on).
+        if (nodeId && nodeHasActiveMeshWork(components, meshId, nodeId)) continue;
+        control.take(marker);
         try {
             const ff = await fastForwardMeshNode({
                 meshId,

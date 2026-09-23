@@ -31,6 +31,7 @@ import {
     MESH_TOPIC_PROTOCOL_VERSION,
     isTurnEvidence,
     type MeshTopicEntry,
+    type NotifyKind,
     type SummaryRef,
     type TurnEvidence,
     type TurnEvidenceOf,
@@ -130,6 +131,16 @@ export interface MeshEventNotice {
     /** Stable id (republish/dedupe key); a fresh UUID when omitted. */
     eventId?: string;
     at?: number;
+    /**
+     * Notify kind of the published entry (default `mesh_event`). The turn-ingest
+     * consumer (C-W3) re-issues a foreign `turn.notify` addressed to this daemon
+     * under its original kind, so the deliver cursor renders it as that shape.
+     */
+    notify?: NotifyKind;
+    /** Text pointer on `mesh.<id>.handoff`, published as the entry's append `ref` (never inline). */
+    ref?: SummaryRef;
+    /** Attempt the notice is about (re-issued turn notices keep it for suppression/rendering). */
+    attemptId?: string;
 }
 
 export interface TurnLedger {
@@ -248,7 +259,14 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
 
         // ≤1 open attempt per session (ux_turn_attempts_open_session). A plain
         // attempt yields to a dispatch (superseded); an open mesh attempt refuses it.
-        if (opened && result.attempt) {
+        // Checked whenever an open attempt LANDS on a session: when it is opened,
+        // and when an applied step moves it onto another session (`delivered`
+        // to the session that took the prompt, `session_rebound`) — without the
+        // second case a delivery onto a session with an open plain turn tripped
+        // the unique index instead of superseding the plain turn.
+        const moved = !!attempt && !!result.attempt && result.verdict === 'applied'
+            && !result.attempt.terminal && result.attempt.sessionId !== attempt.sessionId;
+        if ((opened || moved) && result.attempt && !nested) {
             const conflicting = store.findOpenAttemptForSession(result.attempt.sessionId);
             if (conflicting && conflicting.attemptId !== result.attempt.attemptId) {
                 if (conflicting.scope === 'plain') {
@@ -391,12 +409,14 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
     function notifyMeshEvent(notice: MeshEventNotice): { eventId: string; inserted: boolean } {
         const eventId = notice.eventId ?? `mesh_event:${randomUUID()}`;
         const at = notice.at ?? now();
+        const notifyKind: NotifyKind = notice.notify ?? 'mesh_event';
         const entry: MeshTopicEntry = {
             v: MESH_TOPIC_PROTOCOL_VERSION,
             eventId,
             at,
             k: 'turn.notify',
-            notify: 'mesh_event',
+            ...(notice.attemptId ? { attemptId: notice.attemptId } : {}),
+            notify: notifyKind,
             targetDaemonId: notice.targetDaemonId,
             ...(notice.targetSessionId ? { targetSessionId: notice.targetSessionId } : {}),
             ...(notice.taskId ? { taskId: notice.taskId } : {}),
@@ -404,14 +424,21 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
         const inserted = txn(() => store.insertEvent({
             eventId,
             meshId: notice.meshId,
-            attemptId: null,
+            attemptId: notice.attemptId ?? null,
             generation: null,
             sessionId: notice.targetSessionId ?? '',
             kind: 'notify',
             source: 'mesh_event',
             verdict: 'applied',
             dedupeKey: eventId,
-            payload: { meshId: notice.meshId, notify: 'mesh_event', event: notice.event, entry, ...(notice.payload !== undefined ? { local: { payload: notice.payload } } : {}) },
+            payload: {
+                meshId: notice.meshId,
+                notify: notifyKind,
+                event: notice.event,
+                entry,
+                ...(notice.ref ? { ref: notice.ref } : {}),
+                ...(notice.payload !== undefined ? { local: { payload: notice.payload } } : {}),
+            },
             publishState: 'pending',
             atMs: at,
             recordedAt: now(),
@@ -499,7 +526,18 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
             flushAgain = true;
             return flushing;
         }
-        flushing = drain().finally(() => { flushing = null; });
+        // A flush requested after drain() left its loop but before `flushing`
+        // cleared (two observes in one tick) must not be lost: re-drain while
+        // one was requested. (C-W3: without this a commit observed in the same
+        // tick as its predecessor stayed `pending` until the next tick's republish.)
+        flushing = (async () => {
+            let report: PublishReport;
+            do {
+                flushAgain = false;
+                report = await drain();
+            } while (flushAgain);
+            return report;
+        })().finally(() => { flushing = null; });
         return flushing;
     }
 

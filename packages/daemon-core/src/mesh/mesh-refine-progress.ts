@@ -36,7 +36,7 @@
  *
  * ## Why the existing pending-event channel, not a new one
  *
- * `queuePendingMeshCoordinatorEvent` already solves delivery: session-scoped
+ * `notifyMeshCoordinator` already solves delivery: session-scoped
  * unicast addressing, survival across daemon restarts, dedup, and a drain the
  * coordinator already consumes. A second channel would have to re-derive all of
  * it, and would arrive out of order relative to the terminal event that shares
@@ -45,7 +45,7 @@
  * rather than mis-rendering them as terminal.
  */
 import { LOG } from '../logging/logger.js';
-import { queuePendingMeshCoordinatorEvent } from './mesh-events.js';
+import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 
 /**
  * A gate slower than this is worth announcing. Set at 30s per the owner's
@@ -190,7 +190,7 @@ export function emitRefineProgress(context: RefineProgressContext, event: Refine
         // A critical event does not reset the throttle clock: it is out-of-band, and
         // letting it do so would let a burst of failures starve the ordinary stream.
         if (!CRITICAL_PHASES.has(event.phase)) context.lastEmittedAt = now;
-        queuePendingMeshCoordinatorEvent(buildRefineProgressEventPayload(context, event, suppressed) as any);
+        notifyMeshCoordinator(buildRefineProgressEventPayload(context, event, suppressed) as any);
     } catch (e: any) {
         LOG.debug('Mesh', `[Refinery] progress event dropped (${event.phase}): ${e?.message || e}`);
     }

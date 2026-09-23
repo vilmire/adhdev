@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('../../src/mesh/mesh-work-queue.js', () => ({
   getActiveDirectDispatches: vi.fn(() => [] as any[]),
 }))
-vi.mock('../../src/mesh/mesh-events-stale.js', () => ({
+vi.mock('../../src/mesh/mesh-dispatch-ledger-reads.js', () => ({
   hasUnterminalDirectDispatchLedgerEntry: vi.fn(() => false),
 }))
 vi.mock('../../src/mesh/mesh-ledger.js', () => ({
