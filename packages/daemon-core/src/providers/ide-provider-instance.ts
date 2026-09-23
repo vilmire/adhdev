@@ -65,7 +65,6 @@ export class IdeProviderInstance implements ProviderInstance {
     private provider: ProviderModule;
     private context: InstanceContext | null = null;
     private settings: Record<string, any> = {};
-    private events: ProviderEvent[] = [];
     /** Lifecycle port (wiring-unification B2); null until boot wires it. */
     private lifecyclePort: SessionEventPort | null = null;
     private tickErrorCount = 0;
@@ -186,7 +185,6 @@ export class IdeProviderInstance implements ProviderInstance {
             instanceId: this.instanceId,
             lastUpdated: Date.now(),
             settings: this.settings,
-            pendingEvents: this.flushEvents(),
         };
     }
 
@@ -526,11 +524,9 @@ export class IdeProviderInstance implements ProviderInstance {
     }
 
     private pushEvent(event: ProviderEvent): void {
-        this.events.push(event);
-        // Lifecycle port (B2): deliver now instead of at the next collectAllStates()
-        // drain. The buffer stays (legacy onEvent listeners still read the drain);
-        // the enrichment mirrors ProviderInstanceManager.emitPendingEvents.
-        forwardProviderEvent(this.lifecyclePort, this.instanceId, event, {
+        // Lifecycle port (B2): the only delivery path since wiring-unification B5
+        // — no buffer, no collectAllStates() drain.
+        forwardProviderEvent(this.lifecyclePort, this.instanceId, {
             ...event,
             providerType: this.type,
             instanceId: this.instanceId,
@@ -711,12 +707,6 @@ export class IdeProviderInstance implements ProviderInstance {
             return `provider_effect:notification:${effect.notification?.title || ''}:${effect.notification?.body || ''}`;
         }
         return `provider_effect:toast:${effect.toast?.message || ''}`;
-    }
-
-    private flushEvents(): ProviderEvent[] {
-        const events = [...this.events];
-        this.events = [];
-        return events;
     }
 
  // ─── external access ─────────────────────────────────

@@ -25,7 +25,7 @@
 import type { ProviderModule } from './contracts.js';
 import { flattenContent } from './contracts.js';
 import { getEffectiveMessageInputSupport } from './provider-input-support.js';
-import type { ProviderState, ProviderErrorReason, ProviderEvent } from './provider-instance.js';
+import type { ProviderState, ProviderErrorReason } from './provider-instance.js';
 import type { InteractivePrompt } from './types/interactive-prompt.js';
 import type { ChatMessage } from '../types.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
@@ -75,7 +75,6 @@ export interface ProviderStateHost {
     syncCanonicalSavedHistoryIfNeeded(options?: { full?: boolean }): boolean;
     shouldSuppressStaleParsedBusyStatus(parsedStatus: any, adapterStatus: any): boolean;
     applyProviderResponse(data: any, options: { phase: 'immediate' | 'turn_completed' }): void;
-    flushEvents(): ProviderEvent[];
 }
 
 /**
@@ -350,7 +349,6 @@ export function buildProviderState(host: ProviderStateHost): ProviderState {
         providerSessionId: host.providerSessionId,
         lastUpdated: Date.now(),
         settings: host.settings,
-        pendingEvents: host.flushEvents(),
         runtime: runtime ? {
             runtimeId: runtime.runtimeId,
             runtimeKey: runtime.runtimeKey,

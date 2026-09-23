@@ -89,8 +89,6 @@ interface ProviderStateBase {
     providerSessionId?: string;
     lastUpdated: number;
     settings: Record<string, any>;
- /** Event queue (cleared after daemon collects) */
-    pendingEvents: ProviderEvent[];
     runtime?: ProviderRuntimeInfo;
     resume?: ProviderResumeCapability;
     sessionCapabilities?: SessionCapability[];

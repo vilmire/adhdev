@@ -14,8 +14,10 @@
  *   - ACP update      acp-provider-instance.ts         status + immediate provider events
  *
  * The port stays null until boot wires it (B4/B5), so every helper here is a
- * no-op without one and today's consumers (`pushEvent` buffers, the
- * `emitProviderEvent` listeners, the adapter status callback) are untouched.
+ * no-op without one. The per-instance `pendingEvents` buffer these helpers
+ * used to also write (for the pre-B5 `onEvent`/collectAllStates() drain) is
+ * gone (wiring-unification B residue cleanup) — the port is the only
+ * delivery path now.
  *
  * This module owns only pure diff helpers and the guarded call wrappers; the
  * diff STATE (last fingerprints) lives on each instance.
@@ -27,31 +29,9 @@ import type { SessionEventPort } from '../sessions/session-port.js';
 import type { EnrichedProviderEvent, PromptTransport, StatusCause } from '../sessions/lifecycle-events.js';
 import type { AdapterChangeCause } from '../cli-adapter-types.js';
 import type { InteractivePrompt } from './types/interactive-prompt.js';
-import type { ProviderEvent, SessionModalState } from './provider-instance.js';
+import type { SessionModalState } from './provider-instance.js';
 
 export type { SessionEventPort };
-
-// ─── Port-delivered marker (buffer / bus de-duplication) ─────────────────
-
-/**
- * Provider events forwarded to `port.providerEvent` at push time are ALSO kept
- * in the instance's legacy `pendingEvents` buffer until B4 removes it, because
- * the `onEvent` listeners still consume that drain. The instance manager's
- * drain (`emitPendingEvents`) must not publish such an event on the bus a
- * second time; it asks `wasDeliveredThroughPort(event)` with the SAME object
- * reference the instance buffered (`flushEvents` copies the array, not the
- * events). A WeakSet keeps the marker off the payload, so no subscriber or wire
- * projection ever sees an extra field.
- */
-const PORT_DELIVERED_EVENTS = new WeakSet<object>();
-
-export function markDeliveredThroughPort(event: ProviderEvent): void {
-    PORT_DELIVERED_EVENTS.add(event);
-}
-
-export function wasDeliveredThroughPort(event: ProviderEvent): boolean {
-    return PORT_DELIVERED_EVENTS.has(event);
-}
 
 // ─── Guarded port calls ───────────────────────────────────────────────────
 
@@ -109,18 +89,16 @@ export function emitPrompt(
 }
 
 /**
- * Forward an enriched provider event immediately and mark the original
- * (buffered) event object as delivered. `bufferedEvent` is the object the
- * instance keeps in its legacy buffer; `enriched` is what the bus receives.
+ * Forward an enriched provider event immediately. The only delivery path
+ * since wiring-unification B5 — there is no per-instance buffer to also
+ * write, so this simply guards the port call.
  */
 export function forwardProviderEvent(
     port: SessionEventPort | null | undefined,
     sessionId: string,
-    bufferedEvent: ProviderEvent,
     enriched: EnrichedProviderEvent,
 ): void {
     if (!port || !sessionId) return;
-    markDeliveredThroughPort(bufferedEvent);
     guard('providerEvent', sessionId, () => port.providerEvent(sessionId, enriched));
 }
 

@@ -10,49 +10,25 @@
  * A worker that reached a modal before its first snapshot landed was simply absent
  * from the server's map, and the gate fails OPEN. Stamping the flags onto the
  * event itself removes the ordering dependency entirely.
+ *
+ * Moved onto status/status-event.ts's projectServerStatusEvent +
+ * createInstanceHideMuteResolver (wiring-unification B5): the hide/mute stamp
+ * used to be a private method on DaemonStatusReporter (buildServerStatusEvent /
+ * resolveEventHideMute), which is now the shared projection both hosts use.
  */
-import { describe, expect, it, vi } from 'vitest'
-import { DaemonStatusReporter } from '../../src/status/reporter.js'
+import { describe, expect, it } from 'vitest'
+import { createInstanceHideMuteResolver, projectServerStatusEvent } from '../../src/status/status-event.js'
+import type { ProviderState } from '../../src/providers/provider-instance.js'
 
-function createReporter(instances: Record<string, { settings?: Record<string, unknown>; status?: string }>) {
-    const sendMessage = vi.fn()
-    const sendStatusEvent = vi.fn()
-
-    const reporter = new DaemonStatusReporter({
-        serverConn: { isConnected: () => true, sendMessage, getUserPlan: () => 'pro' },
-        cdpManagers: new Map(),
-        p2p: {
-            isConnected: true,
-            isAvailable: true,
-            connectionState: 'connected',
-            connectedPeerCount: 1,
-            screenshotActive: false,
-            sendStatus: vi.fn(),
-            sendStatusEvent,
+function createResolver(instances: Record<string, { settings?: Record<string, unknown>; status?: string }>) {
+    const instanceManager = {
+        getInstance: (sessionId: string) => {
+            const found = instances[sessionId]
+            if (!found) return undefined
+            return { getState: () => found as unknown as ProviderState }
         },
-        providerLoader: { resolve: () => null, getAll: () => [] },
-        detectedIdes: [],
-        instanceId: 'daemon-1',
-        daemonVersion: '0.0.0-test',
-        instanceManager: {
-            collectAllStates: () => [],
-            collectStatesByCategory: () => [],
-            getInstance: (sessionId: string) => {
-                const found = instances[sessionId]
-                if (!found) return undefined
-                return { getState: () => found as any }
-            },
-        },
-        getScreenshotUsage: () => null,
-    })
-
-    return { reporter, sendMessage, sendStatusEvent }
-}
-
-/** The payload the daemon actually hands the cloud server. */
-function serverPayload(sendMessage: ReturnType<typeof vi.fn>) {
-    const call = sendMessage.mock.calls.find(([type]) => type === 'status_event')
-    return call?.[1]
+    }
+    return createInstanceHideMuteResolver(instanceManager)
 }
 
 /**
@@ -68,37 +44,35 @@ const COORDINATOR_SPAWNED_HIDDEN = {
 
 describe('status_event visibility stamping', () => {
     it('stamps surfaceHidden+muted for a coordinator-spawned hidden worker', () => {
-        const { reporter, sendMessage } = createReporter({
+        const resolveHideMute = createResolver({
             'worker-1': { settings: COORDINATOR_SPAWNED_HIDDEN, status: 'waiting_choice' },
         })
 
-        reporter.emitStatusEvent({
+        const payload = projectServerStatusEvent({
             event: 'agent:waiting_choice',
             targetSessionId: 'worker-1',
             providerType: 'claude-cli',
             modalMessage: 'Which approach?',
             modalButtons: ['A', 'B'],
-        })
+        }, resolveHideMute)!
 
-        const payload = serverPayload(sendMessage)
         expect(payload.surfaceHidden).toBe(true)
         expect(payload.muted).toBe(true)
     })
 
     it('stamps false for an owner-visible session so approval push still fires', () => {
-        const { reporter, sendMessage } = createReporter({
+        const resolveHideMute = createResolver({
             'owner-1': { settings: {}, status: 'waiting_approval' },
         })
 
-        reporter.emitStatusEvent({
+        const payload = projectServerStatusEvent({
             event: 'agent:waiting_approval',
             targetSessionId: 'owner-1',
             providerType: 'claude-cli',
             modalMessage: 'rm -rf build/',
             modalButtons: ['Approve', 'Deny'],
-        })
+        }, resolveHideMute)!
 
-        const payload = serverPayload(sendMessage)
         expect(payload.surfaceHidden).toBe(false)
         expect(payload.muted).toBe(false)
         // The deliberate push exception must survive: the modal text is what makes
@@ -108,57 +82,56 @@ describe('status_event visibility stamping', () => {
     })
 
     it('honors an explicit user un-mute over the coordinator-worker default', () => {
-        const { reporter, sendMessage } = createReporter({
+        const resolveHideMute = createResolver({
             'worker-2': {
                 settings: { ...COORDINATOR_SPAWNED_HIDDEN, userHidden: false, userMuted: false },
                 status: 'waiting_approval',
             },
         })
 
-        reporter.emitStatusEvent({
+        const payload = projectServerStatusEvent({
             event: 'agent:waiting_approval',
             targetSessionId: 'worker-2',
             providerType: 'claude-cli',
-        })
+        }, resolveHideMute)!
 
-        const payload = serverPayload(sendMessage)
         expect(payload.surfaceHidden).toBe(false)
         expect(payload.muted).toBe(false)
     })
 
     it('omits the flags for a session with no local instance (remote mesh worker)', () => {
         // The server then falls back to its snapshot join — unchanged legacy behavior.
-        const { reporter, sendMessage } = createReporter({})
+        const resolveHideMute = createResolver({})
 
-        reporter.emitStatusEvent({
+        const payload = projectServerStatusEvent({
             event: 'agent:waiting_approval',
             targetSessionId: 'remote-1',
             providerType: 'claude-cli',
-        })
+        }, resolveHideMute)!
 
-        const payload = serverPayload(sendMessage)
         expect(payload.surfaceHidden).toBeUndefined()
         expect(payload.muted).toBeUndefined()
     })
 
-    it('still delivers the event to the coordinator over P2P when hidden', () => {
+    it('still builds the event for P2P delivery to the coordinator when hidden', () => {
         // Muting hides the event from the OWNER; it must never kill the event,
-        // or the coordinator never answers and the worker waits forever.
-        const { reporter, sendStatusEvent, sendMessage } = createReporter({
+        // or the coordinator never answers and the worker waits forever. The
+        // dashboard/P2P leg is a separate projection (projectP2PStatusEvent);
+        // this only pins that the server-bound builder itself still returns a
+        // payload rather than null for a hidden worker.
+        const resolveHideMute = createResolver({
             'worker-3': { settings: COORDINATOR_SPAWNED_HIDDEN, status: 'waiting_choice' },
         })
 
-        reporter.emitStatusEvent({
+        const payload = projectServerStatusEvent({
             event: 'agent:waiting_choice',
             targetSessionId: 'worker-3',
             providerType: 'claude-cli',
-        })
+        }, resolveHideMute)
 
-        expect(sendStatusEvent).toHaveBeenCalledTimes(1)
-        expect(sendStatusEvent.mock.calls[0][0]).toMatchObject({
+        expect(payload).toMatchObject({
             event: 'agent:waiting_choice',
             targetSessionId: 'worker-3',
         })
-        expect(serverPayload(sendMessage)).toBeTruthy()
     })
 })

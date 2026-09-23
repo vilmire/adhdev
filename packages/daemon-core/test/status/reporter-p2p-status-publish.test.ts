@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js'
+import { createStatusEventEmitter } from '../../src/status/status-event.js'
 
 const { buildSessionEntriesMock, buildStatusSnapshotMock } = vi.hoisted(() => ({
   buildSessionEntriesMock: vi.fn(() => [
@@ -222,20 +224,45 @@ describe('DaemonStatusReporter P2P publish behavior', () => {
     })
   })
 
-  it('preserves provider transcript metadata on canonical status events for completion refreshes', () => {
-    const { reporter, sendStatusEvent, sendMessage } = createReporter({
-      serverConnected: true,
-      p2pConnected: true,
-    })
+})
 
-    reporter.emitStatusEvent({
-      event: 'agent:generating_completed',
-      timestamp: 456,
-      providerType: 'hermes-cli',
-      targetSessionId: 'runtime-session-1',
-      providerSessionId: 'provider-session-1',
-      workspaceName: '/repo',
-      duration: 9,
+/**
+ * The status_event projection itself — dashboard (P2P) + server delivery from
+ * a single provider_event — moved out of DaemonStatusReporter onto the shared
+ * bus subscriber status/status-event.ts's createStatusEventEmitter
+ * (wiring-unification B5). These two cases (transcript metadata passthrough,
+ * waiting_choice allow-listing) used to be pinned via
+ * `reporter.emitStatusEvent(...)`; they now go through the bus, exactly as
+ * both hosts wire it in production.
+ */
+describe('status_event projection — bus delivery', () => {
+  function createEmitter() {
+    const bus = createSessionLifecycleBus()
+    const dashboard: any[] = []
+    const server: any[] = []
+    createStatusEventEmitter(bus, {
+      sendDashboard: (p) => dashboard.push(p),
+      sendServer: (p) => server.push(p),
+    })
+    return { bus, dashboard, server }
+  }
+
+  it('preserves provider transcript metadata on canonical status events for completion refreshes', () => {
+    const { bus, dashboard, server } = createEmitter()
+
+    bus.emit({
+      kind: 'provider_event',
+      sessionId: 'runtime-session-1',
+      at: 0,
+      event: {
+        event: 'agent:generating_completed',
+        timestamp: 456,
+        providerType: 'hermes-cli',
+        targetSessionId: 'runtime-session-1',
+        providerSessionId: 'provider-session-1',
+        workspaceName: '/repo',
+        duration: 9,
+      } as any,
     })
 
     const expectedPayload = expect.objectContaining({
@@ -247,28 +274,30 @@ describe('DaemonStatusReporter P2P publish behavior', () => {
       workspaceName: '/repo',
       duration: 9,
     })
-    expect(sendStatusEvent).toHaveBeenCalledWith(expectedPayload)
-    expect(sendMessage).toHaveBeenCalledWith('status_event', expectedPayload)
+    expect(dashboard[0]).toEqual(expectedPayload)
+    expect(server[0]).toEqual(expectedPayload)
   })
 
   it('relays agent:waiting_choice to server and P2P (allowlisted) with its modal projection', () => {
     // Regression: waiting_choice was previously absent from the status-event
-    // allowlist (toDaemonStatusEventName), so buildServerStatusEvent returned
-    // null and emitStatusEvent early-returned — the coordinator never got a
+    // allowlist (toDaemonStatusEventName), so projectServerStatusEvent returned
+    // null and the emitter early-returned — the coordinator never got a
     // status_event and no push fired. It must now flow through like
     // waiting_approval.
-    const { reporter, sendStatusEvent, sendMessage } = createReporter({
-      serverConnected: true,
-      p2pConnected: true,
-    })
+    const { bus, dashboard, server } = createEmitter()
 
-    reporter.emitStatusEvent({
-      event: 'agent:waiting_choice',
-      timestamp: 789,
-      providerType: 'claude-cli',
-      targetSessionId: 'runtime-session-2',
-      modalMessage: 'Pick a branch strategy',
-      modalButtons: ['Rebase', 'Merge'],
+    bus.emit({
+      kind: 'provider_event',
+      sessionId: 'runtime-session-2',
+      at: 0,
+      event: {
+        event: 'agent:waiting_choice',
+        timestamp: 789,
+        providerType: 'claude-cli',
+        targetSessionId: 'runtime-session-2',
+        modalMessage: 'Pick a branch strategy',
+        modalButtons: ['Rebase', 'Merge'],
+      } as any,
     })
 
     const expectedPayload = expect.objectContaining({
@@ -279,7 +308,7 @@ describe('DaemonStatusReporter P2P publish behavior', () => {
       modalMessage: 'Pick a branch strategy',
       modalButtons: ['Rebase', 'Merge'],
     })
-    expect(sendStatusEvent).toHaveBeenCalledWith(expectedPayload)
-    expect(sendMessage).toHaveBeenCalledWith('status_event', expectedPayload)
+    expect(dashboard[0]).toEqual(expectedPayload)
+    expect(server[0]).toEqual(expectedPayload)
   })
 })

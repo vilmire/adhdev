@@ -165,7 +165,6 @@ export class CliProviderInstance implements ProviderInstance {
 
     private adapter: CliInstanceAdapter;
     private context: InstanceContext | null = null;
-    private events: ProviderEvent[] = [];
     private lastStatus: string = 'starting';
     // Idempotency guard for the queue-claim agent:ready event. agent:ready is the
     // sole signal the mesh coordinator's tryAssignQueueTask waits on to hand a
@@ -939,11 +938,6 @@ export class CliProviderInstance implements ProviderInstance {
             const prompt = normalizeInteractivePrompt(data);
             if (prompt) {
                 this.activeInteractivePrompt = prompt;
-                this.events.push({
-                    event: 'interactive_prompt',
-                    timestamp: Date.now(),
-                    promptId: prompt.promptId,
-                });
             }
         } else if (event === 'interactive_prompt_response' && data) {
             // LEGACY fire-and-forget answer path (dashboard-local answers and
@@ -2122,10 +2116,6 @@ export class CliProviderInstance implements ProviderInstance {
             return;
         }
         providerEvents.pushEvent(this as unknown as providerEvents.ProviderEventsHost, event);
-    }
-
-    private flushEvents(): ProviderEvent[] {
-        return providerEvents.flushEvents(this as unknown as providerEvents.ProviderEventsHost);
     }
 
     private applyProviderResponse(data: any, options: { phase: 'immediate' | 'turn_completed' }): void {

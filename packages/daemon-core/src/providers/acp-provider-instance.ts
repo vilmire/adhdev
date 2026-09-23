@@ -267,7 +267,6 @@ export class AcpProviderInstance implements ProviderInstance {
     private provider: ProviderModule;
     private context: InstanceContext | null = null;
     private settings: Record<string, any> = {};
-    private events: ProviderEvent[] = [];
     /** Lifecycle port (wiring-unification B2); null until boot wires it. */
     private lifecyclePort: SessionEventPort | null = null;
     private monitor: StatusMonitor;
@@ -412,7 +411,6 @@ export class AcpProviderInstance implements ProviderInstance {
             instanceId: this.instanceId,
             lastUpdated: Date.now(),
             settings: this.settings,
-            pendingEvents: this.flushEvents(),
             messageInput: getEffectiveMessageInputSupport(this.provider, this.agentCapabilities),
  // ACP-specific: expose available models/modes for dashboard
             acpConfigOptions: this.configOptions,
@@ -1638,11 +1636,9 @@ export class AcpProviderInstance implements ProviderInstance {
     }
 
     private pushEvent(event: ProviderEvent): void {
-        this.events.push(event);
-        // Lifecycle port (B2): deliver now instead of at the next collectAllStates()
-        // drain. The buffer stays (legacy onEvent listeners still read the drain);
-        // the enrichment mirrors ProviderInstanceManager.emitPendingEvents.
-        forwardProviderEvent(this.lifecyclePort, this.instanceId, event, {
+        // Lifecycle port (B2): the only delivery path since wiring-unification B5
+        // — no buffer, no collectAllStates() drain.
+        forwardProviderEvent(this.lifecyclePort, this.instanceId, {
             ...event,
             providerType: this.type,
             instanceId: this.instanceId,
@@ -1668,11 +1664,6 @@ export class AcpProviderInstance implements ProviderInstance {
         }
     }
 
-    private flushEvents(): ProviderEvent[] {
-        const events = [...this.events];
-        this.events = [];
-        return events;
-    }
 
  // ─── external access ─────────────────────────────────
 

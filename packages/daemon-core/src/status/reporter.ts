@@ -13,9 +13,8 @@ import {
 } from '../runtime-defaults.js';
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { MachineInfo } from '../shared-types.js';
-import type { BeaconDiagnosticsSummary, CloudStatusReportPayload, DaemonStatusEventPayload, FleetStatusPeerView, P2PStatusEventPayload, P2PStatusSummary, RoutingSessionEntry, SeqscribeStatusSummary, StatusReportPayload } from '../shared-types.js';
+import type { BeaconDiagnosticsSummary, CloudStatusReportPayload, DaemonStatusEventPayload, FleetStatusPeerView, P2PStatusSummary, RoutingSessionEntry, SeqscribeStatusSummary, StatusReportPayload } from '../shared-types.js';
 import { buildStatusSnapshot } from './snapshot.js';
-import { resolveMuted, resolveSurfaceHidden } from './builders.js';
 import type { FleetStatusProducer } from '../seqscribe/runtime.js';
 import { seqscribeSlot } from '../seqscribe/runtime-slot.js';
 // Shared WS message-type union (mesh-shared/ws-protocol) — this sink was typed
@@ -437,7 +436,14 @@ export interface StatusReporterDeps {
             relayTotal: number;
         };
         sendStatus(data: any): void;
-        sendStatusEvent(event: DaemonStatusEventPayload): void;
+        /**
+         * @deprecated Unread by this reporter — the status_event projection
+         * moved to status/status-event.ts's createStatusEventEmitter
+         * (wiring-unification B5). Kept optional so existing test doubles that
+         * still populate it (outside this workstream's file ownership) do not
+         * need editing; a new caller should not add a reader here.
+         */
+        sendStatusEvent?(event: DaemonStatusEventPayload): void;
     } | null;
     providerLoader: { resolve(type: string): any; getAll(): any[] };
     detectedIdes: any[];
@@ -586,165 +592,12 @@ export class DaemonStatusReporter {
         }
     }
 
-    private toDaemonStatusEventName(value: unknown): DaemonStatusEventPayload['event'] | null {
-        switch (value) {
-            case 'agent:generating_started':
-            case 'agent:waiting_approval':
-            case 'agent:waiting_choice':
-            case 'agent:generating_completed':
-            case 'agent:stopped':
-            case 'monitor:no_progress':
-                return value;
-            default:
-                return null;
-        }
-    }
-
-    /**
-     * Resolve the target session's dashboard visibility at event time, straight
-     * from the live provider instance's `settings` — the same source of truth
-     * `buildSessionEntries` uses for the snapshot path (builders.ts), so an event
-     * and a snapshot emitted for the same session always agree.
-     *
-     * Reading the LIVE instance (rather than a cached projection) is what closes
-     * the race: a hide/mute toggle or a coordinator-spawned worker's default is
-     * visible here immediately, whereas the derived caches only refresh on the
-     * 5s/30s heartbeat.
-     *
-     * Returns undefined when the session has no local instance (a genuinely remote
-     * mesh worker hosted by a different daemon, or an event with no targetSessionId).
-     * The event then omits the flags and the server falls back to its snapshot join.
-     */
-    private resolveEventHideMute(sessionId: string): { surfaceHidden: boolean; muted: boolean } | undefined {
-        if (!sessionId) return undefined;
-        const getInstance = this.deps.instanceManager?.getInstance;
-        if (typeof getInstance !== 'function') return undefined;
-        let state: ProviderState | undefined;
-        try {
-            state = getInstance.call(this.deps.instanceManager, sessionId)?.getState?.();
-        } catch {
-            return undefined;
-        }
-        const settings = (state as { settings?: Record<string, any> } | undefined)?.settings;
-        if (!settings) return undefined;
-        return {
-            surfaceHidden: resolveSurfaceHidden(settings),
-            // Status-gated exactly as builders.ts does: pass the session's live status so a
-            // one-shot silent-idle arm mutes only the idle/completion frame and never an
-            // approval/choice frame in the same turn.
-            muted: resolveMuted(settings, (state as { status?: string } | undefined)?.status),
-        };
-    }
-
-    private buildServerStatusEvent(event: Record<string, unknown>): DaemonStatusEventPayload | null {
-        const eventName = this.toDaemonStatusEventName(event.event);
-        if (!eventName) return null;
-
-        // Provider UI effects can carry arbitrary text content and are not required
-        // for server-side routing, push, or dashboard session targeting.
-        if (eventName.startsWith('provider:')) {
-            return null;
-        }
-
-        const payload: DaemonStatusEventPayload = {
-            event: eventName,
-            timestamp: typeof event.timestamp === 'number' && Number.isFinite(event.timestamp)
-                ? event.timestamp
-                : Date.now(),
-        };
-
-        if (typeof event.targetSessionId === 'string' && event.targetSessionId.trim()) {
-            payload.targetSessionId = event.targetSessionId.trim();
-        }
-        const providerType = typeof event.providerType === 'string' && event.providerType.trim()
-            ? event.providerType.trim()
-            : (typeof event.ideType === 'string' && event.ideType.trim() ? event.ideType.trim() : '');
-        if (providerType) {
-            payload.providerType = providerType;
-        }
-        if (typeof event.providerSessionId === 'string' && event.providerSessionId.trim()) {
-            payload.providerSessionId = event.providerSessionId.trim();
-        }
-        if (typeof event.workspaceName === 'string' && event.workspaceName.trim()) {
-            payload.workspaceName = event.workspaceName.trim();
-        }
-        if (typeof event.duration === 'number' && Number.isFinite(event.duration)) {
-            payload.duration = event.duration;
-        }
-        if (typeof event.elapsedSec === 'number' && Number.isFinite(event.elapsedSec)) {
-            payload.elapsedSec = event.elapsedSec;
-        }
-        if (typeof event.modalMessage === 'string' && event.modalMessage.trim()) {
-            payload.modalMessage = event.modalMessage;
-        }
-        if (Array.isArray(event.modalButtons)) {
-            const modalButtons = event.modalButtons
-                .filter((button): button is string => typeof button === 'string' && button.trim().length > 0);
-            if (modalButtons.length > 0) {
-                payload.modalButtons = modalButtons;
-            }
-        }
-
-        // Stamp the target session's visibility so the server's push-suppression
-        // gate does not have to join against a snapshot that may not have arrived
-        // yet. Booleans only — no content. See DaemonStatusEventPayload.
-        if (payload.targetSessionId) {
-            const hideMute = this.resolveEventHideMute(payload.targetSessionId);
-            if (hideMute) {
-                payload.surfaceHidden = hideMute.surfaceHidden;
-                payload.muted = hideMute.muted;
-            }
-        }
-
-        return payload;
-    }
-
-    /**
-     * Enrich the P2P copy of a status event with the structured AskUserQuestion
-     * payload. The dashboard hydrates `activeInteractivePrompt` from these
-     * fields (web-core EventManager.hydrateInteractivePromptFromEvent) so the
-     * STRUCTURED picker renders even when the P2P rich status sync — previously
-     * the only carrier of that field — is degraded.
-     *
-     * P2P-only by design: `interactivePrompt` is agent-authored free text, so
-     * it must NOT join the server-bound payload built above (see
-     * P2PStatusEventPayload in shared-types — the server spreads the event into
-     * external webhook dispatch, and its dashboard relay strips unlisted fields
-     * anyway). Guards mirror buildRelayMetadataEvent (mesh-event-delivery.ts).
-     */
-    private buildP2PStatusEvent(rawEvent: Record<string, unknown>, serverEvent: DaemonStatusEventPayload): P2PStatusEventPayload {
-        const payload: P2PStatusEventPayload = { ...serverEvent };
-        if (rawEvent.interactivePrompt && typeof rawEvent.interactivePrompt === 'object' && !Array.isArray(rawEvent.interactivePrompt)) {
-            payload.interactivePrompt = rawEvent.interactivePrompt as P2PStatusEventPayload['interactivePrompt'];
-        }
-        if (typeof rawEvent.promptId === 'string' && rawEvent.promptId.trim()) {
-            payload.promptId = rawEvent.promptId.trim();
-        }
-        if (rawEvent.multiSelect === true) {
-            payload.multiSelect = true;
-        }
-        return payload;
-    }
-
-    emitStatusEvent(event: Record<string, unknown>): void {
-        LOG.info('StatusEvent', `${event.event} (${event.providerType || event.ideType || ''})`);
-        const serverEvent = this.buildServerStatusEvent(event);
-        if (!serverEvent) return;
-        // The transcript "status-change/finalizing" dirty trigger that used to
-        // fire here is a lifecycle-bus subscriber now (wiring-unification B4,
-        // seqscribe/transcript-bus-subscriber.ts) and runs in both hosts.
-        // Dashboard delivery is P2P-only, but the server still receives the event
-        // for push notifications, webhook dispatch, and audit-side effects. The
-        // P2P copy additionally carries the structured question payload; the
-        // server-bound copy must NOT (content boundary — see buildP2PStatusEvent).
-        this.deps.p2p?.sendStatusEvent(this.buildP2PStatusEvent(event, serverEvent));
-        this.deps.serverConn?.sendMessage('status_event', serverEvent);
-    }
-
-    removeAgentTracking(_key: string): void { /* Managed by Instance itself */ }
-
- // (agent-stream polling backward compat)
-    updateAgentStreams(_ideType: string, _streams: any[]): void { /* Managed by Instance itself */ }
+    // toDaemonStatusEventName / resolveEventHideMute / buildServerStatusEvent /
+    // buildP2PStatusEvent / emitStatusEvent moved to status/status-event.ts as
+    // projectServerStatusEvent / projectP2PStatusEvent / createStatusEventEmitter
+    // (wiring-unification B5, shared by both hosts). removeAgentTracking and
+    // updateAgentStreams were dead no-ops with no caller; deleted with them
+    // (wiring-unification B residue cleanup).
 
     /** Reset P2P dedup hash — forces next send to transmit even if content unchanged */
     resetP2PHash(): void {
