@@ -454,7 +454,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           return { content: [{ type: 'text', text }] };
         }
         case 'send_chat': {
-          const text = await sendChat(transport, { message: a.message, session_id: a.session_id });
+          const text = await sendChat(transport, { message: a.message, session_id: a.session_id, message_id: a.message_id, delivery_mode: a.delivery_mode });
           return { content: [{ type: 'text', text }] };
         }
         case 'approve': {

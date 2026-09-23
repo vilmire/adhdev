@@ -94,10 +94,8 @@ import {
     summarizeMeshUsage,
     getSessionRecoveryContext,
     hasTrailingToolActivityAfterFinalAssistant,
-    insertDirectDispatch,
     recordDirectDispatchTask,
     isP2pRelayTransportFailure,
-    markStaleDirectDispatches,
     nodeSatisfiesRequiredTags,
     normalizeMeshCapabilityTags,
     filterProvidersByRequiredTags,
@@ -330,7 +328,6 @@ export {
     computeMeshMissionStats,
     computeMeshTaskStats,
     daemonIdsEquivalent,
-    deleteDirectDispatchesByTaskId,
     describeTaskDependencyState,
     parseOnDependencyFailurePolicy,
     MeshGraphPolicyError,
@@ -377,12 +374,10 @@ export {
     getMeshStatusMissionsCompact,
     getQueue,
     getSessionRecoveryContext,
-    insertDirectDispatch,
     isP2pRelayTransportFailure,
     isWeakCompletionEvidence,
     listMeshMissionSummaries,
     listMeshMissionsForTool,
-    markStaleDirectDispatches,
     meshNodeIdMatches,
     nodeSatisfiesRequiredTags,
     normalizeMeshCapabilityTags,
@@ -405,7 +400,6 @@ export {
     resolveAllowSendKeysDestructive,
     resolveMeshSurfacedSessionPreview,
     summarizeMeshAsyncRefineJobs,
-    tombstoneOperatingNote,
     upsertMeshMission,
     validateMeshTaskModeRequest,
     buildMeshTaskModeViolationError,
@@ -1355,6 +1349,14 @@ export async function ipcDispatchToRemoteAgent(
          */
         requiredTags?: string[];
         meshContext?: { meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string };
+        /**
+         * D2 (applied in C-W8): the message identity + admission policy the worker's
+         * one send funnel (SessionInputService) dedupes on. Absent → the worker mints
+         * a legacy id (never deduplicated), exactly the pre-D2 behaviour.
+         */
+        messageId?: string;
+        policy?: { mode: 'queue' | 'send_now' | 'interrupt' };
+        origin?: 'mcp' | 'mesh';
     },
 ): Promise<RemoteAgentDispatchResult> {
     const transport = ctx.transport as IpcTransport;
@@ -1546,6 +1548,9 @@ export async function ipcDispatchToRemoteAgent(
             // split by the mesh transport's frame chunking (daemon-mesh-manager
             // writeEnvelope) and reassembled on the worker before the command is handled.
             ...(args.input ? { input: args.input } : {}),
+            ...(args.messageId ? { messageId: args.messageId } : {}),
+            ...(args.policy ? { policy: args.policy } : {}),
+            ...(args.origin ? { origin: args.origin } : {}),
             // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
             dispatchSource: 'mesh-tools-internal:ipcDispatchToRemoteAgent',
             // WTCLAIM (B): carry the node workspace so a sessionless dispatch can be

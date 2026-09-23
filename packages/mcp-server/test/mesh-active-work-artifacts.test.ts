@@ -5,7 +5,8 @@ import { join } from 'node:path';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshEnqueueTask, meshQueueCancel, meshSendTask, meshStatus, meshTaskHistory, meshViewQueue } from '../src/tools/mesh-tools.js';
-import { appendLedgerEntry, buildTaskCompletionEvidence, enqueueTask, getLedgerDir, getQueue, insertDirectDispatch, loadConfig, queuePendingMeshCoordinatorEvent, readLedgerEntries, __writeTaskStatusForTests } from '@adhdev/daemon-core';
+import { appendLedgerEntry, buildTaskCompletionEvidence, enqueueTask, getLedgerDir, getQueue, loadConfig, notifyMeshCoordinator, readLedgerEntries, __writeTaskStatusForTests } from '@adhdev/daemon-core';
+import { answerTurnIpc, armTestTurnLedger, closeOpenTestAttempts, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 import { drainPendingMeshCoordinatorEvents } from './helpers/pending-notices.js';
 
 // The stdio MCP coordinator runs on its own daemon/machine, so a self-fallback (ownerless)
@@ -14,14 +15,18 @@ import { drainPendingMeshCoordinatorEvents } from './helpers/pending-notices.js'
 // machine's coordinator is routed away (MAGI-REPLICA leak guard). Use the real machineId as
 // the coordinator's localDaemonId so this delivery resolves as it does in production.
 const SELF_MACHINE_ID = loadConfig().machineId;
-import { __clearDirectDispatchesForTests, __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
+import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
 import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
-import { recordTurnAck, recordTurnStage } from '../../daemon-core/src/mesh/mesh-turn-ledger.js';
+
+// C-W8: a real in-process turn ledger answers the direct-dispatch turn IPC (the
+// attempt IS the pre-recorded dispatch; Stage 6 reads it). Armed once per file.
+armTestTurnLedger();
 
 function cleanupMesh(meshId: string): void {
   __clearMeshQueueForTests(meshId);
-  __clearDirectDispatchesForTests(meshId);
+  // The fixtures reuse session ids across cases; the ledger holds ≤1 open attempt per session.
+  closeOpenTestAttempts();
   // G2/G3: runtime reads are SQLite-primary — clear the runtime store rows too
   // (ledger entries and drained pending-event fingerprints), otherwise state
   // accumulates across runs and bleeds into assertions.
@@ -69,28 +74,15 @@ function createRemoteCtx(meshId: string) {
   };
   const calls: Array<{ daemonId?: string; command: string; args: Record<string, unknown> }> = [];
 
-  // Per-attempt state so repeated turn_observe calls (dispatch_accepted then
-  // delivered) return a consistent, advancing attemptRef the way the real
-  // daemon's turn ledger would, rather than a fresh id on every call.
-  let directAttempt: { attemptId: string; generation: number } | null = null;
-
   transport.command = async (command, args = {}) => {
     calls.push({ command, args });
     if (command === 'get_mesh') return { success: true, mesh };
     if (command === 'get_pending_mesh_events') return { events: [] };
     if (command === 'mesh_forward_event') return { success: true, forwarded: 0 };
-    // C-W6c/C-W7: mesh_send_task's direct-dispatch arm opens (dispatch_accepted)
-    // and then ACKs (delivered) a turn attempt via turn_observe before recording
-    // the queue row — mesh-active-work.ts's reducer-projection overlay depends on
-    // this attempt existing, so the fixture must answer it like the real daemon.
-    if (command === 'turn_observe') {
-      const evidence = (args as any)?.evidence ?? {};
-      if (evidence.kind === 'dispatch_accepted') {
-        directAttempt = { attemptId: 'att-direct-remote', generation: 0 };
-        return { success: true, verdict: 'applied', attemptRef: directAttempt };
-      }
-      return { success: true, verdict: 'applied', attemptRef: directAttempt ?? { attemptId: 'att-direct-remote', generation: 0 } };
-    }
+    // C-W6c/C-W8: mesh_send_task's direct-dispatch arm opens (dispatch_accepted)
+    // and then ACKs (delivered) its mesh_direct attempt via turn_observe — the real
+    // in-process ledger answers, exactly as the daemon would.
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args);
     if (command === 'get_status_metadata') {
       return {
         success: true,
@@ -231,8 +223,7 @@ function createIdleTranscriptCtx(meshId: string, finalSummary: string) {
   return { ctx: { mesh, transport, localDaemonId: 'daemon-coordinator', localMachineId: 'machine-coordinator' }, calls };
 }
 
-function seedDirectTranscriptDispatch(meshId: string, taskId: string): void {
-  const dispatchedAt = '2026-06-07T20:37:21.000Z';
+async function seedDirectTranscriptDispatch(meshId: string, taskId: string): Promise<void> {
   appendLedgerEntry(meshId, {
     kind: 'task_dispatched',
     nodeId: 'node-transcript',
@@ -246,16 +237,17 @@ function seedDirectTranscriptDispatch(meshId: string, taskId: string): void {
       dispatchedToIdleSession: true,
     },
   });
-  insertDirectDispatch(meshId, {
-    taskId,
-    nodeId: 'node-transcript',
-    sessionId: 'sess-transcript',
-    providerType: 'hermes-cli',
-    message: 'restore approved file',
-    via: 'mesh_send_task',
-    dispatchedToIdleSession: true,
-    dispatchedAt,
-  });
+  // C-W8: the active direct dispatch is its open mesh_direct attempt (was an
+  // insertDirectDispatch row) — opened + delivered on the real ledger.
+  const opened = await answerTurnIpc('turn_observe', { v: 1, evidence: {
+    eventId: taskId, at: Date.parse('2026-06-07T20:37:21.000Z'), source: 'dispatch', sessionId: 'sess-transcript', taskId,
+    observedBy: 'daemon-coordinator', kind: 'dispatch_accepted', scope: 'mesh_direct', messageId: taskId, meshId,
+    nodeId: 'node-transcript', providerType: 'hermes-cli',
+  } });
+  await answerTurnIpc('turn_observe', { v: 1, evidence: {
+    eventId: `${taskId}:delivered`, at: Date.parse('2026-06-07T20:37:22.000Z'), source: 'dispatch', sessionId: 'sess-transcript',
+    attemptRef: opened.attemptRef, observedBy: 'daemon-coordinator', kind: 'delivered', messageId: taskId, outcome: 'delivered', via: 'p2p',
+  } });
 }
 
 test('direct mesh_send_task projects exactly one active work row in status and active queue view', async () => {
@@ -317,22 +309,12 @@ test('direct mesh_send_task projects exactly one active work row in status and a
     // delivered → generating (a turn cannot start before the prompt was consumed),
     // so this is the real worker sequence, not a shortcut. Once the attempt reaches
     // 'generating' the projection flips and arms the anti-polling guidance.
-    const consumed = recordTurnAck({
-      meshId,
-      taskId: send.taskId,
-      kind: 'consumed',
-      attemptId: direct.attemptId,
-      sessionId: 'sess-direct',
-    });
-    assert.equal(consumed?.stage, 'consumed', 'the prompt-consumed ACK must advance the attempt');
-    const advanced = recordTurnStage({
-      meshId,
-      taskId: send.taskId,
-      stage: 'generating',
-      attemptId: direct.attemptId,
-      sessionId: 'sess-direct',
-    });
-    assert.equal(advanced?.applied, true, 'the generating progress echo must be applied to the open attempt');
+    const started = await answerTurnIpc('turn_observe', { v: 1, evidence: {
+      eventId: `${send.taskId}:turn_started`, at: Date.now(), source: 'fsm_edge', sessionId: 'sess-direct',
+      attemptRef: { attemptId: direct.attemptId, generation: 0 }, observedBy: 'daemon-coordinator',
+      kind: 'turn_started', retro: false,
+    } });
+    assert.equal(started.verdict, 'applied', 'the turn start must advance the open attempt to generating');
 
     const status = JSON.parse(await meshStatus(ctx as any));
     const rowsForTask = status.activeWork.filter((entry: any) => entry.taskId === send.taskId);
@@ -451,7 +433,7 @@ test('mesh_status reports an idle direct dispatch\'s final transcript as ONE con
   const { ctx, calls } = createIdleTranscriptCtx(meshId, finalSummary);
 
   try {
-    seedDirectTranscriptDispatch(meshId, taskId);
+    await seedDirectTranscriptDispatch(meshId, taskId);
 
     await meshStatus(ctx as any, { includeStaleDirectWorkDetails: true, includeTerminalDirectWork: true });
     assert.equal(calls.some(call => call.command === 'read_chat'), true);
@@ -497,7 +479,7 @@ test('mesh_view_queue reports transcript-backed idle direct dispatch evidence th
   const { ctx, calls } = createIdleTranscriptCtx(meshId, finalSummary);
 
   try {
-    seedDirectTranscriptDispatch(meshId, taskId);
+    await seedDirectTranscriptDispatch(meshId, taskId);
 
     await meshViewQueue(ctx as any, { view: 'active', verbose: true });
     const observed = turnObserveCalls(calls);
@@ -836,7 +818,7 @@ test('mesh_task_history returns pending async refine failure events instead of d
         finalBranchConvergenceState: result.finalBranchConvergenceState,
       },
     });
-    queuePendingMeshCoordinatorEvent({
+    notifyMeshCoordinator({
       event: 'refine:failed',
       meshId,
       nodeLabel: 'node-refine',

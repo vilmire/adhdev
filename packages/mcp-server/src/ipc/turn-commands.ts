@@ -45,6 +45,8 @@ import {
     decodeMeshRecordResponse,
     decodeMissionQueryResponse,
     decodeMissionUpsertResponse,
+    decodeNoteForgetResponse,
+    decodeNoteUpsertResponse,
     decodeOperatorStatusResponse,
     decodeTurnCancelResponse,
     decodeTurnObserveResponse,
@@ -59,6 +61,10 @@ import {
     type MissionQueryResponse,
     type MissionUpsertRequest,
     type MissionUpsertResponse,
+    type NoteForgetRequest,
+    type NoteForgetResponse,
+    type NoteUpsertRequest,
+    type NoteUpsertResponse,
     type OperatorStatusRequest,
     type OperatorStatusResponse,
     type TurnCancelRequest,
@@ -282,4 +288,24 @@ export async function missionQuery(
     args: Omit<MissionQueryRequest, 'v'>,
 ): Promise<MissionQueryResponse> {
     return dispatch(transport, 'mission_query', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeMissionQueryResponse);
+}
+
+/**
+ * Record a coordinator operating note on the owning daemon (C-W8; replaces the
+ * in-process `appendLedgerEntry('coordinator_operating_note')`). Free text over
+ * local IPC — the daemon keeps it in `mesh_operating_notes`, never on a topic.
+ */
+export async function noteUpsert(
+    transport: CommandTransport,
+    args: Omit<NoteUpsertRequest, 'v'>,
+): Promise<NoteUpsertResponse> {
+    return dispatch(transport, 'note_upsert', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeNoteUpsertResponse);
+}
+
+/** Retract operating notes by id and/or exact text (C-W8; replaces the in-process `tombstoneOperatingNote`). */
+export async function noteForget(
+    transport: CommandTransport,
+    args: Omit<NoteForgetRequest, 'v'>,
+): Promise<NoteForgetResponse> {
+    return dispatch(transport, 'note_forget', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeNoteForgetResponse);
 }

@@ -6,14 +6,15 @@ import { join } from 'node:path';
 import { IpcTransport } from '../src/transports/ipc.js';
 import { computeIdleDispatchAckRisk, meshSendTask } from '../src/tools/mesh-tools.js';
 import { getActiveDirectDispatches, getLedgerDir } from '@adhdev/daemon-core';
-import { __clearDirectDispatchesForTests, __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
+import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
+import { answerTurnIpc, armTestTurnLedger, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
 // DISPATCH-ACK-RISK-STALE regression coverage.
 //
-// After the NOTIF-DROP / CANON-A fix (insertDirectDispatch atomically pre-records the
-// dispatch row BEFORE inject), a direct dispatch to an idle session no longer loses its
+// After the NOTIF-DROP / CANON-A fix (the dispatch is pre-recorded BEFORE inject — since
+// C-W8 as its open `mesh_direct` turn-ledger attempt), a direct dispatch to an idle session no longer loses its
 // completion: sessionHasActiveAssignment becomes TRUE at completion time, so the
 // prior-terminal providerSessionId dedup gate is skipped. The dispatch response must NOT
 // keep emitting `dispatchAcknowledgementRisk:true` for that (now-safe) idle case — the
@@ -22,7 +23,6 @@ import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
 function cleanupMesh(meshId: string): void {
   __clearMeshQueueForTests(meshId);
-  __clearDirectDispatchesForTests(meshId);
   __clearMeshLedgerForTests(meshId);
   __clearMeshPendingEventsForTests(meshId);
   const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -34,7 +34,7 @@ function cleanupMesh(meshId: string): void {
 
 // A LOCAL control-plane node (daemonId === ctx.localDaemonId) hosting a single idle,
 // mesh-managed delegate session. This routes meshSendTask through the local direct-dispatch
-// path (mesh-tools-session.ts) where insertDirectDispatch pre-records the row and the risk
+// path (mesh-tools-session.ts) where the mesh_direct attempt pre-records the dispatch and the risk
 // flag is computed — not the P2P remote path (which never attaches the risk flag).
 function createLocalIdleCtx(meshId: string, opts: { agentCommandSucceeds: boolean }) {
   const idleSession = {
@@ -78,6 +78,8 @@ function createLocalIdleCtx(meshId: string, opts: { agentCommandSucceeds: boolea
     if (command === 'get_pending_mesh_events') return { events: [] };
     if (command === 'get_status_metadata') return { success: true, status: { sessions: [idleSession] } };
     if (command === 'agent_command') return { success: opts.agentCommandSucceeds };
+    // C-W8: the attempt open / deliver / close goes through the daemon's turn IPC.
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args);
     throw new Error(`unexpected local command: ${command}`);
   };
   transport.meshCommand = async (_daemonId, command) => {
@@ -90,6 +92,7 @@ test('idle-session direct dispatch with a successful pre-record reports NO ackno
   const meshId = 'mesh-dispatch-ack-risk-idle-prerecorded';
   cleanupMesh(meshId);
   const { ctx, calls } = createLocalIdleCtx(meshId, { agentCommandSucceeds: true });
+  const ledger = armTestTurnLedger();
 
   try {
     const send = JSON.parse(await meshSendTask(ctx as any, {
@@ -115,6 +118,7 @@ test('idle-session direct dispatch with a successful pre-record reports NO ackno
     assert.equal(send.dispatchAcknowledgementRiskReason, undefined);
     assert.equal(send.dispatchAcknowledgementNote, undefined);
   } finally {
+    ledger.dispose();
     cleanupMesh(meshId);
   }
 });
@@ -123,6 +127,7 @@ test('idle-session direct dispatch whose inject is rejected rolls back the row a
   const meshId = 'mesh-dispatch-ack-risk-idle-rejected';
   cleanupMesh(meshId);
   const { ctx } = createLocalIdleCtx(meshId, { agentCommandSucceeds: false });
+  const ledger = armTestTurnLedger();
 
   try {
     const send = JSON.parse(await meshSendTask(ctx as any, {
@@ -137,14 +142,14 @@ test('idle-session direct dispatch whose inject is rejected rolls back the row a
     assert.equal(send.success, false);
     assert.equal(getActiveDirectDispatches(meshId).length, 0, 'rejected inject must roll back the pre-recorded row');
   } finally {
+    ledger.dispose();
     cleanupMesh(meshId);
   }
 });
 
 // The genuine residual-risk branch — idle session AND the dispatch row did not persist —
-// is exercised directly through the pure decision helper. The daemon-core
-// insertDirectDispatch wrapper swallows its own persistence errors and never throws, so a
-// live persistence failure cannot be forced deterministically from the tool layer; the
+// is exercised directly through the pure decision helper. (C-W8: the pre-record is the
+// ledger attempt; a failed open cannot be forced deterministically from the tool layer); the
 // helper is the single source of truth for the risk decision, so unit-testing it pins the
 // behavior precisely for both branches.
 test('computeIdleDispatchAckRisk warns only for an idle dispatch whose pre-record did not persist', () => {
