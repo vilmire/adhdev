@@ -73,6 +73,7 @@ Canonical runtime contract:
 | `--no-open` | Do not auto-open the browser on startup |
 | `--token <secret>` | Enable token auth for dashboard, API, and WebSocket access |
 | `--dev` | Enable DevConsole and provider debugging helpers |
+| `--log-level <level>` | Log level `debug\|info\|warn\|error` (default `info`; `--dev` alone implies `debug`) |
 | `--public <path>` | Serve the dashboard from a custom build directory |
 
 ### What These Choices Mean In Practice
@@ -89,6 +90,7 @@ Canonical runtime contract:
 Environment variables:
 
 - `ADHDEV_TOKEN` — token auth fallback when `--token` is not passed
+- `ADHDEV_LOG_LEVEL` — log level fallback when `--log-level` is not passed
 - `ADHDEV_SESSION_HOST_NAME` — override the standalone session-host namespace (default: `adhdev-standalone`)
 - `ADHDEV_RESTORE_HOSTED_SESSIONS_ON_STARTUP=1` — opt into restoring hosted runtimes on startup; ordinary standalone launch stays fresh by default
 

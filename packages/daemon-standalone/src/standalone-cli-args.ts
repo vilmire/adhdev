@@ -21,7 +21,12 @@ export interface StandaloneCliOptions {
   open?: boolean;
   token?: string;
   dev?: boolean;
+  /** Console/file log level. `--dev` alone implies `debug` (same rule as the cloud daemon's `resolveDebugRuntimeConfig`). */
+  logLevel?: StandaloneLogLevel;
 }
+
+export const STANDALONE_LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
+export type StandaloneLogLevel = typeof STANDALONE_LOG_LEVELS[number];
 
 export interface ParsedStandaloneCliArgs {
   options: StandaloneCliOptions;
@@ -51,7 +56,8 @@ Options:
                          only). Use --host 0.0.0.0 to opt into public/LAN
                          binding — a warning is printed when no auth is set.
   --token <token>        Set an authentication token for the dashboard UI
-  --dev                  Enable DevConsole to debug and test providers
+  --dev                  Enable DevConsole to debug and test providers (log level defaults to debug)
+  --log-level <level>    Log level: debug|info|warn|error (default: info; also ADHDEV_LOG_LEVEL)
   --public <path>        Custom path to the web dashboard distribution
   --no-open              Do not automatically open the browser on startup
 
@@ -135,6 +141,7 @@ const FLAG_SPECS: readonly FlagSpec[] = [
   { names: ['--public'], takesValue: true },
   { names: ['--no-open'], takesValue: false },
   { names: ['--dev'], takesValue: false },
+  { names: ['--log-level'], takesValue: true },
   { names: ['--help', '-h'], takesValue: false },
 ];
 
@@ -148,6 +155,13 @@ function isKnownFlag(token: string): boolean {
  * StandaloneCliArgsError on any malformed input: missing flag values, invalid
  * --host/--port values, or unknown --flags. Nothing is silently coerced.
  */
+/** Validates a log-level token (flag or `ADHDEV_LOG_LEVEL`); throws `StandaloneCliArgsError` on anything else. */
+export function normalizeStandaloneLogLevel(raw: string, source: string): StandaloneLogLevel {
+  const value = raw.trim().toLowerCase();
+  if ((STANDALONE_LOG_LEVELS as readonly string[]).includes(value)) return value as StandaloneLogLevel;
+  throw new StandaloneCliArgsError(`Invalid ${source} "${raw}" (expected one of ${STANDALONE_LOG_LEVELS.join('|')}).`);
+}
+
 export function parseStandaloneCliArgs(args: readonly string[]): ParsedStandaloneCliArgs {
   const options: StandaloneCliOptions = {};
   let hostExplicit = false;
@@ -203,6 +217,12 @@ export function parseStandaloneCliArgs(args: readonly string[]): ParsedStandalon
     }
     if (name === '--dev') {
       options.dev = true;
+      continue;
+    }
+    if (name === '--log-level') {
+      const { value, consumedNext } = readValue(name, inlineValue, i);
+      options.logLevel = normalizeStandaloneLogLevel(value, '--log-level');
+      if (consumedNext) i++;
       continue;
     }
     if (name === '--help' || name === '-h') {

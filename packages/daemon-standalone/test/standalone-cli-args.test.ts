@@ -194,3 +194,17 @@ test('an explicit --port always outranks ADHDEV_STANDALONE_PORT (precedence pin)
   const effectivePort = options.port || envOverride
   assert.equal(effectivePort, 4000)
 })
+
+// ─── --log-level (wiring-unification live pass 2026-09-25: the standalone never applied a log level) ───
+
+test('parseStandaloneCliArgs accepts --log-level in flag, inline and case-insensitive forms', () => {
+  assert.equal(parseStandaloneCliArgs(['--log-level', 'debug']).options.logLevel, 'debug')
+  assert.equal(parseStandaloneCliArgs(['--log-level=warn']).options.logLevel, 'warn')
+  assert.equal(parseStandaloneCliArgs(['--log-level', 'ERROR']).options.logLevel, 'error')
+  assert.equal(parseStandaloneCliArgs(['--dev']).options.logLevel, undefined)
+})
+
+test('parseStandaloneCliArgs rejects an unknown --log-level value and a missing one', () => {
+  assert.throws(() => parseStandaloneCliArgs(['--log-level', 'verbose']), StandaloneCliArgsError)
+  assert.throws(() => parseStandaloneCliArgs(['--log-level']), StandaloneCliArgsError)
+})
