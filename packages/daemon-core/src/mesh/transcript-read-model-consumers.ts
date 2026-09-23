@@ -146,13 +146,13 @@ export const TRANSCRIPT_CONSUMER_ROSTER: Readonly<Record<TranscriptConsumerId, T
         unit: 6,
     },
     daemon_worker_status_probe: {
-        currentLocation: 'oss/packages/daemon-core/src/mesh/mesh-remote-event-pull.ts (reprobeWorkerStatus)',
+        currentLocation: 'oss/packages/daemon-core/src/mesh/turn-ledger/probe.ts (reprobeWorkerStatus)',
         note: 'Active-session freshness/owner status re-check. Reads ONE field — `payload.status` — which the wire carries verbatim as `snapshot.status` (the producer\'s own effectiveStatus, not a re-derivation), so the read is exactly lossless. Remote nodes only; a declined replica read falls through to the identical legacy read_chat, preserving null\'s fail-open meaning.',
         enabled: true,
         unit: 7,
     },
     daemon_terminal_evidence: {
-        currentLocation: 'oss/packages/daemon-core/src/mesh/mesh-completion-synthesis.ts (fetchAssignedTaskChatTail)',
+        currentLocation: 'oss/packages/daemon-core/src/mesh/turn-ledger/probe.ts (createComponentsProbeReader)',
         note: 'Acked-hold/terminal causal evidence. Every field the extractors read (role/kind/content/senderName/meta.streaming/timestamp/receivedAt, status, providerObservedStatus, activeModal, turn, providerSessionId) survives the projection. ★ NOT lossless in one direction: `turnTerminalMarkers` is deliberately omitted (the wire carries no native markers — see mapTerminalEvidencePayload), so a replica read takes the legacy message-shape admission rules instead of strong native-marker evidence. Weaker evidence, same veto direction.',
         enabled: true,
         unit: 7,

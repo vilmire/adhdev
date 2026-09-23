@@ -71,7 +71,7 @@ import {
     __resetMeshRuntimeStoreForTests,
     enqueueTask,
     getQueue,
-    updateTaskStatus,
+    updateTaskStatus, __writeTaskStatusForTests,
 } from '../../src/mesh/mesh-work-queue.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 
@@ -145,7 +145,7 @@ function buildGateGraph(mesh: string) {
 
 /** Claim helper: complete A (opens the gate) + claim in one step. */
 function openAndClaim(id: string, g: ReturnType<typeof buildGateGraph>, session = 'sess-coord', nowMs?: number) {
-    updateTaskStatus(id, g.taskA.id, 'completed');
+    __writeTaskStatusForTests(id, g.taskA.id, 'completed');
     const claim = claimMeshGraphGate({ meshId: id, gateId: g.gateId, coordinatorSessionId: session, nowMs });
     expect(claim.claimed).toBe(true);
     return claim;
@@ -304,7 +304,7 @@ describe('crash before any side effect — the dead claimant is fenced out forev
         try {
             const t0 = Date.now();
             const g = buildGateGraph(id);
-            updateTaskStatus(id, g.taskA.id, 'completed');
+            __writeTaskStatusForTests(id, g.taskA.id, 'completed');
 
             // sess-1 claims and dies having done NOTHING (no side effect, no release).
             const c1 = claimMeshGraphGate({

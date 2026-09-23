@@ -817,6 +817,51 @@ export async function runWorktreeNodeRetentionTick(
     const recordPasses = opts.recordPasses !== false;
     const state = loadRetentionState();
     let stateDirty = false;
+
+    // ─── Orphaned state-entry GC (2026-09-23 preview log review) ──────────────
+    // The two-pass proof/lease record for a node is only deleted, today, on the
+    // SUCCESS path of executeNodeRemoval() below — i.e. only when THIS module
+    // removed the node. Every other removal path (mesh_remove_node's own direct
+    // handler in commands/med-family/mesh-crud.ts, a remote daemon's removal, a
+    // manually-edited meshes.json) drops the node from mesh.nodes without ever
+    // touching worktree-node-retention-state.json, so its entry is orphaned
+    // forever. Live evidence from the preview daemon's actual state file: 15 of
+    // 18 stored entries referenced node ids absent from the current mesh, with
+    // passCount as high as 19 and firstPassAt up to ~6 weeks stale — proof that
+    // predates node ids the mesh had long since recycled/forgotten. This is a
+    // pure leak (unbounded growth of a JSON file, one fs.readFileSync/JSON.parse
+    // per tick), not the cause of any observed removed=0 tick — a state entry
+    // for a node no longer in mesh.nodes is inert (buildPlan/entries never
+    // reference it), but it still bloats and slows loadRetentionState() every
+    // hourly tick indefinitely. Scoped to non-onlyNodeId ticks and to keys for
+    // THIS mesh only — never touches another mesh's entries, and never runs
+    // under the manual single-node MCP dry-run/execute path (onlyNodeId) where
+    // "not in entries" would wrongly mean "not the one node being inspected"
+    // rather than "gone from the mesh". A held lease is preserved even if its
+    // node vanished (best-effort visibility for the lease-conflict path; it
+    // still expires on its own clock).
+    if (recordPasses && !opts.onlyNodeId) {
+        const liveNodeIds = new Set(
+            (Array.isArray(opts.mesh?.nodes) ? opts.mesh.nodes : [])
+                .map((n: any) => (typeof n?.id === 'string' ? n.id : String(n?.id ?? '')))
+                .filter(Boolean),
+        );
+        const meshPrefix = `${meshId}::`;
+        let orphansPruned = 0;
+        for (const key of Object.keys(state.nodes)) {
+            if (!key.startsWith(meshPrefix)) continue;
+            const nodeId = key.slice(meshPrefix.length);
+            if (liveNodeIds.has(nodeId)) continue;
+            const record = state.nodes[key];
+            if (record?.lease && record.lease.expiresAt > opts.nowMs) continue; // unexpired lease: leave for its owner to release
+            delete state.nodes[key];
+            orphansPruned++;
+            stateDirty = true;
+        }
+        if (orphansPruned > 0) {
+            LOG.info(LOG_CATEGORY, `mesh=${meshId}: pruned ${orphansPruned} orphaned retention-state entry(ies) for node(s) no longer in the mesh`);
+        }
+    }
     for (const entry of entries) {
         const key = stateKey(meshId, entry.nodeId);
         if (!entry.candidate) {
@@ -918,6 +963,19 @@ export async function runWorktreeNodeRetentionTick(
         `tick mesh=${meshId} dryRun=${!execute} mode=${executeMode}: scanned=${summary.scanned} candidates=${summary.candidates} `
         + `skipped=${summary.skipped} autoEligible=${summary.autoEligible} removed=${summary.removed} failed=${summary.removalFailures} leaseConflicts=${summary.leaseConflicts}`,
     );
+    // DEBUG-only breakdown of WHY every scanned node was (or was not) a candidate —
+    // the INFO summary line above carries only counts, which was diagnosable for
+    // "did anything get removed" but not "why didn't it" (2026-09-23 preview log
+    // review: 208/210 hourly auto ticks logged removed=0 with no way to tell,
+    // from the log alone, which reason code(s) were holding every node back).
+    // byReason is already computed for the summary; this just surfaces it.
+    if (summary.scanned > 0) {
+        const reasons = Object.entries(summary.byReason)
+            .sort((a, b) => b[1] - a[1])
+            .map(([reason, count]) => `${reason}=${count}`)
+            .join(' ');
+        LOG.debug(LOG_CATEGORY, `tick mesh=${meshId} byReason: ${reasons}`);
+    }
 
     return { meshId, tickId: opts.tickId, dryRun: !execute, executeMode, graceMs, entries, summary };
 }

@@ -18,28 +18,27 @@
  * Behaviour:
  *  - DETECTION is always on: every residue finding is logged (content-free).
  *  - UNDRAIN RECOVERY (default ON, kill-switch ADHDEV_COMPOSER_RESIDUE_RECOVERY
- *    = '0'/'false') — the durable-undrain promotion of this sweep: for a
- *    full-integrity match whose ledger row was drained BEFORE this process
- *    booted, the sweep clears the composer (bounded backspaces) and flips the
- *    drained row back to drained=0 IN PLACE (the same undrain semantic as the
- *    strict-route hold / modal-park requeue — never a re-insert, so the UNIQUE
- *    fingerprint stays occupied and no duplicate row can exist). The normal
- *    redelivery path (reconcile drain → inject → echo-gated verified submit)
- *    then delivers the body into the now-clean composer. Guards, all required:
+ *    = '0'/'false'): for a full-integrity match whose notice was delivered
+ *    BEFORE this process booted, the sweep clears the composer (bounded
+ *    backspaces) and RELEASES the notice's `delivered:<writer>:<seq>` claim
+ *    row in the turn ledger (wiring-unification C-W3 — notices are
+ *    `turn.notify` rows, no longer drained pending-event rows). The notice then
+ *    reads as undelivered and the deliver backlog retypes it (echo-gated
+ *    verified submit) into the now-clean composer. Guards, all required:
  *      (a) integrity === 'full' — a truncated body is NEVER recovered;
- *      (b) drainedAt < process boot — a row drained by THIS process is live
- *          delivery machinery, not residue, and is never touched;
+ *      (b) deliveredAt < process boot — a claim written by THIS process is
+ *          live delivery machinery, not residue, and is never touched;
  *      (c) two-pass stability — the sweep snapshots the viewport, waits
  *          STABILITY_CONFIRM_DELAY_MS, and recovers only when the session is
  *          still idle with an UNCHANGED viewport (an actively-typing user or
  *          an in-flight injection changes the screen and aborts recovery);
  *      (d) no in-flight submit on the adapter.
- *    Ordering is CLEAR → UNDRAIN: while the row is still drained=1 nothing can
- *    redeliver it (in-process or cross-process — the MCP pull drainer reads the
- *    same SQLite), so no drainer can inject into the still-dirty composer; once
- *    the undrain commits, any drainer that picks the row up finds the composer
- *    already cleared. The reverse order would let a cross-process drain race
- *    the clear and merge the redelivered body into the residue.
+ *    Ordering is CLEAR → RELEASE: while the claim exists nothing redelivers
+ *    the notice (the cursor, the backlog and the MCP inbox read all honour
+ *    it), so nothing can type into the still-dirty composer; once the claim is
+ *    released, the backlog finds the composer already cleared. Candidates are
+ *    re-rendered from the ledger without the live status line, so the body is
+ *    a stable prefix of what was typed.
  *  - LEGACY AUTOSUBMIT (pressing Enter in place) remains the opt-in fallback
  *    (env ADHDEV_COMPOSER_RESIDUE_AUTOSUBMIT + integrity === 'full') and fires
  *    only when undrain recovery did not run for the finding. It never fires
@@ -54,7 +53,7 @@
 
 import { LOG } from '../logging/logger.js';
 import { normalizeForEcho } from '../providers/spec/fsm-driver.js';
-import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
+import type { MeshNoticeRuntime } from '../mesh/turn-ledger/deliver.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
 
 /** Probe length (normalized chars) for the head/tail presence checks — wider
@@ -286,7 +285,7 @@ export function runComposerResidueSweep(deps: ResidueSweepDeps): ResidueFinding[
                         LOG.error(
                             'ComposerResidue',
                             `Undrain FAILED for row ${candidate.rowId} (mesh=${candidate.meshId}) after the composer was cleared — `
-                            + 'the notification was NOT returned to the queue. Requeue it manually from the pending-event ledger.',
+                            + 'the notice\'s delivery claim was NOT released (it will not be redelivered automatically).',
                         );
                         recoveryNote = ' Undrain recovery FAILED after clear — see error above.';
                     }
@@ -378,6 +377,8 @@ export interface ComposerResidueSweepHandle {
  *  with daemon-lifecycle, which imports this module). */
 interface SweepComponents {
     cliManager: { adapters: ReadonlyMap<string, CliAdapter> };
+    /** The S7 notice wiring (delivered-notice read + claim release); absent → detection-only, no candidates. */
+    meshTurn?: { notices: Pick<MeshNoticeRuntime, 'recentDeliveredNotices' | 'releaseDelivery'> } | null;
 }
 
 function readAutoRecoverEnabled(env: NodeJS.ProcessEnv): boolean {
@@ -432,31 +433,35 @@ function collectSweepSessions(
     return sessions;
 }
 
-/** Reads recently-drained notification bodies from the pending-event ledger. */
-function collectSweepCandidates(now: number): ResidueSweepCandidate[] {
-    let rows: ReturnType<MeshRuntimeStore['recentDrainedPendingEventPayloads']>;
+/**
+ * Recently-delivered coordinator notices, re-rendered from the turn ledger
+ * (wiring-unification C-W3: notices are `turn.notify` rows claimed by
+ * `delivered:<writer>:<seq>` rows, not drained pending-event rows).
+ */
+function collectSweepCandidates(components: SweepComponents, now: number): ResidueSweepCandidate[] {
+    const notices = components.meshTurn?.notices;
+    if (!notices?.recentDeliveredNotices) {
+        LOG.debug('ComposerResidue', 'Turn ledger not wired — sweep has no delivered notices to match');
+        return [];
+    }
+    let delivered: ReturnType<NonNullable<typeof notices.recentDeliveredNotices>>;
     try {
-        rows = MeshRuntimeStore.getInstance().recentDrainedPendingEventPayloads(now - RESIDUE_LOOKBACK_MS);
+        delivered = notices.recentDeliveredNotices(now - RESIDUE_LOOKBACK_MS);
     } catch (e: any) {
-        LOG.debug('ComposerResidue', `Ledger unavailable — sweep skipped: ${e?.message || e}`);
+        LOG.debug('ComposerResidue', `Turn ledger unavailable — sweep skipped: ${e?.message || e}`);
         return [];
     }
     const candidates: ResidueSweepCandidate[] = [];
-    for (const row of rows) {
-        const payload = (row.payload && typeof row.payload === 'object' ? row.payload : {}) as Record<string, unknown>;
-        const coordinatorMessage = typeof payload.coordinatorMessage === 'string' ? payload.coordinatorMessage : '';
-        if (coordinatorMessage.length < RESIDUE_MIN_BODY_CHARS) continue;
-        const metadataEvent = (payload.metadataEvent && typeof payload.metadataEvent === 'object'
-            ? payload.metadataEvent
-            : {}) as Record<string, unknown>;
+    for (const notice of delivered) {
+        if (notice.text.length < RESIDUE_MIN_BODY_CHARS) continue;
         candidates.push({
-            rowId: row.id,
-            meshId: row.meshId,
-            event: row.event,
-            eventId: typeof payload.eventId === 'string' ? payload.eventId : null,
-            taskId: typeof metadataEvent.taskId === 'string' ? metadataEvent.taskId : null,
-            drainedAt: row.drainedAt,
-            coordinatorMessage,
+            rowId: notice.claimEventId,
+            meshId: notice.meshId,
+            event: notice.event,
+            eventId: notice.claimEventId,
+            taskId: notice.taskId,
+            drainedAt: notice.deliveredAt,
+            coordinatorMessage: notice.text,
         });
     }
     return candidates;
@@ -487,7 +492,7 @@ export function scheduleComposerResidueSweep(
     const runSweepPass = (priorViewports: ReadonlyMap<string, string>): void => {
         try {
             const now = Date.now();
-            const candidates = collectSweepCandidates(now);
+            const candidates = collectSweepCandidates(components, now);
             const sessions = collectSweepSessions(components, priorViewports);
             if (sessions.length === 0) return;
             const findings = runComposerResidueSweep({
@@ -498,7 +503,9 @@ export function scheduleComposerResidueSweep(
                 bootAt,
                 undrainRow: (candidate) => {
                     try {
-                        return MeshRuntimeStore.getInstance().requeueDrainedPendingEventById(candidate.rowId);
+                        // Release the delivery claim: the notice reads as undelivered
+                        // again and the deliver backlog retypes it into the now-clean composer.
+                        return components.meshTurn?.notices.releaseDelivery?.(candidate.rowId) === true;
                     } catch (e: any) {
                         LOG.error('ComposerResidue', `Undrain store call failed for row ${candidate.rowId}: ${e?.message || e}`);
                         return false;

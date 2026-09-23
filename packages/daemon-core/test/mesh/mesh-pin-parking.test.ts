@@ -92,7 +92,7 @@ import {
   PARKED_TASK_RETENTION_MS,
   taskIsParked,
 } from '../../src/mesh/mesh-task-parking.js'
-import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
+import { drainPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_ID = 'node_main'

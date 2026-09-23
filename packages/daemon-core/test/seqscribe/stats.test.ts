@@ -50,14 +50,10 @@ describe('summarizeSeqscribeStats', () => {
             fgenAgeBucket: 0,
             quarantined: false,
             authority: false,
-            // Stage 2+3 fields with neither `dualWrite` nor `parity` supplied:
-            // a daemon whose shadow leg never armed reports it as inactive and
-            // its buckets as zero, rather than omitting the keys — a reader
-            // must be able to tell "shadow off" from "older daemon".
-            dualWrite: false,
-            dualWriteFailedBucket: 0,
-            dualWriteDroppedBucket: 0,
-            dualWriteBackfilledBucket: 0,
+            // Stage 3 parity fields with no `parity` supplied report never-run
+            // and zero buckets rather than omitting the keys. (C-W3: the
+            // `dualWrite*` shadow buckets are gone — the publisher is the one
+            // write path; see the dedicated test below.)
             parityMismatchBucket: 0,
             parityPersistentMismatchBucket: 0,
             parityRan: false,
@@ -66,7 +62,7 @@ describe('summarizeSeqscribeStats', () => {
             parityFieldMismatchBucket: 0,
             // §8 unit 2: transcript single-observation publisher + parity —
             // same "report inactive/zero, never omit" discipline as the
-            // dualWrite/parity block above.
+            // parity block above.
             transcriptPublish: false,
             transcriptPublishedBucket: 0,
             transcriptPublishFailedBucket: 0,
@@ -79,12 +75,11 @@ describe('summarizeSeqscribeStats', () => {
         });
     });
 
-    it('buckets the dual-write and parity counters instead of passing them through', () => {
+    it('buckets the parity counters instead of passing them through', () => {
         const summary = summarizeSeqscribeStats(
             { topics: { 'assistant.journal': topic() }, peers: [] },
             {
                 authorityEnabled: true,
-                dualWrite: { active: true, failed: 4, dropped: 250, backfilled: 40 },
                 parity: {
                     runs: 3,
                     mismatches: 24,
@@ -96,40 +91,21 @@ describe('summarizeSeqscribeStats', () => {
             },
         );
 
-        expect(summary.dualWrite).toBe(true);
         expect(summary.parityRan).toBe(true);
         // BACKLOG_BUCKETS = [1, 10, 100, 1000] → ordinals, never the raw count.
-        // This is what keeps the status frame byte-identical while a counter
-        // creeps, so the server-side dedup keeps suppressing idle frames.
-        expect(summary.dualWriteFailedBucket).toBe(2);
-        expect(summary.dualWriteDroppedBucket).toBe(4);
         expect(summary.parityMismatchBucket).toBe(3); // 24 → [10,100)
-        expect(summary.dualWriteFailedBucket).not.toBe(4);
         expect(summary.parityMismatchBucket).not.toBe(24);
-        // The backfill counter follows the SAME bucket discipline. It has to:
-        // on a machine running mesh MCP tools it is the counter that ticks most,
-        // since every mcp-server append is repaired here — passing it through
-        // raw would defeat the status-frame dedup single-handedly.
-        // 40 → under the 100 threshold → ordinal 3 (distinct from dropped's 250,
-        // which lands at 4), so this pins the bucketing rather than a constant.
-        expect(summary.dualWriteBackfilledBucket).toBe(3);
-        expect(summary.dualWriteBackfilledBucket).not.toBe(40);
-        // ★ `parityPersistentMismatchBucket` answers "is the read cutover
-        // blocked"; the combined `parityMismatchBucket` answers only "was
-        // anything ever detected", which is EXPECTED to be nonzero in normal
-        // operation (mcp-server appends, repaired by the backfill). The two are
-        // bucketed independently from their own raw counts, so a healthy daemon
-        // reads as mismatch-nonzero + persistent-zero.
         expect(summary.parityPersistentMismatchBucket).toBe(2); // 2 → [1,10)
-        expect(summary.parityPersistentMismatchBucket).not.toBe(
-            summary.parityMismatchBucket,
-        );
-        // The per-class axes answer "blocked by what" — each bucketed
-        // independently against its OWN raw count, not derived from the
-        // combined total, so they need not sum to it.
         expect(summary.parityMissingInShadowBucket).toBe(2); // 9 → [1,10)
         expect(summary.parityExtraInShadowBucket).toBe(3); // 15 → [10,100)
         expect(summary.parityFieldMismatchBucket).toBe(0); // 0 → none
+    });
+
+    it('carries no dual-write shadow fields any more (C-W3: one write path)', () => {
+        const summary = summarizeSeqscribeStats({ topics: { t: topic() }, peers: [] }, { authorityEnabled: true, includeLocalDiagnostics: true });
+        for (const key of Object.keys(summary)) expect(key.startsWith('dualWrite')).toBe(false);
+        expect(summary).not.toHaveProperty('readRouting');
+        expect(summary).not.toHaveProperty('terminalRedrive');
     });
 
     it('emits no topic names, peer ids or other identifiers', () => {
@@ -225,58 +201,28 @@ describe('summarizeSeqscribeStats', () => {
     });
 
     /**
-     * Stage 4A read-path routing on the LOCAL surface.
-     *
-     * The point of the field is diagnosing WHICH readiness condition is holding
-     * a mesh on the ledger. Before it, a live daemon could report a perfectly
-     * healthy replication picture (dualWrite armed, parity clean) while every
-     * read still fell back, and there was no way to tell that apart from the
-     * gate never being consulted at all — which is precisely the misdiagnosis
-     * that motivated this field.
+     * Coordinator-notice delivery (C7-4) on the LOCAL surface: the turn cursors'
+     * raw counters ride only when local diagnostics are requested (they would
+     * defeat the status-frame dedup), and are copied, never aliased.
      */
-    describe('read-path routing counters (Stage 4A)', () => {
-        const routing = {
-            fromReplica: 412,
-            fromLedger: 9,
-            fallbacks: { consumer_lag: 7, parity_mismatch: 2 },
-        };
+    describe('mesh delivery counters (C7-4)', () => {
+        const counters = { delivered: 5, deferred: 2, escalated: 1, suppressed: 0 };
 
-        it('surfaces the counters and the per-reason fallback breakdown', () => {
-            const summary = summarizeSeqscribeStats(
-                { topics: { t: topic() }, peers: [] },
-                { authorityEnabled: true, includeLocalDiagnostics: true, readRouting: routing },
-            );
-
-            expect(summary.readRouting).toEqual(routing);
-            // The reason is the whole value of the field: it names the condition
-            // rather than only saying that *a* fallback happened.
-            expect(summary.readRouting?.fallbacks.consumer_lag).toBe(7);
+        it('surfaces the counters under includeLocalDiagnostics', () => {
+            const summary = summarizeSeqscribeStats({ topics: { t: topic() }, peers: [] }, { authorityEnabled: true, includeLocalDiagnostics: true, meshDelivery: counters });
+            expect(summary.meshDelivery).toEqual(counters);
         });
 
         it('omits the counters unless local diagnostics are requested', () => {
-            // The status reporter shares this projection with
-            // `get_status_metadata`. These are RAW monotonic counters, so if
-            // they rode the deduped status frame every heartbeat would hash
-            // differently and an idle daemon would transmit forever.
-            const summary = summarizeSeqscribeStats(
-                { topics: { t: topic() }, peers: [] },
-                { authorityEnabled: true, readRouting: routing },
-            );
-            expect(summary).not.toHaveProperty('readRouting');
+            const summary = summarizeSeqscribeStats({ topics: { t: topic() }, peers: [] }, { authorityEnabled: true, meshDelivery: counters });
+            expect(summary).not.toHaveProperty('meshDelivery');
         });
 
         it('copies the counters so a later read cannot mutate a held snapshot', () => {
-            const live = { fromReplica: 1, fromLedger: 0, fallbacks: { consumer_lag: 1 } };
-            const summary = summarizeSeqscribeStats(
-                { topics: { t: topic() }, peers: [] },
-                { authorityEnabled: true, includeLocalDiagnostics: true, readRouting: live },
-            );
-
-            live.fallbacks.consumer_lag = 99;
-            live.fromReplica = 99;
-
-            expect(summary.readRouting?.fallbacks.consumer_lag).toBe(1);
-            expect(summary.readRouting?.fromReplica).toBe(1);
+            const live = { delivered: 1 };
+            const summary = summarizeSeqscribeStats({ topics: { t: topic() }, peers: [] }, { authorityEnabled: true, includeLocalDiagnostics: true, meshDelivery: live });
+            live.delivered = 99;
+            expect(summary.meshDelivery?.delivered).toBe(1);
         });
     });
 

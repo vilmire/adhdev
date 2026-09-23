@@ -41,7 +41,7 @@ import {
     FOREIGN_TIMESTAMP_FUTURE_SKEW_TOLERANCE_MS,
     AUTO_LAUNCH_AWAIT_CLAIM_MS,
 } from '../../src/mesh/mesh-autolaunch-integrity.js';
-import { bootstrapQueueTaskCountsAsHandled } from '../../src/mesh/mesh-event-delivery.js';
+import { bootstrapQueueTaskCountsAsHandled } from '../../src/mesh/mesh-event-forwarding.js';
 import {
     resolveTargetPinTtlVerdict,
     TARGET_SESSION_PIN_TTL_MS,

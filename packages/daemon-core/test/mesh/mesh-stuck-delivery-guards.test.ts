@@ -19,10 +19,11 @@ import { join } from 'path'
 //      guard for the fix that was considered and deliberately NOT made — see below.
 
 const SRC = join(import.meta.dirname, '../../src/mesh')
-// The delivered-no-turn / hard-deadline code these assertions scan moved out of
-// mesh-reconcile-loop.ts into mesh-reconcile-stranded-dispatch.ts (pure move, no
-// behavior change). Only the path follows it — every assertion below is unchanged.
-const reconcile = readFileSync(join(SRC, 'mesh-reconcile-stranded-dispatch.ts'), 'utf-8')
+// Guard 1 (the delivered-no-turn GENERATING hold bounded by the shared hard
+// ceiling) retired 2026-09-23 with mesh-reconcile-stranded-dispatch.ts (wiring-
+// unification C4): every open mesh attempt now carries a hard_ceiling turn hold
+// from R1, H5 commits it failed, and the scheduler WARNs on an open attempt
+// without one — pinned in test/turn-ledger/scheduler.test.ts.
 const assignment = readFileSync(join(SRC, 'mesh-queue-assignment.ts'), 'utf-8')
 // The auto-launch subsystem (incl. maybeAutoLaunchOneQueueSession and its gates) moved
 // out of mesh-queue-assignment.ts into mesh-queue-autolaunch.ts (pure move, no behavior
@@ -33,54 +34,6 @@ const autolaunch = readFileSync(join(SRC, 'mesh-queue-autolaunch.ts'), 'utf-8')
 // every assertion below is unchanged. Without this the two scans would slice an empty
 // string and pass against nothing.
 const skipNotify = readFileSync(join(SRC, 'mesh-skip-notify.ts'), 'utf-8')
-
-/** Body of the delivered-no-turn GENERATING branch. */
-function generatingBranch(): string {
-  // Anchored on the GENERATING-HARD-DEADLINE marker, NOT on the bare `verdict ===
-  // 'GENERATING'` test: that expression now appears at three sites in this module (the
-  // early-idle transcript arm gate and the delivered-not-consumed branch precede this
-  // one), so a bare indexOf silently anchored on the FIRST of them and widened the slice
-  // to ~800 lines — the assertions below then passed against a span that included, but
-  // was not, the branch they are meant to pin.
-  const start = reconcile.indexOf('// GENERATING-HARD-DEADLINE:')
-  expect(start, "delivered-no-turn GENERATING branch not found").toBeGreaterThan(-1)
-  const end = reconcile.indexOf('continue;  // worker still working', start)
-  expect(end, 'GENERATING branch terminator not found').toBeGreaterThan(start)
-  return reconcile.slice(start, end)
-}
-
-describe('generating hold is bounded (defect B)', () => {
-  it('the GENERATING branch is gated by the shared hard deadline', () => {
-    const branch = generatingBranch()
-    // Without this the branch resets the grace and `continue`s unconditionally, so a
-    // stuck liveness signal holds the row 'assigned' forever.
-    expect(branch).toContain('queueHoldHardDeadlineExceeded(')
-    expect(branch).toContain("'live_generating'")
-    // Negated: the branch is taken only while the ceiling has NOT been exceeded.
-    expect(branch).toMatch(/&&\s*!queueHoldHardDeadlineExceeded\(/)
-  })
-
-  it('reuses the existing ceiling rather than introducing a second number', () => {
-    // One place decides "how long is too long to hold a row assigned". A separate
-    // constant here would drift from the approval/suspension holds it must agree with.
-    expect(reconcile).toContain('const QUEUE_HOLD_HARD_DEADLINE_MS = 90 * 60_000')
-    expect(generatingBranch()).not.toMatch(/\d+\s*\*\s*60_000/)
-  })
-
-  it('keeps the reset-grace behavior for workers inside the ceiling', () => {
-    // Below the ceiling a demonstrably-alive worker must still be protected — the fix
-    // bounds the hold, it does not weaken liveness respect.
-    expect(generatingBranch()).toContain('deliveredNoTurnUnknownStreak.delete(streakKey)')
-  })
-
-  it('live_generating is an accepted gate label on the shared helper', () => {
-    const sig = reconcile.slice(
-      reconcile.indexOf('function queueHoldHardDeadlineExceeded('),
-      reconcile.indexOf('): boolean {', reconcile.indexOf('function queueHoldHardDeadlineExceeded(')),
-    )
-    expect(sig).toContain("'live_generating'")
-  })
-})
 
 describe('expired target pin reaches the coordinator (defect A — the real one)', () => {
   it('target_session_pin_expired is classified actionable', () => {

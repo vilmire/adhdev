@@ -110,3 +110,21 @@ describe('runtime ledger over mesh-runtime.db', () => {
         }
     });
 });
+
+describe('boot migration on the live store (C integration)', () => {
+    it('leaves the migrating boot with the legacy tables recreated EMPTY — the state every later open has — so remaining legacy writers do not throw until a restart', () => {
+        const mesh = meshId();
+        const store = MeshRuntimeStore.getInstance();
+        const report = store.runTurnLedgerMigrationV1({ ownerDaemonId: 'dc', exportPath: null });
+        expect(report.skipped).toBe(false);
+        expect(report.droppedTables).toEqual(expect.arrayContaining(['mesh_session_delivery', 'mesh_event_ledger']));
+        const exists = (t: string) => !!store.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(t);
+        expect(exists('mesh_session_delivery')).toBe(true);
+        expect(exists('mesh_event_ledger')).toBe(true);
+        // A remaining writer works in the same boot.
+        store.appendLedgerEntry({ id: randomUUID(), meshId: mesh, timestamp: new Date().toISOString(), kind: 'task_dispatched' });
+        expect(store.readLedgerEntriesOrdered(mesh)).toHaveLength(1);
+        // Idempotent: the second run is a no-op at user_version 1.
+        expect(store.runTurnLedgerMigrationV1({ ownerDaemonId: 'dc', exportPath: null }).skipped).toBe(true);
+    });
+});

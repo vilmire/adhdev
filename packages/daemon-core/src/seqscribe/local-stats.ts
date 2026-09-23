@@ -11,21 +11,20 @@
 
 import { LOG } from '../logging/logger.js';
 import type { SeqscribeStatusSummary } from '../shared-types.js';
-import { isMeshDualWriteActive, meshDualWriteCounters } from './mesh-publisher.js';
-import { meshParityCounters } from './mesh-parity.js';
-import { meshReadRoutingCounters } from './mesh-read-readiness.js';
 import type { SeqscribeRuntime } from './runtime.js';
 import { summarizeSeqscribeStats } from './stats.js';
 import { transcriptParityCounters } from './transcript-parity.js';
 
 export interface LocalSeqscribeStatsInputs {
     /**
-     * Terminal-notification redelivery counters (P-δ, 2026-09-23): load-bearing
-     * (35 of 295 completions on preview were redelivered) and otherwise
-     * invisible. Injected because the counters live in `mesh/` and this module
-     * may not value-import it.
+     * Coordinator-notice delivery counters (wiring-unification C7-4): the
+     * turn cursors' outcome counters merged with the deliver handler's
+     * (`meshNoticeRuntime.current()?.counters()`). They replace the retired
+     * Stage 5a `terminalRedrive` block — the `turn.deliver` cursor IS
+     * redelivery. Injected because the counters live in `mesh/` and this
+     * module may not value-import it. Null/absent → no turn ledger booted.
      */
-    terminalRedrive: () => { redelivered: number; skipped: number; quarantined: number };
+    meshDelivery?: () => Record<string, number> | null;
 }
 
 export function buildLocalSeqscribeStats(
@@ -34,11 +33,6 @@ export function buildLocalSeqscribeStats(
 ): SeqscribeStatusSummary | null {
     if (!rt) return null;
     try {
-        // Stage 2+3 counters ride the same aggregate-only projection:
-        // summarizeSeqscribeStats buckets them, so nothing here is a live
-        // counter and the status-frame dedup keeps working.
-        const dual = meshDualWriteCounters();
-        const parity = meshParityCounters();
         // §8 unit 2: the publisher runs a parity self-check on every append, and
         // the allow-listed `transcript*` fields already exist through reporter.ts
         // and the server sanitizer — so passing them fills existing fields
@@ -61,29 +55,11 @@ export function buildLocalSeqscribeStats(
             // syncHotspots carries topic names and peer ids and is local-only.
             includeLocalDiagnostics: true,
             throughput: snapshot,
-            // Stage 4A read-path routing — raw local counters; the fallback
-            // reason is the only surface that says WHICH readiness condition is
-            // holding a mesh on the ledger.
-            readRouting: meshReadRoutingCounters(),
-            terminalRedrive: inputs.terminalRedrive(),
+            meshDelivery: inputs.meshDelivery?.() ?? null,
             // Transcript trigger attribution + stage latencies. Local-only: raw
             // distributions would defeat the status-frame dedup. The cloud
             // status-report supplier deliberately does NOT pass this.
             transcriptLatency: transcriptService?.getLatencyDetail() ?? null,
-            dualWrite: {
-                active: isMeshDualWriteActive(),
-                failed: dual.failed,
-                dropped: dual.dropped,
-                backfilled: dual.backfilled,
-            },
-            parity: {
-                runs: parity.runs,
-                mismatches: parity.mismatches,
-                persistentMismatches: parity.persistentMismatches,
-                missingInShadow: parity.missingInShadow,
-                extraInShadow: parity.extraInShadow,
-                fieldMismatch: parity.fieldMismatch,
-            },
             // `active` follows the SERVICE, not the mode: mode `shadow` still
             // publishes, so keying off the mode would read `false` on a daemon
             // that is actively appending.

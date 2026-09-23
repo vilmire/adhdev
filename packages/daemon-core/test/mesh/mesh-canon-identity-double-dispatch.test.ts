@@ -6,7 +6,7 @@ import {
     requeueTask,
     updateSessionTaskStatus,
     cancelTask,
-    reclaimStrandedAssignedTask,
+    requeueTaskForLedgerReclaim,
     __clearMeshQueueForTests,
     __resetMeshRuntimeStoreForTests,
 } from '../../src/mesh/mesh-work-queue.js';
@@ -123,13 +123,13 @@ describe('CANON-IDENTITY — single-flight requeue guard (C)', () => {
         expect(isTaskDispatchInFlight(meshId, t.id)).toBe(false);
     });
 
-    it('reclaiming a stranded assigned row clears the in-flight mark', () => {
+    it('the ledger reclaim of an assigned row clears the in-flight mark', () => {
         const t = enqueueTask(meshId, 'work', { targetNodeId: 'n',
     difficulty: 'medium',
 });
         claimNextTask(meshId, 'n', 'sessA', [], { providerType: 'claude-cli' });
         beginTaskDispatchInFlight(meshId, t.id);
-        reclaimStrandedAssignedTask(meshId, t.id, { reason: 'assigned_stranded_dispatch_unconfirmed' });
+        requeueTaskForLedgerReclaim(meshId, t.id, 'H1_await_delivery', new Date().toISOString());
         expect(isTaskDispatchInFlight(meshId, t.id)).toBe(false);
         expect(getQueue(meshId).find(x => x.id === t.id)?.status).toBe('pending');
     });

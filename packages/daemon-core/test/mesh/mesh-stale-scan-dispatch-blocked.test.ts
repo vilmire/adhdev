@@ -53,10 +53,10 @@ import {
   __clearMeshQueueForTests,
   __resetMeshRuntimeStoreForTests,
   enqueueTask,
-  updateTaskStatus,
+  updateTaskStatus, __writeTaskStatusForTests,
   cancelTask,
 } from '../../src/mesh/mesh-work-queue.js'
-import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
+import { drainPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
 
 const NODE_ID = 'node_stale_scan'
 const COORDINATOR_DAEMON_ID = 'mach_stale_scan_test'
@@ -108,7 +108,7 @@ describe('STALE-SCAN-BLOCKER: dispatch_blocked is not paged for work already und
   it('★does NOT page when the task already completed during the scan await', () => {
     meshId = `stale-scan-${randomUUID().slice(0, 8)}`
     const task = enqueueTask(meshId, 'work that finished mid-scan', { difficulty: 'medium' })
-    updateTaskStatus(meshId, task.id, 'completed')
+    __writeTaskStatusForTests(meshId, task.id, 'completed')
 
     expect(pagedFor(meshId, task.id, 'remote_auto_launch_unsupported')).toBe(false)
   })

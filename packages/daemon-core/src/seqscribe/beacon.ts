@@ -639,7 +639,13 @@ export function armBeacon(
             return res;
         } catch (err) {
             counters.getFailed++;
-            LOG.info(
+            // Log hygiene (2026-09-23 preview log review, C-W7): this is advisory and
+            // ignored by every caller (the throw only lets queryWithSplitRetry decide
+            // whether to retry) — a transient poll timeout is not an operator-actionable
+            // event and firing at INFO on every failed round trip was 3,916 lines/8d in
+            // the reviewed preview log. DEBUG; the counter above still tracks the rate
+            // for anyone diagnosing Beacon health.
+            LOG.debug(
                 'Seqscribe',
                 `beacon get failed (advisory, ignored): ${err instanceof Error ? err.message : String(err)}`,
             );
@@ -720,11 +726,18 @@ export function armBeacon(
             reports = res.reports;
             truncated = res.truncated;
         } catch (err) {
-            counters.getFailed++;
-            LOG.info(
-                'Seqscribe',
-                `beacon get failed (advisory, ignored): ${err instanceof Error ? err.message : String(err)}`,
-            );
+            // C-W6 fix (2026-09-23): `rawQuery` above already increments
+            // `counters.getFailed` and logs at the point of the actual
+            // transport call — every path into this catch went through
+            // `rawQuery` first (queryWithSplitRetry never fails any other
+            // way). Incrementing AGAIN here double-counted every failure
+            // (confirmed by the C-W3 audit: the raw-transport ratio
+            // `get=992/1722` was read as a ~58% failure rate when the true
+            // number of distinct failed round trips was half that — the
+            // pair of increments landing in the same-ms log lines is what
+            // made it look like two failures per incident). Re-throw only;
+            // do not re-count or re-log a failure `rawQuery` already
+            // recorded.
             throw err;
         }
 

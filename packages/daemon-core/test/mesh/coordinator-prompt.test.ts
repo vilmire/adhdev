@@ -1120,13 +1120,15 @@ describe('Repo Mesh coordinator prompt', () => {
     })
   })
 
-  it('6-6: mesh_mission_list and the G2 requeue tool are exposed (operating-rule + gap coverage)', () => {
+  it('6-6: mesh_mission_list is exposed and the retired G2 requeue tool is not (operating-rule coverage)', () => {
     const prompt = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
     const exposed = extractPromptToolTable(prompt)
     // mesh_mission_list underpins the "remaining work = enumerate every mission" rule.
     expect(exposed).toContain('mesh_mission_list')
-    // mesh_requeue_held_events is the G2 event_held→pending recovery path.
-    expect(exposed).toContain('mesh_requeue_held_events')
+    // mesh_requeue_held_events (the G2 event_held→pending recovery path) was
+    // retired with the pending-events queue (wiring-unification C-W3): a notice
+    // is a durable turn_events row until delivered, so nothing is ever "held".
+    expect(exposed).not.toContain('mesh_requeue_held_events')
   })
 
   // ── Configured MAGI panels section ──

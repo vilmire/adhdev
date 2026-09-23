@@ -46,6 +46,7 @@ import {
     subscribeHostModal,
     subscribeHostSessionPurge,
     subscribeHostStatusFacts,
+    subscribeHostTopicReconciliation,
     subscribeHostTurnSnapshots,
     type StatusFactsEvent,
 } from './host-subscribers.js';
@@ -243,6 +244,9 @@ export function createDaemonHostRuntime(runtime: DaemonRuntime, transport: Daemo
             gitServices: components.commandHandler.ctx?.gitCommandServices ?? null,
             gitMonitor,
         }),
+        // P-II item 1: replaces both hosts' 2-2.5s "safety net" flush timers.
+        // WARN-only — never flushes; see host-subscribers.ts for the policy note.
+        subscribeHostTopicReconciliation(bus, topics),
         // send_chat refreshes the workspace git pill (the pre-turn snapshot is
         // the command plane's onBeforeSendChat).
         bus.on('command_executed', (e) => {

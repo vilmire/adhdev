@@ -17,20 +17,17 @@ import { createDefaultGitCommandServices } from '../../git/git-commands.js';
 import { getCachedProviderVersions } from '../../detection/cli-detector.js';
 import { buildLocalSeqscribeStats } from '../../seqscribe/local-stats.js';
 import { toBeaconDiagnosticsSummary } from '../../seqscribe/beacon-diagnostics.js';
-import {
-    getTotalQuarantineSkips,
-    getTotalRedriveInjected,
-    getTotalRedriveSkipped,
-} from '../../mesh/mesh-terminal-redrive.js';
+import { meshNoticeRuntime } from '../../mesh/turn-ledger/deliver.js';
 import type { CommandPlaneStage, SeqscribeNodeStage } from './types.js';
 
-/** Terminal-notification redelivery counters for the local stats surface. */
-export function readTerminalRedriveCounters(): { redelivered: number; skipped: number; quarantined: number } {
-    return {
-        redelivered: getTotalRedriveInjected(),
-        skipped: getTotalRedriveSkipped(),
-        quarantined: getTotalQuarantineSkips(),
-    };
+/**
+ * Coordinator-notice delivery counters for the local stats surface (the turn
+ * cursors + deliver outcomes; null before S7 binds the notice runtime). The
+ * successor of the retired Stage 5a `readTerminalRedriveCounters`.
+ */
+export function readMeshDeliveryCounters(): Record<string, number> | null {
+    const counters = meshNoticeRuntime.current()?.counters();
+    return counters ? { ...counters } : null;
 }
 
 export function bootCommandPlane(s4: SeqscribeNodeStage): CommandPlaneStage {
@@ -110,7 +107,7 @@ export function bootCommandPlane(s4: SeqscribeNodeStage): CommandPlaneStage {
         getCdpLogFn: (ideType: string) => LOG.forComponent(`CDP:${ideType}`).asLogFn(),
         // Local replication-health read surface (get_status_metadata).
         // Aggregate-only by construction — see seqscribe/local-stats.ts.
-        getSeqscribeStats: () => buildLocalSeqscribeStats(seqscribe, { terminalRedrive: readTerminalRedriveCounters }),
+        getSeqscribeStats: () => buildLocalSeqscribeStats(seqscribe, { meshDelivery: readMeshDeliveryCounters }),
         // Beacon staleness / sole-copy (§7.1). Unlike the stats this DOES carry
         // topic names and peer writer ids — LOCAL/P2P only, never status_report.
         // `diagnostics()` does no I/O, so an on-demand read cannot become a
@@ -131,7 +128,11 @@ export function bootCommandPlane(s4: SeqscribeNodeStage): CommandPlaneStage {
         },
         getFleetStatusPeerView: () => seqscribe?.fleetPeerView?.snapshot() ?? null,
         getTranscriptReplicaStore: () => seqscribe?.transcriptReplica ?? null,
-        // resolveTranscriptPeer intentionally left unset — see CommandRouterDeps.
+        // G3: cloud-only — see CommandRouterDeps.resolveTranscriptPeer's doc
+        // comment and DaemonBootConfig.mesh.resolveTranscriptPeer. Absent
+        // (undefined) on standalone, same as every other `cfg.mesh?.*` hook
+        // above — there is no mesh peer map to resolve a peer from.
+        resolveTranscriptPeer: cfg.mesh?.resolveTranscriptPeer,
     });
 
     return { ...s4, commandRegistry: getDaemonCommandRegistry(), commandHandler, router };

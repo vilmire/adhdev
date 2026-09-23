@@ -1,8 +1,16 @@
-import { describe, expect, it, afterEach } from 'vitest';
+import { describe, expect, it, afterEach, vi } from 'vitest';
 import { randomUUID } from 'crypto';
+
+// Wiring-unification C-W3: own task lifecycle = this daemon's writer on the
+// durable mesh_topic_index (task_dispatched) + the turn tables (terminals).
+const OWN_WRITER = 'w-own';
+vi.mock('../../src/seqscribe/mesh-publisher.js', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../../src/seqscribe/mesh-publisher.js')>()),
+    meshPublisherWriterId: () => OWN_WRITER,
+}));
 import { computeMeshTaskStats, computeMeshMissionStats } from '../../src/mesh/mesh-task-stats.js';
-import { appendLedgerEntry } from '../../src/mesh/mesh-ledger.js';
-import { enqueueTask, claimNextTask, updateTaskStatus, requeueTask, __clearMeshQueueForTests } from '../../src/mesh/mesh-work-queue.js';
+import { meshTopicIndexFor, MESH_RECORD_APPEND_KIND } from '../../src/mesh/mesh-topic-index.js';
+import { enqueueTask, claimNextTask, updateTaskStatus, __writeTaskStatusForTests, requeueTask, __clearMeshQueueForTests } from '../../src/mesh/mesh-work-queue.js';
 import { __clearMeshLedgerForTests } from '../../src/mesh/mesh-ledger.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 
@@ -15,24 +23,29 @@ describe('M7 — operational stats (time/attempts)', () => {
         MeshRuntimeStore.resetForTests();
     });
 
+    let seq = 0;
     function dispatchAndComplete(taskId: string, dispatchedAt: string, terminalAt: string, kind: 'task_completed' | 'task_failed' = 'task_completed') {
-        // Inject ledger evidence with controlled timestamps via direct store append
-        // (appendLedgerEntry stamps its own time, so write rows directly).
+        // Seed the two own-read sources with controlled timestamps: the dispatch
+        // record as indexed from this daemon's writer, the terminal as the
+        // committed turn attempt.
         const store = MeshRuntimeStore.getInstance();
-        store.appendLedgerEntry({
-            id: randomUUID(), meshId, timestamp: dispatchedAt, kind: 'task_dispatched',
-            sessionId: 'session-1', payload: { taskId, source: 'queue' },
+        const at = Date.parse(dispatchedAt);
+        const id = randomUUID();
+        meshTopicIndexFor(store.db).ingest({
+            meshId, writer: OWN_WRITER, seq: ++seq, kind: MESH_RECORD_APPEND_KIND,
+            payload: { id, timestamp: dispatchedAt, ledgerKind: 'task_dispatched', nodeId: null, sessionId: 'session-1', providerType: null, taskId,
+                payload: { taskId, source: 'queue' }, v: 2, k: 'mesh.record', eventId: id, at },
         });
-        store.appendLedgerEntry({
-            id: randomUUID(), meshId, timestamp: terminalAt, kind,
-            sessionId: 'session-1', payload: { taskId },
-        });
+        const end = Date.parse(terminalAt);
+        store.db.prepare(`INSERT INTO turn_attempts (attempt_id, scope, mesh_id, task_id, session_id, owner_daemon_id, state, accepted_at, terminal_outcome, terminal_reason, terminal_at, created_at, updated_at)
+            VALUES (?, 'mesh_queue', ?, ?, 'session-1', 'd-self', ?, ?, ?, 'turn_end', ?, ?, ?)`)
+            .run(randomUUID(), meshId, taskId, kind === 'task_completed' ? 'completed' : 'failed', at, kind === 'task_completed' ? 'completed' : 'failed', end, at, end);
     }
 
     it('derives duration and dispatch count from an injected event sequence', () => {
         const task = enqueueTask(meshId, 'measured task', { difficulty: 'medium' });
         claimNextTask(meshId, 'node-1', 'session-1');
-        updateTaskStatus(meshId, task.id, 'completed');
+        __writeTaskStatusForTests(meshId, task.id, 'completed');
         dispatchAndComplete(task.id, '2026-06-10T10:00:00.000Z', '2026-06-10T10:03:14.000Z');
 
         const [stats] = computeMeshTaskStats(meshId, { taskIds: [task.id] });
@@ -56,7 +69,7 @@ describe('M7 — operational stats (time/attempts)', () => {
     it('flags incomplete evidence instead of estimating when ledger events are missing', () => {
         const task = enqueueTask(meshId, 'evidence-less task', { difficulty: 'medium' });
         claimNextTask(meshId, 'node-1', 'session-1');
-        updateTaskStatus(meshId, task.id, 'completed');
+        __writeTaskStatusForTests(meshId, task.id, 'completed');
         // No ledger entries injected — terminal status without dispatch/terminal evidence.
 
         const [stats] = computeMeshTaskStats(meshId, { taskIds: [task.id] });
@@ -77,7 +90,7 @@ describe('M7 — operational stats (time/attempts)', () => {
 });
         for (const task of [a, b, c]) {
             claimNextTask(meshId, 'node-1', 'session-1');
-            updateTaskStatus(meshId, task.id, 'completed');
+            __writeTaskStatusForTests(meshId, task.id, 'completed');
         }
         dispatchAndComplete(a.id, '2026-06-10T10:00:00.000Z', '2026-06-10T10:10:00.000Z');
         dispatchAndComplete(b.id, '2026-06-10T10:05:00.000Z', '2026-06-10T10:20:00.000Z');

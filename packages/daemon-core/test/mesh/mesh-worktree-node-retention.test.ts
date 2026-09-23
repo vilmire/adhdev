@@ -47,6 +47,7 @@ import {
     resolveWorktreeNodeRetentionLeaseMs,
 } from '../../src/mesh/mesh-retention-config.js';
 import { getLedgerDir } from '../../src/mesh/mesh-ledger.js';
+import { LOG } from '../../src/logging/logger.js';
 
 const MESH_ID = 'mesh_retention_test';
 const HOUR_MS = 60 * 60 * 1000;
@@ -649,5 +650,127 @@ describe('plan shape, dry-run parity, metrics', () => {
         expect(m.candidates).toBe(1);
         expect(m.skips).toBe(1);
         expect(m.removed).toBe(0);
+    });
+});
+
+// ─── orphaned state-entry GC (2026-09-23 preview log review) ────────────────
+// A node removed via ANY path other than this module's own executeNodeRemoval
+// success branch (e.g. mesh_remove_node's direct handler) leaves its two-pass
+// proof/lease record behind in worktree-node-retention-state.json forever,
+// because the only delete of a state key happens on THIS module's own removal
+// success (terminal cleanup) or on a live entry's own reasonCode lapse — never
+// when the node simply disappears from mesh.nodes between ticks. Live evidence
+// from the actual preview daemon state file: 15/18 stored entries referenced
+// node ids absent from the current mesh, one with passCount=19 and
+// firstPassAt ~6 weeks stale.
+describe('orphaned state-entry GC', () => {
+    const statePath = () => join(getLedgerDir(), 'worktree-node-retention-state.json');
+    function readState(): any { return JSON.parse(fs.readFileSync(statePath(), 'utf8')); }
+
+    it('prunes a state entry whose node is no longer in mesh.nodes', async () => {
+        const deps = makeDeps();
+        const mesh = makeMesh([worktreeNode()]);
+        // Establish a proof record for node-wt-1.
+        await runWorktreeNodeRetentionTick(deps, makeOpts(mesh, { tickId: 'tick-1', nowMs: NOW }));
+        expect(readState().nodes[`${MESH_ID}::node-wt-1`]).toBeDefined();
+
+        // Node removed via a path OTHER than this module (e.g. mesh_remove_node's
+        // own direct handler) — it simply vanishes from mesh.nodes.
+        const meshAfterRemoval = makeMesh([]);
+        const result = await runWorktreeNodeRetentionTick(deps, makeOpts(meshAfterRemoval, { tickId: 'tick-2', nowMs: NOW + HOUR_MS }));
+        expect(readState().nodes[`${MESH_ID}::node-wt-1`]).toBeUndefined();
+        // The pruned node isn't even scanned this tick (it's gone from the mesh).
+        expect(result.entries.find(e => e.nodeId === 'node-wt-1')).toBeUndefined();
+    });
+
+    it('never prunes another mesh\'s entries', async () => {
+        const deps = makeDeps();
+        const mesh = makeMesh([worktreeNode()]);
+        await runWorktreeNodeRetentionTick(deps, makeOpts(mesh, { tickId: 'tick-1', nowMs: NOW }));
+        // Manually seed a foreign-mesh entry the same way a different mesh's tick would.
+        const state = readState();
+        state.nodes['mesh_other::node-elsewhere'] = { firstPassAt: NOW, lastPassAt: NOW, lastTickId: 'x', passCount: 5 };
+        fs.writeFileSync(statePath(), JSON.stringify(state, null, 2));
+
+        const meshAfterRemoval = makeMesh([]);
+        await runWorktreeNodeRetentionTick(deps, makeOpts(meshAfterRemoval, { tickId: 'tick-2', nowMs: NOW + HOUR_MS }));
+        expect(readState().nodes['mesh_other::node-elsewhere']).toBeDefined();
+    });
+
+    it('does not prune under onlyNodeId (single-node manual inspection is not a full-mesh scan)', async () => {
+        const deps = makeDeps();
+        const mesh = makeMesh([worktreeNode(), worktreeNode({ id: 'node-wt-2', workspace: '/wt/two' })]);
+        await runWorktreeNodeRetentionTick(deps, makeOpts(mesh, { tickId: 'tick-1', nowMs: NOW }));
+        expect(readState().nodes[`${MESH_ID}::node-wt-1`]).toBeDefined();
+        expect(readState().nodes[`${MESH_ID}::node-wt-2`]).toBeDefined();
+
+        // onlyNodeId restricts the SCAN to node-wt-2; node-wt-1 is absent from
+        // `entries` but is NOT gone from the mesh — must not be pruned.
+        await runWorktreeNodeRetentionTick(deps, makeOpts(mesh, { tickId: 'tick-2', nowMs: NOW + HOUR_MS, onlyNodeId: 'node-wt-2' }));
+        expect(readState().nodes[`${MESH_ID}::node-wt-1`]).toBeDefined();
+    });
+
+    it('does not prune a state entry still holding an unexpired lease, even if its node is gone', async () => {
+        const deps = makeDeps();
+        const mesh = makeMesh([worktreeNode()]);
+        await runWorktreeNodeRetentionTick(deps, makeOpts(mesh, { tickId: 'tick-1', nowMs: NOW }));
+        expect(acquireWorktreeRetentionLease({ meshId: MESH_ID, nodeId: 'node-wt-1', owner: 'someone', nowMs: NOW, leaseMs: 10 * HOUR_MS })).toBe(true);
+
+        const meshAfterRemoval = makeMesh([]);
+        await runWorktreeNodeRetentionTick(deps, makeOpts(meshAfterRemoval, { tickId: 'tick-2', nowMs: NOW + HOUR_MS }));
+        // Lease still unexpired (10h > 1h elapsed) — record preserved for its owner to release.
+        expect(readState().nodes[`${MESH_ID}::node-wt-1`]).toBeDefined();
+
+        // Once the lease expires, the next tick prunes it.
+        await runWorktreeNodeRetentionTick(deps, makeOpts(meshAfterRemoval, { tickId: 'tick-3', nowMs: NOW + 11 * HOUR_MS }));
+        expect(readState().nodes[`${MESH_ID}::node-wt-1`]).toBeUndefined();
+    });
+
+    it('recordPasses:false (observational dry-run) does not prune', async () => {
+        const deps = makeDeps();
+        const mesh = makeMesh([worktreeNode()]);
+        await runWorktreeNodeRetentionTick(deps, makeOpts(mesh, { tickId: 'tick-1', nowMs: NOW }));
+        expect(readState().nodes[`${MESH_ID}::node-wt-1`]).toBeDefined();
+
+        const meshAfterRemoval = makeMesh([]);
+        await runWorktreeNodeRetentionTick(deps, makeOpts(meshAfterRemoval, { tickId: 'tick-2', nowMs: NOW + HOUR_MS, recordPasses: false }));
+        expect(readState().nodes[`${MESH_ID}::node-wt-1`]).toBeDefined();
+    });
+});
+
+// ─── DEBUG byReason breakdown (2026-09-23 preview log review) ───────────────
+// The INFO summary line only ever carried counts (scanned/candidates/skipped/
+// autoEligible/removed/failed/leaseConflicts) — with the live preview daemon
+// showing removed=0 on 208/210 hourly auto ticks, there was no way to tell
+// from the log alone WHICH reason code(s) were holding every node back.
+// summary.byReason was already computed (asserted in the metrics test above)
+// but never logged; this surfaces it at DEBUG so it doesn't add to the INFO
+// volume budget the same review flagged elsewhere.
+describe('DEBUG byReason breakdown', () => {
+    it('logs a per-reason-code breakdown at DEBUG, not INFO', async () => {
+        const debugSpy = vi.spyOn(LOG, 'debug').mockImplementation(() => {});
+        const infoSpy = vi.spyOn(LOG, 'info');
+        const mesh = makeMesh([worktreeNode(), worktreeNode({ id: 'node-wt-2', workspace: '/wt/two' })]);
+        await runWorktreeNodeRetentionTick(makeDeps(), makeOpts(mesh, { tickId: 'tick-1', nowMs: NOW }));
+
+        const debugCall = debugSpy.mock.calls.find(c => c[0] === 'WorktreeRetention' && String(c[1]).includes('byReason:'));
+        expect(debugCall).toBeDefined();
+        expect(String(debugCall?.[1])).toContain('candidate=2');
+
+        // The existing INFO summary line is untouched — byReason is DEBUG-only.
+        const infoCall = infoSpy.mock.calls.find(c => c[0] === 'WorktreeRetention' && String(c[1]).startsWith('tick mesh='));
+        expect(infoCall).toBeDefined();
+        expect(String(infoCall?.[1])).not.toContain('byReason');
+
+        debugSpy.mockRestore();
+        infoSpy.mockRestore();
+    });
+
+    it('skips the DEBUG line entirely when nothing was scanned', async () => {
+        const debugSpy = vi.spyOn(LOG, 'debug').mockImplementation(() => {});
+        const emptyMesh = { id: MESH_ID, name: MESH_ID, nodes: [] };
+        await runWorktreeNodeRetentionTick(makeDeps(), makeOpts(emptyMesh, { tickId: 'tick-1', nowMs: NOW }));
+        expect(debugSpy.mock.calls.find(c => c[0] === 'WorktreeRetention' && String(c[1]).includes('byReason:'))).toBeUndefined();
+        debugSpy.mockRestore();
     });
 });

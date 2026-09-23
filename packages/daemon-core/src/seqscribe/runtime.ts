@@ -14,7 +14,6 @@
  */
 
 import { LOG } from '../logging/logger.js';
-import type { MeshParityLoopHandle } from '../mesh/mesh-parity-loop.js';
 import type { FleetStatusEntry } from '../status/reporter.js';
 import type { BeaconDiagnostics } from './beacon-diagnostics.js';
 import { loadStoredFleetSecret } from './fleet-secret.js';
@@ -73,8 +72,6 @@ const fleetStatusProducer: FleetStatusProducer = {
 export interface SeqscribeProjectionsView {
     /** The live transcript publisher, or null when the node could not arm it. */
     transcript: TranscriptProjectionService | null;
-    /** The mesh ledger ↔ shadow parity loop; null when the dual-write shadow is off. */
-    parityLoop: MeshParityLoopHandle | null;
 }
 
 export interface SeqscribeRuntime {

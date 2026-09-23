@@ -233,6 +233,34 @@ describe('sessions, holds, notices', () => {
         expect(ports.calls).toContain('bus:committed');
     });
 
+    it('★a delivery that lands the attempt on a session holding an open plain turn supersedes the plain turn (C-W4 ledger fix)', () => {
+        const db = memDb();
+        const ports = recordingPorts();
+        const ledger = ledgerOn(db, { ports, publisher: fakePublisher() });
+        // The dispatch targets s1; the prompt actually lands on s2, which is
+        // mid plain (dashboard) turn.
+        expect(ledger.observe(dispatch()).rule).toBe('R1');
+        const plain = ledger.observe(evd('turn_started', { retro: false }, { attemptRef: undefined, sessionId: 's2' })).attempt!;
+        expect(plain.scope).toBe('plain');
+        const delivered = ledger.observe(evd('delivered', { messageId: 'msg-1', outcome: 'delivered', via: 'local' }, { source: 'input_service', sessionId: 's2' }));
+        expect(delivered.verdict).toBe('applied');
+        expect(delivered.attempt?.sessionId).toBe('s2');
+        expect(ledger.getAttempt(plain.attemptId)).toMatchObject({ state: 'cancelled', terminal: { reason: 'superseded' } });
+        expect(ledger.openAttemptForSession('s2')?.attemptId).toBe('a1');
+        // Closed, not stopped: s2 is the session that just took the prompt.
+        expect(ports.calls.some((c) => c.startsWith('cancel'))).toBe(false);
+    });
+
+    it('a delivery that would land the attempt on a session holding ANOTHER open mesh attempt is refused, not an index violation', () => {
+        const db = memDb();
+        const ledger = ledgerOn(db, { publisher: fakePublisher() });
+        ledger.observe(dispatch());
+        ledger.observe(dispatch({ attemptId: 'a2', taskId: 't2', session: 's2' }));
+        const delivered = ledger.observe(evd('delivered', { messageId: 'msg-1', outcome: 'delivered', via: 'local' }, { source: 'input_service', sessionId: 's2' }));
+        expect(delivered.verdict).toBe('rejected');
+        expect(ledger.openAttemptForSession('s2')?.attemptId).toBe('a2');
+    });
+
     it('a second mesh dispatch onto a session with an open mesh attempt is refused', () => {
         const db = memDb();
         const ledger = ledgerOn(db, { publisher: fakePublisher() });

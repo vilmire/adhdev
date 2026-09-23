@@ -80,7 +80,7 @@ import {
     enqueueTask,
     getQueue,
     taskDependenciesSatisfied,
-    updateTaskStatus,
+    updateTaskStatus, __writeTaskStatusForTests,
 } from '../../src/mesh/mesh-work-queue.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { triggerMeshQueue } from '../../src/mesh/mesh-events.js';
@@ -180,7 +180,7 @@ describe('SURFACE claim (claimNextQueueTask) routes through the predicate', () =
         try {
             const dep = enqueueTask(id, 'prerequisite', { taskMode: 'code_change', difficulty: 'medium' });
             const dependent = enqueueTask(id, 'dependent work', { taskMode: 'code_change', dependsOn: [dep.id], difficulty: 'medium' });
-            updateTaskStatus(id, dep.id, 'completed');
+            __writeTaskStatusForTests(id, dep.id, 'completed');
 
             const pred = spyOnPredicate();
             const claimed = claimNextTask(id, NODE_ID, 'claim-sess-2');
@@ -197,7 +197,7 @@ describe('SURFACE claim (claimNextQueueTask) routes through the predicate', () =
         try {
             const dep = enqueueTask(id, 'prerequisite', { taskMode: 'code_change', difficulty: 'medium' });
             const dependent = enqueueTask(id, 'dependent work', { taskMode: 'code_change', dependsOn: [dep.id], difficulty: 'medium' });
-            updateTaskStatus(id, dep.id, 'completed');
+            __writeTaskStatusForTests(id, dep.id, 'completed');
             // A graph-owned system block (the shape B–D will use) must be refused by the
             // UNCHANGED predicate — no new claim-side check may be added for it.
             MeshRuntimeStore.getInstance().updateQueueEntry({
@@ -286,7 +286,7 @@ describe('SURFACE auto-launch (maybeAutoLaunchOneQueueSession) routes through th
             const components = createComponents([]);
             const dep = enqueueTask(id, 'prerequisite', { taskMode: 'code_change', difficulty: 'medium' });
             const dependent = enqueueTask(id, 'dependent work', { taskMode: 'code_change', dependsOn: [dep.id], difficulty: 'medium' });
-            updateTaskStatus(id, dep.id, 'completed');
+            __writeTaskStatusForTests(id, dep.id, 'completed');
 
             const pred = spyOnPredicate();
             await triggerMeshQueue(components, id);

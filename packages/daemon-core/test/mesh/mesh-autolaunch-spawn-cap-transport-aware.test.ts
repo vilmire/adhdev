@@ -76,7 +76,7 @@ import {
   SPAWN_CAP_PARK_REASON,
   autoLaunchUnclaimedSpawnCount,
 } from '../../src/mesh/mesh-autolaunch-spawn-cap.js'
-import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
+import { drainPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
 import { notifyCoordinatorOfActionableSkip } from '../../src/mesh/mesh-skip-notify.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
 

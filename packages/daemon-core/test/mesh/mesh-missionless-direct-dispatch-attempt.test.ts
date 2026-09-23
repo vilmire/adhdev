@@ -24,6 +24,14 @@
  * These tests pin the corrected contract. The discriminating assertions are the
  * attempt-id shape (a real UUID, never `legacy-`) and the resolvability of that
  * attempt by (taskId, sessionId) — reverting the fix makes exactly those fail.
+ *
+ * C-W7 NOTE (wiring-unification): recordDirectDispatchTask still opens this LEGACY
+ * Stage-5 attempt in-process — it is NOT redundant with mcp-server's newer
+ * `openDirectDispatchAttempt` (turn_observe IPC on the NEW turn ledger). Stage 6
+ * presentation (mesh-turn-presentation.ts, read by mesh-active-work/read_chat/
+ * session_status/dashboard/stall_watchdog/restart_gate) is wired to THIS table only;
+ * removing this open silently breaks every one of those surfaces for a direct
+ * dispatch. See the long comment at the call site before changing this again.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';

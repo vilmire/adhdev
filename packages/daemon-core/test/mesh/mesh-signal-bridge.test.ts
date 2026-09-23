@@ -14,11 +14,12 @@
 // ---------------------------------------------------------------------------
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 
-// The durable queue is the delivery mechanism under reuse, not under test: stub
+// The coordinator notice path (turn-ledger/deliver, C-W3) is the delivery mechanism under reuse, not under test: stub
 // it so the assertions are about the payload the bridge builds.
 const queued: any[] = []
-vi.mock('../../src/mesh/mesh-events-pending.js', () => ({
-  queuePendingMeshCoordinatorEvent: (event: any) => { queued.push(event); return true },
+vi.mock('../../src/mesh/turn-ledger/deliver.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/mesh/turn-ledger/deliver.js')>()),
+  notifyMeshCoordinator: (event: any) => { queued.push(event); return true },
 }))
 
 import {

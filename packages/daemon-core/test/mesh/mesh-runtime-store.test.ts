@@ -34,7 +34,7 @@ import {
     getMeshQueueStats,
     cancelTask,
     requeueTask,
-    updateTaskStatus,
+    updateTaskStatus, __writeTaskStatusForTests,
     recordDirectDispatchTask,
     __clearMeshQueueForTests,
 } from '../../src/mesh/mesh-work-queue.js';
@@ -842,7 +842,7 @@ describe('mesh-runtime-store', () => {
             expect(db.claimNextQueueTask(meshId, 'node1', 'sess2', [], opts)).toBeNull();
 
             // Complete the first task: it is no longer 'assigned', freeing the budget.
-            updateTaskStatus(meshId, 'ro-1', 'completed');
+            __writeTaskStatusForTests(meshId, 'ro-1', 'completed');
             const c2 = db.claimNextQueueTask(meshId, 'node1', 'sess2', [], opts);
             expect(c2?.id).toBe('ro-2');
 
@@ -1462,106 +1462,12 @@ describe('mesh-runtime-store', () => {
         });
     });
 
-    // ── Phase G3: Pending Events SQLite ──────────────────────────────────────
+    // ── Phase G3 residue: the pending-events store retired with C-W3 (notices
+    // are turn_events rows); only the ledger kind invariant test remains here.
 
-    describe('Phase G3: mesh_pending_events table', () => {
+    describe('Phase G3: ledger kind invariant', () => {
         afterEach(() => {
             __resetMeshRuntimeStoreForTests();
-        });
-
-        it('G3.1 — insertPendingEvent persists and drainPendingEvents returns it', () => {
-            const meshId = `mesh-g3-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            db.insertPendingEvent({
-                id: randomUUID(),
-                meshId,
-                event: 'agent:generating_completed',
-                payload: { nodeLabel: 'Node X' },
-                queuedAt: Date.now(),
-            });
-            expect(db.pendingEventCount(meshId)).toBe(1);
-            const drained = db.drainPendingEvents(meshId);
-            expect(drained).toHaveLength(1);
-            expect(drained[0].event).toBe('agent:generating_completed');
-            expect(db.pendingEventCount(meshId)).toBe(0); // drained
-        });
-
-        it('G3.2 — fingerprint dedup prevents duplicate inserts', () => {
-            const meshId = `mesh-g3-fp-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            const fingerprint = `fp::${randomUUID()}`;
-            db.insertPendingEvent({ id: randomUUID(), meshId, event: 'agent:stopped', payload: {}, fingerprint, queuedAt: Date.now() });
-            const second = db.insertPendingEvent({ id: randomUUID(), meshId, event: 'agent:stopped', payload: {}, fingerprint, queuedAt: Date.now() });
-            expect(second).toBe(false); // duplicate rejected
-            expect(db.pendingEventCount(meshId)).toBe(1);
-        });
-
-        it('G3.3 — hasPendingEventFingerprint returns true after insert', () => {
-            const meshId = `mesh-g3-has-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            const fp = `fp::${randomUUID()}`;
-            expect(db.hasPendingEventFingerprint(meshId, fp)).toBe(false);
-            db.insertPendingEvent({ id: randomUUID(), meshId, event: 'agent:stopped', payload: {}, fingerprint: fp, queuedAt: Date.now() });
-            expect(db.hasPendingEventFingerprint(meshId, fp)).toBe(true);
-        });
-
-        it('G3.4 — drain with coordinatorDaemonId filters correctly', () => {
-            const meshId = `mesh-g3-scope-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            db.insertPendingEvent({ id: randomUUID(), meshId, coordinatorDaemonId: 'coord-A', event: 'agent:ready', payload: {}, queuedAt: Date.now() });
-            db.insertPendingEvent({ id: randomUUID(), meshId, coordinatorDaemonId: null, event: 'agent:stopped', payload: {}, queuedAt: Date.now() });
-            const drainedForA = db.drainPendingEvents(meshId, 'coord-A');
-            // Both: scoped to coord-A + unscoped
-            expect(drainedForA).toHaveLength(2);
-            expect(db.pendingEventCount(meshId)).toBe(0);
-        });
-
-        it('G3.5 — prunePendingEvents removes long-drained + long-orphaned rows, keeps recent', () => {
-            const meshId = `mesh-g3-prune-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            const now = Date.now();
-            const day = 24 * 60 * 60 * 1000;
-
-            // Recent undrained (queued now) — must survive both windows.
-            db.insertPendingEvent({ id: randomUUID(), meshId, event: 'agent:ready', payload: {}, queuedAt: now });
-            // Recently drained (< drained window) — must survive: still an idempotency baseline.
-            const freshDrained = randomUUID();
-            db.insertPendingEvent({ id: freshDrained, meshId, event: 'agent:stopped', payload: {}, queuedAt: now - 1 * day });
-            db.markPendingEventsDrainedById([freshDrained]);
-            // Old drained (> 7d) — must be pruned.
-            const oldDrained = randomUUID();
-            db.insertPendingEvent({ id: oldDrained, meshId, event: 'agent:stopped', payload: {}, queuedAt: now - 10 * day });
-            db.markPendingEventsDrainedById([oldDrained]);
-            // Old undrained but < 30d — orphan, but within the wide undrained window → kept.
-            db.insertPendingEvent({ id: randomUUID(), meshId, event: 'agent:ready', payload: {}, queuedAt: now - 10 * day });
-            // Very old undrained (> 30d) — unrecoverable orphan → pruned.
-            db.insertPendingEvent({ id: randomUUID(), meshId, event: 'agent:ready', payload: {}, queuedAt: now - 40 * day });
-
-            const result = db.prunePendingEvents({ drainedOlderThanMs: 7 * day, undrainedOlderThanMs: 30 * day });
-            expect(result.drainedExpired).toBe(1); // oldDrained
-            expect(result.undrainedExpired).toBe(1); // very-old-undrained
-
-            // The undrained-expired row is returned BEFORE deletion so a caller (the
-            // daemon-core retention sweep) can mirror it to event_held.
-            expect(result.undrainedRows).toHaveLength(1);
-            expect(result.undrainedRows[0].meshId).toBe(meshId);
-            expect(result.undrainedRows[0].event).toBe('agent:ready');
-
-            // Undrained survivors: recent + the 10d-old (within 30d window).
-            expect(db.pendingEventCount(meshId)).toBe(2);
-            // The recently-drained row is still there as an idempotency baseline; the old one is gone.
-            expect(db.hasDrainedEventId).toBeTypeOf('function');
-        });
-
-        it('G3.6 — prunePendingEvents is a no-op when nothing is stale', () => {
-            const meshId = `mesh-g3-prune-noop-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            db.insertPendingEvent({ id: randomUUID(), meshId, event: 'agent:ready', payload: {}, queuedAt: Date.now() });
-            const result = db.prunePendingEvents({ drainedOlderThanMs: 7 * 24 * 60 * 60 * 1000, undrainedOlderThanMs: 30 * 24 * 60 * 60 * 1000 });
-            expect(result.drainedExpired).toBe(0);
-            expect(result.undrainedExpired).toBe(0);
-            expect(result.undrainedRows).toHaveLength(0);
-            expect(db.pendingEventCount(meshId)).toBe(1);
         });
 
         it('G3.7 — appendLedgerEntry / importLedgerEntries reject a blank kind (schema invariant)', () => {

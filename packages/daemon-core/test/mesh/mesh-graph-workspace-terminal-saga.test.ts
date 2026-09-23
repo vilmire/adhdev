@@ -49,11 +49,11 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 // Records what the sweep queues. A recording spy only — it seeds nothing and
 // stabilizes no identity, so it cannot mask the behaviour under test.
 const queuedEvents = vi.hoisted(() => ({ events: [] as any[] }));
-vi.mock('../../src/mesh/mesh-events-pending.js', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../../src/mesh/mesh-events-pending.js')>();
+vi.mock('../../src/mesh/turn-ledger/deliver.js', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../src/mesh/turn-ledger/deliver.js')>();
     return {
         ...actual,
-        queuePendingMeshCoordinatorEvent: vi.fn((event: any) => {
+        notifyMeshCoordinator: vi.fn((event: any) => {
             queuedEvents.events.push(event);
             return true;
         }),

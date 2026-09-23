@@ -28,14 +28,19 @@ import type BetterSqlite3 from 'better-sqlite3';
 import type { Constants, SeqscribeNodeExt, SqliteHandle } from 'seqscribe';
 import { betterSqlite3Handle, createSeqscribe, loadOrCreateWriterId } from 'seqscribe';
 import { getConfigDir } from '../config/config.js';
+import { SEQSCRIBE_DB_SUFFIX_ENV_VAR } from '../config/config-dir.js';
 import { LOG } from '../logging/logger.js';
 import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
 import { createFleetAuthorityIfConfigured, startFleetFinalityLoop } from './authority.js';
 import { loadStoredFleetSecret } from './fleet-secret.js';
+import { createLocalAuthority } from './local-authority.js';
 import { baseTopicDefinitions, contentTopicsFor, type TopicDefinition } from './topics.js';
 
 /** DB file name under the config dir (design §6.2 inventory). */
 export const SEQSCRIBE_DB_NAME = 'seqscribe.db';
+
+/** Re-exported for discoverability from this module's own consumers — the canonical definition (and its doc comment) lives in config/config-dir.ts. */
+export { SEQSCRIBE_DB_SUFFIX_ENV_VAR };
 
 /**
  * writerId prefix (design D3). Deliberately NOT the daemonId: writerIds are
@@ -45,8 +50,15 @@ export const SEQSCRIBE_DB_NAME = 'seqscribe.db';
  */
 export const WRITER_ID_PREFIX = 'adhdev';
 
-export function getSeqscribeDbPath(): string {
-    return join(getConfigDir(), SEQSCRIBE_DB_NAME);
+/**
+ * C7-3: honors `SEQSCRIBE_DB_SUFFIX_ENV_VAR` (defined in config-dir.ts — see
+ * that constant's doc comment for the full rationale) to isolate just this
+ * one file inside an otherwise-shared, deliberately-inherited config dir.
+ */
+export function getSeqscribeDbPath(env: NodeJS.ProcessEnv = process.env): string {
+    const suffix = env[SEQSCRIBE_DB_SUFFIX_ENV_VAR]?.trim();
+    const name = suffix ? `seqscribe-${suffix}.db` : SEQSCRIBE_DB_NAME;
+    return join(getConfigDir(env), name);
 }
 
 export interface SeqscribeNodeOptions {
@@ -67,6 +79,15 @@ export interface SeqscribeNodeOptions {
      * resolveFleetSecret in authority.ts.
      */
     storedFleetSecret?: string | null;
+    /**
+     * C7-3: when no fleet secret is configured, mint/load a machine-local
+     * authority secret (local-authority.ts) so content topics still define
+     * (verification-only — this node never issues fleet certificates with
+     * it). Defaults to true. Set `false` to pin the pre-C7-3
+     * metadata-topics-only behavior (tests only — production always wants
+     * the local authority when there is no fleet secret).
+     */
+    localAuthority?: boolean;
     /**
      * Library constants override (seqscribe `Constants`). TESTS ONLY — e.g. a
      * short FINALITY_WINDOW_MS. Production callers never set this: the defaults
@@ -89,8 +110,10 @@ export interface SeqscribeNodeHandle {
     daemonId: string | null;
     dbPath: string;
     topics: TopicDefinition[];
-    /** True when a fleet secret was configured and certificates can be verified. */
+    /** True when EITHER a fleet or a local authority is active and certificates can be verified. */
     authorityEnabled: boolean;
+    /** True when the active authority is the machine-local one (no fleet secret configured). */
+    authorityIsLocal: boolean;
     /** Non-null only on the coordinator with an authority configured. */
     finalityLoop: { stop(): void } | null;
     /**
@@ -120,7 +143,7 @@ export interface SeqscribeNodeHandle {
  * shadow/primary flags precisely so this stays non-fatal.
  */
 export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNodeHandle {
-    const dbPath = opts.dbPath ?? getSeqscribeDbPath();
+    const dbPath = opts.dbPath ?? getSeqscribeDbPath(opts.env ?? process.env);
     const dir = dirname(dbPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
 
@@ -177,14 +200,29 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
         opts.storedFleetSecret !== undefined
             ? opts.storedFleetSecret
             : loadStoredFleetSecret(opts.env ?? process.env)?.secret ?? null;
-    const authority = createFleetAuthorityIfConfigured(opts.env ?? process.env, storedSecret);
+    const fleetAuthority = createFleetAuthorityIfConfigured(opts.env ?? process.env, storedSecret);
+
+    // C7-3: no fleet secret (env unset, auth_ok never delivered one — the
+    // normal standalone state) no longer means "metadata-topics-only". A
+    // locally-minted, machine-local secret (local-authority.ts) lets this
+    // node define AND verify content topics (mesh.<id>.handoff, etc.)
+    // against itself. Priority: env fleet secret > stored fleet secret >
+    // local secret — the fleet secret always wins when present so a machine
+    // that later joins a fleet picks up real cross-node verification without
+    // a config change. `opts.localAuthority === false` lets tests pin the
+    // pre-C7-3 metadata-only behavior without touching the filesystem.
+    const localAuthority =
+        !fleetAuthority && opts.localAuthority !== false
+            ? createLocalAuthority(opts.env ?? process.env)
+            : null;
+    const authorityHooks = fleetAuthority?.hooks ?? localAuthority?.hooks ?? null;
 
     let node: SeqscribeNodeExt;
     try {
         node = createSeqscribe({
             writerId,
             storage,
-            ...(authority ? { authority: authority.hooks } : {}),
+            ...(authorityHooks ? { authority: authorityHooks } : {}),
             ...(opts.constants ? { constants: opts.constants } : {}),
         });
     } catch (err) {
@@ -200,19 +238,24 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
         throw err;
     }
 
-    // Without a fleet secret the node runs METADATA-TOPICS-ONLY. defineTopic
-    // throws on ANY policy that sets `finalityAuthority` when verifyFinality is
-    // absent — and since Phase 1 all three content topics name the authority
-    // (topics.ts), that filter subsumes the old `owned`-register skip
-    // (`config.settings` has both). Metadata topics (mesh events, fleet status)
-    // stay defined and keep syncing in provisional mode; content topics require
-    // the secret, env-delivered or auth_ok-delivered.
+    // With EITHER a fleet or a local authority, every content topic defines
+    // successfully (defineTopic requires verifyFinality for any policy naming
+    // finalityAuthority — both authority kinds supply it). Only a node with
+    // NEITHER (localAuthority disabled AND no fleet secret) still runs
+    // metadata-topics-only, pre-filtering content topics out of `defs` the
+    // way node.ts always has (§7.3's "Correction": the library never actually
+    // throws in practice — this filter is what avoids it).
     const allDefs = baseTopicDefinitions(opts.meshIds ?? []);
-    const defs = authority ? allDefs : allDefs.filter((d) => d.policy.finalityAuthority === undefined);
-    if (!authority) {
+    const defs = authorityHooks ? allDefs : allDefs.filter((d) => d.policy.finalityAuthority === undefined);
+    if (!authorityHooks) {
         LOG.info(
             'Seqscribe',
-            'no fleet secret configured — running metadata-topics-only; content topics require the fleet secret (env or auth_ok-delivered)',
+            'no fleet secret configured and local authority disabled — running metadata-topics-only',
+        );
+    } else if (localAuthority) {
+        LOG.info(
+            'Seqscribe',
+            'no fleet secret configured — using a machine-local authority (verification only; this node never issues certificates for a fleet)',
         );
     }
 
@@ -222,11 +265,17 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
 
     // Issuance is coordinator-only: two hosts signing under one authority id
     // race their generation counters and the fleet rejects both as bad_cert.
+    // ★ Never for a local authority, regardless of `opts.isCoordinator` — a
+    // locally-minted secret has no lesser capability than a fleet one (no
+    // verify-only mode exists in the library, local-authority.ts's header),
+    // so the ONLY thing stopping it from signing fleet-invalid certs is this
+    // condition never calling startFleetFinalityLoop for it. Do not relax
+    // this to `opts.isCoordinator && authorityHooks`.
     const finalityLoop =
-        opts.isCoordinator && authority
+        opts.isCoordinator && fleetAuthority
             ? startFleetFinalityLoop(node, {
                   topics: contentTopicsFor(defs),
-                  authority: authority.authority,
+                  authority: fleetAuthority.authority,
                   intervalMs: opts.finalityIntervalMs,
               })
             : null;
@@ -285,7 +334,7 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
 
     LOG.info(
         'Seqscribe',
-        `node open writer=${writerId} topics=${defs.length} authority=${authority ? 'on' : 'off'}${opts.isCoordinator ? ' role=coordinator' : ''}`,
+        `node open writer=${writerId} topics=${defs.length} authority=${authorityHooks ? (localAuthority ? 'local' : 'on') : 'off'}${opts.isCoordinator ? ' role=coordinator' : ''}`,
     );
 
     // Teardown callbacks registered after open (currently: the Beacon transport).
@@ -342,7 +391,8 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
         daemonId: opts.daemonId ?? null,
         dbPath,
         topics: defs,
-        authorityEnabled: authority !== null,
+        authorityEnabled: authorityHooks !== null,
+        authorityIsLocal: localAuthority !== null,
         finalityLoop,
         onClose: (fn: () => void) => {
             // A callback registered after close() has already run would never

@@ -416,6 +416,48 @@ export class TurnStore {
         return rows.map(eventFromRow);
     }
 
+    /**
+     * Published `turn.notify` rows of one mesh that no `delivered:<writer>:<seq>`
+     * claim covers yet, in publish order (C-W3 deliver backlog + the MCP-only
+     * coordinator read). Own-writer by construction: a notify row is only ever
+     * written by this daemon's ledger. Read-only (check:turn-single-emitter rule 1).
+     */
+    listUndeliveredNotifies(meshId: string, opts: { sinceMs?: number; limit?: number } = {}): TurnEventRow[] {
+        const rows = this.stmt(`SELECT n.* FROM turn_events n
+            WHERE n.kind = 'notify' AND n.mesh_id = ? AND n.publish_state = 'published' AND n.recorded_at >= ?
+              AND NOT EXISTS (SELECT 1 FROM turn_events d WHERE d.event_id = 'delivered:' || n.src_writer || ':' || n.published_seq)
+            ORDER BY n.published_seq, n.rowid LIMIT ?`).all(meshId, opts.sinceMs ?? 0, opts.limit ?? 200) as EventRowRaw[];
+        return rows.map(eventFromRow);
+    }
+
+    /**
+     * Recent `delivered:<writer>:<seq>` claim rows, newest first (the boot
+     * composer-residue sweep's candidate list). Read-only.
+     */
+    listRecentDeliveryClaims(sinceMs: number, limit = 200): TurnEventRow[] {
+        const rows = this.stmt(`SELECT * FROM turn_events WHERE kind = 'delivered' AND event_id LIKE 'delivered:%' AND recorded_at >= ?
+            ORDER BY recorded_at DESC, rowid DESC LIMIT ?`).all(sinceMs, limit) as EventRowRaw[];
+        return rows.map(eventFromRow);
+    }
+
+    /**
+     * Drop one delivery claim, so its notice reads as undelivered again and the
+     * deliver backlog redelivers it (composer-residue recovery: the text reached
+     * the composer but was never submitted). Only a `delivered:` claim row can
+     * be released. True when a row was removed.
+     */
+    releaseDeliveryClaim(claimEventId: string): boolean {
+        if (!claimEventId.startsWith('delivered:')) return false;
+        return this.stmt(`DELETE FROM turn_events WHERE event_id = ? AND kind = 'delivered'`).run(claimEventId).changes > 0;
+    }
+
+    /** The local row of an own-writer topic entry, by its published coordinates. */
+    findPublishedEvent(writer: string, seq: number): TurnEventRow | null {
+        const row = this.stmt(`SELECT * FROM turn_events WHERE src_writer = ? AND published_seq = ? AND publish_state = 'published' LIMIT 1`)
+            .get(writer, seq) as EventRowRaw | undefined;
+        return row ? eventFromRow(row) : null;
+    }
+
     /** `pending` rows in write order — the publisher's queue (C7-1) and the boot/tick republish input. */
     pendingPublish(limit = 256): TurnEventRow[] {
         const rows = this.stmt(`SELECT * FROM turn_events WHERE publish_state = 'pending' ORDER BY recorded_at, rowid LIMIT ?`).all(limit) as EventRowRaw[];

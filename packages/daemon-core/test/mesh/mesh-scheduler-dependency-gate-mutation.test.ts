@@ -72,7 +72,7 @@ import {
     claimNextTask,
     enqueueTask,
     getQueue,
-    updateTaskStatus,
+    updateTaskStatus, __writeTaskStatusForTests,
 } from '../../src/mesh/mesh-work-queue.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { triggerMeshQueue } from '../../src/mesh/mesh-events.js';
@@ -148,7 +148,7 @@ function claimScenarioUnmet(id: string): Scenario {
 function claimScenarioBlocked(id: string): Scenario {
     const dep = enqueueTask(id, 'prerequisite', { taskMode: 'code_change', difficulty: 'medium' });
     const dependent = enqueueTask(id, 'dependent work', { taskMode: 'code_change', dependsOn: [dep.id], difficulty: 'medium' });
-    updateTaskStatus(id, dep.id, 'completed');
+    __writeTaskStatusForTests(id, dep.id, 'completed');
     setEntry(getQueue(id).find(t => t.id === dependent.id)!, { blockedReason: 'graph_materialization_pending:node-1' });
     return { dep, dependent };
 }

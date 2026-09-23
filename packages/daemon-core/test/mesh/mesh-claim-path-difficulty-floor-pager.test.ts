@@ -50,7 +50,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 
 import { triggerMeshQueue, DIFFICULTY_FLOOR_REPORT_AFTER_MS } from '../../src/mesh/mesh-queue-assignment.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
-import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
+import { drainPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
 import { resetDifficultyFloorReportsForTests } from '../../src/mesh/mesh-difficulty-floor.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
 

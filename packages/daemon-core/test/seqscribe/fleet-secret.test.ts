@@ -149,11 +149,17 @@ describe('topic policies and finalityAuthority', () => {
 });
 
 describe('openSeqscribeNode provisional degradation', () => {
-    it('defines metadata topics only when no secret exists anywhere', () => {
+    // C7-3 changed the DEFAULT behavior here: no fleet secret no longer means
+    // metadata-only, it means a machine-local authority (local-authority.ts)
+    // is minted and content topics still define. This test pins the
+    // pre-C7-3 shape explicitly via `localAuthority: false` — see
+    // local-authority.test.ts for the new default-on coverage.
+    it('defines metadata topics only when local authority is explicitly disabled', () => {
         const handle = openSeqscribeNode({
             dbPath: join(tmpDir('provisional'), 'seq.db'),
             env: {},
             storedFleetSecret: null,
+            localAuthority: false,
             meshIds: ['mesh_abc'],
         });
         handles.push(handle);
@@ -163,6 +169,7 @@ describe('openSeqscribeNode provisional degradation', () => {
         expect(topics).not.toContain(CONFIG_SETTINGS_TOPIC);
         expect(topics).toContain(meshEventsTopic('mesh_abc'));
         expect(handle.authorityEnabled).toBe(false);
+        expect(handle.authorityIsLocal).toBe(false);
     });
 
     it('defines every topic when the env var carries the secret', () => {

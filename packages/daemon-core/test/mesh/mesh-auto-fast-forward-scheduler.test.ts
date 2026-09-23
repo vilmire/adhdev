@@ -251,18 +251,19 @@ describe('startContinuousAutoFastForwardScheduler', () => {
     }
   })
 
-  it('reconcile tick does not await auto-ff: the scheduler tick function returns without the caller blocking on P2P', async () => {
-    // This is a structural assertion on the module wiring rather than a timing race:
-    // mesh-reconcile-loop.ts's runMeshReconcileTick must not import or call
-    // runContinuousAutoFastForwardScan / startContinuousAutoFastForwardScheduler.
-    const reconcileLoopSource = await import('../../src/mesh/mesh-reconcile-loop.js')
-    // The tick function itself is exported; verifying it completes without the mock
-    // dispatch (which mesh-auto-fast-forward would call) ever being invoked when no
-    // continuous-mode mesh exists demonstrates PHASE 2.7 no longer runs inline. The
-    // stronger, static guarantee (never awaited) is documented in the PHASE 2.7
-    // REMOVED comment in mesh-reconcile-loop.ts and enforced by this module split:
-    // runContinuousAutoFastForwardScan is only reachable from
-    // startContinuousAutoFastForwardScheduler's own timer now.
-    expect(typeof reconcileLoopSource.runMeshReconcileTick).toBe('function')
+  it('no tick awaits auto-ff: the turn scheduler and the housekeeping tick never reach the scan', async () => {
+    // Structural (C4, 2026-09-23): the reconcile loop that once awaited the scan
+    // inline (PHASE 2.7) is deleted. Its successors — the turn scheduler and the
+    // mesh housekeeping tick — must not import or call the scan either;
+    // runContinuousAutoFastForwardScan is reachable only from
+    // startContinuousAutoFastForwardScheduler's own timer (started by
+    // boot/stages/loops.ts next to them).
+    const { readFileSync } = await import('fs')
+    const { join } = await import('path')
+    const src = (rel: string) => readFileSync(join(import.meta.dirname, '../../src', rel), 'utf8')
+    for (const rel of ['mesh/turn-ledger/scheduler.ts', 'mesh/mesh-housekeeping-tick.ts']) {
+      expect(src(rel), rel).not.toMatch(/runContinuousAutoFastForwardScan|startContinuousAutoFastForwardScheduler/)
+    }
+    expect(src('boot/stages/loops.ts')).toMatch(/startContinuousAutoFastForwardScheduler\(components\)/)
   })
 })

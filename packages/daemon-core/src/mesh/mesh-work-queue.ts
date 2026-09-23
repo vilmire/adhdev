@@ -13,7 +13,7 @@ import { appendLedgerEntry } from './mesh-ledger.js';
 import type { MeshLedgerKind } from './mesh-ledger.js';
 import { createSessionDelivery } from './mesh-delivery-policy.js';
 import { isTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
-import { closeAttemptForReassignment, openTurnAttempt, recordTurnAck, type TurnTerminalOutcome } from './mesh-turn-ledger.js';
+import { openTurnAttempt, recordTurnAck, type TurnTerminalOutcome } from './mesh-turn-ledger.js';
 // GRAPH-ORCHESTRATION Phase B: THE single terminal choke point (design :311-334).
 // updateTaskStatus / updateSessionTaskStatus delegate every terminal flip to it.
 import {
@@ -951,6 +951,18 @@ export function recordDirectDispatchTask(
          */
         difficulty?: string;
         dispatchedAt?: string;
+        /**
+         * C2/C-W7: the attempt this dispatch delivers, opened by the CALLER before
+         * this is invoked (mcp-server's `openDirectDispatchAttempt` → `turn_observe`
+         * IPC, `dispatch_accepted`/`scope:'mesh_direct'` — C-W6c). This function no
+         * longer opens the attempt itself (the legacy `openTurnAttempt`/
+         * `recordTurnAck` Stage-5 reducer calls are retired); it only stamps the
+         * already-open attempt id on the materialised row so the worker's evidence
+         * and this task correlate. Absent when the caller could not open one
+         * (turn ledger not yet armed) — the row still materialises, uncorrelated,
+         * exactly like the pre-ledger fallback.
+         */
+        attemptId?: string;
     },
 ): MeshWorkQueueEntry | null {
     // A missing missionId only means "not attributable to a mission" — it must not
@@ -1004,6 +1016,20 @@ export function recordDirectDispatchTask(
         // causal stage the 'delivered' delivery record below attests to. The attempt
         // gives this task's completion an authoritative (taskId, attemptId, session)
         // correlation instead of the session-scalar heuristic.
+        //
+        // C-W7 NOTE: mcp-server's `openDirectDispatchAttempt` (C-W6c) ALSO opens an
+        // attempt for this same dispatch on the NEW turn-ledger (`turn_observe` IPC,
+        // scope:'mesh_direct') and may pass its id as `opts.attemptId`. That new-ledger
+        // attempt is NOT a substitute for the one opened here: Stage 6 presentation
+        // (`mesh-turn-presentation.ts`, read by mesh-active-work/read_chat/session_status/
+        // dashboard/stall_watchdog/restart_gate — effectively every execution-status
+        // surface) is wired to THIS legacy Stage-5 table only, not the new ledger. Until
+        // that migration happens, this function must keep opening the legacy attempt or
+        // every one of those surfaces silently loses direct-dispatch coverage (verified:
+        // removing this made mesh-active-work.ts's turnOverlay disappear and the raw
+        // session-status point sample take over). `opts.attemptId`, if present, is stamped
+        // as a secondary/informational id only when the legacy open did not itself produce
+        // one (it always does) — kept for forward-compat with the eventual Stage 6 migration.
         try {
             entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
             const { attempt } = openTurnAttempt({
@@ -1294,6 +1320,32 @@ export function updateTaskStatus(
     } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
+    // C3: a terminal queue status is an EFFECT of a turn-ledger commit, never a
+    // direct write — submit evidence (`ledger.observe`) instead.
+    if (TERMINAL_TASK_STATUSES.has(status)) throw new TerminalStatusIsLedgerEffect(meshId, taskId, status);
+    return writeTaskStatusUnchecked(meshId, taskId, status, opts);
+}
+
+/**
+ * @internal Test fixtures only: drive a queue row terminal through the graph
+ * choke point without a ledger (the legacy commit path the runner tests
+ * exercise). Production code must submit evidence; `updateTaskStatus` throws.
+ */
+export function __writeTaskStatusForTests(
+    meshId: string,
+    taskId: string,
+    status: MeshTaskStatus,
+    opts?: Parameters<typeof updateTaskStatus>[3],
+): MeshWorkQueueEntry | null {
+    return writeTaskStatusUnchecked(meshId, taskId, status, opts);
+}
+
+function writeTaskStatusUnchecked(
+    meshId: string,
+    taskId: string,
+    status: MeshTaskStatus,
+    opts?: Parameters<typeof updateTaskStatus>[3],
+): MeshWorkQueueEntry | null {
     const result = withQueueLock(meshId, () => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
@@ -1818,173 +1870,6 @@ export function getParkedTasks(meshId: string): MeshWorkQueueEntry[] {
     return getQueue(meshId, { status: ['pending'] }).filter(taskIsParked);
 }
 
-/**
- * Max times the assigned-stranded watchdog will reclaim a single task before giving
- * up and failing it. Bounds the reclaim→re-dispatch→strand cycle so a permanently
- * undeliverable target (e.g. a node whose transport is wedged) eventually fails and
- * unblocks its dependents instead of looping every reconcile tick.
- */
-const MAX_STRANDED_RECLAIMS = 3;
-
-/**
- * TASK-PROMPT-REDRIVE-AFTER-COMPLETE: the reclaim reasons the assigned-stranded watchdog
- * uses when it RE-DRIVES a delivered-but-not-terminal task (returns it to 'pending' so the
- * SAME prompt is re-dispatched). These are distinct from `assigned_stranded_dispatch_unconfirmed`
- * (a dispatch that was NEVER handed off — nothing ran, so a late completion is impossible).
- *
- * A re-drive assumes the worker never finished. But for an autoLaunch/worktree worker the
- * turn-lifecycle events (agent:generating_started/completed) do NOT reliably reach the
- * coordinator ledger, so the deadline can elapse and re-drive fire while the worker's genuine
- * completion is merely LATE (observed live: it lands 0.9s–98s AFTER the reclaim). The late
- * completion must then SUPERSEDE the re-drive rather than be dropped — the completion handler's
- * flip-miss safety net checks a row reclaimed for one of these reasons within
- * {@link REDRIVE_SUPERSEDE_WINDOW_MS} of its `requeuedAt`.
- */
-export const REDRIVE_RECLAIM_REASONS: ReadonlySet<string> = new Set([
-    'delivered_no_turn_deadline',
-    'reclaim_after_unknown_grace',
-    'delivered_not_consumed_redrive',
-]);
-
-/**
- * How long after a re-drive reclaim's `requeuedAt` a late completion still supersedes the
- * re-dispatch. Comfortably covers the observed 0.9s–98s completion-vs-reclaim race with margin,
- * while staying far short of the time it would take a genuinely fresh re-dispatched turn to
- * produce its OWN completion — so a real second turn is never mistaken for the superseded one.
- */
-export const REDRIVE_SUPERSEDE_WINDOW_MS = 5 * 60_000;
-
-/**
- * Bug B: reclaim a task stuck in 'assigned' because its dispatch was never confirmed.
- *
- * claimNextTask atomically marks a row 'assigned' BEFORE the fire-and-forget dispatch
- * runs. If that dispatch neither rejects (→ no .catch requeue) nor is confirmed
- * delivered — a relay that hangs without acking, or a confirm timer lost across a
- * daemon restart — the row stays 'assigned' forever, contributing 0 pending so PHASE 3
- * reconcile never re-examines it. This returns such a row to 'pending' and clears its
- * dead assignment ownership (node / session / provider / dispatchTimestamp) — the same
- * ownership-clear requeueTask applies — so PHASE 3 can re-dispatch it onto a fresh idle
- * session.
- *
- * Guarded to 'assigned' rows only (a completion/cancel that already moved the row off
- * 'assigned' must never be resurrected) and bounded by MAX_STRANDED_RECLAIMS (beyond
- * which the task is failed so dependents unblock).
- */
-export function reclaimStrandedAssignedTask(
-    meshId: string,
-    taskId: string,
-    opts?: { reason?: string; ageMs?: number } & MeshQueueMutationOptions,
-): MeshWorkQueueEntry | null {
-    requireMeshHostQueueOwner(opts);
-    const result = withQueueLock(meshId, () => {
-        const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
-        if (!entry) return null;
-        // Only a still-assigned row is stranded. If a completion/cancel already moved it
-        // off 'assigned', there is nothing to reclaim — never resurrect a terminal row.
-        if (entry.status !== 'assigned') return null;
-        const now = new Date().toISOString();
-        const reason = opts?.reason || 'assigned_stranded_dispatch_unconfirmed';
-        const reclaims = (entry.strandedReclaimCount || 0) + 1;
-        const prevNode = entry.assignedNodeId;
-        const prevSession = entry.assignedSessionId;
-        const prevProvider = entry.assignedProviderType;
-        // REDRIVE-PROVIDER-FLIP (a): remember WHAT is being torn down before the deletes
-        // below erase it. The re-claim that follows does NOT recompute routing — it adopts
-        // whatever idle session is available — so the provider can change silently. This
-        // stamp is the only carrier of the pre-reclaim provider into the next dispatch
-        // (the in-memory reconcile streak maps are pruned the moment the row leaves
-        // 'assigned', so they cannot carry it). Diagnostic only: no routing reads it.
-        entry.lastReclaim = {
-            ...(prevProvider ? { providerType: prevProvider } : {}),
-            ...(prevNode ? { nodeId: prevNode } : {}),
-            ...(prevSession ? { sessionId: prevSession } : {}),
-            reason,
-            reclaimCount: reclaims,
-            at: now,
-        };
-        // Always clear the dead assignment ownership so a re-claim starts clean and the
-        // assigned-counters (which filter status==='assigned') stop counting this row.
-        delete entry.assignedNodeId;
-        delete entry.assignedSessionId;
-        delete entry.assignedProviderType;
-        delete entry.assignedModel;
-        delete entry.dispatchTimestamp;
-        // REDRIVE-DUP: bump the dispatch nonce so the ORIGINAL inject to prevNode/prevSession
-        // (which is delivered-but-unconsumed and about to be re-dispatched elsewhere) now
-        // carries a stale nonce. When that stranded inject finally fires and the worker emits
-        // agent:generating_started echoing the old nonce, the coordinator's stale-nonce guard
-        // rejects the ack and stops that worker — so the reclaimed+re-dispatched task is never
-        // executed by the originally-assigned session (no duplicate execution).
-        entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
-        // REDRIVE-STALE-AUTOLAUNCH: the autoLaunch record describes the launch of the session
-        // this reclaim is tearing down. Left in place it outlives its subject: the row returns
-        // to 'pending' still carrying `status:'completed'` + the dead sessionId, which is
-        // exactly what the per-task await-claim guard (mesh-queue-assignment) reads to mean "a
-        // claim for this task is already in flight, do not launch". So the requeued task waits
-        // out the await-claim window and its 90→180→360s backoff against a session that no
-        // longer exists, instead of being relaunched — observed live 2026-08-28 on cursor task
-        // 0aaa398c, which sat 'pending' with no assignment and no retry after its redrive.
-        // Clearing it is the same ownership-clear the assigned* fields above get, applied to
-        // the one field that also names the dead session. A fresh launch re-records it.
-        delete entry.autoLaunch;
-        entry.strandedReclaimCount = reclaims;
-        entry.updatedAt = now;
-        // TURN-LEDGER (Stage 5): reassignment closes the CURRENT attempt (terminal
-        // 'cancelled' / reassigned:<reason>) — the TASK continues, and the re-dispatch
-        // under the just-bumped nonce opens a NEW attempt identity. Late events naming
-        // the old attempt are rejected as stale from here on and can never mutate the
-        // new attempt. Best-effort: a missing attempt (legacy row) is a no-op.
-        try {
-            closeAttemptForReassignment({ meshId, taskId, reason });
-        } catch { /* attempt close is best-effort — the queue mutation above already landed */ }
-        delete entry.attemptId;
-        // The stranded assignment is being torn down (→ pending or failed); end its
-        // single-flight window so a re-claim/requeue is not blocked.
-        endTaskDispatchInFlight(meshId, taskId);
-        // SIBLING-DISPATCH-ORPHAN: third instance of the same class as cancelTask/requeueTask
-        // — this path also abandons an already-dispatched row (nonce bumped, assignment
-        // cleared) while its mesh_direct_dispatches sibling stays live and unsweepable.
-        terminalizeSiblingDispatch(meshId, taskId, 'queue_task_stranded_reclaimed');
-        let cascaded: MeshWorkQueueEntry[] = [];
-        if (reclaims > MAX_STRANDED_RECLAIMS) {
-            // Repeatedly undeliverable — stop cycling and fail it so dependents unblock.
-            entry.status = 'failed';
-            entry.cancelReason = `stranded_dispatch_unrecovered: reclaimed ${reclaims - 1} time(s) without a confirmed dispatch`;
-            MeshRuntimeStore.getInstance().updateQueueEntry(entry);
-            cascaded = propagateDependencyFailure(meshId, taskId);
-        } else {
-            entry.status = 'pending';
-            entry.requeuedAt = now;
-            entry.requeueReason = reason;
-            MeshRuntimeStore.getInstance().updateQueueEntry(entry);
-        }
-        try {
-            appendLedgerEntry(meshId, {
-                kind: 'task_reclaimed' as MeshLedgerKind,
-                nodeId: prevNode,
-                sessionId: prevSession,
-                // REDRIVE-PROVIDER-FLIP (a): name the provider being torn down. This is the
-                // "before" half of the flip; the "after" half is the redriveProvenance block
-                // on the next task_dispatched, so the comparison no longer needs a manual
-                // two-entry join.
-                ...(prevProvider ? { providerType: prevProvider } : {}),
-                payload: {
-                    taskId,
-                    reason,
-                    ...(prevProvider ? { providerType: prevProvider } : {}),
-                    ...(typeof opts?.ageMs === 'number' ? { ageMs: opts.ageMs } : {}),
-                    reclaimCount: reclaims,
-                    outcome: entry.status,
-                },
-            });
-        } catch { /* ledger write is best-effort */ }
-        return { entry, cascaded };
-    });
-    // Reclaim toggles the mission aggregate either way: → failed may make it all-terminal;
-    // → pending resets any stale close-candidate marker. Re-check in both outcomes.
-    if (result) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
-    return result ? result.entry : null;
-}
 
 /**
  * Update the status of the task currently assigned to a specific session.
@@ -2174,9 +2059,6 @@ export {
     recordMeshToolCall,
 } from './mesh-direct-dispatch.js';
 export type { DirectDispatchRecord, SiblingDispatchTerminalizeReason, MeshToolCallRateResult } from './mesh-direct-dispatch.js';
-// Pass-through that lived inside the moved block; mesh-queue-assignment.ts
-// imports it from here, so the re-export stays on this module.
-export { recordAckedHoldDispatchOutcome } from './mesh-reconcile-acked-hold.js';
 
 // ── Turn ledger (wiring-unification C2/C3, C-W2) ─────────────────────────────
 // `mesh_queue.status` is an EFFECT of a turn commit, never the reverse (C3). The
@@ -2185,11 +2067,11 @@ export { recordAckedHoldDispatchOutcome } from './mesh-reconcile-acked-hold.js';
 // a better-sqlite3 immediate transaction, so it nests as a savepoint).
 //
 // `TerminalStatusIsLedgerEffect` is the refusal `updateTaskStatus` raises for a
-// terminal status once the integration pass retires the legacy writers (design
-// C3 "updateTaskStatus throws TerminalStatusIsLedgerEffect on terminal
-// statuses"). It is exported now so callers can be migrated against the real
-// type; the throw itself is armed in updateTaskStatus by the integration pass
-// (13 call sites, all in C-W4/C-W6 files — see the C-W2 report).
+// terminal status (design C3 "updateTaskStatus throws TerminalStatusIsLedgerEffect
+// on terminal statuses"). ARMED 2026-09-23 (C-W4): the reconcile/stranded-dispatch
+// writers and the queue-claim terminal skip are deleted; a terminal queue status
+// is written only by a ledger commit (meshRuntimeTxnHost.graphAdvance) or by the
+// explicit cancel/session paths that own their own commit.
 
 /** Refusal: a terminal queue status can only be written by a turn-ledger commit. */
 export class TerminalStatusIsLedgerEffect extends Error {
@@ -2237,6 +2119,28 @@ export function requeueTaskForLedgerReclaim(meshId: string, taskId: string, reas
         store.updateQueueEntry(entry);
         endTaskDispatchInFlight(meshId, taskId);
         terminalizeSiblingDispatch(meshId, taskId, 'queue_task_stranded_reclaimed');
+        return entry;
+    });
+}
+
+/**
+ * DISPATCH-BOOT-RACE backoff for a row the ledger just reclaimed after a
+ * dispatch failure (C-W4): bump `dispatchFailureCount` and hold the pending row
+ * until the escalating `notBefore`, so the re-claim does not race the same boot
+ * window. Queue METADATA only — it never fails the row (the reducer's reclaim
+ * budget owns that) and it is a no-op on a non-pending row.
+ */
+export function applyDispatchFailureBackoff(meshId: string, taskId: string): MeshWorkQueueEntry | null {
+    return withQueueLock(meshId, () => {
+        const store = MeshRuntimeStore.getInstance();
+        const entry = store.findQueueEntryById(meshId, taskId);
+        if (!entry || entry.status !== 'pending') return entry;
+        const dispatchFailures = (entry.dispatchFailureCount || 0) + 1;
+        entry.dispatchFailureCount = dispatchFailures;
+        const backoffMs = DISPATCH_RETRY_BACKOFF_BASE_MS * Math.pow(2, dispatchFailures - 1);
+        entry.notBefore = resolveNotBefore(Math.min(backoffMs, DISPATCH_RETRY_BACKOFF_MAX_MS));
+        entry.updatedAt = new Date().toISOString();
+        store.updateQueueEntry(entry);
         return entry;
     });
 }

@@ -67,7 +67,7 @@ import {
   autoLaunchUnclaimedSpawnCount,
 } from '../../src/mesh/mesh-autolaunch-spawn-cap.js'
 import { isActionableSkipReason } from '../../src/mesh/mesh-skip-notify.js'
-import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
+import { drainPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_ID = 'node_main'

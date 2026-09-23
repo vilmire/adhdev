@@ -4,7 +4,7 @@ import { getMachineId } from '../config/config.js';
 import { getMesh } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
-import { buildMeshNodeCapabilityTags, claimNextTask, updateTaskStatus, getQueue, getQueueHeads, requeueTask, recordAckedHoldDispatchOutcome } from './mesh-work-queue.js';
+import { buildMeshNodeCapabilityTags, claimNextTask, updateTaskStatus, getQueue, getQueueHeads, requeueTask, applyDispatchFailureBackoff } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evidence.js';
 import { createSessionDelivery, updateSessionDeliveryStatus } from './mesh-delivery-policy.js';
@@ -21,13 +21,15 @@ import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveDaemonSiblingNodeIds } from './mesh-daemon-slot-axis.js';
 import { recordLastQuotaRanking, recordLastQuotaRankingOutcome } from './mesh-quota-routing.js';
 import { evaluateQuotaClaimGateForAssignment } from './mesh-queue-claim-gate.js';
-import { findTerminalLedgerEvidenceForTask } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId } from './mesh-node-identity.js';
 import { shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
 import { beginTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { isModelAllowedBySlot } from './slot-model-enforcement.js';
-import { openTurnAttempt, recordTurnAck, closeAttemptForReassignment, assertPromptInjectionAllowed, rebindAttemptToLiveHolder, recordDuplicateDispatchConsumption } from './mesh-turn-ledger.js';
+import type { TurnLedger } from './turn-ledger/ledger.js';
+import { dispatchMessageId, openOrResumeQueueAttempt } from './mesh-queue-dispatch-evidence.js';
+import { withMeshDirectDispatch } from '../commands/command-args.js';
+import type { TurnAttemptRef, TurnEvidence } from '@adhdev/mesh-shared';
 import { classifyDuplicateMeshDispatch } from './mesh-duplicate-dispatch.js';
 import { isWorkspaceAutoFastForwardInFlight, maybeAutoFastForwardIdleNode } from './mesh-auto-fast-forward.js';
 import { retractActionableSkipIfPreviouslyNotified } from './mesh-skip-notify.js';
@@ -379,7 +381,49 @@ interface DeliverTaskContext {
     // the target node's other live sessions for the coordinator notification without
     // threading a second parameter through deliverTaskToSession.
     components: DaemonComponents;
+    /** TURN-LEDGER (C2): the attempt this dispatch delivers (absent without a wired ledger). */
+    attemptRef?: TurnAttemptRef;
 }
+
+// ── TURN-LEDGER evidence (wiring-unification C2/C4, C-W4) ─────────────────────
+// The claim/dispatch path no longer writes attempt rows itself (the legacy
+// openTurnAttempt / recordTurnAck / closeAttemptForReassignment /
+// rebindAttemptToLiveHolder calls are retired). It reports what it observed —
+// dispatch_accepted, delivered, dispatch_failed, duplicate_dispatch_refusal —
+// and the ledger's reducer decides: R1 opens the attempt with its
+// await_delivery + hard_ceiling holds, R2 binds the delivering session, R24
+// reclaims (queue row → pending is a commit effect), R25 rebinds to the live
+// holder. Without a wired ledger (unit fixtures) the evidence is skipped and
+// only the queue bookkeeping below runs.
+
+/** The daemon's turn ledger, as the boot stage puts it on `components` (C-W3). */
+export function turnLedgerOf(components: DaemonComponents | undefined): TurnLedger | null {
+    return components?.turnLedger ?? null;
+}
+
+function observeDispatchEvidence(components: DaemonComponents, evidence: TurnEvidence): void {
+    const ledger = turnLedgerOf(components);
+    if (!ledger) return;
+    try {
+        const result = ledger.observe(evidence);
+        if (result.verdict === 'rejected') {
+            LOG.warn('TurnLedger', `dispatch evidence ${evidence.kind} ${evidence.eventId} rejected (${result.rejection ?? 'unknown'})`);
+        }
+    } catch (e: any) {
+        LOG.error('TurnLedger', `dispatch evidence ${evidence.kind} ${evidence.eventId} failed: ${e?.message || e}`);
+    }
+}
+
+function dispatchEvidenceBase(ctx: Pick<DeliverTaskContext, 'sessionId' | 'task' | 'attemptRef'>, source: 'dispatch' | 'input_service'): Omit<TurnEvidence, 'kind' | 'eventId'> {
+    return {
+        at: Date.now(),
+        source,
+        sessionId: ctx.sessionId,
+        ...(ctx.attemptRef ? { attemptRef: ctx.attemptRef } : { taskId: ctx.task.id }),
+        observedBy: localCoordinatorDaemonId() || 'local',
+    } as Omit<TurnEvidence, 'kind' | 'eventId'>;
+}
+
 
 // Readiness barrier for the LOCAL auto-launch path. A just-spawned CLI session is
 // not interactive until its PTY prints the input prompt (the adapter flips
@@ -590,37 +634,20 @@ function deliverTaskToSession(
         if (timer) clearTimeout(timer);
         const isQueued = res && typeof res === 'object' && res.status === 'queued';
         updateSessionDeliveryStatus(delivery.id, isQueued ? 'queued' : 'delivered');
-        recordAckedHoldDispatchOutcome(ctx.meshId, ctx.task.id, { ok: true });
-        // TURN-LEDGER (Stage 5): the transport confirm IS the delivered evidence — the
-        // prompt/input submission reached the provider/PTY boundary and the durable
-        // delivery record was just committed above. Record the ACK idempotently; a
-        // consumed-stage attempt (worker ack raced ahead) is left untouched by the
-        // monotonic guard.
-        //
-        // DISPATCH-ACK-EVIDENCE: a QUEUED result is a positive receipt too, and it used to
-        // record nothing at all. The adapter buffered the prompt in its outbound queue
-        // because the session was busy — the message IS held for that session and will be
-        // submitted when it frees up. Leaving the attempt at 'accepted' made that state
-        // byte-identical to "never dispatched", which is what let downstream consumers
-        // conclude a delta was lost when it was merely waiting. The delivery record already
-        // distinguishes the two ('queued' vs no row); the turn ledger now does as well.
-        //
-        // Still NOT 'delivered': queued means handed to the adapter's buffer, not to the
-        // PTY. Recording it as delivered would license the redrive gates to treat a merely
-        // buffered prompt as submitted. The stage stays 'accepted' and the distinction is
-        // carried as evidence on the ack, so nothing that keys on stage rank changes
-        // behavior — this is an observability addition, not a control-flow change.
-        if (ctx.task.attemptId) {
-            try {
-                recordTurnAck({
-                    meshId: ctx.meshId,
-                    taskId: ctx.task.id,
-                    kind: isQueued ? 'accepted' : 'delivered',
-                    attemptId: ctx.task.attemptId,
-                    sessionId: ctx.sessionId,
-                    ...(isQueued ? { evidence: { source: 'transport_queued_in_adapter' } } : {}),
-                });
-            } catch { /* ACK is best-effort — the delivery record above is the pre-Stage-5 witness */ }
+        // TURN-LEDGER (C2): the transport confirm IS the delivered evidence (R2
+        // binds the attempt to this session and arms await_consume / await_turn).
+        // A QUEUED result is a positive receipt too — the adapter buffered the
+        // prompt for this session — and carries `outcome:'queued'` so the two
+        // stay distinguishable in the evidence row.
+        if (ctx.attemptRef) {
+            observeDispatchEvidence(ctx.components, {
+                ...dispatchEvidenceBase(ctx, 'dispatch'),
+                eventId: `dispatch-ack:${ctx.attemptRef.attemptId}:g${ctx.attemptRef.generation}:${delivery.id}`,
+                kind: 'delivered',
+                messageId: dispatchMessageId(ctx.task),
+                outcome: isQueued ? 'queued' : 'delivered',
+                via: ctx.transport === 'remote' ? 'p2p' : 'local',
+            } as TurnEvidence);
         }
     }).catch((e: any) => {
         if (timer) clearTimeout(timer);
@@ -647,81 +674,44 @@ function deliverTaskToSession(
         // completion be accepted, which is precisely what session_mismatch must keep out.
         const duplicate = classifyDuplicateMeshDispatch(e);
         if (duplicate?.holderSessionId) {
-            const rebind = rebindAttemptToLiveHolder({
-                meshId: ctx.meshId,
-                taskId: ctx.task.id,
-                holderSessionId: duplicate.holderSessionId,
-            });
-            if (rebind.rebound || rebind.reason === 'same_session') {
-                LOG.info('MeshQueue', `Duplicate dispatch of task ${ctx.task.id} refused by node ${ctx.nodeId}: it is already being worked by live session ${duplicate.holderSessionId}. Task stays assigned; turn attempt ${rebind.attemptId ?? 'n/a'} ${rebind.rebound ? 'rebound to that session' : 'was already bound to it'}.`);
-                // DUP-REFUSAL-IS-CONSUMPTION (delivery-row half): 'acked', not
-                // 'delivered'. These are the two CONSUMED statuses the redrive gate
-                // reads (`taskDeliveryConsumed` = status IN ('acked','completed')), and
-                // writing 'delivered' here is precisely what left the row one rank short
-                // of proving consumption while the refusal had already proved it.
-                //
-                // Advance THIS row by id rather than via consumeSessionDelivery(): the
-                // row belongs to the REFUSED session (ctx.sessionId), and that helper
-                // filters on session equivalence, so keying it on the holder would match
-                // zero rows. The row is nonetheless the right one to advance — it is the
-                // delivery record for this task's dispatch, and what the refusal settles
-                // is the fate of that dispatch: its prompt is being worked. The store's
-                // monotonic guard keeps this safe (it may advance or rewrite the same
-                // rank, never regress), so a later transport confirm cannot pull it back
-                // to 'delivered'.
-                updateSessionDeliveryStatus(delivery.id, 'acked');
-                // DUP-REFUSAL-IS-CONSUMPTION (attempt half): the refusal proves the
-                // prompt was taken up — the worker daemon observed a live session on its
-                // own machine already WORKING this exact (meshId, taskId). Record that as
-                // the durable consumed link, which the rebind alone did not do.
-                //
-                // Without it the attempt stayed pre-consumed, so every redrive path —
-                // all of which infer "never consumed" from the ABSENCE of
-                // agent:generating_started, an event an emitsPtyTurnEvents=false
-                // provider never emits — still read this healthy worker as unconsumed
-                // and tore it off its turn (live task 307f7b4e, antigravity-cli:
-                // rebind 07:48:13, redrive 07:49:54, the worker's genuine result
-                // 07:50:09). The two gates are INDEPENDENT authorities and both must be
-                // satisfied: the delivery-row gate (taskDeliveryConsumed) is the write
-                // just above; this is the durable attempt gate (evaluateRedrive →
-                // already_consumed), which survives the daemon restart that resets the
-                // in-memory redrive streaks.
-                //
-                // Ordering matters: this runs AFTER the rebind so the ack is recorded
-                // against a session the attempt names — recordTurnAck's session-binding
-                // guard ignores evidence from any other session. Best-effort, exactly
-                // like the rebind's own audit write: a failure here restores the
-                // previous behaviour, it never blocks the refusal handling.
-                try {
-                    recordDuplicateDispatchConsumption({
-                        meshId: ctx.meshId,
-                        taskId: ctx.task.id,
-                        holderSessionId: duplicate.holderSessionId,
-                        ...(rebind.attemptId ? { attemptId: rebind.attemptId } : {}),
-                    });
-                } catch { /* best-effort durable consumed link */ }
-                try {
-                    appendLedgerEntry(ctx.meshId, {
-                        kind: 'dispatch_duplicate_rebound',
-                        nodeId: ctx.nodeId,
-                        sessionId: duplicate.holderSessionId,
-                        payload: {
-                            taskId: ctx.task.id,
-                            deliveryId: delivery.id,
-                            transport: ctx.transport,
-                            attemptedSessionId: ctx.sessionId,
-                            holderSessionId: duplicate.holderSessionId,
-                            ...(rebind.attemptId ? { attemptId: rebind.attemptId } : {}),
-                            rebound: rebind.rebound,
-                        },
-                    });
-                } catch { /* ledger write is best-effort */ }
-                return;
+            // DUP-CLAIM-REBIND / DUP-REFUSAL-IS-CONSUMPTION: the node refused because a
+            // live session is ALREADY working this exact task — the prompt was taken
+            // up. Not a dispatch failure: the task stays assigned.
+            LOG.info('MeshQueue', `Duplicate dispatch of task ${ctx.task.id} refused by node ${ctx.nodeId}: it is already being worked by live session ${duplicate.holderSessionId}. Task stays assigned${ctx.attemptRef ? `; attempt ${ctx.attemptRef.attemptId} rebinds to that session` : ''}.`);
+            // DUP-REFUSAL-IS-CONSUMPTION (delivery-row half): 'acked', not 'delivered'
+            // — the two CONSUMED statuses are acked/completed, and 'delivered' is one
+            // rank short of proving the consumption this refusal already proved.
+            updateSessionDeliveryStatus(delivery.id, 'acked');
+            // DUP-REFUSAL-IS-CONSUMPTION (attempt half, C2): duplicate_dispatch_refusal
+            // naming THIS attempt as the holder → R25 rebinds the attempt to the
+            // holder session AND marks it consumed in one reducer step (the old
+            // rebind-then-promote ordering is now a single transition).
+            if (ctx.attemptRef) {
+                observeDispatchEvidence(ctx.components, {
+                    ...dispatchEvidenceBase(ctx, 'dispatch'),
+                    eventId: `dispatch-dup:${ctx.attemptRef.attemptId}:g${ctx.attemptRef.generation}:${delivery.id}`,
+                    kind: 'duplicate_dispatch_refusal',
+                    holderSessionId: duplicate.holderSessionId,
+                    holderAttemptId: ctx.attemptRef.attemptId,
+                } as TurnEvidence);
             }
-            // The refusal was genuine but the attempt could not be rebound (already
-            // terminal, or no attempt row). Fall through: the task returns to pending and
-            // a later tick re-dispatches it — the pre-fix behavior, which is safe here.
-            LOG.warn('MeshQueue', `Duplicate dispatch of task ${ctx.task.id} refused by node ${ctx.nodeId} (holder ${duplicate.holderSessionId}), but the turn attempt could not be rebound (${rebind.reason}) — falling back to the requeue path.`);
+            try {
+                appendLedgerEntry(ctx.meshId, {
+                    kind: 'dispatch_duplicate_rebound',
+                    nodeId: ctx.nodeId,
+                    sessionId: duplicate.holderSessionId,
+                    payload: {
+                        taskId: ctx.task.id,
+                        deliveryId: delivery.id,
+                        transport: ctx.transport,
+                        attemptedSessionId: ctx.sessionId,
+                        holderSessionId: duplicate.holderSessionId,
+                        ...(ctx.attemptRef ? { attemptId: ctx.attemptRef.attemptId } : {}),
+                        rebound: true,
+                    },
+                });
+            } catch { /* ledger write is best-effort */ }
+            return;
         }
         // A dispatch failure (transport reject OR hang timeout) is most often transient —
         // a busy/refusing adapter, or a relay that never acked — not a permanent task
@@ -730,66 +720,70 @@ function deliverTaskToSession(
         // ledger entry so the reconcile loop re-dispatches it. Identical for both transports.
         LOG.error('MeshQueue', `Failed to dispatch task via ${ctx.transport} to node ${ctx.nodeId}: ${e?.message}`);
         updateSessionDeliveryStatus(delivery.id, 'failed', { lastError: e?.message, incrementAttempt: true });
-        recordAckedHoldDispatchOutcome(ctx.meshId, ctx.task.id, { ok: false, reason: e?.message });
         // The dispatch failed — the task is no longer in-flight (it returns to pending
         // for a clean re-dispatch). Clear the single-flight mark so a legitimate
         // requeue/re-claim is not blocked as if a worker were still generating.
         endTaskDispatchInFlight(ctx.meshId, ctx.task.id);
-        // TURN-LEDGER (Stage 5): the dispatch never reached the worker — close this
-        // attempt (reassigned:dispatch_failed); the re-claim opens a fresh attempt.
-        try {
-            closeAttemptForReassignment({ meshId: ctx.meshId, taskId: ctx.task.id, reason: 'dispatch_failed' });
-        } catch { /* best-effort */ }
-        // DEAD-DISPATCH-BOUND: return the row to 'pending' THROUGH the retry budget rather
-        // than with a bare status flip.
-        //
-        // The bare `updateTaskStatus(..., 'pending')` this replaces was the unbounded leg of
-        // the re-dispatch loop: it reset the row to claimable while touching neither
-        // requeueCount nor any other counter, so a target that fails EVERY time — a node
-        // absent from the live mesh, whose P2P dial can never be answered — was re-claimed
-        // and re-failed on every drain forever. Observed live 2026-08-11 (task 25994f43 →
-        // node_d4bc9f12…, 17 dispatches in 64s, dispatchNonce to 23, ended only by a manual
-        // mesh_queue_cancel). `isRetryableDispatchFailure` already existed but was computed
-        // ONLY for the ledger payload below — purely descriptive, gating nothing — so even
-        // the self-dial classification it was written for never actually stopped the cycle.
-        //
-        // requeueTask supplies the bound that was missing: it increments requeueCount and,
-        // past maxRetries, auto-fails the row (`max_retries_exceeded`) and cascades to
-        // dependents, so an undeliverable task reaches a terminal state instead of cycling.
-        // This is the SAME budget every other requeue path spends, so a genuinely transient
-        // failure keeps its ordinary retries — the fix bounds the loop, it does not remove
-        // retrying. Pins are preserved (clearTargetSession:false): a dispatch failure says
-        // nothing about whether the pin is still the right destination, and DEAD-TARGET-
-        // SELFHEAL owns unpinning on its own liveness evidence.
-        //
-        // A failure the transport classified as non-recoverable (self-dial: a retry re-runs
-        // an identical decision on identical inputs) skips the budget entirely and fails the
-        // row now — retrying it is provably pointless.
         const retryable = isRetryableDispatchFailure(e);
-        if (!retryable) {
+        if (ctx.attemptRef) {
+            // TURN-LEDGER (C2): the dispatch never reached the worker. The reducer
+            // owns what happens to the attempt AND the queue row:
+            //   retryable     → dispatch_failed → R24 reclaim (generation + 1, the
+            //                   row back to `pending` as a commit effect; the reclaim
+            //                   budget bounds the loop — DEAD-DISPATCH-BOUND);
+            //   unrecoverable → session_error{spawn_failed} → R21 commit failed
+            //                   (a self-dial re-runs an identical decision — retrying
+            //                   is provably pointless).
+            // The DISPATCH-BOOT-RACE backoff is kept as queue metadata only
+            // (notBefore on the now-pending row); it never makes a terminal decision.
+            const gen = `${ctx.attemptRef.attemptId}:g${ctx.attemptRef.generation}:${delivery.id}`;
+            observeDispatchEvidence(ctx.components, {
+                ...dispatchEvidenceBase(ctx, 'dispatch'),
+                eventId: `dispatch-failed:${gen}`,
+                kind: 'dispatch_failed',
+                workerAbsent: /timeout|not.?found|no adapter|unreachable|offline/i.test(String(e?.message ?? '')),
+                reason: /timeout/i.test(String(e?.message ?? '')) ? 'timeout' : 'transport_error',
+            } as TurnEvidence);
+            if (!retryable) {
+                LOG.error('MeshQueue', `Task ${ctx.task.id} (mesh ${ctx.meshId}) is undeliverable to node ${ctx.nodeId} (session ${ctx.sessionId ?? '?'}) and will NOT be retried: dispatch_unrecoverable: ${e?.message || 'transport reported the failure as non-recoverable'}`);
+                const failRef = turnLedgerOf(ctx.components)?.getAttempt(ctx.attemptRef.attemptId);
+                observeDispatchEvidence(ctx.components, {
+                    ...dispatchEvidenceBase({ ...ctx, attemptRef: failRef ? { attemptId: failRef.attemptId, generation: failRef.generation } : ctx.attemptRef }, 'dispatch'),
+                    eventId: `dispatch-unrecoverable:${gen}`,
+                    kind: 'session_error',
+                    reason: 'spawn_failed',
+                } as TurnEvidence);
+            } else {
+                try { applyDispatchFailureBackoff(ctx.meshId, ctx.task.id); } catch { /* backoff is advisory */ }
+                const requeued = MeshRuntimeStore.getInstance().findQueueEntryById(ctx.meshId, ctx.task.id);
+                if (requeued?.status === 'pending' && readNonEmptyString(requeued.targetSessionId)) {
+                    notifyCoordinatorOfPinnedDispatchFailure(ctx.components, {
+                        meshId: ctx.meshId,
+                        taskId: ctx.task.id,
+                        targetSessionId: requeued.targetSessionId!,
+                        nodeId: ctx.nodeId,
+                        error: e?.message,
+                        sourceCoordinatorSessionId: ctx.sourceCoordinatorSessionId,
+                        sourceCoordinatorDaemonId: ctx.sourceCoordinatorDaemonId,
+                    });
+                }
+            }
+        } else if (!retryable) {
+            // No ledger wired (unit fixtures): queue bookkeeping only.
             failTaskAsUndeliverable(ctx, `dispatch_unrecoverable: ${e?.message || 'transport reported the failure as non-recoverable'}`);
         } else {
-            // DISPATCH-BOOT-RACE: route through the dispatch-failure axis, NOT
-            // requeueCount/maxTaskRetries — the worker never started this task, so it
-            // must not spend the same budget a worker-side execution failure spends.
-            // See dispatchFailureCount / MAX_DISPATCH_FAILURES doc (mesh-work-queue.ts).
-            // This also carries the escalating backoff (notBefore) that keeps a
-            // re-dispatch from racing the exact boot window that just failed.
+            // DISPATCH-BOOT-RACE: the dispatch-failure axis, never requeueCount — the
+            // worker never started this task. Carries the escalating notBefore backoff.
             const requeued = requeueTask(ctx.meshId, ctx.task.id, {
                 reason: 'dispatch_failed',
                 clearTargetSession: false,
                 dispatchFailure: true,
             });
-            // requeueTask no-ops (null) only when the row is already gone/terminal — nothing
-            // left to schedule. When it auto-failed on the cap, say so plainly in the log so
-            // the terminal state is not mistaken for a silent drop.
             if (requeued?.status === 'failed') {
                 LOG.error('MeshQueue', `Task ${ctx.task.id} (mesh ${ctx.meshId}) failed after repeated dispatch failures to node ${ctx.nodeId} — the worker never started it: ${requeued.cancelReason || 'dispatch_never_started'}. Dependents were unblocked.`);
             } else if (requeued?.status === 'pending' && readNonEmptyString(requeued.targetSessionId)) {
-                // COORD-NOTIFY-STUCK: the row is back to 'pending' STILL PINNED (clearTargetSession
-                // was false above) — the coordinator gets no other signal this happened, and could
-                // otherwise re-target the same dead session. Page it now rather than let it find
-                // out only when the slower dead-target/pin-TTL backstops eventually clear the pin.
+                // COORD-NOTIFY-STUCK: the row is back to 'pending' STILL PINNED — page the
+                // coordinator now rather than let it re-target the same dead session.
                 notifyCoordinatorOfPinnedDispatchFailure(ctx.components, {
                     meshId: ctx.meshId,
                     taskId: ctx.task.id,
@@ -1189,50 +1183,44 @@ export function tryAssignQueueTask(
         quotaClaimTrace.clear = 0;
     }
 
-    const terminal = findTerminalLedgerEvidenceForTask({
-        meshId,
-        taskId: task.id,
-    });
-    if (terminal) {
-        const status = terminal.kind === 'task_completed' ? 'completed' : 'failed';
-        updateTaskStatus(meshId, task.id, status);
-        LOG.info('MeshQueue', `Skipped dispatch for terminal task ${task.id} on mesh ${meshId}; ${terminal.kind} ledger evidence already exists`);
-        traceMeshEventDrop('dispatch_terminal_ledger', {
-            taskId: task.id,
-            sessionId,
-            nodeId,
-            meshId,
-            event: 'agent_command',
-        }, terminal.kind);
-        return false;
-    }
-
     LOG.info('MeshQueue', `Node ${nodeId} (${sessionId}) pulled task ${task.id}`);
 
-    // TURN-LEDGER (Stage 5): open the authoritative attempt for THIS dispatch. The
-    // claim already bumped the dispatch nonce, so the attempt's seq (= nonce) makes a
-    // crash-retried open idempotent and a later reclaim's re-dispatch a NEW attempt.
-    // Stamping entry.attemptId persists the correlation key on the queue row; the
-    // meshContext below carries it to the worker, which echoes it on every lifecycle
-    // event. Best-effort: a store failure degrades to the pre-Stage-5 nonce-only path.
-    let dispatchAttemptId: string | undefined;
-    try {
-        const { attempt } = openTurnAttempt({
-            meshId,
-            taskId: task.id,
-            dispatchNonce: task.dispatchNonce ?? 0,
-            nodeId,
-            sessionId,
-            providerType,
-            coordinatorDaemonId: localCoordinatorDaemonId(),
-            coordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) || undefined,
-        });
-        dispatchAttemptId = attempt.attemptId;
-        task.attemptId = attempt.attemptId;
-        MeshRuntimeStore.getInstance().updateQueueEntry(task);
-    } catch (e: any) {
-        LOG.warn('TurnLedger', `Failed to open turn attempt for task ${task.id} (dispatch proceeds on the legacy nonce path): ${e?.message || e}`);
+    // TURN-LEDGER (C2, C-W4): open — or, after a reclaim, resume — the attempt
+    // this dispatch delivers, as evidence (dispatch_accepted → R1). The attempt
+    // id is stamped on the queue row and carried to the worker (meshContext
+    // attemptId + attemptGeneration), which echoes it as its evidence
+    // attemptRef. The legacy "terminal ledger evidence already exists → flip the
+    // row terminal" skip is gone: a ledger commit writes the row in the same txn,
+    // so a pending row whose latest attempt is terminal is a legitimate retry.
+    let dispatchAttemptRef: TurnAttemptRef | undefined;
+    const turnLedger = turnLedgerOf(components);
+    if (turnLedger) {
+        try {
+            const opened = openOrResumeQueueAttempt(turnLedger, {
+                coordinatorDaemonId: localCoordinatorDaemonId(),
+                meshId,
+                task,
+                nodeId,
+                sessionId,
+                providerType,
+                consumeProfile: assignedTranscriptProfile?.class === 'native-source' ? 'native_source' : 'default',
+                maxTaskRetries: typeof mesh?.policy?.maxTaskRetries === 'number' ? mesh.policy.maxTaskRetries : 1,
+            });
+            if ('refused' in opened) {
+                // A prompt must never be injected into an attempt that already
+                // consumed one (crash/replay or a same-tick duplicate path).
+                LOG.warn('MeshQueue', `Refusing queue claim dispatch of task ${task.id} → session ${sessionId}: its open attempt ${opened.refused.attemptId} is already ${opened.refused.state}`);
+                updateTaskStatus(meshId, task.id, 'pending');
+                return false;
+            }
+            dispatchAttemptRef = opened.ref;
+            task.attemptId = opened.ref.attemptId;
+            MeshRuntimeStore.getInstance().updateQueueEntry(task);
+        } catch (e: any) {
+            LOG.warn('TurnLedger', `Failed to open turn attempt for task ${task.id} (dispatch proceeds without an attemptRef): ${e?.message || e}`);
+        }
     }
+    const dispatchAttemptId = dispatchAttemptRef?.attemptId;
 
     // WORKER-MCP (design §9.2.1): mint the per-task worker token now that the
     // attempt exists. This is the queue-claim arm; the direct-dispatch arm
@@ -1263,20 +1251,6 @@ export function tryAssignQueueTask(
     // remote and local arms cannot drift, and applied to the DISPATCHED body
     // only — `task.message` stays the authored text. Gate-off ⇒ unchanged.
     const dispatchMessage = resolveDispatchMessage(task, meshId, node);
-
-    // TURN-LEDGER (Stage 5): a prompt must never be injected into an attempt that has
-    // already CONSUMED one. The fresh claim above normally guarantees a pre-consumed
-    // attempt, but a same-tick duplicate dispatch path (or a crash/replay) must fail
-    // closed here rather than double-execute the task.
-    if (dispatchAttemptId) {
-        try {
-            const attemptRow = MeshRuntimeStore.getInstance().getTurnAttempt(dispatchAttemptId);
-            if (!assertPromptInjectionAllowed(attemptRow, `queue claim dispatch task ${task.id} → session ${sessionId}`)) {
-                updateTaskStatus(meshId, task.id, 'pending');
-                return false;
-            }
-        } catch { /* guard is best-effort */ }
-    }
 
     // LEDGER-TASK-TRACEABILITY (C): the task just transitioned pending→assigned. Record
     // the claim (distinct from the later task_dispatched, which fires when the message is
@@ -1390,6 +1364,7 @@ export function tryAssignQueueTask(
                         // echoed on the worker's lifecycle events so ACKs/completion proposals
                         // correlate to (taskId, attemptId, session), not just the nonce.
                         ...(dispatchAttemptId ? { attemptId: dispatchAttemptId } : {}),
+                        ...(dispatchAttemptRef ? { attemptGeneration: dispatchAttemptRef.generation } : {}),
                         ...(localDaemonIdForDispatch ? { coordinatorDaemonId: localDaemonIdForDispatch } : {}),
                         ...(sourceCoordinatorSessionId ? { coordinatorSessionId: sourceCoordinatorSessionId } : {}),
                         ...(silentIdlePushOnDispatch ? { silentIdlePush: true } : {}),
@@ -1406,6 +1381,7 @@ export function tryAssignQueueTask(
                     ...(sourceCoordinatorSessionId ? { sourceCoordinatorSessionId } : {}),
                     ...(localDaemonIdForDispatch ? { sourceCoordinatorDaemonId: localDaemonIdForDispatch } : {}),
                     ...(routingDecision ? { routingDecision } : {}),
+                    ...(dispatchAttemptRef ? { attemptRef: dispatchAttemptRef } : {}),
                 },
                 // Warmup-aware deadline: this dispatch can be the FIRST command to a
                 // peer whose mesh DataChannel is still opening — charge the cold-open
@@ -1471,8 +1447,7 @@ export function tryAssignQueueTask(
     // on the last-write-wins session scalar, which races a follow-up task and made the
     // completion echo the wrong taskId (the standalone NOTIF-MISDELIVER repro).
     deliverTaskToSession(
-        () => components.router.execute('agent_command', {
-            _meshDirectDispatch: true,
+        () => components.router.execute('agent_command', withMeshDirectDispatch({}, {
             targetSessionId: sessionId,
             cliType: providerType,
             action: 'send_chat',
@@ -1490,11 +1465,12 @@ export function tryAssignQueueTask(
                 ...(typeof task.dispatchNonce === 'number' ? { dispatchNonce: task.dispatchNonce } : {}),
                 // TURN-LEDGER (Stage 5): the opaque attempt identity (see remote branch above).
                 ...(dispatchAttemptId ? { attemptId: dispatchAttemptId } : {}),
+                ...(dispatchAttemptRef ? { attemptGeneration: dispatchAttemptRef.generation } : {}),
                 ...(localCoordinatorDaemonId() ? { coordinatorDaemonId: localCoordinatorDaemonId() } : {}),
                 ...(readNonEmptyString(task.sourceCoordinatorSessionId) ? { coordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) } : {}),
                 ...(silentIdlePushOnDispatch ? { silentIdlePush: true } : {}),
             },
-        }, 'mesh'),
+        }), 'mesh'),
         {
             meshId,
             nodeId,
@@ -1506,6 +1482,7 @@ export function tryAssignQueueTask(
             ...(readNonEmptyString(task.sourceCoordinatorSessionId) ? { sourceCoordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) } : {}),
             ...(localCoordinatorDaemonId() ? { sourceCoordinatorDaemonId: localCoordinatorDaemonId() } : {}),
             ...(routingDecision ? { routingDecision } : {}),
+            ...(dispatchAttemptRef ? { attemptRef: dispatchAttemptRef } : {}),
         },
     );
 

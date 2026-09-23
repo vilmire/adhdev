@@ -1,55 +1,26 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 // NOTIF-STATUS-LINE. A terminal coordinator notification (worker completed / needs
-// approval / stopped / refine · bootstrap finished) now carries a one-line mesh snapshot
+// approval / stopped / refine · bootstrap finished) carries a one-line mesh snapshot
 // so the coordinator does not have to spend a mesh_status round-trip re-establishing what
 // else is in flight.
 //
-// The four properties that make this safe, each asserted below:
-//   (1) the line is appended to TERMINAL events and is content-free (taskId prefixes,
+// The properties that make this safe, each asserted below:
+//   (1) the line is appended to TERMINAL notices and is content-free (taskId prefixes,
 //       status enums, counts — never taskTitle, which is free text cut out of the task
 //       message),
-//   (2) a SILENT lifecycle event never carries one,
+//   (2) a non-terminal notice never carries one,
 //   (3) the line never exceeds MESH_STATUS_LINE_MAX_CHARS,
-//   (4) the snapshot is taken at INJECT time, not emit time — a held event injected an
-//       hour later must report the mesh as it is NOW, not as it was when it was queued.
+//   (4) the snapshot is taken at DELIVER time (turn-ledger/deliver renderNotice,
+//       wiring-unification C-W3), not when the notice was written — a notice
+//       delivered an hour later reports the mesh as it is NOW.
 
-const statusLineMock = vi.hoisted(() => ({
-  buildMeshStatusLineForNotification: vi.fn((_meshId: string) => null as string | null),
-}))
-
-vi.mock('../../src/mesh/mesh-notification-status-line.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/mesh/mesh-notification-status-line.js')>()
-  return { ...actual, buildMeshStatusLineForNotification: statusLineMock.buildMeshStatusLineForNotification }
-})
-
-import { injectPendingIntoCoordinator } from '../../src/mesh/mesh-reconcile-coordinator-drain.js'
 import {
   renderMeshStatusLine,
   MESH_STATUS_LINE_MAX_CHARS,
 } from '../../src/mesh/mesh-notification-status-line.js'
 import type { MeshActiveWorkRecord, MeshActiveWorkStatus } from '../../src/mesh/mesh-active-work.js'
-import type { PendingMeshCoordinatorEvent } from '../../src/mesh/mesh-events-pending.js'
-
-function makeCoordinator() {
-  const sent: any[] = []
-  return {
-    sent,
-    onEvent: (name: string, payload: any) => { sent.push({ name, payload }) },
-  }
-}
-
-function makePending(event: string, over: Partial<PendingMeshCoordinatorEvent> = {}): PendingMeshCoordinatorEvent {
-  return {
-    event,
-    meshId: 'mesh-alpha',
-    nodeLabel: 'worker-1',
-    metadataEvent: {},
-    coordinatorMessage: '[System] worker-1 completed its task.',
-    queuedAt: Date.now(),
-    ...over,
-  } as PendingMeshCoordinatorEvent
-}
+import { renderNotice } from '../../src/mesh/turn-ledger/deliver.js'
 
 function countsFrom(partial: Partial<Record<MeshActiveWorkStatus, number>>): Record<MeshActiveWorkStatus, number> {
   return {
@@ -85,10 +56,6 @@ function recordsWithStatus(entries: Array<[string, MeshActiveWorkStatus]>): Mesh
   })) as MeshActiveWorkRecord[]
 }
 
-beforeEach(() => {
-  statusLineMock.buildMeshStatusLineForNotification.mockReset()
-  statusLineMock.buildMeshStatusLineForNotification.mockReturnValue(null)
-})
 
 describe('renderMeshStatusLine', () => {
   it('renders counts and taskId prefixes, and never the free-text taskTitle', () => {
@@ -203,90 +170,42 @@ describe('renderMeshStatusLine', () => {
   })
 })
 
-describe('injectPendingIntoCoordinator — status line append', () => {
-  it('appends the snapshot to a TERMINAL event notification', () => {
-    statusLineMock.buildMeshStatusLineForNotification.mockReturnValue('[Mesh] active 2: 2 generating (a3f21c8, 7b0e441)')
-    const coordinator = makeCoordinator()
-    injectPendingIntoCoordinator(coordinator as any, makePending('agent:generating_completed'))
+/** A notice row as the ledger stores it: text LOCAL, entry content-free. */
+function noticeRow(event: string, coordinatorMessage = '[System] worker-1 completed its task.') {
+  return {
+    eventId: 'n1', meshId: 'mesh-alpha', attemptId: null, generation: null, sessionId: '', kind: 'notify', source: 'mesh_event',
+    verdict: 'applied', rule: null, rejection: null, dedupeKey: 'n1', fromState: null, toState: null,
+    payload: { meshId: 'mesh-alpha', notify: 'mesh_event', event, entry: {}, local: { payload: { nodeLabel: 'worker-1', coordinatorMessage } } },
+    observedBy: null, srcWriter: 'w', srcSeq: 1, publishState: 'published', publishedSeq: 1, atMs: 0, recordedAt: 0,
+  } as any
+}
 
-    expect(coordinator.sent).toHaveLength(1)
-    const text = coordinator.sent[0].payload.input.text as string
-    expect(text).toContain('[System] worker-1 completed its task.')
-    expect(text).toContain('[Mesh] active 2: 2 generating (a3f21c8, 7b0e441)')
-    // textFallback must carry the same appended text — the two must not diverge.
-    expect(coordinator.sent[0].payload.input.textFallback).toBe(text)
+function render(event: string, statusLine: (meshId: string) => string | null) {
+  const ctx = { ledger: { getAttempt: () => null, store: { getEvent: () => null } } as any, statusLine }
+  return renderNotice(ctx, 'mesh-alpha', { notify: 'mesh_event' }, noticeRow(event)).text
+}
+
+describe('renderNotice — status line append (deliver time)', () => {
+  it('appends the snapshot to a TERMINAL notice', () => {
+    const text = render('refine:completed', () => '[mesh] 2 active: t-abc12 generating')
+    expect(text).toBe('[System] worker-1 completed its task.\n\n[mesh] 2 active: t-abc12 generating')
   })
 
-  it('appends to an approval nudge delivered with forceOverride:false', () => {
-    // forceOverride only changes HOW the message reaches the PTY (queued to the adapter's
-    // outbound queue vs raw force-write); it still becomes a real coordinator turn, so it
-    // must carry the snapshot.
-    statusLineMock.buildMeshStatusLineForNotification.mockReturnValue('[Mesh] active 1: 1 awaiting_approval (aaaa111)')
-    const coordinator = makeCoordinator()
-    injectPendingIntoCoordinator(
-      coordinator as any,
-      makePending('agent:waiting_approval', { coordinatorMessage: '[System] worker-1 needs approval.' }),
-      { forceOverride: false },
-    )
-    const text = coordinator.sent[0].payload.input.text as string
-    expect(text).toContain('[Mesh] active 1: 1 awaiting_approval')
-    expect(coordinator.sent[0].payload.force).toBeUndefined()
+  it('does NOT append to a non-terminal notice', () => {
+    let called = 0
+    const text = render('mission_close_candidate', () => { called++; return '[mesh] line' })
+    expect(text).toBe('[System] worker-1 completed its task.')
+    expect(called).toBe(0)
   })
 
-  it('does NOT append to a silent lifecycle event', () => {
-    statusLineMock.buildMeshStatusLineForNotification.mockReturnValue('[Mesh] active 3: 3 generating (aaaa111)')
-    const coordinator = makeCoordinator()
-    injectPendingIntoCoordinator(
-      coordinator as any,
-      makePending('agent:ready', { coordinatorMessage: '[System] worker-1 is ready.' }),
-    )
-    const text = coordinator.sent[0].payload.input.text as string
-    expect(text).toBe('[System] worker-1 is ready.')
-    expect(text).not.toContain('[Mesh]')
-    expect(statusLineMock.buildMeshStatusLineForNotification).not.toHaveBeenCalled()
+  it('delivers the notice unchanged when the snapshot is unavailable', () => {
+    expect(render('worktree_bootstrap_complete', () => null)).toBe('[System] worker-1 completed its task.')
   })
 
-  it('injects the notification unchanged when the snapshot is unavailable', () => {
-    statusLineMock.buildMeshStatusLineForNotification.mockReturnValue(null)
-    const coordinator = makeCoordinator()
-    injectPendingIntoCoordinator(coordinator as any, makePending('agent:generating_completed'))
-    expect(coordinator.sent[0].payload.input.text).toBe('[System] worker-1 completed its task.')
-  })
-
-  it('snapshots at INJECT time, not at the time the event was queued', () => {
-    // The defect this guards: a held event can sit at drained=0 for a very long time while
-    // the coordinator is busy (measured: 1h42m). If the line were rendered when the event
-    // was EMITTED, it would deliver counts that are hours stale. Model that by changing the
-    // mesh state between queueing the event and injecting it — the injected text must carry
-    // the LATER numbers.
-    statusLineMock.buildMeshStatusLineForNotification.mockReturnValue('[Mesh] active 5: 5 generating (aaaa111)')
-    const pending = makePending('agent:generating_completed', { queuedAt: Date.now() - 6_120_000 })
-
-    // ... mesh state moves on while the event is held ...
-    statusLineMock.buildMeshStatusLineForNotification.mockReturnValue('[Mesh] active 1: 1 generating (bbbb222)')
-
-    const coordinator = makeCoordinator()
-    injectPendingIntoCoordinator(coordinator as any, pending)
-
-    const text = coordinator.sent[0].payload.input.text as string
-    expect(text).toContain('[Mesh] active 1: 1 generating (bbbb222)')
-    expect(text).not.toContain('active 5')
-    // And the snapshot was taken for this event's own mesh.
-    expect(statusLineMock.buildMeshStatusLineForNotification).toHaveBeenCalledWith('mesh-alpha', undefined, undefined)
-  })
-
-  it('passes the caller-provided live node snapshot into the status-line collector', () => {
-    const nodes = [{ id: 'node-1', sessions: [{ id: 'sess-1', status: 'generating' }] }]
-    statusLineMock.buildMeshStatusLineForNotification.mockReturnValue('[Mesh] active 1: 1 generating')
-    const coordinator = makeCoordinator()
-
-    injectPendingIntoCoordinator(
-      coordinator as any,
-      makePending('agent:generating_completed'),
-      { nodes },
-    )
-
-    expect(statusLineMock.buildMeshStatusLineForNotification)
-      .toHaveBeenCalledWith('mesh-alpha', undefined, nodes)
+  it('snapshots at DELIVER time, not when the notice was written', () => {
+    let state = 'written'
+    const statusLine = () => `[mesh] ${state}`
+    state = 'delivered'
+    expect(render('refine:failed', statusLine)).toContain('[mesh] delivered')
   })
 })

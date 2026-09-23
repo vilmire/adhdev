@@ -10,8 +10,6 @@ import {
     appendMeshHandoff,
     configureMeshPublisher,
     flushMeshPublisher,
-    isMeshDualWriteActive,
-    isMeshReadPrimary,
     meshPublisherCounters,
     meshPublisherInflight,
     publishMeshRecord,
@@ -33,10 +31,21 @@ import { meshEventsTopic } from '../../src/seqscribe/topics.js';
 const tmpDirs: string[] = [];
 const handles: SeqscribeNodeHandle[] = [];
 
-function openNode(name: string, meshIds: readonly string[] = []): SeqscribeNodeHandle {
+function openNode(
+    name: string,
+    meshIds: readonly string[] = [],
+    opts: { localAuthority?: boolean } = {},
+): SeqscribeNodeHandle {
     const dir = mkdtempSync(join(tmpdir(), `adhdev-mesh-pub-${name}-`));
     tmpDirs.push(dir);
-    const handle = openSeqscribeNode({ dbPath: join(dir, 'seq.db'), env: {}, storedFleetSecret: null, daemonId: 'daemon_pub_test', meshIds });
+    const handle = openSeqscribeNode({
+        dbPath: join(dir, 'seq.db'),
+        env: {},
+        storedFleetSecret: null,
+        daemonId: 'daemon_pub_test',
+        meshIds,
+        ...opts,
+    });
     handles.push(handle);
     return handle;
 }
@@ -174,20 +183,24 @@ describe('real node', () => {
     });
 
     it('appendMeshHandoff needs an authority (content class) — provisional nodes reject loudly', async () => {
-        configureMeshPublisher(openNode('handoff', ['m1']));
+        // C7-3: no fleet secret no longer means no authority at all (a local
+        // one is minted by default) — pin the true authority-less case
+        // explicitly to keep testing this rejection path.
+        configureMeshPublisher(openNode('handoff', ['m1'], { localAuthority: false }));
         await expect(appendMeshHandoff('m1', 'turn.summary', { text: 'x' })).rejects.toThrow(/authority off/);
     });
 
-    it('the legacy read cut-over answers false: reads stay on the complete ledger (C7-2)', () => {
-        configureMeshPublisher(openNode('legacy', ['m1']));
-        expect(isMeshDualWriteActive()).toBe(true);
-        expect(isMeshReadPrimary()).toBe(false);
-    });
 });
 
 describe('boot activation (C7-1: an undefinable topic is a mesh boot failure)', () => {
     it('throws MeshTopicActivationError naming the topics that failed', () => {
-        const node = openNode('boot-fail');
+        // C7-3 opt-out: isolates this to the events-topic failure the test is
+        // about. With the default local authority, ensureHandoffTopic also
+        // attempts (and fails) defineTopic on the same broken mock, which is
+        // real and correct (a genuinely broken node fails BOTH its topics),
+        // but would double topicErrors here for a reason orthogonal to what
+        // this test pins — see the next test for that combined count.
+        const node = openNode('boot-fail', [], { localAuthority: false });
         const broken: SeqscribeNodeHandle = {
             ...node,
             node: { ...node.node, defineTopic: () => { throw new Error('ERR_TOPIC schema mismatch'); } } as SeqscribeNodeHandle['node'],
@@ -195,6 +208,19 @@ describe('boot activation (C7-1: an undefinable topic is a mesh boot failure)', 
         configureMeshPublisher(broken);
         expect(() => activateMeshTopicsAtBoot(['m1'])).toThrow(MeshTopicActivationError);
         expect(meshPublisherCounters().topicErrors).toBe(1);
+    });
+
+    it('with the default local authority, a broken node fails BOTH its events and handoff topics', () => {
+        const node = openNode('boot-fail-local-authority');
+        expect(node.authorityEnabled).toBe(true);
+        expect(node.authorityIsLocal).toBe(true);
+        const broken: SeqscribeNodeHandle = {
+            ...node,
+            node: { ...node.node, defineTopic: () => { throw new Error('ERR_TOPIC schema mismatch'); } } as SeqscribeNodeHandle['node'],
+        };
+        configureMeshPublisher(broken);
+        expect(() => activateMeshTopicsAtBoot(['m1'])).toThrow(MeshTopicActivationError);
+        expect(meshPublisherCounters().topicErrors).toBe(2);
     });
 
     it('defines every known mesh on a healthy node', () => {

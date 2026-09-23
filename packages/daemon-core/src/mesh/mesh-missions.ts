@@ -19,7 +19,7 @@ import { getQueue } from './mesh-work-queue.js';
 import { deriveDependencyFailures } from './mesh-graph-derived-failure.js';
 import { computeMeshMissionStats, type MeshMissionStats } from './mesh-task-stats.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
-import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 
 /**
  * Max chars of mission goal text written into a ledger entry payload. Mission
@@ -406,7 +406,7 @@ function emitMissionCloseCandidateEvent(
         + `It is a candidate to close. Review its outcome and, if done, set its status with `
         + `mesh_mission_upsert(mission_id: "${mission.id}", status: "completed" | "abandoned"). `
         + `This is only a hint — the mission stays 'active' until you decide.`;
-    queuePendingMeshCoordinatorEvent({
+    notifyMeshCoordinator({
         event: 'mission_close_candidate',
         meshId,
         nodeLabel: '',

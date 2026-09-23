@@ -8,7 +8,7 @@
  * page the coordinator through the SAME pendingCoordinatorEvents channel task
  * completions and graph-gate notifications already use.
  *
- * Nothing new is invented for delivery: `queuePendingMeshCoordinatorEvent` gives
+ * Nothing new is invented for delivery: `notifyMeshCoordinator` gives
  * durable queueing, dedup, the v2 envelope, and idle-edge injection for free.
  * The event name is `mesh:provider_signal`, matching the `mesh:*` convention the
  * graph-gate notifications established for informational coordinator pages.
@@ -75,7 +75,7 @@ export function toProviderSignalObservation(event: EventOf<'signal'>): ProviderS
     };
 }
 import { resolveMeshTerminationBinding } from './mesh-termination-bridge.js';
-import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 
 /** The coordinator-facing event name. `mesh:*` = informational page, matching
  *  the graph-gate notification convention. */
@@ -138,7 +138,7 @@ export function handleProviderSignalObservation(observation: ProviderSignalObser
 
     const nodeLabel = binding.nodeId || observation.sessionId;
     try {
-        return queuePendingMeshCoordinatorEvent({
+        return notifyMeshCoordinator({
             event: PROVIDER_SIGNAL_EVENT,
             meshId: binding.meshId,
             nodeLabel,

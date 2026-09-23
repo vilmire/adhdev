@@ -30,7 +30,7 @@ import {
     recordDirectDispatchTask,
     cancelTask,
     requeueTask,
-    reclaimStrandedAssignedTask,
+    requeueTaskForLedgerReclaim,
     getQueue,
     getActiveDirectDispatches,
     updateDirectDispatchStatus,
@@ -203,13 +203,13 @@ describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direc
         expect((audit[0].payload as any).reason).toBe('queue_task_dispatch_failed');
     });
 
-    it('reclaimStrandedAssignedTask: terminalizes the sibling of the row it tears down', () => {
+    it('the ledger reclaim (requeueTaskForLedgerReclaim) terminalizes the sibling of the row it tears down', () => {
         const taskId = dispatchAndAck('task-stranded-1');
         // recordDirectDispatchTask leaves the queue row 'assigned', which is what the
-        // stranded-reclaim watchdog acts on.
+        // ledger's reclaim effect (H1/H2r/R31) requeues.
         expect(getQueue(meshId).find(t => t.id === taskId)?.status).toBe('assigned');
 
-        reclaimStrandedAssignedTask(meshId, taskId, { reason: 'assigned_stranded_dispatch_unconfirmed' });
+        requeueTaskForLedgerReclaim(meshId, taskId, 'H1_await_delivery', new Date().toISOString());
 
         expect(getActiveDirectDispatches(meshId).map(d => d.taskId)).not.toContain(taskId);
         const audit = readLedgerEntries(meshId)

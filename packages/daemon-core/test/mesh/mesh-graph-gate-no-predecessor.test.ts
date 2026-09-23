@@ -65,7 +65,7 @@ import {
     __clearMeshQueueForTests,
     __resetMeshRuntimeStoreForTests,
     getQueue,
-    updateTaskStatus,
+    updateTaskStatus, __writeTaskStatusForTests,
 } from '../../src/mesh/mesh-work-queue.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 
@@ -226,7 +226,7 @@ describe('★ gates WITH predecessors still open only on upstream completion', (
         try {
             const g = planDependentGate(id);
             expect(gs().getGate(g.gateId)!.state).toBe('declared');
-            updateTaskStatus(id, g.taskA.id, 'completed');
+            __writeTaskStatusForTests(id, g.taskA.id, 'completed');
             expect(gs().getGate(g.gateId)!.state).toBe('awaiting_coordinator');
             expect(
                 gs().listOutboxEvents(id, g.graphId).filter(e => e.kind === 'graph_gate_awaiting'),

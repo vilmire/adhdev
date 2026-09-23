@@ -1107,7 +1107,6 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_task_history\` | Task ledger — dispatches, completions, failures |
 | \`mesh_ledger_query\` | Ledger query by kind/since/node/tail (kind/time/node axes) |
 | \`mesh_reconcile_ledger\` | Import missing ledger entries from remote nodes over P2P |
-| \`mesh_requeue_held_events\` | Restore held coordinator events to the pending queue (lossless) |
 | \`mesh_review_inbox\` | Local worktree nodes needing human review, with evidence/diff summaries |
 | \`mesh_record_note\` | Record a durable operating note (quirk / pattern to avoid / recovery lesson) for future coordinators |
 | \`mesh_forget_note\` | Retract a stale note by id or exact text (tombstone; history kept) |

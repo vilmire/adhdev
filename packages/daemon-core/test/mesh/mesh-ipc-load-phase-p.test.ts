@@ -44,7 +44,7 @@ import {
 } from '../../src/mesh/mesh-ledger.js';
 import { buildMeshActiveWork } from '../../src/mesh/mesh-active-work.js';
 import { buildMeshAsyncRefineJobs } from '../../src/mesh/mesh-refine-status.js';
-import { autoPruneStaleDirectDispatches } from '../../src/mesh/mesh-completion-synthesis.js';
+// autoPruneStaleDirectDispatches (the reconcile PHASE 5 auto-prune) was deleted in C4 (C-W4).
 
 const DAY_MS = 24 * 60 * 60_000;
 
@@ -83,34 +83,6 @@ describe('Phase P — IPC / event-loop load fixes', () => {
     });
 
     describe('audit #1 — auto-prune can idle', () => {
-        it('a 30-day-old acked row is marked stale and the prune early-exits without probing nodes', async () => {
-            const taskId = `task-${randomUUID().slice(0, 8)}`;
-            withClock(Date.now() - 30 * DAY_MS, () => {
-                insertDirectDispatch(meshId, { taskId, sessionId: 'sess-old', message: 'old', via: 'local_direct', dispatchedAt: new Date().toISOString() });
-                updateDirectDispatchStatus(meshId, 'sess-old', 'acked', taskId);
-            });
-            expect(getActiveDirectDispatches(meshId).map(d => d.status)).toEqual(['acked']);
-
-            const execute = vi.fn(async () => ({ success: true }));
-            const dispatchMeshCommand = vi.fn(async () => ({ success: true }));
-            const components = { router: { execute }, dispatchMeshCommand } as any;
-            const mesh = { id: meshId, nodes: [{ id: 'node-local' }, { id: 'node-remote', daemonId: 'daemon_remote' }] } as any;
-
-            const snapshot = await autoPruneStaleDirectDispatches(components, mesh, ['daemon_local'], 'daemon_local', DAY_MS);
-
-            expect(snapshot).toBeUndefined();
-            expect(execute).not.toHaveBeenCalled();
-            expect(dispatchMeshCommand).not.toHaveBeenCalled();
-            expect(getActiveDirectDispatches(meshId)).toEqual([]);
-            // The flip is audited, not silent.
-            const audit = readLedgerEntriesByKind(meshId, ['direct_dispatch_pruned']);
-            expect(audit).toHaveLength(1);
-            expect(audit[0].payload).toMatchObject({ action: 'marked_stale', taskIds: [taskId] });
-            // Idempotent: the second pass has nothing to flip and appends nothing.
-            expect(listDirectDispatchesForAutoPrune(meshId, DAY_MS)).toEqual([]);
-            expect(readLedgerEntriesByKind(meshId, ['direct_dispatch_pruned'])).toHaveLength(1);
-        });
-
         it('keeps rows that had a lifecycle update inside the age gate (fresh acked, old-dispatched-but-recently-acked)', () => {
             const fresh = `task-fresh-${randomUUID().slice(0, 8)}`;
             const reacked = `task-reacked-${randomUUID().slice(0, 8)}`;

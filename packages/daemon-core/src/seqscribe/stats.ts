@@ -85,28 +85,11 @@ export interface SeqscribeStatusSummary {
     /** True when a fleet secret is configured and certificates can be verified. */
     authority: boolean;
 
-    // ── Phase 2 Stage 2+3: mesh dual-write shadow + parity ──────────────────
-    // Same discipline as the fields above: booleans and bucket ordinals, never
-    // live counters, so an idle daemon's status frame stays byte-identical and
-    // the server-side dedup keeps working.
-    /** True when the mesh dual-write shadow leg is armed. */
-    dualWrite: boolean;
-    /** Bucketed count of shadow appends that failed. 0 = none. */
-    dualWriteFailedBucket: number;
-    /** Bucketed count of shadow records dropped by load-shedding. 0 = none. */
-    dualWriteDroppedBucket: number;
-    /**
-     * Bucketed count of records mirrored LATE by the parity backfill.
-     *
-     * ★ Nonzero is EXPECTED and healthy on a machine that runs mesh MCP tools:
-     * the mcp-server process appends to the shared ledger with no armed shadow
-     * leg of its own, so the daemon repairs those entries on its parity sweep
-     * (see the process-boundary note in mesh-dual-write.ts). Read it together
-     * with `parityMismatchBucket` — backfill nonzero + mismatch settling is the
-     * repair working; mismatch persisting while this stays 0 is the repair
-     * itself being broken.
-     */
-    dualWriteBackfilledBucket: number;
+    // ── Phase 2 Stage 3: mesh parity ──────────────────────────────────────
+    // (C-W3: the dual-write shadow is gone — the publisher is the one write
+    // path — so its `dualWrite*` buckets were dropped. The parity fields stay
+    // on the wire shape until the server allow-list drops them; with the parity
+    // loop deleted they report never-run.)
     /**
      * Bucketed count of parity mismatches observed since boot.
      *
@@ -216,38 +199,6 @@ export interface SeqscribeStatusSummary {
      * to the server on any path.
      */
     syncHotspots?: { topic: string; peerId: string; bytes: number }[];
-    /**
-     * Stage 4A read-path routing: how many allow-listed reads this process
-     * answered from the replica versus the ledger, and why the ledger ones fell
-     * back (`mesh-read-readiness.ts` `MeshReadFallbackReason`).
-     *
-     * ★ Why this exists. The readiness gate is four fail-closed conditions, and
-     * until this field there was NO way to ask a live daemon which of them was
-     * holding. `parityPersistentMismatchBucket` covers condition 4 alone; the
-     * other three — topic/grant, quarantine, consumer catch-up — were visible
-     * only in a transition log line that prints once and scrolls away. That gap
-     * cost a real misdiagnosis: a healthy fleet (dualWrite on, parity clean) was
-     * read as "the gate is never called at all", because the observable surface
-     * could not distinguish a gate that was never reached from one that was
-     * reached and answered `consumer_lag`. `fallbacks` names the condition
-     * directly, so that question is now answerable from `get_status_metadata`.
-     *
-     * ★★ LOCAL-ONLY, for TWO independent reasons — either alone is sufficient:
-     *   1. These are RAW monotonic counters, not buckets. On the deduped status
-     *      frame they would change every tick and turn an idle daemon into a
-     *      constant transmitter — the failure this file's bucket discipline
-     *      exists to prevent.
-     *   2. They are per-process aggregates the server has no routing use for.
-     * The keys are fixed `MeshReadFallbackReason` enums and the values are
-     * integers; no mesh id, topic name or peer id appears, which is what makes
-     * the shape safe on this local surface at all.
-     */
-    readRouting?: {
-        fromReplica: number;
-        fromLedger: number;
-        /** Keyed by `MeshReadFallbackReason` — a fixed enum, never a mesh id. */
-        fallbacks: Record<string, number>;
-    };
     /**
      * §8 unit 2 transcript parity, RAW and undecimated — the numbers §5.6's
      * remaining gate condition (`persistent mismatch 0`) actually needs.
@@ -418,27 +369,18 @@ export interface SeqscribeStatusSummary {
         collectFailed: number;
     };
     /**
-     * Terminal-redrive re-arm outcomes (`mesh/mesh-terminal-redrive.ts`), named
-     * following the `dualWrite*` style (2026-09-23 usage audit finding #1): the
-     * seqscribe-only re-arm backstop redelivered 35 of 295 completion/stop
-     * notifications since 09-16 with NO trace anywhere but a `source` field on
-     * the resulting pending-event payload. This is the counter half of that fix
-     * — the log half is the per-redelivery INFO line at the call site.
+     * Coordinator-notice delivery (wiring-unification C7-4): the three turn
+     * cursors' outcome counters (`turn.deliver` delivered / queued / deferred /
+     * escalated / suppressed / refused / MCP-read; `turn.ingest` observed /
+     * relayed; `mesh.index` rows) — the successor of the Stage 5a
+     * `terminalRedrive` counters (the deliver cursor IS redelivery).
      *
-     * ★ LOCAL-ONLY, for the same reason as `projectionCarry`/`readRouting`
-     * above: raw monotonic counters that would defeat the deduped status-frame
-     * hash, and the server has no routing use for a redelivery count.
-     * `buildCloudSeqscribeSummary` (status/reporter.ts) does not name this key,
-     * and `test/status/cloud-status-content-boundary.test.ts` keeps it out.
+     * ★ LOCAL-ONLY: raw monotonic counters that would defeat the deduped
+     * status-frame hash, and the server has no routing use for them.
+     * `buildCloudSeqscribeSummary` (status/reporter.ts) does not name this key.
+     * Keys are fixed counter names; values integers — no mesh id, topic, or text.
      */
-    terminalRedrive?: {
-        /** Entries successfully re-armed into the pending queue (dedup may still collapse them). */
-        redelivered: number;
-        /** Entries skipped as non-terminal or unusable (not a failure — see mesh-terminal-redrive.ts). */
-        skipped: number;
-        /** Entries skip-and-advanced because the mesh was quarantined at the time. */
-        quarantined: number;
-    };
+    meshDelivery?: Record<string, number>;
     /**
      * G2 transcript-transport handshake diagnostics (design §7e, 2026-09-23
      * RCA `scratchpad/transcript-handshake-rca.md`). The RCA's own finding #5:
@@ -481,14 +423,6 @@ export interface SeqscribeStatusSummary {
 
 export interface SummarizeOptions {
     authorityEnabled: boolean;
-    /** Stage 2 shadow counters. Omitted → reported as inactive/zero. */
-    dualWrite?: {
-        active: boolean;
-        failed: number;
-        dropped: number;
-        /** Records mirrored late by the parity backfill. Omitted → 0. */
-        backfilled?: number;
-    };
     /** Stage 3 parity counters. Omitted → reported as never-run. */
     parity?: {
         runs: number;
@@ -568,16 +502,6 @@ export interface SummarizeOptions {
      */
     throughput?: SeqscribeThroughputSnapshot | null;
     /**
-     * Stage 4A read-routing counters (`meshReadRoutingCounters()`). Only read
-     * when `includeLocalDiagnostics` is set — see the `readRouting` field for
-     * why this must not ride the deduped status frame.
-     */
-    readRouting?: {
-        fromReplica: number;
-        fromLedger: number;
-        fallbacks: Record<string, number>;
-    } | null;
-    /**
      * Transcript trigger attribution + stage latencies
      * (`transcriptLatencyDetail()` from seqscribe/transcript-publisher.ts). Only
      * read when `includeLocalDiagnostics` is set — see the
@@ -586,16 +510,11 @@ export interface SummarizeOptions {
      */
     transcriptLatency?: TranscriptLatencyDetail | null;
     /**
-     * Terminal-redrive counters (`getTotalRedriveInjected()` /
-     * `getTotalQuarantineSkips()` / a `skipped` total from
-     * mesh/mesh-terminal-redrive.ts). Only read when `includeLocalDiagnostics`
-     * is set, for the same reason as `readRouting` above.
+     * Coordinator-notice delivery counters (turn cursors + deliver outcomes,
+     * `meshNoticeRuntime.current()?.counters()` merged with the consumer's).
+     * Only read when `includeLocalDiagnostics` is set.
      */
-    terminalRedrive?: {
-        redelivered: number;
-        skipped: number;
-        quarantined: number;
-    } | null;
+    meshDelivery?: Record<string, number> | null;
     /**
      * G2 transcript-transport selection + zombie-recovery counters — see
      * `transcriptTransportSelection` on `SeqscribeStatusSummary` above for
@@ -666,7 +585,6 @@ export function summarizeSeqscribeStats(
         const snap = opts.throughput;
         // Copy the counters rather than aliasing the module's live maps, so a
         // later read cannot mutate a snapshot a caller is still holding.
-        const routing = opts.readRouting;
         const tp = opts.transcriptParity;
         // `since` defaults to now rather than 0 when a caller passes only the
         // three bucket fields: a 0 stamp would render as a 1970 date and read as
@@ -728,24 +646,7 @@ export function summarizeSeqscribeStats(
                       },
                   }
                 : {}),
-            ...(routing
-                ? {
-                      readRouting: {
-                          fromReplica: routing.fromReplica,
-                          fromLedger: routing.fromLedger,
-                          fallbacks: { ...routing.fallbacks },
-                      },
-                  }
-                : {}),
-            ...(opts.terminalRedrive
-                ? {
-                      terminalRedrive: {
-                          redelivered: opts.terminalRedrive.redelivered,
-                          skipped: opts.terminalRedrive.skipped,
-                          quarantined: opts.terminalRedrive.quarantined,
-                      },
-                  }
-                : {}),
+            ...(opts.meshDelivery ? { meshDelivery: { ...opts.meshDelivery } } : {}),
             ...(opts.transcriptTransportSelection
                 ? {
                       transcriptTransportSelection: {
@@ -782,10 +683,6 @@ export function summarizeSeqscribeStats(
         fgenAgeBucket: bucket(maxCertAgeMs / (60 * 60 * 1000), FGEN_AGE_BUCKETS_H),
         quarantined,
         authority: opts.authorityEnabled,
-        dualWrite: opts.dualWrite?.active ?? false,
-        dualWriteFailedBucket: bucket(opts.dualWrite?.failed ?? 0, BACKLOG_BUCKETS),
-        dualWriteDroppedBucket: bucket(opts.dualWrite?.dropped ?? 0, BACKLOG_BUCKETS),
-        dualWriteBackfilledBucket: bucket(opts.dualWrite?.backfilled ?? 0, BACKLOG_BUCKETS),
         parityMismatchBucket: bucket(opts.parity?.mismatches ?? 0, BACKLOG_BUCKETS),
         parityPersistentMismatchBucket: bucket(
             opts.parity?.persistentMismatches ?? 0,

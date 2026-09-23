@@ -23,8 +23,13 @@ import type { SessionLifecycleBus } from '../sessions/lifecycle-bus.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { TranscriptReplicaStore } from '../seqscribe/transcript-replica-store.js';
 import type { SeqscribeRuntime } from '../seqscribe/runtime.js';
+import type { PeerHandle } from 'seqscribe';
 import type { ComposerResidueSweepHandle } from './composer-residue-sweep.js';
 import type { SessionOutputFanout } from './session-output-fanout.js';
+import type { TurnLedger } from '../mesh/turn-ledger/ledger.js';
+import type { MeshTurnWiring, TurnProbePort } from './stages/mesh-runtime.js';
+import type { TurnScheduler } from '../mesh/turn-ledger/scheduler.js';
+import type { HousekeepingHandle } from '../mesh/mesh-housekeeping-tick.js';
 
 /** A stage's teardown. Stages return one; `DaemonRuntime.shutdown` runs them in reverse. */
 export type Disposer = () => void;
@@ -62,6 +67,20 @@ export interface DaemonBootConfig {
          * handler (which calls it after the router's stale-approval verdict).
          */
         mirrorMeshWorkerEvent?: (payload: Record<string, unknown>) => void;
+        /**
+         * G3 (`CommandRouterDeps.resolveTranscriptPeer`, `commands/router.ts`) —
+         * cloud-only resolver for a remote daemon's live seqscribe `PeerHandle`,
+         * so `TranscriptReplicaStore.ensureSubscription` can attach a `tail` SUB
+         * to `session.<id>.transcript` for a session owned by that daemon.
+         * Backed by `CloudSeqscribeWiring.resolveTranscriptPeer`
+         * (`packages/daemon-cloud/src/cloud-seqscribe-wiring.ts`), which reads
+         * the SAME mesh peer map `wireMeshTransport` populates — no new peer
+         * registry. Absent on standalone: there is no mesh transport to resolve
+         * a peer from, and a LOCAL session's `read_chat` never calls this hook
+         * at all (`mesh-transcript-replica-read.ts`'s "LOCAL nodes never take
+         * this path").
+         */
+        resolveTranscriptPeer?: (ownerDaemonId: string) => Promise<PeerHandle | null> | PeerHandle | null;
     };
     /**
      * Restore hosted CLI runtimes inside `startLoops`, after every bus subscriber
@@ -98,8 +117,6 @@ export interface DaemonComponents {
     // Cloud-only hook: after the single core forwarder handles a mesh coordinator event,
     // cloud keeps its P2P dashboard view in sync. Absent/no-op on standalone.
     onMeshCoordinatorEventForwarded?: (payload: Record<string, unknown>) => void;
-    // Periodic queue → live-coordinator reconcile loop handle.
-    meshReconcileLoop?: { stop(): void };
     // Periodic provider-quota refresh handle (fills the cache buildLocalNodeFacts READS).
     quotaRefreshLoop?: { stop(): void };
     // Event-driven quota refresh handle (agent:generating_completed → refetch that provider).
@@ -115,6 +132,22 @@ export interface DaemonComponents {
     statusInstanceId?: string;
     /** The runtime's transcript replica store (read by the mesh remote-pull / completion paths). */
     transcriptReplicaStore?: TranscriptReplicaStore;
+    /**
+     * The daemon's ONE turn ledger (wiring-unification C2/C3), built by S7
+     * (`boot/stages/mesh-runtime.ts`) and passed by value — the turn scheduler
+     * (S8) and the evidence producers take it from here.
+     */
+    turnLedger?: TurnLedger | null;
+    /** The ledger's late-bound `probe` port; the S8 scheduler binds itself to it. */
+    turnProbePort?: TurnProbePort | null;
+    /** The C-W3 notice/consumer wiring (cursors, topic index, notice runtime). */
+    meshTurn?: MeshTurnWiring | null;
+    /** The one turn-lifecycle timer (C4, `mesh/turn-ledger/scheduler.ts`), started in S8. */
+    turnScheduler?: TurnScheduler;
+    /** Mesh housekeeping cadence (C4, `mesh/mesh-housekeeping-tick.ts`) — never touches turns or holds. */
+    meshHousekeeping?: HousekeepingHandle;
+    /** Continuous auto fast-forward cadence (P6), its own scheduler. */
+    autoFastForwardScheduler?: { stop(): void };
 }
 
 /** What `bootDaemonRuntime` returns. `shutdown` tears the stages down in reverse. */

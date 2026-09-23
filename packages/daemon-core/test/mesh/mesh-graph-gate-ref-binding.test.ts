@@ -59,7 +59,7 @@ import {
     __clearMeshQueueForTests,
     __resetMeshRuntimeStoreForTests,
     getQueue,
-    updateTaskStatus,
+    updateTaskStatus, __writeTaskStatusForTests,
 } from '../../src/mesh/mesh-work-queue.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 
@@ -124,7 +124,7 @@ function openClaimRelease(
     outcome: 'passed' | 'failed',
     result?: Record<string, unknown>,
 ) {
-    updateTaskStatus(id, g.taskA.id, 'completed');
+    __writeTaskStatusForTests(id, g.taskA.id, 'completed');
     expect(gs().getGate(g.gateId)!.state).toBe('awaiting_coordinator');
     const claim = claimMeshGraphGate({ meshId: id, gateId: g.gateId, coordinatorSessionId: 'sess-coord' });
     expect(claim.claimed).toBe(true);
@@ -221,7 +221,7 @@ describe('C2 contracts hold for gate-ref-binding graphs', () => {
                 run_if: { from: 'land', select: '/gate_outcome', op: 'eq', value: 'passed' },
             });
             // Upstream A completes → the gate OPENS, but is never released.
-            updateTaskStatus(id, g.taskA.id, 'completed');
+            __writeTaskStatusForTests(id, g.taskA.id, 'completed');
 
             expect(gs().getGate(g.gateId)!.state).toBe('awaiting_coordinator');
             const entryB = getQueue(id).find(t => t.id === g.taskB.id)!;
@@ -273,7 +273,7 @@ describe('C2 contracts hold for gate-ref-binding graphs', () => {
             expect(fromGate.map(e => e.kind)).toEqual(['gate']);
 
             // And it behaves like a gate: the unreleased gate stops the node.
-            updateTaskStatus(id, result.tasks[0].id, 'completed');
+            __writeTaskStatusForTests(id, result.tasks[0].id, 'completed');
             const entryB = getQueue(id).find(t => t.id === result.tasks[1].id)!;
             expect(entryB.blockedReason).toBe(coordinatorGateBlockReason(gate.gateId));
             expect(gs().getNode(result.graphId, nodeB)!.state).toBe('blocked');

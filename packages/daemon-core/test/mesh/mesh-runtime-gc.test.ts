@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
 // mesh-runtime.db 자동 GC (SoT 1-11 / gaps I-9, I-10)
 //
-//  (a) assigned-zombie sweep — reconcileZombieAssignedTasks terminal-fails aged
-//      'assigned' rows that PHASE 2.5 can never age (no dispatchTimestamp) whose
-//      session is positively absent on the owning daemon; everything else
-//      (dispatched / live-session / remote-node / fresh) is left untouched.
+//  (a) assigned-zombie sweep — RETIRED 2026-09-23 with the reconcile loop
+//      (wiring-unification C4): a stuck assigned row cannot exist once the queue
+//      status is a ledger commit effect; a dead session reaches the ledger as
+//      liveness{dead} (scheduler probe) → R31 reclaim.
 //  (b) retention sweeps — pruneEventLedger / pruneToolCallLog /
 //      pruneTerminalQueueEntries delete rows past their conservative windows,
 //      with the documented exemptions (operating notes; live dependsOn anchors).
@@ -39,7 +39,6 @@ import {
 } from '../../src/mesh/mesh-runtime-store.js'
 import { __resetMeshRuntimeStoreForTests, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import type { MeshWorkQueueEntry } from '../../src/mesh/mesh-work-queue.js'
-import { reconcileZombieAssignedTasks } from '../../src/mesh/mesh-reconcile-loop.js'
 import { appendLedgerEntry } from '../../src/mesh/mesh-ledger.js'
 
 const MESH = 'mesh_gc_test'
@@ -89,68 +88,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
-})
-
-describe('(a) assigned-zombie sweep (reconcileZombieAssignedTasks)', () => {
-  it('fails only the aged, session-gone, locally-owned rows without a dispatchTimestamp', () => {
-    const store = MeshRuntimeStore.getInstance()
-    const oldIso = isoAgo(60 * 60 * 1000) // 1h — past the 30-min age gate
-
-    // Zombie: no dispatchTimestamp, session gone, local node, aged → failed.
-    store.insertQueueEntry(queueEntry({ id: 'zombie-1', assignedNodeId: LOCAL_NODE, assignedSessionId: 'gone-session', createdAt: oldIso, updatedAt: oldIso }))
-    // Has a dispatchTimestamp → PHASE 2.5 territory; the zombie sweep must not touch it.
-    store.insertQueueEntry(queueEntry({ id: 'dispatched-1', assignedNodeId: LOCAL_NODE, assignedSessionId: 'gone-session', dispatchTimestamp: oldIso, createdAt: oldIso, updatedAt: oldIso }))
-    // Session exists locally (idle) → not a zombie.
-    store.insertQueueEntry(queueEntry({ id: 'live-1', assignedNodeId: LOCAL_NODE, assignedSessionId: 'live-session', createdAt: oldIso, updatedAt: oldIso }))
-    // Remote node → session not locally observable; never guessed dead.
-    store.insertQueueEntry(queueEntry({ id: 'remote-1', assignedNodeId: 'daemon_other-machine', assignedSessionId: 'remote-session', createdAt: oldIso, updatedAt: oldIso }))
-    // Fresh row (now timestamps) → held back by the age gate.
-    store.insertQueueEntry(queueEntry({ id: 'fresh-1', assignedNodeId: LOCAL_NODE, assignedSessionId: 'gone-session-2' }))
-
-    reconcileZombieAssignedTasks(componentsWithCliSessions(['live-session']), { id: MESH, nodes: [] }, SELF_IDS)
-
-    const byId = new Map(getQueue(MESH).map(e => [e.id, e.status]))
-    expect(byId.get('zombie-1')).toBe('failed')
-    expect(byId.get('dispatched-1')).toBe('assigned')
-    expect(byId.get('live-1')).toBe('assigned')
-    expect(byId.get('remote-1')).toBe('assigned')
-    expect(byId.get('fresh-1')).toBe('assigned')
-
-    // The transition is auditable: a task_failed ledger entry names the reason.
-    const failedEntries = store.readLedgerEntries(MESH, { tail: 50 }).filter(e => e.kind === 'task_failed')
-    expect(failedEntries.some(e => {
-      const payload = e.payload as Record<string, unknown>
-      return payload?.taskId === 'zombie-1' && payload?.reason === 'assigned_zombie_session_missing'
-    })).toBe(true)
-  })
-
-  it('flips an aged zombie row to the terminal the ledger already evidences', () => {
-    const store = MeshRuntimeStore.getInstance()
-    const oldIso = isoAgo(60 * 60 * 1000)
-    store.insertQueueEntry(queueEntry({ id: 'evid-1', assignedNodeId: LOCAL_NODE, assignedSessionId: 'gone-session', createdAt: oldIso, updatedAt: oldIso }))
-    // The completion arrived (ledger evidence) but the queue flip was lost.
-    appendLedgerEntry(MESH, {
-      kind: 'task_completed',
-      sessionId: 'gone-session',
-      payload: { taskId: 'evid-1', finalSummary: 'work was actually done' },
-    })
-
-    reconcileZombieAssignedTasks(componentsWithCliSessions([]), { id: MESH, nodes: [] }, SELF_IDS)
-
-    const byId = new Map(getQueue(MESH).map(e => [e.id, e.status]))
-    expect(byId.get('evid-1')).toBe('completed')
-  })
-
-  it('fails an aged, session-less assigned row (nothing can ever complete it)', () => {
-    const store = MeshRuntimeStore.getInstance()
-    const oldIso = isoAgo(60 * 60 * 1000)
-    store.insertQueueEntry(queueEntry({ id: 'nosession-1', assignedNodeId: LOCAL_NODE, createdAt: oldIso, updatedAt: oldIso }))
-
-    reconcileZombieAssignedTasks(componentsWithCliSessions([]), { id: MESH, nodes: [] }, SELF_IDS)
-
-    const byId = new Map(getQueue(MESH).map(e => [e.id, e.status]))
-    expect(byId.get('nosession-1')).toBe('failed')
-  })
 })
 
 describe('(b) retention sweeps', () => {

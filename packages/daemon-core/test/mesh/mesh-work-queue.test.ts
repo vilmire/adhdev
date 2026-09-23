@@ -7,12 +7,12 @@ import {
     enqueueTask,
     getQueue,
     claimNextTask,
-    updateTaskStatus,
+    updateTaskStatus, __writeTaskStatusForTests, TerminalStatusIsLedgerEffect, applyDispatchFailureBackoff,
     updateSessionTaskStatus,
     cancelTask,
     takeCancelledTaskAssignment,
     requeueTask,
-    reclaimStrandedAssignedTask,
+    requeueTaskForLedgerReclaim,
     getMeshQueueStats,
     buildMeshNodeCapabilityTags,
     nodeSatisfiesRequiredTags,
@@ -45,6 +45,29 @@ describe('Mesh Work Queue (GUPP)', () => {
         if (fs.existsSync(queuePath)) {
             fs.unlinkSync(queuePath);
         }
+    });
+
+    it('C3 (C-W4): a terminal status via updateTaskStatus throws TerminalStatusIsLedgerEffect and leaves the row untouched', () => {
+        const task = enqueueTask(meshId, 'ledger-owned terminal', { difficulty: 'medium' });
+        for (const status of ['completed', 'failed', 'cancelled'] as const) {
+            expect(() => updateTaskStatus(meshId, task.id, status)).toThrow(TerminalStatusIsLedgerEffect);
+        }
+        expect(getQueue(meshId).find(t => t.id === task.id)?.status).toBe('pending');
+        // Non-terminal transitions are unaffected.
+        expect(updateTaskStatus(meshId, task.id, 'assigned')?.status).toBe('assigned');
+        expect(updateTaskStatus(meshId, task.id, 'pending')?.status).toBe('pending');
+    });
+
+    it('C-W4: applyDispatchFailureBackoff sets an escalating notBefore on a pending row and never fails it', () => {
+        const task = enqueueTask(meshId, 'dispatch failed, reclaimed by the ledger', { difficulty: 'medium' });
+        const first = applyDispatchFailureBackoff(meshId, task.id)!;
+        const second = applyDispatchFailureBackoff(meshId, task.id)!;
+        expect(first.status).toBe('pending');
+        expect(second.status).toBe('pending');
+        expect(second.dispatchFailureCount).toBe(2);
+        expect(Date.parse(String(second.notBefore))).toBeGreaterThan(Date.now());
+        for (let i = 0; i < 20; i++) applyDispatchFailureBackoff(meshId, task.id);
+        expect(getQueue(meshId).find(t => t.id === task.id)?.status).toBe('pending');
     });
 
     it('(3) persists sourceCoordinatorSessionId in the queue payload (round-trips; legacy omit is undefined)', () => {
@@ -156,7 +179,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         });
         expect(mediumClaim?.id).to.equal(medium.id);
         expect(getQueue(meshId).find(task => task.id === difficult.id)?.status).to.equal('pending');
-        updateTaskStatus(meshId, medium.id, 'completed');
+        __writeTaskStatusForTests(meshId, medium.id, 'completed');
 
         const difficultClaim = claimNextTask(meshId, 'node1', 'opus-session', [], {
             allowedTaskDifficulties: ['easy', 'medium', 'difficult'],
@@ -263,14 +286,14 @@ describe('Mesh Work Queue (GUPP)', () => {
             expect(fromQueue?.dispatchNonce).to.equal(1);
         });
 
-        it('reclaimStrandedAssignedTask bumps the nonce so a stale inject is rejectable', () => {
+        it('the ledger reclaim bumps the nonce so a stale inject is rejectable', () => {
             const t1 = enqueueTask(meshId, 'stranded task', { difficulty: 'medium' });
             const claimed = claimNextTask(meshId, 'nodeA', 'sessionA');
             expect(claimed?.dispatchNonce).to.equal(1);
             const nonceAtDispatch = claimed!.dispatchNonce!;
 
-            // The delivered-not-consumed watchdog reclaims it back to pending.
-            const reclaimed = reclaimStrandedAssignedTask(meshId, t1.id, { reason: 'delivered_not_consumed_redrive' });
+            // The ledger's reclaim effect (H2r delivered-not-consumed) returns it to pending.
+            const reclaimed = requeueTaskForLedgerReclaim(meshId, t1.id, 'H2r_redeliver_exhausted', new Date().toISOString());
             expect(reclaimed?.status).to.equal('pending');
             // The reclaim bumped the nonce strictly above the value the original inject carried,
             // so a late generating_started echoing nonceAtDispatch is now stale (< current).
@@ -385,7 +408,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         const claimed = claimNextTask(meshId, 'node1', 'session1');
         expect(claimed?.id).to.equal(task.id);
 
-        updateTaskStatus(meshId, task.id, 'completed');
+        __writeTaskStatusForTests(meshId, task.id, 'completed');
         
         const q = getQueue(meshId);
         expect(q[0].status).to.equal('completed');
@@ -567,13 +590,13 @@ describe('Mesh Work Queue (GUPP)', () => {
         it('(a2) protects completed / failed rows from non-terminal resurrection too', () => {
             const done = enqueueTask(meshId, 'completed row', { difficulty: 'medium' });
             claimNextTask(meshId, 'node1', 'session-done');
-            updateTaskStatus(meshId, done.id, 'completed');
+            __writeTaskStatusForTests(meshId, done.id, 'completed');
             expect(updateTaskStatus(meshId, done.id, 'assigned')?.status).to.equal('completed');
             expect(updateTaskStatus(meshId, done.id, 'pending')?.status).to.equal('completed');
 
             const failed = enqueueTask(meshId, 'failed row', { difficulty: 'medium' });
             claimNextTask(meshId, 'node1', 'session-fail');
-            updateTaskStatus(meshId, failed.id, 'failed');
+            __writeTaskStatusForTests(meshId, failed.id, 'failed');
             expect(updateTaskStatus(meshId, failed.id, 'pending')?.status).to.equal('failed');
         });
 
@@ -581,7 +604,7 @@ describe('Mesh Work Queue (GUPP)', () => {
             const t = enqueueTask(meshId, 'terminal to terminal', { difficulty: 'medium' });
             cancelTask(meshId, t.id, { reason: 'cancelled' });
             // cancelled → failed is a terminal→terminal move; permitted.
-            expect(updateTaskStatus(meshId, t.id, 'failed')?.status).to.equal('failed');
+            expect(__writeTaskStatusForTests(meshId, t.id, 'failed')?.status).to.equal('failed');
             // Explicit operator override may reopen a terminal row.
             expect(updateTaskStatus(meshId, t.id, 'pending', { force: true })?.status).to.equal('pending');
         });
@@ -648,7 +671,7 @@ describe('Mesh Work Queue (GUPP)', () => {
     it('keeps historical terminal rows out of active assignment counters', () => {
         const failedTask = enqueueTask(meshId, 'failed historical task', { difficulty: 'medium' });
         claimNextTask(meshId, 'node-history', 'session-history');
-        updateTaskStatus(meshId, failedTask.id, 'failed');
+        __writeTaskStatusForTests(meshId, failedTask.id, 'failed');
         const pendingTask = enqueueTask(meshId, 'pending active task', { difficulty: 'medium' });
 
         const stats = getMeshQueueStats(meshId);
@@ -740,7 +763,7 @@ describe('M1 — task dependencies + mission grouping', () => {
         expect(blockedClaim).to.equal(null);
 
         // Complete A → B becomes claimable.
-        updateTaskStatus(meshId, a.id, 'completed');
+        __writeTaskStatusForTests(meshId, a.id, 'completed');
         const second = claimNextTask(meshId, 'node-2', 'session-2');
         expect(second?.id).to.equal(b.id);
     });
@@ -751,7 +774,7 @@ describe('M1 — task dependencies + mission grouping', () => {
     difficulty: 'medium',
 });
 
-        updateTaskStatus(meshId, a.id, 'failed');
+        __writeTaskStatusForTests(meshId, a.id, 'failed');
 
         const queue = getQueue(meshId);
         const after = queue.find(t => t.id === b.id);
@@ -769,7 +792,7 @@ describe('M1 — task dependencies + mission grouping', () => {
 
         // Predecessor retry → success unblocks the dependent without requeueing it.
         requeueTask(meshId, a.id, { force: true });
-        updateTaskStatus(meshId, a.id, 'completed');
+        __writeTaskStatusForTests(meshId, a.id, 'completed');
         const claimed = claimNextTask(meshId, 'node-1', 'session-1');
         expect(claimed?.id).to.equal(b.id);
     });
@@ -1344,57 +1367,10 @@ describe('validateMeshTaskModeRequest — prose/negation vs command context', ()
     });
 });
 
-describe('reclaimStrandedAssignedTask (Bug B)', () => {
-    const meshId = `test_reclaim_${Date.now()}`;
-    beforeEach(() => { __clearMeshQueueForTests(meshId); });
-    afterEach(() => { __clearMeshQueueForTests(meshId); __resetMeshRuntimeStoreForTests(); });
-
-    it('returns an assigned row to pending, clears ownership, and records a task_reclaimed ledger entry', () => {
-        enqueueTask(meshId, 'work', { targetNodeId: 'n',
-    difficulty: 'medium',
-});
-        const claimed = claimNextTask(meshId, 'n', 'sess-x', [], { providerType: 'claude-cli' })!;
-        expect(claimed.status).toBe('assigned');
-
-        const result = reclaimStrandedAssignedTask(meshId, claimed.id, { reason: 'assigned_stranded_dispatch_unconfirmed', ageMs: 999_000 });
-        expect(result).not.toBeNull();
-        expect(result!.status).toBe('pending');
-        expect(result!.assignedNodeId).toBeUndefined();
-        expect(result!.assignedSessionId).toBeUndefined();
-        expect(result!.assignedProviderType).toBeUndefined();
-        expect(result!.dispatchTimestamp).toBeUndefined();
-        expect(result!.strandedReclaimCount).toBe(1);
-
-        const reclaimed = readLedgerEntries(meshId).filter(e => e.kind === 'task_reclaimed');
-        expect(reclaimed).toHaveLength(1);
-        expect((reclaimed[0].payload as any).taskId).toBe(claimed.id);
-        expect((reclaimed[0].payload as any).reclaimCount).toBe(1);
-        expect((reclaimed[0].payload as any).ageMs).toBe(999_000);
-    });
-
-    it('is a no-op on a non-assigned (pending) row — never resurrects a terminal/idle row', () => {
-        const entry = enqueueTask(meshId, 'work', { difficulty: 'medium' });
-        expect(reclaimStrandedAssignedTask(meshId, entry.id, {})).toBeNull();
-        expect(getQueue(meshId)[0].status).toBe('pending');
-    });
-
-    it('is bounded: after MAX_STRANDED_RECLAIMS reclaims the task is failed, not requeued forever', () => {
-        enqueueTask(meshId, 'work', { targetNodeId: 'n',
-    difficulty: 'medium',
-});
-        let outcome: any = null;
-        // Each iteration: claim (→ assigned) then reclaim. The 4th reclaim crosses the
-        // cap (MAX_STRANDED_RECLAIMS=3) and fails the task instead of cycling.
-        for (let i = 0; i < 4; i++) {
-            const c = claimNextTask(meshId, 'n', `sess-${i}`, [])!;
-            expect(c.status).toBe('assigned');
-            outcome = reclaimStrandedAssignedTask(meshId, c.id, { reason: 'test' });
-        }
-        expect(outcome.status).toBe('failed');
-        expect(outcome.strandedReclaimCount).toBe(4);
-        expect(String(outcome.cancelReason)).toContain('stranded_dispatch_unrecovered');
-    });
-});
+// reclaimStrandedAssignedTask (Bug B) retired with the reconcile loop (C-W4):
+// the stranded-row recovery is the ledger's await_delivery hold (H1 → reclaim
+// effect → requeueTaskForLedgerReclaim) and its budget is the reducer's
+// RECLAIM_BUDGET — pinned in test/turn-ledger/{scheduler,ledger-runtime}.test.ts.
 
 // GUARDRAIL-COMMA-FP + GUARDRAIL-TEACHING-ERROR (promoted from the 42-probe boundary
 // investigation). Two approved changes:

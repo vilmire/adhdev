@@ -25,11 +25,13 @@ import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus
 import type { EventOf } from '../sessions/lifecycle-events.js';
 import type { SessionRegistry } from '../sessions/registry.js';
 import type { TopicSubscriptionRegistry } from '../subscriptions/topic-registry.js';
+import type { TransportTopic } from '../shared-types.js';
 import type { GitCommandServices } from '../git/git-commands.js';
 import type { GitWorkspaceMonitor } from '../git/git-monitor.js';
 
 type Bus = Pick<SessionLifecycleBus, 'on'>;
 type Topics = Pick<TopicSubscriptionRegistry, 'hasSubscriptions' | 'flushNow' | 'invalidate'> & Partial<Pick<TopicSubscriptionRegistry, 'purgeChatOutputActivity'>>;
+type ReconcileTopics = Pick<TopicSubscriptionRegistry, 'hasSubscriptions' | 'oldestLastSentAt'>;
 
 export type StatusFactsEvent =
     | EventOf<'status'>
@@ -142,4 +144,99 @@ export function subscribeHostTurnSnapshots(bus: Bus, deps: TurnSnapshotDeps): Un
                 .catch(swallow('git monitor refresh'));
         }
     }, { name: 'host.turn-snapshots' });
+}
+
+// ─── P-II item 1: topic-flush reconciliation (WARN-only safety net) ───
+//
+// Both hosts used to re-flush every push topic on a 2-2.5s `setInterval`,
+// self-labelled "safety net" in both code comments, even though every edge
+// that can invalidate a topic already flushes it through the bus subscribers
+// above (host.chat-tail / host.modal / host.topics / host.mesh-state) or
+// `command_executed.invalidates`. That timer is gone; this is what replaces
+// it — a single slow (default 60s) tick that does NOT flush anything itself.
+// It only checks whether a topic that has live subscribers has gone stale
+// (nothing sent since well before the newest edge that should have produced
+// a send) and WARNs with the topic name and the age, so a silently-broken
+// bus subscriber is still observable. Precedent for "shrink the safety net
+// once the event path is trusted": `UserSession.ts`'s removed 30s DO timer
+// (packages/server, ~line 1029).
+
+/** Topics this reconciliation pass watches — every push topic the removed 2-2.5s timers flushed. */
+const RECONCILE_TOPICS: ReadonlyArray<TransportTopic> = [
+    'machine.runtime',
+    'session_host.diagnostics',
+    'session.modal',
+    'workspace.git',
+    'daemon.metadata',
+];
+
+/** Bus edges that should have produced a flush of at least one watched topic. */
+const RECONCILE_EDGE_KINDS = [
+    'status',
+    'modal',
+    'prompt',
+    'registered',
+    'terminated',
+    'daemon_facts',
+    'command_executed',
+    'mesh_state',
+] as const satisfies readonly EventOf<'status' | 'modal' | 'prompt' | 'registered' | 'terminated' | 'daemon_facts' | 'command_executed' | 'mesh_state'>['kind'][];
+
+export const DEFAULT_HOST_RECONCILE_INTERVAL_MS = 60_000;
+/** A topic must be at least this much older than the newest edge before it is reported stale — absorbs the topic's own internal throttle (the slowest is machine.runtime's default 15s) plus scheduling jitter. */
+const RECONCILE_STALE_GRACE_MS = 20_000;
+
+export interface HostReconcileOptions {
+    intervalMs?: number;
+    /** Test seam / explicit override of the default `Date.now`. */
+    now?: () => number;
+    /** Test seam for `setInterval`/`clearInterval` (defaults to the globals). */
+    setIntervalFn?: typeof setInterval;
+    clearIntervalFn?: typeof clearInterval;
+}
+
+/**
+ * Arms the WARN-only reconciliation tick. Never calls `flushNow`/`invalidate`
+ * — flushing here would silently reinstate a second delivery path, which the
+ * design explicitly rules out. Returns the unsubscribe (clears the timer and
+ * detaches the bus listener that tracks the newest edge timestamp).
+ */
+export function subscribeHostTopicReconciliation(bus: Bus, topics: ReconcileTopics, opts: HostReconcileOptions = {}): Unsubscribe {
+    const now = opts.now ?? Date.now;
+    const setIntervalFn = opts.setIntervalFn ?? setInterval;
+    const clearIntervalFn = opts.clearIntervalFn ?? clearInterval;
+    const intervalMs = opts.intervalMs ?? DEFAULT_HOST_RECONCILE_INTERVAL_MS;
+
+    let newestEdgeAt = now();
+    const offEdges = bus.on(RECONCILE_EDGE_KINDS, (e) => {
+        const at = (e as { at?: number }).at;
+        if (typeof at === 'number' && at > newestEdgeAt) newestEdgeAt = at;
+    }, { name: 'host.reconcile-edge-tracker' });
+
+    const tick = (): void => {
+        const edgeAt = newestEdgeAt;
+        // Give the event path a grace window after the edge before judging a
+        // topic stale (absorbs the topic's own internal throttle — the
+        // slowest is machine.runtime's default 15s — plus scheduling jitter).
+        // Below that, "not flushed yet" is expected, not evidence of a break.
+        if (now() < edgeAt + RECONCILE_STALE_GRACE_MS) return;
+        for (const topic of RECONCILE_TOPICS) {
+            if (!topics.hasSubscriptions(topic)) continue;
+            const oldest = topics.oldestLastSentAt(topic);
+            if (oldest === null) continue;
+            // Healthy: this topic was flushed at or after the newest edge that
+            // should have produced a send (the event path caught up).
+            if (oldest >= edgeAt) continue;
+            const ageMs = now() - oldest;
+            LOG.warn('HostRuntime', `topic reconciliation: ${topic} has subscribers but no flush since ${ageMs}ms ago (newest bus edge was ${now() - edgeAt}ms ago) — a bus subscriber may be silently broken`);
+        }
+    };
+    const timer = setIntervalFn(tick, intervalMs);
+    if (typeof (timer as unknown as { unref?: () => void }).unref === 'function') {
+        (timer as unknown as { unref: () => void }).unref();
+    }
+    return () => {
+        clearIntervalFn(timer);
+        offEdges();
+    };
 }

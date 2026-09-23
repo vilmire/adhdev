@@ -17,7 +17,7 @@
  *
  * ─── No new channel ─────────────────────────────────────────────────────
  *
- * This reuses `queuePendingMeshCoordinatorEvent` — the same pending-events
+ * This reuses `notifyMeshCoordinator` — the same pending-events
  * inbox every other coordinator-facing signal rides — exactly as
  * mesh-dispatch-failed-notify.ts and mesh-orphaned-pin-notify.ts do. The event
  * name `mesh:worker_progress` is registered in contracts.ts as a
@@ -42,7 +42,7 @@
 import { LOG } from '../logging/logger.js';
 import { getMachineId } from '../config/config.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import type { WorkerProgressNoticeSink } from './worker-report.js';
 
@@ -78,7 +78,7 @@ export const queueWorkerProgressNotice: WorkerProgressNoticeSink = (notice) => {
 
     const nodeLabel = notice.nodeId || notice.sessionId || notice.taskId;
     try {
-        queuePendingMeshCoordinatorEvent({
+        notifyMeshCoordinator({
             event: WORKER_PROGRESS_EVENT_NAME,
             meshId: notice.meshId,
             nodeLabel,

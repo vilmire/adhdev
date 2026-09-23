@@ -61,6 +61,12 @@ export interface TurnCompletionEnvelope {
     nodeId?: string;
     providerType?: string;
     completedAt?: string;
+    /**
+     * Deliver-time render context (C-W3): the node label and the content-free
+     * completion scalars `turn-ledger/format.ts` renders from, plus any local
+     * text. Stored on the evidence row's `payload_json.local` — never published.
+     */
+    notice?: Record<string, unknown>;
 }
 
 /** In-txn writes outside the turn tables (mesh_queue, graph). */

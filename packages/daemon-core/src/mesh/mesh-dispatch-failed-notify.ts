@@ -1,7 +1,7 @@
 import { LOG } from '../logging/logger.js';
 import { sessionIdsEquivalent, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { readNonEmptyString } from './mesh-events-utils.js';
-import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { getMachineId } from '../config/config.js';
 import { isTerminalSessionStatus } from './mesh-candidacy-predicates.js';
 import type { DaemonComponents } from '../boot/daemon-components.js';
@@ -140,7 +140,7 @@ export function notifyCoordinatorOfPinnedDispatchFailure(
 
     LOG.warn('MeshQueue', `COORD-NOTIFY-STUCK: dispatch of pinned task ${opts.taskId} to session ${targetSessionId} (node ${opts.nodeId}, mesh ${opts.meshId}) failed and requeued with pin intact.`);
     try {
-        queuePendingMeshCoordinatorEvent({
+        notifyMeshCoordinator({
             event: 'mesh:dispatch_blocked',
             meshId: opts.meshId,
             nodeLabel: opts.nodeId,
@@ -226,7 +226,7 @@ export function notifyCoordinatorOfPinnedReclaim(
 
     LOG.warn('MeshQueue', `COORD-NOTIFY-STUCK: pinned task ${opts.taskId} reclaimed from session ${targetSessionId} (node ${opts.nodeId}, mesh ${opts.meshId}) after ${Math.round(opts.silentForMs / 60_000)}min silence and requeued with pin intact.`);
     try {
-        queuePendingMeshCoordinatorEvent({
+        notifyMeshCoordinator({
             event: 'mesh:dispatch_blocked',
             meshId: opts.meshId,
             nodeLabel: opts.nodeId,
