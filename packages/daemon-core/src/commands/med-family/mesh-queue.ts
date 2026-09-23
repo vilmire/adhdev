@@ -76,7 +76,7 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         if (!meshId) return { success: false, error: 'meshId required' };
         try {
-            const { getMeshQueueStats, getQueue, describeTaskDependencyState } = await import('../../mesh/mesh-work-queue.js');
+            const { getMeshQueueStats, getQueue, describeTaskDependencyState, summarizeQueueEntryInputForView } = await import('../../mesh/mesh-work-queue.js');
             const status = Array.isArray(args?.status)
                 ? args.status.map((s: any) => typeof s === 'string' ? s.trim() : '').filter(Boolean)
                 : undefined;
@@ -85,7 +85,8 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
             const allQueue = getQueue(meshId);
             const statusById = new Map(allQueue.map(task => [task.id, task.status]));
             const depMetaById = new Map(allQueue.map(task => [task.id, task] as const));
-            const queue = rawQueue.map(task =>
+            // IPC load audit 2026-09-23: never echo a persisted image envelope from a view command.
+            const queue = rawQueue.map(summarizeQueueEntryInputForView).map(task =>
                 Array.isArray(task.dependsOn) && task.dependsOn.length > 0
                     ? { ...task, ...describeTaskDependencyState(task, statusById, depMetaById) }
                     : task);
@@ -113,7 +114,7 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'queue cancellation');
         if (ownerFailure) return ownerFailure;
         try {
-            const { cancelTask, takeCancelledTaskAssignment } = await import('../../mesh/mesh-work-queue.js');
+            const { summarizeQueueEntryInputForView, cancelTask, takeCancelledTaskAssignment } = await import('../../mesh/mesh-work-queue.js');
             const reason = typeof args?.reason === 'string' ? args.reason : undefined;
             const task = cancelTask(meshId, taskId, { reason });
             if (!task) return { success: false, error: `Queue task '${taskId}' not found` };
@@ -129,7 +130,7 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
             if (prior?.sessionId) {
                 void stopCancelledTaskWorker(ctx, meshId, prior);
             }
-            return { success: true, task };
+            return { success: true, task: summarizeQueueEntryInputForView(task) };
         } catch (e: any) {
             return { success: false, error: e.message };
         }
@@ -142,7 +143,7 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'queue requeue');
         if (ownerFailure) return ownerFailure;
         try {
-            const { requeueTask, getQueue } = await import('../../mesh/mesh-work-queue.js');
+            const { summarizeQueueEntryInputForView, requeueTask, getQueue } = await import('../../mesh/mesh-work-queue.js');
             // CANON-IDENTITY single-flight hardening (restart-safe): the in-memory in-flight
             // mark requeueTask consults is process-local and is lost across a daemon restart.
             // Independently of that mark, if the row is still 'assigned' to a session this
@@ -192,7 +193,7 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
                     task,
                 };
             }
-            return { success: true, task };
+            return { success: true, task: summarizeQueueEntryInputForView(task) };
         } catch (e: any) {
             return { success: false, error: e.message };
         }

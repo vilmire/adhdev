@@ -30,6 +30,15 @@
 
 import { daemonIdsEquivalent, machineCoreFromDaemonId } from '@adhdev/mesh-shared';
 
+// ─── Task status (canonical enum) ────────────────────────────────────────
+//
+// Wiring-unification A3: the task-status vocabulary is declared ONCE in
+// mesh-shared (mesh-vocabulary.ts) and re-exported here for the v2 contract
+// consumers. The local copy this file used to carry included `in_progress`,
+// which no queue row, ledger entry or dispatch ever held as a task status (the
+// only `in_progress` literal in the tree is an ACP tool-call status).
+export { MESH_TASK_STATUSES, isMeshTaskStatus, type MeshTaskStatus } from '@adhdev/mesh-shared';
+
 /** Provider type identifier (e.g. 'claude-cli', 'codex-cli', 'roo-code').
  *  Free-form string; no shared enum exists in daemon-core yet. */
 type ProviderType = string;
@@ -122,27 +131,6 @@ export interface MeshSessionHandle {
 
 export function meshSessionHandleKey(handle: MeshSessionHandle): string {
   return `${handle.nodeId}|${handle.sessionId}`;
-}
-
-// ─── Task status (canonical enum) ────────────────────────────────────────
-
-/**
- * Single canonical task status enum. v1 had at least three overlapping
- * sets (queue / ledger / direct-dispatch). v2 consumers import from here.
- */
-export const MESH_TASK_STATUSES = [
-  'pending',
-  'assigned',
-  'in_progress',
-  'completed',
-  'failed',
-  'cancelled',
-] as const;
-export type MeshTaskStatus = typeof MESH_TASK_STATUSES[number];
-
-export function isMeshTaskStatus(value: unknown): value is MeshTaskStatus {
-  return typeof value === 'string'
-    && (MESH_TASK_STATUSES as readonly string[]).includes(value);
 }
 
 // ─── Event scope ─────────────────────────────────────────────────────────

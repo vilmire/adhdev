@@ -23,7 +23,22 @@ import {
     resolveOnDependencyFailurePolicy,
     type MeshDependencyFailure,
 } from './mesh-graph-derived-failure.js';
-import { sessionIdsEquivalent, isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES, normalizeNodeCapabilitySlots, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
+import {
+    sessionIdsEquivalent,
+    isMeshTaskDifficulty,
+    isMeshTaskPriority,
+    MESH_TASK_DIFFICULTIES,
+    normalizeNodeCapabilitySlots,
+    type MeshTaskDifficulty,
+    type MeshTaskMode,
+    type MeshTaskPriority,
+    type MeshTaskStatus,
+    type MeshTerminalTaskStatus,
+} from '@adhdev/mesh-shared';
+// Type-only: the queue carries the multipart input envelope a task was dispatched
+// with. A VALUE import across the mesh → providers boundary is forbidden
+// (check:boundaries); a type import is the contract this field is typed against.
+import type { InputEnvelope } from '../providers/io-contracts.js';
 import { validateMeshTaskModeRequest, buildMeshTaskModeViolationError } from './mesh-task-mode-guardrail.js';
 import { isWorkerMcpEnabled, mintWorkerTaskToken } from './worker-mcp-isolation.js';
 import {
@@ -36,16 +51,62 @@ import {
     taskIsParked,
 } from './mesh-task-parking.js';
 
-export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
+// ── Vocabulary (wiring-unification A3) ────────────────────────────────────────
+// Every mesh enum is declared ONCE in @adhdev/mesh-shared (mesh-vocabulary.ts).
+// This file re-exports the names its ~100 importers and the daemon-core barrel
+// already use, so the queue, the MCP schemas and the dashboard cannot drift.
+// `MeshTaskPriority` is the TASK-level scheduling priority (G6: which task a node
+// pulls first, created_at tie-break) — distinct from a node's schedulingPriority.
+export {
+    MESH_TASK_STATUSES,
+    MESH_TERMINAL_TASK_STATUSES,
+    MESH_TASK_MODES,
+    MESH_TASK_PRIORITIES,
+    isMeshTaskStatus,
+    isMeshTerminalTaskStatus,
+    isMeshTaskMode,
+    isMeshTaskPriority,
+} from '@adhdev/mesh-shared';
+export type { MeshTaskStatus, MeshTaskMode, MeshTaskPriority, MeshTerminalTaskStatus } from '@adhdev/mesh-shared';
 export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned'>;
-export type MeshHistoricalTaskStatus = Extract<MeshTaskStatus, 'completed' | 'failed' | 'cancelled'>;
-export type MeshTaskMode = 'code_change' | 'validation' | 'live_debug_readonly' | 'launch_app' | 'convergence';
+export type MeshHistoricalTaskStatus = MeshTerminalTaskStatus;
 
-/** G6: task-level scheduling priority. Ranks which task a node pulls first (created_at tie-break). */
-export type MeshTaskPriority = 'low' | 'normal' | 'high';
+/**
+ * The multipart input a task is dispatched with (MESH-IMAGE-DISPATCH), as it
+ * arrives from the MCP tools: `parts` is authoritative, `textFallback` is
+ * derived daemon-side by `normalizeInputEnvelope` at delivery, so it is optional
+ * here. Persisted on the queue row so a task queued for a BUSY session is
+ * delivered with the same envelope a direct dispatch would have carried.
+ */
+export type MeshTaskInputEnvelope = Pick<InputEnvelope, 'parts'> & Partial<Pick<InputEnvelope, 'textFallback' | 'metadata'>>;
 
-export const MESH_TASK_MODES: MeshTaskMode[] = ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'];
-export const MESH_TASK_PRIORITIES: MeshTaskPriority[] = ['low', 'normal', 'high'];
+/** Content-free description of a persisted input envelope, for view/status surfaces. */
+export interface MeshTaskInputSummary {
+    partCount: number;
+    /** Distinct part types in order of first appearance (e.g. ['text', 'image']). */
+    partTypes: string[];
+}
+
+/**
+ * MESH-IMAGE-DISPATCH: project a queue entry for a VIEW surface (mesh_status,
+ * mesh_view_queue, the dashboard queue) — the persisted envelope, which may
+ * carry base64 image data, is replaced by a small {@link MeshTaskInputSummary}.
+ * Only the dispatch path (mesh-queue-assignment) needs the real envelope; every
+ * status/view producer must go through this so an attachment never rides along
+ * a status payload. Entries without an envelope are returned unchanged.
+ */
+export function summarizeQueueEntryInputForView<T extends { input?: MeshTaskInputEnvelope }>(
+    entry: T,
+): Omit<T, 'input'> & { inputSummary?: MeshTaskInputSummary } {
+    if (!entry.input) return entry;
+    const { input, ...rest } = entry;
+    const partTypes: string[] = [];
+    for (const part of input.parts) {
+        const type = typeof part?.type === 'string' ? part.type : 'unknown';
+        if (!partTypes.includes(type)) partTypes.push(type);
+    }
+    return { ...rest, inputSummary: { partCount: input.parts.length, partTypes } };
+}
 
 /**
  * G6: numeric rank of a task priority (higher = pulled first). Absent/unknown → 'normal' (1).
@@ -61,7 +122,7 @@ export function meshTaskPriorityRank(priority: unknown): number {
 
 /** G6: coerce an arbitrary input to a valid MeshTaskPriority, or undefined when not one of the three. */
 export function normalizeMeshTaskPriority(value: unknown): MeshTaskPriority | undefined {
-    return value === 'low' || value === 'normal' || value === 'high' ? value : undefined;
+    return isMeshTaskPriority(value) ? value : undefined;
 }
 
 /**
@@ -167,6 +228,14 @@ export interface MeshWorkQueueEntry {
     id: string;
     meshId: string;
     message: string;
+    /**
+     * MESH-IMAGE-DISPATCH: the structured envelope (e.g. a screenshot) the task was
+     * enqueued with. Rides in the payload JSON (no column). Delivered verbatim by
+     * the claim dispatch (mesh-queue-assignment) exactly as the direct-dispatch path
+     * forwards it — before this field existed an image sent to a busy worker was
+     * queued as text only and the attachment silently vanished. Absent on text tasks.
+     */
+    input?: MeshTaskInputEnvelope;
     status: MeshTaskStatus;
     /**
      * PIN-PARKING: present ⇔ the task is parked awaiting a coordinator decision.
@@ -569,6 +638,8 @@ function assertMeshTaskDifficulty(value: unknown, callerLabel: string): MeshTask
 export interface MeshEnqueueTaskOptions {
     targetNodeId?: string;
     targetSessionId?: string;
+    /** MESH-IMAGE-DISPATCH: multipart envelope persisted with the task (see {@link MeshWorkQueueEntry.input}). */
+    input?: MeshTaskInputEnvelope;
     taskMode?: MeshTaskMode | string;
     /** QUEUE-NODE-SERIALIZATION: explicit read-only axis (orthogonal to taskMode). */
     readonly?: boolean;
@@ -711,6 +782,9 @@ export function enqueueTask(
             ...(typeof opts?.sourceCoordinatorSessionId === 'string' && opts.sourceCoordinatorSessionId.trim()
                 ? { sourceCoordinatorSessionId: opts.sourceCoordinatorSessionId.trim() }
                 : {}),
+            // MESH-IMAGE-DISPATCH: persist the envelope only when it carries parts, so a
+            // text-only task's payload is byte-identical to what it was before this field.
+            ...(Array.isArray(opts?.input?.parts) && opts.input.parts.length > 0 ? { input: opts.input } : {}),
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
         };

@@ -24,6 +24,7 @@ import {
     __replaceMeshQueueForTests,
     __resetMeshRuntimeStoreForTests,
     buildMeshTaskModeViolationError,
+    summarizeQueueEntryInputForView,
 } from '../../src/mesh/mesh-work-queue.js';
 import { getLedgerDir, readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
 
@@ -57,6 +58,32 @@ describe('Mesh Work Queue (GUPP)', () => {
         // Omitted → undefined (legacy / single-coordinator → daemon-level routing fallback).
         const legacy = enqueueTask(meshId, 'legacy task', { difficulty: 'medium' });
         expect(legacy.sourceCoordinatorSessionId).to.equal(undefined);
+    });
+
+    it('MESH-IMAGE-DISPATCH: persists the input envelope in the queue payload (round-trips; text-only rows carry no key)', () => {
+        const input = {
+            parts: [
+                { type: 'text' as const, text: 'look at this' },
+                { type: 'image' as const, mimeType: 'image/png', data: 'iVBORw0KGgo=' },
+            ],
+        };
+        const task = enqueueTask(meshId, 'look at this screenshot', { difficulty: 'medium', input });
+        expect(task.input).to.deep.equal(input);
+        // Round-trips through the SQLite payload JSON (no column migration).
+        const fromQueue = getQueue(meshId).find(t => t.id === task.id);
+        expect(fromQueue?.input).to.deep.equal(input);
+        // A text-only task's payload is byte-identical to before the field existed.
+        const textOnly = enqueueTask(meshId, 'plain text task', { difficulty: 'medium' });
+        expect('input' in textOnly).to.equal(false);
+        // An empty envelope is not persisted either (nothing to deliver).
+        const empty = enqueueTask(meshId, 'empty envelope', { difficulty: 'medium', input: { parts: [] } });
+        expect('input' in empty).to.equal(false);
+        // View projection replaces the (possibly base64-heavy) envelope with a summary.
+        const projected = summarizeQueueEntryInputForView(fromQueue!);
+        expect('input' in projected).to.equal(false);
+        expect(projected.inputSummary).to.deep.equal({ partCount: 2, partTypes: ['text', 'image'] });
+        expect(JSON.stringify(projected)).not.to.contain('iVBORw0KGgo=');
+        expect(summarizeQueueEntryInputForView(textOnly)).to.equal(textOnly);
     });
 
     it('should enqueue tasks and list them', () => {

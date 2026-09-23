@@ -32,9 +32,26 @@ export type MeshTaskPriority = typeof MESH_TASK_PRIORITIES[number]
 export const MESH_THINKING_LEVELS = ['low', 'medium', 'high'] as const
 export type MeshThinkingLevel = typeof MESH_THINKING_LEVELS[number]
 
-/** How a message is delivered to a session that may be busy. */
+/**
+ * How a message is delivered to a session that may be busy.
+ *
+ *   'when_idle'  — DEFAULT. Never disturbs a running turn; a busy session's task
+ *                  is queued and auto-delivered on its next idle transition.
+ *   'interrupt'  — Abort the in-flight turn (the provider's own stop control),
+ *                  then deliver once the session settles to idle. The name is
+ *                  deliberately blunt: the unfinished work is LOST. `immediate`
+ *                  was rejected as a name because it reads like a gentle overlay.
+ */
 export const MESH_DELIVERY_MODES = ['when_idle', 'interrupt'] as const
 export type MeshDeliveryMode = typeof MESH_DELIVERY_MODES[number]
+
+/**
+ * What to do with a node's sessions when the node is removed or a MAGI fan-out
+ * settles. Declared here so daemon-core (`RepoMeshSessionCleanupMode`), the
+ * web dashboard picker and the MCP schemas all read one list.
+ */
+export const MESH_SESSION_CLEANUP_MODES = ['preserve', 'stop', 'delete_stopped', 'stop_and_delete'] as const
+export type MeshSessionCleanupMode = typeof MESH_SESSION_CLEANUP_MODES[number]
 
 /** Outcome a delegated worker may report through `report_completion`. */
 export const WORKER_REPORT_OUTCOMES = ['completed', 'blocked', 'failed'] as const
@@ -61,6 +78,7 @@ export const isMeshTaskMode = makeGuard(MESH_TASK_MODES)
 export const isMeshTaskPriority = makeGuard(MESH_TASK_PRIORITIES)
 export const isMeshThinkingLevel = makeGuard(MESH_THINKING_LEVELS)
 export const isMeshDeliveryMode = makeGuard(MESH_DELIVERY_MODES)
+export const isMeshSessionCleanupMode = makeGuard(MESH_SESSION_CLEANUP_MODES)
 export const isWorkerReportOutcome = makeGuard(WORKER_REPORT_OUTCOMES)
 export const isWorkerBranchState = makeGuard(WORKER_BRANCH_STATES)
 

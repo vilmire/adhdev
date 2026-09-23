@@ -86,13 +86,17 @@ import type {
 // §8 unit 6 ("mesh_read_chat remote display cutover") — the FIRST hop of the
 // fixed `replica → live P2P read_chat → cached summary` order.
 import { readTranscriptReplicaForDisplay } from './mesh-transcript-replica-read.js';
-import { normalizeNodeCapabilitySlots, isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES } from '@adhdev/mesh-shared';
+import { normalizeNodeCapabilitySlots, isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES, appendWorkerProtocolFooter } from '@adhdev/mesh-shared';
 // QUOTA GATE for the manual launch path. Same judgement module the auto-launch /
 // queue-drain path uses (daemon-core resolveUsableProvider) — deliberately shared
 // rather than reimplemented, so the two dispatch paths can never disagree about
 // what "out of quota" means, and so the fail-open contract has exactly one
 // definition. See mesh-quota-routing.ts.
 import { evaluateProviderQuotaGate, rankProvidersByQuotaGate } from '@adhdev/daemon-core';
+// F1: worker-protocol footer materialization on the direct-dispatch path — not
+// (yet) re-exported through mesh-tools-internal.ts, imported directly like the
+// quota-gate symbols above.
+import { resolveDispatchMessage } from '@adhdev/daemon-core';
 
 
 /**
@@ -443,12 +447,39 @@ export async function meshSendTask(
             const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id || ''));
             const taskId = randomUUID();
             const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
+            // F1: materialize the worker-protocol footer (and any relevant handoff
+            // notes) onto the DISPATCHED body only — the ledger/dispatch rows below
+            // keep the authored `message`.
+            const dispatchBody = resolveDispatchMessage(
+                {
+                    id: taskId, message, taskMode, difficulty,
+                    ...(readonly ? { readonly: true } : {}),
+                    ...(missionId ? { missionId } : {}),
+                },
+                ctx.mesh.id,
+                node,
+            );
+            // MULTIPART-FOOTER-PARITY: when the attachment envelope carries its own text
+            // part, the provider may render the parts and never look at `message` — the
+            // footer must land there too, or the worker never learns the protocol on an
+            // image-attached dispatch. appendWorkerProtocolFooter is idempotent, so this
+            // is safe even if the text part already carries the marker for some reason.
+            const dispatchInput = taskInput && Array.isArray(taskInput.parts)
+                ? {
+                    ...taskInput,
+                    parts: taskInput.parts.map(part =>
+                        part && typeof part === 'object' && part.type === 'text' && typeof (part as any).text === 'string'
+                            ? { ...part, text: appendWorkerProtocolFooter((part as any).text, { taskId, taskMode, difficulty, readonly }) }
+                            : part,
+                    ),
+                }
+                : taskInput;
             const result = await ipcDispatchToRemoteAgent(ctx, node, {
                 session_id: args.session_id,
-                message: message,
+                message: dispatchBody,
                 // MESH-IMAGE-DISPATCH: the remote P2P path carries the attachment too —
                 // this is the leg that needs the transport chunking.
-                ...(taskInput ? { input: taskInput } : {}),
+                ...(dispatchInput ? { input: dispatchInput } : {}),
                 providerType: cached?.providerType,
                 verifiedSession: explicitTargetSession,
                 meshContext: {
@@ -745,6 +776,9 @@ export async function meshSendTask(
                         targetSessionId: args.session_id,
                         taskMode,
                         difficulty,
+                        // MESH-IMAGE-DISPATCH: the queued task carries the same envelope the
+                        // direct dispatch below forwards — the claim dispatch delivers it.
+                        ...(taskInput ? { input: taskInput } : {}),
                         ...(readonly ? { readonly: true } : {}),
                         ...(missionId ? { missionId } : {}),
                         ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
@@ -804,6 +838,9 @@ export async function meshSendTask(
                         targetSessionId: args.session_id,
                         taskMode,
                         difficulty,
+                        // MESH-IMAGE-DISPATCH: the queued task carries the same envelope the
+                        // direct dispatch below forwards — the claim dispatch delivers it.
+                        ...(taskInput ? { input: taskInput } : {}),
                         ...(readonly ? { readonly: true } : {}),
                         ...(missionId ? { missionId } : {}),
                         ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
@@ -910,18 +947,44 @@ export async function meshSendTask(
             // would never observe task_completed.
             // coordinatorDaemonId is required so the completion event is
             // routed to the correct coordinator pendingCoordinatorEvents queue.
+            // F1: materialize the worker-protocol footer (and any relevant handoff
+            // notes) onto the DISPATCHED body only — the ledger/dispatch rows keep
+            // the authored `message` (see recordDirectDispatchTask(message, ...) below).
+            const localDispatchBody = resolveDispatchMessage(
+                {
+                    id: taskId, message, taskMode, difficulty,
+                    ...(readonly ? { readonly: true } : {}),
+                    ...(missionId ? { missionId } : {}),
+                },
+                ctx.mesh.id,
+                node,
+            );
+            // MULTIPART-FOOTER-PARITY: see the identical note on the remote-dispatch
+            // arm above — when the attachment envelope carries its own text part, the
+            // footer must also land there or a provider that renders parts (skipping
+            // `message`) never learns the protocol.
+            const localDispatchInput = taskInput && Array.isArray(taskInput.parts)
+                ? {
+                    ...taskInput,
+                    parts: taskInput.parts.map(part =>
+                        part && typeof part === 'object' && part.type === 'text' && typeof (part as any).text === 'string'
+                            ? { ...part, text: appendWorkerProtocolFooter((part as any).text, { taskId, taskMode, difficulty, readonly }) }
+                            : part,
+                    ),
+                }
+                : taskInput;
             const dispatchResult = await commandForNode(ctx, node, 'agent_command', {
                 targetSessionId: args.session_id,
                 agentType: resolvedProviderType,
                 cliType: resolvedProviderType,
                 providerType: resolvedProviderType,
                 action: 'send_chat',
-                message: message,
+                message: localDispatchBody,
                 // MESH-IMAGE-DISPATCH: forward the multipart envelope so the worker's
                 // provider instance receives structured parts instead of text-only. Spread
                 // conditionally so a text-only dispatch sends the byte-identical payload it
                 // sent before this change.
-                ...(taskInput ? { input: taskInput } : {}),
+                ...(localDispatchInput ? { input: localDispatchInput } : {}),
                 // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
                 dispatchSource: 'mesh-tools-session:mesh_send_task:direct',
                 meshContext: {
@@ -1030,6 +1093,8 @@ export async function meshSendTask(
             targetSessionId: args.session_id,
             taskMode,
             difficulty,
+            // MESH-IMAGE-DISPATCH: see the pinned-queue branches above.
+            ...(taskInput ? { input: taskInput } : {}),
             ...(readonly ? { readonly: true } : {}),
             ...(missionId ? { missionId } : {}),
             ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),

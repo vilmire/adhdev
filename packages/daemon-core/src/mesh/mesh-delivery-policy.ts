@@ -1,4 +1,12 @@
 import { randomUUID } from 'crypto';
+import {
+    isBlockedStatus,
+    isBusyStatus,
+    isDeadStatus,
+    isMeshDeliveryMode,
+    normalizeSessionStatus,
+    type MeshDeliveryMode,
+} from '@adhdev/mesh-shared';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 
 /**
@@ -36,23 +44,17 @@ export type MeshDeliveryDecision =
 /**
  * How the caller wants a task delivered to a session that may be busy.
  *
- *   'when_idle'  — DEFAULT. Never disturbs a running turn. A busy session's task
- *                  is queued and auto-delivered on its next idle transition.
- *   'interrupt'  — Abort the turn currently in flight (press the provider's own
- *                  stop control), then deliver the new task once the session
- *                  settles to idle.
- *
- * ★ The name is deliberately blunt. This is NOT "inject alongside the current
- * work" — the in-flight turn is CANCELLED and whatever it had not yet finished
- * is LOST. `immediate` was rejected as a name precisely because it reads like a
- * gentle overlay; a caller skimming the option list must be able to tell from
- * the word alone that work gets thrown away.
+ * The vocabulary (`when_idle` | `interrupt`) is declared ONCE in
+ * @adhdev/mesh-shared (`MESH_DELIVERY_MODES`, wiring-unification A3) and its
+ * semantics — including why `interrupt` is deliberately blunt about discarding
+ * the in-flight turn — are documented on that tuple. This policy, the MCP
+ * schema and the daemon-core barrel all read the same list.
  */
-export type MeshTaskDeliveryMode = 'when_idle' | 'interrupt';
+export type { MeshDeliveryMode };
 
 /** The delivery mode used when a caller does not specify one. Interrupting is
  *  always an explicit opt-in — never a default, never inferred. */
-export const DEFAULT_DELIVERY_MODE: MeshTaskDeliveryMode = 'when_idle';
+export const DEFAULT_DELIVERY_MODE: MeshDeliveryMode = 'when_idle';
 
 /**
  * Normalize a caller-supplied delivery mode.
@@ -63,11 +65,12 @@ export const DEFAULT_DELIVERY_MODE: MeshTaskDeliveryMode = 'when_idle';
  */
 export function normalizeDeliveryMode(
     raw: unknown,
-): { mode: MeshTaskDeliveryMode; unrecognized?: string } {
+): { mode: MeshDeliveryMode; unrecognized?: string } {
     if (raw === undefined || raw === null || raw === '') return { mode: DEFAULT_DELIVERY_MODE };
     const v = String(raw).trim().toLowerCase();
-    if (v === 'when_idle' || v === 'whenidle') return { mode: 'when_idle' };
-    if (v === 'interrupt') return { mode: 'interrupt' };
+    // camelCase spelling of the default is tolerated; everything else must be a member.
+    if (v === 'whenidle') return { mode: 'when_idle' };
+    if (isMeshDeliveryMode(v)) return { mode: v };
     return { mode: DEFAULT_DELIVERY_MODE, unrecognized: String(raw) };
 }
 
@@ -81,48 +84,45 @@ export interface MeshDeliveryPolicyResult {
 }
 
 /**
- * Session statuses where immediate delivery is allowed.
- * The session is ready to accept new work.
+ * Status classification (wiring-unification A3).
+ *
+ * "Busy" is no longer a hand-maintained local set (one of five that disagreed
+ * with each other): it is `isBusyStatus` from mesh-shared — the `working` and
+ * `blocked` classes of SESSION_STATUS_CLASS plus every alias spelling the class
+ * map accepts. Mapping from the old sets to the outcome each spelling gets now:
+ *
+ *   immediate (unchanged) — 'idle' (the ready class member that means "will
+ *     take input now") plus the two legacy spellings 'waiting_input' / 'ready'
+ *     that only this policy ever accepted; they are not in the shared
+ *     vocabulary, so they stay an explicit local set. The other ready-class
+ *     members ('panel_hidden', 'not_monitored') were rejected before as
+ *     unrecognized and STILL are: a task delivered to a session nobody is
+ *     monitoring can never report completion, so they are deliberately not
+ *     promoted to immediate here.
+ *   queued (busy) — every spelling the old BUSY set carried ('generating',
+ *     'running', 'streaming', 'busy', 'starting', 'initializing',
+ *     'waiting_approval', 'waiting_choice') classifies working/blocked, PLUS the
+ *     alias spellings the old set silently rejected ('finalizing', 'working',
+ *     'loading', 'thinking', 'active', 'no_progress', 'long_generating',
+ *     'waiting'). Those used to fall through to the fail-closed reject — a
+ *     session that is demonstrably alive and mid-turn is queued, not refused.
+ *   rejected (terminal) — the dead class ('stopped', 'error', 'disconnected';
+ *     'disconnected' was previously rejected as unrecognized — same decision,
+ *     now with the terminal reason) plus the legacy terminal spellings
+ *     'failed' / 'terminated' / 'exited' / 'closed' / 'deleted', kept as an
+ *     explicit set so their reason string stays `session_<status>_terminal`.
+ *   rejected (unknown) — anything else, fail-closed, unchanged.
  */
-const IMMEDIATE_DELIVERY_STATUSES = new Set([
-    'idle',
-    'waiting_input',
-    'ready',
-]);
+const LEGACY_IMMEDIATE_DELIVERY_STATUSES: ReadonlySet<string> = new Set(['waiting_input', 'ready']);
+const LEGACY_TERMINAL_DELIVERY_STATUSES: ReadonlySet<string> = new Set(['failed', 'terminated', 'exited', 'closed', 'deleted']);
 
-/**
- * Session statuses that indicate the session is busy but still alive.
- * Delivery is queued rather than attempted immediately.
- */
-const BUSY_DELIVERY_STATUSES = new Set([
-    'generating',
-    'running',
-    'streaming',
-    'busy',
-    'starting',
-    'initializing',
-    'waiting_approval',
-    // A session parked on a question picker is busy-but-alive in exactly the same
-    // sense as one parked on an approval modal: it holds a live turn and cannot
-    // take new work until the human answers. Omitting it made resolveDeliveryDecision
-    // fall through to the fail-closed 'unrecognized_session_status' reject, so
-    // mesh_send_task was refused outright rather than queued.
-    'waiting_choice',
-]);
+function isImmediateDeliveryStatus(status: string): boolean {
+    return normalizeSessionStatus(status) === 'idle' || LEGACY_IMMEDIATE_DELIVERY_STATUSES.has(status);
+}
 
-/**
- * Session statuses that indicate the session is permanently unavailable.
- * Delivery should be rejected.
- */
-const TERMINAL_DELIVERY_STATUSES = new Set([
-    'stopped',
-    'failed',
-    'terminated',
-    'exited',
-    'closed',
-    'deleted',
-    'error',
-]);
+function isTerminalDeliveryStatus(status: string): boolean {
+    return isDeadStatus(status) || LEGACY_TERMINAL_DELIVERY_STATUSES.has(status);
+}
 
 /**
  * Determine whether to deliver immediately, queue, or reject based on session status.
@@ -139,7 +139,7 @@ export function resolveDeliveryDecision(
          * Caller's requested delivery mode. Defaults to 'when_idle'.
          * 'interrupt' asks to abort the in-flight turn before delivering.
          */
-        deliveryMode?: MeshTaskDeliveryMode;
+        deliveryMode?: MeshDeliveryMode;
         /**
          * Whether the target provider can actually interrupt a turn, resolved
          * from its live spec (resolveInterruptCapability). REQUIRED to get an
@@ -165,7 +165,7 @@ export function resolveDeliveryDecision(
         };
     }
 
-    if (IMMEDIATE_DELIVERY_STATUSES.has(status)) {
+    if (isImmediateDeliveryStatus(status)) {
         return {
             decision: 'immediate',
             reason: `session_${status}`,
@@ -173,7 +173,7 @@ export function resolveDeliveryDecision(
         };
     }
 
-    if (BUSY_DELIVERY_STATUSES.has(status)) {
+    if (isBusyStatus(status)) {
         if (opts?.allowBusyInjection) {
             return {
                 decision: 'immediate',
@@ -186,7 +186,7 @@ export function resolveDeliveryDecision(
         // the session is blocked on a modal whose answer IS the delivery, so routing
         // it through the idle queue would deadlock — the session never goes idle
         // until someone answers.
-        if ((status === 'waiting_approval' || status === 'waiting_choice') && opts?.kind === 'approval') {
+        if (isBlockedStatus(status) && opts?.kind === 'approval') {
             return {
                 decision: 'immediate',
                 reason: `session_${status}_approval_message`,
@@ -227,7 +227,7 @@ export function resolveDeliveryDecision(
         };
     }
 
-    if (TERMINAL_DELIVERY_STATUSES.has(status)) {
+    if (isTerminalDeliveryStatus(status)) {
         return {
             decision: 'rejected',
             reason: `session_${status}_terminal`,

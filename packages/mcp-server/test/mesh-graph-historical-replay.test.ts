@@ -8,6 +8,7 @@ import {
     meshSendTask,
 } from '../src/tools/mesh-tools.js';
 import { IpcTransport } from '../src/transports/ipc.js';
+import { hasWorkerProtocolFooter, stripWorkerProtocolFooter } from '@adhdev/mesh-shared';
 import { getQueue, updateTaskStatus, taskDependenciesSatisfied } from '@adhdev/daemon-core';
 
 // GRAPH-ORCHESTRATION Phase G — historical replay + backward compatibility.
@@ -186,9 +187,13 @@ async function replayLegacyBatch(fixture: LegacyBatchFixture) {
         fixture.tasks.length - fixture.roots.length,
         'dependents deferred, roots pushed — the recorded dispatch split',
     );
-    const pushedMessages = transport.meshCommands
+    const pushedBodies = transport.meshCommands
         .filter(c => c.cmd === 'agent_command')
-        .map(c => c.args?.message);
+        .map(c => String(c.args?.message ?? ''));
+    // Wiring-unification F1: every delivered body carries the worker protocol footer;
+    // the replay compares the AUTHORED text, which the footer never changes.
+    assert.ok(pushedBodies.every(hasWorkerProtocolFooter), 'every dispatched body carries the worker protocol footer');
+    const pushedMessages = pushedBodies.map(stripWorkerProtocolFooter);
     assert.deepEqual(
         pushedMessages.sort(),
         fixture.roots.map(r => fixture.tasks.find(t => t.ref === r)!.message).sort(),

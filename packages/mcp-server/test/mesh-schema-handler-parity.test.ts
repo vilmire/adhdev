@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import {
+    ALL_MESH_TOOLS,
+    MESH_NOTIFY_WORKER_TOOL,
     MESH_FORGET_NOTE_TOOL,
     MESH_MAGI_COLLECT_TOOL,
     MESH_MAGI_KIND_PANEL_LIST_TOOL,
@@ -229,4 +231,110 @@ test('D2#4: an undeclared key is still rejected on the fixed tools (the gate was
     const error = rejectUnknownMeshToolArgs('mesh_queue_cancel', { taskld: 't_x' });
     assert.ok(error, 'a typo must still be rejected');
     assert.match(error, /Unknown parameter/);
+});
+
+// ─── A3: required-argument table ↔ handler signatures ───────────────────────
+//
+// The schema's `required` list is the required-arg table (enforced at dispatch by
+// validateMeshToolArgs). Each handler declares in its own `args: { … }` parameter
+// type whether it needs node_id / session_id / task_id (`node_id: string`) or
+// tolerates its absence (`node_id?: string`). A handler that requires the key
+// while the schema does not is the "node_id validation gap": a call omitting it
+// reaches the handler and fails deep inside node resolution instead of at the
+// boundary. The reverse (schema requires, handler optional) over-constrains a
+// supported call shape — mesh_send_task's sessionless dispatch was exactly that.
+// Both directions are asserted, so the signature and the table cannot drift.
+
+const ID_KEYS = ['node_id', 'session_id', 'task_id'] as const;
+
+const toolsDir = join(here, '../src/tools');
+const dispatchSrc = readFileSync(join(toolsDir, 'mesh-tool-dispatch.ts'), 'utf8');
+
+function handlerRegistry(): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const m of dispatchSrc.matchAll(/^\s*(mesh_[a-z_]+): \([^)]*\) => (mesh[A-Za-z]+)\(/gm)) map.set(m[1], m[2]);
+    return map;
+}
+
+/** `args` parameter type text of every exported mesh* handler, keyed by function name. */
+function handlerArgTypes(): Map<string, string | null> {
+    const types = new Map<string, string | null>();
+    for (const file of readdirSync(toolsDir).filter(f => f.startsWith('mesh-tools') && f.endsWith('.ts'))) {
+        const src = readFileSync(join(toolsDir, file), 'utf8');
+        for (const m of src.matchAll(/^export (?:async )?function (mesh[A-Za-z]+)\(/gm)) {
+            const open = src.indexOf('(', (m.index ?? 0) + m[0].length - 1);
+            // Parameter list: balanced parentheses from the opening one.
+            let depth = 0; let i = open;
+            for (; i < src.length; i++) {
+                if (src[i] === '(') depth += 1;
+                else if (src[i] === ')') { depth -= 1; if (depth === 0) break; }
+            }
+            const params = src.slice(open + 1, i);
+            const argsAt = params.search(/\bargs\??:\s*\{/);
+            if (argsAt < 0) { types.set(m[1], null); continue; }
+            const braceOpen = params.indexOf('{', argsAt);
+            let bd = 0; let j = braceOpen;
+            for (; j < params.length; j++) {
+                if (params[j] === '{') bd += 1;
+                else if (params[j] === '}') { bd -= 1; if (bd === 0) break; }
+            }
+            types.set(m[1], params.slice(braceOpen + 1, j));
+        }
+    }
+    return types;
+}
+
+type Need = 'required' | 'optional' | 'alias-pair' | 'unused';
+function camelAlias(key: string): string {
+    return key.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase());
+}
+/**
+ * What the handler's `args` type says about `key`. An `alias-pair` handler
+ * declares both spellings optional (`task_id?` and `taskId?`) because EITHER
+ * satisfies it (`args.task_id ?? args.taskId`); the schema may then require the
+ * snake_case key, since the dispatch gate accepts the declared alias in its place.
+ */
+function handlerNeed(argType: string, key: string): Need {
+    const declared = (name: string, optional: boolean) => new RegExp(`(^|[\\s;{])${name}${optional ? '\\?' : ''}:`).test(argType);
+    if (declared(key, true)) return declared(camelAlias(key), true) ? 'alias-pair' : 'optional';
+    if (declared(key, false)) return 'required';
+    return 'unused';
+}
+
+test('A3: the required-arg table agrees with every handler signature on node_id / session_id / task_id', () => {
+    const registry = handlerRegistry();
+    const argTypes = handlerArgTypes();
+    assert.ok(registry.size >= 60, `registry parse failed (${registry.size} entries)`);
+    const schemaByName = new Map<string, any>([...ALL_MESH_TOOLS, MESH_NOTIFY_WORKER_TOOL].map(t => [t.name, t]));
+    const audited: string[] = [];
+    const untyped: string[] = [];
+    const failures: string[] = [];
+    for (const [tool, handler] of registry) {
+        const schema = schemaByName.get(tool);
+        if (!schema) continue; // hidden 1-release aliases forward to a published schema
+        assert.ok(argTypes.has(handler), `handler source for ${tool} (${handler}) not found`);
+        const argType = argTypes.get(handler);
+        if (argType === null || argType === undefined) { untyped.push(tool); continue; }
+        const required: string[] = schema.inputSchema?.required ?? [];
+        for (const key of ID_KEYS) {
+            const need = handlerNeed(argType, key);
+            if (need === 'unused') continue;
+            audited.push(`${tool}.${key}:${need}`);
+            if (need === 'required' && !required.includes(key)) {
+                failures.push(`${tool}: handler ${handler} declares ${key}: string (required) but the schema does not require it`);
+            }
+            if (need === 'optional' && required.includes(key)) {
+                failures.push(`${tool}: schema requires ${key} but handler ${handler} declares ${key}?: string (a call without it is supported)`);
+            }
+        }
+    }
+    assert.deepEqual(failures, []);
+    // Coverage floor: the audit must keep seeing the session/node tool family. A handler
+    // typed `args: any` is invisible to it — keep that set from silently growing.
+    assert.ok(audited.length >= 30, `expected at least 30 audited (tool, key) pairs, saw ${audited.length}: ${audited.join(', ')}`);
+    assert.ok(untyped.length <= 3, `handlers without an inline args type (invisible to the audit): ${untyped.join(', ')}`);
+});
+
+test('A3: mesh_notify_worker (flag-gated, not in ALL_MESH_TOOLS) declares node_id and task_id required', () => {
+    assert.deepEqual(MESH_NOTIFY_WORKER_TOOL.inputSchema.required, ['node_id', 'task_id', 'message']);
 });

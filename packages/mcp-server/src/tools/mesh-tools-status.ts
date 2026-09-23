@@ -62,6 +62,10 @@ import {
 import type {
     MeshContext,
 } from './mesh-tools-internal.js';
+// MESH-IMAGE-DISPATCH: view-surface projection — not (yet) re-exported through
+// mesh-tools-internal.ts, imported directly from the package like the other
+// daemon-core symbols mesh-tools-internal.ts itself imports.
+import { summarizeQueueEntryInputForView } from '@adhdev/daemon-core';
 
 // The v2 protocol version literal (mirrors MESH_PROTOCOL_VERSION_V2 in
 // daemon-core mesh/contracts.ts). Kept as a local literal so this MCP-side
@@ -417,7 +421,11 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     }
     const activeWorkEvidence = buildMeshActiveWork({
         meshId: mesh.id,
-        queue: getQueue(mesh.id),
+        // MESH-IMAGE-DISPATCH: mesh_status is a VIEW surface — strip any persisted
+        // input envelope (may carry base64 image data) before this queue snapshot
+        // feeds the response. buildMeshActiveWork never reads `task.input`, so this
+        // is a pure size/privacy trim with no effect on the derived records.
+        queue: getQueue(mesh.id).map(task => summarizeQueueEntryInputForView(task)),
         ledgerEntries,
         directDispatches,
         nodes: results,

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { writeFileSync, readFileSync, unlinkSync } from 'node:fs';
 
 import { IpcTransport } from '../src/transports/ipc.js';
+import { hasWorkerProtocolFooter, stripWorkerProtocolFooter } from '@adhdev/mesh-shared';
 import { meshApprove, meshCheckpoint, meshCloneNode, meshFastForwardNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshViewQueue, meshQueueCancel, meshQueueRequeue, meshTaskHistory, meshRefineConfig, meshChangeImpactConfig, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
 import { CANONICAL_MESH_TOOL_COUNT, appendLedgerEntry, claimNextTask, enqueueTask, getLedgerDir, getQueue, requeueTask } from '@adhdev/daemon-core';
 import { clearPendingMeshCoordinatorEvents, drainPendingMeshCoordinatorEvents, handleMeshForwardEvent } from '../../daemon-core/src/mesh/mesh-events.js';
@@ -1471,7 +1472,9 @@ test('mesh_send_task does not reuse a remote live session that lacks mesh delega
   assert.equal(relayCalls[1].args.targetSessionId, undefined);
   assert.equal(relayCalls[1].args.agentType, 'hermes-cli');
   assert.equal(relayCalls[1].args.cliType, 'hermes-cli');
-  assert.equal(relayCalls[1].args.message, 'do work');
+  // Wiring-unification F1: the delivered body is the authored text plus the worker protocol footer.
+  assert.equal(stripWorkerProtocolFooter(relayCalls[1].args.message), 'do work');
+  assert.ok(hasWorkerProtocolFooter(relayCalls[1].args.message), 'direct remote dispatch carries the worker protocol footer');
 });
 
 test('mesh_send_task self-heals a mesh-owned remote session missing the relay anchor when a coordinatorDaemonId is resolvable', async () => {
@@ -3749,7 +3752,8 @@ test('local IPC mesh_send_task with explicit session resolves providerType from 
   assert.equal(directCalls[1].args.agentType, 'hermes-cli');
   assert.equal(directCalls[1].args.cliType, 'hermes-cli');
   assert.equal(directCalls[1].args.action, 'send_chat');
-  assert.equal(directCalls[1].args.message, 'run targeted task');
+  assert.equal(stripWorkerProtocolFooter(directCalls[1].args.message), 'run targeted task');
+  assert.ok(hasWorkerProtocolFooter(directCalls[1].args.message), 'direct local dispatch carries the worker protocol footer');
 
   // MISSIONLESS-DIRECT-DISPATCH-NO-ATTEMPT (oss a79686f2): recordDirectDispatchTask now
   // runs for every direct dispatch, not just mission-attributed ones, so it materialises

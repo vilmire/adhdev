@@ -14,7 +14,8 @@
 import type { GitRepoStatus, GitCompactSummary } from './git/git-types.js';
 import type { MeshMissionSummary, MeshMissionSlimSummary } from './mesh/mesh-missions.js';
 import type { MeshMagiActivitySummary } from './mesh/mesh-magi-status.js';
-import type { MagiKindPanelMap, DifficultyBrainMap, NodeCapabilitySlot } from '@adhdev/mesh-shared';
+import type { MagiKindPanelMap, DifficultyBrainMap, NodeCapabilitySlot, MeshSessionCleanupMode, MeshTaskPriority, MeshTaskStatus } from '@adhdev/mesh-shared';
+import { MESH_SESSION_CLEANUP_MODES } from '@adhdev/mesh-shared';
 import type { ProviderModule } from './providers/contracts.js';
 import { deriveAutoApproveModeRisk } from './providers/auto-approve-modes.js';
 // Type-only import (no runtime cycle) — mesh-json-config imports types from this
@@ -107,7 +108,8 @@ export type RepoMeshNodeHealth =
 
 // ─── Policy Types ───────────────────────────────
 
-export type RepoMeshSessionCleanupMode = 'preserve' | 'stop' | 'delete_stopped' | 'stop_and_delete';
+/** Session cleanup vocabulary — declared once in @adhdev/mesh-shared (MESH_SESSION_CLEANUP_MODES). */
+export type RepoMeshSessionCleanupMode = MeshSessionCleanupMode;
 export type RepoMeshSpawnedSessionVisibility = 'visible' | 'hidden';
 
 /**
@@ -875,9 +877,7 @@ export function resolveCoordinatorIdlePushPolicy(
 // mesh-config, and the scattered field clamps) from drifting apart. The function
 // is idempotent: feeding it an already-normalized policy yields the same object.
 
-const SESSION_CLEANUP_MODES = new Set<RepoMeshSessionCleanupMode>([
-    'preserve', 'stop', 'delete_stopped', 'stop_and_delete',
-]);
+const SESSION_CLEANUP_MODES: ReadonlySet<string> = new Set<string>(MESH_SESSION_CLEANUP_MODES);
 
 /**
  * Resolve a magiSessionCleanup policy value (string mode, boolean shorthand,
@@ -1952,7 +1952,8 @@ export interface RepoMeshNodeStatus {
     error?: string;
 }
 
-export type RepoMeshQueueTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
+/** Queue task status on the status wire — the ONE vocabulary from @adhdev/mesh-shared (MESH_TASK_STATUSES). */
+export type RepoMeshQueueTaskStatus = MeshTaskStatus;
 
 export interface RepoMeshQueueTask {
     id: string;
@@ -1990,8 +1991,8 @@ export interface RepoMeshQueueTask {
      * `modelSource` below are the *requested* model at enqueue time.
      */
     assignedModel?: string;
-    /** G6 task-level scheduling priority ('low' | 'normal' | 'high'); absent = normal. */
-    priority?: string;
+    /** G6 task-level scheduling priority (MESH_TASK_PRIORITIES); absent = normal. */
+    priority?: MeshTaskPriority;
     /**
      * Independent system hold. C3 derived failure does not write
      * `dependency_failed:*` here; views expose `dependencyFailures` instead.

@@ -202,7 +202,7 @@ test('mesh_send_task exposes orchestration_decision and does NOT require it', ()
     // and phase E measures rather than enforces.
     assert.deepEqual(
         (tool.inputSchema as any).required,
-        ['node_id', 'session_id', 'message', 'difficulty'],
+        ['node_id', 'message', 'difficulty'] /* session_id became optional in wiring-unification A3: sessionless direct dispatch is a supported path */,
         'orchestration_decision must stay OPTIONAL on the direct surface',
     );
 

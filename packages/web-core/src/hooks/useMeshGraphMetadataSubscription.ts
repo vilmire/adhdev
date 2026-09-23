@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DaemonMetadataUpdate, RepoMeshStatus } from '@adhdev/daemon-core'
+import { normalizeSessionStatus, type SessionStatus } from '@adhdev/mesh-shared'
 import { subscriptionManager } from '../managers/SubscriptionManager'
 
 export type MeshGraphLiveSessionStatus = {
@@ -8,7 +9,13 @@ export type MeshGraphLiveSessionStatus = {
     meshId: string
     nodeId?: string | null
     providerType?: string
-    state?: string
+    /**
+     * Canonical session status (mesh-shared SESSION_STATUSES). Raw spellings from
+     * the metadata lane are normalized through the shared alias table; a spelling
+     * the vocabulary does not know (e.g. the cloud placeholder 'online') is
+     * dropped rather than carried as free text.
+     */
+    state?: SessionStatus
     chatStatus?: string
     lifecycle?: string
     surfaceKind?: string
@@ -89,7 +96,7 @@ function buildLiveSessionStatus(session: any, meshId: string): MeshGraphLiveSess
         meshId,
         nodeId: belongsToRequestedMesh ? readString(settings.meshNodeId) || null : null,
         providerType: readString(session?.providerType) || undefined,
-        state: readString(session?.status) || undefined,
+        state: normalizeSessionStatus(session?.status) ?? undefined,
         chatStatus: readString(activeChat.status) || undefined,
         lifecycle: readString(session?.runtimeLifecycle) || undefined,
         surfaceKind: readString(session?.runtimeSurfaceKind) || undefined,

@@ -293,8 +293,14 @@ export function shouldHoldPendingDrainForBusyLocalCoordinator(
  *
  * Force-inject (a raw write into a generating PTY) is NOT one of the modes and
  * stays retired — see the `force` note in SpecCliAdapter.sendMessage.
+ *
+ * Naming (wiring-unification A3): this used to be called `MeshDeliveryMode`,
+ * colliding with the caller-facing task delivery-mode vocabulary
+ * (`when_idle` | `interrupt`, now `MeshDeliveryMode` in @adhdev/mesh-shared).
+ * The two are different axes — that one is what a caller ASKS for, this one is
+ * how the coordinator inject actually LANDED — so this is the inject mode.
  */
-export type MeshDeliveryMode = 'idle-turn' | 'next-turn-queue' | 'mid-generation-split';
+export type MeshCoordinatorInjectMode = 'idle-turn' | 'next-turn-queue' | 'mid-generation-split';
 
 /**
  * Why an injection attempt did not put the body in front of the coordinator.
@@ -307,7 +313,7 @@ export type MeshDeliveryMode = 'idle-turn' | 'next-turn-queue' | 'mid-generation
  * exists ONLY in that pending event.
  */
 export type MeshInjectOutcome =
-    | { delivered: true; mode: MeshDeliveryMode }
+    | { delivered: true; mode: MeshCoordinatorInjectMode }
     | { delivered: false; reason: 'no_coordinator' | 'no_message' | 'mode_refused'; detail?: string };
 
 /**
@@ -320,9 +326,9 @@ export type MeshInjectOutcome =
 export function injectPendingIntoCoordinator(
     coordinator: LiveCoordinator['instance'],
     pending: PendingMeshCoordinatorEvent,
-    opts?: { forceOverride?: boolean; mode?: MeshDeliveryMode; nodes?: any[] },
+    opts?: { forceOverride?: boolean; mode?: MeshCoordinatorInjectMode; nodes?: any[] },
 ): MeshInjectOutcome {
-    const mode: MeshDeliveryMode = opts?.mode ?? 'idle-turn';
+    const mode: MeshCoordinatorInjectMode = opts?.mode ?? 'idle-turn';
     if (!coordinator) return { delivered: false, reason: 'no_coordinator' };
     // NOTIF-DROP-SYNTH-NO-MESSAGE (defence-in-depth): a queued event with no coordinatorMessage
     // used to be dropped here (drain-without-inject) — the row had already been consumed

@@ -1,5 +1,5 @@
 import type { MeshCoordinatorMetadata } from '../../utils/mesh-coordinator-setup'
-import type { NodeCapabilitySlot } from '@adhdev/mesh-shared'
+import type { MeshSessionCleanupMode, MeshTaskStatus, NodeCapabilitySlot } from '@adhdev/mesh-shared'
 
 export type { NodeCapabilitySlot }
 
@@ -46,7 +46,8 @@ export interface MeshQueueEntry {
     id: string
     meshId?: string
     message: string
-    status: 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled' | string
+    /** The ONE task-status vocabulary (mesh-shared MESH_TASK_STATUSES) — no `| string` escape hatch. */
+    status: MeshTaskStatus
     targetNodeId?: string
     targetSessionId?: string
     assignedNodeId?: string
@@ -78,7 +79,8 @@ export interface MeshQueueSummary {
     recent: MeshQueueEntry[]
 }
 
-export type RepoMeshSessionCleanupMode = 'preserve' | 'stop' | 'delete_stopped' | 'stop_and_delete'
+/** Derived from mesh-shared MESH_SESSION_CLEANUP_MODES (same list the daemon and the MCP schema use). */
+export type RepoMeshSessionCleanupMode = MeshSessionCleanupMode
 
 export const SESSION_CLEANUP_MODE_OPTIONS: Array<{ value: RepoMeshSessionCleanupMode; label: string; description: string }> = [
     { value: 'preserve', label: 'Preserve history and runtimes', description: 'Keep completed chat history and leave live runtimes alone.' },
