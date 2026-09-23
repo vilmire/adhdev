@@ -35,6 +35,7 @@ import * as path from 'path';
 import {
   detectOccupiedConfigDir,
   formatOccupiedConfigDirWarning,
+  SEQSCRIBE_DB_SUFFIX_ENV_VAR,
 } from '@adhdev/daemon-core/config/config-dir';
 
 export function pinStandaloneConfigDir(
@@ -57,6 +58,14 @@ export function pinStandaloneConfigDir(
  * standalone in it is an ordinary port conflict that the server surfaces
  * already. `write` is injectable so the test asserts the exact text without
  * capturing global stderr.
+ *
+ * C7-3: also sets `SEQSCRIBE_DB_SUFFIX_ENV_VAR` on `env` when occupied — see
+ * that constant's doc comment (config-dir.ts) for why the seqscribe DB
+ * specifically needs a real redirect rather than just a warning (a second
+ * opener fails outright with `ERR_DB_OWNED`, unlike the other shared files
+ * this warning covers). This does NOT widen the warn-not-refuse contract for
+ * the config dir as a whole: every other file under it is still genuinely
+ * shared, unchanged, exactly as the operator's ADHDEV_CONFIG_DIR intended.
  */
 export function warnIfInheritedConfigDirIsOccupied(
   configDir: string,
@@ -73,6 +82,12 @@ export function warnIfInheritedConfigDirIsOccupied(
   }
   if (!occupancy) return false;
   write(formatOccupiedConfigDirWarning(occupancy));
+  // Isolate only the seqscribe DB filename — see the constant's doc comment.
+  // The occupant's pid is distinctive enough to avoid colliding with a THIRD
+  // process that might also redirect into the same shared dir.
+  if (!env[SEQSCRIBE_DB_SUFFIX_ENV_VAR]) {
+    env[SEQSCRIBE_DB_SUFFIX_ENV_VAR] = `standalone-${process.pid}`;
+  }
   return true;
 }
 

@@ -24,7 +24,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { DaemonCommandRouter } from '../../src/commands/router'
-import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events'
+import { drainPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
 
 function git(cwd: string, ...args: string[]) {
   return execFileSync('git', args, { cwd, encoding: 'utf-8' })

@@ -12,7 +12,7 @@
 import type { DaemonCommandRouter } from './router.js';
 import { LOG } from '../logging/logger.js';
 import { meshNodeIdMatches } from '@adhdev/mesh-shared';
-import { resolveTunedReconcileMs } from '../mesh/mesh-reconcile-acked-hold.js';
+import { resolveTunedReconcileMs } from '../mesh/mesh-tuned-env.js';
 import { evaluateRefineExecutorLiveness } from '../mesh/mesh-refine-executor-liveness.js';
 import {
     appendRefineJobLedger,

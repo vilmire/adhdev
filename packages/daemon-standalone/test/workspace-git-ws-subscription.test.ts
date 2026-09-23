@@ -53,7 +53,11 @@ test('standalone push-topic flushes only run while subscribers exist', () => {
   const text = source()
 
   assert.match(text, /if \(topics\?\.hasSubscriptions\(topic\)\) void topics\.flushNow\(topic\)/)
-  assert.match(text, /this\.flushTopic\('workspace\.git'\)/)
+  // P-II-1 (wiring-unification): the 2s status/topic flush interval is gone —
+  // workspace.git is flushed by the host runtime on its bus edge (the router's
+  // command_executed invalidation), not polled by the host.
+  assert.doesNotMatch(text, /STATUS_INTERVAL|statusTimer/)
+  assert.doesNotMatch(text, /this\.flushTopic\('workspace\.git'\)/)
 })
 
 test('standalone command invalidation rides the router command_executed event, not a host table', () => {

@@ -17,7 +17,7 @@
  * Worse than a silent no-op: because the prior fix promoted the stamp failure
  * from WARN to a re-thrown ERROR (so it "surfaces loudly instead of being
  * swallowed"), the throw now escapes emitBootstrapEvent's `try` block BEFORE it
- * reaches the `queuePendingMeshCoordinatorEvent` fallback — so the event never
+ * reaches the `notifyMeshCoordinator` fallback — so the event never
  * even reaches the pending-event queue the coordinator later pulls from. The
  * bootstrap completion is recovered only via the ~30-40min stale-running
  * backstop, never the intended event path.
@@ -31,8 +31,8 @@ import { promisify } from 'node:util'
 import { randomUUID } from 'crypto'
 
 import { DaemonCommandRouter } from '../../src/commands/router'
-import { handleMeshForwardEvent, queuePendingMeshCoordinatorEvent } from '../../src/mesh/mesh-events.js'
-import { getPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
+import { handleMeshForwardEvent, notifyMeshCoordinator } from '../../src/mesh/mesh-events.js'
+import { getPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js'
 import { triggerMeshQueue } from '../../src/mesh/mesh-queue-assignment.js'
 import { LOG } from '../../src/logging/logger.js'
@@ -89,7 +89,7 @@ function bootstrapCompletePayload(meshId: string, nodeId: string, workspace: str
 
 /**
  * Mirrors emitBootstrapEvent's control-flow SHAPE (single outer try wrapping both
- * the in-process handleMeshForwardEvent attempt and the queuePendingMeshCoordinatorEvent
+ * the in-process handleMeshForwardEvent attempt and the notifyMeshCoordinator
  * fallback) exactly as it shipped in mesh-crud.ts before this fix — a throw from
  * handleMeshForwardEvent aborts before the fallback ever runs.
  */
@@ -97,7 +97,7 @@ function emitLikePreFix(components: any, payload: ReturnType<typeof bootstrapCom
   try {
     const forwarded = handleMeshForwardEvent({ instanceManager: components.instanceManager } as any, payload as any)
     if (forwarded?.success === true) return
-    queuePendingMeshCoordinatorEvent({
+    notifyMeshCoordinator({
       event: payload.event,
       meshId,
       nodeLabel: nodeId,
@@ -124,7 +124,7 @@ function emitLikePostFix(components: any, payload: ReturnType<typeof bootstrapCo
       )
       if (forwarded?.success === true) return
     } catch { /* falls through to the queue fallback below */ }
-    queuePendingMeshCoordinatorEvent({
+    notifyMeshCoordinator({
       event: payload.event,
       meshId,
       nodeLabel: nodeId,
@@ -153,30 +153,31 @@ describe('MESH-CRUD-BOOTSTRAP-STAMP-REMAINING-PATH — clone_mesh_node local emi
   })
   afterEach(() => { vi.clearAllMocks() })
 
-  it('red regression: the pre-fix {instanceManager}-only shim still throws on worktree_bootstrap_complete', () => {
+  // C-W3: the two historical red cases (a stampless shim THREW, and the pre-fix
+  // control flow therefore lost the notice) no longer reproduce by design — the
+  // notice path isolates the stamp: a stamp failure is logged, the notice is
+  // still recorded. Pinned as the new invariant.
+  it('a stampless {instanceManager}-only shim no longer throws, and the notice is still recorded', () => {
     const meshId = `mesh_crud_red_prim_${randomUUID().slice(0, 8)}`
     try {
       const components = { instanceManager: { getInstance: vi.fn(() => undefined) } } as any
-      expect(() => handleMeshForwardEvent(components, bootstrapCompletePayload(meshId, 'node_wt', `/repo/${meshId}`) as any))
-        .toThrow(/markWorktreeBootstrapTerminalState/)
+      const result = handleMeshForwardEvent(components, bootstrapCompletePayload(meshId, 'node_wt', `/repo/${meshId}`) as any)
+      expect(result.error).toMatch(/markWorktreeBootstrapTerminalState/)
+      expect(getPendingMeshCoordinatorEvents(meshId).some(e => e.event === 'worktree_bootstrap_complete')).toBe(true)
     } finally {
       cleanup(meshId)
     }
   })
 
-  it('red regression: the pre-fix control-flow swallows the throw AND skips the queue fallback — the coordinator never learns', () => {
+  it('even the pre-fix control flow now reaches the coordinator (the throw that swallowed the fallback is gone)', () => {
     const meshId = `mesh_crud_red_flow_${randomUUID().slice(0, 8)}`
     const nodeId = 'node_wt_owned'
     const workspace = `/repo/${meshId}`
     try {
       const components = { instanceManager: { getInstance: vi.fn(() => undefined) } } as any
       emitLikePreFix(components, bootstrapCompletePayload(meshId, nodeId, workspace), meshId, nodeId)
-
-      // The event never reached the pending queue at all — not the rich payload
-      // handleMeshForwardEvent would have queued on success, nor the manual
-      // fallback, because the throw escaped before either could run.
       const pending = getPendingMeshCoordinatorEvents(meshId)
-      expect(pending.filter(e => e.event === 'worktree_bootstrap_complete')).toHaveLength(0)
+      expect(pending.filter(e => e.event === 'worktree_bootstrap_complete').length).toBeGreaterThanOrEqual(1)
     } finally {
       cleanup(meshId)
     }

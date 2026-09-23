@@ -65,7 +65,7 @@ export interface MedFamilyContext {
      * Bound `DaemonCommandRouter.markWorktreeBootstrapTerminalState`. `clone_mesh_node`'s
      * post-bootstrap emit (worktree_bootstrap_complete/_failed) runs on the WORKER
      * daemon that owns the cloned worktree and calls handleMeshForwardEvent locally
-     * (in-process, before falling back to queuePendingMeshCoordinatorEvent) — that
+     * (in-process, before falling back to notifyMeshCoordinator) — that
      * local call needs the same bound stamp the HIGH-family mesh_forward_event
      * handler supplies, or it throws on `components.router.markWorktreeBootstrapTerminalState`
      * (the handler only has `ctx.deps`, which does NOT expose the router itself).

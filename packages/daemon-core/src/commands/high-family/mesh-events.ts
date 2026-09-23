@@ -1,112 +1,85 @@
 /**
  * RF-ROUTER HIGH family — mesh coordinator-event relay + interactive prompt.
  *
- * mesh_forward_event (relay a worker event to the local instance manager),
- * get_pending_mesh_events (drain queued coordinator events, optionally scoped to
- * a coordinator daemon), and interactive_prompt_response (deliver a prompt reply
- * to a running instance). Extracted verbatim from executeDaemonCommand — only
- * `this.deps` became `ctx.deps`.
+ * mesh_forward_event (a worker event reported in-process / by command — it takes
+ * the same evidence / notice path as a local provider event), get_pending_mesh_events
+ * (the MCP-only coordinator inbox: undelivered own `turn.notify` notices of this
+ * daemon, rendered and claimed — wiring-unification C2), and
+ * interactive_prompt_response (deliver a prompt reply to a running instance).
  */
-import {
-    handleMeshForwardEvent,
-    drainPendingMeshCoordinatorEvents,
-    shouldHoldPendingDrainForBusyLocalCoordinator,
-    resolveCoordinatorDrainDeliverability,
-    getMeshV2DrainCounters,
-    getMeshV2BackstopCounters,
-    isMeshProtocolV2EnforceEnabled,
-    getPendingRetentionCounters,
-} from '../../mesh/mesh-events.js';
+import { handleMeshForwardEvent } from '../../mesh/mesh-events.js';
+import { meshNoticeRuntime } from '../../mesh/turn-ledger/deliver.js';
 import { normalizeInteractivePromptResponse } from '../../providers/types/interactive-prompt.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
 
 export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
     mesh_forward_event: async (ctx: HighFamilyContext, args: any) => {
-        // WORKTREE-BOOTSTRAP-COORD-STATE: a forwarded worktree_bootstrap_complete/_failed event
-        // must stamp the terminal bootstrap state into the coordinator's inline mesh view via
-        // router.markWorktreeBootstrapTerminalState. The handler only has `ctx.deps`, which does
-        // NOT expose the router itself, so we pass the bound method explicitly.
-        //
-        // WORKTREE-BOOTSTRAP-REFIRE-SHIM: a successful stamp schedules
-        // setImmediate(() => triggerMeshQueue(components, meshId)) using this SAME shim
-        // object as `components` — triggerMeshQueue unconditionally calls
-        // components.router.getCachedInlineMesh(meshId), so it must be bound here too or
-        // the re-fire throws "getCachedInlineMesh is not a function" (WARN-logged, silently
-        // dropped) instead of draining the deferred claim.
-        return handleMeshForwardEvent({
+        // WORKTREE-BOOTSTRAP-COORD-STATE: a forwarded worktree_bootstrap_complete/_failed
+        // stamps the terminal bootstrap state into the coordinator's inline mesh view
+        // and re-fires the queue (which reads getCachedInlineMesh) — both router
+        // methods are bound here because the handler only has `ctx.deps`.
+        const result = handleMeshForwardEvent({
             instanceManager: ctx.deps.instanceManager,
             router: {
                 markWorktreeBootstrapTerminalState: ctx.markWorktreeBootstrapTerminalState,
                 getCachedInlineMesh: ctx.getCachedInlineMesh,
             },
+            statusInstanceId: ctx.deps.statusInstanceId,
         } as any, args as Record<string, unknown>);
+        return { ...result };
     },
 
+    /**
+     * The MCP-only coordinator inbox (C2). Returns the undelivered own
+     * `turn.notify` notices addressed to this daemon, rendered, and CLAIMS them
+     * (`delivered:<writer>:<seq>`) so the `turn.deliver` cursor passes them
+     * without submitting. Field name `pendingCoordinatorEvents` on the MCP side
+     * is unchanged (C2 naming decision).
+     *
+     * A daemon that hosts an injectable CLI coordinator for the mesh leaves the
+     * notices to the cursor — unless the caller IS that coordinator reading its
+     * own inbox (`selfCoordinatorInboxRead`), in which case surfacing them in the
+     * tool result is lossless and faster than waiting for its idle edge.
+     * A read addressed to another coordinator daemon (the pre-C remote pull)
+     * returns nothing: cross-machine notices travel by topic replication.
+     */
     get_pending_mesh_events: async (ctx: HighFamilyContext, args: any) => {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
-        // (B3) Respect coordinatorDaemonId when the caller declares it
-        // so unicast events route to the right coordinator instead of
-        // being silently consumed by the first drainer.
+        const runtime = meshNoticeRuntime.current();
+        if (!meshId || !runtime) {
+            return { success: true, events: [], hasLiveCliCoordinator: false, source: 'turn.notify', ...(runtime ? {} : { unavailable: 'turn ledger not booted' }) };
+        }
+        const selfCoordinatorInboxRead = args?.selfCoordinatorInboxRead === true;
         const coordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
             ? args.coordinatorDaemonId.trim()
-            : undefined;
-        // SELF-COORDINATOR INBOX LEVEL-DRAIN (Defect 2): the MCP self-coordinator inbox read
-        // (drainCoordinatorPendingEvents) sets this so its own drain is not held while its CLI
-        // is busy — the events return in ITS tool result (a lossless data-queue surface), never
-        // a PTY inject. Every other drain leaves it unset and keeps the busy-coordinator hold.
-        const selfCoordinatorInboxRead = args?.selfCoordinatorInboxRead === true;
-        // DRAIN-WITHOUT-INJECT guard: when a LOCAL live CLI coordinator for this mesh is
-        // busy (generating / modal-parked), the reconcile loop is HOLDING its terminal
-        // events (drained=0) for the coordinator's next idle tick. Draining here would
-        // consume those held rows (drained=1) into an MCP tool result the busy coordinator
-        // never surfaces as a turn — losing the completion forever. Defer to the reconcile
-        // loop: return nothing, leaving the rows undrained for its idle-tick delivery. A
-        // remote pull (foreign coordinatorDaemonId) or a pure stdio MCP coordinator (no live
-        // CLI session) is NOT held — see shouldHoldPendingDrainForBusyLocalCoordinator.
-        // Surface whether THIS daemon has a live CLI coordinator for the mesh. The MCP
-        // (LLM) coordinator's pull (drainCoordinatorPendingEvents) needs this to decide its
-        // delivery surface: when there is NO live CLI coordinator (pure stdio MCP/LLM), the
-        // MCP tool result is the ONLY surface, so the puller must return the drained events
-        // to the LLM rather than re-forwarding them (a re-forward just re-queues with no PTY
-        // to inject into — the NOTIF-DROP transcript-reconcile drain-without-inject loop).
-        // When a live CLI coordinator exists, the reconcile loop owns PTY delivery and the
-        // puller keeps forwarding (unchanged). NOTE: this is observational only — it does not
-        // change what is drained here, so the idle full-drain and remote-pull paths are intact.
-        const hasLiveCliCoordinator = meshId
-            ? resolveCoordinatorDrainDeliverability(ctx.deps, meshId).hasLiveCliCoordinator
-            : false;
-        // DRAIN-WITHOUT-INJECT guard: when a LOCAL live CLI coordinator for this mesh is
-        // busy (generating / modal-parked), the reconcile loop is HOLDING its terminal
-        // events (drained=0) for the coordinator's next idle tick. Draining here would
-        // consume those held rows (drained=1) into an MCP tool result the busy coordinator
-        // never surfaces as a turn — losing the completion forever. Defer to the reconcile
-        // loop: return nothing, leaving the rows undrained for its idle-tick delivery. A
-        // remote pull (foreign coordinatorDaemonId) or a pure stdio MCP coordinator (no live
-        // CLI session) is NOT held — see shouldHoldPendingDrainForBusyLocalCoordinator.
-        if (meshId && shouldHoldPendingDrainForBusyLocalCoordinator(ctx.deps, meshId, coordinatorDaemonId, selfCoordinatorInboxRead)) {
-            return { success: true, events: [], heldForBusyLocalCoordinator: true, hasLiveCliCoordinator };
+            : '';
+        const hasLiveCliCoordinator = runtime.hasLiveCliCoordinator(meshId);
+        const addressedElsewhere = coordinatorDaemonId !== '' && !runtime.isSelfDaemon(coordinatorDaemonId);
+        if (addressedElsewhere || (hasLiveCliCoordinator && !selfCoordinatorInboxRead)) {
+            return {
+                success: true,
+                events: [],
+                hasLiveCliCoordinator,
+                source: 'turn.notify',
+                ...(addressedElsewhere ? { replicatedNotAddressed: true } : { deliveredByCursor: true }),
+            };
         }
-        const events = drainPendingMeshCoordinatorEvents(meshId || undefined, coordinatorDaemonId);
-        // T6 (B3c): ride the live v2 enforce/backstop counters on the drain response so a
-        // pure stdio MCP coordinator (which reads its inbox via this IPC call, not the
-        // daemon-core mesh_status command) sees the same enforce state + quarantine /
-        // last-resort-backstop tallies. Process-lifetime snapshot; the counters were just
-        // updated by the drain above. Additive — omitting it keeps version-skewed pullers safe.
-        const meshProtocolV2Counters = {
-            enforce: isMeshProtocolV2EnforceEnabled(),
-            drain: { ...getMeshV2DrainCounters() },
-            backstop: { ...getMeshV2BackstopCounters() },
+        const ack = args?.ack !== false;
+        const events = runtime.readNotices(meshId, {
+            ack,
+            ...(typeof args?.sessionId === 'string' && args.sessionId.trim() ? { surfacedSessionId: args.sessionId.trim() } : {}),
+        });
+        return {
+            success: true,
+            events,
+            hasLiveCliCoordinator,
+            // The notices were surfaced through THIS tool result (and claimed): the
+            // MCP client must not re-forward them.
+            surfacedForSelfCoordinator: true,
+            source: 'turn.notify',
+            ...(runtime.replicationPending(meshId) ? { replication: 'pending' as const } : {}),
         };
-        // Same rationale as meshProtocolV2Counters above: ride the live pending-event
-        // retention counters on the drain response so a pure stdio MCP coordinator sees
-        // undrainedExpired (silent-drop risk, mirrored to event_held) without a separate call.
-        const pendingRetentionCounters = { ...getPendingRetentionCounters() };
-        // SELF-COORDINATOR INBOX LEVEL-DRAIN: when the busy local coordinator drained its OWN
-        // inbox (selfCoordinatorInboxRead), tell the puller these events were surfaced through
-        // the caller's tool result — it must NOT re-forward them into the (busy) PTY (that is the
-        // lossy path). Absent the flag, delivery is unchanged (reconcile-owned PTY / remote pull).
-        return { success: true, events, hasLiveCliCoordinator, meshProtocolV2Counters, pendingRetentionCounters, ...(selfCoordinatorInboxRead ? { surfacedForSelfCoordinator: true } : {}) };
     },
 
     interactive_prompt_response: async (ctx: HighFamilyContext, args: any) => {

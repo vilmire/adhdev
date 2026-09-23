@@ -202,6 +202,19 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     // (rather than skipped) so this test's exhaustive low-family enumeration below
     // stays accurate, with this comment as the deliberate-change record.
     'get_runtime_snapshot', 'get_command_history',
+    // NOT a legacy-table migration either: the turn-ledger IPC surface
+    // (wiring-unification C2 / C-W6, commands/low-family/turn-ledger-ipc.ts) —
+    // the MCP server's only path to the turn ledger, mesh records, the topic
+    // index and missions now that it may not open mesh-runtime.db itself
+    // (check:boundaries C8). IPC-only: pinned by the `sources` test below.
+    'turn_observe', 'mesh_record', 'turn_cancel', 'operator_status', 'turn_query',
+    'mesh_index_query', 'mission_upsert', 'mission_query',
+];
+
+/** The turn-ledger IPC commands: reachable ONLY over the local IPC source. */
+const TURN_LEDGER_IPC_COMMANDS = [
+    'turn_observe', 'mesh_record', 'turn_cancel', 'operator_status', 'turn_query',
+    'mesh_index_query', 'mission_upsert', 'mission_query',
 ];
 
 /** med-family/index.ts medFamilyRegistry keys. */
@@ -341,6 +354,16 @@ describe('daemon command registry — golden diff against the legacy tables', ()
             'get_command_history', 'get_runtime_snapshot', 'totally_unknown', '',
         ]) {
             expect(sorted(registry.invalidationsFor(name)), name || '(empty)').toEqual(sorted(legacyCommandInvalidations(name)));
+        }
+    });
+});
+
+describe('turn-ledger IPC commands (C-W6)', () => {
+    it('are low-family specs restricted to the ipc source — never ws / p2p / mesh / api', () => {
+        for (const name of TURN_LEDGER_IPC_COMMANDS) {
+            const spec = getDaemonCommandRegistry().get(name);
+            expect(spec?.family, name).toBe('low');
+            expect(spec?.sources, name).toEqual(['ipc']);
         }
     });
 });

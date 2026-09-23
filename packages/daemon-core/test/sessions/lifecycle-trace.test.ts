@@ -16,6 +16,7 @@ function sample(kind: BusEvent['kind']): BusEvent {
         case 'binding': return { kind, ...base, providerSessionId: 'prov_abcdefghijkl' }
         case 'launch_updated': return { kind, ...base, cause: 'launch', launch: { model: { source: 'user', requested: SENTINEL, history: [] }, thinkingLevel: { source: 'unspecified', history: [] } } as any }
         case 'terminated': return { kind, ...base, cause: 'pty_exit', providerType: 'claude-code', runtimeSettings: {} }
+        case 'turn': return { kind, ...base, phase: 'committed', attemptId: 'attempt_0123456789', generation: 1, outcome: 'completed', strength: 'genuine' }
         case 'provider_event': return { kind, ...base, event: { event: 'agent:ready', summary: SENTINEL } as any }
         case 'daemon_facts': return { kind, at: 1, cause: 'provider_detection' }
         case 'mesh_state': return { kind, at: 1, meshId: 'mesh_0123456789' }

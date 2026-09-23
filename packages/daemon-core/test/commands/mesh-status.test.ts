@@ -6,7 +6,9 @@ import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { DaemonCommandRouter } from '../../src/commands/router'
-import { drainPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent } from '../../src/mesh/mesh-events'
+import { notifyMeshCoordinator } from '../../src/mesh/mesh-events'
+// C-W3: notices are turn.notify rows; the helper binds a capturing notice runtime.
+import { drainPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
 import { appendLedgerEntry } from '../../src/mesh/mesh-ledger'
 
 const execFileAsync = promisify(execFile)
@@ -1490,7 +1492,7 @@ describe('mesh_status', () => {
       expect(initial.success).toBe(true)
       expect(initial.pendingCoordinatorEvents).toBeUndefined()
 
-      queuePendingMeshCoordinatorEvent({
+      notifyMeshCoordinator({
         event: 'refine:completed',
         meshId: mesh.id,
         nodeLabel: 'node-pending',

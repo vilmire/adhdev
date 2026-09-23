@@ -134,6 +134,16 @@ function describe(reason: string): string {
 export async function sendNowIntoAgentQueue(
     adapter: QueueWritableAdapter,
     text: string,
+    options?: {
+        /**
+         * Wiring-unification D3: the `OutboundMessage.messageId` this delivery
+         * belongs to, when the caller has one. Threaded through for LOGGING only
+         * (see interrupt-and-deliver.ts's identical option for the full
+         * rationale) — the claim/write/restore sequence below is unchanged, and
+         * `recordAcknowledgedUserInput` ack-stamping is out of scope here.
+         */
+        messageId?: string;
+    },
 ): Promise<QueuedWriteResult> {
     if (typeof adapter.sendMessageDuringGeneration !== 'function') {
         return {
@@ -169,7 +179,8 @@ export async function sendNowIntoAgentQueue(
     if (outcome.accepted) {
         LOG.info(
             'SendNowQueue',
-            `[${adapter.cliType}] handed to agent input queue (len=${body.text.length}, claimed=${claimed})`,
+            `[${adapter.cliType}] handed to agent input queue (len=${body.text.length}, claimed=${claimed})`
+            + (options?.messageId ? ` messageId=${options.messageId}` : ''),
         );
         return { ok: true, claimed };
     }

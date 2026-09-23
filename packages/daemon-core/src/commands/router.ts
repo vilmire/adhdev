@@ -36,6 +36,7 @@ import { coordinatorPromptSpecs } from './low-family/coordinator-prompt.js';
 import { notificationSpecs } from './low-family/notification.js';
 import { daemonLifecycleSpecs } from './low-family/daemon-lifecycle.js';
 import { meshLedgerSpecs } from './low-family/mesh-ledger.js';
+import { turnLedgerIpcSpecs } from './low-family/turn-ledger-ipc.js';
 import { meshNodeLogsSpecs } from './low-family/mesh-node-logs.js';
 import { workerReportSpecs } from './low-family/worker-report.js';
 import { workerMailboxSpecs } from './low-family/worker-mailbox.js';
@@ -68,7 +69,7 @@ import type { TranscriptReplicaStore } from '../seqscribe/transcript-replica-sto
 import { logCommand } from '../logging/command-log.js';
 import { createInteractionId, recordDebugTrace } from '../logging/debug-trace.js';
 import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
-import { handleMeshForwardEvent, queuePendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
+import { handleMeshForwardEvent } from '../mesh/mesh-events.js';
 import { buildMeshHostRequiredFailure, resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../mesh/mesh-refine-batch.js';
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
@@ -143,6 +144,7 @@ import {
 } from './router-aggregate-status.js';
 // ─── Remote mesh-session owner resolution (bodies extracted from this file) ───
 import { resolveRemoteMeshSessionOwnerDaemonId } from './router-mesh-session-owner.js';
+import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from './command-args.js';
 
 // ─── Barrel re-exports: node-identity / git-freshness, refine gates, coordinator config ───
 // These modules were split out of router.ts. Re-export their public surface so the
@@ -317,6 +319,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...notificationSpecs,
             ...daemonLifecycleSpecs,
             ...meshLedgerSpecs,
+            ...turnLedgerIpcSpecs,
             ...meshNodeLogsSpecs,
             ...workerReportSpecs,
             ...workerMailboxSpecs,
@@ -1322,7 +1325,7 @@ export class DaemonCommandRouter {
      * Returns null when the command should run locally.
      */
     private async forwardToOwningDaemon(cmd: string, args: Record<string, unknown>): Promise<CommandRouterResult | null> {
-        if (!this.deps.dispatchMeshCommand || args?._meshDirectDispatch) return null;
+        if (!this.deps.dispatchMeshCommand || readMeshDirectDispatchFlag(args)) return null;
         const targetSessionId = readStringValue(args?.targetSessionId, args?.sessionId, args?.instanceId);
         if (!targetSessionId) return null;
         const localInstance = this.deps.instanceManager?.getInstance(targetSessionId);
@@ -1338,10 +1341,7 @@ export class DaemonCommandRouter {
         const ownerDaemonId = this.resolveRemoteMeshSessionOwnerDaemonId(targetSessionId, ownerNodeIdHint);
         if (!ownerDaemonId) return null;
         LOG.info('Mesh', `[Mesh] Forwarding session-scoped '${cmd}' for remote worker session ${targetSessionId.split('_')[0]} → daemon ${ownerDaemonId.slice(0, 12)}`);
-        const forwarded = await this.deps.dispatchMeshCommand(ownerDaemonId, cmd, {
-            ...args,
-            _meshDirectDispatch: true,
-        });
+        const forwarded = await this.deps.dispatchMeshCommand(ownerDaemonId, cmd, withMeshDirectDispatch(args));
         return (forwarded ?? { success: false, error: 'no response from remote worker daemon' }) as CommandRouterResult;
     }
 

@@ -21,6 +21,7 @@ import type { ProviderEvent, SessionModalState } from '../providers/provider-ins
 import type { CommandInvalidationTopic, CommandSource } from '../commands/command-registry.js';
 import type { SessionRuntimeTarget } from './registry.js';
 import type { SessionLaunchRecord } from './launch-record.js';
+import type { TurnBusEvent } from '../mesh/turn-ledger/types.js';
 
 /** Which code path put a session into the registry. */
 export type RegisterOrigin =
@@ -131,6 +132,14 @@ export type SessionLifecycleEvent =
         termination?: SessionTermination;
     }
     /**
+     * A turn phase committed by the turn ledger (wiring-unification C1/C2): the
+     * ledger's `bus` effect, emitted post-commit. `committed` is the ONE source of
+     * the `agent:generating_completed` / `agent:stopped` wire names
+     * (`turn-ledger/bus-projection.ts`); `started` / `suspended` / `resumed` /
+     * `progress` are the phases the turn-deliver consumer and dashboards follow.
+     */
+    | ({ at: number } & TurnBusEvent)
+    /**
      * TRANSITIONAL (B -> C): today's untyped agent:* / provider:* / mesh:* event bag,
      * already enriched (providerType, instanceId, targetSessionId, workspaceName).
      * C replaces it with `{kind:'turn'}`; nothing new may subscribe to it after B lands.
@@ -168,6 +177,7 @@ export const BUS_EVENT_KINDS = [
     'binding',
     'launch_updated',
     'terminated',
+    'turn',
     'provider_event',
     'daemon_facts',
     'mesh_state',

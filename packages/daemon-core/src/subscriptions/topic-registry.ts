@@ -457,6 +457,36 @@ export class TopicSubscriptionRegistry {
     }
 
     /**
+     * Oldest `lastSentAt` across every subscriber of `topic` (0 if any
+     * subscriber has never been sent — that counts as maximally stale), or
+     * `null` when the topic has no subscribers at all. Read-only: used by the
+     * host runtime's slow WARN-only reconciliation pass (P-II item 1) to
+     * decide whether a topic's bus-edge-driven flush was actually delivered,
+     * never to drive a flush itself.
+     */
+    oldestLastSentAt(topic: TransportTopic): number | null {
+        if (topic === 'workspace.git') {
+            let oldest: number | null = null;
+            for (const subs of this.gitSubscriptions.values()) {
+                for (const entry of subs.values()) {
+                    if (oldest === null || entry.lastSentAt < oldest) oldest = entry.lastSentAt;
+                }
+            }
+            return oldest;
+        }
+        if (!this.isPushTopic(topic)) return null;
+        const byConn = this.pushSubscriptions.get(topic);
+        if (!byConn) return null;
+        let oldest: number | null = null;
+        for (const subs of byConn.values()) {
+            for (const entry of subs.values()) {
+                if (oldest === null || entry.lastSentAt < oldest) oldest = entry.lastSentAt;
+            }
+        }
+        return oldest;
+    }
+
+    /**
      * Consume a `command_executed.invalidates` set (from the command registry): run a flush pass for each
      * invalidated topic the registry owns. NOTE: matches both daemons' historic
      * behavior — invalidation triggers a flush PASS, it does not bypass the

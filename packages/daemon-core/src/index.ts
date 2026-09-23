@@ -359,7 +359,7 @@ export { buildMeshLedgerReconciliationEvidence, buildMeshLedgerReplicaEvidence }
 export type { AnyLedgerSlice, MeshLedgerReconciliationEvidence, MeshLedgerReplicaEvidence, MeshLedgerReplicaStatus } from './mesh/mesh-ledger-reconciliation.js';
 
 // ── Mesh Work Queue (GUPP) ──
-export { summarizeQueueEntryInputForView, enqueueTask, enqueueTaskGraph, MESH_TASK_GRAPH_MAX_TASKS, recordDirectDispatchTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, normalizeMeshTaskMode, validateMeshTaskModeRequest, buildMeshTaskModeViolationError, formatMeshTaskModeViolations, isTaskReadonly, buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, resolveConvergeRequiredTags, providerPinsFromRequiredTags, filterProvidersByRequiredTags, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, terminalizeSiblingDispatch, cleanupTerminalDirectDispatches, markStaleDirectDispatches, deleteDirectDispatchesByTaskId, recordMeshToolCall, assertNoDependencyCycle, hasPendingDependents, describeTaskDependencyState, taskDependenciesSatisfied, normalizeMeshTaskPriority, meshTaskPriorityRank, resolveNotBefore, meshTaskNotBeforeReady, MESH_TASK_PRIORITIES, NOT_BEFORE_RELATIVE_THRESHOLD_MS } from './mesh/mesh-work-queue.js';
+export { summarizeQueueEntryInputForView, enqueueTask, enqueueTaskGraph, MESH_TASK_GRAPH_MAX_TASKS, recordDirectDispatchTask, getQueue, claimNextTask, updateTaskStatus, __writeTaskStatusForTests, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, normalizeMeshTaskMode, validateMeshTaskModeRequest, buildMeshTaskModeViolationError, formatMeshTaskModeViolations, isTaskReadonly, buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, resolveConvergeRequiredTags, providerPinsFromRequiredTags, filterProvidersByRequiredTags, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, terminalizeSiblingDispatch, cleanupTerminalDirectDispatches, markStaleDirectDispatches, deleteDirectDispatchesByTaskId, recordMeshToolCall, assertNoDependencyCycle, hasPendingDependents, describeTaskDependencyState, taskDependenciesSatisfied, normalizeMeshTaskPriority, meshTaskPriorityRank, resolveNotBefore, meshTaskNotBeforeReady, MESH_TASK_PRIORITIES, NOT_BEFORE_RELATIVE_THRESHOLD_MS } from './mesh/mesh-work-queue.js';
 export { parkTaskTargetPin, failRetentionExpiredParkedTask, getParkedTasks } from './mesh/mesh-work-queue.js';
 export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshTaskPriority, MeshWorkQueueStats, MeshQueueMutationOptions, MeshEnqueueTaskOptions, MeshTaskGraphEntrySpec, MeshTaskModeValidationResult, MeshTaskModeViolationDetail, DirectDispatchRecord, MeshToolCallRateResult, MeshTaskParking } from './mesh/mesh-work-queue.js';
 // PIN-PARKING: a stale target pin PARKS the task (held, still addressed, claimable by
@@ -529,8 +529,53 @@ export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, isMeshHost
 // export type { MeshGraph, MeshGraphNode, MeshGraphEdge, MeshGraphNodeType, MeshGraphEdgeType } from './mesh/mesh-visualization.js';
 
 // ── Mesh Events ──
-export { triggerMeshQueue, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, clearPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent, requeueHeldMeshCoordinatorEvents, serializeV2EnvelopeToWire, readV2EnvelopeFromWire, reconcileDirectDispatchCompletionFromTranscript } from './mesh/mesh-events.js';
-export type { PendingMeshCoordinatorEvent, MeshHeldEventRequeueFilter, MeshHeldEventRequeueResult } from './mesh/mesh-events.js';
+// Wiring-unification C-W3: the pending-events queue and its drains are gone —
+// coordinator notices are `turn.notify` entries delivered by the turn.deliver
+// cursor; an MCP-only coordinator reads them over IPC (`get_pending_mesh_events`).
+export { triggerMeshQueue, queuePendingMeshCoordinatorEvent, notifyMeshCoordinator } from './mesh/mesh-events.js';
+export type { PendingMeshCoordinatorEvent } from './mesh/mesh-events.js';
+export {
+  createCoordinatorNotifier,
+  createTurnIngestHandler,
+  createTurnDeliverHandler,
+  createDeliverEdgeWaiter,
+  createTurnDeliverCounters,
+  renderNotice,
+  readCoordinatorNotices,
+  deliverNoticeBacklog,
+  listControlNotices,
+  retractCoordinatorNotices,
+  retractDispatchBlockedNotices,
+  bindMeshNoticeRuntime,
+  meshNoticeRuntime,
+  defaultNoticeEventId,
+  NOTICE_DEDUPE_BUCKET_MS,
+  NOTICE_BACKLOG_WINDOW_MS,
+  type CoordinatorNotice,
+  type CoordinatorNotifier,
+  type ControlNotice,
+  type DeliverCursorEntry,
+  type DeliverEdgeWaiter,
+  type DeliverResult,
+  type MeshNoticeRuntime,
+  type PendingCoordinatorNoticeWire,
+  type TurnDeliverCounters,
+  type TurnDeliverDeps,
+} from './mesh/turn-ledger/deliver.js';
+export { routeNotice, type CoordinatorSessionView, type NoticeRoute } from './mesh/turn-ledger/routing.js';
+export { evaluateNotifySuppression, type NotifySuppression } from './mesh/turn-ledger/suppression.js';
+export {
+  MeshTopicIndex,
+  MESH_INDEX_CONSUMER,
+  parseMeshIndexEntry,
+  readOwnTaskLifecycle,
+  readFleetTaskActivity,
+  hasDispatchAfterTerminal,
+  meshTopicIndexFor,
+  type MeshIndexView,
+  type MeshIndexQuery,
+  type MeshIndexWriterFilter,
+} from './mesh/mesh-topic-index.js';
 // CANCEL-ORPHANS-PINNED-TASK: stopping a worker session strands pending queue tasks pinned to
 // it. Exported for the mcp-server cancel tool, which is where the coordinator KNOWS which
 // session it just killed (the queue lives in the coordinator daemon's store, so this cannot be
@@ -602,8 +647,6 @@ export { DaemonCdpManager } from './cdp/manager.js';
 export { CdpDomHandlers } from './cdp/devtools.js';
 export { setupIdeInstance, registerExtensionProviders, connectCdpManager, probeCdpPort } from './cdp/setup.js';
 export type { CdpSetupContext, SetupIdeInstanceOptions } from './cdp/setup.js';
-export { DaemonCdpScanner } from './cdp/scanner.js';
-export type { CdpScannerOptions } from './cdp/scanner.js';
 export { DaemonCdpInitializer } from './cdp/initializer.js';
 export type { CdpInitializerConfig } from './cdp/initializer.js';
 
@@ -825,7 +868,6 @@ export type { ActivationRef, ActivationPointer, ActivateResult } from './provide
 export { ProviderChannelRuntime, collectSyncTargetTypes } from './providers/channel/runtime.js';
 export type { ChannelSyncReport, ChannelSyncError, ProviderChannelRuntimeOptions } from './providers/channel/runtime.js';
 export { ProviderInstanceManager } from './providers/provider-instance-manager.js';
-export type { ProviderEventListener } from './providers/provider-instance-manager.js';
 // Session lifecycle bus (wiring-unification B1)
 export { createSessionLifecycleBus } from './sessions/lifecycle-bus.js';
 export type { SessionLifecycleBus, Unsubscribe, SubscribeOptions, AsyncSubscribeOptions, BusStats, CreateSessionLifecycleBusOptions } from './sessions/lifecycle-bus.js';
@@ -865,6 +907,7 @@ export {
   CHAT_MESSAGE_INTERNAL_SOURCES,
   classifyChatMessageVisibility,
   hasTrailingToolActivityAfterFinalAssistant,
+  extractFinalAssistantSummaryEvidence,
   isUserFacingChatMessage,
   isActivityChatMessage,
   isInternalChatMessage,
@@ -1042,6 +1085,7 @@ export {
   openSeqscribeNode,
   getSeqscribeDbPath,
   SEQSCRIBE_DB_NAME,
+  SEQSCRIBE_DB_SUFFIX_ENV_VAR,
   WRITER_ID_PREFIX,
   type SeqscribeNodeHandle,
   type SeqscribeNodeOptions,
@@ -1162,18 +1206,6 @@ export {
   __resetMeshPublisherForTests,
   MESH_PUBLISH_SLOTS,
   MESH_RECORD_MAX_WAITING,
-  // @deprecated aliases kept for daemon-cloud's status reporter and the root
-  // seqscribe gate tests until their callers switch (C-W2 REQUESTED EDITS).
-  // `recordMeshEventShadow` had no remaining caller once
-  // tests/seqscribe-convergence.test.mjs switched to the publisher names, and
-  // is removed.
-  configureMeshDualWrite,
-  meshDualWriteInflight,
-  meshDualWriteCounters,
-  isMeshDualWriteActive,
-  isMeshReadPrimary,
-  __forceMeshReadPrimaryForTests,
-  __resetMeshDualWriteForTests,
   type MeshPublisherCounters,
   type MeshRecordEntry,
 } from './seqscribe/mesh-publisher.js';
@@ -1204,45 +1236,30 @@ export { TURN_LEDGER_SCHEMA_VERSION, LEGACY_TURN_TABLES } from './mesh/turn-ledg
 export { projectTurnWireEvent, turnWireEventName, TURN_WIRE_EVENT_NAMES, type TurnWireEvent } from './mesh/turn-ledger/bus-projection.js';
 export type { TurnLedgerPorts, TurnTxnHost, CancelDispatchRequest, TurnCompletionEnvelope } from './mesh/turn-ledger/effects.js';
 export { createMeshRuntimeTurnLedger } from './mesh/turn-ledger/runtime-ledger.js';
-// Phase 2 Stage 4A: the materialized read model and its per-mesh readiness gate.
+// C4 (C-W4): the one turn-lifecycle timer — started by boot/stages/loops.ts.
 export {
-  configureMeshReadModel,
-  queryMeshReadModel,
-  queryMeshReadModelBySession,
-  primeMeshReadModel,
-  rebuildMeshReadModel,
-  meshReadModelStats,
-  meshReadModelMeshIds,
-  hasMeshReadModelIndex,
-  meshReadModelConsumerName,
-  meshReadModelNode,
-  __resetMeshReadModelForTests,
-  READ_MODEL_CONSUMER,
-  type MeshReadModelQuery,
-  type MeshReadModelRecord,
-  type MeshReadModelStats,
-} from './seqscribe/mesh-read-model.js';
+  createTurnScheduler,
+  startTurnScheduler,
+  createLateBoundProbePort,
+  type TurnScheduler,
+  type TurnSchedulerDeps,
+  type TurnTickReport,
+} from './mesh/turn-ledger/scheduler.js';
+// Wiring-unification C-W3: the durable turn cursors on `mesh.<id>.events`
+// (turn.ingest / turn.deliver / mesh.index). The Stage 4A in-memory read model,
+// its readiness gate and the roster module are gone — `mesh_topic_index`
+// answers fleet reads, the turn tables answer own reads.
 export {
-  isMeshReadModelReady,
-  evaluateMeshReadReadiness,
-  reportMeshTopicGrants,
-  meshReadRoutingCounters,
-  __resetMeshReadReadinessForTests,
-  type MeshReadReadiness,
-  type MeshReadFallbackReason,
-  type MeshReadRoutingCounters,
-} from './seqscribe/mesh-read-readiness.js';
-export {
-  readProjectedEntriesByKind,
-  readTaskStatsEntries,
-  readApprovalResolutionEntries,
-  hasMatchingTaskDispatchedEntry,
-  hasDispatchAfterTerminalEntry,
-  readIntentionalCleanupStopEntries,
-  meshReplicaDiagnostics,
-  type ProjectedLedgerView,
-  type MeshReplicaDiagnostics,
-} from './mesh/mesh-read-model-consumers.js';
+  armMeshTurnConsumer,
+  pruneRetiredMeshConsumers,
+  TURN_INGEST_CONSUMER,
+  TURN_DELIVER_CONSUMER,
+  RETIRED_MESH_CONSUMER_PREFIXES,
+  type MeshTopicCursorEntry,
+  type MeshTurnConsumer,
+  type MeshTurnConsumerCounters,
+  type MeshTurnConsumerHandlers,
+} from './seqscribe/mesh-turn-consumer.js';
 export {
   projectMeshLedgerEntry,
   isProjectedPayloadKey,
@@ -1257,64 +1274,6 @@ export {
   maxEntryBytes,
   type ProjectedMeshEvent,
 } from './seqscribe/mesh-event-projection.js';
-// Terminal-notification redrive from the replica. Introduced in Stage 5a-2 as
-// the seqscribe half of the turn outbox's redelivery guarantee and dual-driven
-// with it; since 5c-1 removed the outbox it is the SOLE path by which a
-// coordinator-bound terminal notification is re-armed.
-export {
-  REDRIVE_CONSUMER,
-  REDRIVE_ENV,
-  REDRIVEN_TERMINAL_KINDS,
-  isTerminalRedriveEnabled,
-  assertRedriveConsumerNameIsPruneSafe,
-  buildRedriveInjection,
-  consumeRedriveEntry,
-  getRedriveState,
-  getTotalRedriveInjected,
-  getTotalRedriveSkipped,
-  __resetTerminalRedriveForTests,
-  // Stage 5a-4: quarantine — auto-resolving skip-and-advance for a redrive
-  // leg that has failed QUARANTINE_FAILURE_THRESHOLD times in a row, so a
-  // permanently-stuck cursor stops pinning the §7.6 archive floor open.
-  QUARANTINE_FAILURE_THRESHOLD,
-  QUARANTINE_COOLDOWN_MS,
-  isMeshQuarantined,
-  getQuarantinedMeshCount,
-  getTotalQuarantineSkips,
-  type RedriveMeshState,
-  type RedriveProjectedEntry,
-} from './mesh/mesh-terminal-redrive.js';
-// The redrive leg's health surface (injection total + 5a-4 quarantine counters).
-// ★ Stage 5c-1: this replaced the outbox coverage join and the outbox backlog
-// diagnostics, whose subject — `mesh_turn_outbox` — was removed. See
-// mesh-terminal-redrive-diagnostics.ts for why the coverage half could not be
-// carried forward (its denominator was the outbox).
-export {
-  readTerminalRedriveDiagnostics,
-  type TerminalRedriveDiagnostics,
-} from './mesh/mesh-terminal-redrive-diagnostics.js';
-export {
-  configureTerminalRedrive,
-  ensureTerminalRedriveConsumer,
-  ensureTerminalRedriveConsumersAtBoot,
-  registeredRedriveMeshIds,
-  __resetTerminalRedriveConsumerForTests,
-  type RedriveEntryEnvelope,
-  type RedriveHandler,
-} from './seqscribe/mesh-terminal-redrive-consumer.js';
-// Phase 2 Stage 3: the parity verifier that compares the two stores.
-export {
-  runMeshParityCheck,
-  meshParityCounters,
-  __resetMeshParityForTests,
-  PARITY_CONSUMER,
-  MISMATCH_LOG_CAP,
-  type MeshParityCounters,
-  type MeshParityMismatch,
-  type MeshParityMismatchKind,
-  type MeshParityResult,
-  type ParityLedgerEntry,
-} from './seqscribe/mesh-parity.js';
 // §8 unit 2: transcript publisher + parity counters. Exported so the cloud
 // daemon's status projection can pass them to `summarizeSeqscribeStats` the
 // same way it already passes the mesh-axis `dualWrite`/`parity` counters.
@@ -1355,15 +1314,6 @@ export {
   FLEET_STATUS_SUB_VIEW,
   type FleetStatusPeerViewConsumer,
 } from './seqscribe/fleet-status-peer-view.js';
-export {
-  startMeshParityLoop,
-  PARITY_INTERVAL_MS,
-  PARITY_TAIL,
-  PARITY_BACKFILL_CAP,
-  PARITY_BACKFILL_FAILURE_LIMIT,
-  type MeshParityLoopHandle,
-  type MeshParityLoopOptions,
-} from './mesh/mesh-parity-loop.js';
 // §8 unit 5 ("web chat pane consumer cutover"): type-only, zero-runtime-cost
 // re-export of the `session.<safeSessionId>.transcript` wire contract (§8
 // unit 1) so web-core's roster adapter can type-import
@@ -1498,3 +1448,8 @@ export type { StatusEventEmitterDeps, StatusEventHideMute, ResolveStatusEventHid
 export type { HotChatSessionState, SessionModalState } from './providers/provider-instance.js';
 export { subscribeLifecycleTrace, formatLifecycleTraceLine } from './sessions/lifecycle-trace.js';
 export type { LifecycleTraceLog } from './sessions/lifecycle-trace.js';
+
+// D-prep: the `_meshDirectDispatch` forwarding-loop guard — one reader, one writer
+// (hosts forwarding a mesh command to themselves use the writer too).
+export { readMeshDirectDispatchFlag, withMeshDirectDispatch } from './commands/command-args.js';
+export type { MeshDirectDispatchArgs } from './commands/command-args.js';

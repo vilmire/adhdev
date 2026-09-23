@@ -42,6 +42,7 @@ import { LOG } from '../logging/logger.js';
 import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
 import { evaluateMeshStopTaskScope } from './mesh-stop-task-scope.js';
 import { interruptAndDeliver, type InterruptibleAdapter } from './interrupt-and-deliver.js';
+import { readMeshContext, readMessageId, type AgentCommandArgs, type MeshCommandContext } from './command-args.js';
 // MESH-IMAGE-DISPATCH: shared with the dashboard send path so a multipart dispatch is
 // deduplicated by the SAME signature on both routes rather than by two divergent rules.
 import { buildSendInputSignature } from './chat-commands-shared.js';
@@ -1851,7 +1852,7 @@ export class DaemonCliManager {
     }
 
     /** `agent_command`: send_chat / clear_history / stop against a CLI session. */
-    async agentCommand(args: any): Promise<CommandResult> {
+    async agentCommand(args: AgentCommandArgs): Promise<CommandResult> {
         const agentType = args?.agentType || args?.cliType;
         const action = args?.action;
         if (!agentType || !action) throw new Error('agentType and action required');
@@ -1864,8 +1865,8 @@ export class DaemonCliManager {
         // closed when no session is bound to the node so the coordinator
         // launches/retries instead of mis-landing the work.
         const meshScopeNodeId = (() => {
-            const mc = (args as any)?.meshContext;
-            return mc && typeof mc === 'object' && typeof mc.nodeId === 'string' ? mc.nodeId.trim() : '';
+            const mc = readMeshContext(args);
+            return typeof mc?.nodeId === 'string' ? mc.nodeId.trim() : '';
         })();
         let found: { adapter: CliAdapter; key: string } | null;
         if (meshScopeNodeId && !args?.targetSessionId) {
@@ -1894,7 +1895,7 @@ export class DaemonCliManager {
             // event has a routing marker by the time it fires.
             // mesh_send_task --direct ships meshContext for plain CLI
             // sessions that were never launched as mesh delegates.
-            const meshContext = (args as any)?.meshContext;
+            const meshContext = readMeshContext(args);
             if (meshContext && typeof meshContext === 'object' && typeof meshContext.meshId === 'string' && meshContext.meshId) {
                 const targetInstanceId = key;
                 let stampResult: { stamped: boolean; reason?: string; holderSessionId?: string } | undefined;
@@ -1911,6 +1912,7 @@ export class DaemonCliManager {
                         // worker session so its lifecycle events echo it back for the
                         // coordinator's reducer.
                         ...(typeof meshContext.attemptId === 'string' && meshContext.attemptId ? { attemptId: meshContext.attemptId } : {}),
+                        ...(typeof meshContext.attemptGeneration === 'number' && Number.isInteger(meshContext.attemptGeneration) && meshContext.attemptGeneration >= 0 ? { attemptGeneration: meshContext.attemptGeneration } : {}),
                         ...(typeof meshContext.coordinatorDaemonId === 'string' && meshContext.coordinatorDaemonId ? { coordinatorDaemonId: meshContext.coordinatorDaemonId } : {}),
                         // SESSION-ISOLATION: the originating coordinator SESSION, so this
                         // worker's completion routes back to the exact dispatching session
@@ -1946,7 +1948,7 @@ export class DaemonCliManager {
                 // a worker that never completes (TTL expiry) are unaffected. Re-armed on
                 // every dispatch (fresh armedAt) and one-shot-cleared at the completion
                 // emission (emitGeneratingCompleted) so subsequent turns notify normally.
-                if ((meshContext as any).silentIdlePush === true) {
+                if (meshContext.silentIdlePush === true) {
                     try {
                         const workerInst = this.deps.getInstanceManager()?.getInstance(targetInstanceId);
                         if (workerInst && typeof workerInst.updateSettings === 'function') {
@@ -1994,8 +1996,8 @@ export class DaemonCliManager {
             // not the last-write-wins session scalar. Carried for both local and
             // remote (P2P-echoed meshContext) dispatch; absent for plain ad-hoc chat.
             const meshTaskId = (meshContext && typeof meshContext === 'object'
-                && typeof (meshContext as any).taskId === 'string' && (meshContext as any).taskId.trim())
-                ? (meshContext as any).taskId as string
+                && typeof meshContext.taskId === 'string' && meshContext.taskId.trim())
+                ? meshContext.taskId
                 : undefined;
             const forceSend = args?.force === true || args?.forceSend === true;
             // DISPATCH-SOURCE-TRACE: every agent_command send_chat issuer tags its
@@ -2003,8 +2005,8 @@ export class DaemonCliManager {
             // be attributed from the daemon log WITHOUT timing inference. Logged
             // before the idempotency guard so suppressed duplicates are traced too.
             // 'untagged' itself is a signal: an issuer this change did not cover.
-            const dispatchSource = typeof (args as any)?.dispatchSource === 'string' && (args as any).dispatchSource.trim()
-                ? (args as any).dispatchSource.trim() : 'untagged';
+            const dispatchSource = typeof args?.dispatchSource === 'string' && args.dispatchSource.trim()
+                ? args.dispatchSource.trim() : 'untagged';
             LOG.info('MeshDispatch', `agent_command send_chat on session ${key}${meshTaskId ? ` task=${meshTaskId}` : ''} dispatchSource=${dispatchSource}`);
             // PTY-SUBMIT-IDEMPOTENCY: run the duplicate-submission guard BEFORE the
             // adapter write — this is the last funnel before the PTY. forceSend is an
@@ -2100,9 +2102,9 @@ export class DaemonCliManager {
                 throw e;
             }
             const targetInstance = this.deps.getInstanceManager()?.getInstance(key) as
-                | { recordAcknowledgedUserInput?: (input: unknown) => void }
+                | { recordAcknowledgedUserInput?: (input: unknown, sourceMessageId?: string) => void }
                 | undefined;
-            targetInstance?.recordAcknowledgedUserInput?.(input);
+            targetInstance?.recordAcknowledgedUserInput?.(input, readMessageId(args));
             return {
                 success: true,
                 status: BUSY_AGENT_STATUSES.has(currentStatus) ? currentStatus : 'generating',
@@ -2132,7 +2134,7 @@ export class DaemonCliManager {
             // Unscoped stops (no taskId) and sessions with no resolvable task identity
             // are unaffected; see mesh-stop-task-scope.ts for why those fail open.
             const stopScopeTaskId = (() => {
-                const mc = (args as any)?.meshContext;
+                const mc = readMeshContext(args);
                 return mc && typeof mc === 'object' && typeof mc.taskId === 'string' ? mc.taskId.trim() : '';
             })();
             const stopScope = evaluateMeshStopTaskScope({

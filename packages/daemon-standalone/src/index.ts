@@ -73,7 +73,6 @@ import {
 
 // ─── Constants ───
 const DEFAULT_PORT = DEFAULT_STANDALONE_PORT;
-const STATUS_INTERVAL = 2000;
 // Standalone auth/session/preference helpers live in ./standalone-auth.ts
 // (pure move, 2026-09-18). Re-exported so every existing importer keeps
 // resolving them through this entry unchanged.
@@ -149,7 +148,6 @@ class StandaloneServer {
   private wsConnectionIds = new WeakMap<WebSocket, string>();
   private wsByConnectionId = new Map<string, WebSocket>();
   private wsConnectionSeq = 0;
-  private statusTimer: NodeJS.Timeout | null = null;
   private lastStatusBroadcastAt = 0;
   private statusBroadcastPending = false;
   private lastWsStatusSignature: string | null = null;
@@ -340,16 +338,14 @@ class StandaloneServer {
       }
     });
 
-    // 7. Status broadcast timer (a safety net: every facts / status edge already
-    // pushes through the bus subscribers).
-    this.statusTimer = setInterval(() => {
-      this.scheduleBroadcastStatus();
-      void this.chatTail.flush(undefined, { onlyActive: true });
-      this.flushTopic('machine.runtime');
-      this.flushTopic('session_host.diagnostics');
-      this.flushTopic('session.modal');
-      this.flushTopic('workspace.git');
-    }, STATUS_INTERVAL);
+    // 7. (was: a 2s "status broadcast timer" safety net.) Every facts / status
+    // edge already pushes through the bus subscribers (host.status-facts →
+    // scheduleBroadcastStatus, host.chat-tail → chatTail.flush, host.modal /
+    // host.mesh-state / host.topics → the push-topic flushes above) — see
+    // boot/host-runtime.ts's DaemonHostRuntime wiring. The interval is gone;
+    // a 60s WARN-only reconciliation tick (host-subscribers.ts
+    // subscribeHostTopicReconciliation, armed inside createDaemonHostRuntime)
+    // is the only thing left watching for a silently-missed edge.
 
     // 8. Start listening
     this.running = true;
@@ -630,11 +626,6 @@ class StandaloneServer {
     this.running = false;
 
     console.log('\n   Shutting down...');
-
-    if (this.statusTimer) {
-      clearInterval(this.statusTimer);
-      this.statusTimer = null;
-    }
 
     // Close WS clients
     for (const ws of this.clients) {

@@ -20,14 +20,36 @@ import {
     daemonIdsEquivalent,
     normalizeNodeCapabilitySlots,
 } from '@adhdev/mesh-shared';
-import {
-    getPendingMeshCoordinatorEvents,
-    getMeshV2DrainCounters,
-    getMeshV2BackstopCounters,
-    isMeshProtocolV2EnforceEnabled,
-    getPendingRetentionCounters,
-} from '../../mesh/mesh-events.js';
-import type { MeshProtocolV2Counters, MeshPendingRetentionCounters } from '../../repo-mesh-types.js';
+import { meshNoticeRuntime, type PendingCoordinatorNoticeWire } from '../../mesh/turn-ledger/deliver.js';
+
+/**
+ * Undelivered coordinator notices of this daemon, rendered WITHOUT claiming
+ * (mesh_status is a read — the MCP inbox read / the turn.deliver cursor
+ * deliver). Replaces the pending-events peek.
+ */
+function peekCoordinatorNotices(meshId: string): readonly PendingCoordinatorNoticeWire[] {
+    try {
+        return meshNoticeRuntime.current()?.readNotices(meshId, { ack: false }) ?? [];
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * C7-5 freshness gate: another writer's `mesh.<id>.events` entries have not
+ * replicated here yet (Beacon `staleness().behind` — a per-writer map, so any
+ * writer behind > 0). Computed on EVERY call and attached on the cached, stale
+ * and live paths alike, so a cached snapshot never carries stale replication
+ * state. Fleet-wide reads (node lifecycle, sibling activity) are advisory
+ * while it is set.
+ */
+function replicationMarker(meshId: string): { replication?: 'pending' } {
+    try {
+        return meshNoticeRuntime.current()?.replicationPending(meshId) ? { replication: 'pending' } : {};
+    } catch {
+        return {};
+    }
+}
 import { getTurnPresentationMetrics } from '../../mesh/mesh-turn-presentation.js';
 import { getRecentUnroutableDeliveries } from '../../mesh/mesh-routing.js';
 import { normalizeMeshDaemonRole, resolveMeshHostStatus } from '../../mesh/mesh-host-ownership.js';
@@ -101,7 +123,8 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     const peekScope = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
                         ? args.coordinatorDaemonId.trim()
                         : (ctx.deps.statusInstanceId || undefined);
-                    const pendingCoordinatorEventCount = getPendingMeshCoordinatorEvents(meshId, peekScope).length;
+                    void peekScope;
+                    const pendingCoordinatorEventCount = peekCoordinatorNotices(meshId).length;
                     const hadAggregateCache = ctx.aggregateMeshStatusCache.has(meshId);
                     // The never-cached, process-live extras. The live path strips these
                     // out of the cacheable snapshot (see the destructure below the
@@ -110,7 +133,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     // snapshot would carry no pending events at all. Built lazily
                     // because the cold path recomputes them further down anyway.
                     const attachLiveOnlyExtras = async (snapshot: any) => {
-                        const pendingCoordinatorEvents = getPendingMeshCoordinatorEvents(meshId, peekScope);
+                        const pendingCoordinatorEvents = peekCoordinatorNotices(meshId);
                         // asyncRefineJobs is DERIVED from the pending events (plus a
                         // kind-filtered ledger read) — both cheap, neither involving the
                         // peer probe that makes the full rebuild slow. When events ARE
@@ -163,13 +186,8 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                 const unroutableDeliveries = getRecentUnroutableDeliveries();
                                 return unroutableDeliveries.length > 0 ? { unroutableDeliveries } : {};
                             })(),
-                            meshProtocolV2Counters: {
-                                enforce: isMeshProtocolV2EnforceEnabled(),
-                                drain: { ...getMeshV2DrainCounters() },
-                                backstop: { ...getMeshV2BackstopCounters() },
-                            } satisfies MeshProtocolV2Counters,
-                            pendingRetentionCounters: { ...getPendingRetentionCounters() } satisfies MeshPendingRetentionCounters,
                             turnPresentationCounters: getTurnPresentationMetrics(),
+                            ...replicationMarker(meshId),
                         };
                     };
                     // Strict serve requires a fully fresh snapshot AND no undrained
@@ -755,25 +773,12 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     const callerCoordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
                         ? args.coordinatorDaemonId.trim()
                         : (ctx.deps.statusInstanceId || undefined);
-                    const pendingCoordinatorEvents = getPendingMeshCoordinatorEvents(meshId, callerCoordinatorDaemonId);
+                    void callerCoordinatorDaemonId;
+                    const pendingCoordinatorEvents = peekCoordinatorNotices(meshId);
                     // R4: surface recent fail-loud routing drops so a coordinator/operator can see
                     // that a worker completion was lost (envelope present, mesh unresolved) instead
                     // of it vanishing silently. Diagnostic-only — never cached (see omit below).
                     const unroutableDeliveries = getRecentUnroutableDeliveries();
-                    // T6 (B3c): live enforce/observability counters from this daemon. A
-                    // process-lifetime snapshot (never cached — like unroutableDeliveries)
-                    // so an operator/coordinator can read enforce state, quarantine tallies,
-                    // and last-resort backstop fires straight from the aggregate status.
-                    const meshProtocolV2Counters: MeshProtocolV2Counters = {
-                        enforce: isMeshProtocolV2EnforceEnabled(),
-                        drain: { ...getMeshV2DrainCounters() },
-                        backstop: { ...getMeshV2BackstopCounters() },
-                    };
-                    // Pending-event retention sweep counters — surfaced the same way as
-                    // meshProtocolV2Counters (process-lifetime, never cached) so an operator
-                    // can see undrainedExpired (genuine silent-drop risk, mirrored to
-                    // event_held) without having to run mesh_requeue_held_events first.
-                    const pendingRetentionCounters: MeshPendingRetentionCounters = { ...getPendingRetentionCounters() };
                     // Stage 6: unified turn-presentation observability — authority source
                     // usage, shadow divergences (reason|surface|provider) and age gauges.
                     // Process-lifetime snapshot (never cached — like meshProtocolV2Counters).
@@ -893,8 +898,6 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         ...(historicalSessions ? { historicalSessions } : {}),
                         ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),
                         ...(unroutableDeliveries.length > 0 ? { unroutableDeliveries } : {}),
-                        meshProtocolV2Counters,
-                        pendingRetentionCounters,
                         turnPresentationCounters,
                         activeRefineJobs: Array.from(ctx.runningRefineJobs.values())
                             .filter(job => job.meshId === meshId)
@@ -907,7 +910,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                 targetCoordinatorDaemonId: job.targetCoordinatorDaemonId,
                             })),
                     };
-                    const { pendingCoordinatorEvents: _pendingCoordinatorEvents, unroutableDeliveries: _unroutableDeliveries, meshProtocolV2Counters: _meshProtocolV2Counters, pendingRetentionCounters: _pendingRetentionCounters, turnPresentationCounters: _turnPresentationCounters, ...cacheableStatusResult } = statusResult as any;
+                    const { pendingCoordinatorEvents: _pendingCoordinatorEvents, unroutableDeliveries: _unroutableDeliveries, turnPresentationCounters: _turnPresentationCounters, replication: _replication, ...cacheableStatusResult } = statusResult as any;
                     // Verbose carries full mission goals; never store it in the shared
                     // (compact) aggregate cache or a later compact poll would return the
                     // heavy goals from cache. Return it without caching.
@@ -918,9 +921,8 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         ...rememberedStatus,
                         ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),
                         ...(unroutableDeliveries.length > 0 ? { unroutableDeliveries } : {}),
-                        meshProtocolV2Counters,
-                        pendingRetentionCounters,
                         turnPresentationCounters,
+                        ...replicationMarker(meshId),
                     };
                     logRepoMeshStatusDebug('return_live', {
                         meshId,

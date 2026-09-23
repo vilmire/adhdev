@@ -9,7 +9,7 @@ import { resumePendingRefineJobsOnStartup } from '../../src/commands/router-refi
 import { createMesh, addNode } from '../../src/config/mesh-config'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger'
-import { getPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending'
+import { getPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
 import { shouldNotifyRefineCloseOut } from '../../src/mesh/mesh-refine-zombie-sweep'
 
 /**

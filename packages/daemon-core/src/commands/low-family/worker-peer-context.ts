@@ -9,21 +9,18 @@
  * this mesh are doing or have left behind. Design §6 names the reused APIs
  * explicitly ("신규 저장소 0") and this handler follows that:
  *
- *  - `readProjectedEntriesByKind` (mesh/mesh-read-model-consumers.ts) — the
- *    mesh's own lifecycle facts: which task went to which status, on which
- *    node, when. This is the roster's own routing point (read-model when
- *    ready, ledger fallback otherwise — design §6's "read model이 미준비면 원장
- *    폴백이 성립한다"), so this handler behaves the same on a daemon whose
- *    seqscribe replica is not wired at all as on one where it is. Both paths
- *    are METADATA CLASS (mesh-event-projection.ts's allow-list, or the
- *    fallback's own scalar-only payload filter) — no free text travels
- *    through here, so nothing here can leak a transcript even by accident.
- *    ★Deliberately NOT `queryMeshReadModel` directly — that module's own
- *    header restricts direct callers to its enumerated roster file.
+ *  - `readFleetTaskActivity` (mesh/mesh-topic-index.ts) — the mesh's own
+ *    lifecycle facts from the durable `mesh_topic_index` (fed by the
+ *    `mesh.index` cursor on `mesh.<id>.events`; wiring-unification C-W3
+ *    replaced the Stage 4A in-memory read model and its ledger fallback), with
+ *    `turn.committed` projected onto task_completed / task_failed. A daemon
+ *    whose replica is not wired simply has an empty index → no peer facts.
+ *    METADATA CLASS only (mesh-event-projection.ts's allow-list) — no free
+ *    text travels through here, so nothing can leak a transcript by accident.
  *  - `getStoredHandoffNote` (mesh/worker-handoff-notes.ts) — the C-authored
  *    prose (intent, conflict guidance, follow-ups) for a sibling task, when
  *    THIS daemon holds it. A sibling whose report landed on a different
- *    daemon shows only its read-model facts, degrading gracefully rather than
+ *    daemon shows only its index facts, degrading gracefully rather than
  *    failing — matching the note store's own documented behavior for C.
  *
  * ─── Scope enforcement ─────────────────────────────────────────────────────
@@ -37,7 +34,7 @@ import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import type { MeshLedgerKind } from '../../mesh/mesh-ledger.js';
 import { defineCommandSpecs } from '../command-registry.js';
 
-/** Read-model event kinds that carry sibling lifecycle signal worth surfacing. */
+/** Index event kinds that carry sibling lifecycle signal worth surfacing. */
 const PEER_EVENT_KINDS: MeshLedgerKind[] = [
     'task_dispatched',
     'task_completed',
@@ -51,7 +48,7 @@ const PEER_EVENT_KINDS: MeshLedgerKind[] = [
  *  worker asking "what are my siblings doing" gets the most recent slice, with
  *  an announced omission count rather than a silently truncated list. */
 export const PEER_CONTEXT_MAX_PEERS = 10;
-/** How far back the read-model query looks for lifecycle events at all. */
+/** How far back the index query looks for lifecycle events at all. */
 const PEER_CONTEXT_EVENT_TAIL = 300;
 
 export const workerPeerContextHandlers: Record<string, LowFamilyHandler> = {
@@ -72,7 +69,7 @@ export const workerPeerContextHandlers: Record<string, LowFamilyHandler> = {
                 ? args.topic.trim().toLowerCase()
                 : undefined;
 
-            const { readProjectedEntriesByKind } = await import('../../mesh/mesh-read-model-consumers.js');
+            const { readFleetTaskActivity, meshTopicIndexFor } = await import('../../mesh/mesh-topic-index.js');
             const { getStoredHandoffNote } = await import('../../mesh/worker-handoff-notes.js');
             const { MeshRuntimeStore } = await import('../../mesh/mesh-runtime-store.js');
 
@@ -84,7 +81,9 @@ export const workerPeerContextHandlers: Record<string, LowFamilyHandler> = {
                 } catch { /* fall through — an unresolvable own-mission degrades to no filter match */ }
             }
 
-            const events = readProjectedEntriesByKind(identity.meshId, PEER_EVENT_KINDS, PEER_CONTEXT_EVENT_TAIL);
+            // C3 `fleet` read: a worker owns none of its siblings' attempts, so it
+            // reads every writer's entries from the durable topic index.
+            const events = readFleetTaskActivity(meshTopicIndexFor(MeshRuntimeStore.getInstance().db), identity.meshId, PEER_EVENT_KINDS, PEER_CONTEXT_EVENT_TAIL);
 
             // Latest event per sibling task, own task excluded. Iterating in the
             // read model's ascending order and overwriting means the LAST write

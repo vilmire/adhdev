@@ -308,6 +308,24 @@ export function configDirChannelMismatch(
 export const ALLOW_TRACK_MISMATCH_ENV_VAR = 'ADHDEV_ALLOW_TRACK_MISMATCH';
 
 /**
+ * C7-3 escape hatch for exactly one file inside an inherited config dir: the
+ * seqscribe DB. `warnIfInheritedConfigDirIsOccupied` (daemon-standalone's
+ * bootstrap-config-dir.ts) WARNS but deliberately never redirects the config
+ * dir itself — most shared files there are an ordinary, sanctioned power-user
+ * choice. The seqscribe DB is different: a second opener of the same file
+ * fails outright with `ERR_DB_OWNED` (Store.init's cross-process owner lock),
+ * so there is nothing to "warn and let the operator decide" about — it is
+ * simply broken. When the bootstrap detects that specific hazard it sets this
+ * env var so `seqscribe/node.ts getSeqscribeDbPath()` names a different file
+ * inside the SAME (still-shared, still-honored) config dir, without widening
+ * the warn-not-refuse contract for anything else in it. Defined here (not in
+ * seqscribe/node.ts) so the standalone bootstrap — which must run before any
+ * other module, including the seqscribe/better-sqlite3 chain, evaluates — can
+ * import it from this dependency-free leaf.
+ */
+export const SEQSCRIBE_DB_SUFFIX_ENV_VAR = 'ADHDEV_SEQSCRIBE_DB_SUFFIX';
+
+/**
  * The daemon PID file a track's own daemon writes inside its config dir.
  * Mirrors daemon-cloud/src/daemon-pid.ts getDaemonPidFile(): the stable
  * default port keeps the historical bare `daemon.pid` name, every other

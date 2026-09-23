@@ -14,6 +14,7 @@ import { redactLogLines } from '../../logging/log-redactor.js';
 import type { CommandRouterResult } from '../router.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
+import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from '../command-args.js';
 
 export const meshNodeLogsHandlers: Record<string, LowFamilyHandler> = {
     get_mesh_node_logs: async (ctx: LowFamilyContext, args: any) => {
@@ -38,11 +39,8 @@ export const meshNodeLogsHandlers: Record<string, LowFamilyHandler> = {
         // daemonIdsEquivalent: a legacy-form daemonId resolving to this machine's core is
         // local — read locally instead of forwarding. Equivalent → local.
         const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent(nodeDaemonId, selfDaemonId);
-        if (isRemote && ctx.deps.dispatchMeshCommand && !args?._meshDirectDispatch) {
-            const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'get_mesh_node_logs', {
-                ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
-                _meshDirectDispatch: true,
-            });
+        if (isRemote && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
+            const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'get_mesh_node_logs', withMeshDirectDispatch(args));
             return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
         }
 
