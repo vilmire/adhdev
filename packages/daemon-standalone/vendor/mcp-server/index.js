@@ -118702,6 +118702,19 @@ ${marker}`,
         payload: entry.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload) ? entry.payload : {}
       };
     }
+    function toMissionListSummaryWire(summary) {
+      const base = {
+        id: summary.id,
+        meshId: summary.meshId,
+        title: summary.title,
+        status: summary.status,
+        ...summary.source !== void 0 ? { source: summary.source } : {},
+        tasks: summary.tasks,
+        ...summary.stats !== void 0 ? { stats: summary.stats } : {},
+        ...summary.brief !== void 0 ? { brief: summary.brief } : {}
+      };
+      return typeof summary.goal === "string" ? { ...base, goal: summary.goal } : { ...base, goalPreview: summary.goalPreview ?? "", goalTruncated: summary.goalTruncated === true };
+    }
     function readAudit(audit) {
       const a = audit ?? {};
       const str6 = (v) => typeof v === "string" && v ? v : void 0;
@@ -118787,7 +118800,14 @@ ${marker}`,
               ...req.limit !== void 0 ? { limit: req.limit } : {},
               ...req.historyIdLimit !== void 0 ? { historyIdLimit: req.historyIdLimit } : {}
             });
-            return { success: true, ...result };
+            const response = {
+              missions: result.missions.map(toMissionListSummaryWire),
+              historyFold: result.historyFold ?? null,
+              truncated: result.truncated,
+              matched: result.matched,
+              ...result.overflowIds ? { overflowIds: result.overflowIds } : {}
+            };
+            return { success: true, ...response };
           } catch (e) {
             return failure4(e);
           }

@@ -48,6 +48,7 @@ import {
     type RecordLocalResponse,
     type RecoveryContextQueryResponse,
     type ToolCallRecordResponse,
+    type MissionListSummaryWire,
 } from '@adhdev/mesh-shared';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import type { MeshLedgerEntry } from '../../mesh/mesh-ledger.js';
@@ -156,6 +157,23 @@ const ledgerQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) 
 
 // ─── mission_list_query (C-W9b) ─────────────────────────────────────────────
 
+/** The wire row for one mission: only the keys `isMissionListSummaryWire` allows (verbose ⇒ `goal`, slim ⇒ `goalPreview`+`goalTruncated`). */
+function toMissionListSummaryWire(summary: Record<string, unknown>): MissionListSummaryWire {
+    const base = {
+        id: summary.id,
+        meshId: summary.meshId,
+        title: summary.title,
+        status: summary.status,
+        ...(summary.source !== undefined ? { source: summary.source } : {}),
+        tasks: summary.tasks,
+        ...(summary.stats !== undefined ? { stats: summary.stats } : {}),
+        ...(summary.brief !== undefined ? { brief: summary.brief } : {}),
+    };
+    return (typeof summary.goal === 'string'
+        ? { ...base, goal: summary.goal }
+        : { ...base, goalPreview: summary.goalPreview ?? '', goalTruncated: summary.goalTruncated === true }) as MissionListSummaryWire;
+}
+
 const missionListQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) => {
     const req = decodeMissionListQueryRequest(args);
     if (!req) return badRequest('mission_list_query');
@@ -168,7 +186,23 @@ const missionListQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: 
             ...(req.limit !== undefined ? { limit: req.limit } : {}),
             ...(req.historyIdLimit !== undefined ? { historyIdLimit: req.historyIdLimit } : {}),
         });
-        return { success: true, ...(result as unknown as MissionListQueryResponse) };
+        // Project each summary onto the wire contract. `listMeshMissionsForTool`
+        // returns the daemon's own `MeshMissionSummary`/`MeshMissionSlimSummary`,
+        // which still carries the legacy flat counters (`total`/`pending`/…),
+        // `createdAt`/`updatedAt`/`lastActivityAt` and `closeCandidateEmittedAt`
+        // next to the `tasks` aggregate; the strict wire decoder
+        // (`isMissionListSummaryWire`, `hasOnlyKeys`) rejects any of them, so
+        // spreading the summary raw made `mesh_mission_list` fail
+        // `response failed decode` on every mesh with ≥1 mission (found live on
+        // preview, 2026-09-25 — the unit tests only ever listed an empty mesh).
+        const response: MissionListQueryResponse = {
+            missions: (result.missions as unknown as Record<string, unknown>[]).map(toMissionListSummaryWire),
+            historyFold: result.historyFold ?? null,
+            truncated: result.truncated,
+            matched: result.matched,
+            ...(result.overflowIds ? { overflowIds: result.overflowIds } : {}),
+        };
+        return { success: true, ...response };
     } catch (e) {
         return failure(e);
     }
