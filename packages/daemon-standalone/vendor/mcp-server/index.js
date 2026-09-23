@@ -130054,6 +130054,89 @@ ${effect.notification.body || ""}`.trim();
               },
               description: "Optional map from user-facing model labels to provider-specific CLI values used to fill {{model}} in modelLaunchArgs. A model absent from the map passes through unchanged."
             },
+            modelDiscovery: {
+              description: "How this machine can discover the CLI's actually-installed models at runtime, overlaying the manifest's static modelOptions. Discriminated on 'kind' so a 'none' declaration cannot carry a half-configured command and a 'command'/'file' entry cannot omit its required fields.",
+              oneOf: [
+                {
+                  type: "object",
+                  description: "Discover models by spawning the provider's own listing subcommand and parsing stdout.",
+                  required: [
+                    "kind",
+                    "argv",
+                    "parse"
+                  ],
+                  additionalProperties: false,
+                  properties: {
+                    kind: {
+                      const: "command"
+                    },
+                    argv: {
+                      type: "array",
+                      minItems: 1,
+                      items: {
+                        type: "string",
+                        minLength: 1
+                      }
+                    },
+                    parse: {
+                      $ref: "#/$defs/modelDiscoveryParse"
+                    },
+                    ttlMs: {
+                      type: "integer",
+                      minimum: 0
+                    },
+                    timeoutMs: {
+                      type: "integer",
+                      minimum: 0
+                    }
+                  }
+                },
+                {
+                  type: "object",
+                  description: "Discover models by reading a local config file the CLI itself maintains.",
+                  required: [
+                    "kind",
+                    "path",
+                    "parse"
+                  ],
+                  additionalProperties: false,
+                  properties: {
+                    kind: {
+                      const: "file"
+                    },
+                    path: {
+                      type: "string",
+                      minLength: 1
+                    },
+                    parse: {
+                      $ref: "#/$defs/modelDiscoveryParse"
+                    },
+                    ttlMs: {
+                      type: "integer",
+                      minimum: 0
+                    }
+                  }
+                },
+                {
+                  type: "object",
+                  description: "Declares that this provider cannot be discovered, with a reason surfaced to the user verbatim.",
+                  required: [
+                    "kind",
+                    "reason"
+                  ],
+                  additionalProperties: false,
+                  properties: {
+                    kind: {
+                      const: "none"
+                    },
+                    reason: {
+                      type: "string",
+                      minLength: 1
+                    }
+                  }
+                }
+              ]
+            },
             modelOptions: {
               type: "array",
               items: {
@@ -131063,6 +131146,66 @@ ${effect.notification.body || ""}`.trim();
                 },
                 confirmLabel: {
                   type: "string"
+                }
+              }
+            },
+            modelDiscoveryParse: {
+              type: "object",
+              description: "Parse instructions for a modelDiscovery source. Which fields apply depends on 'format'; the parser ignores the rest.",
+              required: [
+                "format"
+              ],
+              additionalProperties: false,
+              properties: {
+                format: {
+                  enum: [
+                    "json",
+                    "lines",
+                    "toml-table-keys"
+                  ]
+                },
+                itemsPath: {
+                  type: "string",
+                  description: "format: json \u2014 dot path to the array of model records. Absent \u2192 the root must be an array."
+                },
+                slugField: {
+                  type: "string",
+                  description: "format: json \u2014 record field holding the model identifier passed to the CLI."
+                },
+                labelField: {
+                  type: "string",
+                  description: "format: json \u2014 record field holding the human label, when the provider has one."
+                },
+                filter: {
+                  type: "object",
+                  description: "format: json \u2014 keep only records whose fields all equal these values.",
+                  additionalProperties: {
+                    type: [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                priorityField: {
+                  type: "string",
+                  description: "format: json \u2014 record field carrying a sort key. Lower sorts first. Absent \u2192 source order is preserved."
+                },
+                linePattern: {
+                  type: "string",
+                  description: "format: lines \u2014 regex applied per line, with named groups 'slug' and optionally 'label'. Lines that do not match are skipped."
+                },
+                lineFlags: {
+                  type: "string",
+                  description: "format: lines \u2014 regex flags for linePattern. Never assume 'm' \u2014 the pattern runs per line."
+                },
+                defaultMarker: {
+                  type: "string",
+                  description: "format: lines \u2014 a line matching this marks the model on it as the provider's default. Default models sort first."
+                },
+                tableHeaderPattern: {
+                  type: "string",
+                  description: `format: toml-table-keys \u2014 regex with a named 'slug' group matched against TOML table headers, e.g. '^\\[models\\."(?<slug>[^"]+)"\\]'.`
                 }
               }
             }

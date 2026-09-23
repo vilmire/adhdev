@@ -6,6 +6,7 @@ import { join } from 'path';
 import { ProviderLoader } from '../../src/providers/provider-loader.js';
 import { getConfigDir } from '../../src/config/config.js';
 import { validateCliProviderManifest } from '../../src/providers/sdk/v1/validators/manifest.js';
+import { readFileSync } from 'fs';
 
 function writeProvider(root: string, category: string, type: string, data: Record<string, unknown>) {
   const dir = join(root, category, type);
@@ -1215,4 +1216,80 @@ describe('ProviderLoader v1-manifest inline nativeHistory.source wiring', () => 
     expect(nh?.scripts?.listSessions).toBe('listNativeHistory');
     expect(typeof (resolved?.scripts as any)?.readNativeHistory).toBe('function');
   });
+});
+
+describe('CLI provider.schema.json — modelDiscovery coverage', () => {
+  // The 8 real, shipped CLI provider manifests (adhdev-providers/cli/*),
+  // excluding the non-provider `_shared` directory. All 8 declare a
+  // `modelDiscovery` block (oss 1026551d / adhdev-providers f689270) — this
+  // guards the regression where the TS allow-list (provider-schema.ts) and
+  // the two vendored provider.schema.json copies (daemon-core +
+  // adhdev-providers, kept in sync by check:schema-vendoring) drifted: the
+  // manifests loaded, but every boot logged a spurious
+  // `schema validation failed: - <root>: unexpected property "modelDiscovery"`
+  // from provider-loader-manifest-scan.ts.
+  const CLI_PROVIDER_TYPES = [
+    'antigravity-cli',
+    'claude-cli',
+    'codex-cli',
+    'cursor-cli',
+    'grok-cli',
+    'hermes-cli',
+    'kimi',
+    'opencode',
+  ];
+
+  const PROVIDERS_ROOT = path.resolve(__dirname, '../../../../../adhdev-providers');
+
+  function realManifestPath(type: string): string {
+    return path.join(PROVIDERS_ROOT, 'cli', type, 'provider.v1.json');
+  }
+
+  const availableTypes = CLI_PROVIDER_TYPES.filter((type) => existsSync(realManifestPath(type)));
+
+  it.skipIf(availableTypes.length === 0)(
+    'all real CLI manifests declare modelDiscovery and validate with zero schema issues',
+    () => {
+      expect(availableTypes).toEqual(CLI_PROVIDER_TYPES);
+
+      const results = availableTypes.map((type) => {
+        const manifest = JSON.parse(readFileSync(realManifestPath(type), 'utf-8'));
+        const result = validateCliProviderManifest(manifest);
+        return { type, manifest, result };
+      });
+
+      for (const { type, manifest, result } of results) {
+        expect(manifest.modelDiscovery, `${type}: manifest missing modelDiscovery`).toBeDefined();
+        expect(
+          result.issues,
+          `${type}: schema issues: ${JSON.stringify(result.issues)}`,
+        ).toEqual([]);
+        expect(result.ok, `${type}: schema validation failed`).toBe(true);
+      }
+    },
+  );
+
+  it.skipIf(availableTypes.length === 0)(
+    'rejects a modelDiscovery block with an unrecognized property (red/green proof)',
+    () => {
+      const sampleType = availableTypes.includes('codex-cli') ? 'codex-cli' : availableTypes[0];
+      const manifest = JSON.parse(readFileSync(realManifestPath(sampleType), 'utf-8'));
+
+      // Inject a bogus key into the real, valid modelDiscovery block. Without
+      // the schema's additionalProperties:false + oneOf-per-kind, this would
+      // pass (or worse, pass silently alongside the real "unexpected property
+      // modelDiscovery" warning this test suite is guarding against).
+      const tainted = {
+        ...manifest,
+        modelDiscovery: {
+          ...manifest.modelDiscovery,
+          bogusField: 'should-not-validate',
+        },
+      };
+
+      const result = validateCliProviderManifest(tainted);
+      expect(result.ok).toBe(false);
+      expect(result.issues.length).toBeGreaterThan(0);
+    },
+  );
 });
