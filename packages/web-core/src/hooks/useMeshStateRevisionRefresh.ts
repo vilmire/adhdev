@@ -14,6 +14,15 @@ type UseMeshStateRevisionRefreshArgs = {
      * background SWR mesh_status refresh — keeping the current graph on screen.
      */
     onRevisionAdvance: () => void
+    /**
+     * Called on EVERY observed `meshStateRevisions` push for the viewed mesh
+     * (advance or not) — proof the daemon.metadata push channel is alive and
+     * carrying revision data, independent of whether the counter moved. Callers
+     * use this as a liveness signal for a slow WARN-only backstop: if no
+     * observation lands within the backstop window, the push path may be dead
+     * and the backstop should refresh (and log) instead of trusting it silently.
+     */
+    onRevisionObserved?: () => void
 }
 
 /**
@@ -36,12 +45,15 @@ export function useMeshStateRevisionRefresh({
     meshId,
     sendData,
     onRevisionAdvance,
+    onRevisionObserved,
 }: UseMeshStateRevisionRefreshArgs): void {
     // Last-seen revision per daemon for the active mesh. Reset when the mesh or the
     // daemon set changes so a mesh switch doesn't inherit a stale high-water mark.
     const lastSeenRef = useRef<Map<string, number>>(new Map())
     const onRevisionAdvanceRef = useRef(onRevisionAdvance)
     onRevisionAdvanceRef.current = onRevisionAdvance
+    const onRevisionObservedRef = useRef(onRevisionObserved)
+    onRevisionObservedRef.current = onRevisionObserved
 
     const daemonIdsKey = [...new Set(daemonIds.filter(Boolean))].sort().join(',')
 
@@ -73,6 +85,8 @@ export function useMeshStateRevisionRefresh({
                 if (typeof next !== 'number') return
                 const prev = lastSeenRef.current.get(did)
                 lastSeenRef.current.set(did, next)
+                // Any observation (advance or not) proves the push channel is alive.
+                onRevisionObservedRef.current?.()
                 // First observation seeds the baseline without firing (the initial
                 // paint already loaded the graph). Only a genuine advance refreshes.
                 if (prev !== undefined && next > prev) {

@@ -3087,7 +3087,9 @@
                 "soleCopyLabel": "sole copy",
                 "soleCopyTooltip": "This machine may hold the only copy of {{entries}} entries across {{count}} topic(s). Peers have not confirmed them.",
                 "deferredLabel": "can't tell",
-                "deferredTooltip": "Sole-copy check was deferred: the peer board was truncated, so the machines compared against are only part of the fleet."
+                "deferredTooltip": "Sole-copy check was deferred: the peer board was truncated, so the machines compared against are only part of the fleet.",
+                "lastSyncedTooltip": "Last synced {{minutes}} min ago{{behindPart}}.",
+                "lastSyncedBehindPart": ", {{count}} entries behind on {{topic}}"
             },
             "fleetPeer": {
                 "label": "seqscribe peer",

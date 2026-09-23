@@ -3087,7 +3087,9 @@
                 "soleCopyLabel": "可能唯一副本",
                 "soleCopyTooltip": "此机器可能是 {{count}} 个主题中 {{entries}} 条记录的唯一持有者。对等节点尚未确认。",
                 "deferredLabel": "无法判定",
-                "deferredTooltip": "对等看板被截断，因此推迟了唯一副本判定 — 比较对象并非整个集群。"
+                "deferredTooltip": "对等看板被截断，因此推迟了唯一副本判定 — 比较对象并非整个集群。",
+                "lastSyncedTooltip": "{{minutes}} 分钟前最后同步{{behindPart}}。",
+                "lastSyncedBehindPart": "，在 {{topic}} 上落后 {{count}} 条"
             },
             "fleetPeer": {
                 "label": "seqscribe 对等视图",

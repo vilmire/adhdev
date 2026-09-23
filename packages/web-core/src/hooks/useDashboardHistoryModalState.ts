@@ -144,11 +144,16 @@ export function useDashboardHistoryModalState({
     const cliType = getConversationProviderType(historyTargetConv)
     try {
       setResumingSavedHistorySessionId(session.providerSessionId)
+      const initialModel = getProviderSummaryValue(session.summaryMetadata, 'model', { preferShortValue: true }) || undefined
       const raw: any = await launchCli(routeTarget, {
         cliType,
         dir: session.workspace,
         resumeSessionId: session.providerSessionId,
-        initialModel: getProviderSummaryValue(session.summaryMetadata, 'model', { preferShortValue: true }) || undefined,
+        initialModel,
+        // Phase E launch provenance (same shape as buildDashboardProviderLaunchPayload
+        // in useDashboardCommandActions.ts): this model came from saved session
+        // history, not a dialog pick, so it is stamped 'remembered' rather than 'user'.
+        ...(initialModel ? { modelSource: 'remembered' as const } : {}),
       })
       const result = raw?.result ?? raw
       const nextSessionId = typeof result?.sessionId === 'string' ? result.sessionId : typeof result?.id === 'string' ? result.id : ''

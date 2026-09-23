@@ -9,6 +9,7 @@ import { getMeshGraphTheme } from './meshGraphTheme'
 import { formatMeshConnectionSummary } from '../../utils/mesh-visualization'
 import type { MeshGraphNode } from './types'
 import { IconLightbulb } from '../Icons'
+import { sessionStatusLabelKey } from './MeshObservabilitySurface/meshSurfaceHelpers'
 
 interface MeshGraphPanelProps {
     node: MeshGraphNode | null
@@ -94,13 +95,11 @@ function formatUpstreamState(node: MeshGraphNode, t: TFn): string | null {
 }
 
 function sessionStatusLabel(session: MeshGraphNode['sessionDetails'][number], t: TFn): string {
-    const raw = (session.chatStatus || session.state || session.lifecycle || '').trim()
-    if (!raw) return 'unknown'
-    const normalized = raw.toLowerCase().replace(/[\s-]+/g, '_')
-    if (normalized.includes('approval')) return t('mesh.panel.statusAwaiting')
-    if (normalized.includes('generating') || normalized.includes('running') || normalized.includes('busy')) return t('mesh.panel.statusGenerating')
-    if (normalized.includes('idle') || normalized.includes('ready') || normalized.includes('waiting_input')) return t('mesh.panel.statusIdle')
-    return normalized.replace(/_/g, ' ')
+    return sessionStatusLabelKey(session, t, {
+        approval: 'mesh.panel.statusAwaiting',
+        generating: 'mesh.panel.statusGenerating',
+        idle: 'mesh.panel.statusIdle',
+    })
 }
 
 function sessionRoleLabel(session: MeshGraphNode['sessionDetails'][number], t: TFn): string {
