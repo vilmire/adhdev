@@ -1039,7 +1039,20 @@ export class DaemonCommandHandler implements CommandHelpers {
         try {
             channelStaleness = await this._ctx.providerLoader?.checkVerifiedChannelStaleness?.() ?? null;
         } catch { /* read-only extra — rows above are still valid without it */ }
-        return { success: true, providers: checks, channelSync: null, channelStaleness };
+
+        // modelStaleness: the same badge treatment for the MODEL-list axis,
+        // reusing this payload rather than inventing a second convention.
+        // Purely a cache read — no spawn, no network (see getModelDiscoveryStaleness).
+        //
+        // ★`cannotVerifyTypes` must stay distinct from `staleTypes`: claude-cli
+        // and hermes-cli can never be enumerated, and rendering them as "up to
+        // date" would assert a check that never happened — the same class of
+        // comfortable lie as a phantom approval.
+        let modelStaleness: unknown = null;
+        try {
+            modelStaleness = this._ctx.providerLoader?.getModelDiscoveryStaleness?.() ?? null;
+        } catch { /* read-only extra — rows above are still valid without it */ }
+        return { success: true, providers: checks, channelSync: null, channelStaleness, modelStaleness };
     }
 
     /**
