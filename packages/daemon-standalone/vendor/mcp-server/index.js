@@ -40179,6 +40179,16 @@ var require_dist3 = __commonJS({
       decodeDirectDispatchRecordResponse: () => decodeDirectDispatchRecordResponse2,
       decodeGraphAuditRecordRequest: () => decodeGraphAuditRecordRequest,
       decodeGraphAuditRecordResponse: () => decodeGraphAuditRecordResponse2,
+      decodeGraphGateAbandonRequest: () => decodeGraphGateAbandonRequest,
+      decodeGraphGateAbandonResponse: () => decodeGraphGateAbandonResponse2,
+      decodeGraphGateClaimRequest: () => decodeGraphGateClaimRequest,
+      decodeGraphGateClaimResponse: () => decodeGraphGateClaimResponse2,
+      decodeGraphGateReleaseRequest: () => decodeGraphGateReleaseRequest,
+      decodeGraphGateReleaseResponse: () => decodeGraphGateReleaseResponse2,
+      decodeGraphNodePatchRequest: () => decodeGraphNodePatchRequest,
+      decodeGraphNodePatchResponse: () => decodeGraphNodePatchResponse2,
+      decodeGraphViewQueryRequest: () => decodeGraphViewQueryRequest,
+      decodeGraphViewQueryResponse: () => decodeGraphViewQueryResponse2,
       decodeLedgerQueryRequest: () => decodeLedgerQueryRequest,
       decodeLedgerQueryResponse: () => decodeLedgerQueryResponse2,
       decodeMeshIndexQueryRequest: () => decodeMeshIndexQueryRequest,
@@ -40197,6 +40207,10 @@ var require_dist3 = __commonJS({
       decodeNoteUpsertResponse: () => decodeNoteUpsertResponse2,
       decodeOperatorStatusRequest: () => decodeOperatorStatusRequest,
       decodeOperatorStatusResponse: () => decodeOperatorStatusResponse2,
+      decodeOrphanedPinNotifyRequest: () => decodeOrphanedPinNotifyRequest,
+      decodeOrphanedPinNotifyResponse: () => decodeOrphanedPinNotifyResponse2,
+      decodePruneStaleDirectRequest: () => decodePruneStaleDirectRequest,
+      decodePruneStaleDirectResponse: () => decodePruneStaleDirectResponse2,
       decodeQueueCancelRequest: () => decodeQueueCancelRequest,
       decodeQueueCancelResponse: () => decodeQueueCancelResponse2,
       decodeQueueEnqueueGraphRequest: () => decodeQueueEnqueueGraphRequest,
@@ -40212,6 +40226,8 @@ var require_dist3 = __commonJS({
       decodeRecoveryContextQueryRequest: () => decodeRecoveryContextQueryRequest,
       decodeRecoveryContextQueryResponse: () => decodeRecoveryContextQueryResponse2,
       decodeServerToDaemon: () => decodeServerToDaemon,
+      decodeTaskStatsQueryRequest: () => decodeTaskStatsQueryRequest,
+      decodeTaskStatsQueryResponse: () => decodeTaskStatsQueryResponse2,
       decodeToolCallRecordRequest: () => decodeToolCallRecordRequest,
       decodeToolCallRecordResponse: () => decodeToolCallRecordResponse2,
       decodeTurnCancelRequest: () => decodeTurnCancelRequest,
@@ -40261,7 +40277,17 @@ var require_dist3 = __commonJS({
       isFiniteNumber: () => isFiniteNumber,
       isGraphAuditEvent: () => isGraphAuditEvent2,
       isGraphAuditRecordRequest: () => isGraphAuditRecordRequest,
-      isGraphAuditRecordResponse: () => isGraphAuditRecordResponse2,
+      isGraphAuditRecordResponse: () => isGraphAuditRecordResponse,
+      isGraphGateAbandonRequest: () => isGraphGateAbandonRequest,
+      isGraphGateAbandonResponse: () => isGraphGateAbandonResponse2,
+      isGraphGateClaimRequest: () => isGraphGateClaimRequest,
+      isGraphGateClaimResponse: () => isGraphGateClaimResponse2,
+      isGraphGateReleaseRequest: () => isGraphGateReleaseRequest,
+      isGraphGateReleaseResponse: () => isGraphGateReleaseResponse2,
+      isGraphNodePatchRequest: () => isGraphNodePatchRequest,
+      isGraphNodePatchResponse: () => isGraphNodePatchResponse2,
+      isGraphViewQueryRequest: () => isGraphViewQueryRequest,
+      isGraphViewQueryResponse: () => isGraphViewQueryResponse2,
       isHoldReason: () => isHoldReason2,
       isInputEnvelopeWire: () => isInputEnvelopeWire,
       isLedgerQueryRequest: () => isLedgerQueryRequest,
@@ -40304,10 +40330,14 @@ var require_dist3 = __commonJS({
       isOperatorStatusRequest: () => isOperatorStatusRequest,
       isOperatorStatusResponse: () => isOperatorStatusResponse,
       isOperatorStatusValue: () => isOperatorStatusValue2,
+      isOrphanedPinNotifyRequest: () => isOrphanedPinNotifyRequest,
+      isOrphanedPinNotifyResponse: () => isOrphanedPinNotifyResponse2,
       isOutboundMessage: () => isOutboundMessage,
       isOutboundMessageOrigin: () => isOutboundMessageOrigin,
       isP2PSignalType: () => isP2PSignalType2,
       isPhantomDaemonEntry: () => isPhantomDaemonEntry,
+      isPruneStaleDirectRequest: () => isPruneStaleDirectRequest,
+      isPruneStaleDirectResponse: () => isPruneStaleDirectResponse2,
       isQueueCancelRequest: () => isQueueCancelRequest,
       isQueueCancelResponse: () => isQueueCancelResponse2,
       isQueueEnqueueGraphRequest: () => isQueueEnqueueGraphRequest,
@@ -40336,6 +40366,8 @@ var require_dist3 = __commonJS({
       isSharedSessionToViewerType: () => isSharedSessionToViewerType2,
       isSubmitOutcome: () => isSubmitOutcome,
       isSummaryRef: () => isSummaryRef,
+      isTaskStatsQueryRequest: () => isTaskStatsQueryRequest,
+      isTaskStatsQueryResponse: () => isTaskStatsQueryResponse2,
       isTerminalClassEvidenceKind: () => isTerminalClassEvidenceKind,
       isToolCallRecordRequest: () => isToolCallRecordRequest,
       isToolCallRecordResponse: () => isToolCallRecordResponse2,
@@ -41878,16 +41910,28 @@ ${renderWorkerProtocolFooter2(input)}`;
     function decodeMeshIndexQueryResponse2(value) {
       return isMeshIndexQueryResponse(value) ? value : null;
     }
+    function isStringArray2(value) {
+      return Array.isArray(value) && value.every((v) => typeof v === "string");
+    }
+    function isMissionBriefWire2(value) {
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["goal", "constraints", "doneCriteria", "handoffNotes", "ownedPaths"])) return false;
+      if (typeof value.goal !== "string" || value.goal.trim().length === 0) return false;
+      for (const k of ["constraints", "doneCriteria", "handoffNotes", "ownedPaths"]) {
+        if (value[k] !== void 0 && !isStringArray2(value[k])) return false;
+      }
+      return true;
+    }
     function isMeshMissionRecordWire2(value) {
-      if (!isRecord2(value) || !hasOnlyKeys22(value, ["id", "meshId", "title", "goal", "status", "source"])) return false;
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["id", "meshId", "title", "goal", "status", "source", "brief"])) return false;
       if (!isEvidenceIdentifier2(value.id) || !isEvidenceIdentifier2(value.meshId)) return false;
       if (typeof value.title !== "string" || typeof value.goal !== "string") return false;
       if (!isMeshMissionStatusValue3(value.status)) return false;
       if (value.source !== void 0 && !isMeshMissionSourceValue2(value.source)) return false;
+      if (value.brief !== void 0 && !isMissionBriefWire2(value.brief)) return false;
       return true;
     }
     function isMissionUpsertRequest(value) {
-      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "id", "title", "goal", "status", "source"])) return false;
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "id", "title", "goal", "status", "source", "brief"])) return false;
       if (value.v !== TURN_IPC_PROTOCOL_VERSION2) return false;
       if (!isEvidenceIdentifier2(value.meshId)) return false;
       if (value.id !== void 0 && !isEvidenceIdentifier2(value.id)) return false;
@@ -41895,6 +41939,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (value.goal !== void 0 && typeof value.goal !== "string") return false;
       if (value.status !== void 0 && !isMeshMissionStatusValue3(value.status)) return false;
       if (value.source !== void 0 && !isMeshMissionSourceValue2(value.source)) return false;
+      if (value.brief !== void 0 && value.brief !== null && !isMissionBriefWire2(value.brief)) return false;
       return true;
     }
     function decodeMissionUpsertRequest(value) {
@@ -41968,7 +42013,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       const hasGoal = "goal" in value;
       const hasPreview = "goalPreview" in value && "goalTruncated" in value;
       if (hasGoal === hasPreview) return false;
-      const baseKeys = ["id", "meshId", "title", "status", "source", "tasks", "stats"];
+      const baseKeys = ["id", "meshId", "title", "status", "source", "tasks", "stats", "brief"];
       const allowed = hasGoal ? [...baseKeys, "goal"] : [...baseKeys, "goalPreview", "goalTruncated"];
       if (!hasOnlyKeys22(value, allowed)) return false;
       if (!isEvidenceIdentifier2(value.id) || !isEvidenceIdentifier2(value.meshId)) return false;
@@ -41977,6 +42022,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (value.source !== void 0 && !isMeshMissionSourceValue2(value.source)) return false;
       if (!isMeshMissionTaskAggregateWire2(value.tasks)) return false;
       if (value.stats !== void 0 && !isMeshMissionStatsWire2(value.stats)) return false;
+      if (value.brief !== void 0 && !isMissionBriefWire2(value.brief)) return false;
       if (hasGoal && typeof value.goal !== "string") return false;
       if (hasPreview && (typeof value.goalPreview !== "string" || typeof value.goalTruncated !== "boolean")) return false;
       return true;
@@ -42099,7 +42145,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     function isOptionalRecord2(value) {
       return value === void 0 || isRecord2(value);
     }
-    function isOptionalBoolean(value) {
+    function isOptionalBoolean2(value) {
       return value === void 0 || typeof value === "boolean";
     }
     function isOptionalString2(value) {
@@ -42124,7 +42170,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "statuses", "taskId", "view"])) return false;
       if (value.v !== TURN_IPC_PROTOCOL_VERSION2 || !isEvidenceIdentifier2(value.meshId)) return false;
       if (value.statuses !== void 0 && (!Array.isArray(value.statuses) || !value.statuses.every(isEvidenceIdentifier2))) return false;
-      return isOptionalId22(value.taskId) && isOptionalBoolean(value.view);
+      return isOptionalId22(value.taskId) && isOptionalBoolean2(value.view);
     }
     function decodeQueueQueryRequest(value) {
       return isQueueQueryRequest(value) ? value : null;
@@ -42212,11 +42258,11 @@ ${renderWorkerProtocolFooter2(input)}`;
     function decodeGraphAuditRecordRequest(value) {
       return isGraphAuditRecordRequest(value) ? value : null;
     }
-    function isGraphAuditRecordResponse2(value) {
+    function isGraphAuditRecordResponse(value) {
       return isRecord2(value) && hasOnlyKeys22(value, ["recorded"]) && typeof value.recorded === "boolean";
     }
     function decodeGraphAuditRecordResponse2(value) {
-      return isGraphAuditRecordResponse2(value) ? value : null;
+      return isGraphAuditRecordResponse(value) ? value : null;
     }
     function isActiveWorkQueryRequest(value) {
       if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "nodes", "queue", "recordTail", "includeTerminalDirect", "compute", "includeInputs", "includeSummary", "includeSchedulingRuntime", "mesh"])) return false;
@@ -42225,7 +42271,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (value.queue !== void 0 && !isRecordArray2(value.queue)) return false;
       if (value.recordTail !== void 0 && !isNonNegativeInt2(value.recordTail)) return false;
       if (value.includeSchedulingRuntime === true && !isRecord2(value.mesh)) return false;
-      return isOptionalBoolean(value.includeTerminalDirect) && isOptionalBoolean(value.compute) && isOptionalBoolean(value.includeInputs) && isOptionalBoolean(value.includeSummary) && isOptionalBoolean(value.includeSchedulingRuntime) && isOptionalRecord2(value.mesh);
+      return isOptionalBoolean2(value.includeTerminalDirect) && isOptionalBoolean2(value.compute) && isOptionalBoolean2(value.includeInputs) && isOptionalBoolean2(value.includeSummary) && isOptionalBoolean2(value.includeSchedulingRuntime) && isOptionalRecord2(value.mesh);
     }
     function decodeActiveWorkQueryRequest(value) {
       return isActiveWorkQueryRequest(value) ? value : null;
@@ -42250,6 +42296,185 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function decodeRecoveryContextQueryResponse2(value) {
       return isRecoveryContextQueryResponse2(value) ? value : null;
+    }
+    function isGraphGateClaimRequest(value) {
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "gateId", "coordinatorSessionId", "leaseSeconds", "extendDeadlineSeconds", "probeConvergenceEvidence"])) return false;
+      if (value.v !== TURN_IPC_PROTOCOL_VERSION2 || !isEvidenceIdentifier2(value.meshId) || !isEvidenceIdentifier2(value.gateId) || !isEvidenceIdentifier2(value.coordinatorSessionId)) return false;
+      if (value.leaseSeconds !== void 0 && !isFiniteNumber3(value.leaseSeconds)) return false;
+      if (value.extendDeadlineSeconds !== void 0 && !isFiniteNumber3(value.extendDeadlineSeconds)) return false;
+      return isOptionalBoolean2(value.probeConvergenceEvidence);
+    }
+    function decodeGraphGateClaimRequest(value) {
+      return isGraphGateClaimRequest(value) ? value : null;
+    }
+    function isGraphGateClaimResponse2(value) {
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["claimed", "reason", "gate", "leaseGeneration", "fencingToken", "leaseExpiresAt", "deadlineAt", "ambiguousExternalOutcome", "previousLeaseOwnerSessionId", "convergenceEvidence"])) return false;
+      if (typeof value.claimed !== "boolean") return false;
+      return isOptionalRecord2(value.gate) && isOptionalRecord2(value.convergenceEvidence) && isOptionalBoolean2(value.ambiguousExternalOutcome);
+    }
+    function decodeGraphGateClaimResponse2(value) {
+      return isGraphGateClaimResponse2(value) ? value : null;
+    }
+    function isGraphGateReleaseRequest(value) {
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "gateId", "fencingToken", "leaseGeneration", "idempotencyKey", "outcome", "result", "evidence", "patches"])) return false;
+      if (value.v !== TURN_IPC_PROTOCOL_VERSION2 || !isEvidenceIdentifier2(value.meshId) || !isEvidenceIdentifier2(value.gateId)) return false;
+      if (typeof value.fencingToken !== "string" || !value.fencingToken) return false;
+      if (!isFiniteNumber3(value.leaseGeneration)) return false;
+      if (typeof value.idempotencyKey !== "string" || !value.idempotencyKey) return false;
+      if (typeof value.outcome !== "string" || !value.outcome) return false;
+      if (value.patches !== void 0) {
+        if (!Array.isArray(value.patches)) return false;
+        for (const p of value.patches) {
+          if (!isRecord2(p) || typeof p.node !== "string" || !p.node || !isRecord2(p.baseSpecPatch)) return false;
+        }
+      }
+      return true;
+    }
+    function decodeGraphGateReleaseRequest(value) {
+      return isGraphGateReleaseRequest(value) ? value : null;
+    }
+    function isGraphGateReleaseResponse2(value) {
+      if (!isRecord2(value)) return false;
+      if (value.released === true) {
+        if (!hasOnlyKeys22(value, ["released", "duplicate", "gate", "materializedNodeIds", "downstreamNodeCount", "graphCompleted"])) return false;
+        if (typeof value.duplicate !== "boolean") return false;
+        if (!Array.isArray(value.materializedNodeIds) || !value.materializedNodeIds.every((n) => typeof n === "string")) return false;
+        if (value.downstreamNodeCount !== void 0 && !isNonNegativeInt2(value.downstreamNodeCount)) return false;
+        return isOptionalRecord2(value.gate) && isOptionalBoolean2(value.graphCompleted);
+      }
+      if (value.released === false) {
+        return hasOnlyKeys22(value, ["released", "refusalCode", "message"]) && typeof value.message === "string" && isOptionalString2(value.refusalCode);
+      }
+      return false;
+    }
+    function decodeGraphGateReleaseResponse2(value) {
+      return isGraphGateReleaseResponse2(value) ? value : null;
+    }
+    function isGraphGateAbandonRequest(value) {
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "gateId", "reason", "coordinatorSessionId", "force"])) return false;
+      if (value.v !== TURN_IPC_PROTOCOL_VERSION2 || !isEvidenceIdentifier2(value.meshId) || !isEvidenceIdentifier2(value.gateId)) return false;
+      if (typeof value.reason !== "string" || !value.reason) return false;
+      if (value.coordinatorSessionId !== void 0 && !isEvidenceIdentifier2(value.coordinatorSessionId)) return false;
+      return isOptionalBoolean2(value.force);
+    }
+    function decodeGraphGateAbandonRequest(value) {
+      return isGraphGateAbandonRequest(value) ? value : null;
+    }
+    function isGraphGateAbandonResponse2(value) {
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["abandoned", "reason", "gate", "cancelledNodeIds", "cancelledTaskIds", "graphStatus"])) return false;
+      if (typeof value.abandoned !== "boolean") return false;
+      if (!Array.isArray(value.cancelledNodeIds) || !value.cancelledNodeIds.every((n) => typeof n === "string")) return false;
+      if (!Array.isArray(value.cancelledTaskIds) || !value.cancelledTaskIds.every((n) => typeof n === "string")) return false;
+      return isOptionalRecord2(value.gate);
+    }
+    function decodeGraphGateAbandonResponse2(value) {
+      return isGraphGateAbandonResponse2(value) ? value : null;
+    }
+    function isGraphNodePatchRequest(value) {
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "node", "graphId", "baseSpecPatch"])) return false;
+      if (value.v !== TURN_IPC_PROTOCOL_VERSION2 || !isEvidenceIdentifier2(value.meshId)) return false;
+      if (typeof value.node !== "string" || !value.node) return false;
+      if (value.graphId !== void 0 && !isEvidenceIdentifier2(value.graphId)) return false;
+      return isRecord2(value.baseSpecPatch) && Object.keys(value.baseSpecPatch).length > 0;
+    }
+    function decodeGraphNodePatchRequest(value) {
+      return isGraphNodePatchRequest(value) ? value : null;
+    }
+    function isGraphNodePatchResponse2(value) {
+      if (!isRecord2(value)) return false;
+      if (value.patched === true) {
+        if (!hasOnlyKeys22(value, ["patched", "graphId", "nodeId", "ref", "queueTaskId", "materializationVersion", "state", "outcomeKind", "skippedReason", "blockedReason"])) return false;
+        if (!isEvidenceIdentifier2(value.graphId) || !isEvidenceIdentifier2(value.nodeId)) return false;
+        if (!isNonNegativeInt2(value.materializationVersion)) return false;
+        return typeof value.state === "string" && typeof value.outcomeKind === "string";
+      }
+      if (value.patched === false) {
+        return hasOnlyKeys22(value, ["patched", "refusalCode", "message"]) && typeof value.message === "string" && isOptionalString2(value.refusalCode);
+      }
+      return false;
+    }
+    function decodeGraphNodePatchResponse2(value) {
+      return isGraphNodePatchResponse2(value) ? value : null;
+    }
+    function isGraphViewQueryRequest(value) {
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "graphId", "batchId", "activeOnly", "limit", "probeGateEvidence"])) return false;
+      if (value.v !== TURN_IPC_PROTOCOL_VERSION2 || !isEvidenceIdentifier2(value.meshId)) return false;
+      if (value.graphId !== void 0 && !isEvidenceIdentifier2(value.graphId)) return false;
+      if (value.batchId !== void 0 && !isEvidenceIdentifier2(value.batchId)) return false;
+      if (value.limit !== void 0 && !isNonNegativeInt2(value.limit)) return false;
+      return isOptionalBoolean2(value.activeOnly) && isOptionalBoolean2(value.probeGateEvidence);
+    }
+    function decodeGraphViewQueryRequest(value) {
+      return isGraphViewQueryRequest(value) ? value : null;
+    }
+    function isGraphViewQueryResponse2(value) {
+      return isRecord2(value) && hasOnlyKeys22(value, ["graphs"]) && isRecordArray2(value.graphs);
+    }
+    function decodeGraphViewQueryResponse2(value) {
+      return isGraphViewQueryResponse2(value) ? value : null;
+    }
+    function isTaskStatsQueryRequest(value) {
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "taskIds", "missionId", "tail", "rollup"])) return false;
+      if (value.v !== TURN_IPC_PROTOCOL_VERSION2 || !isEvidenceIdentifier2(value.meshId)) return false;
+      if (value.taskIds !== void 0) {
+        if (!Array.isArray(value.taskIds) || value.taskIds.length === 0 || !value.taskIds.every(isEvidenceIdentifier2)) return false;
+      }
+      if (value.missionId !== void 0 && !isEvidenceIdentifier2(value.missionId)) return false;
+      if (value.tail !== void 0 && !isNonNegativeInt2(value.tail)) return false;
+      if (value.rollup === true && value.missionId === void 0) return false;
+      return isOptionalBoolean2(value.rollup);
+    }
+    function decodeTaskStatsQueryRequest(value) {
+      return isTaskStatsQueryRequest(value) ? value : null;
+    }
+    function isTaskStatsQueryResponse2(value) {
+      return isRecord2(value) && hasOnlyKeys22(value, ["tasks", "mission"]) && isRecordArray2(value.tasks) && isOptionalRecord2(value.mission);
+    }
+    function decodeTaskStatsQueryResponse2(value) {
+      return isTaskStatsQueryResponse2(value) ? value : null;
+    }
+    function isPruneStaleDirectRequest(value) {
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "execute", "includeTerminal", "source"])) return false;
+      if (value.v !== TURN_IPC_PROTOCOL_VERSION2 || !isEvidenceIdentifier2(value.meshId)) return false;
+      if (value.source !== void 0 && typeof value.source !== "string") return false;
+      return isOptionalBoolean2(value.execute) && isOptionalBoolean2(value.includeTerminal);
+    }
+    function decodePruneStaleDirectRequest(value) {
+      return isPruneStaleDirectRequest(value) ? value : null;
+    }
+    function isPruneStaleDirectResponse2(value) {
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["mode", "includeTerminal", "candidateCount", "prunable", "prunedCount", "preservedUnacknowledged", "preservedLedgerOnly", "preservedNotOrphan"])) return false;
+      if (value.mode !== "execute" && value.mode !== "dry_run") return false;
+      if (typeof value.includeTerminal !== "boolean") return false;
+      if (!isNonNegativeInt2(value.candidateCount) || !isNonNegativeInt2(value.prunedCount)) return false;
+      return isRecordArray2(value.prunable) && isRecordArray2(value.preservedUnacknowledged) && isRecordArray2(value.preservedLedgerOnly) && isRecordArray2(value.preservedNotOrphan);
+    }
+    function decodePruneStaleDirectResponse2(value) {
+      return isPruneStaleDirectResponse2(value) ? value : null;
+    }
+    function isOrphanedPinnedTaskWire2(value) {
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["taskId", "title", "targetSessionId", "targetNodeId", "missionId"])) return false;
+      if (!isEvidenceIdentifier2(value.taskId) || !isEvidenceIdentifier2(value.targetSessionId)) return false;
+      if (typeof value.title !== "string") return false;
+      if (value.targetNodeId !== void 0 && !isEvidenceIdentifier2(value.targetNodeId)) return false;
+      return value.missionId === void 0 || isEvidenceIdentifier2(value.missionId);
+    }
+    function isOrphanedPinNotifyRequest(value) {
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "stoppedSessionId", "excludeTaskId", "cause", "nodeId", "coordinatorSessionId"])) return false;
+      if (value.v !== TURN_IPC_PROTOCOL_VERSION2 || !isEvidenceIdentifier2(value.meshId) || !isEvidenceIdentifier2(value.stoppedSessionId)) return false;
+      if (value.excludeTaskId !== void 0 && !isEvidenceIdentifier2(value.excludeTaskId)) return false;
+      if (value.cause !== void 0 && typeof value.cause !== "string") return false;
+      if (value.nodeId !== void 0 && !isEvidenceIdentifier2(value.nodeId)) return false;
+      return value.coordinatorSessionId === void 0 || isEvidenceIdentifier2(value.coordinatorSessionId);
+    }
+    function decodeOrphanedPinNotifyRequest(value) {
+      return isOrphanedPinNotifyRequest(value) ? value : null;
+    }
+    function isOrphanedPinNotifyResponse2(value) {
+      return isRecord2(value) && hasOnlyKeys22(value, ["orphans"]) && Array.isArray(value.orphans) && value.orphans.every(isOrphanedPinnedTaskWire2);
+    }
+    function decodeOrphanedPinNotifyResponse2(value) {
+      return isOrphanedPinNotifyResponse2(value) ? value : null;
     }
     function toPosix(raw) {
       return raw.replace(/\\/g, "/");
@@ -43423,7 +43648,18 @@ ${renderWorkerProtocolFooter2(input)}`;
           "direct_dispatch_record",
           "graph_audit_record",
           "active_work_query",
-          "recovery_context_query"
+          "recovery_context_query",
+          // C-W9c additions (2026-09-24 19:00 stamp — the last mcp-server in-process
+          // daemon-core paths: graph gates/plan/patch, mission reads (MAGI), task/
+          // mission stats, orphaned-pin helpers, one prune audit):
+          "graph_gate_claim",
+          "graph_gate_release",
+          "graph_gate_abandon",
+          "graph_node_patch",
+          "graph_view_query",
+          "task_stats_query",
+          "prune_stale_direct",
+          "orphaned_pin_notify"
         ];
         isTurnIpcCommand2 = makeGuard32(TURN_IPC_COMMANDS2);
         MAX_OWNED_PATHS = 64;
@@ -44413,7 +44649,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     function isRecord4(value) {
       return !!value && typeof value === "object" && !Array.isArray(value);
     }
-    function isStringArray(value) {
+    function isStringArray22(value) {
       return Array.isArray(value) && value.every((v) => typeof v === "string" && v.length > 0);
     }
     function validateTarget(value, key2, errors) {
@@ -44438,15 +44674,15 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       const config2 = {};
       if (raw.daemonRuntimePackages !== void 0) {
-        if (isStringArray(raw.daemonRuntimePackages)) config2.daemonRuntimePackages = [...raw.daemonRuntimePackages];
+        if (isStringArray22(raw.daemonRuntimePackages)) config2.daemonRuntimePackages = [...raw.daemonRuntimePackages];
         else errors.push("daemonRuntimePackages must be an array of non-empty strings");
       }
       if (raw.webOnlyPackages !== void 0) {
-        if (isStringArray(raw.webOnlyPackages)) config2.webOnlyPackages = [...raw.webOnlyPackages];
+        if (isStringArray22(raw.webOnlyPackages)) config2.webOnlyPackages = [...raw.webOnlyPackages];
         else errors.push("webOnlyPackages must be an array of non-empty strings");
       }
       if (raw.nonRuntimeRootFilePatterns !== void 0) {
-        if (isStringArray(raw.nonRuntimeRootFilePatterns)) config2.nonRuntimeRootFilePatterns = [...raw.nonRuntimeRootFilePatterns];
+        if (isStringArray22(raw.nonRuntimeRootFilePatterns)) config2.nonRuntimeRootFilePatterns = [...raw.nonRuntimeRootFilePatterns];
         else errors.push("nonRuntimeRootFilePatterns must be an array of non-empty strings");
       }
       if (raw.impactTargets !== void 0) {
@@ -50188,11 +50424,21 @@ child.on('exit', () => process.exit(0));
       const now = options.now ?? Date.now;
       const lastRefreshAt = /* @__PURE__ */ new Map();
       let stopped = false;
-      const off = components.bus.on("provider_event", (e) => {
-        const event = e.event;
-        if (stopped) return;
-        if (typeof event.event !== "string" || !QUOTA_REFRESH_EVENTS.has(event.event)) return;
-        const refresher = typeof event.providerType === "string" ? REFRESHERS.find(({ provider }) => provider === event.providerType) : void 0;
+      const resolveProviderType = (sessionId) => {
+        try {
+          const getInstance = components.instanceManager?.getInstance;
+          if (typeof getInstance !== "function") return void 0;
+          const state = getInstance.call(components.instanceManager, sessionId)?.getState?.();
+          const type2 = state?.type;
+          return typeof type2 === "string" && type2 ? type2 : void 0;
+        } catch {
+          return void 0;
+        }
+      };
+      const off = components.bus.on("turn", (e) => {
+        if (stopped || e.phase !== "committed") return;
+        const providerType = resolveProviderType(e.sessionId);
+        const refresher = providerType ? REFRESHERS.find(({ provider }) => provider === providerType) : void 0;
         if (!refresher) return;
         if (isEnabled && !isEnabled(refresher.provider)) return;
         if (isRateLimitedSnapshot(cache.get(refresher.provider))) return;
@@ -50201,7 +50447,7 @@ child.on('exit', () => process.exit(0));
         lastRefreshAt.set(refresher.provider, at);
         void refreshQuotaCacheOnce([refresher], isEnabled).catch((err) => LOG.warn("Quota", `Event-driven quota refresh failed: ${err?.message || err}`));
       }, { name: "quota.event-refresh" });
-      LOG.info("Quota", `Event-driven quota refresh armed (${[...QUOTA_REFRESH_EVENTS].join(", ")}, ${debounceMs}ms debounce)`);
+      LOG.info("Quota", `Event-driven quota refresh armed (turn commits, ${debounceMs}ms debounce)`);
       return {
         stop() {
           stopped = true;
@@ -50308,7 +50554,6 @@ child.on('exit', () => process.exit(0));
     var MIN_CHAIN_WAKE_DELAY_MS;
     var bootRefreshInFlight;
     var QUOTA_EVENT_REFRESH_DEBOUNCE_MS;
-    var QUOTA_REFRESH_EVENTS;
     var revalidateInFlight;
     var init_refresh = __esm2({
       "src/quota/refresh.ts"() {
@@ -50397,7 +50642,6 @@ child.on('exit', () => process.exit(0));
         MIN_CHAIN_WAKE_DELAY_MS = 1e3;
         bootRefreshInFlight = false;
         QUOTA_EVENT_REFRESH_DEBOUNCE_MS = 6e4;
-        QUOTA_REFRESH_EVENTS = /* @__PURE__ */ new Set(["agent:generating_completed", "agent:stopped"]);
         revalidateInFlight = /* @__PURE__ */ new Set();
       }
     });
@@ -56398,7 +56642,7 @@ ${lines.join("\n")}
       }
       return result.materialized;
     }
-    function patchGraphNodeAndRetry3(input) {
+    function patchGraphNodeAndRetry(input) {
       const store2 = MeshRuntimeStore.getInstance();
       const nowIso = (/* @__PURE__ */ new Date()).toISOString();
       for (const key2 of Object.keys(input.baseSpecPatch ?? {})) {
@@ -57856,7 +58100,7 @@ ${summary}`;
       };
     }
     function createTurnIngestHandler(deps) {
-      const counters6 = deps.counters ?? createTurnDeliverCounters();
+      const counters8 = deps.counters ?? createTurnDeliverCounters();
       const log = deps.log ?? NOOP_LOG;
       return (entry) => {
         if (entry.own || !isRecord5(entry.payload)) return;
@@ -57870,14 +58114,14 @@ ${summary}`;
               return;
             }
             const result = deps.ledger.observe(evidence, { src: { writer: entry.writer, seq: entry.seq } });
-            if (result.verdict !== "duplicate") counters6.ingested++;
+            if (result.verdict !== "duplicate") counters8.ingested++;
             return;
           }
           case "turn.committed": {
             const attemptId = str2(p.attemptId);
             if (!attemptId || typeof p.generation !== "number") return;
             deps.releaseAttemptRef?.({ attemptId, generation: p.generation });
-            counters6.released++;
+            counters8.released++;
             return;
           }
           case "turn.notify": {
@@ -57897,7 +58141,7 @@ ${summary}`;
               ...entry.ref && isSummaryRef(entry.ref) ? { ref: entry.ref } : {},
               payload: { relayedFrom: entry.writer, relayedSeq: entry.seq }
             });
-            if (inserted) counters6.relayed++;
+            if (inserted) counters8.relayed++;
             return;
           }
           default:
@@ -58072,7 +58316,7 @@ ${line}`;
       const backlog = handlerOpts.mode === "backlog";
       const policy = deps.policy ?? DEFAULT_TURN_POLICY;
       const now = deps.now ?? (() => Date.now());
-      const counters6 = deps.counters ?? createTurnDeliverCounters();
+      const counters8 = deps.counters ?? createTurnDeliverCounters();
       const log = deps.log ?? NOOP_LOG;
       return async (entry, signal) => {
         if (entry.kind !== "turn.notify" || !isRecord5(entry.payload)) return { outcome: "skipped", why: "not_notify" };
@@ -58093,7 +58337,7 @@ ${line}`;
         const suppression = evaluateNotifySuppression({ notify: notify2, attempt, generation: row?.generation ?? null });
         if (suppression) {
           deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: sessionForClaim, outcome: `suppressed:${suppression}` });
-          counters6.suppressed++;
+          counters8.suppressed++;
           log.info(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify2} outcome=suppressed:${suppression}`);
           return { outcome: "suppressed", why: suppression };
         }
@@ -58114,7 +58358,7 @@ ${line}`;
         const refusedSessions = /* @__PURE__ */ new Set();
         for (; ; ) {
           if (store2.hasEvent(key2)) {
-            counters6.ackedElsewhere++;
+            counters8.ackedElsewhere++;
             log.info(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify2} outcome=acked_elsewhere waitedMs=${now() - startedAt}`);
             return { outcome: "acked_elsewhere" };
           }
@@ -58122,13 +58366,13 @@ ${line}`;
           const route = routeNotice({ targetSessionId: str2(p.targetSessionId) ?? null, coordinators, pastCeiling: !backlog && now() >= deadline });
           if (backlog && route.kind !== "deliver") return { outcome: "not_now" };
           if (route.kind === "none") {
-            counters6.noCoordinator++;
+            counters8.noCoordinator++;
             return { outcome: "no_coordinator" };
           }
           if (route.kind === "wait") {
             if (!deferredOnce) {
               deferredOnce = true;
-              counters6.deferred++;
+              counters8.deferred++;
             }
             await deps.waiter.wait(entry.meshId, deadline, signal);
             continue;
@@ -58145,7 +58389,7 @@ ${line}`;
               createdAt: now()
             });
           } catch (error48) {
-            counters6.submitFailures++;
+            counters8.submitFailures++;
             throw error48;
           }
           if (outcome.kind === "refused") {
@@ -58155,20 +58399,20 @@ ${line}`;
               continue;
             }
             if (RETRYABLE_REFUSALS.has(outcome.reason)) {
-              counters6.submitFailures++;
+              counters8.submitFailures++;
               throw new Error(`notice ${messageId} refused (${outcome.reason}) by every coordinator of mesh ${entry.meshId}`);
             }
             deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: route.sessionId, outcome: `refused:${outcome.reason}` });
-            counters6.refused++;
+            counters8.refused++;
             log.warn(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify2} outcome=refused:${outcome.reason} session=${route.sessionId}`);
             return { outcome: "refused", reason: outcome.reason };
           }
           const claimed = deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: route.sessionId, outcome: outcome.kind });
-          if (!claimed) counters6.duplicates++;
-          if (outcome.kind === "delivered") counters6.delivered++;
-          else if (outcome.kind === "queued") counters6.queued++;
-          else counters6.duplicates++;
-          if (route.escalated) counters6.escalated++;
+          if (!claimed) counters8.duplicates++;
+          if (outcome.kind === "delivered") counters8.delivered++;
+          else if (outcome.kind === "queued") counters8.queued++;
+          else counters8.duplicates++;
+          if (route.escalated) counters8.escalated++;
           const waitedMs = now() - startedAt;
           log.info(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify2}${rendered.event ? ` event=${rendered.event}` : ""} outcome=${outcome.kind}${route.escalated ? " escalated=true" : ""} session=${route.sessionId} waitedMs=${waitedMs}`);
           return { outcome: outcome.kind, sessionId: route.sessionId, escalated: route.escalated, waitedMs };
@@ -58212,7 +58456,7 @@ ${line}`;
     }
     function readCoordinatorNotices(deps, meshId, opts = {}) {
       const ack = opts.ack !== false;
-      const counters6 = deps.counters ?? createTurnDeliverCounters();
+      const counters8 = deps.counters ?? createTurnDeliverCounters();
       const out = [];
       for (const row of pendingNoticeRows(deps, meshId, opts.limit ?? 200)) {
         const writer = row.srcWriter;
@@ -58248,7 +58492,7 @@ ${line}`;
           ...str2(entry.targetSessionId) ? { targetCoordinatorSessionId: str2(entry.targetSessionId) } : {},
           ...isRecord5(local.metadataEvent) ? { metadataEvent: local.metadataEvent } : {}
         });
-        counters6.mcpRead++;
+        counters8.mcpRead++;
       }
       if (ack && out.length > 0) deps.waiter?.wake(meshId);
       return out;
@@ -58262,8 +58506,8 @@ ${line}`;
         if (result.outcome === "delivered" || result.outcome === "queued") delivered++;
         if (result.outcome === "not_now" || result.outcome === "no_coordinator") break;
       }
-      const counters6 = deps.counters;
-      if (counters6) counters6.backlogDelivered += delivered;
+      const counters8 = deps.counters;
+      if (counters8) counters8.backlogDelivered += delivered;
       return delivered;
     }
     function listControlNotices(deps, meshId, event) {
@@ -61000,6 +61244,48 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               this.push({ t: "retireTopic", topic, resolve: resolve37, reject });
             });
           }
+          // Local entry prune (host-guide `pruneTopic`, REQUESTED EDIT). Unlike
+          // retireTopic (whole-writer-row GC, only ever fires on an EMPTY topic),
+          // this shrinks a LIVE `full`-retention topic's durable sq_log row count —
+          // the primitive `writer-gc.ts`-shaped hosts need for a topic that
+          // accumulates unboundedly between finality certs (ArchiveHub requires a
+          // cert; this does not — it is local housekeeping, not a cross-peer
+          // finality claim, same distinction `retireTopic`'s own doc comment draws).
+          // `full-sync` is refused for the same reason retireTopic refuses it: those
+          // rows are cross-peer canonical, and deleting them locally would fork the
+          // mesh's view of "what this node has" without an authority's say-so.
+          // `register`-kind is refused because register state is reconstructed by
+          // replaying its topic from genesis (RegisterHub) — pruning would silently
+          // invalidate register replay for a NEW replica that later syncs from this
+          // node (the local prune has no on-wire signal, so a peer requesting entries
+          // below the prune floor would see a false gap, not a reasoned refusal).
+          pruneTopic(topic, o) {
+            if (this.closed)
+              throw new SeqscribeError("ERR_MISUSE", "node is closed");
+            const entry = this.topics.get(topic);
+            if (entry.policy.kind === "register") {
+              return Promise.reject(misuse(`pruneTopic: register-kind topics are not prunable (${topic})`));
+            }
+            if (entry.policy.replication === "full-sync") {
+              return Promise.reject(misuse(`pruneTopic: full-sync topics are not prunable (${topic})`));
+            }
+            if (entry.policy.retention.mode !== "full") {
+              return Promise.reject(misuse(`pruneTopic: requires retention "full" (${topic} is ${entry.policy.retention.mode})`));
+            }
+            if (o.olderThanMs === void 0 && o.keepNewest === void 0) {
+              return Promise.reject(misuse(`pruneTopic: at least one of olderThanMs/keepNewest is required`));
+            }
+            return new Promise((resolve37, reject) => {
+              this.push({
+                t: "pruneTopic",
+                topic,
+                olderThanMs: o.olderThanMs,
+                keepNewest: o.keepNewest,
+                resolve: resolve37,
+                reject
+              });
+            });
+          }
           recoveryTarget(topic, writer) {
             return this.recoveries.get(`${topic} ${writer}`);
           }
@@ -61092,6 +61378,14 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           ringTail(topic) {
             return [...this.rings.get(topic) ?? []];
           }
+          // SubHub's "tail" view on a full-retention topic (G2b) — the durable
+          // counterpart to ringTail: last `limit` sq_log rows for `topic`, oldest
+          // first. A pure store read (no in-memory tail to maintain — full topics
+          // already persist every row via persist()), so this has no undo/rollback
+          // entry in the ringUndo journal the way ring pushes need.
+          fullTail(topic, limit) {
+            return this.store.entriesTailByRowid(topic, limit).map((r) => r.entry);
+          }
           entries(topic, writer, fromSeq, toSeq) {
             return this.store.entriesRange(topic, writer, fromSeq, toSeq).map((r) => r.entry);
           }
@@ -61163,8 +61457,10 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                     this.processDirective(item, settle, anomalies);
                   else if (item.t === "adopt")
                     this.processAdopt(item, settle);
-                  else
+                  else if (item.t === "retireTopic")
                     this.processRetireTopic(item, settle);
+                  else
+                    this.processPruneTopic(item, settle);
                 }
                 this.store.metaSet(HLC_META_KEY, JSON.stringify(this.hlcState));
               });
@@ -61375,6 +61671,50 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             if (this.vectorsCache)
               delete this.vectorsCache[topic];
             settle.push(() => item.resolve({ writersRemoved: writers.length }));
+          }
+          // Local entry prune (pruneTopic's flush-handler half — see pruneTopic's
+          // doc comment for the design rationale). Re-checks the topic-shape
+          // preconditions (kind/replication/retention) the same way
+          // processRetireTopic re-checks its own: a racing defineTopic can't happen
+          // (topics are immutable per process, §14) but re-reading here — instead of
+          // trusting pruneTopic()'s enqueue-time snapshot — costs nothing and keeps
+          // the two prune paths (enqueue preflight, flush re-check) symmetric with
+          // retireTopic's own discipline rather than a special case.
+          processPruneTopic(item, settle) {
+            const { topic } = item;
+            const entry = this.topics.get(topic);
+            if (entry.policy.kind === "register") {
+              settle.push(() => item.reject(misuse(`pruneTopic: register-kind topics are not prunable (${topic})`)));
+              return;
+            }
+            if (entry.policy.replication === "full-sync") {
+              settle.push(() => item.reject(misuse(`pruneTopic: full-sync topics are not prunable (${topic})`)));
+              return;
+            }
+            if (entry.policy.retention.mode !== "full") {
+              settle.push(() => item.reject(misuse(`pruneTopic: requires retention "full" (${topic} is ${entry.policy.retention.mode})`)));
+              return;
+            }
+            let cursorFloor = Number.MAX_SAFE_INTEGER;
+            for (const c of this.store.cursorsForTopic(topic))
+              cursorFloor = Math.min(cursorFloor, c.lastRowid);
+            if (this.hasActiveSubscriber?.(topic)) {
+              settle.push(() => item.reject(misuse(`pruneTopic: topic has an active tail subscriber (${topic})`)));
+              return;
+            }
+            let keepNewestFloor = Number.MAX_SAFE_INTEGER;
+            if (item.keepNewest !== void 0) {
+              const rows = this.store.entriesTailByRowid(topic, item.keepNewest);
+              keepNewestFloor = rows.length > 0 ? rows[0].rowid : Number.MAX_SAFE_INTEGER;
+            }
+            const belowRowid = Math.min(cursorFloor, keepNewestFloor) - 1;
+            const hlcBefore = item.olderThanMs !== void 0 ? this.clock() - item.olderThanMs : null;
+            if (belowRowid < 1) {
+              settle.push(() => item.resolve({ prunedRows: 0 }));
+              return;
+            }
+            const prunedRows = this.store.deleteLogRowsUpToRowid(topic, belowRowid, hlcBefore);
+            settle.push(() => item.resolve({ prunedRows }));
           }
           recoveryIngest(head, e, target, applied, anomalies, via, done) {
             const now = new Date(this.clock()).toISOString();
@@ -62439,6 +62779,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     var B64;
     var B64REV;
+    var FULL_TAIL_DEFAULT;
     var textEnc;
     var textDec2;
     var SubHub;
@@ -62449,6 +62790,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         init_errors3();
         B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         B64REV = new Map([...B64].map((c, i) => [c, i]));
+        FULL_TAIL_DEFAULT = 500;
         textEnc = new globalThis.TextEncoder();
         textDec2 = new globalThis.TextDecoder();
         SubHub = class {
@@ -62537,8 +62879,13 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           registerKey(topic) {
             return `register\0${jcs({ topic })}`;
           }
-          // ring topic entries feed their topic's tail groups (rowid-null applies)
-          handleRingApplied(e) {
+          // Live DELTA feed for "tail" groups — ring topics (rowid-null applies,
+          // node.ts's `else` branch) AND full-retention subscribe-only topics
+          // (durable applies, rowid !== null) share this: both are keyed by
+          // `ringKey(topic)` in resolveGroup above, so one lookup covers either
+          // shape and a subscriber sees the identical DELTA wire message regardless
+          // of which retention mode its topic uses.
+          handleTailApplied(e) {
             const group = this.groups.get(this.ringKey(e.topic));
             if (!group)
               return;
@@ -62593,13 +62940,17 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               if (typeof topic !== "string")
                 throw new SeqscribeError("ERR_UNKNOWN_VIEW", "tail needs {topic}");
               const policy = this.deps.topics.get(topic).policy;
-              if (policy.retention.mode !== "ring")
-                throw new SeqscribeError("ERR_UNKNOWN_VIEW", `tail serves ring topics only (${topic})`);
+              const mode = policy.retention.mode;
+              if (mode !== "ring" && mode !== "full")
+                throw new SeqscribeError("ERR_UNKNOWN_VIEW", `tail serves ring or full subscribe-only topics only (${topic})`);
+              if (mode === "full" && policy.replication !== "subscribe-only")
+                throw new SeqscribeError("ERR_UNKNOWN_VIEW", `tail on a full-retention topic requires subscribe-only replication (${topic})`);
               let epoch = this.ringEpochs.get(topic);
               if (epoch === void 0) {
                 epoch = this.mintEpoch();
                 this.ringEpochs.set(topic, epoch);
               }
+              const rowsProvider = mode === "ring" ? () => this.deps.core.ringTail(topic).map((e) => this.ringRow(e)) : () => this.deps.core.fullTail(topic, FULL_TAIL_DEFAULT).map((e) => this.ringRow(e));
               const group2 = {
                 key: this.ringKey(topic),
                 viewName: null,
@@ -62608,7 +62959,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                 deltaSeq: 0,
                 journal: [],
                 subs: /* @__PURE__ */ new Map(),
-                rowsProvider: () => this.deps.core.ringTail(topic).map((e) => this.ringRow(e))
+                rowsProvider
               };
               this.groups.set(group2.key, group2);
               return group2;
@@ -63201,6 +63552,21 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           entriesForTopicFromRowid(topic, afterRowid, limit) {
             return this.db.all("SELECT rowid, * FROM sq_log WHERE topic = ? AND rowid > ? ORDER BY rowid LIMIT ?", [topic, afterRowid, limit]).map(rowToEntry);
           }
+          // SubHub's `tail` view on a `full`-retention topic (rowid order == insertion
+          // order == append order, same as the ring tail's push order): last `limit`
+          // rows, re-ascended to rowid order for the SNAP body. Two queries, not one
+          // ORDER BY rowid DESC LIMIT ? in a subquery, because sqlite's query planner
+          // does not reliably use the `sq_log` rowid ordering for a wrapped subquery
+          // ORDER BY without a matching index hint, and this method runs on every
+          // fresh/reset SUB — worth the second round trip to keep the plan obvious.
+          entriesTailByRowid(topic, limit) {
+            const rows = this.db.all("SELECT rowid, * FROM sq_log WHERE topic = ? ORDER BY rowid DESC LIMIT ?", [
+              topic,
+              limit
+            ]).map(rowToEntry);
+            rows.reverse();
+            return rows;
+          }
           // Total-order iteration (§1): entries strictly after `after` in
           // (hlc_l, hlc_c, writer, seq) order; after=null starts from the beginning.
           entriesAfterOrder(topic, after, limit) {
@@ -63324,6 +63690,37 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               fromSeq
             ]);
             this.logCounts.delete(topic);
+          }
+          // Node.pruneTopic (local housekeeping GC — see log.ts processPruneTopic's
+          // doc comment). Deletes rows at or below `belowRowid` (all writers), and,
+          // when `hlcBefore` is given, additionally requires hlc_l < hlcBefore — the
+          // caller passes the tighter of the two bounds it already computed
+          // (keepNewest's rowid floor, olderThanMs's hlc_l floor) so this is always a
+          // single bounded DELETE, never an unbounded scan. Batched like
+          // archiveCovered: a topic's whole prunable region can be millions of rows
+          // (the same reason archiveCovered doesn't do it in one statement), and
+          // this runs inside the append queue's flush, which must not stall on one
+          // giant transaction. Returns rows actually deleted.
+          deleteLogRowsUpToRowid(topic, belowRowid, hlcBefore) {
+            const BATCH2 = 2e3;
+            let total = 0;
+            for (; ; ) {
+              const cond = hlcBefore !== null ? "AND hlc_l < ?" : "";
+              const params = hlcBefore !== null ? [topic, belowRowid, hlcBefore, BATCH2] : [topic, belowRowid, BATCH2];
+              const rows = this.db.all(`SELECT rowid FROM sq_log WHERE topic = ? AND rowid <= ? ${cond} ORDER BY rowid LIMIT ?`, params);
+              if (rows.length === 0)
+                break;
+              this.db.transaction(() => {
+                for (const r of rows)
+                  this.db.run("DELETE FROM sq_log WHERE rowid = ?", [r.rowid]);
+              });
+              total += rows.length;
+              if (rows.length < BATCH2)
+                break;
+            }
+            if (total > 0)
+              this.logCounts.delete(topic);
+            return total;
           }
           checkpointPut(topic, view, version2, ord, state) {
             this.db.run(`INSERT OR REPLACE INTO sq_checkpoints
@@ -65649,9 +66046,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           consumers.notifyApplied(e.topic);
           views.notifyApplied(e.topic);
           registers.notifyApplied(e.topic);
-        } else {
-          subs.handleRingApplied(e);
         }
+        subs.handleTailApplied(e);
       });
       let closed = false;
       const node = {
@@ -65818,6 +66214,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         pruneConsumers: (topic, o) => consumers.pruneConsumers(topic, o),
         consumerCaughtUp: (topic, consumer) => consumers.caughtUp(topic, consumer),
         retireTopic: (topic) => core2.retireTopic(topic),
+        pruneTopic: (topic, o) => core2.pruneTopic(topic, o),
         gcWriters: async (o) => {
           if (closed)
             throw misuse("node is closed");
@@ -66095,10 +66492,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         finalityAuthority: ADHDEV_AUTHORITY_ID
       };
     }
-    function sessionTranscriptPolicy(ringSize = SESSION_TRANSCRIPT_RING) {
+    function sessionTranscriptPolicy() {
       return {
         kind: "append",
-        retention: { mode: "ring", size: ringSize },
+        retention: { mode: "full" },
         replication: "subscribe-only",
         access: "content",
         finalityAuthority: ADHDEV_AUTHORITY_ID
@@ -67020,7 +67417,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const parsed = new Date(value).getTime();
       return Number.isFinite(parsed) ? parsed : null;
     }
-    function computeMeshTaskStats3(meshId, opts) {
+    function computeMeshTaskStats(meshId, opts) {
       const queue = getQueue(meshId);
       const queueById = new Map(queue.map((task) => [task.id, task]));
       let targetIds;
@@ -67073,8 +67470,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         return stats;
       });
     }
-    function computeMeshMissionStats3(meshId, missionId) {
-      const tasks = computeMeshTaskStats3(meshId, { missionId });
+    function computeMeshMissionStats(meshId, missionId) {
+      const tasks = computeMeshTaskStats(meshId, { missionId });
       const stats = {
         missionId,
         taskCount: tasks.length,
@@ -67124,7 +67521,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       MESH_MISSION_STATUSES: () => MESH_MISSION_STATUSES22,
       buildMissionPromptSection: () => buildMissionPromptSection,
       getActiveMeshMissionSummaries: () => getActiveMeshMissionSummaries3,
-      getMeshMission: () => getMeshMission3,
+      getMeshMission: () => getMeshMission,
       getMeshMissions: () => getMeshMissions,
       getMeshStatusMissionSummaries: () => getMeshStatusMissionSummaries3,
       getMeshStatusMissionsCompact: () => getMeshStatusMissionsCompact3,
@@ -67134,7 +67531,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       maybeEmitMissionCloseCandidate: () => maybeEmitMissionCloseCandidate,
       summarizeMeshMission: () => summarizeMeshMission,
       summarizeMissionTasks: () => summarizeMissionTasks,
-      upsertMeshMission: () => upsertMeshMission3
+      upsertMeshMission: () => upsertMeshMission
     });
     function summarizeGoalForLedger(goal) {
       return goal.length > LEDGER_GOAL_SUMMARY_MAX ? goal.slice(0, LEDGER_GOAL_SUMMARY_MAX) : goal;
@@ -67145,7 +67542,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function normalizeMissionSource(value) {
       return value === "magi" || value === "coordinator" ? value : void 0;
     }
-    function upsertMeshMission3(meshId, input) {
+    function parseStoredMissionBrief(briefJson) {
+      if (!briefJson) return void 0;
+      try {
+        const parsed = JSON.parse(briefJson);
+        return normalizeMissionBrief(parsed).brief ?? void 0;
+      } catch {
+        return void 0;
+      }
+    }
+    function upsertMeshMission(meshId, input) {
       const title = typeof input.title === "string" ? input.title.trim() : "";
       if (!title) throw new Error("mission_title_required: a mission needs a non-empty title");
       if (input.status !== void 0 && !MESH_MISSION_STATUSES22.includes(input.status)) {
@@ -67165,6 +67571,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const existing = requestedId ? store2.getMission(meshId, id22) : null;
       const prevStatus = existing ? normalizeMissionStatus(existing.status) : null;
       const prevGoal = existing?.goal ?? "";
+      const normalizedBrief = input.brief === void 0 ? void 0 : normalizeMissionBrief(input.brief).brief;
+      const briefJson = input.brief === void 0 ? void 0 : normalizedBrief ? JSON.stringify(normalizedBrief) : null;
       const record2 = {
         id: id22,
         meshId,
@@ -67174,14 +67582,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         // source is write-once: only forwarded when the caller supplies one. The
         // store COALESCEs it against the existing value, so a later status/goal
         // upsert that omits source never clears a previously-stamped tag.
-        ...input.source ? { source: input.source } : {}
+        ...input.source ? { source: input.source } : {},
+        briefJson
       };
       store2.upsertMission(record2);
       const saved = store2.getMission(meshId, id22);
       const result = {
         ...saved,
         status: normalizeMissionStatus(saved.status),
-        source: normalizeMissionSource(saved.source)
+        source: normalizeMissionSource(saved.source),
+        brief: parseStoredMissionBrief(saved.briefJson)
       };
       appendMissionLedgerEntries(meshId, {
         isCreate: !existing,
@@ -67236,11 +67646,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
     }
     function getMeshMissions(meshId, statuses) {
-      return MeshRuntimeStore.getInstance().getMissions(meshId, statuses).map((m) => ({ ...m, status: normalizeMissionStatus(m.status), source: normalizeMissionSource(m.source) }));
+      return MeshRuntimeStore.getInstance().getMissions(meshId, statuses).map((m) => ({ ...m, status: normalizeMissionStatus(m.status), source: normalizeMissionSource(m.source), brief: parseStoredMissionBrief(m.briefJson) }));
     }
-    function getMeshMission3(meshId, missionId) {
+    function getMeshMission(meshId, missionId) {
       const record2 = MeshRuntimeStore.getInstance().getMission(meshId, missionId);
-      return record2 ? { ...record2, status: normalizeMissionStatus(record2.status), source: normalizeMissionSource(record2.source) } : null;
+      return record2 ? { ...record2, status: normalizeMissionStatus(record2.status), source: normalizeMissionSource(record2.source), brief: parseStoredMissionBrief(record2.briefJson) } : null;
     }
     function summarizeMissionTasks(meshId, missionId) {
       const queue = getQueue(meshId);
@@ -67280,7 +67690,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function maybeEmitMissionCloseCandidate(meshId, missionId) {
       try {
-        const mission = getMeshMission3(meshId, missionId);
+        const mission = getMeshMission(meshId, missionId);
         if (!mission) return false;
         const store2 = MeshRuntimeStore.getInstance();
         const aggregate = summarizeMissionTasks(meshId, missionId);
@@ -67344,7 +67754,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const history = all.filter((m) => m.status === "completed" || m.status === "abandoned").sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || "")).slice(0, historyLimit);
       let full = [...live, ...history].map((mission) => summarizeMeshMission(meshId, mission));
       if (options?.withStats) {
-        full = full.map((summary) => ({ ...summary, stats: computeMeshMissionStats3(meshId, summary.id) }));
+        full = full.map((summary) => ({ ...summary, stats: computeMeshMissionStats(meshId, summary.id) }));
       }
       return options?.verbose ? full : full.map((summary) => slimMissionSummary(summary));
     }
@@ -67387,7 +67797,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         let summary = summarizeMeshMission(meshId, mission);
         if (withStats) {
           try {
-            summary = { ...summary, stats: computeMeshMissionStats3(meshId, mission.id) };
+            summary = { ...summary, stats: computeMeshMissionStats(meshId, mission.id) };
           } catch {
           }
         }
@@ -67465,6 +67875,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_task_stats();
         init_mesh_record();
         init_deliver();
+        init_dist();
         LEDGER_GOAL_SUMMARY_MAX = 200;
         MESH_MISSION_STATUSES22 = ["active", "paused", "completed", "abandoned"];
         GOAL_PREVIEW_MAX = 120;
@@ -67600,6 +68011,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
       const id22 = typeof opts?.id === "string" && opts.id.trim() ? opts.id.trim() : (0, import_crypto10.randomUUID)();
       const dependsOn = normalizeDependsOn(opts?.dependsOn);
+      const ownedPathsResult = normalizeOwnedPaths(opts?.ownedPaths);
+      const ownedPaths = ownedPathsResult.declaration.paths.length > 0 ? ownedPathsResult.declaration : void 0;
       const priority = normalizeMeshTaskPriority2(opts?.priority);
       const notBefore = resolveNotBefore2(opts?.notBefore);
       const maxRetries = typeof opts?.maxRetries === "number" && Number.isFinite(opts.maxRetries) && opts.maxRetries >= 0 ? Math.floor(opts.maxRetries) : void 0;
@@ -67644,6 +68057,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           targetNodeId: opts?.targetNodeId,
           targetSessionId: opts?.targetSessionId,
           requiredTags: resolvedRequiredTags,
+          ...ownedPaths ? { ownedPaths } : {},
           ...dependsOn.length > 0 ? { dependsOn } : {},
           // G6: only persist a non-default priority so legacy/normal rows stay minimal.
           ...priority && priority !== "normal" ? { priority } : {},
@@ -67726,6 +68140,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         throw new Error(buildMeshTaskModeViolationError3(modeValidation));
       }
       const now = opts.dispatchedAt && opts.dispatchedAt.trim() ? opts.dispatchedAt : (/* @__PURE__ */ new Date()).toISOString();
+      const directOwnedPathsResult = normalizeOwnedPaths(opts.ownedPaths);
+      const directOwnedPaths = directOwnedPathsResult.declaration.paths.length > 0 ? directOwnedPathsResult.declaration : void 0;
       return withQueueLock(meshId, () => {
         if (MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId)) {
           return null;
@@ -67738,6 +68154,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           ...modeValidation.taskMode ? { taskMode: modeValidation.taskMode } : {},
           ...readonly2 ? { readonly: true } : {},
           ...missionId ? { missionId } : {},
+          ...directOwnedPaths ? { ownedPaths: directOwnedPaths } : {},
           difficulty: taskDifficulty,
           ...opts.assignedNodeId ? { targetNodeId: opts.assignedNodeId, assignedNodeId: opts.assignedNodeId } : {},
           ...opts.assignedSessionId ? { targetSessionId: opts.assignedSessionId, assignedSessionId: opts.assignedSessionId } : {},
@@ -74541,6 +74958,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             -- re-completion can nudge again. Never drives a status transition \u2014 the
             -- coordinator/human still decides via mesh_mission_upsert.
             close_candidate_emitted_at TEXT,
+            -- H2 (wiring-unification Phase H, mission brief -- docs/design/2026-09-23-
+            -- wiring-unification.md section 7c): nullable JSON-encoded MissionBrief
+            -- (mesh-shared normalizeMissionBrief) -- goal/constraints/doneCriteria/
+            -- handoffNotes/ownedPaths, rendered into a dispatched task's worker-protocol
+            -- footer under this mission. Distinct from the free-text goal column above:
+            -- goal is the short mission-record summary, brief_json is the longer
+            -- structured packet a worker actually reads. NULL = no brief attached.
+            brief_json TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -74625,6 +75050,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         }
         if (!missionCols.has("close_candidate_emitted_at")) {
           self.db.exec(`ALTER TABLE mesh_missions ADD COLUMN close_candidate_emitted_at TEXT`);
+        }
+        if (!missionCols.has("brief_json")) {
+          self.db.exec(`ALTER TABLE mesh_missions ADD COLUMN brief_json TEXT`);
         }
         self.db.exec(`DROP TABLE IF EXISTS mesh_direct_delivered_events`);
         self.db.exec(`DROP TABLE IF EXISTS mesh_completion_conflicts`);
@@ -75372,6 +75800,17 @@ CREATE TABLE IF NOT EXISTS sq_archive (
                 if (isTaskReadonly2(candidate)) return true;
                 return !nodeBusy;
               };
+              const inFlightOwnership = this.assignedRowsForDaemon(meshId, nodeId, opts?.daemonNodeIds).map((row) => {
+                try {
+                  const parsed = JSON.parse(row.payload);
+                  if (!parsed.ownedPaths || isTaskReadonly2(parsed)) return null;
+                  return { taskId: parsed.id, paths: parsed.ownedPaths };
+                } catch {
+                  return null;
+                }
+              }).filter((v) => v !== null);
+              const ownedPathsConflictFor = (candidate) => candidate.ownedPaths && !isTaskReadonly2(candidate) ? findOwnershipConflicts(candidate.ownedPaths, inFlightOwnership) : [];
+              const ownedPathsAllows = (candidate) => ownedPathsConflictFor(candidate).length === 0;
               const claimNowMs = Date.now();
               const notBeforeReady = (candidate) => meshTaskNotBeforeReady(candidate, claimNowMs);
               const nodeIsWorktree = opts?.nodeIsWorktree === true;
@@ -75395,10 +75834,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
                 { reason: "target_pin_unmatched", test: targetMatches },
                 { reason: "difficulty_floor_unmet", test: difficultyAllows },
                 { reason: "parallel_cap_reached", test: parallelCapsAllow },
-                { reason: "node_busy_with_active_assignment", test: nodeConflictAllows }
+                { reason: "node_busy_with_active_assignment", test: nodeConflictAllows },
+                { reason: "owned_paths_conflict", test: ownedPathsAllows }
               ]);
               if (!selected.entry) {
                 if (!candidates.length) return refuse("no_pending_candidates");
+                if (selected.reason === "owned_paths_conflict" && selected.deepest) {
+                  const conflicts = ownedPathsConflictFor(selected.deepest);
+                  const detail = conflicts.length ? `owned_paths overlap with task(s): ${conflicts.map((c) => `${c.taskId} [${c.overlappingPaths.join(", ")}]`).join("; ")}` : void 0;
+                  return refuse("owned_paths_conflict", detail, selected.deepest);
+                }
                 return refuse(
                   selected.reason,
                   selected.deepest ? `closest candidate ${selected.deepest.id} of ${candidates.length}` : void 0,
@@ -75612,13 +76057,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           upsertMission(mission) {
             const now = (/* @__PURE__ */ new Date()).toISOString();
             this.db.prepare(
-              `INSERT INTO mesh_missions (id, mesh_id, title, goal, status, source, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              `INSERT INTO mesh_missions (id, mesh_id, title, goal, status, source, brief_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                  title = excluded.title,
                  goal = excluded.goal,
                  status = excluded.status,
                  source = COALESCE(excluded.source, mesh_missions.source),
+                 brief_json = CASE WHEN ? THEN mesh_missions.brief_json ELSE excluded.brief_json END,
                  updated_at = excluded.updated_at`
             ).run(
               mission.id,
@@ -75627,8 +76073,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               mission.goal ?? "",
               mission.status ?? "active",
               mission.source ?? null,
+              mission.briefJson === void 0 ? null : mission.briefJson,
               now,
-              now
+              now,
+              mission.briefJson === void 0 ? 1 : 0
             );
             this.maybeCheckpointWal();
           }
@@ -75637,7 +76085,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               "SELECT * FROM mesh_missions WHERE mesh_id = ? AND id = ?"
             ).get(meshId, missionId);
             if (!row) return null;
-            return { id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, source: row.source ?? void 0, closeCandidateEmittedAt: row.close_candidate_emitted_at ?? void 0, createdAt: row.created_at, updatedAt: row.updated_at };
+            return { id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, source: row.source ?? void 0, closeCandidateEmittedAt: row.close_candidate_emitted_at ?? void 0, briefJson: row.brief_json ?? void 0, createdAt: row.created_at, updatedAt: row.updated_at };
           }
           getMissions(meshId, statuses) {
             let rows;
@@ -75651,7 +76099,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
                 "SELECT * FROM mesh_missions WHERE mesh_id = ? ORDER BY updated_at DESC"
               ).all(meshId);
             }
-            return rows.map((row) => ({ id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, source: row.source ?? void 0, closeCandidateEmittedAt: row.close_candidate_emitted_at ?? void 0, createdAt: row.created_at, updatedAt: row.updated_at }));
+            return rows.map((row) => ({ id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, source: row.source ?? void 0, closeCandidateEmittedAt: row.close_candidate_emitted_at ?? void 0, briefJson: row.brief_json ?? void 0, createdAt: row.created_at, updatedAt: row.updated_at }));
           }
           /**
            * G3: set/clear the mission_close_candidate idempotency marker. Passing an ISO
@@ -75963,6 +76411,7 @@ Default branch: \`${mesh.defaultBranch}\`` : ""}`);
       if (magiSection) sections.push(magiSection);
       sections.push(TOOLS_SECTION);
       sections.push(WORKERS_SECTION);
+      sections.push(OWNERSHIP_AND_BRIEF_SECTION);
       sections.push(TOOL_EXPOSURE_PREFLIGHT_SECTION);
       const rulesLayer = splitRulesLayer((ctx.repoRules ?? resolveCoordinatorRules(void 0)).text);
       if (rulesLayer.workflow) sections.push(rulesLayer.workflow);
@@ -76002,6 +76451,7 @@ Default branch: \`${mesh.defaultBranch}\`` : ""}`);
         policy: buildPolicySection(mergeAndNormalizePolicy(void 0, mesh.policy)),
         tools: TOOLS_SECTION,
         workers: WORKERS_SECTION,
+        ownershipAndBrief: OWNERSHIP_AND_BRIEF_SECTION,
         workflow: rulesLayer.workflow,
         quota: QUOTA_SECTION,
         onboarding: ONBOARDING_SECTION,
@@ -76361,6 +76811,7 @@ ${rules.join("\n")}`;
     var OPERATING_NOTE_INJECTION_BYTE_BUDGET;
     var TOOLS_SECTION;
     var WORKERS_SECTION;
+    var OWNERSHIP_AND_BRIEF_SECTION;
     var TOOL_EXPOSURE_PREFLIGHT_SECTION;
     var QUOTA_SECTION;
     var ONBOARDING_SECTION;
@@ -76446,6 +76897,13 @@ ${rules.join("\n")}`;
 | \`mesh_coordinator_prompt_append_get\` | Read this daemon's per-machine coordinator prompt APPEND for a CLI type |
 | \`mesh_coordinator_prompt_append_set\` | Write/clear that APPEND (append-only; base prompt is not replaceable) |`;
         WORKERS_SECTION = renderCoordinatorWorkerSection();
+        OWNERSHIP_AND_BRIEF_SECTION = [
+          "## Path Ownership & Mission Briefs",
+          "",
+          "- When two or more `code_change` tasks may touch the same files (parallel worktrees, a fix + its follow-up, a refactor split across tasks), declare `owned_paths` on each \u2014 repo-relative files/dirs it will touch (`src/foo.ts`, or `src/mesh/**` for a subtree). A second `code_change` task whose `owned_paths` overlaps an already-claimed one is refused at claim time (`owned_paths_conflict`) instead of silently racing it \u2014 cheaper than discovering the collision in a merge conflict later. It is opt-in: omitting it performs no check, so declare it whenever a collision is plausible.",
+          "- After a worker reports, check the response for `ownedPathsMismatch` \u2014 it means `touched_files` included paths outside the task's declared `owned_paths`. This is evidence, not a rejection (the completion already committed): read it to decide whether the task drifted in scope or your declaration was too narrow, not to re-run anything.",
+          "- Attach a `brief` (`goal`, `constraints`, `doneCriteria`, `handoffNotes`, `ownedPaths`) to a mission via `mesh_mission_upsert` whenever that mission is meant to outlive this coordinator session \u2014 a long multi-task plan, or one a differently-scoped coordinator (fresh session, different machine) may pick up later. The brief is rendered into every task dispatched under that mission's worker protocol footer, so a worker sees it without a separate lookup; `mesh_mission_list` / a mission upsert response both echo the stored `brief` back to you. A mission you expect to finish within this session does not need one."
+        ].join("\n");
         TOOL_EXPOSURE_PREFLIGHT_SECTION = `## Tool Exposure Preflight
 
 Before searching for an enqueue tool, classify the whole currently known work frontier. For every new delegation search, include \`mesh_enqueue_batch\` by exact name; never search for or load only \`mesh_enqueue_task\`. Load \`mesh_enqueue_task\` only as the single-task fallback after the batch eligibility check below fails.
@@ -78090,6 +78548,33 @@ ${rendered}`, "utf-8");
         init_change_impact_config();
       }
     });
+    function readNonEmptyString2(value) {
+      return typeof value === "string" && value.trim() ? value.trim() : void 0;
+    }
+    function extractJsonObjectFromSummary(summary) {
+      const text = readNonEmptyString2(summary);
+      if (!text) return void 0;
+      const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      const candidates = [fenced?.[1], text].filter(Boolean);
+      for (const candidate of candidates) {
+        const trimmed2 = candidate.trim();
+        if (!trimmed2.startsWith("{") || !trimmed2.endsWith("}")) continue;
+        try {
+          const parsed = JSON.parse(trimmed2);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            const hasWorkerShape = "status" in parsed && ("changedFiles" in parsed || "errors" in parsed || "gitStatus" in parsed || "nextAction" in parsed || "validationResults" in parsed);
+            if (hasWorkerShape) return parsed;
+          }
+        } catch {
+        }
+      }
+      return void 0;
+    }
+    var init_worker_result_parse = __esm2({
+      "src/shared/worker-result-parse.ts"() {
+        "use strict";
+      }
+    });
     function coordinatorIdentityFromEmitFields2(fields) {
       const daemonId = typeof fields.daemonId === "string" && fields.daemonId.length > 0 ? fields.daemonId : void 0;
       if (!daemonId) return void 0;
@@ -78147,42 +78632,23 @@ When your task is done, end your final response with a JSON code block in this e
 \`\`\`
 Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
     }
-    function readNonEmptyString2(value) {
+    function readNonEmptyString3(value) {
       return typeof value === "string" && value.trim() ? value.trim() : void 0;
     }
     function readStringArray4(value) {
       if (!Array.isArray(value)) return [];
-      return value.map((item) => readNonEmptyString2(item)).filter(Boolean);
-    }
-    function extractJsonObjectFromSummary(summary) {
-      const text = readNonEmptyString2(summary);
-      if (!text) return void 0;
-      const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-      const candidates = [fenced?.[1], text].filter(Boolean);
-      for (const candidate of candidates) {
-        const trimmed2 = candidate.trim();
-        if (!trimmed2.startsWith("{") || !trimmed2.endsWith("}")) continue;
-        try {
-          const parsed = JSON.parse(trimmed2);
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            const hasWorkerShape = "status" in parsed && ("changedFiles" in parsed || "errors" in parsed || "gitStatus" in parsed || "nextAction" in parsed || "validationResults" in parsed);
-            if (hasWorkerShape) return parsed;
-          }
-        } catch {
-        }
-      }
-      return void 0;
+      return value.map((item) => readNonEmptyString3(item)).filter(Boolean);
     }
     function normalizeValidationResults(value) {
       if (!Array.isArray(value)) return [];
       return value.filter((item) => item && typeof item === "object" && !Array.isArray(item)).map((item) => {
         const status = ["passed", "failed", "skipped", "unknown"].includes(item.status) ? item.status : "unknown";
         return {
-          ...readNonEmptyString2(item.command) ? { command: readNonEmptyString2(item.command) } : {},
+          ...readNonEmptyString3(item.command) ? { command: readNonEmptyString3(item.command) } : {},
           status,
           ...Number.isFinite(Number(item.durationMs)) ? { durationMs: Number(item.durationMs) } : {},
-          ...readNonEmptyString2(item.outputPath) ? { outputPath: readNonEmptyString2(item.outputPath) } : {},
-          ...readNonEmptyString2(item.summary) ? { summary: readNonEmptyString2(item.summary) } : {}
+          ...readNonEmptyString3(item.outputPath) ? { outputPath: readNonEmptyString3(item.outputPath) } : {},
+          ...readNonEmptyString3(item.summary) ? { summary: readNonEmptyString3(item.summary) } : {}
         };
       });
     }
@@ -78191,14 +78657,14 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       const kinds = /* @__PURE__ */ new Set(["process", "log", "port", "window", "session", "file", "url", "other"]);
       return value.filter((item) => item && typeof item === "object" && !Array.isArray(item)).map((item) => ({
         kind: kinds.has(item.kind) ? item.kind : "other",
-        ...readNonEmptyString2(item.id) ? { id: readNonEmptyString2(item.id) } : {},
-        ...readNonEmptyString2(item.label) ? { label: readNonEmptyString2(item.label) } : {},
-        ...readNonEmptyString2(item.locator) ? { locator: readNonEmptyString2(item.locator) } : {},
+        ...readNonEmptyString3(item.id) ? { id: readNonEmptyString3(item.id) } : {},
+        ...readNonEmptyString3(item.label) ? { label: readNonEmptyString3(item.label) } : {},
+        ...readNonEmptyString3(item.locator) ? { locator: readNonEmptyString3(item.locator) } : {},
         ...Number.isFinite(Number(item.pid)) ? { pid: Number(item.pid) } : {},
         ...Number.isFinite(Number(item.port)) ? { port: Number(item.port) } : {},
-        ...readNonEmptyString2(item.url) ? { url: readNonEmptyString2(item.url) } : {},
-        ...readNonEmptyString2(item.path) ? { path: readNonEmptyString2(item.path) } : {},
-        ...readNonEmptyString2(item.sessionId) ? { sessionId: readNonEmptyString2(item.sessionId) } : {},
+        ...readNonEmptyString3(item.url) ? { url: readNonEmptyString3(item.url) } : {},
+        ...readNonEmptyString3(item.path) ? { path: readNonEmptyString3(item.path) } : {},
+        ...readNonEmptyString3(item.sessionId) ? { sessionId: readNonEmptyString3(item.sessionId) } : {},
         ...typeof item.keepRunning === "boolean" ? { keepRunning: item.keepRunning } : {},
         ...item.metadata && typeof item.metadata === "object" && !Array.isArray(item.metadata) ? { metadata: item.metadata } : {}
       }));
@@ -78209,19 +78675,19 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       const gitStatus2 = raw.gitStatus && typeof raw.gitStatus === "object" && !Array.isArray(raw.gitStatus) ? raw.gitStatus : void 0;
       return {
         status,
-        ...readNonEmptyString2(raw.classification) ? { classification: readNonEmptyString2(raw.classification) } : {},
+        ...readNonEmptyString3(raw.classification) ? { classification: readNonEmptyString3(raw.classification) } : {},
         changedFiles: readStringArray4(raw.changedFiles),
         validationResults: normalizeValidationResults(raw.validationResults),
         ...gitStatus2 ? { gitStatus: gitStatus2 } : {},
         processArtifacts: normalizeProcessArtifacts(raw.processArtifacts),
         errors: readStringArray4(raw.errors),
-        ...readNonEmptyString2(raw.nextAction) ? { nextAction: readNonEmptyString2(raw.nextAction) } : {},
+        ...readNonEmptyString3(raw.nextAction) ? { nextAction: readNonEmptyString3(raw.nextAction) } : {},
         requiresUserAction: raw.requiresUserAction === true,
         source
       };
     }
     function summaryHasParseableJsonAnswer(summary) {
-      const text = readNonEmptyString2(summary);
+      const text = readNonEmptyString3(summary);
       if (!text) return false;
       const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
       const candidates = [fenced?.[1], text].filter(Boolean);
@@ -78299,7 +78765,9 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
     var init_mesh_ledger = __esm2({
       "src/mesh/mesh-ledger.ts"() {
         "use strict";
+        init_worker_result_parse();
         init_contracts();
+        init_worker_result_parse();
         MAX_LEDGER_SLICE_LIMIT = 500;
         ACTIVE_WORK_LEDGER_PROJECTION = {
           name: "active_work",
@@ -79196,6 +79664,36 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       if (!commit2.committed) {
         return { accepted: false, refusal: "unknown_task", detail: `no queue row for task ${identity.taskId}` };
       }
+      let ownedPathsMismatch;
+      try {
+        const taskEntry = store2.findQueueEntryById(identity.meshId, identity.taskId);
+        const owned = taskEntry?.ownedPaths;
+        if (owned && owned.paths.length > 0) {
+          const touched = [...report.touchedFiles || [], ...report.handoffNotes?.touchedFiles || []];
+          const { undeclaredTouched } = touchedFilesOutsideOwnership(touched, owned);
+          if (undeclaredTouched.length > 0) {
+            ownedPathsMismatch = {
+              declared: owned.paths.map((p) => p.subtree ? `${p.path}/**` : p.path),
+              touched,
+              undeclaredTouched: [...undeclaredTouched]
+            };
+            try {
+              meshRecord(identity.meshId, "ownership_violation", {
+                ...identity.nodeId ? { nodeId: identity.nodeId } : {},
+                ...identity.sessionId ? { sessionId: identity.sessionId } : {},
+                payload: {
+                  taskId: identity.taskId,
+                  declaredCount: ownedPathsMismatch.declared.length,
+                  touchedCount: ownedPathsMismatch.touched.length,
+                  undeclaredTouchedCount: ownedPathsMismatch.undeclaredTouched.length
+                }
+              }, { local: true });
+            } catch {
+            }
+          }
+        }
+      } catch {
+      }
       LOG.info(
         "WorkerReport",
         `Accepted ${report.outcome} report for task ${identity.taskId}` + (identity.attemptId ? ` attempt ${identity.attemptId}` : "") + (commit2.duplicate ? " (duplicate replay)" : "") + (handoffNoteRecorded ? " with handoff note" : "")
@@ -79211,7 +79709,8 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         // discarding a valid completion because its optional note failed would
         // trade a small loss for a large one. But the worker is TOLD, so it can
         // put the context somewhere else rather than believing it was filed.
-        ...handoffNoteError ? { handoffNoteError } : {}
+        ...handoffNoteError ? { handoffNoteError } : {},
+        ...ownedPathsMismatch ? { ownedPathsMismatch } : {}
       };
     }
     function acceptWorkerProgressUpdate(credential, note, opts = {}) {
@@ -79391,6 +79890,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         init_worker_progress_notify();
         init_mesh_graph_transition_runner();
         init_mesh_work_queue();
+        init_mesh_record();
         init_worker_mcp_isolation();
         WORKER_REPORT_EVENT_KIND = "worker_tool_report";
         WORKER_PROGRESS_EVENT_KIND = "worker_progress_update";
@@ -79706,12 +80206,20 @@ ${block2.text}`,
           enclosedHandoffNotes = 0;
         }
       }
+      let missionBrief;
+      if (task.missionId) {
+        try {
+          missionBrief = getMeshMission(meshId, task.missionId)?.brief;
+        } catch {
+        }
+      }
       return appendWorkerProtocolFooter2(body, {
         taskId: task.id,
         ...readNonEmpty2(task.taskMode) ? { taskMode: task.taskMode.trim() } : {},
         ...readNonEmpty2(task.difficulty) ? { difficulty: task.difficulty.trim() } : {},
         ...isTaskReadonly2(task) ? { readonly: true } : {},
-        ...enclosedHandoffNotes > 0 ? { enclosedHandoffNotes } : {}
+        ...enclosedHandoffNotes > 0 ? { enclosedHandoffNotes } : {},
+        ...missionBrief ? { missionBrief } : {}
       });
     }
     var init_worker_handoff_dispatch = __esm2({
@@ -79723,6 +80231,7 @@ ${block2.text}`,
         init_worker_mcp_isolation();
         init_worker_handoff_notes();
         init_mesh_work_queue();
+        init_mesh_missions();
       }
     });
     function applyBoundedRetention(map3, options) {
@@ -90020,7 +90529,7 @@ ${cleanBody}`;
       if (record2.staleReason && PRUNABLE_ORPHAN_STALE_REASONS.has(record2.staleReason)) return "prunable_orphan";
       return "preserve_active";
     }
-    async function pruneStaleDirectDispatches3(opts) {
+    async function pruneStaleDirectDispatches(opts) {
       const now = opts.now ?? Date.now();
       const includeTerminal = opts.includeTerminal === true;
       const execute = opts.execute === true;
@@ -90354,6 +90863,18 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       }
       return out;
     }
+    function resolveEvidenceOwner(components, sessionId) {
+      try {
+        const routing = resolveWorkerDelegateRouting(components, sessionId, {
+          getMeshById: (meshId) => getMeshWithCache(components, meshId),
+          getMeshByWorkspace: (workspace) => getCachedMeshByWorkspace(workspace)
+        });
+        if (!routing.isDelegate || !routing.meshId || !routing.coordinatorDaemonId) return null;
+        return { daemonId: routing.coordinatorDaemonId, meshId: routing.meshId };
+      } catch {
+        return null;
+      }
+    }
     function runSessionDestructiveAction(sessionKey2, act) {
       const prior = sessionDestructiveChains.get(sessionKey2) ?? Promise.resolve();
       const next = prior.then(act, act);
@@ -90398,24 +90919,6 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         }
       });
     }
-    function resolveGraphEnvelopeWorkerResult(metadataEvent) {
-      const explicit = readWorkerResultMetadata(metadataEvent);
-      if (explicit) return explicit;
-      return extractJsonObjectFromSummary(readNonEmptyString(metadataEvent.finalSummary) || void 0);
-    }
-    function isHollowCompletion(metadataEvent) {
-      const diagnostic = readRecord6(metadataEvent.completionDiagnostic);
-      if (diagnostic?.finalAssistantContentLength !== 0) return false;
-      if (readNonEmptyString(metadataEvent.evidenceLevel) !== "insufficient") return false;
-      if (readWorkerResultMetadata(metadataEvent)) return false;
-      if (readNonEmptyString(diagnostic.finalSummarySource) === "tool_report") return false;
-      return true;
-    }
-    function nonRetryableProviderFailureReason(metadataEvent) {
-      const diagnostic = readRecord6(metadataEvent.completionDiagnostic);
-      const reason = readNonEmptyString(diagnostic?.reason) || readNonEmptyString(metadataEvent.errorReason);
-      return reason === "auth_failed" || reason === "billing_failed" ? reason : null;
-    }
     function bootstrapQueueTaskCountsAsHandled(task, bootstrapNodeId, nowMs2) {
       if (!meshNodeIdMatches5({ id: task.targetNodeId }, bootstrapNodeId)) return false;
       if (task.status === "assigned") return true;
@@ -90428,168 +90931,6 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
     }
     function readRecord6(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : void 0;
-    }
-    function readAttemptRef(event, settings) {
-      for (const candidate of [event.attemptRef, settings.meshAttemptRef]) {
-        if (isTurnAttemptRef(candidate)) return candidate;
-      }
-      const attemptId = readNonEmptyString(event.attemptId) || readNonEmptyString(settings.meshActiveAttemptId);
-      const generation = typeof event.attemptGeneration === "number" ? event.attemptGeneration : typeof settings.meshActiveAttemptGeneration === "number" ? settings.meshActiveAttemptGeneration : typeof settings.meshAttemptGeneration === "number" ? settings.meshAttemptGeneration : void 0;
-      return attemptId && typeof generation === "number" ? { attemptId, generation } : void 0;
-    }
-    function providerEvidenceEventId(sessionId, event, timestamp2, taskId) {
-      return `pe:${(0, import_crypto15.createHash)("sha256").update(`${sessionId}|${event}|${timestamp2}|${taskId}`).digest("hex").slice(0, 32)}`;
-    }
-    function modalQuestions(event) {
-      const prompt = readRecord6(event.interactivePrompt);
-      const questions = Array.isArray(prompt?.questions) ? prompt.questions : Array.isArray(event.questions) ? event.questions : void 0;
-      if (!questions) return void 0;
-      return questions.map((q) => {
-        const r = readRecord6(q) ?? {};
-        return {
-          ...readNonEmptyString(r.header) ? { header: readNonEmptyString(r.header) } : {},
-          question: readNonEmptyString(r.question),
-          ...r.multiSelect === true ? { multiSelect: true } : {},
-          options: (Array.isArray(r.options) ? r.options : []).map((o) => {
-            const opt = readRecord6(o) ?? {};
-            return { label: readNonEmptyString(opt.label), ...readNonEmptyString(opt.description) ? { description: readNonEmptyString(opt.description) } : {} };
-          })
-        };
-      });
-    }
-    function buildProviderEvidence(input) {
-      const { eventName, event, sessionId, settings } = input;
-      const timestamp2 = typeof event.timestamp === "number" && Number.isFinite(event.timestamp) ? event.timestamp : Date.now();
-      const taskId = readNonEmptyString(event.taskId) || readNonEmptyString(event.meshActiveTaskId) || readNonEmptyString(settings.meshActiveTaskId);
-      const attemptRef = readAttemptRef(event, settings);
-      const base = {
-        eventId: providerEvidenceEventId(sessionId, eventName, timestamp2, taskId),
-        at: timestamp2,
-        sessionId,
-        observedBy: input.observedBy,
-        ...attemptRef ? { attemptRef } : {},
-        ...taskId ? { taskId } : {}
-      };
-      const notice = {
-        nodeLabel: input.nodeLabel,
-        ...readNonEmptyString(event.providerSessionId) ? { providerSessionId: readNonEmptyString(event.providerSessionId) } : {}
-      };
-      const diagnostic = readRecord6(event.completionDiagnostic);
-      switch (eventName) {
-        case "agent:generating_started":
-          return { evidence: { ...base, source: "fsm_edge", kind: "turn_started", retro: false } };
-        case "agent:waiting_approval":
-        case "agent:waiting_choice": {
-          const modalMessage = readNonEmptyString(event.modalMessage);
-          const questions = eventName === "agent:waiting_choice" ? modalQuestions(event) : void 0;
-          const promptId = readNonEmptyString(event.promptId) || readNonEmptyString(readRecord6(event.interactivePrompt)?.promptId);
-          return {
-            evidence: { ...base, source: "approval_gate", kind: "suspension", modal: eventName === "agent:waiting_approval" ? "approval" : "choice" },
-            envelope: { notice: { ...notice, ...modalMessage ? { modalMessage } : {}, ...questions ? { questions } : {}, ...promptId ? { promptId } : {} } }
-          };
-        }
-        case "agent:approval_resolved": {
-          const resolution = readNonEmptyString(event.resolution);
-          return {
-            evidence: {
-              ...base,
-              source: "modal_button",
-              kind: "suspension_resolved",
-              resolution: resolution === "rejected" ? "rejected" : resolution === "answered" ? "answered" : "approved",
-              via: readNonEmptyString(event.source) === "auto_approve" ? "auto_approve" : "modal_button"
-            }
-          };
-        }
-        case "agent:ready":
-        case "agent:generating_completed": {
-          const finalSummary = readNonEmptyString(event.finalSummary) || readNonEmptyString(event.summary);
-          const workerResult = resolveGraphEnvelopeWorkerResult(event);
-          if (eventName === "agent:ready" && !finalSummary && !readWorkerResultMetadata(event)) return null;
-          const weak = isWeakCompletionEvidence2(event);
-          const afterTimeout = diagnostic?.emittedAfterFinalizationTimeout === true;
-          const hollow = eventName === "agent:generating_completed" && isHollowCompletion(event);
-          const completionMetadata = {
-            ...readNonEmptyString(diagnostic?.reason) ? { diagnosticReason: readNonEmptyString(diagnostic?.reason) } : {},
-            ...typeof diagnostic?.finalAssistantPresent === "boolean" ? { finalAssistantPresent: diagnostic.finalAssistantPresent } : {},
-            ...readNonEmptyString(event.evidenceLevel) ? { evidenceLevel: readNonEmptyString(event.evidenceLevel) } : {},
-            ...diagnostic?.finalAssistantMayBeTruncated === true ? { summaryMayBeTruncated: true } : {}
-          };
-          return {
-            evidence: {
-              ...base,
-              source: weak ? "completion_flush_weak" : "completion_flush_genuine",
-              kind: "turn_end",
-              strength: weak ? "weak" : "genuine",
-              ...afterTimeout ? { afterFinalizationTimeout: true } : {},
-              ...hollow ? { hollow: true } : {}
-            },
-            envelope: {
-              ...finalSummary ? { finalSummary } : {},
-              ...workerResult ? { workerResult } : {},
-              ...input.nodeId ? { nodeId: input.nodeId } : {},
-              ...readNonEmptyString(event.providerType) ? { providerType: readNonEmptyString(event.providerType) } : {},
-              notice: {
-                ...notice,
-                ...event.reviewRecommended === true ? { reviewRecommended: true } : {},
-                ...Object.keys(completionMetadata).length > 0 ? { completionMetadata } : {}
-              }
-            },
-            ...finalSummary ? { handoffText: finalSummary } : {}
-          };
-        }
-        case "agent:stopped": {
-          const failure5 = nonRetryableProviderFailureReason(event);
-          return {
-            evidence: {
-              ...base,
-              source: failure5 ? "provider_error" : "pty_exit",
-              kind: "process_exit",
-              exitCode: typeof event.exitCode === "number" && Number.isSafeInteger(event.exitCode) ? event.exitCode : null,
-              ...failure5 ? { providerFailure: failure5 } : {}
-            },
-            envelope: { notice: { ...notice, ...readNonEmptyString(event.errorMessage) ? { errorMessage: readNonEmptyString(event.errorMessage) } : {} } }
-          };
-        }
-        case "monitor:no_progress": {
-          const stalledMs = typeof event.stalledMs === "number" && event.stalledMs >= 0 ? event.stalledMs : 0;
-          const observed = readNonEmptyString(event.observedStatus) || readNonEmptyString(event.status) || "unknown";
-          return {
-            evidence: {
-              ...base,
-              source: "mesh_stall_watchdog",
-              kind: "no_progress",
-              stalledMs,
-              observedStatus: observed,
-              finalAssistantPresent: diagnostic?.finalAssistantPresent === true
-            },
-            envelope: { notice: { ...notice, stalledMs, observedStatus: observed } }
-          };
-        }
-        default:
-          return null;
-      }
-    }
-    function observeBuilt(deps, built, owner) {
-      const opts = {
-        ...owner ? { owner } : {},
-        ...built.envelope ? { envelope: built.envelope } : {}
-      };
-      const run2 = (evidence) => {
-        try {
-          const result = deps.ledger.observe(evidence, opts);
-          if (result.verdict === "rejected") {
-            traceMeshEventDrop("turn_evidence_rejected", { sessionId: evidence.sessionId, taskId: evidence.taskId, event: evidence.kind }, result.rejection);
-          }
-        } catch (e) {
-          LOG.warn("MeshEvents", `turn evidence ${evidence.kind} for session ${evidence.sessionId} failed to observe: ${e?.message || e}`);
-        }
-      };
-      const remoteOwner = owner && !daemonIdsEquivalent4(owner.daemonId, deps.ledger.selfDaemonId);
-      if (!remoteOwner || !built.handoffText || !deps.appendHandoff || built.evidence.kind !== "turn_end") {
-        run2(built.evidence);
-        return;
-      }
-      deps.appendHandoff(owner.meshId, TURN_EVIDENCE_HANDOFF_KIND, { text: built.handoffText, notice: built.envelope?.notice ?? {} }).then((ref) => run2({ ...built.evidence, summary: ref }), () => run2(built.evidence));
     }
     function worktreeHasQueuedTaskFor(meshId, nodeId) {
       try {
@@ -90679,7 +91020,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         });
       });
     }
-    function processMeshEvent(components, deps, input) {
+    function processMeshEvent(components, input) {
       const { meshId, eventName, event, nodeId, sessionId } = input;
       const traceCtx = { taskId: event.taskId ?? event.meshActiveTaskId, sessionId, nodeId, meshId, event: eventName };
       const result = { success: true };
@@ -90710,33 +91051,12 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
           return result;
         }
         applyQueueEdges(components, meshId, nodeId, eventName, event, sessionId);
-        if (!deps || !sessionId) return result;
-        const built = buildProviderEvidence({
-          eventName,
-          event,
-          sessionId,
-          settings: input.settings,
-          nodeId,
-          nodeLabel: input.nodeLabel,
-          observedBy: deps.ledger.selfDaemonId
-        });
-        if (!built) return result;
-        const owner = input.coordinatorDaemonId && !daemonIdsEquivalent4(input.coordinatorDaemonId, deps.ledger.selfDaemonId) ? { daemonId: input.coordinatorDaemonId, meshId } : null;
-        observeBuilt(deps, built, owner);
-        traceMeshEventStage("observed", traceCtx, built.evidence.kind);
-        result.evidence = built.evidence.kind;
       } catch (e) {
         LOG.warn("MeshEvents", `mesh event ${eventName} (mesh ${meshId}, session ${sessionId || "-"}) failed: ${e?.message || e}`);
         result.success = false;
         result.error = e?.message || String(e);
       }
       return result;
-    }
-    function forwardingDepsFrom(components) {
-      const rt = meshNoticeRuntime.current();
-      const ledger = components.turnLedger ?? rt?.evidence ?? null;
-      if (!ledger) return null;
-      return { ledger, ...rt?.appendHandoff ? { appendHandoff: rt.appendHandoff } : {} };
     }
     function handleMeshForwardEvent(components, payload) {
       const eventName = readNonEmptyString(payload.event);
@@ -90760,7 +91080,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       }
       const event = buildRelayMetadataEvent(payload);
       traceMeshEventStage("received", { taskId: event.taskId, sessionId: event.targetSessionId, nodeId, meshId, event: eventName });
-      return processMeshEvent(components, forwardingDepsFrom(components), {
+      return processMeshEvent(components, {
         meshId,
         eventName,
         event,
@@ -90950,7 +91270,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         }
         const nodeId = routing.nodeId || readNonEmptyString(event.meshNodeId) || readNonEmptyString(settings.meshNodeId);
         mirrorToDashboard(components, meshId, nodeId, eventName, event, sourceSession);
-        processMeshEvent(components, forwardingDepsFrom(components), {
+        processMeshEvent(components, {
           meshId,
           eventName,
           event,
@@ -90967,17 +91287,14 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       }
       return components.bus.on("provider_event", (e) => onProviderEvent(e.event), { name: "mesh.forwarding" });
     }
-    var import_crypto15;
     var REMOTE_IDLE_SESSION_TTL_MS;
     var meshByWorkspaceCache;
     var MESH_WORKSPACE_CACHE_TTL_MS;
     var sessionDestructiveChains;
-    var TURN_EVIDENCE_HANDOFF_KIND;
     var NOTICE_EVENTS;
     var init_mesh_event_forwarding = __esm2({
       "src/mesh/mesh-event-forwarding.ts"() {
         "use strict";
-        import_crypto15 = require("crypto");
         init_config();
         init_mesh_config();
         init_logger();
@@ -90990,7 +91307,6 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         init_snapshot3();
         init_mesh_idle_reminder();
         init_mesh_graph_transition_runner();
-        init_mesh_ledger();
         init_mesh_node_identity();
         init_mesh_queue_assignment();
         init_mesh_autolaunch_integrity();
@@ -91001,7 +91317,6 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         meshByWorkspaceCache = /* @__PURE__ */ new Map();
         MESH_WORKSPACE_CACHE_TTL_MS = 5e3;
         sessionDestructiveChains = /* @__PURE__ */ new Map();
-        TURN_EVIDENCE_HANDOFF_KIND = "turn.evidence.text";
         NOTICE_EVENTS = /* @__PURE__ */ new Set([
           "refine:accepted",
           "refine:completed",
@@ -92255,6 +92570,13 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         init_logger();
       }
     });
+    function handoffTextOf(envelope) {
+      if (!envelope) return void 0;
+      if (envelope.finalSummary) return envelope.finalSummary;
+      const notice = envelope.notice;
+      const fromNotice = typeof notice?.modalMessage === "string" ? notice.modalMessage : typeof notice?.errorMessage === "string" ? notice.errorMessage : void 0;
+      return fromNotice || void 0;
+    }
     function makeEventId(sessionId, kind, at) {
       eventSeq = (eventSeq + 1) % Number.MAX_SAFE_INTEGER;
       return `tev_${sessionId}_${kind}_${at}_${eventSeq}`;
@@ -92263,8 +92585,21 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       const log = deps.log ?? defaultLog;
       const now = deps.now ?? (() => Date.now());
       const dropped = {};
+      function runObserve(evidence, opts) {
+        const kind = evidence.kind;
+        try {
+          const result = deps.observe(evidence, opts);
+          if (result && typeof result.catch === "function") {
+            result.catch((error48) => {
+              log.warn("TurnEvidencePort", `[TurnEvidencePort] observe(${kind}) for ${evidence.sessionId} failed (async): ${error48?.message ?? error48}`);
+            });
+          }
+        } catch (error48) {
+          log.warn("TurnEvidencePort", `[TurnEvidencePort] observe(${kind}) for ${evidence.sessionId} failed: ${error48?.message ?? error48}`);
+        }
+      }
       return {
-        observe(evidence) {
+        observe(evidence, callerOpts) {
           const kind = evidence?.kind ?? "unknown";
           let withAttempt = evidence;
           if (!evidence.attemptRef && evidence.sessionId && deps.attemptRefFor) {
@@ -92279,16 +92614,20 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
             log.debug("TurnEvidencePort", `[TurnEvidencePort] dropped invalid ${kind} for ${evidence?.sessionId ?? "unknown"} (failed isTurnEvidence)`);
             return;
           }
-          try {
-            const result = deps.observe(withAttempt);
-            if (result && typeof result.catch === "function") {
-              result.catch((error48) => {
-                log.warn("TurnEvidencePort", `[TurnEvidencePort] observe(${kind}) for ${withAttempt.sessionId} failed (async): ${error48?.message ?? error48}`);
-              });
-            }
-          } catch (error48) {
-            log.warn("TurnEvidencePort", `[TurnEvidencePort] observe(${kind}) for ${withAttempt.sessionId} failed: ${error48?.message ?? error48}`);
+          const resolvedOwner = callerOpts?.owner ?? (deps.ownerFor ? deps.ownerFor(withAttempt.sessionId) : null) ?? void 0;
+          const isRemoteOwner = !!resolvedOwner && (!deps.selfDaemonId || !daemonIdsEquivalent4(resolvedOwner.daemonId, deps.selfDaemonId));
+          const owner = isRemoteOwner ? resolvedOwner : void 0;
+          const envelope = callerOpts?.envelope;
+          const opts = owner || envelope ? { ...owner ? { owner } : {}, ...envelope ? { envelope } : {} } : void 0;
+          const text = isRemoteOwner && SUMMARY_REF_KINDS.has(withAttempt.kind) ? handoffTextOf(envelope) : void 0;
+          if (!text || !deps.appendHandoff) {
+            runObserve(withAttempt, opts);
+            return;
           }
+          deps.appendHandoff(owner.meshId, TURN_EVIDENCE_HANDOFF_KIND, { text, notice: envelope?.notice ?? {} }).then(
+            (ref) => runObserve({ ...withAttempt, summary: ref }, opts),
+            () => runObserve(withAttempt, opts)
+          );
         }
       };
     }
@@ -92305,7 +92644,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         ...!attemptRef && taskId ? { taskId } : {}
       };
     }
-    function guardEmit(port, kind, sessionId, build) {
+    function guardEmit(port, kind, sessionId, build, envelope) {
       if (!port) return;
       try {
         const evidence = build();
@@ -92313,7 +92652,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
           LOG.debug("TurnEvidencePort", `[TurnEvidencePort] dropped invalid ${kind} for ${sessionId} (failed isTurnEvidence)`);
           return;
         }
-        port.observe(evidence);
+        port.observe(evidence, envelope ? { envelope } : void 0);
       } catch (error48) {
         LOG.warn("TurnEvidencePort", `[TurnEvidencePort] emit ${kind} for ${sessionId} failed: ${error48?.message ?? error48}`);
       }
@@ -92339,7 +92678,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         ...opts.releasedByHardCap !== void 0 ? { releasedByHardCap: opts.releasedByHardCap } : {},
         ...opts.nativeOutcome ? { nativeOutcome: opts.nativeOutcome } : {},
         ...opts.live ? { live: opts.live } : {}
-      }));
+      }), opts.envelope);
     }
     function emitNoProgress(port, opts) {
       guardEmit(port, "no_progress", opts.sessionId, () => ({
@@ -92358,7 +92697,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         kind: "process_exit",
         exitCode: opts.exitCode,
         ...opts.providerFailure ? { providerFailure: opts.providerFailure } : {}
-      }));
+      }), opts.envelope);
     }
     function emitSessionError(port, opts) {
       guardEmit(port, "session_error", opts.sessionId, () => ({
@@ -92366,7 +92705,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         source: opts.source,
         kind: "session_error",
         reason: opts.reason
-      }));
+      }), opts.envelope);
     }
     function emitSuspension(port, opts) {
       guardEmit(port, "suspension", opts.sessionId, () => ({
@@ -92375,8 +92714,10 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         kind: "suspension",
         modal: opts.modal,
         ...opts.modalKey ? { modalKey: opts.modalKey } : {}
-      }));
+      }), opts.envelope);
     }
+    var SUMMARY_REF_KINDS;
+    var TURN_EVIDENCE_HANDOFF_KIND;
     var eventSeq;
     var defaultLog;
     var init_turn_evidence_port = __esm2({
@@ -92384,6 +92725,8 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         "use strict";
         init_dist();
         init_logger();
+        SUMMARY_REF_KINDS = /* @__PURE__ */ new Set(["turn_end", "transcript_final"]);
+        TURN_EVIDENCE_HANDOFF_KIND = "turn.evidence.text";
         eventSeq = 0;
         defaultLog = { warn: (scope, msg) => LOG.warn(scope, msg), debug: (scope, msg) => LOG.debug(scope, msg) };
       }
@@ -92598,25 +92941,15 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
                   });
                 }
               } else if (agentStatus === "idle" && (this.lastAgentStatus === "generating" || this.lastAgentStatus === "waiting_approval")) {
-                const duration3 = this.generatingStartedAt ? Math.round((now - this.generatingStartedAt) / 1e3) : 0;
-                this.pushEvent({
-                  event: "agent:generating_completed",
-                  chatTitle: this.resolveChatTitle(data),
-                  duration: duration3,
-                  timestamp: now,
-                  ideType: this.ideType || this.type,
-                  agentType: this.type,
-                  agentName: this.agentName || this.provider.name,
-                  extensionId: this.extensionId || this.type,
-                  finalSummary: extractFinalSummaryFromMessages(data?.messages)
-                });
                 if (this.turnEvidencePort) {
+                  const finalSummary = extractFinalSummaryFromMessages(data?.messages);
                   emitTurnEnd(this.turnEvidencePort, {
                     sessionId: this.instanceId,
                     observedBy: "ide_poll",
                     source: "fsm_edge",
                     at: now,
-                    strength: "genuine"
+                    strength: "genuine",
+                    ...finalSummary ? { envelope: { finalSummary } } : {}
                   });
                 }
                 this.generatingStartedAt = 0;
@@ -93559,16 +93892,15 @@ ${effect.notification.body || ""}`.trim();
                   });
                 }
               } else if (agentStatus === "idle" && (lastStatus === "generating" || lastStatus === "waiting_approval")) {
-                const startedAt = this.generatingStartedAt.get(agentKey);
-                const duration3 = startedAt ? Math.round((now - startedAt) / 1e3) : 0;
-                this.pushEvent({ event: "agent:generating_completed", chatTitle, duration: duration3, timestamp: now, ideType: this.type, finalSummary: extractFinalSummaryFromMessages(chatData?.messages) });
                 if (this.turnEvidencePort) {
+                  const finalSummary = extractFinalSummaryFromMessages(chatData?.messages);
                   emitTurnEnd(this.turnEvidencePort, {
                     sessionId: this.instanceId,
                     observedBy: "ide_poll",
                     source: "fsm_edge",
                     at: now,
-                    strength: "genuine"
+                    strength: "genuine",
+                    ...finalSummary ? { envelope: { finalSummary } } : {}
                   });
                 }
                 this.generatingStartedAt.delete(agentKey);
@@ -94619,7 +94951,7 @@ ${effect.notification.body || ""}`.trim();
         );
       }
       relPaths.sort();
-      const hash2 = (0, import_crypto16.createHash)("sha256");
+      const hash2 = (0, import_crypto15.createHash)("sha256");
       for (const relPath of relPaths) {
         const absPath = path29.join(rootDir, ...relPath.split("/"));
         const bytes = fs21.readFileSync(absPath);
@@ -94661,14 +94993,14 @@ ${effect.notification.body || ""}`.trim();
     }
     var fs21;
     var path29;
-    var import_crypto16;
+    var import_crypto15;
     var TREE_DIGEST_ALGORITHM;
     var init_tree_digest = __esm2({
       "src/providers/channel/tree-digest.ts"() {
         "use strict";
         fs21 = __toESM2(require("fs"));
         path29 = __toESM2(require("path"));
-        import_crypto16 = require("crypto");
+        import_crypto15 = require("crypto");
         init_contract();
         TREE_DIGEST_ALGORITHM = "adhdev-provider-tree-sha256-v1";
       }
@@ -117750,13 +118082,13 @@ ${marker}`,
     }
     function normalizeRef(value, label) {
       const ref = typeof value === "string" ? value.trim() : "";
-      if (!ref) throw new MeshGraphPlanError3("invalid_graph_ref", `${label} requires a non-empty ref`);
+      if (!ref) throw new MeshGraphPlanError("invalid_graph_ref", `${label} requires a non-empty ref`);
       return ref;
     }
     function pickEnum(value, allowed, fallback, code, label) {
       if (value === void 0 || value === null || value === "") return fallback;
       if (typeof value === "string" && allowed.includes(value)) return value;
-      throw new MeshGraphPlanError3(code, `${label} must be one of ${allowed.join(" | ")} (got ${JSON.stringify(value)})`);
+      throw new MeshGraphPlanError(code, `${label} must be one of ${allowed.join(" | ")} (got ${JSON.stringify(value)})`);
     }
     function computeMeshGraphPlanDigest(req) {
       const normalized = {
@@ -117791,13 +118123,13 @@ ${marker}`,
         })),
         on_dependency_failure: parseOnDependencyFailurePolicy3(req.onDependencyFailure)
       };
-      return (0, import_crypto17.createHash)("sha256").update(canonicalJson(normalized)).digest("hex");
+      return (0, import_crypto16.createHash)("sha256").update(canonicalJson(normalized)).digest("hex");
     }
-    function commitMeshGraphPlan3(req) {
+    function commitMeshGraphPlan(req) {
       const store2 = MeshRuntimeStore.getInstance();
       const tasks = Array.isArray(req.tasks) ? req.tasks : [];
       if (tasks.length === 0) {
-        throw new MeshGraphPlanError3("empty_task_graph", "a graph plan requires at least one task");
+        throw new MeshGraphPlanError("empty_task_graph", "a graph plan requires at least one task");
       }
       const gates = Array.isArray(req.gates) ? req.gates : [];
       const workspaces = Array.isArray(req.workspaces) ? req.workspaces : [];
@@ -117810,7 +118142,7 @@ ${marker}`,
         const ref = typeof t.ref === "string" ? t.ref.trim() : "";
         if (!ref) return;
         if (taskRefs.has(ref)) {
-          throw new MeshGraphPlanError3("duplicate_task_ref", `ref '${ref}' is used by more than one task in this batch`);
+          throw new MeshGraphPlanError("duplicate_task_ref", `ref '${ref}' is used by more than one task in this batch`);
         }
         taskRefs.set(ref, i);
       });
@@ -117818,7 +118150,7 @@ ${marker}`,
       gates.forEach((g3, i) => {
         const ref = normalizeRef(g3.ref, `gates[${i}]`);
         if (taskRefs.has(ref) || gateRefs.has(ref)) {
-          throw new MeshGraphPlanError3(
+          throw new MeshGraphPlanError(
             "duplicate_graph_ref",
             `ref '${ref}' is declared more than once \u2014 tasks, gates and workspaces share ONE ref namespace`
           );
@@ -117829,7 +118161,7 @@ ${marker}`,
       workspaces.forEach((w, i) => {
         const ref = normalizeRef(w.ref, `workspaces[${i}]`);
         if (taskRefs.has(ref) || gateRefs.has(ref) || workspaceRefs.has(ref)) {
-          throw new MeshGraphPlanError3(
+          throw new MeshGraphPlanError(
             "duplicate_graph_ref",
             `ref '${ref}' is declared more than once \u2014 tasks, gates and workspaces share ONE ref namespace`
           );
@@ -117839,7 +118171,7 @@ ${marker}`,
       tasks.forEach((t, i) => {
         for (const dep of t.dependsOn ?? []) {
           if (gateRefs.has(dep)) {
-            throw new MeshGraphPlanError3(
+            throw new MeshGraphPlanError(
               "gate_ref_in_depends_on",
               `task ${t.ref ? `'${t.ref}'` : `#${i}`} lists gate ref '${dep}' in depends_on \u2014 use gated_by to declare a gate edge (a gate is an intentional stop, never an ordinary queue dependency)`
             );
@@ -117847,7 +118179,7 @@ ${marker}`,
         }
         for (const gateRef of t.gated_by ?? []) {
           if (!gateRefs.has(gateRef)) {
-            throw new MeshGraphPlanError3(
+            throw new MeshGraphPlanError(
               "unknown_gate_ref",
               `task ${t.ref ? `'${t.ref}'` : `#${i}`} is gated_by '${gateRef}', which is not a gate in this batch` + (gateRefs.size ? ` (gates: ${[...gateRefs.keys()].join(", ")})` : "")
             );
@@ -117855,7 +118187,7 @@ ${marker}`,
         }
         const ws = typeof t.workspace_ref === "string" ? t.workspace_ref.trim() : "";
         if (ws && !workspaceRefs.has(ws)) {
-          throw new MeshGraphPlanError3(
+          throw new MeshGraphPlanError(
             "unknown_workspace_ref",
             `task ${t.ref ? `'${t.ref}'` : `#${i}`} names workspace_ref '${ws}', which is not declared in this batch`
           );
@@ -117864,7 +118196,7 @@ ${marker}`,
       gates.forEach((g3, i) => {
         for (const dep of g3.depends_on ?? []) {
           if (!taskRefs.has(dep) && !gateRefs.has(dep)) {
-            throw new MeshGraphPlanError3(
+            throw new MeshGraphPlanError(
               "unknown_gate_dependency",
               `gate '${g3.ref}' depends on '${dep}', which is not a task or gate ref in this batch`
             );
@@ -117882,7 +118214,7 @@ ${marker}`,
           parseInputBindings({ inputs_from: t.inputs_from });
         } catch (e) {
           const detail = e instanceof MeshMaterializationError ? e.detail : void 0;
-          throw new MeshGraphPlanError3(
+          throw new MeshGraphPlanError(
             "invalid_binding_spec",
             `task ${t.ref ? `'${t.ref}'` : `#${i}`} has a malformed inputs_from: ${e instanceof Error ? e.message : String(e)} \u2014 each entry is {from: <predecessor ref>, select: <RFC-6901 JSON Pointer>, as: <name>}. Rejected now rather than after the upstream work runs: the binding is baked into the node at enqueue time, so a shape error accepted here only surfaces once every predecessor has already completed.`,
             { taskIndex: i, ...t.ref ? { taskRef: t.ref } : {}, ...detail ? { detail } : {} }
@@ -117893,7 +118225,7 @@ ${marker}`,
         if (t.inputs_from === void 0) return;
         for (const sourceRef of collectInputSourceRefs(t.inputs_from)) {
           if (taskRefs.has(sourceRef) || gateRefs.has(sourceRef)) continue;
-          throw new MeshGraphPlanError3(
+          throw new MeshGraphPlanError(
             "unknown_input_source_ref",
             `task ${t.ref ? `'${t.ref}'` : `#${i}`} binds inputs_from '${sourceRef}', which is not a task or gate ref in this batch \u2014 a binding reads a step declared in the SAME batch, so an unresolvable ref would leave the task with no ordering edge and no source envelope at all.`,
             { taskIndex: i, ...t.ref ? { taskRef: t.ref } : {}, sourceRef }
@@ -117905,7 +118237,7 @@ ${marker}`,
         const existing = graphStore.getGraphByBatchId(req.meshId, batchId);
         if (existing) {
           if (existing.planDigest !== planDigest) {
-            throw new MeshGraphPlanError3(
+            throw new MeshGraphPlanError(
               "batch_id_conflict",
               `batch_id '${batchId}' already exists on this mesh with a DIFFERENT plan digest \u2014 reuse of a batch id is only idempotent for an identical plan`,
               { graphId: existing.graphId }
@@ -118193,12 +118525,12 @@ ${marker}`,
       }
       return [...new Set(out)];
     }
-    var import_crypto17;
-    var MeshGraphPlanError3;
+    var import_crypto16;
+    var MeshGraphPlanError;
     var init_mesh_graph_plan = __esm2({
       "src/mesh/mesh-graph-plan.ts"() {
         "use strict";
-        import_crypto17 = require("crypto");
+        import_crypto16 = require("crypto");
         init_logger();
         init_mesh_runtime_store();
         init_mesh_graph_input_binding();
@@ -118207,7 +118539,7 @@ ${marker}`,
         init_mesh_graph_transition_runner();
         init_mesh_graph_workspace_saga();
         init_mesh_work_queue();
-        MeshGraphPlanError3 = class extends Error {
+        MeshGraphPlanError = class extends Error {
           constructor(code, message, extra) {
             super(`${code}: ${message}`);
             this.code = code;
@@ -118375,7 +118707,7 @@ ${marker}`,
     var queueRequeue2;
     var directDispatchRecord2;
     var GRAPH_AUDIT_RECORDERS;
-    var graphAuditRecord2;
+    var graphAuditRecord;
     var DEFAULT_ACTIVE_WORK_RECORD_TAIL;
     var activeWorkQuery2;
     var recoveryContextQuery2;
@@ -118497,7 +118829,7 @@ ${marker}`,
               const response2 = { ok: true, tasks: tasks2 };
               return { success: true, ...response2 };
             }
-            const plan = commitMeshGraphPlan3({ ...req.plan, meshId: req.meshId });
+            const plan = commitMeshGraphPlan({ ...req.plan, meshId: req.meshId });
             recordGraphEnqueueCommitted(req.meshId, {
               graphId: plan.graphId,
               batchId: plan.batchId,
@@ -118519,7 +118851,7 @@ ${marker}`,
             return { success: true, ...response };
           } catch (e) {
             const message = e?.message || String(e);
-            const code = e instanceof MeshGraphPlanError3 ? e.code : audit.errorCodes.find((c) => message.includes(c));
+            const code = e instanceof MeshGraphPlanError ? e.code : audit.errorCodes.find((c) => message.includes(c));
             if (req.mode === "graph") {
               recordGraphEnqueueRolledBack(req.meshId, {
                 code: code ?? "graph_plan_failed",
@@ -118538,7 +118870,7 @@ ${marker}`,
               ok: false,
               ...code ? { refusalCode: code } : {},
               message,
-              ...e instanceof MeshGraphPlanError3 && e.extra ? { extra: e.extra } : {}
+              ...e instanceof MeshGraphPlanError && e.extra ? { extra: e.extra } : {}
             };
             return { success: true, ...response };
           }
@@ -118594,7 +118926,7 @@ ${marker}`,
           gate_abandoned: recordGraphGateAbandoned,
           node_patched: recordGraphNodePatched
         };
-        graphAuditRecord2 = async (_ctx, args) => {
+        graphAuditRecord = async (_ctx, args) => {
           const req = decodeGraphAuditRecordRequest(args);
           if (!req) return badRequest("graph_audit_record");
           const recorder = GRAPH_AUDIT_RECORDERS[req.event];
@@ -118664,9 +118996,1474 @@ ${marker}`,
           queue_cancel: queueCancel2,
           queue_requeue: queueRequeue2,
           direct_dispatch_record: directDispatchRecord2,
-          graph_audit_record: graphAuditRecord2,
+          graph_audit_record: graphAuditRecord,
           active_work_query: activeWorkQuery2,
           recovery_context_query: recoveryContextQuery2
+        };
+      }
+    });
+    function readGateSpec(node) {
+      if (!node) return {};
+      try {
+        const parsed = JSON.parse(node.baseSpecJson);
+        return parsed && typeof parsed === "object" ? parsed : {};
+      } catch {
+        return {};
+      }
+    }
+    function isoAfter(nowMs2, seconds) {
+      return new Date(nowMs2 + seconds * 1e3).toISOString();
+    }
+    function claimMeshGraphGate(input) {
+      const store2 = MeshRuntimeStore.getInstance();
+      const nowMs2 = input.nowMs ?? Date.now();
+      const nowIso = new Date(nowMs2).toISOString();
+      const outboxEvents = [];
+      const result = store2.transaction(() => {
+        const graphStore = store2.graphStore();
+        const gate = graphStore.getGate(input.gateId);
+        if (!gate || gate.meshId !== input.meshId) return { claimed: false, reason: "gate_not_found" };
+        if (gate.eligibleCoordinatorSessionId && gate.eligibleCoordinatorSessionId !== input.coordinatorSessionId) {
+          return { claimed: false, reason: "gate_not_eligible" };
+        }
+        if (gate.state === "released" || gate.state === "cancelled") {
+          return { claimed: false, reason: `gate_terminal:${gate.state}` };
+        }
+        if (gate.state === "declared") {
+          return { claimed: false, reason: "gate_not_awaiting" };
+        }
+        const leaseLive = !!gate.leaseExpiresAt && gate.leaseExpiresAt > nowIso;
+        const sameOwner = gate.leaseOwnerSessionId === input.coordinatorSessionId;
+        const priorState = gate.state;
+        let takeoverFromClaimed = false;
+        if (priorState === "claimed" && leaseLive && !sameOwner) {
+          return { claimed: false, reason: "gate_lease_held", gate };
+        }
+        if (priorState === "expired" && gate.onTimeout !== "hold") {
+          return { claimed: false, reason: "gate_terminal:expired", gate };
+        }
+        const node = graphStore.getNode(gate.graphId, gate.nodeId);
+        const spec = readGateSpec(node);
+        const leaseSeconds = input.leaseSeconds ?? spec.lease_seconds ?? MESH_GATE_DEFAULT_LEASE_SECONDS;
+        const leaseExpiresAt = isoAfter(nowMs2, leaseSeconds);
+        let generation;
+        let fencingToken;
+        if (priorState === "claimed" && sameOwner && leaseLive) {
+          generation = gate.leaseGeneration;
+          fencingToken = gate.fencingToken;
+        } else {
+          takeoverFromClaimed = priorState === "claimed";
+          generation = gate.leaseGeneration + 1;
+          fencingToken = (0, import_crypto17.randomUUID)();
+        }
+        const deadlineAt = input.extendDeadlineSeconds && input.extendDeadlineSeconds > 0 ? isoAfter(nowMs2, input.extendDeadlineSeconds) : gate.deadlineAt;
+        const won = graphStore.patchGate(gate.gateId, {
+          state: "claimed",
+          leaseOwnerSessionId: input.coordinatorSessionId,
+          leaseGeneration: generation,
+          fencingToken,
+          leaseExpiresAt,
+          ...deadlineAt !== void 0 ? { deadlineAt } : {}
+        }, nowIso, { leaseGeneration: gate.leaseGeneration });
+        if (!won) return { claimed: false, reason: "gate_claim_race" };
+        if (node && node.state === "expired") {
+          graphStore.updateNodeState(gate.graphId, gate.nodeId, "awaiting_coordinator", nowIso);
+        }
+        if (takeoverFromClaimed) {
+          outboxEvents.push({
+            kind: "graph_gate_lease_expired",
+            payload: {
+              graphId: gate.graphId,
+              gateId: gate.gateId,
+              ref: gate.ref,
+              previousOwnerSessionId: gate.leaseOwnerSessionId,
+              previousGeneration: gate.leaseGeneration,
+              newGeneration: generation
+            }
+          });
+        }
+        outboxEvents.push({
+          kind: "graph_gate_claimed",
+          payload: {
+            graphId: gate.graphId,
+            gateId: gate.gateId,
+            ref: gate.ref,
+            action: gate.action,
+            ownerSessionId: input.coordinatorSessionId,
+            generation,
+            leaseExpiresAt
+          }
+        });
+        for (const event of outboxEvents) {
+          graphStore.insertOutboxEvent({
+            id: newMeshGraphOutboxId(),
+            meshId: gate.meshId,
+            graphId: gate.graphId,
+            kind: event.kind,
+            payload: JSON.stringify(event.payload),
+            status: "pending",
+            attemptCount: 0,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          });
+        }
+        return {
+          claimed: true,
+          gate: graphStore.getGate(gate.gateId),
+          leaseGeneration: generation,
+          fencingToken,
+          leaseExpiresAt,
+          deadlineAt,
+          ambiguousExternalOutcome: takeoverFromClaimed || priorState === "expired" && gate.leaseGeneration > 0,
+          previousLeaseOwnerSessionId: gate.leaseOwnerSessionId
+        };
+      });
+      if (result.claimed) {
+        try {
+          drainMeshGraphOutbox(input.meshId);
+        } catch {
+        }
+      }
+      return result;
+    }
+    function releaseMeshGraphGate(input) {
+      const store2 = MeshRuntimeStore.getInstance();
+      const nowMs2 = input.nowMs ?? Date.now();
+      const nowIso = new Date(nowMs2).toISOString();
+      const result = store2.transaction(() => {
+        const graphStore = store2.graphStore();
+        const gate = graphStore.getGate(input.gateId);
+        if (!gate || gate.meshId !== input.meshId) throw new Error(`gate_not_found: no gate '${input.gateId}'`);
+        const releaseDigest = sha256Hex(canonicalJson({
+          outcome: input.outcome,
+          result: input.result ?? null,
+          evidence: input.evidence ?? null,
+          patches: input.patches ?? []
+        }));
+        if (gate.releaseIdempotencyKey === input.idempotencyKey) {
+          if (gate.releaseEvidenceDigest === releaseDigest) {
+            return { released: true, duplicate: true, gate, materializedNodeIds: [] };
+          }
+          throw new Error(
+            `gate_release_conflict: idempotency key '${input.idempotencyKey}' already committed with a different release digest (gate '${input.gateId}')`
+          );
+        }
+        if (gate.state === "released") {
+          throw new Error(`gate_already_released: gate '${input.gateId}' was released under a different idempotency key`);
+        }
+        if (gate.state !== "claimed") {
+          throw new Error(`gate_not_claimed: gate '${input.gateId}' is '${gate.state}' \u2014 only a claimed gate can be released`);
+        }
+        if (input.fencingToken !== gate.fencingToken || input.leaseGeneration !== gate.leaseGeneration) {
+          throw new Error(
+            `stale_fence: gate '${input.gateId}' is at lease generation ${gate.leaseGeneration}; the presented token/generation (${input.leaseGeneration}) is stale`
+          );
+        }
+        if (gate.leaseExpiresAt && gate.leaseExpiresAt <= nowIso) {
+          throw new Error(
+            `gate_lease_expired: gate '${input.gateId}' lease expired at ${gate.leaseExpiresAt} \u2014 reclaim the gate (higher generation) and reconcile external evidence before releasing`
+          );
+        }
+        const node = graphStore.getNode(gate.graphId, gate.nodeId);
+        if (!node) throw new Error(`graph_node_not_found: gate '${input.gateId}' backs a missing node '${gate.nodeId}'`);
+        const nodes = graphStore.listNodes(gate.graphId);
+        const edges = graphStore.listEdges(gate.graphId);
+        const byId = new Map(nodes.map((n) => [n.nodeId, n]));
+        const incoming = edges.filter((e) => e.toNodeId === node.nodeId);
+        const upstreamSettled = incoming.every((e) => {
+          const sourceState = byId.get(e.fromNodeId)?.state;
+          return sourceState === "completed" || sourceState === "released" || sourceState === "skipped" && e.omitOnSkip;
+        });
+        if (!upstreamSettled) {
+          throw new Error(`gate_upstream_unsettled: gate '${input.gateId}' has unsatisfied predecessors`);
+        }
+        const directDownstream = new Set(edges.filter((e) => e.fromNodeId === node.nodeId).map((e) => e.toNodeId));
+        for (const patch of input.patches ?? []) {
+          const target = nodes.find((n) => n.nodeId === patch.node || n.ref === patch.node);
+          if (!target || !directDownstream.has(target.nodeId)) {
+            throw new Error(`gate_patch_not_downstream: '${patch.node}' is not a direct downstream node of gate '${input.gateId}'`);
+          }
+          for (const key2 of Object.keys(patch.baseSpecPatch)) {
+            if (!MESH_GATE_RELEASE_PATCH_KEYS.includes(key2)) {
+              throw new Error(`gate_patch_forbidden: key '${key2}' is outside the permitted release patch surface (design :294-299)`);
+            }
+          }
+          if (target.queueTaskId) {
+            const entry = store2.findQueueEntryById(target.meshId, target.queueTaskId);
+            if (entry && entry.status !== "pending") {
+              throw new Error(
+                `task_already_claimed: gate release cannot patch node '${target.nodeId}' \u2014 queue task '${target.queueTaskId}' is '${entry.status}' and immutable (design :334)`
+              );
+            }
+          }
+          const rawSpec = (() => {
+            try {
+              return JSON.parse(target.baseSpecJson);
+            } catch {
+              return {};
+            }
+          })();
+          graphStore.updateNodeBaseSpec(
+            target.graphId,
+            target.nodeId,
+            JSON.stringify({ ...rawSpec && typeof rawSpec === "object" ? rawSpec : {}, ...patch.baseSpecPatch }),
+            nowIso
+          );
+          const inMap = byId.get(target.nodeId);
+          if (inMap) inMap.materializationVersion += 1;
+        }
+        const won = graphStore.patchGate(gate.gateId, {
+          state: "released",
+          releaseOutcome: input.outcome,
+          releaseEvidenceJson: canonicalJson({ result: input.result ?? null, evidence: input.evidence ?? null }),
+          releaseEvidenceDigest: releaseDigest,
+          releaseIdempotencyKey: input.idempotencyKey
+        }, nowIso, { leaseGeneration: gate.leaseGeneration });
+        if (!won) throw new Error(`stale_fence: gate '${input.gateId}' moved under the release (generation race)`);
+        graphStore.updateNodeState(gate.graphId, node.nodeId, "released", nowIso);
+        const mapped = byId.get(node.nodeId);
+        if (mapped) mapped.state = "released";
+        const materializedNodeIds = advanceReleasedGateDownstream(store2, gate, node, nowIso);
+        const freshNodes = graphStore.listNodes(gate.graphId);
+        const graph = graphStore.getGraph(gate.graphId);
+        let graphCompleted = false;
+        if (graph && freshNodes.every(isTerminalEquivalent)) {
+          graphStore.updateGraphStatus(gate.graphId, "completed", nowIso, true);
+          insertGateOutbox(graphStore, gate.meshId, gate.graphId, "graph_completed", { graphId: gate.graphId }, nowIso);
+          graphCompleted = true;
+        } else if (graph?.status === "waiting_gate") {
+          const stillWaiting = graphStore.listGatesByGraph(gate.graphId).some((g3) => g3.gateId !== gate.gateId && (g3.state === "awaiting_coordinator" || g3.state === "claimed"));
+          if (!stillWaiting) graphStore.updateGraphStatus(gate.graphId, "active", nowIso);
+        }
+        insertGateOutbox(graphStore, gate.meshId, gate.graphId, "graph_gate_released", {
+          graphId: gate.graphId,
+          gateId: gate.gateId,
+          nodeId: node.nodeId,
+          ref: gate.ref,
+          action: gate.action,
+          outcome: input.outcome,
+          releaseDigest,
+          generation: gate.leaseGeneration,
+          materializedNodeIds
+        }, nowIso);
+        if (materializedNodeIds.length > 0) {
+          insertGateOutbox(graphStore, gate.meshId, gate.graphId, "queue_wake", {
+            meshId: gate.meshId,
+            reason: "graph_gate_released",
+            graphId: gate.graphId,
+            gateId: gate.gateId
+          }, nowIso);
+        }
+        return {
+          released: true,
+          duplicate: false,
+          gate: graphStore.getGate(gate.gateId),
+          materializedNodeIds,
+          // Read from the edge set this release already walked — a gate with an empty
+          // directDownstream is terminal, and terminal gates materialize nothing by design.
+          downstreamNodeCount: directDownstream.size,
+          graphCompleted
+        };
+      });
+      try {
+        drainMeshGraphOutbox(input.meshId);
+      } catch {
+      }
+      return result;
+    }
+    function advanceReleasedGateDownstream(store2, gate, gateNode, nowIso) {
+      const graphStore = store2.graphStore();
+      const nodes = graphStore.listNodes(gate.graphId);
+      const edges = graphStore.listEdges(gate.graphId);
+      const byId = new Map(nodes.map((n) => [n.nodeId, n]));
+      const mappedGate = byId.get(gateNode.nodeId);
+      if (mappedGate) mappedGate.state = "released";
+      const materialized = [];
+      let frontier = /* @__PURE__ */ new Set([gateNode.nodeId]);
+      for (let pass = 0; pass < nodes.length + 1 && frontier.size > 0; pass += 1) {
+        const nextFrontier = /* @__PURE__ */ new Set();
+        const downstreamIds = new Set(edges.filter((e) => frontier.has(e.fromNodeId)).map((e) => e.toNodeId));
+        for (const targetId of downstreamIds) {
+          const target = byId.get(targetId);
+          if (!target) continue;
+          if (target.kind === "coordinator_gate") {
+            maybeOpenCoordinatorGate(store2, target, edges, byId, nowIso);
+            continue;
+          }
+          if (target.kind !== "worker_task" || !target.queueTaskId) continue;
+          if (target.state !== "declared" && target.state !== "blocked") continue;
+          clearReleasedGateHold(store2, target, gate.gateId);
+          const outcome = settleDownstreamNode(store2, target, edges, byId, nowIso);
+          if (outcome.kind === "materialized") {
+            materialized.push(target.nodeId);
+            insertGateOutbox(graphStore, target.meshId, target.graphId, "graph_node_materialized", {
+              graphId: target.graphId,
+              nodeId: target.nodeId,
+              ref: target.ref,
+              taskId: target.queueTaskId,
+              gateId: gate.gateId,
+              materializationVersion: target.materializationVersion,
+              digest: outcome.digest,
+              receipts: outcome.receipts
+            }, nowIso);
+          } else if (outcome.kind === "skipped") {
+            nextFrontier.add(target.nodeId);
+            insertGateOutbox(graphStore, target.meshId, target.graphId, "graph_node_skipped", {
+              graphId: target.graphId,
+              nodeId: target.nodeId,
+              ref: target.ref,
+              taskId: target.queueTaskId,
+              gateId: gate.gateId,
+              reason: outcome.reason
+            }, nowIso);
+          } else if (outcome.kind === "error") {
+            insertGateOutbox(graphStore, target.meshId, target.graphId, "graph_node_materialization_failed", {
+              graphId: target.graphId,
+              nodeId: target.nodeId,
+              ref: target.ref,
+              taskId: target.queueTaskId,
+              gateId: gate.gateId,
+              blockedReason: outcome.blockedReason
+            }, nowIso);
+          } else {
+            const entry = store2.findQueueEntryById(target.meshId, target.queueTaskId);
+            if (entry && entry.status === "pending" && !entry.blockedReason) {
+              entry.blockedReason = graphMaterializationBlockReason(target.nodeId, target.materializationVersion);
+              store2.updateQueueEntry(entry);
+            }
+          }
+        }
+        frontier = nextFrontier;
+      }
+      return materialized;
+    }
+    function clearReleasedGateHold(store2, target, gateId) {
+      if (!target.queueTaskId) return;
+      const entry = store2.findQueueEntryById(target.meshId, target.queueTaskId);
+      if (!entry || entry.status !== "pending") return;
+      const hold = parseCoordinatorGateBlock(entry.blockedReason);
+      if (hold && hold.gateId === gateId) {
+        delete entry.blockedReason;
+        store2.updateQueueEntry(entry);
+      }
+    }
+    function coordinatorGateAbandonedReason(gateId) {
+      return `coordinator_gate_abandoned:${gateId}`;
+    }
+    function abandonMeshGraphGate(input) {
+      const store2 = MeshRuntimeStore.getInstance();
+      const nowMs2 = input.nowMs ?? Date.now();
+      const nowIso = new Date(nowMs2).toISOString();
+      const result = store2.transaction(() => {
+        const graphStore = store2.graphStore();
+        const gate = graphStore.getGate(input.gateId);
+        if (!gate || gate.meshId !== input.meshId) {
+          return { abandoned: false, reason: "gate_not_found", cancelledNodeIds: [], cancelledTaskIds: [] };
+        }
+        if (gate.state === "cancelled") {
+          return { abandoned: true, reason: "gate_already_abandoned", gate, cancelledNodeIds: [], cancelledTaskIds: [] };
+        }
+        if (gate.state === "released") {
+          return { abandoned: false, reason: `gate_terminal:${gate.state}`, gate, cancelledNodeIds: [], cancelledTaskIds: [] };
+        }
+        if (!input.force && gate.state === "claimed" && gate.leaseExpiresAt && gate.leaseExpiresAt > nowIso) {
+          return { abandoned: false, reason: "gate_lease_held", gate, cancelledNodeIds: [], cancelledTaskIds: [] };
+        }
+        const abandonReason = `${coordinatorGateAbandonedReason(gate.gateId)}:${input.reason}`;
+        const won = graphStore.patchGate(gate.gateId, {
+          state: "cancelled",
+          // Drop the lease: an abandoned gate has no owner and no live fence.
+          leaseOwnerSessionId: null,
+          fencingToken: null,
+          leaseExpiresAt: null
+        }, nowIso, { leaseGeneration: gate.leaseGeneration });
+        if (!won) {
+          return { abandoned: false, reason: "gate_abandon_race", gate, cancelledNodeIds: [], cancelledTaskIds: [] };
+        }
+        const node = graphStore.getNode(gate.graphId, gate.nodeId);
+        if (node && node.state !== "cancelled") {
+          graphStore.updateNodeState(gate.graphId, gate.nodeId, "cancelled", nowIso, { failureReason: abandonReason });
+        }
+        const cancelledNodeIds = node ? cancelGateDownstreamSubtree(store2, node, nowIso, abandonReason) : [];
+        const cancelledTaskIds = [];
+        for (const nodeId of cancelledNodeIds) {
+          const target = graphStore.getNode(gate.graphId, nodeId);
+          if (target?.queueTaskId) cancelledTaskIds.push(target.queueTaskId);
+        }
+        const graph = graphStore.getGraph(gate.graphId);
+        let graphStatus;
+        const rolled = classifyGraphRollup(graphStore.listNodes(gate.graphId));
+        if (graph && rolled && graph.status !== rolled) {
+          graphStore.updateGraphStatus(gate.graphId, rolled, nowIso, true);
+          graphStatus = rolled;
+          insertGateOutbox(
+            graphStore,
+            gate.meshId,
+            gate.graphId,
+            rolled === "completed" ? "graph_completed" : rolled === "failed" ? "graph_failed" : "graph_cancelled",
+            { graphId: gate.graphId, status: rolled },
+            nowIso
+          );
+        } else if (graph?.status === "waiting_gate") {
+          const stillWaiting = graphStore.listGatesByGraph(gate.graphId).some((g3) => g3.gateId !== gate.gateId && (g3.state === "awaiting_coordinator" || g3.state === "claimed"));
+          if (!stillWaiting) {
+            graphStore.updateGraphStatus(gate.graphId, "active", nowIso);
+            graphStatus = "active";
+          }
+        }
+        insertGateOutbox(graphStore, gate.meshId, gate.graphId, "graph_gate_abandoned", {
+          graphId: gate.graphId,
+          gateId: gate.gateId,
+          nodeId: gate.nodeId,
+          ref: gate.ref,
+          action: gate.action,
+          priorState: gate.state,
+          reason: input.reason,
+          ...input.coordinatorSessionId ? { coordinatorSessionId: input.coordinatorSessionId } : {},
+          ...input.force ? { force: true } : {},
+          ...cancelledNodeIds.length > 0 ? { cancelledNodeIds } : {}
+        }, nowIso);
+        return {
+          abandoned: true,
+          gate: graphStore.getGate(gate.gateId),
+          cancelledNodeIds,
+          cancelledTaskIds,
+          ...graphStatus ? { graphStatus } : {}
+        };
+      });
+      if (result.abandoned) {
+        try {
+          drainMeshGraphOutbox(input.meshId);
+        } catch {
+        }
+      }
+      return result;
+    }
+    function sweepMeshGraphGateTimeouts(meshId, nowMs2) {
+      const store2 = MeshRuntimeStore.getInstance();
+      const now = nowMs2 ?? Date.now();
+      const nowIso = new Date(now).toISOString();
+      const result = store2.transaction(() => {
+        const graphStore = store2.graphStore();
+        const candidates = graphStore.listGatesByMesh(meshId, ["awaiting_coordinator", "claimed"]);
+        const expiredLeaseGateIds = candidates.filter((g3) => g3.state === "claimed" && g3.leaseExpiresAt && g3.leaseExpiresAt <= nowIso).map((g3) => g3.gateId);
+        const expiredGateIds = [];
+        for (const gate of candidates) {
+          if (!gate.deadlineAt || gate.deadlineAt > nowIso) continue;
+          const node = graphStore.getNode(gate.graphId, gate.nodeId);
+          const won = graphStore.patchGate(gate.gateId, { state: "expired" }, nowIso, { leaseGeneration: gate.leaseGeneration });
+          if (!won) continue;
+          if (node && node.state !== "expired") {
+            graphStore.updateNodeState(gate.graphId, gate.nodeId, "expired", nowIso);
+          }
+          let cancelledNodeIds = [];
+          if (gate.onTimeout === "cancel_downstream" && node) {
+            cancelledNodeIds = cancelGateDownstreamSubtree(store2, node, nowIso);
+          } else if (gate.onTimeout === "fail_graph") {
+            graphStore.updateGraphStatus(gate.graphId, "failed", nowIso, true);
+          }
+          insertGateOutbox(graphStore, gate.meshId, gate.graphId, "graph_gate_expired", {
+            graphId: gate.graphId,
+            gateId: gate.gateId,
+            nodeId: gate.nodeId,
+            ref: gate.ref,
+            action: gate.action,
+            policy: gate.onTimeout,
+            deadlineAt: gate.deadlineAt,
+            urgent: true,
+            ...cancelledNodeIds.length > 0 ? { cancelledNodeIds } : {}
+          }, nowIso);
+          expiredGateIds.push(gate.gateId);
+        }
+        return { expiredGateIds, expiredLeaseGateIds };
+      });
+      if (result.expiredGateIds.length > 0) {
+        try {
+          drainMeshGraphOutbox(meshId);
+        } catch {
+        }
+      }
+      if (result.expiredGateIds.length > 0 || result.expiredLeaseGateIds.length > 0) {
+        LOG.info("MeshGraph", `Gate sweep for mesh ${meshId}: expired=[${result.expiredGateIds.join(",")}] lease-lapsed=[${result.expiredLeaseGateIds.join(",")}]`);
+      }
+      return result;
+    }
+    function isCancelExempt(state) {
+      return state === "completed" || state === "released" || state === "skipped" || state === "cancelled" || state === "failed" || state === "expired";
+    }
+    function cancelGateDownstreamSubtree(store2, gateNode, nowIso, reason = `coordinator_gate_timeout:${gateNode.nodeId}`) {
+      const graphStore = store2.graphStore();
+      const nodes = graphStore.listNodes(gateNode.graphId);
+      const edges = graphStore.listEdges(gateNode.graphId);
+      const byId = new Map(nodes.map((n) => [n.nodeId, n]));
+      const cancelled = [];
+      const visited = /* @__PURE__ */ new Set([gateNode.nodeId]);
+      let frontier = [gateNode.nodeId];
+      while (frontier.length > 0) {
+        const next = [];
+        for (const id22 of frontier) {
+          for (const edge of edges.filter((e) => e.fromNodeId === id22)) {
+            if (visited.has(edge.toNodeId)) continue;
+            visited.add(edge.toNodeId);
+            const target = byId.get(edge.toNodeId);
+            if (!target || isCancelExempt(target.state)) continue;
+            graphStore.updateNodeState(target.graphId, target.nodeId, "cancelled", nowIso, {
+              failureReason: reason
+            });
+            if (target.queueTaskId) {
+              const entry = store2.findQueueEntryById(target.meshId, target.queueTaskId);
+              if (entry && entry.status === "pending") {
+                entry.status = "cancelled";
+                entry.blockedReason = reason;
+                store2.updateQueueEntry(entry);
+              }
+            }
+            cancelled.push(target.nodeId);
+            next.push(target.nodeId);
+          }
+        }
+        frontier = next;
+      }
+      return cancelled;
+    }
+    function insertGateOutbox(graphStore, meshId, graphId, kind, payload, nowIso) {
+      graphStore.insertOutboxEvent({
+        id: newMeshGraphOutboxId(),
+        meshId,
+        graphId,
+        kind,
+        payload: JSON.stringify(payload),
+        status: "pending",
+        attemptCount: 0,
+        createdAt: nowIso,
+        updatedAt: nowIso
+      });
+    }
+    var import_crypto17;
+    var MESH_GATE_DEFAULT_LEASE_SECONDS;
+    var MESH_GATE_NAMED_OUTCOMES;
+    var MESH_GATE_RELEASE_PATCH_KEYS;
+    var init_mesh_graph_gates = __esm2({
+      "src/mesh/mesh-graph-gates.ts"() {
+        "use strict";
+        import_crypto17 = require("crypto");
+        init_mesh_runtime_store();
+        init_logger();
+        init_mesh_graph_input_binding();
+        init_mesh_graph_types();
+        init_mesh_graph_derived_failure();
+        init_mesh_graph_transition_runner();
+        init_mesh_graph_transition_runner();
+        MESH_GATE_DEFAULT_LEASE_SECONDS = 900;
+        MESH_GATE_NAMED_OUTCOMES = ["passed", "failed", "rejected"];
+        MESH_GATE_RELEASE_PATCH_KEYS = MESH_NODE_PATCH_KEYS3;
+      }
+    });
+    function isCommitReachable(workspace, sha, defaultBranch) {
+      try {
+        hiddenExecFileSync("git", ["merge-base", "--is-ancestor", sha, `origin/${defaultBranch}`], {
+          cwd: workspace,
+          timeout: GIT_PROBE_TIMEOUT_MS,
+          stdio: ["ignore", "ignore", "ignore"]
+        });
+        return true;
+      } catch (e) {
+        return e && typeof e.status === "number" && e.status === 1 ? false : "unknown";
+      }
+    }
+    function readString7(value) {
+      return typeof value === "string" && value.trim().length > 0 ? value.trim() : void 0;
+    }
+    function resolveMeshBaseWorkspace(meshId) {
+      try {
+        const mesh = getMesh(meshId);
+        return readString7(mesh?.nodes?.[0]?.workspace);
+      } catch {
+        return void 0;
+      }
+    }
+    function collectUpstreamCommits(gate) {
+      const graphStore = MeshRuntimeStore.getInstance().graphStore();
+      const upstreamNodeIds = new Set(
+        graphStore.listEdges(gate.graphId).filter((edge) => edge.toNodeId === gate.nodeId).map((edge) => edge.fromNodeId)
+      );
+      if (upstreamNodeIds.size === 0) return [];
+      const commits = [];
+      const seen = /* @__PURE__ */ new Set();
+      for (const node of graphStore.listNodes(gate.graphId)) {
+        if (node.kind !== "worker_task" || !upstreamNodeIds.has(node.nodeId) || !node.queueTaskId) continue;
+        const output = graphStore.getLatestOutput(node.queueTaskId);
+        if (!output) continue;
+        let envelope;
+        try {
+          const parsed = JSON.parse(output.envelopeJson);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+          envelope = parsed;
+        } catch {
+          continue;
+        }
+        const artifacts = envelope.artifacts;
+        const rawCommits = Array.isArray(artifacts?.commits) ? artifacts.commits : [];
+        for (const raw of rawCommits) {
+          const sha = readString7(raw?.sha);
+          if (!sha || !SHA_PATTERN.test(sha) || seen.has(sha.toLowerCase())) continue;
+          seen.add(sha.toLowerCase());
+          commits.push({
+            sha,
+            ...readString7(raw?.repo) ? { repo: readString7(raw?.repo) } : {},
+            ...node.ref ? { fromRef: node.ref } : {}
+          });
+          if (commits.length >= MAX_PROBE_COMMITS) return commits;
+        }
+      }
+      return commits;
+    }
+    async function collectGateConvergenceEvidence(meshId, gateId) {
+      try {
+        const graphStore = MeshRuntimeStore.getInstance().graphStore();
+        const gate = graphStore.getGate(gateId);
+        if (!gate || gate.meshId !== meshId) return null;
+        const workspace = resolveMeshBaseWorkspace(meshId);
+        if (!workspace) return null;
+        const upstream = collectUpstreamCommits(gate);
+        if (upstream.length === 0) return null;
+        const mesh = getMesh(meshId);
+        const defaultBranch = await resolveRootDefaultBranch(workspace, mesh);
+        const commits = upstream.map((ref) => ({
+          ...ref,
+          reachedMain: isCommitReachable(workspace, ref.sha, defaultBranch)
+        }));
+        const allReachedMain = commits.every((c) => c.reachedMain === true);
+        return {
+          workspace,
+          probedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          probedAgainst: `local origin/${defaultBranch} (no fetch)`,
+          commits,
+          allReachedMain,
+          ...allReachedMain ? {
+            hint: `Every upstream commit is already reachable from origin/${defaultBranch} \u2014 the guarded work appears to have landed. Verify, then RELEASE this gate with these commits as evidence instead of re-running the action. (Evidence never auto-releases a gate; the decision is yours.)`
+          } : {}
+        };
+      } catch {
+        return null;
+      }
+    }
+    var GIT_PROBE_TIMEOUT_MS;
+    var MAX_PROBE_COMMITS;
+    var SHA_PATTERN;
+    var init_mesh_graph_gate_evidence = __esm2({
+      "src/mesh/mesh-graph-gate-evidence.ts"() {
+        "use strict";
+        init_hidden_spawn();
+        init_mesh_runtime_store();
+        init_mesh_config();
+        init_mesh_onboarding_plan();
+        GIT_PROBE_TIMEOUT_MS = 3e3;
+        MAX_PROBE_COMMITS = 12;
+        SHA_PATTERN = /^[0-9a-f]{7,40}$/i;
+      }
+    });
+    function buildMeshGraphViews(meshId, opts = {}) {
+      const store2 = MeshRuntimeStore.getInstance();
+      const graphStore = store2.graphStore();
+      const nowIso = new Date(opts.nowMs ?? Date.now()).toISOString();
+      let graphs;
+      if (opts.graphId) {
+        const one = graphStore.getGraph(opts.graphId);
+        graphs = one && one.meshId === meshId ? [one] : [];
+      } else if (opts.batchId) {
+        const one = graphStore.getGraphByBatchId(meshId, opts.batchId);
+        graphs = one ? [one] : [];
+      } else {
+        graphs = graphStore.listGraphsByMesh(meshId, {
+          ...opts.activeOnly === false ? {} : { statuses: IN_FLIGHT_GRAPH_STATUSES },
+          limit: opts.limit ?? 20
+        });
+      }
+      return graphs.map((graph) => {
+        const nodes = graphStore.listNodes(graph.graphId);
+        const edges = graphStore.listEdges(graph.graphId);
+        const gates = graphStore.listGatesByGraph(graph.graphId);
+        const workspaces = graphStore.listWorkspaceIntents(graph.graphId);
+        const byId = new Map(nodes.map((n) => [n.nodeId, n]));
+        const policy = projectGraphPublicPolicy(graph.policyJson);
+        const decision = readOrchestrationDecision(graph.policyJson);
+        const queueByTaskId = /* @__PURE__ */ new Map();
+        for (const node of nodes) {
+          if (!node.queueTaskId) continue;
+          const entry = store2.findQueueEntryById(meshId, node.queueTaskId);
+          if (entry) {
+            queueByTaskId.set(node.queueTaskId, {
+              status: entry.status,
+              blockedReason: entry.blockedReason,
+              cancelReason: entry.cancelReason,
+              dependsOn: entry.dependsOn
+            });
+          }
+        }
+        const statusById = /* @__PURE__ */ new Map();
+        const depMetaById = /* @__PURE__ */ new Map();
+        for (const [taskId, row] of queueByTaskId) {
+          statusById.set(taskId, row.status);
+          depMetaById.set(taskId, { status: row.status, blockedReason: row.blockedReason, cancelReason: row.cancelReason });
+        }
+        for (const row of queueByTaskId.values()) {
+          for (const depId of row.dependsOn ?? []) {
+            if (statusById.has(depId)) continue;
+            const dep = store2.findQueueEntryById(meshId, depId);
+            if (!dep) continue;
+            statusById.set(depId, dep.status);
+            depMetaById.set(depId, {
+              status: dep.status,
+              blockedReason: dep.blockedReason,
+              cancelReason: dep.cancelReason
+            });
+          }
+        }
+        const gateByNodeId = new Map(gates.map((g3) => [g3.nodeId, g3]));
+        const nodeViews = nodes.map((node) => {
+          const queue = node.queueTaskId ? queueByTaskId.get(node.queueTaskId) : void 0;
+          const gateBlock = parseCoordinatorGateBlock(queue?.blockedReason);
+          const failures = queue?.dependsOn?.length ? deriveDependencyFailures(queue.dependsOn, statusById, depMetaById) : [];
+          return {
+            nodeId: node.nodeId,
+            ...node.ref ? { ref: node.ref } : {},
+            kind: node.kind,
+            state: node.state,
+            ...node.queueTaskId ? { taskId: node.queueTaskId } : {},
+            ...queue ? { taskStatus: queue.status } : {},
+            ...queue?.blockedReason ? { blockedReason: queue.blockedReason } : {},
+            ...gateBlock ? { blockedByGateId: gateBlock.gateId } : {},
+            materializationVersion: node.materializationVersion,
+            ...node.materializedDigest ? { materializedDigest: node.materializedDigest } : {},
+            ...node.skipReason ? { skipReason: node.skipReason } : {},
+            ...node.failureReason ? { failureReason: node.failureReason } : {},
+            ...failures.length > 0 ? { dependencyFailures: failures } : {},
+            ...describeNodeFeatures(node.baseSpecJson).length > 0 ? { features: describeNodeFeatures(node.baseSpecJson) } : {}
+          };
+        });
+        const edgeViews = edges.map((edge) => {
+          const source = byId.get(edge.fromNodeId);
+          const active = !(source?.state === "skipped" && edge.omitOnSkip);
+          const condition = describeEdgeCondition(edge.conditionJson);
+          return {
+            from: source?.ref ?? edge.fromNodeId,
+            to: byId.get(edge.toNodeId)?.ref ?? edge.toNodeId,
+            kind: edge.kind,
+            omitOnSkip: edge.omitOnSkip,
+            active,
+            ...condition ? { condition } : {}
+          };
+        });
+        const gateViews = gates.map((gate) => {
+          const blocking = nodeViews.filter((n) => n.blockedByGateId === gate.gateId).map((n) => n.ref ?? n.nodeId);
+          const leaseExpired = gate.state === "claimed" && !!gate.leaseExpiresAt && gate.leaseExpiresAt <= nowIso;
+          return {
+            gateId: gate.gateId,
+            ...gate.ref ? { ref: gate.ref } : {},
+            nodeId: gate.nodeId,
+            state: gate.state,
+            action: gate.action,
+            ...gate.instructions ? { instructions: gate.instructions } : {},
+            onTimeout: gate.onTimeout,
+            leaseGeneration: gate.leaseGeneration,
+            ...gate.leaseOwnerSessionId ? { leaseOwnerSessionId: gate.leaseOwnerSessionId } : {},
+            ...gate.leaseExpiresAt ? { leaseExpiresAt: gate.leaseExpiresAt } : {},
+            ...leaseExpired ? { leaseExpired: true } : {},
+            ...gate.deadlineAt ? { deadlineAt: gate.deadlineAt } : {},
+            ...gate.releaseOutcome ? { releaseOutcome: gate.releaseOutcome } : {},
+            ...gate.eligibleCoordinatorSessionId ? { eligibleCoordinatorSessionId: gate.eligibleCoordinatorSessionId } : {},
+            ...blocking.length > 0 ? { blocking } : {}
+          };
+        });
+        const nodeStates = {};
+        for (const node of nodes) nodeStates[node.state] = (nodeStates[node.state] ?? 0) + 1;
+        const orphanedGateIds = /* @__PURE__ */ new Set();
+        for (const gate of gates) {
+          if (gate.state !== "awaiting_coordinator" && gate.state !== "claimed" && gate.state !== "expired") continue;
+          const downstream = edges.filter((e) => e.fromNodeId === gate.nodeId).map((e) => byId.get(e.toNodeId)).filter((n) => !!n);
+          if (downstream.length === 0) continue;
+          if (downstream.every((n) => n.state === "cancelled" || n.state === "failed" || n.state === "skipped")) {
+            orphanedGateIds.add(gate.gateId);
+          }
+        }
+        const actions = [];
+        for (const gate of gateViews) {
+          if (orphanedGateIds.has(gate.gateId)) {
+            actions.push({
+              kind: "gate_abandon",
+              gateId: gate.gateId,
+              detail: `Gate '${gate.ref ?? gate.gateId}' (${gate.action}) is ORPHANED: every task it was gating is already cancelled, failed or skipped, so releasing it would open nothing. While it stays unsettled this graph cannot reach ANY terminal state \u2014 not even cancelled. Close it with mesh_graph_gate_abandon and a reason. Abandon cancels what the gate was holding; it never passes the gate.`
+            });
+            continue;
+          }
+          if (gate.state === "awaiting_coordinator") {
+            actions.push({
+              kind: "gate_awaiting",
+              gateId: gate.gateId,
+              detail: `Gate '${gate.ref ?? gate.gateId}' (${gate.action}) is awaiting a coordinator. Claim it with mesh_graph_gate_claim, perform the action, then release it with mesh_graph_gate_release.`
+            });
+          } else if (gate.state === "claimed" && gate.leaseExpired) {
+            actions.push({
+              kind: "gate_reclaim",
+              gateId: gate.gateId,
+              detail: `Gate '${gate.ref ?? gate.gateId}' has a LAPSED lease (generation ${gate.leaseGeneration}). Reclaim it to get a higher generation; the previous owner may already have performed the external side effect, so reconcile external evidence before acting again.`
+            });
+          } else if (gate.state === "claimed") {
+            actions.push({
+              kind: "gate_claimed",
+              gateId: gate.gateId,
+              detail: `Gate '${gate.ref ?? gate.gateId}' is claimed by ${gate.leaseOwnerSessionId ?? "a coordinator"} until ${gate.leaseExpiresAt ?? "lease expiry"}; release it to advance the graph.`
+            });
+          } else if (gate.state === "expired" && gate.onTimeout === "hold") {
+            actions.push({
+              kind: "gate_reclaim",
+              gateId: gate.gateId,
+              detail: `Gate '${gate.ref ?? gate.gateId}' passed its deadline under on_timeout=hold \u2014 downstream is still held. Reclaim it with mesh_graph_gate_claim (optionally with extend_deadline_seconds) to resume, or give it up with mesh_graph_gate_abandon, which cancels what it was holding instead of opening it. A timeout is never passage: the gate cannot release itself.`
+            });
+          }
+        }
+        for (const ws of workspaces) {
+          if (ws.sagaState === "compensation_required") {
+            actions.push({
+              kind: "workspace_compensation",
+              workspaceRef: ws.workspaceRef,
+              detail: `Workspace '${ws.workspaceRef}' needs manual compensation: ${ws.lastError ?? "compensation refused"}.`
+            });
+          } else if (ws.sagaState === "declared" && !ws.baseRevision) {
+            actions.push({
+              kind: "workspace_declared_no_base",
+              workspaceRef: ws.workspaceRef,
+              detail: `Workspace '${ws.workspaceRef}' is stuck in 'declared': no base_revision was given and none could be derived from ${ws.sourceNodeId ? `source node '${ws.sourceNodeId}' (its repo is unreachable on this daemon, or git could not resolve its HEAD)` : "a source node, because the declaration named none"}. The workspace will never clone and every task bound to it stays blocked. Re-declare the workspace with an explicit base_revision (e.g. 'main')${ws.sourceNodeId ? "" : " and a source_node_id"}.`
+            });
+          }
+        }
+        return {
+          graphId: graph.graphId,
+          batchId: graph.batchId,
+          status: graph.status,
+          ...graph.missionId ? { missionId: graph.missionId } : {},
+          enqueueSurface: graph.enqueueSurface,
+          schemaVersion: graph.schemaVersion,
+          createdAt: graph.createdAt,
+          ...graph.terminalAt ? { terminalAt: graph.terminalAt } : {},
+          onDependencyFailure: policy.on_dependency_failure,
+          ...policy.policyInvalid ? { policyInvalid: policy.policyInvalid } : {},
+          ...decision ? { orchestrationDecision: decision } : {},
+          counts: {
+            tasks: graph.taskCount,
+            gates: graph.gateCount,
+            workspaces: graph.workspaceCount,
+            edges: graph.dependencyEdgeCount
+          },
+          nodeStates,
+          nodes: nodeViews,
+          edges: edgeViews,
+          gates: gateViews,
+          workspaces: workspaces.map((w) => ({
+            ref: w.workspaceRef,
+            sagaState: w.sagaState,
+            ...w.branchIdentity ? { branchIdentity: w.branchIdentity } : {},
+            ...w.createdNodeId ? { createdNodeId: w.createdNodeId } : {},
+            ...w.createdWorktreePath ? { createdWorktreePath: w.createdWorktreePath } : {},
+            ...w.lastError ? { lastError: w.lastError } : {}
+          })),
+          ...actions.length > 0 ? { nextCoordinatorAction: actions } : {}
+        };
+      });
+    }
+    function countMeshGraphViews(meshId, opts = {}) {
+      const graphStore = MeshRuntimeStore.getInstance().graphStore();
+      if (opts.graphId) {
+        const graph = graphStore.getGraph(opts.graphId);
+        return graph && graph.meshId === meshId ? 1 : 0;
+      }
+      if (opts.batchId) return graphStore.getGraphByBatchId(meshId, opts.batchId) ? 1 : 0;
+      return graphStore.countGraphsByMesh(meshId, {
+        ...opts.activeOnly === false ? {} : { statuses: IN_FLIGHT_GRAPH_STATUSES }
+      });
+    }
+    function describeEdgeCondition(conditionJson) {
+      if (typeof conditionJson !== "string" || conditionJson.length === 0) return void 0;
+      let parsed;
+      try {
+        parsed = JSON.parse(conditionJson);
+      } catch {
+        return void 0;
+      }
+      return reduceCondition(parsed);
+    }
+    function reduceCondition(raw) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return void 0;
+      let node = raw;
+      let negated = false;
+      if (node.not !== void 0) {
+        const inner = node.not;
+        if (!inner || typeof inner !== "object" || Array.isArray(inner)) return void 0;
+        negated = true;
+        node = inner;
+      }
+      for (const key2 of ["all", "any"]) {
+        const list = node[key2];
+        if (!Array.isArray(list) || list.length === 0) continue;
+        const clauses = [];
+        let truncated = false;
+        for (const entry of list) {
+          const clause2 = toClause(entry);
+          if (!clause2) {
+            truncated = true;
+            continue;
+          }
+          if (clauses.length >= MAX_CONDITION_CLAUSES) {
+            truncated = true;
+            continue;
+          }
+          clauses.push(clause2);
+        }
+        if (clauses.length === 0) return void 0;
+        return { combinator: key2, negated, clauses, truncated };
+      }
+      const clause = toClause(node);
+      return clause ? { combinator: "single", negated, clauses: [clause], truncated: false } : void 0;
+    }
+    function toClause(raw) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return void 0;
+      const node = raw;
+      const op = node.op;
+      if (op !== "exists" && op !== "eq" && op !== "ne" && op !== "in") return void 0;
+      const selector = typeof node.select === "string" && node.select ? node.select.replace(/^\//, "").replace(/\//g, ".") : "";
+      const subject = [typeof node.from === "string" ? node.from : "", selector].filter(Boolean).join(".") || "result";
+      if (op === "exists") return { subject, op };
+      return { subject, op, value: renderLiteral(node.value) };
+    }
+    function renderLiteral(value) {
+      if (typeof value === "string") return value;
+      if (Array.isArray(value)) return value.map(renderLiteral).join(", ");
+      if (value === null || value === void 0) return "null";
+      if (typeof value === "object") return "{...}";
+      return String(value);
+    }
+    function describeNodeFeatures(baseSpecJson) {
+      let spec;
+      try {
+        const parsed = JSON.parse(baseSpecJson);
+        spec = parsed && typeof parsed === "object" ? parsed : void 0;
+      } catch {
+        return ["invalid_base_spec"];
+      }
+      if (!spec) return [];
+      const features = [];
+      if (Array.isArray(spec.inputs_from) && spec.inputs_from.length > 0) features.push("inputs_from");
+      if (spec.run_if !== void 0) features.push("run_if");
+      if (typeof spec.workspace_ref === "string" && spec.workspace_ref) features.push("workspace_ref");
+      return features;
+    }
+    function readOrchestrationDecision(policyJson) {
+      if (!policyJson) return void 0;
+      try {
+        const parsed = JSON.parse(policyJson);
+        const decision = parsed?.orchestration_decision;
+        return decision && typeof decision === "object" && !Array.isArray(decision) ? decision : void 0;
+      } catch {
+        return void 0;
+      }
+    }
+    var IN_FLIGHT_GRAPH_STATUSES;
+    var MAX_CONDITION_CLAUSES;
+    var init_mesh_graph_view = __esm2({
+      "src/mesh/mesh-graph-view.ts"() {
+        "use strict";
+        init_mesh_runtime_store();
+        init_mesh_graph_derived_failure();
+        init_mesh_graph_transition_runner();
+        IN_FLIGHT_GRAPH_STATUSES = [
+          "preparing",
+          "active",
+          "waiting_gate",
+          "compensation_required"
+        ];
+        MAX_CONDITION_CLAUSES = 3;
+      }
+    });
+    function titleForTask(task) {
+      const raw = readNonEmptyString(task.message) || "";
+      const firstLine = raw.split("\n").map((s2) => s2.trim()).find(Boolean) || "(no message)";
+      return firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine;
+    }
+    function findTasksOrphanedBySessionStop(meshId, stoppedSessionId, opts) {
+      const sessionId = readNonEmptyString(stoppedSessionId);
+      if (!sessionId) return [];
+      let queue;
+      try {
+        queue = getQueue(meshId, { status: ["pending"] });
+      } catch (e) {
+        LOG.warn("MeshQueue", `Orphan-pin scan failed to read queue for mesh ${meshId}: ${e?.message || e}`);
+        return [];
+      }
+      const excludeTaskId = readNonEmptyString(opts?.excludeTaskId);
+      const orphans = [];
+      for (const task of queue) {
+        if (excludeTaskId && task.id === excludeTaskId) continue;
+        const pin = readNonEmptyString(task.targetSessionId);
+        if (!pin || !sessionIdsEquivalent(pin, sessionId)) continue;
+        orphans.push({
+          taskId: task.id,
+          title: titleForTask(task),
+          targetSessionId: pin,
+          ...readNonEmptyString(task.targetNodeId) ? { targetNodeId: task.targetNodeId } : {},
+          ...readNonEmptyString(task.missionId) ? { missionId: task.missionId } : {}
+        });
+      }
+      return orphans;
+    }
+    function buildOrphanedPinNotice2(orphans, stoppedSessionId, cause) {
+      const listed = orphans.slice(0, MAX_LISTED_ORPHANS);
+      const overflow = orphans.length - listed.length;
+      const lines = listed.map((o) => `  - ${o.taskId}: "${o.title}"`).join("\n");
+      const more = overflow > 0 ? `
+  ...and ${overflow} more.` : "";
+      const plural2 = orphans.length === 1 ? "task is" : "tasks are";
+      const firstId = listed[0]?.taskId || "<task_id>";
+      return `[System] ${orphans.length} queued mesh ${plural2} now ORPHANED and will never be delivered.
+Cause: ${cause} stopped worker session '${stoppedSessionId}', and these pending tasks are hard-pinned to that session (targetSessionId), so they can neither be delivered (the session is gone) nor start a new session (the pin blocks auto-launch, reported as autoLaunch.reason='target_session_constraint').
+Orphaned:
+${lines}${more}
+Fix \u2014 for each task, clear the dead pin so it can be re-dispatched:
+  mesh_queue_requeue(task_id='${firstId}', keep_target_session=false, clear_target_node=false, reason='pinned session stopped')
+That releases the session pin (keeping the node pin) and the task becomes claimable by a live session on the same node; add clear_target_node=true to free it to any node, or pass target_session_id=<new session> to re-pin it to a replacement session. If the task is no longer wanted, cancel it with mesh_queue_cancel instead.
+The pin is NOT cleared automatically: a pin often encodes required context continuity, so re-targeting is your decision, not the daemon's.`;
+    }
+    function notifyCoordinatorOfOrphanedPins(meshId, stoppedSessionId, opts) {
+      const orphans = findTasksOrphanedBySessionStop(meshId, stoppedSessionId, { excludeTaskId: opts?.excludeTaskId });
+      if (orphans.length === 0) return orphans;
+      const cause = readNonEmptyString(opts?.cause) || "A cancellation";
+      const coordinatorMessage = buildOrphanedPinNotice2(orphans, stoppedSessionId, cause);
+      const nodeLabel = readNonEmptyString(opts?.nodeId) || readNonEmptyString(orphans[0]?.targetNodeId) || meshId;
+      const targetCoordinatorDaemonId = readNonEmptyString(getMachineId());
+      const targetCoordinatorSessionId = readNonEmptyString(opts?.coordinatorSessionId);
+      LOG.warn("MeshQueue", `CANCEL-ORPHANS-PINNED-TASK: stopping session ${stoppedSessionId} (mesh ${meshId}) orphaned ${orphans.length} pinned pending task(s): ${orphans.map((o) => o.taskId).join(", ")}`);
+      try {
+        notifyMeshCoordinator({
+          event: "mesh:dispatch_blocked",
+          meshId,
+          nodeLabel,
+          ...readNonEmptyString(opts?.nodeId) ? { nodeId: opts.nodeId } : {},
+          metadataEvent: {
+            source: "mesh_session_stop_orphaned_pins",
+            // taskId anchors the pending-event fingerprint (buildPendingEventFingerprint),
+            // so one notification per orphaned task set rather than a global collapse.
+            taskId: orphans[0].taskId,
+            reason: "pinned_session_stopped",
+            orphanedTaskIds: orphans.map((o) => o.taskId),
+            stoppedSessionId,
+            coordinatorMessage
+          },
+          coordinatorMessage,
+          queuedAt: Date.now(),
+          ...targetCoordinatorDaemonId ? { targetCoordinatorDaemonId } : {},
+          ...targetCoordinatorSessionId ? { targetCoordinatorSessionId } : {}
+        });
+      } catch (e) {
+        LOG.warn("MeshQueue", `Failed to surface orphaned-pin notification for session ${stoppedSessionId} (mesh ${meshId}): ${e?.message || e}`);
+      }
+      return orphans;
+    }
+    var MAX_LISTED_ORPHANS;
+    var init_mesh_orphaned_pin_notify = __esm2({
+      "src/mesh/mesh-orphaned-pin-notify.ts"() {
+        "use strict";
+        init_logger();
+        init_dist();
+        init_mesh_work_queue();
+        init_mesh_events_utils();
+        init_deliver();
+        init_config();
+        MAX_LISTED_ORPHANS = 5;
+      }
+    });
+    function badRequest2(command) {
+      return { success: false, error: `${command}: request failed decode (bad shape)` };
+    }
+    function failure5(e) {
+      return { success: false, error: e?.message ?? String(e) };
+    }
+    function classifyGateError(message) {
+      return GATE_RELEASE_ERROR_CODES.find((code) => message.startsWith(`${code}:`) || message.includes(`${code}:`));
+    }
+    function classifyNodePatchError(e, message) {
+      const code = e?.code;
+      if (typeof code === "string" && code) return code;
+      return NODE_PATCH_ERROR_CODES.find((c) => message.startsWith(`${c}:`) || message.includes(`${c}:`));
+    }
+    async function triggerQueueBestEffort(ctx, meshId) {
+      try {
+        await triggerMeshQueue(ctx.deps, meshId);
+      } catch (e) {
+        LOG.warn("MeshGraphIpc", `post-release/patch queue trigger failed for mesh ${meshId}: ${e?.message ?? String(e)}`);
+      }
+    }
+    var GATE_RELEASE_ERROR_CODES;
+    var NODE_PATCH_ERROR_CODES;
+    var graphGateClaim2;
+    var graphGateRelease2;
+    var graphGateAbandon2;
+    var graphNodePatch2;
+    var MAX_GATE_EVIDENCE_PROBES;
+    var graphViewQuery2;
+    var taskStatsQuery2;
+    var pruneStaleDirect2;
+    var orphanedPinNotify2;
+    var meshGraphIpcHandlers;
+    var init_mesh_graph_ipc = __esm2({
+      "src/commands/low-family/mesh-graph-ipc.ts"() {
+        "use strict";
+        init_dist();
+        init_mesh_graph_gates();
+        init_mesh_graph_gate_evidence();
+        init_mesh_graph_transition_runner();
+        init_mesh_graph_view();
+        init_mesh_graph_provenance();
+        init_mesh_task_stats();
+        init_mesh_active_work();
+        init_mesh_work_queue();
+        init_mesh_local_records();
+        init_mesh_orphaned_pin_notify();
+        init_mesh_queue_assignment();
+        init_logger();
+        GATE_RELEASE_ERROR_CODES = [
+          "gate_not_found",
+          "gate_release_conflict",
+          "gate_already_released",
+          "gate_not_claimed",
+          "stale_fence",
+          "gate_lease_expired",
+          "gate_upstream_unsettled",
+          "gate_patch_not_downstream",
+          "gate_patch_forbidden",
+          "task_already_claimed",
+          "graph_node_not_found"
+        ];
+        NODE_PATCH_ERROR_CODES = [
+          "graph_node_not_found",
+          "graph_not_found",
+          "ambiguous_node_ref",
+          "node_not_patchable",
+          "node_patch_forbidden",
+          "task_already_claimed"
+        ];
+        graphGateClaim2 = async (_ctx, args) => {
+          const req = decodeGraphGateClaimRequest(args);
+          if (!req) return badRequest2("graph_gate_claim");
+          try {
+            const result = claimMeshGraphGate({
+              meshId: req.meshId,
+              gateId: req.gateId,
+              coordinatorSessionId: req.coordinatorSessionId,
+              ...req.leaseSeconds !== void 0 ? { leaseSeconds: req.leaseSeconds } : {},
+              ...req.extendDeadlineSeconds !== void 0 ? { extendDeadlineSeconds: req.extendDeadlineSeconds } : {}
+            });
+            if (!result.claimed) {
+              const response2 = {
+                claimed: false,
+                ...result.reason ? { reason: result.reason } : {},
+                ...result.gate ? { gate: result.gate } : {}
+              };
+              return { success: true, ...response2 };
+            }
+            try {
+              recordGraphGateClaimed(req.meshId, {
+                graphId: result.gate.graphId,
+                gateId: req.gateId,
+                ref: result.gate.ref,
+                action: result.gate.action,
+                generation: result.leaseGeneration,
+                ownerSessionId: req.coordinatorSessionId,
+                leaseExpiresAt: result.leaseExpiresAt,
+                ambiguousExternalOutcome: result.ambiguousExternalOutcome,
+                previousLeaseOwnerSessionId: result.previousLeaseOwnerSessionId
+              });
+            } catch {
+            }
+            let convergenceEvidence;
+            if (req.probeConvergenceEvidence) {
+              try {
+                const evidence = await collectGateConvergenceEvidence(req.meshId, req.gateId);
+                if (evidence) convergenceEvidence = evidence;
+              } catch {
+              }
+            }
+            const response = {
+              claimed: true,
+              gate: result.gate,
+              leaseGeneration: result.leaseGeneration,
+              fencingToken: result.fencingToken,
+              leaseExpiresAt: result.leaseExpiresAt,
+              ...result.deadlineAt ? { deadlineAt: result.deadlineAt } : {},
+              ...result.ambiguousExternalOutcome ? { ambiguousExternalOutcome: true, previousLeaseOwnerSessionId: result.previousLeaseOwnerSessionId } : {},
+              ...convergenceEvidence ? { convergenceEvidence } : {}
+            };
+            return { success: true, ...response };
+          } catch (e) {
+            return failure5(e);
+          }
+        };
+        graphGateRelease2 = async (ctx, args) => {
+          const req = decodeGraphGateReleaseRequest(args);
+          if (!req) return badRequest2("graph_gate_release");
+          try {
+            const result = releaseMeshGraphGate({
+              meshId: req.meshId,
+              gateId: req.gateId,
+              fencingToken: req.fencingToken,
+              leaseGeneration: req.leaseGeneration,
+              idempotencyKey: req.idempotencyKey,
+              outcome: req.outcome,
+              ...req.result !== void 0 ? { result: req.result } : {},
+              ...req.evidence !== void 0 ? { evidence: req.evidence } : {},
+              ...req.patches && req.patches.length > 0 ? { patches: req.patches.map((p) => ({ node: p.node, baseSpecPatch: p.baseSpecPatch })) } : {}
+            });
+            try {
+              recordGraphGateReleased(req.meshId, {
+                graphId: result.gate.graphId,
+                gateId: req.gateId,
+                ref: result.gate.ref,
+                action: result.gate.action,
+                outcome: req.outcome,
+                generation: req.leaseGeneration,
+                releaseDigest: result.gate.releaseEvidenceDigest,
+                materializedNodeIds: result.materializedNodeIds,
+                duplicate: result.duplicate
+              });
+            } catch {
+            }
+            if (result.materializedNodeIds.length > 0) await triggerQueueBestEffort(ctx, req.meshId);
+            const response = {
+              released: true,
+              duplicate: result.duplicate,
+              ...result.gate ? { gate: result.gate } : {},
+              materializedNodeIds: result.materializedNodeIds,
+              ...result.downstreamNodeCount !== void 0 ? { downstreamNodeCount: result.downstreamNodeCount } : {},
+              ...result.graphCompleted !== void 0 ? { graphCompleted: result.graphCompleted } : {}
+            };
+            return { success: true, ...response };
+          } catch (e) {
+            const message = e?.message || String(e);
+            const response = { released: false, message, ...classifyGateError(message) ? { refusalCode: classifyGateError(message) } : {} };
+            return { success: true, ...response };
+          }
+        };
+        graphGateAbandon2 = async (_ctx, args) => {
+          const req = decodeGraphGateAbandonRequest(args);
+          if (!req) return badRequest2("graph_gate_abandon");
+          try {
+            const result = abandonMeshGraphGate({
+              meshId: req.meshId,
+              gateId: req.gateId,
+              reason: req.reason,
+              ...req.coordinatorSessionId ? { coordinatorSessionId: req.coordinatorSessionId } : {},
+              ...req.force === true ? { force: true } : {}
+            });
+            if (!result.abandoned) {
+              const response2 = {
+                abandoned: false,
+                ...result.reason ? { reason: result.reason } : {},
+                ...result.gate ? { gate: result.gate } : {},
+                cancelledNodeIds: [],
+                cancelledTaskIds: []
+              };
+              return { success: true, ...response2 };
+            }
+            const duplicate = result.reason === "gate_already_abandoned";
+            if (!duplicate) {
+              try {
+                recordGraphGateAbandoned(req.meshId, {
+                  graphId: result.gate.graphId,
+                  gateId: req.gateId,
+                  ref: result.gate.ref,
+                  action: result.gate.action,
+                  priorState: result.gate.state,
+                  reason: req.reason,
+                  ...req.coordinatorSessionId ? { coordinatorSessionId: req.coordinatorSessionId } : {},
+                  ...req.force === true ? { force: true } : {},
+                  cancelledNodeIds: result.cancelledNodeIds,
+                  ...result.graphStatus ? { graphStatus: result.graphStatus } : {}
+                });
+              } catch {
+              }
+            }
+            const response = {
+              abandoned: true,
+              ...duplicate ? { reason: result.reason } : {},
+              gate: result.gate,
+              cancelledNodeIds: result.cancelledNodeIds,
+              cancelledTaskIds: result.cancelledTaskIds,
+              ...result.graphStatus ? { graphStatus: result.graphStatus } : {}
+            };
+            return { success: true, ...response };
+          } catch (e) {
+            return failure5(e);
+          }
+        };
+        graphNodePatch2 = async (ctx, args) => {
+          const req = decodeGraphNodePatchRequest(args);
+          if (!req) return badRequest2("graph_node_patch");
+          try {
+            const result = patchGraphNodeAndRetry({
+              meshId: req.meshId,
+              node: req.node,
+              ...req.graphId ? { graphId: req.graphId } : {},
+              baseSpecPatch: req.baseSpecPatch
+            });
+            const recovered = result.outcome.kind === "materialized";
+            try {
+              recordGraphNodePatched(req.meshId, {
+                graphId: result.graphId,
+                nodeId: result.nodeId,
+                ...result.ref ? { ref: result.ref } : {},
+                ...result.queueTaskId ? { queueTaskId: result.queueTaskId } : {},
+                patchedKeys: Object.keys(req.baseSpecPatch),
+                outcome: result.outcome.kind,
+                state: result.state,
+                ...result.blockedReason ? { blockedReason: result.blockedReason } : {},
+                materializationVersion: result.materializationVersion
+              });
+            } catch {
+            }
+            if (recovered) await triggerQueueBestEffort(ctx, req.meshId);
+            const response = {
+              patched: true,
+              graphId: result.graphId,
+              nodeId: result.nodeId,
+              ...result.ref ? { ref: result.ref } : {},
+              ...result.queueTaskId ? { queueTaskId: result.queueTaskId } : {},
+              materializationVersion: result.materializationVersion,
+              state: result.state,
+              outcomeKind: result.outcome.kind,
+              ...result.outcome.kind === "skipped" ? { skippedReason: result.outcome.reason } : {},
+              ...result.blockedReason ? { blockedReason: result.blockedReason } : {}
+            };
+            return { success: true, ...response };
+          } catch (e) {
+            const message = e?.message || String(e);
+            const response = { patched: false, message, ...classifyNodePatchError(e, message) ? { refusalCode: classifyNodePatchError(e, message) } : {} };
+            return { success: true, ...response };
+          }
+        };
+        MAX_GATE_EVIDENCE_PROBES = 5;
+        graphViewQuery2 = async (_ctx, args) => {
+          const req = decodeGraphViewQueryRequest(args);
+          if (!req) return badRequest2("graph_view_query");
+          try {
+            const graphs = buildMeshGraphViews(req.meshId, {
+              ...req.graphId ? { graphId: req.graphId } : {},
+              ...req.batchId ? { batchId: req.batchId } : {},
+              activeOnly: req.activeOnly !== false,
+              ...req.limit !== void 0 ? { limit: req.limit } : {}
+            });
+            if (req.probeGateEvidence) {
+              let probesLeft = MAX_GATE_EVIDENCE_PROBES;
+              for (const graph of graphs) {
+                for (const gate of graph.gates ?? []) {
+                  if (probesLeft <= 0) break;
+                  if (gate.state !== "awaiting_coordinator" && gate.state !== "expired") continue;
+                  probesLeft -= 1;
+                  try {
+                    const evidence = await collectGateConvergenceEvidence(req.meshId, gate.gateId);
+                    if (evidence) gate.convergenceEvidence = evidence;
+                  } catch {
+                  }
+                }
+              }
+            }
+            const response = { graphs };
+            return { success: true, ...response };
+          } catch (e) {
+            return failure5(e);
+          }
+        };
+        taskStatsQuery2 = async (_ctx, args) => {
+          const req = decodeTaskStatsQueryRequest(args);
+          if (!req) return badRequest2("task_stats_query");
+          try {
+            const tasks = computeMeshTaskStats(req.meshId, {
+              ...req.taskIds ? { taskIds: [...req.taskIds] } : {},
+              ...req.missionId ? { missionId: req.missionId } : {},
+              ...req.tail !== void 0 ? { tail: req.tail } : {}
+            });
+            const response = { tasks };
+            if (req.rollup && req.missionId) {
+              try {
+                response.mission = computeMeshMissionStats(req.meshId, req.missionId);
+              } catch {
+              }
+            }
+            return { success: true, ...response };
+          } catch (e) {
+            return failure5(e);
+          }
+        };
+        pruneStaleDirect2 = async (_ctx, args) => {
+          const req = decodePruneStaleDirectRequest(args);
+          if (!req) return badRequest2("prune_stale_direct");
+          try {
+            const queue = getQueue(req.meshId);
+            const directDispatches = getActiveDirectDispatches(req.meshId);
+            const ledgerEntries = readLocalRecords(req.meshId, { tail: 500 });
+            const result = await pruneStaleDirectDispatches({
+              meshId: req.meshId,
+              queue,
+              ledgerEntries,
+              directDispatches,
+              nodes: [],
+              execute: req.execute === true,
+              includeTerminal: req.includeTerminal === true,
+              source: req.source || "mesh_prune_stale_direct"
+              // No closeDispatches override: this handler runs IN the daemon that owns
+              // the turn ledger, so the default `cancelDirectDispatchAttempts` (this
+              // process's ledger — the same core the daemon reconcile-loop auto-prune
+              // already uses) is exactly right; the mcp-server's own closure existed
+              // only to reach that ledger over `turn_cancel` IPC, which is now moot.
+            });
+            const response = {
+              mode: result.mode,
+              includeTerminal: result.includeTerminal,
+              candidateCount: result.candidateCount,
+              prunable: result.prunable,
+              prunedCount: result.prunedCount,
+              preservedUnacknowledged: result.preservedUnacknowledged,
+              preservedLedgerOnly: result.preservedLedgerOnly,
+              preservedNotOrphan: result.preservedNotOrphan
+            };
+            return { success: true, ...response };
+          } catch (e) {
+            return failure5(e);
+          }
+        };
+        orphanedPinNotify2 = async (_ctx, args) => {
+          const req = decodeOrphanedPinNotifyRequest(args);
+          if (!req) return badRequest2("orphaned_pin_notify");
+          try {
+            const orphans = notifyCoordinatorOfOrphanedPins(req.meshId, req.stoppedSessionId, {
+              ...req.excludeTaskId ? { excludeTaskId: req.excludeTaskId } : {},
+              ...req.cause ? { cause: req.cause } : {},
+              ...req.nodeId ? { nodeId: req.nodeId } : {},
+              ...req.coordinatorSessionId ? { coordinatorSessionId: req.coordinatorSessionId } : {}
+            });
+            const response = { orphans };
+            return { success: true, ...response };
+          } catch (e) {
+            return failure5(e);
+          }
+        };
+        meshGraphIpcHandlers = {
+          graph_gate_claim: graphGateClaim2,
+          graph_gate_release: graphGateRelease2,
+          graph_gate_abandon: graphGateAbandon2,
+          graph_node_patch: graphNodePatch2,
+          graph_view_query: graphViewQuery2,
+          task_stats_query: taskStatsQuery2,
+          prune_stale_direct: pruneStaleDirect2,
+          orphaned_pin_notify: orphanedPinNotify2
         };
       }
     });
@@ -118677,7 +120474,7 @@ ${marker}`,
     function unavailable(detail) {
       return { success: false, error: `turn ledger unavailable: ${detail}`, code: "turn_ledger_unavailable" };
     }
-    function badRequest2(command) {
+    function badRequest3(command) {
       return { success: false, error: `${command}: request failed decode (bad shape)` };
     }
     function mintDirectDispatchWorkerToken(evidence, verdict, attempt) {
@@ -118730,7 +120527,10 @@ ${marker}`,
         title: record2.title,
         goal: record2.goal,
         status: record2.status,
-        ...record2.source ? { source: record2.source } : {}
+        ...record2.source ? { source: record2.source } : {},
+        // H2: `record.brief` is already normalized (mesh-missions.ts) — a structural
+        // mirror is enough for the wire, not a re-normalize.
+        ...record2.brief ? { brief: record2.brief } : {}
       };
     }
     var import_crypto18;
@@ -118763,10 +120563,11 @@ ${marker}`,
         init_mesh_operating_notes();
         init_worker_mcp_isolation();
         init_mesh_store_ipc();
+        init_mesh_graph_ipc();
         indexSlot = null;
         turnObserve2 = async (_ctx, args) => {
           const req = decodeTurnObserveRequest(args);
-          if (!req) return badRequest2("turn_observe");
+          if (!req) return badRequest3("turn_observe");
           const ledger = getActiveTurnLedger();
           if (!ledger) return unavailable("no active turn ledger (boot wiring pending \u2014 see file header)");
           try {
@@ -118787,7 +120588,7 @@ ${marker}`,
         };
         meshRecordHandler = async (_ctx, args) => {
           const req = decodeMeshRecordRequest(args);
-          if (!req) return badRequest2("mesh_record");
+          if (!req) return badRequest3("mesh_record");
           try {
             const result = await meshRecordAppended(req.meshId, req.ledgerKind, {
               ...req.nodeId ? { nodeId: req.nodeId } : {},
@@ -118803,7 +120604,7 @@ ${marker}`,
         };
         turnCancel2 = async (ctx, args) => {
           const req = decodeTurnCancelRequest(args);
-          if (!req) return badRequest2("turn_cancel");
+          if (!req) return badRequest3("turn_cancel");
           if (!isCancelReason(req.reason)) {
             return { success: false, error: `turn_cancel: '${req.reason}' is not a valid cancel reason (expected one of ${CANCEL_REASONS2.join(", ")})` };
           }
@@ -118836,7 +120637,7 @@ ${marker}`,
         };
         operatorStatus = async (ctx, args) => {
           const req = decodeOperatorStatusRequest(args);
-          if (!req) return badRequest2("operator_status");
+          if (!req) return badRequest3("operator_status");
           const ledger = getActiveTurnLedger();
           if (!ledger) return unavailable("no active turn ledger (boot wiring pending \u2014 see file header)");
           try {
@@ -118867,7 +120668,7 @@ ${marker}`,
         };
         turnQuery = async (_ctx, args) => {
           const req = decodeTurnQueryRequest(args);
-          if (!req) return badRequest2("turn_query");
+          if (!req) return badRequest3("turn_query");
           const ledger = getActiveTurnLedger();
           if (!ledger) return unavailable("no active turn ledger (boot wiring pending \u2014 see file header)");
           try {
@@ -118927,7 +120728,7 @@ ${marker}`,
         MESH_INDEX_QUERY_MAX_TAIL = 500;
         meshIndexQuery = async (_ctx, args) => {
           const req = decodeMeshIndexQueryRequest(args);
-          if (!req) return badRequest2("mesh_index_query");
+          if (!req) return badRequest3("mesh_index_query");
           const slot = indexSlot;
           if (!getActiveTurnLedger() || !slot) return { ...unavailable("no mesh_topic_index bound (boot wiring pending)"), rows: [] };
           try {
@@ -118955,14 +120756,18 @@ ${marker}`,
         };
         missionUpsert2 = async (_ctx, args) => {
           const req = decodeMissionUpsertRequest(args);
-          if (!req) return badRequest2("mission_upsert");
+          if (!req) return badRequest3("mission_upsert");
           try {
-            const record2 = upsertMeshMission3(req.meshId, {
+            const record2 = upsertMeshMission(req.meshId, {
               ...req.id ? { id: req.id } : {},
               title: req.title,
               ...req.goal !== void 0 ? { goal: req.goal } : {},
               ...req.status ? { status: req.status } : {},
-              ...req.source ? { source: req.source } : {}
+              ...req.source ? { source: req.source } : {},
+              // H2: `undefined` (field omitted) preserves the existing brief; `null`
+              // (explicit clear) and a MissionBriefWire object both forward as-is —
+              // upsertMeshMission's own normalizeMissionBrief call does the real work.
+              ...req.brief !== void 0 ? { brief: req.brief } : {}
             });
             const response = { mission: toWireMission(record2) };
             return { success: true, ...response };
@@ -118972,10 +120777,10 @@ ${marker}`,
         };
         missionQuery2 = async (_ctx, args) => {
           const req = decodeMissionQueryRequest(args);
-          if (!req) return badRequest2("mission_query");
+          if (!req) return badRequest3("mission_query");
           try {
             if (req.id) {
-              const record2 = getMeshMission3(req.meshId, req.id);
+              const record2 = getMeshMission(req.meshId, req.id);
               const response2 = { missions: record2 ? [toWireMission(record2)] : [] };
               return { success: true, ...response2 };
             }
@@ -118988,7 +120793,7 @@ ${marker}`,
         };
         noteUpsert2 = async (_ctx, args) => {
           const req = decodeNoteUpsertRequest(args);
-          if (!req) return badRequest2("note_upsert");
+          if (!req) return badRequest3("note_upsert");
           try {
             const before = new Set(readOperatingNotes(req.meshId).map((n) => n.id));
             const note = recordOperatingNote(req.meshId, {
@@ -119009,7 +120814,7 @@ ${marker}`,
         };
         noteForget2 = async (_ctx, args) => {
           const req = decodeNoteForgetRequest(args);
-          if (!req) return badRequest2("note_forget");
+          if (!req) return badRequest3("note_forget");
           try {
             const result = forgetOperatingNote(req.meshId, {
               ...req.noteId ? { noteId: req.noteId } : {},
@@ -119035,7 +120840,10 @@ ${marker}`,
           note_forget: noteForget2,
           // C-W9b / C-W9a: the mcp-server's store access (records, queue, missions,
           // active work) — mesh-store-ipc.ts.
-          ...meshStoreIpcHandlers
+          ...meshStoreIpcHandlers,
+          // C-W9c: graph gates/plan/patch, task/mission stats, prune audit and
+          // orphaned-pin notify — mesh-graph-ipc.ts.
+          ...meshGraphIpcHandlers
         };
         turnLedgerIpcSpecs = defineCommandSpecs("low", turnLedgerIpcHandlers, {
           turn_observe: { sources: ["ipc"] },
@@ -119048,7 +120856,8 @@ ${marker}`,
           mission_query: { sources: ["ipc"] },
           note_upsert: { sources: ["ipc"] },
           note_forget: { sources: ["ipc"] },
-          ...Object.fromEntries(Object.keys(meshStoreIpcHandlers).map((name) => [name, { sources: ["ipc"] }]))
+          ...Object.fromEntries(Object.keys(meshStoreIpcHandlers).map((name) => [name, { sources: ["ipc"] }])),
+          ...Object.fromEntries(Object.keys(meshGraphIpcHandlers).map((name) => [name, { sources: ["ipc"] }]))
         });
       }
     });
@@ -119483,7 +121292,10 @@ ${marker}`,
                 handoffNoteRecorded: result.handoffNoteRecorded,
                 // ★F5: carries WHY a note did not persist, so the tool layer can
                 // warn instead of printing the unconditional "stored" line.
-                ...result.handoffNoteError ? { handoffNoteError: result.handoffNoteError } : {}
+                ...result.handoffNoteError ? { handoffNoteError: result.handoffNoteError } : {},
+                // H1 (path ownership): present only on a declared-but-mismatched report —
+                // evidence, never a refusal (the completion above already committed).
+                ...result.ownedPathsMismatch ? { ownedPathsMismatch: result.ownedPathsMismatch } : {}
               };
             } catch (e) {
               return { success: false, error: e?.message || String(e) };
@@ -119747,6 +121559,45 @@ ${marker}`,
           }
         };
         transcriptReplicaSpecs = defineCommandSpecs("low", transcriptReplicaHandlers);
+      }
+    });
+    function recordTranscriptTransportSelection(selection) {
+      if (selection === "replica") counters4.replicaSelected++;
+      else counters4.legacySelected++;
+    }
+    function transcriptTransportSelectionCounters() {
+      return { ...counters4 };
+    }
+    var counters4;
+    var init_transcript_transport_selection = __esm2({
+      "src/seqscribe/transcript-transport-selection.ts"() {
+        "use strict";
+        counters4 = {
+          replicaSelected: 0,
+          legacySelected: 0
+        };
+      }
+    });
+    function readSelection(args) {
+      const selection = args?.selection;
+      return selection === "replica" || selection === "legacy" ? selection : null;
+    }
+    var transcriptTransportReportHandlers;
+    var transcriptTransportReportSpecs;
+    var init_transcript_transport_report = __esm2({
+      "src/commands/low-family/transcript-transport-report.ts"() {
+        "use strict";
+        init_transcript_transport_selection();
+        init_command_registry();
+        transcriptTransportReportHandlers = {
+          report_transcript_transport: async (_ctx, args) => {
+            const selection = readSelection(args);
+            if (!selection) return { success: false, error: "selection must be 'replica' or 'legacy'" };
+            recordTranscriptTransportSelection(selection);
+            return { success: true };
+          }
+        };
+        transcriptTransportReportSpecs = defineCommandSpecs("low", transcriptTransportReportHandlers);
       }
     });
     function normalizeClaudeTuiIdentity(text) {
@@ -124156,31 +126007,31 @@ ${text}` : text;
       return { suspect: null, advisoryNotifiedAtMs: 0, coordinatorMarkerLogged: false, stopRequested: false };
     }
     function classifyAuthBillingOutput(cliType, text, exitCode) {
-      const failure5 = detectProviderFailure(text, exitCode);
-      if (!failure5) return null;
-      if (cliType !== "kimi" && failure5.failureKind !== "auth") return null;
-      return failure5;
+      const failure6 = detectProviderFailure(text, exitCode);
+      if (!failure6) return null;
+      if (cliType !== "kimi" && failure6.failureKind !== "auth") return null;
+      return failure6;
     }
     function exitClassificationAllowed(exitCode, termination, state) {
       if (termination?.requestedStop || state?.stopRequested) return false;
       return exitCode !== 0;
     }
-    function authBillingLatchLogLine(cliType, failure5, context) {
-      const suppressionNote = failure5.failureKind === "quota" ? "this PTY session will not be blindly restarted; the mesh may retry once quota resets" : "automatic provider retry must be suppressed";
-      return `[${cliType}] ${failure5.failureKind} failure detected from live PTY/exit (${context}); ${suppressionNote}`;
+    function authBillingLatchLogLine(cliType, failure6, context) {
+      const suppressionNote = failure6.failureKind === "quota" ? "this PTY session will not be blindly restarted; the mesh may retry once quota resets" : "automatic provider retry must be suppressed";
+      return `[${cliType}] ${failure6.failureKind} failure detected from live PTY/exit (${context}); ${suppressionNote}`;
     }
-    function noteLiveAuthMatch(state, ctx, failure5) {
+    function noteLiveAuthMatch(state, ctx, failure6) {
       if (state.stopRequested) return;
       if (ctx.isCoordinator) {
         if (!state.coordinatorMarkerLogged) {
           state.coordinatorMarkerLogged = true;
-          LOG.info("SpecAdapter", `[${ctx.cliType}] live ${failure5.failureKind} marker in COORDINATOR PTY tail (session=${ctx.sessionLabel}) \u2014 ignored: a coordinator's screen quotes other sessions' failures; only its exit is classified`);
+          LOG.info("SpecAdapter", `[${ctx.cliType}] live ${failure6.failureKind} marker in COORDINATOR PTY tail (session=${ctx.sessionLabel}) \u2014 ignored: a coordinator's screen quotes other sessions' failures; only its exit is classified`);
         }
         return;
       }
       if (state.suspect) return;
-      state.suspect = { failure: failure5, suspectedAtMs: Date.now() };
-      LOG.info("SpecAdapter", `[${ctx.cliType}] live ${failure5.failureKind} marker in PTY tail (session=${ctx.sessionLabel}) \u2014 suspicion only, session untouched; checking the visible screen at the next turn boundary`);
+      state.suspect = { failure: failure6, suspectedAtMs: Date.now() };
+      LOG.info("SpecAdapter", `[${ctx.cliType}] live ${failure6.failureKind} marker in PTY tail (session=${ctx.sessionLabel}) \u2014 suspicion only, session untouched; checking the visible screen at the next turn boundary`);
     }
     function resolveLiveAuthSuspect(state, ctx, input) {
       const suspect = state.suspect;
@@ -125356,13 +127207,13 @@ ${text}` : text;
           observeProviderFailureOutput(chunk, exitCode, exit) {
             if (this.providerFailure || exit && !exitClassificationAllowed(exit.exit_code, exit.termination, this.liveAuth)) return false;
             void chunk;
-            const failure5 = classifyAuthBillingOutput(this.cliType, this.rawTail.strippedTail(TAIL_BYTES4), exitCode);
-            if (!failure5) return false;
+            const failure6 = classifyAuthBillingOutput(this.cliType, this.rawTail.strippedTail(TAIL_BYTES4), exitCode);
+            if (!failure6) return false;
             if (exitCode === void 0 && !this.exited) {
-              noteLiveAuthMatch(this.liveAuth ??= createLiveAuthState(), this.liveAuthContext(), failure5);
+              noteLiveAuthMatch(this.liveAuth ??= createLiveAuthState(), this.liveAuthContext(), failure6);
               return false;
             }
-            this.latchAuthBillingFailure(failure5, `exitCode=${exitCode ?? "pending"}`);
+            this.latchAuthBillingFailure(failure6, `exitCode=${exitCode ?? "pending"}`);
             return true;
           }
           liveAuthContext() {
@@ -125370,9 +127221,9 @@ ${text}` : text;
             const isCoordinator = typeof coordinatorFor === "string" && !!coordinatorFor.trim();
             return { cliType: this.cliType, sessionLabel: this.owningSessionId || "unknown", isCoordinator };
           }
-          latchAuthBillingFailure(failure5, context) {
-            this.providerFailure = failure5;
-            LOG.warn("SpecAdapter", authBillingLatchLogLine(this.cliType, failure5, context));
+          latchAuthBillingFailure(failure6, context) {
+            this.providerFailure = failure6;
+            LOG.warn("SpecAdapter", authBillingLatchLogLine(this.cliType, failure6, context));
             this.notifyChange("provider_failure");
           }
           /** Resolve a pending live suspicion on the routine status poll (turn boundary). */
@@ -128396,16 +130247,6 @@ ${buttons.join("\n")}`;
           host.completedDebouncePending = null;
           host.errorMessage = adapterStatus.errorMessage || host.errorMessage;
           host.errorReason = adapterStatus.errorReason || host.errorReason;
-          host.pushEvent({
-            event: "agent:stopped",
-            chatTitle,
-            timestamp: now,
-            finalSummary: adapterStatus.errorMessage || adapterStatus.errorReason || "Provider reported an error",
-            completionDiagnostic: {
-              reason: adapterStatus.errorReason || "provider_error",
-              errorMessage: adapterStatus.errorMessage || void 0
-            }
-          });
           if (host.turnEvidencePort) {
             emitSessionError(host.turnEvidencePort, {
               sessionId: host.instanceId,
@@ -128413,7 +130254,14 @@ ${buttons.join("\n")}`;
               source: "fsm_edge",
               attemptRef: host.currentAttemptRef?.() ?? void 0,
               at: now,
-              reason: classifySessionErrorReason(host.errorReason)
+              reason: classifySessionErrorReason(host.errorReason),
+              envelope: {
+                finalSummary: adapterStatus.errorMessage || adapterStatus.errorReason || "Provider reported an error",
+                notice: {
+                  ...adapterStatus.errorMessage ? { errorMessage: adapterStatus.errorMessage } : {},
+                  completionMetadata: { diagnosticReason: adapterStatus.errorReason || "provider_error" }
+                }
+              }
             });
           }
         } else if (newStatus === "stopped") {
@@ -128427,7 +130275,6 @@ ${buttons.join("\n")}`;
             host.completedDebounceTimer = null;
           }
           host.completedDebouncePending = null;
-          host.pushEvent({ event: "agent:stopped", chatTitle, timestamp: now });
           if (host.turnEvidencePort) {
             emitProcessExit(host.turnEvidencePort, {
               sessionId: host.instanceId,
@@ -129539,6 +131386,9 @@ ${buttons.join("\n")}`;
     function asTurnEndBlockReason(value) {
       return typeof value === "string" && TURN_END_BLOCK_REASON_SET.has(value) ? value : void 0;
     }
+    function asNativeTurnOutcome(value) {
+      return typeof value === "string" && NATIVE_TURN_OUTCOME_SET.has(value) ? value : void 0;
+    }
     function flushCompletedDebounceIfFinalized(host) {
       const pending = host.completedDebouncePending;
       if (!pending) {
@@ -129691,20 +131541,16 @@ ${buttons.join("\n")}`;
       if (summary) {
         host.lastCompletionSummary = { content: summary, receivedAt: opts.timestamp };
       }
-      const completionEvent = {
-        event: "agent:generating_completed",
+      const completionEvidenceInput = {
         chatTitle: opts.chatTitle,
         duration: opts.duration,
         timestamp: opts.timestamp,
-        // ARCH-REFACTOR R1: attribute to the turn captured at idle-transition.
         ...opts.taskId ? { taskId: opts.taskId } : {},
-        // finalSummary is always carried (value may be undefined) — every prior
-        // inline builder included the key, so downstream consumers see the same shape.
         finalSummary: opts.finalSummary,
         ...opts.evidenceLevel !== void 0 ? { evidenceLevel: opts.evidenceLevel } : {},
         ...opts.completionDiagnostic !== void 0 ? { completionDiagnostic: opts.completionDiagnostic } : {}
       };
-      const weak = isWeakCompletionEvidence2(completionEvent);
+      const weak = isWeakCompletionEvidence2(completionEvidenceInput);
       host.lastEmittedCompletion = {
         taskId: typeof opts.taskId === "string" ? opts.taskId : "",
         at: Date.now(),
@@ -129712,7 +131558,6 @@ ${buttons.join("\n")}`;
         weak,
         emittedAtEpoch: host.busyEpoch
       };
-      host.pushEvent(completionEvent);
       if (host.turnEvidencePort) {
         emitTurnEnd(host.turnEvidencePort, {
           sessionId: host.instanceId,
@@ -129722,15 +131567,60 @@ ${buttons.join("\n")}`;
           taskId: opts.taskId,
           at: opts.timestamp,
           strength: weak ? "weak" : "genuine",
-          // `summary` is a SummaryRef POINTER (topic/writer/seq), never text —
-          // omitted until W2 exposes `publishSummary(meshId, text):
-          // Promise<SummaryRef>` for the content-class `mesh.<id>.handoff`
-          // topic (brief §1a, §8 item 2). `opts.finalSummary` (plain text)
-          // still reaches the wire event above unchanged; it is NOT carried
-          // into evidence — see REQUESTED EDITS.
           blockReason: asTurnEndBlockReason(opts.completionDiagnostic?.blockReason),
           releasedByHardCap: opts.completionDiagnostic?.releasedByTerminalBlockHardCap === true ? true : void 0,
-          afterFinalizationTimeout: opts.completionDiagnostic?.emittedAfterFinalizationTimeout === true ? true : void 0
+          afterFinalizationTimeout: opts.completionDiagnostic?.emittedAfterFinalizationTimeout === true ? true : void 0,
+          // A provider's own turn-terminal record (stall-rescue's wedge/idle
+          // native-marker reconcile) — `turn_end`'s closed `nativeOutcome`
+          // enum, never a free-text passthrough.
+          nativeOutcome: asNativeTurnOutcome(opts.completionDiagnostic?.nativeTurnOutcome),
+          // `nodeLabel` is intentionally omitted — `turn-ledger/deliver.ts`'s
+          // `nodeLabelFor` already falls back to the attempt's own
+          // `nodeId`/`providerType` (dispatch-time facts the ledger has),
+          // which is the same information this host has access to, so
+          // there is nothing this call site can add.
+          //
+          // `workerResult`: the graph output envelope's structured pointer
+          // target (`envelope.worker_result`, `mesh-graph-transition-runner.ts`
+          // `applyTaskTerminalInTxn`, fed by `runtime-ledger.ts`'s
+          // `graphAdvance` from `ctx.envelope`). Parsed with the SAME
+          // trailing-JSON-in-the-final-summary rule the ledger evidence
+          // record has always used (`shared/worker-result-parse.ts`, moved
+          // out of `mesh/mesh-ledger.ts` in C-W5c so this producers-side
+          // call site can use it without a `providers -> mesh` boundary
+          // violation) — without it `envelope.worker_result` is empty for
+          // every locally-completed task and documented pointers like
+          // `/worker_result/validationResults` resolve to nothing.
+          envelope: {
+            ...opts.finalSummary ? { finalSummary: opts.finalSummary } : {},
+            ...(() => {
+              const workerResult = opts.finalSummary ? extractJsonObjectFromSummary(opts.finalSummary) : void 0;
+              return workerResult ? { workerResult } : {};
+            })(),
+            ...typeof opts.completionDiagnostic?.reason === "string" || typeof opts.completionDiagnostic?.blockReason === "string" || typeof opts.completionDiagnostic?.finalAssistantPresent === "boolean" || opts.evidenceLevel || typeof opts.completionDiagnostic?.source === "string" || typeof opts.completionDiagnostic?.wedgedObservedStatus === "string" || typeof opts.completionDiagnostic?.nativeTurnId === "string" ? {
+              notice: {
+                completionMetadata: {
+                  ...typeof opts.completionDiagnostic?.reason === "string" ? { diagnosticReason: opts.completionDiagnostic.reason } : {},
+                  // `blockReason` here is the FULL diagnostic vocabulary
+                  // (e.g. 'parsed_final_assistant_quiet_dwell') — much
+                  // wider than `asTurnEndBlockReason`'s closed 4-value
+                  // evidence enum above, so it rides local text too
+                  // (never silently dropped just because it didn't
+                  // narrow into the typed field).
+                  ...typeof opts.completionDiagnostic?.blockReason === "string" && !asTurnEndBlockReason(opts.completionDiagnostic.blockReason) ? { diagnosticReason: opts.completionDiagnostic.blockReason } : {},
+                  ...typeof opts.completionDiagnostic?.finalAssistantPresent === "boolean" ? { finalAssistantPresent: opts.completionDiagnostic.finalAssistantPresent } : {},
+                  ...opts.evidenceLevel ? { evidenceLevel: opts.evidenceLevel } : {},
+                  // Diagnostic-only strings (which producer path fired,
+                  // the wedge's observed status, the provider's own
+                  // native turn id) — local render context, same
+                  // treatment the deleted wire literal gave them.
+                  ...typeof opts.completionDiagnostic?.source === "string" ? { source: opts.completionDiagnostic.source } : {},
+                  ...typeof opts.completionDiagnostic?.wedgedObservedStatus === "string" ? { wedgedObservedStatus: opts.completionDiagnostic.wedgedObservedStatus } : {},
+                  ...typeof opts.completionDiagnostic?.nativeTurnId === "string" ? { nativeTurnId: opts.completionDiagnostic.nativeTurnId } : {}
+                }
+              }
+            } : {}
+          }
         });
       }
       if (host.settings?.silentNextIdlePush === true) {
@@ -129738,12 +131628,14 @@ ${buttons.join("\n")}`;
       }
     }
     var TURN_END_BLOCK_REASON_SET;
+    var NATIVE_TURN_OUTCOME_SET;
     var init_completion_flush = __esm2({
       "src/providers/completion/completion-flush.ts"() {
         "use strict";
         init_logger();
         init_completion_engine();
         init_mesh_event_trace();
+        init_worker_result_parse();
         init_transcript_evidence();
         init_mesh_events_utils();
         init_turn_evidence_port();
@@ -129753,6 +131645,7 @@ ${buttons.join("\n")}`;
           "terminal_block_hard_cap",
           "decoupled_completion"
         ]);
+        NATIVE_TURN_OUTCOME_SET = /* @__PURE__ */ new Set(["completed", "aborted"]);
       }
     });
     function attachMeshAssignment(host, assignment) {
@@ -132939,21 +134832,20 @@ ${rawInput}` : rawInput;
                   });
                 }
               } else if (newStatus === "idle" && (this.lastStatus === "generating" || this.lastStatus === "waiting_approval")) {
-                const duration3 = this.generatingStartedAt ? Math.round((now - this.generatingStartedAt) / 1e3) : 0;
-                this.pushEvent({ event: "agent:generating_completed", chatTitle, duration: duration3, timestamp: now, finalSummary: extractFinalSummaryFromMessages(this.messages) });
                 if (this.turnEvidencePort) {
+                  const finalSummary = extractFinalSummaryFromMessages(this.messages);
                   emitTurnEnd(this.turnEvidencePort, {
                     sessionId: this.instanceId,
                     observedBy: "acp_update",
                     source: "fsm_edge",
                     attemptRef: this.currentAttemptRef() ?? void 0,
                     at: now,
-                    strength: "genuine"
+                    strength: "genuine",
+                    ...finalSummary ? { envelope: { finalSummary } } : {}
                   });
                 }
                 this.generatingStartedAt = 0;
               } else if (newStatus === "stopped") {
-                this.pushEvent({ event: "agent:stopped", chatTitle, timestamp: now });
                 if (this.turnEvidencePort) {
                   emitProcessExit(this.turnEvidencePort, {
                     sessionId: this.instanceId,
@@ -138952,989 +140844,6 @@ ${mergeTreeErr?.stderr || ""}`;
         meshWorktreeRetentionSpecs = defineCommandSpecs("med", meshWorktreeRetentionHandlers);
       }
     });
-    function buildMeshGraphViews3(meshId, opts = {}) {
-      const store2 = MeshRuntimeStore.getInstance();
-      const graphStore = store2.graphStore();
-      const nowIso = new Date(opts.nowMs ?? Date.now()).toISOString();
-      let graphs;
-      if (opts.graphId) {
-        const one = graphStore.getGraph(opts.graphId);
-        graphs = one && one.meshId === meshId ? [one] : [];
-      } else if (opts.batchId) {
-        const one = graphStore.getGraphByBatchId(meshId, opts.batchId);
-        graphs = one ? [one] : [];
-      } else {
-        graphs = graphStore.listGraphsByMesh(meshId, {
-          ...opts.activeOnly === false ? {} : { statuses: IN_FLIGHT_GRAPH_STATUSES },
-          limit: opts.limit ?? 20
-        });
-      }
-      return graphs.map((graph) => {
-        const nodes = graphStore.listNodes(graph.graphId);
-        const edges = graphStore.listEdges(graph.graphId);
-        const gates = graphStore.listGatesByGraph(graph.graphId);
-        const workspaces = graphStore.listWorkspaceIntents(graph.graphId);
-        const byId = new Map(nodes.map((n) => [n.nodeId, n]));
-        const policy = projectGraphPublicPolicy(graph.policyJson);
-        const decision = readOrchestrationDecision(graph.policyJson);
-        const queueByTaskId = /* @__PURE__ */ new Map();
-        for (const node of nodes) {
-          if (!node.queueTaskId) continue;
-          const entry = store2.findQueueEntryById(meshId, node.queueTaskId);
-          if (entry) {
-            queueByTaskId.set(node.queueTaskId, {
-              status: entry.status,
-              blockedReason: entry.blockedReason,
-              cancelReason: entry.cancelReason,
-              dependsOn: entry.dependsOn
-            });
-          }
-        }
-        const statusById = /* @__PURE__ */ new Map();
-        const depMetaById = /* @__PURE__ */ new Map();
-        for (const [taskId, row] of queueByTaskId) {
-          statusById.set(taskId, row.status);
-          depMetaById.set(taskId, { status: row.status, blockedReason: row.blockedReason, cancelReason: row.cancelReason });
-        }
-        for (const row of queueByTaskId.values()) {
-          for (const depId of row.dependsOn ?? []) {
-            if (statusById.has(depId)) continue;
-            const dep = store2.findQueueEntryById(meshId, depId);
-            if (!dep) continue;
-            statusById.set(depId, dep.status);
-            depMetaById.set(depId, {
-              status: dep.status,
-              blockedReason: dep.blockedReason,
-              cancelReason: dep.cancelReason
-            });
-          }
-        }
-        const gateByNodeId = new Map(gates.map((g3) => [g3.nodeId, g3]));
-        const nodeViews = nodes.map((node) => {
-          const queue = node.queueTaskId ? queueByTaskId.get(node.queueTaskId) : void 0;
-          const gateBlock = parseCoordinatorGateBlock(queue?.blockedReason);
-          const failures = queue?.dependsOn?.length ? deriveDependencyFailures(queue.dependsOn, statusById, depMetaById) : [];
-          return {
-            nodeId: node.nodeId,
-            ...node.ref ? { ref: node.ref } : {},
-            kind: node.kind,
-            state: node.state,
-            ...node.queueTaskId ? { taskId: node.queueTaskId } : {},
-            ...queue ? { taskStatus: queue.status } : {},
-            ...queue?.blockedReason ? { blockedReason: queue.blockedReason } : {},
-            ...gateBlock ? { blockedByGateId: gateBlock.gateId } : {},
-            materializationVersion: node.materializationVersion,
-            ...node.materializedDigest ? { materializedDigest: node.materializedDigest } : {},
-            ...node.skipReason ? { skipReason: node.skipReason } : {},
-            ...node.failureReason ? { failureReason: node.failureReason } : {},
-            ...failures.length > 0 ? { dependencyFailures: failures } : {},
-            ...describeNodeFeatures(node.baseSpecJson).length > 0 ? { features: describeNodeFeatures(node.baseSpecJson) } : {}
-          };
-        });
-        const edgeViews = edges.map((edge) => {
-          const source = byId.get(edge.fromNodeId);
-          const active = !(source?.state === "skipped" && edge.omitOnSkip);
-          const condition = describeEdgeCondition(edge.conditionJson);
-          return {
-            from: source?.ref ?? edge.fromNodeId,
-            to: byId.get(edge.toNodeId)?.ref ?? edge.toNodeId,
-            kind: edge.kind,
-            omitOnSkip: edge.omitOnSkip,
-            active,
-            ...condition ? { condition } : {}
-          };
-        });
-        const gateViews = gates.map((gate) => {
-          const blocking = nodeViews.filter((n) => n.blockedByGateId === gate.gateId).map((n) => n.ref ?? n.nodeId);
-          const leaseExpired = gate.state === "claimed" && !!gate.leaseExpiresAt && gate.leaseExpiresAt <= nowIso;
-          return {
-            gateId: gate.gateId,
-            ...gate.ref ? { ref: gate.ref } : {},
-            nodeId: gate.nodeId,
-            state: gate.state,
-            action: gate.action,
-            ...gate.instructions ? { instructions: gate.instructions } : {},
-            onTimeout: gate.onTimeout,
-            leaseGeneration: gate.leaseGeneration,
-            ...gate.leaseOwnerSessionId ? { leaseOwnerSessionId: gate.leaseOwnerSessionId } : {},
-            ...gate.leaseExpiresAt ? { leaseExpiresAt: gate.leaseExpiresAt } : {},
-            ...leaseExpired ? { leaseExpired: true } : {},
-            ...gate.deadlineAt ? { deadlineAt: gate.deadlineAt } : {},
-            ...gate.releaseOutcome ? { releaseOutcome: gate.releaseOutcome } : {},
-            ...gate.eligibleCoordinatorSessionId ? { eligibleCoordinatorSessionId: gate.eligibleCoordinatorSessionId } : {},
-            ...blocking.length > 0 ? { blocking } : {}
-          };
-        });
-        const nodeStates = {};
-        for (const node of nodes) nodeStates[node.state] = (nodeStates[node.state] ?? 0) + 1;
-        const orphanedGateIds = /* @__PURE__ */ new Set();
-        for (const gate of gates) {
-          if (gate.state !== "awaiting_coordinator" && gate.state !== "claimed" && gate.state !== "expired") continue;
-          const downstream = edges.filter((e) => e.fromNodeId === gate.nodeId).map((e) => byId.get(e.toNodeId)).filter((n) => !!n);
-          if (downstream.length === 0) continue;
-          if (downstream.every((n) => n.state === "cancelled" || n.state === "failed" || n.state === "skipped")) {
-            orphanedGateIds.add(gate.gateId);
-          }
-        }
-        const actions = [];
-        for (const gate of gateViews) {
-          if (orphanedGateIds.has(gate.gateId)) {
-            actions.push({
-              kind: "gate_abandon",
-              gateId: gate.gateId,
-              detail: `Gate '${gate.ref ?? gate.gateId}' (${gate.action}) is ORPHANED: every task it was gating is already cancelled, failed or skipped, so releasing it would open nothing. While it stays unsettled this graph cannot reach ANY terminal state \u2014 not even cancelled. Close it with mesh_graph_gate_abandon and a reason. Abandon cancels what the gate was holding; it never passes the gate.`
-            });
-            continue;
-          }
-          if (gate.state === "awaiting_coordinator") {
-            actions.push({
-              kind: "gate_awaiting",
-              gateId: gate.gateId,
-              detail: `Gate '${gate.ref ?? gate.gateId}' (${gate.action}) is awaiting a coordinator. Claim it with mesh_graph_gate_claim, perform the action, then release it with mesh_graph_gate_release.`
-            });
-          } else if (gate.state === "claimed" && gate.leaseExpired) {
-            actions.push({
-              kind: "gate_reclaim",
-              gateId: gate.gateId,
-              detail: `Gate '${gate.ref ?? gate.gateId}' has a LAPSED lease (generation ${gate.leaseGeneration}). Reclaim it to get a higher generation; the previous owner may already have performed the external side effect, so reconcile external evidence before acting again.`
-            });
-          } else if (gate.state === "claimed") {
-            actions.push({
-              kind: "gate_claimed",
-              gateId: gate.gateId,
-              detail: `Gate '${gate.ref ?? gate.gateId}' is claimed by ${gate.leaseOwnerSessionId ?? "a coordinator"} until ${gate.leaseExpiresAt ?? "lease expiry"}; release it to advance the graph.`
-            });
-          } else if (gate.state === "expired" && gate.onTimeout === "hold") {
-            actions.push({
-              kind: "gate_reclaim",
-              gateId: gate.gateId,
-              detail: `Gate '${gate.ref ?? gate.gateId}' passed its deadline under on_timeout=hold \u2014 downstream is still held. Reclaim it with mesh_graph_gate_claim (optionally with extend_deadline_seconds) to resume, or give it up with mesh_graph_gate_abandon, which cancels what it was holding instead of opening it. A timeout is never passage: the gate cannot release itself.`
-            });
-          }
-        }
-        for (const ws of workspaces) {
-          if (ws.sagaState === "compensation_required") {
-            actions.push({
-              kind: "workspace_compensation",
-              workspaceRef: ws.workspaceRef,
-              detail: `Workspace '${ws.workspaceRef}' needs manual compensation: ${ws.lastError ?? "compensation refused"}.`
-            });
-          } else if (ws.sagaState === "declared" && !ws.baseRevision) {
-            actions.push({
-              kind: "workspace_declared_no_base",
-              workspaceRef: ws.workspaceRef,
-              detail: `Workspace '${ws.workspaceRef}' is stuck in 'declared': no base_revision was given and none could be derived from ${ws.sourceNodeId ? `source node '${ws.sourceNodeId}' (its repo is unreachable on this daemon, or git could not resolve its HEAD)` : "a source node, because the declaration named none"}. The workspace will never clone and every task bound to it stays blocked. Re-declare the workspace with an explicit base_revision (e.g. 'main')${ws.sourceNodeId ? "" : " and a source_node_id"}.`
-            });
-          }
-        }
-        return {
-          graphId: graph.graphId,
-          batchId: graph.batchId,
-          status: graph.status,
-          ...graph.missionId ? { missionId: graph.missionId } : {},
-          enqueueSurface: graph.enqueueSurface,
-          schemaVersion: graph.schemaVersion,
-          createdAt: graph.createdAt,
-          ...graph.terminalAt ? { terminalAt: graph.terminalAt } : {},
-          onDependencyFailure: policy.on_dependency_failure,
-          ...policy.policyInvalid ? { policyInvalid: policy.policyInvalid } : {},
-          ...decision ? { orchestrationDecision: decision } : {},
-          counts: {
-            tasks: graph.taskCount,
-            gates: graph.gateCount,
-            workspaces: graph.workspaceCount,
-            edges: graph.dependencyEdgeCount
-          },
-          nodeStates,
-          nodes: nodeViews,
-          edges: edgeViews,
-          gates: gateViews,
-          workspaces: workspaces.map((w) => ({
-            ref: w.workspaceRef,
-            sagaState: w.sagaState,
-            ...w.branchIdentity ? { branchIdentity: w.branchIdentity } : {},
-            ...w.createdNodeId ? { createdNodeId: w.createdNodeId } : {},
-            ...w.createdWorktreePath ? { createdWorktreePath: w.createdWorktreePath } : {},
-            ...w.lastError ? { lastError: w.lastError } : {}
-          })),
-          ...actions.length > 0 ? { nextCoordinatorAction: actions } : {}
-        };
-      });
-    }
-    function countMeshGraphViews(meshId, opts = {}) {
-      const graphStore = MeshRuntimeStore.getInstance().graphStore();
-      if (opts.graphId) {
-        const graph = graphStore.getGraph(opts.graphId);
-        return graph && graph.meshId === meshId ? 1 : 0;
-      }
-      if (opts.batchId) return graphStore.getGraphByBatchId(meshId, opts.batchId) ? 1 : 0;
-      return graphStore.countGraphsByMesh(meshId, {
-        ...opts.activeOnly === false ? {} : { statuses: IN_FLIGHT_GRAPH_STATUSES }
-      });
-    }
-    function describeEdgeCondition(conditionJson) {
-      if (typeof conditionJson !== "string" || conditionJson.length === 0) return void 0;
-      let parsed;
-      try {
-        parsed = JSON.parse(conditionJson);
-      } catch {
-        return void 0;
-      }
-      return reduceCondition(parsed);
-    }
-    function reduceCondition(raw) {
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return void 0;
-      let node = raw;
-      let negated = false;
-      if (node.not !== void 0) {
-        const inner = node.not;
-        if (!inner || typeof inner !== "object" || Array.isArray(inner)) return void 0;
-        negated = true;
-        node = inner;
-      }
-      for (const key2 of ["all", "any"]) {
-        const list = node[key2];
-        if (!Array.isArray(list) || list.length === 0) continue;
-        const clauses = [];
-        let truncated = false;
-        for (const entry of list) {
-          const clause2 = toClause(entry);
-          if (!clause2) {
-            truncated = true;
-            continue;
-          }
-          if (clauses.length >= MAX_CONDITION_CLAUSES) {
-            truncated = true;
-            continue;
-          }
-          clauses.push(clause2);
-        }
-        if (clauses.length === 0) return void 0;
-        return { combinator: key2, negated, clauses, truncated };
-      }
-      const clause = toClause(node);
-      return clause ? { combinator: "single", negated, clauses: [clause], truncated: false } : void 0;
-    }
-    function toClause(raw) {
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return void 0;
-      const node = raw;
-      const op = node.op;
-      if (op !== "exists" && op !== "eq" && op !== "ne" && op !== "in") return void 0;
-      const selector = typeof node.select === "string" && node.select ? node.select.replace(/^\//, "").replace(/\//g, ".") : "";
-      const subject = [typeof node.from === "string" ? node.from : "", selector].filter(Boolean).join(".") || "result";
-      if (op === "exists") return { subject, op };
-      return { subject, op, value: renderLiteral(node.value) };
-    }
-    function renderLiteral(value) {
-      if (typeof value === "string") return value;
-      if (Array.isArray(value)) return value.map(renderLiteral).join(", ");
-      if (value === null || value === void 0) return "null";
-      if (typeof value === "object") return "{...}";
-      return String(value);
-    }
-    function describeNodeFeatures(baseSpecJson) {
-      let spec;
-      try {
-        const parsed = JSON.parse(baseSpecJson);
-        spec = parsed && typeof parsed === "object" ? parsed : void 0;
-      } catch {
-        return ["invalid_base_spec"];
-      }
-      if (!spec) return [];
-      const features = [];
-      if (Array.isArray(spec.inputs_from) && spec.inputs_from.length > 0) features.push("inputs_from");
-      if (spec.run_if !== void 0) features.push("run_if");
-      if (typeof spec.workspace_ref === "string" && spec.workspace_ref) features.push("workspace_ref");
-      return features;
-    }
-    function readOrchestrationDecision(policyJson) {
-      if (!policyJson) return void 0;
-      try {
-        const parsed = JSON.parse(policyJson);
-        const decision = parsed?.orchestration_decision;
-        return decision && typeof decision === "object" && !Array.isArray(decision) ? decision : void 0;
-      } catch {
-        return void 0;
-      }
-    }
-    var IN_FLIGHT_GRAPH_STATUSES;
-    var MAX_CONDITION_CLAUSES;
-    var init_mesh_graph_view = __esm2({
-      "src/mesh/mesh-graph-view.ts"() {
-        "use strict";
-        init_mesh_runtime_store();
-        init_mesh_graph_derived_failure();
-        init_mesh_graph_transition_runner();
-        IN_FLIGHT_GRAPH_STATUSES = [
-          "preparing",
-          "active",
-          "waiting_gate",
-          "compensation_required"
-        ];
-        MAX_CONDITION_CLAUSES = 3;
-      }
-    });
-    function readGateSpec(node) {
-      if (!node) return {};
-      try {
-        const parsed = JSON.parse(node.baseSpecJson);
-        return parsed && typeof parsed === "object" ? parsed : {};
-      } catch {
-        return {};
-      }
-    }
-    function isoAfter(nowMs2, seconds) {
-      return new Date(nowMs2 + seconds * 1e3).toISOString();
-    }
-    function claimMeshGraphGate3(input) {
-      const store2 = MeshRuntimeStore.getInstance();
-      const nowMs2 = input.nowMs ?? Date.now();
-      const nowIso = new Date(nowMs2).toISOString();
-      const outboxEvents = [];
-      const result = store2.transaction(() => {
-        const graphStore = store2.graphStore();
-        const gate = graphStore.getGate(input.gateId);
-        if (!gate || gate.meshId !== input.meshId) return { claimed: false, reason: "gate_not_found" };
-        if (gate.eligibleCoordinatorSessionId && gate.eligibleCoordinatorSessionId !== input.coordinatorSessionId) {
-          return { claimed: false, reason: "gate_not_eligible" };
-        }
-        if (gate.state === "released" || gate.state === "cancelled") {
-          return { claimed: false, reason: `gate_terminal:${gate.state}` };
-        }
-        if (gate.state === "declared") {
-          return { claimed: false, reason: "gate_not_awaiting" };
-        }
-        const leaseLive = !!gate.leaseExpiresAt && gate.leaseExpiresAt > nowIso;
-        const sameOwner = gate.leaseOwnerSessionId === input.coordinatorSessionId;
-        const priorState = gate.state;
-        let takeoverFromClaimed = false;
-        if (priorState === "claimed" && leaseLive && !sameOwner) {
-          return { claimed: false, reason: "gate_lease_held", gate };
-        }
-        if (priorState === "expired" && gate.onTimeout !== "hold") {
-          return { claimed: false, reason: "gate_terminal:expired", gate };
-        }
-        const node = graphStore.getNode(gate.graphId, gate.nodeId);
-        const spec = readGateSpec(node);
-        const leaseSeconds = input.leaseSeconds ?? spec.lease_seconds ?? MESH_GATE_DEFAULT_LEASE_SECONDS;
-        const leaseExpiresAt = isoAfter(nowMs2, leaseSeconds);
-        let generation;
-        let fencingToken;
-        if (priorState === "claimed" && sameOwner && leaseLive) {
-          generation = gate.leaseGeneration;
-          fencingToken = gate.fencingToken;
-        } else {
-          takeoverFromClaimed = priorState === "claimed";
-          generation = gate.leaseGeneration + 1;
-          fencingToken = (0, import_crypto19.randomUUID)();
-        }
-        const deadlineAt = input.extendDeadlineSeconds && input.extendDeadlineSeconds > 0 ? isoAfter(nowMs2, input.extendDeadlineSeconds) : gate.deadlineAt;
-        const won = graphStore.patchGate(gate.gateId, {
-          state: "claimed",
-          leaseOwnerSessionId: input.coordinatorSessionId,
-          leaseGeneration: generation,
-          fencingToken,
-          leaseExpiresAt,
-          ...deadlineAt !== void 0 ? { deadlineAt } : {}
-        }, nowIso, { leaseGeneration: gate.leaseGeneration });
-        if (!won) return { claimed: false, reason: "gate_claim_race" };
-        if (node && node.state === "expired") {
-          graphStore.updateNodeState(gate.graphId, gate.nodeId, "awaiting_coordinator", nowIso);
-        }
-        if (takeoverFromClaimed) {
-          outboxEvents.push({
-            kind: "graph_gate_lease_expired",
-            payload: {
-              graphId: gate.graphId,
-              gateId: gate.gateId,
-              ref: gate.ref,
-              previousOwnerSessionId: gate.leaseOwnerSessionId,
-              previousGeneration: gate.leaseGeneration,
-              newGeneration: generation
-            }
-          });
-        }
-        outboxEvents.push({
-          kind: "graph_gate_claimed",
-          payload: {
-            graphId: gate.graphId,
-            gateId: gate.gateId,
-            ref: gate.ref,
-            action: gate.action,
-            ownerSessionId: input.coordinatorSessionId,
-            generation,
-            leaseExpiresAt
-          }
-        });
-        for (const event of outboxEvents) {
-          graphStore.insertOutboxEvent({
-            id: newMeshGraphOutboxId(),
-            meshId: gate.meshId,
-            graphId: gate.graphId,
-            kind: event.kind,
-            payload: JSON.stringify(event.payload),
-            status: "pending",
-            attemptCount: 0,
-            createdAt: nowIso,
-            updatedAt: nowIso
-          });
-        }
-        return {
-          claimed: true,
-          gate: graphStore.getGate(gate.gateId),
-          leaseGeneration: generation,
-          fencingToken,
-          leaseExpiresAt,
-          deadlineAt,
-          ambiguousExternalOutcome: takeoverFromClaimed || priorState === "expired" && gate.leaseGeneration > 0,
-          previousLeaseOwnerSessionId: gate.leaseOwnerSessionId
-        };
-      });
-      if (result.claimed) {
-        try {
-          drainMeshGraphOutbox(input.meshId);
-        } catch {
-        }
-      }
-      return result;
-    }
-    function releaseMeshGraphGate3(input) {
-      const store2 = MeshRuntimeStore.getInstance();
-      const nowMs2 = input.nowMs ?? Date.now();
-      const nowIso = new Date(nowMs2).toISOString();
-      const result = store2.transaction(() => {
-        const graphStore = store2.graphStore();
-        const gate = graphStore.getGate(input.gateId);
-        if (!gate || gate.meshId !== input.meshId) throw new Error(`gate_not_found: no gate '${input.gateId}'`);
-        const releaseDigest = sha256Hex(canonicalJson({
-          outcome: input.outcome,
-          result: input.result ?? null,
-          evidence: input.evidence ?? null,
-          patches: input.patches ?? []
-        }));
-        if (gate.releaseIdempotencyKey === input.idempotencyKey) {
-          if (gate.releaseEvidenceDigest === releaseDigest) {
-            return { released: true, duplicate: true, gate, materializedNodeIds: [] };
-          }
-          throw new Error(
-            `gate_release_conflict: idempotency key '${input.idempotencyKey}' already committed with a different release digest (gate '${input.gateId}')`
-          );
-        }
-        if (gate.state === "released") {
-          throw new Error(`gate_already_released: gate '${input.gateId}' was released under a different idempotency key`);
-        }
-        if (gate.state !== "claimed") {
-          throw new Error(`gate_not_claimed: gate '${input.gateId}' is '${gate.state}' \u2014 only a claimed gate can be released`);
-        }
-        if (input.fencingToken !== gate.fencingToken || input.leaseGeneration !== gate.leaseGeneration) {
-          throw new Error(
-            `stale_fence: gate '${input.gateId}' is at lease generation ${gate.leaseGeneration}; the presented token/generation (${input.leaseGeneration}) is stale`
-          );
-        }
-        if (gate.leaseExpiresAt && gate.leaseExpiresAt <= nowIso) {
-          throw new Error(
-            `gate_lease_expired: gate '${input.gateId}' lease expired at ${gate.leaseExpiresAt} \u2014 reclaim the gate (higher generation) and reconcile external evidence before releasing`
-          );
-        }
-        const node = graphStore.getNode(gate.graphId, gate.nodeId);
-        if (!node) throw new Error(`graph_node_not_found: gate '${input.gateId}' backs a missing node '${gate.nodeId}'`);
-        const nodes = graphStore.listNodes(gate.graphId);
-        const edges = graphStore.listEdges(gate.graphId);
-        const byId = new Map(nodes.map((n) => [n.nodeId, n]));
-        const incoming = edges.filter((e) => e.toNodeId === node.nodeId);
-        const upstreamSettled = incoming.every((e) => {
-          const sourceState = byId.get(e.fromNodeId)?.state;
-          return sourceState === "completed" || sourceState === "released" || sourceState === "skipped" && e.omitOnSkip;
-        });
-        if (!upstreamSettled) {
-          throw new Error(`gate_upstream_unsettled: gate '${input.gateId}' has unsatisfied predecessors`);
-        }
-        const directDownstream = new Set(edges.filter((e) => e.fromNodeId === node.nodeId).map((e) => e.toNodeId));
-        for (const patch of input.patches ?? []) {
-          const target = nodes.find((n) => n.nodeId === patch.node || n.ref === patch.node);
-          if (!target || !directDownstream.has(target.nodeId)) {
-            throw new Error(`gate_patch_not_downstream: '${patch.node}' is not a direct downstream node of gate '${input.gateId}'`);
-          }
-          for (const key2 of Object.keys(patch.baseSpecPatch)) {
-            if (!MESH_GATE_RELEASE_PATCH_KEYS.includes(key2)) {
-              throw new Error(`gate_patch_forbidden: key '${key2}' is outside the permitted release patch surface (design :294-299)`);
-            }
-          }
-          if (target.queueTaskId) {
-            const entry = store2.findQueueEntryById(target.meshId, target.queueTaskId);
-            if (entry && entry.status !== "pending") {
-              throw new Error(
-                `task_already_claimed: gate release cannot patch node '${target.nodeId}' \u2014 queue task '${target.queueTaskId}' is '${entry.status}' and immutable (design :334)`
-              );
-            }
-          }
-          const rawSpec = (() => {
-            try {
-              return JSON.parse(target.baseSpecJson);
-            } catch {
-              return {};
-            }
-          })();
-          graphStore.updateNodeBaseSpec(
-            target.graphId,
-            target.nodeId,
-            JSON.stringify({ ...rawSpec && typeof rawSpec === "object" ? rawSpec : {}, ...patch.baseSpecPatch }),
-            nowIso
-          );
-          const inMap = byId.get(target.nodeId);
-          if (inMap) inMap.materializationVersion += 1;
-        }
-        const won = graphStore.patchGate(gate.gateId, {
-          state: "released",
-          releaseOutcome: input.outcome,
-          releaseEvidenceJson: canonicalJson({ result: input.result ?? null, evidence: input.evidence ?? null }),
-          releaseEvidenceDigest: releaseDigest,
-          releaseIdempotencyKey: input.idempotencyKey
-        }, nowIso, { leaseGeneration: gate.leaseGeneration });
-        if (!won) throw new Error(`stale_fence: gate '${input.gateId}' moved under the release (generation race)`);
-        graphStore.updateNodeState(gate.graphId, node.nodeId, "released", nowIso);
-        const mapped = byId.get(node.nodeId);
-        if (mapped) mapped.state = "released";
-        const materializedNodeIds = advanceReleasedGateDownstream(store2, gate, node, nowIso);
-        const freshNodes = graphStore.listNodes(gate.graphId);
-        const graph = graphStore.getGraph(gate.graphId);
-        let graphCompleted = false;
-        if (graph && freshNodes.every(isTerminalEquivalent)) {
-          graphStore.updateGraphStatus(gate.graphId, "completed", nowIso, true);
-          insertGateOutbox(graphStore, gate.meshId, gate.graphId, "graph_completed", { graphId: gate.graphId }, nowIso);
-          graphCompleted = true;
-        } else if (graph?.status === "waiting_gate") {
-          const stillWaiting = graphStore.listGatesByGraph(gate.graphId).some((g3) => g3.gateId !== gate.gateId && (g3.state === "awaiting_coordinator" || g3.state === "claimed"));
-          if (!stillWaiting) graphStore.updateGraphStatus(gate.graphId, "active", nowIso);
-        }
-        insertGateOutbox(graphStore, gate.meshId, gate.graphId, "graph_gate_released", {
-          graphId: gate.graphId,
-          gateId: gate.gateId,
-          nodeId: node.nodeId,
-          ref: gate.ref,
-          action: gate.action,
-          outcome: input.outcome,
-          releaseDigest,
-          generation: gate.leaseGeneration,
-          materializedNodeIds
-        }, nowIso);
-        if (materializedNodeIds.length > 0) {
-          insertGateOutbox(graphStore, gate.meshId, gate.graphId, "queue_wake", {
-            meshId: gate.meshId,
-            reason: "graph_gate_released",
-            graphId: gate.graphId,
-            gateId: gate.gateId
-          }, nowIso);
-        }
-        return {
-          released: true,
-          duplicate: false,
-          gate: graphStore.getGate(gate.gateId),
-          materializedNodeIds,
-          // Read from the edge set this release already walked — a gate with an empty
-          // directDownstream is terminal, and terminal gates materialize nothing by design.
-          downstreamNodeCount: directDownstream.size,
-          graphCompleted
-        };
-      });
-      try {
-        drainMeshGraphOutbox(input.meshId);
-      } catch {
-      }
-      return result;
-    }
-    function advanceReleasedGateDownstream(store2, gate, gateNode, nowIso) {
-      const graphStore = store2.graphStore();
-      const nodes = graphStore.listNodes(gate.graphId);
-      const edges = graphStore.listEdges(gate.graphId);
-      const byId = new Map(nodes.map((n) => [n.nodeId, n]));
-      const mappedGate = byId.get(gateNode.nodeId);
-      if (mappedGate) mappedGate.state = "released";
-      const materialized = [];
-      let frontier = /* @__PURE__ */ new Set([gateNode.nodeId]);
-      for (let pass = 0; pass < nodes.length + 1 && frontier.size > 0; pass += 1) {
-        const nextFrontier = /* @__PURE__ */ new Set();
-        const downstreamIds = new Set(edges.filter((e) => frontier.has(e.fromNodeId)).map((e) => e.toNodeId));
-        for (const targetId of downstreamIds) {
-          const target = byId.get(targetId);
-          if (!target) continue;
-          if (target.kind === "coordinator_gate") {
-            maybeOpenCoordinatorGate(store2, target, edges, byId, nowIso);
-            continue;
-          }
-          if (target.kind !== "worker_task" || !target.queueTaskId) continue;
-          if (target.state !== "declared" && target.state !== "blocked") continue;
-          clearReleasedGateHold(store2, target, gate.gateId);
-          const outcome = settleDownstreamNode(store2, target, edges, byId, nowIso);
-          if (outcome.kind === "materialized") {
-            materialized.push(target.nodeId);
-            insertGateOutbox(graphStore, target.meshId, target.graphId, "graph_node_materialized", {
-              graphId: target.graphId,
-              nodeId: target.nodeId,
-              ref: target.ref,
-              taskId: target.queueTaskId,
-              gateId: gate.gateId,
-              materializationVersion: target.materializationVersion,
-              digest: outcome.digest,
-              receipts: outcome.receipts
-            }, nowIso);
-          } else if (outcome.kind === "skipped") {
-            nextFrontier.add(target.nodeId);
-            insertGateOutbox(graphStore, target.meshId, target.graphId, "graph_node_skipped", {
-              graphId: target.graphId,
-              nodeId: target.nodeId,
-              ref: target.ref,
-              taskId: target.queueTaskId,
-              gateId: gate.gateId,
-              reason: outcome.reason
-            }, nowIso);
-          } else if (outcome.kind === "error") {
-            insertGateOutbox(graphStore, target.meshId, target.graphId, "graph_node_materialization_failed", {
-              graphId: target.graphId,
-              nodeId: target.nodeId,
-              ref: target.ref,
-              taskId: target.queueTaskId,
-              gateId: gate.gateId,
-              blockedReason: outcome.blockedReason
-            }, nowIso);
-          } else {
-            const entry = store2.findQueueEntryById(target.meshId, target.queueTaskId);
-            if (entry && entry.status === "pending" && !entry.blockedReason) {
-              entry.blockedReason = graphMaterializationBlockReason(target.nodeId, target.materializationVersion);
-              store2.updateQueueEntry(entry);
-            }
-          }
-        }
-        frontier = nextFrontier;
-      }
-      return materialized;
-    }
-    function clearReleasedGateHold(store2, target, gateId) {
-      if (!target.queueTaskId) return;
-      const entry = store2.findQueueEntryById(target.meshId, target.queueTaskId);
-      if (!entry || entry.status !== "pending") return;
-      const hold = parseCoordinatorGateBlock(entry.blockedReason);
-      if (hold && hold.gateId === gateId) {
-        delete entry.blockedReason;
-        store2.updateQueueEntry(entry);
-      }
-    }
-    function coordinatorGateAbandonedReason(gateId) {
-      return `coordinator_gate_abandoned:${gateId}`;
-    }
-    function abandonMeshGraphGate3(input) {
-      const store2 = MeshRuntimeStore.getInstance();
-      const nowMs2 = input.nowMs ?? Date.now();
-      const nowIso = new Date(nowMs2).toISOString();
-      const result = store2.transaction(() => {
-        const graphStore = store2.graphStore();
-        const gate = graphStore.getGate(input.gateId);
-        if (!gate || gate.meshId !== input.meshId) {
-          return { abandoned: false, reason: "gate_not_found", cancelledNodeIds: [], cancelledTaskIds: [] };
-        }
-        if (gate.state === "cancelled") {
-          return { abandoned: true, reason: "gate_already_abandoned", gate, cancelledNodeIds: [], cancelledTaskIds: [] };
-        }
-        if (gate.state === "released") {
-          return { abandoned: false, reason: `gate_terminal:${gate.state}`, gate, cancelledNodeIds: [], cancelledTaskIds: [] };
-        }
-        if (!input.force && gate.state === "claimed" && gate.leaseExpiresAt && gate.leaseExpiresAt > nowIso) {
-          return { abandoned: false, reason: "gate_lease_held", gate, cancelledNodeIds: [], cancelledTaskIds: [] };
-        }
-        const abandonReason = `${coordinatorGateAbandonedReason(gate.gateId)}:${input.reason}`;
-        const won = graphStore.patchGate(gate.gateId, {
-          state: "cancelled",
-          // Drop the lease: an abandoned gate has no owner and no live fence.
-          leaseOwnerSessionId: null,
-          fencingToken: null,
-          leaseExpiresAt: null
-        }, nowIso, { leaseGeneration: gate.leaseGeneration });
-        if (!won) {
-          return { abandoned: false, reason: "gate_abandon_race", gate, cancelledNodeIds: [], cancelledTaskIds: [] };
-        }
-        const node = graphStore.getNode(gate.graphId, gate.nodeId);
-        if (node && node.state !== "cancelled") {
-          graphStore.updateNodeState(gate.graphId, gate.nodeId, "cancelled", nowIso, { failureReason: abandonReason });
-        }
-        const cancelledNodeIds = node ? cancelGateDownstreamSubtree(store2, node, nowIso, abandonReason) : [];
-        const cancelledTaskIds = [];
-        for (const nodeId of cancelledNodeIds) {
-          const target = graphStore.getNode(gate.graphId, nodeId);
-          if (target?.queueTaskId) cancelledTaskIds.push(target.queueTaskId);
-        }
-        const graph = graphStore.getGraph(gate.graphId);
-        let graphStatus;
-        const rolled = classifyGraphRollup(graphStore.listNodes(gate.graphId));
-        if (graph && rolled && graph.status !== rolled) {
-          graphStore.updateGraphStatus(gate.graphId, rolled, nowIso, true);
-          graphStatus = rolled;
-          insertGateOutbox(
-            graphStore,
-            gate.meshId,
-            gate.graphId,
-            rolled === "completed" ? "graph_completed" : rolled === "failed" ? "graph_failed" : "graph_cancelled",
-            { graphId: gate.graphId, status: rolled },
-            nowIso
-          );
-        } else if (graph?.status === "waiting_gate") {
-          const stillWaiting = graphStore.listGatesByGraph(gate.graphId).some((g3) => g3.gateId !== gate.gateId && (g3.state === "awaiting_coordinator" || g3.state === "claimed"));
-          if (!stillWaiting) {
-            graphStore.updateGraphStatus(gate.graphId, "active", nowIso);
-            graphStatus = "active";
-          }
-        }
-        insertGateOutbox(graphStore, gate.meshId, gate.graphId, "graph_gate_abandoned", {
-          graphId: gate.graphId,
-          gateId: gate.gateId,
-          nodeId: gate.nodeId,
-          ref: gate.ref,
-          action: gate.action,
-          priorState: gate.state,
-          reason: input.reason,
-          ...input.coordinatorSessionId ? { coordinatorSessionId: input.coordinatorSessionId } : {},
-          ...input.force ? { force: true } : {},
-          ...cancelledNodeIds.length > 0 ? { cancelledNodeIds } : {}
-        }, nowIso);
-        return {
-          abandoned: true,
-          gate: graphStore.getGate(gate.gateId),
-          cancelledNodeIds,
-          cancelledTaskIds,
-          ...graphStatus ? { graphStatus } : {}
-        };
-      });
-      if (result.abandoned) {
-        try {
-          drainMeshGraphOutbox(input.meshId);
-        } catch {
-        }
-      }
-      return result;
-    }
-    function sweepMeshGraphGateTimeouts(meshId, nowMs2) {
-      const store2 = MeshRuntimeStore.getInstance();
-      const now = nowMs2 ?? Date.now();
-      const nowIso = new Date(now).toISOString();
-      const result = store2.transaction(() => {
-        const graphStore = store2.graphStore();
-        const candidates = graphStore.listGatesByMesh(meshId, ["awaiting_coordinator", "claimed"]);
-        const expiredLeaseGateIds = candidates.filter((g3) => g3.state === "claimed" && g3.leaseExpiresAt && g3.leaseExpiresAt <= nowIso).map((g3) => g3.gateId);
-        const expiredGateIds = [];
-        for (const gate of candidates) {
-          if (!gate.deadlineAt || gate.deadlineAt > nowIso) continue;
-          const node = graphStore.getNode(gate.graphId, gate.nodeId);
-          const won = graphStore.patchGate(gate.gateId, { state: "expired" }, nowIso, { leaseGeneration: gate.leaseGeneration });
-          if (!won) continue;
-          if (node && node.state !== "expired") {
-            graphStore.updateNodeState(gate.graphId, gate.nodeId, "expired", nowIso);
-          }
-          let cancelledNodeIds = [];
-          if (gate.onTimeout === "cancel_downstream" && node) {
-            cancelledNodeIds = cancelGateDownstreamSubtree(store2, node, nowIso);
-          } else if (gate.onTimeout === "fail_graph") {
-            graphStore.updateGraphStatus(gate.graphId, "failed", nowIso, true);
-          }
-          insertGateOutbox(graphStore, gate.meshId, gate.graphId, "graph_gate_expired", {
-            graphId: gate.graphId,
-            gateId: gate.gateId,
-            nodeId: gate.nodeId,
-            ref: gate.ref,
-            action: gate.action,
-            policy: gate.onTimeout,
-            deadlineAt: gate.deadlineAt,
-            urgent: true,
-            ...cancelledNodeIds.length > 0 ? { cancelledNodeIds } : {}
-          }, nowIso);
-          expiredGateIds.push(gate.gateId);
-        }
-        return { expiredGateIds, expiredLeaseGateIds };
-      });
-      if (result.expiredGateIds.length > 0) {
-        try {
-          drainMeshGraphOutbox(meshId);
-        } catch {
-        }
-      }
-      if (result.expiredGateIds.length > 0 || result.expiredLeaseGateIds.length > 0) {
-        LOG.info("MeshGraph", `Gate sweep for mesh ${meshId}: expired=[${result.expiredGateIds.join(",")}] lease-lapsed=[${result.expiredLeaseGateIds.join(",")}]`);
-      }
-      return result;
-    }
-    function isCancelExempt(state) {
-      return state === "completed" || state === "released" || state === "skipped" || state === "cancelled" || state === "failed" || state === "expired";
-    }
-    function cancelGateDownstreamSubtree(store2, gateNode, nowIso, reason = `coordinator_gate_timeout:${gateNode.nodeId}`) {
-      const graphStore = store2.graphStore();
-      const nodes = graphStore.listNodes(gateNode.graphId);
-      const edges = graphStore.listEdges(gateNode.graphId);
-      const byId = new Map(nodes.map((n) => [n.nodeId, n]));
-      const cancelled = [];
-      const visited = /* @__PURE__ */ new Set([gateNode.nodeId]);
-      let frontier = [gateNode.nodeId];
-      while (frontier.length > 0) {
-        const next = [];
-        for (const id22 of frontier) {
-          for (const edge of edges.filter((e) => e.fromNodeId === id22)) {
-            if (visited.has(edge.toNodeId)) continue;
-            visited.add(edge.toNodeId);
-            const target = byId.get(edge.toNodeId);
-            if (!target || isCancelExempt(target.state)) continue;
-            graphStore.updateNodeState(target.graphId, target.nodeId, "cancelled", nowIso, {
-              failureReason: reason
-            });
-            if (target.queueTaskId) {
-              const entry = store2.findQueueEntryById(target.meshId, target.queueTaskId);
-              if (entry && entry.status === "pending") {
-                entry.status = "cancelled";
-                entry.blockedReason = reason;
-                store2.updateQueueEntry(entry);
-              }
-            }
-            cancelled.push(target.nodeId);
-            next.push(target.nodeId);
-          }
-        }
-        frontier = next;
-      }
-      return cancelled;
-    }
-    function insertGateOutbox(graphStore, meshId, graphId, kind, payload, nowIso) {
-      graphStore.insertOutboxEvent({
-        id: newMeshGraphOutboxId(),
-        meshId,
-        graphId,
-        kind,
-        payload: JSON.stringify(payload),
-        status: "pending",
-        attemptCount: 0,
-        createdAt: nowIso,
-        updatedAt: nowIso
-      });
-    }
-    var import_crypto19;
-    var MESH_GATE_DEFAULT_LEASE_SECONDS;
-    var MESH_GATE_NAMED_OUTCOMES;
-    var MESH_GATE_RELEASE_PATCH_KEYS;
-    var init_mesh_graph_gates = __esm2({
-      "src/mesh/mesh-graph-gates.ts"() {
-        "use strict";
-        import_crypto19 = require("crypto");
-        init_mesh_runtime_store();
-        init_logger();
-        init_mesh_graph_input_binding();
-        init_mesh_graph_types();
-        init_mesh_graph_derived_failure();
-        init_mesh_graph_transition_runner();
-        init_mesh_graph_transition_runner();
-        MESH_GATE_DEFAULT_LEASE_SECONDS = 900;
-        MESH_GATE_NAMED_OUTCOMES = ["passed", "failed", "rejected"];
-        MESH_GATE_RELEASE_PATCH_KEYS = MESH_NODE_PATCH_KEYS3;
-      }
-    });
-    function isCommitReachable(workspace, sha, defaultBranch) {
-      try {
-        hiddenExecFileSync("git", ["merge-base", "--is-ancestor", sha, `origin/${defaultBranch}`], {
-          cwd: workspace,
-          timeout: GIT_PROBE_TIMEOUT_MS,
-          stdio: ["ignore", "ignore", "ignore"]
-        });
-        return true;
-      } catch (e) {
-        return e && typeof e.status === "number" && e.status === 1 ? false : "unknown";
-      }
-    }
-    function readString7(value) {
-      return typeof value === "string" && value.trim().length > 0 ? value.trim() : void 0;
-    }
-    function resolveMeshBaseWorkspace(meshId) {
-      try {
-        const mesh = getMesh(meshId);
-        return readString7(mesh?.nodes?.[0]?.workspace);
-      } catch {
-        return void 0;
-      }
-    }
-    function collectUpstreamCommits(gate) {
-      const graphStore = MeshRuntimeStore.getInstance().graphStore();
-      const upstreamNodeIds = new Set(
-        graphStore.listEdges(gate.graphId).filter((edge) => edge.toNodeId === gate.nodeId).map((edge) => edge.fromNodeId)
-      );
-      if (upstreamNodeIds.size === 0) return [];
-      const commits = [];
-      const seen = /* @__PURE__ */ new Set();
-      for (const node of graphStore.listNodes(gate.graphId)) {
-        if (node.kind !== "worker_task" || !upstreamNodeIds.has(node.nodeId) || !node.queueTaskId) continue;
-        const output = graphStore.getLatestOutput(node.queueTaskId);
-        if (!output) continue;
-        let envelope;
-        try {
-          const parsed = JSON.parse(output.envelopeJson);
-          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
-          envelope = parsed;
-        } catch {
-          continue;
-        }
-        const artifacts = envelope.artifacts;
-        const rawCommits = Array.isArray(artifacts?.commits) ? artifacts.commits : [];
-        for (const raw of rawCommits) {
-          const sha = readString7(raw?.sha);
-          if (!sha || !SHA_PATTERN.test(sha) || seen.has(sha.toLowerCase())) continue;
-          seen.add(sha.toLowerCase());
-          commits.push({
-            sha,
-            ...readString7(raw?.repo) ? { repo: readString7(raw?.repo) } : {},
-            ...node.ref ? { fromRef: node.ref } : {}
-          });
-          if (commits.length >= MAX_PROBE_COMMITS) return commits;
-        }
-      }
-      return commits;
-    }
-    async function collectGateConvergenceEvidence3(meshId, gateId) {
-      try {
-        const graphStore = MeshRuntimeStore.getInstance().graphStore();
-        const gate = graphStore.getGate(gateId);
-        if (!gate || gate.meshId !== meshId) return null;
-        const workspace = resolveMeshBaseWorkspace(meshId);
-        if (!workspace) return null;
-        const upstream = collectUpstreamCommits(gate);
-        if (upstream.length === 0) return null;
-        const mesh = getMesh(meshId);
-        const defaultBranch = await resolveRootDefaultBranch(workspace, mesh);
-        const commits = upstream.map((ref) => ({
-          ...ref,
-          reachedMain: isCommitReachable(workspace, ref.sha, defaultBranch)
-        }));
-        const allReachedMain = commits.every((c) => c.reachedMain === true);
-        return {
-          workspace,
-          probedAt: (/* @__PURE__ */ new Date()).toISOString(),
-          probedAgainst: `local origin/${defaultBranch} (no fetch)`,
-          commits,
-          allReachedMain,
-          ...allReachedMain ? {
-            hint: `Every upstream commit is already reachable from origin/${defaultBranch} \u2014 the guarded work appears to have landed. Verify, then RELEASE this gate with these commits as evidence instead of re-running the action. (Evidence never auto-releases a gate; the decision is yours.)`
-          } : {}
-        };
-      } catch {
-        return null;
-      }
-    }
-    var GIT_PROBE_TIMEOUT_MS;
-    var MAX_PROBE_COMMITS;
-    var SHA_PATTERN;
-    var init_mesh_graph_gate_evidence = __esm2({
-      "src/mesh/mesh-graph-gate-evidence.ts"() {
-        "use strict";
-        init_hidden_spawn();
-        init_mesh_runtime_store();
-        init_mesh_config();
-        init_mesh_onboarding_plan();
-        GIT_PROBE_TIMEOUT_MS = 3e3;
-        MAX_PROBE_COMMITS = 12;
-        SHA_PATTERN = /^[0-9a-f]{7,40}$/i;
-      }
-    });
     function providerReportedDisabled(node, providerType) {
       return node?.nodeFacts?.providerEnablement?.[providerType]?.enabled === false;
     }
@@ -140246,7 +141155,7 @@ ${mergeTreeErr?.stderr || ""}`;
                 activeOnly: !includeTerminal,
                 ...typeof args?.limit === "number" && args.limit > 0 ? { limit: Math.min(100, args.limit) } : {}
               };
-              const graphs = buildMeshGraphViews3(meshId, viewOptions);
+              const graphs = buildMeshGraphViews(meshId, viewOptions);
               const totalGraphCount = countMeshGraphViews(meshId, viewOptions);
               const pendingCoordinatorActions = graphs.flatMap((g3) => (g3.nextCoordinatorAction ?? []).map((a) => ({ graphId: g3.graphId, ...a })));
               return { success: true, meshId, graphCount: graphs.length, totalGraphCount, graphs, pendingCoordinatorActions };
@@ -140260,7 +141169,7 @@ ${mergeTreeErr?.stderr || ""}`;
             if (!meshId || !gateId) return { success: false, error: "meshId and gateId are required" };
             const coordinatorSessionId = readString8(args?.coordinatorSessionId) || "dashboard_operator";
             try {
-              const result = claimMeshGraphGate3({
+              const result = claimMeshGraphGate({
                 meshId,
                 gateId,
                 coordinatorSessionId,
@@ -140277,7 +141186,7 @@ ${mergeTreeErr?.stderr || ""}`;
               }
               let convergenceEvidence = null;
               try {
-                convergenceEvidence = await collectGateConvergenceEvidence3(meshId, gateId);
+                convergenceEvidence = await collectGateConvergenceEvidence(meshId, gateId);
               } catch {
               }
               return {
@@ -140306,7 +141215,7 @@ ${mergeTreeErr?.stderr || ""}`;
               return { success: false, error: "meshId, gateId, leaseGeneration, fencingToken and outcome are required" };
             }
             try {
-              const result = releaseMeshGraphGate3({
+              const result = releaseMeshGraphGate({
                 meshId,
                 gateId,
                 leaseGeneration,
@@ -140328,7 +141237,7 @@ ${mergeTreeErr?.stderr || ""}`;
             const gateId = readString8(args?.gateId);
             if (!meshId || !gateId) return { success: false, error: "meshId and gateId are required" };
             try {
-              const result = abandonMeshGraphGate3({
+              const result = abandonMeshGraphGate({
                 meshId,
                 gateId,
                 reason: readString8(args?.reason) || "abandoned from dashboard",
@@ -146860,6 +147769,7 @@ ${e?.stderr || ""}`;
           ...workerMailboxSpecs,
           ...workerPeerContextSpecs,
           ...transcriptReplicaSpecs,
+          ...transcriptTransportReportSpecs,
           ...cliAgentSpecs,
           ...ideSpecs,
           ...meshCrudSpecs,
@@ -146965,6 +147875,7 @@ ${e?.stderr || ""}`;
         init_worker_mailbox2();
         init_worker_peer_context();
         init_transcript_replica();
+        init_transcript_transport_report();
         init_cli_agent();
         init_ide();
         init_mesh_crud();
@@ -149720,7 +150631,7 @@ ${e?.stderr || ""}`;
       const nowMs2 = ports.nowMs();
       const nowIso = new Date(nowMs2).toISOString();
       const leaseUntil = new Date(nowMs2 + WORKSPACE_SAGA_LEASE_MS).toISOString();
-      const fencingToken = (0, import_crypto20.randomUUID)();
+      const fencingToken = (0, import_crypto19.randomUUID)();
       const claimed = store2.transaction(() => {
         const graphStore = store2.graphStore();
         const intent2 = graphStore.getWorkspaceIntent(graphId, workspaceRef);
@@ -150219,13 +151130,13 @@ ${e?.stderr || ""}`;
         return void 0;
       }
     }
-    var import_crypto20;
+    var import_crypto19;
     var LEASE_OWNER;
     var ACTIVE_SAGA_STATES;
     var init_mesh_graph_workspace_saga = __esm2({
       "src/mesh/mesh-graph-workspace-saga.ts"() {
         "use strict";
-        import_crypto20 = require("crypto");
+        import_crypto19 = require("crypto");
         init_mesh_runtime_store();
         init_mesh_graph_types();
         init_mesh_graph_transition_runner();
@@ -150411,7 +151322,7 @@ ${e?.stderr || ""}`;
       MIN_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS: () => MIN_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
       MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS: () => MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS,
       MODEL_AXIS_SOURCES: () => MODEL_AXIS_SOURCES,
-      MeshGraphPlanError: () => MeshGraphPlanError3,
+      MeshGraphPlanError: () => MeshGraphPlanError,
       MeshGraphPolicyError: () => MeshGraphPolicyError3,
       MeshTopicActivationError: () => MeshTopicActivationError,
       MeshTopicIndex: () => MeshTopicIndex,
@@ -150486,7 +151397,7 @@ ${e?.stderr || ""}`;
       __resetMeshPublisherForTests: () => __resetMeshPublisherForTests,
       __resetTranscriptParityForTests: () => __resetTranscriptParityForTests,
       __writeTaskStatusForTests: () => __writeTaskStatusForTests,
-      abandonMeshGraphGate: () => abandonMeshGraphGate3,
+      abandonMeshGraphGate: () => abandonMeshGraphGate,
       activateKnownMeshTopics: () => activateKnownMeshTopics,
       activateMeshTopicsAtBoot: () => activateMeshTopicsAtBoot,
       activeTranscriptProjectionService: () => activeTranscriptProjectionService,
@@ -150525,7 +151436,7 @@ ${e?.stderr || ""}`;
       buildMeshActiveWork: () => buildMeshActiveWork3,
       buildMeshActiveWorkSummary: () => buildMeshActiveWorkSummary,
       buildMeshAsyncRefineJobs: () => buildMeshAsyncRefineJobs3,
-      buildMeshGraphViews: () => buildMeshGraphViews3,
+      buildMeshGraphViews: () => buildMeshGraphViews,
       buildMeshHostRequiredFailure: () => buildMeshHostRequiredFailure,
       buildMeshJsonConfigScaffold: () => buildMeshJsonConfigScaffold,
       buildMeshMagiActivity: () => buildMeshMagiActivity3,
@@ -150559,7 +151470,7 @@ ${e?.stderr || ""}`;
       cancelTask: () => cancelTask,
       canonicalDaemonId: () => canonicalDaemonId3,
       checkDiskSpace: () => checkDiskSpace,
-      claimMeshGraphGate: () => claimMeshGraphGate3,
+      claimMeshGraphGate: () => claimMeshGraphGate,
       claimNextTask: () => claimNextTask,
       classifyChatMessageVisibility: () => classifyChatMessageVisibility,
       classifyDiskSpace: () => classifyDiskSpace,
@@ -150575,17 +151486,17 @@ ${e?.stderr || ""}`;
       clearDebugTrace: () => clearDebugTrace,
       codexSessionsDir: () => codexSessionsDir,
       collectFsmSpecWarnings: () => collectFsmSpecWarnings,
-      collectGateConvergenceEvidence: () => collectGateConvergenceEvidence3,
+      collectGateConvergenceEvidence: () => collectGateConvergenceEvidence,
       collectIgnoredMagiSlotFields: () => collectIgnoredMagiSlotFields2,
       collectPendingApprovals: () => collectPendingApprovals3,
       collectSyncTargetTypes: () => collectSyncTargetTypes,
-      commitMeshGraphPlan: () => commitMeshGraphPlan3,
+      commitMeshGraphPlan: () => commitMeshGraphPlan,
       compareGitSnapshots: () => compareGitSnapshots,
       compensateWorkspaceIntent: () => compensateWorkspaceIntent,
       computeBeaconDiagnostics: () => computeBeaconDiagnostics,
       computeMeshGraphPlanDigest: () => computeMeshGraphPlanDigest,
-      computeMeshMissionStats: () => computeMeshMissionStats3,
-      computeMeshTaskStats: () => computeMeshTaskStats3,
+      computeMeshMissionStats: () => computeMeshMissionStats,
+      computeMeshTaskStats: () => computeMeshTaskStats,
       computeProviderTreeDigest: () => computeProviderTreeDigest,
       configSettingsPolicy: () => configSettingsPolicy,
       configureDebugTraceStore: () => configureDebugTraceStore,
@@ -150681,7 +151592,7 @@ ${e?.stderr || ""}`;
       filterProvidersByRequiredTags: () => filterProvidersByRequiredTags3,
       filterUserFacingChatMessages: () => filterUserFacingChatMessages,
       findCdpManager: () => findCdpManager,
-      findTasksOrphanedBySessionStop: () => findTasksOrphanedBySessionStop2,
+      findTasksOrphanedBySessionStop: () => findTasksOrphanedBySessionStop,
       flattenMessageParts: () => flattenMessageParts,
       fleetStatusParityCounters: () => fleetStatusParityCounters,
       fleetStatusPolicy: () => fleetStatusPolicy,
@@ -150726,7 +151637,7 @@ ${e?.stderr || ""}`;
       getMesh: () => getMesh,
       getMeshByRepo: () => getMeshByRepo,
       getMeshMagiActivityByGroup: () => getMeshMagiActivityByGroup3,
-      getMeshMission: () => getMeshMission3,
+      getMeshMission: () => getMeshMission,
       getMeshMissions: () => getMeshMissions,
       getMeshQueueRevision: () => getMeshQueueRevision,
       getMeshQueueStats: () => getMeshQueueStats,
@@ -150890,7 +151801,7 @@ ${e?.stderr || ""}`;
       normalizeRepoIdentity: () => normalizeRepoIdentity,
       normalizeRepoMeshDeclarativeConfig: () => normalizeRepoMeshDeclarativeConfig,
       normalizeSessionModalFields: () => normalizeSessionModalFields,
-      notifyCoordinatorOfOrphanedPins: () => notifyCoordinatorOfOrphanedPins2,
+      notifyCoordinatorOfOrphanedPins: () => notifyCoordinatorOfOrphanedPins,
       notifyCoordinatorOfParkedTaskDropped: () => notifyCoordinatorOfParkedTaskDropped,
       notifyMeshCoordinator: () => notifyMeshCoordinator,
       observeFleetStatusWsProjection: () => observeFleetStatusWsProjection,
@@ -150911,7 +151822,7 @@ ${e?.stderr || ""}`;
       partitionChannelEntries: () => partitionChannelEntries,
       partitionSessionHostDiagnosticsSessions: () => import_session_host_core3.partitionSessionHostDiagnosticsSessions,
       partitionSessionHostRecords: () => import_session_host_core3.partitionSessionHostRecords,
-      patchGraphNodeAndRetry: () => patchGraphNodeAndRetry3,
+      patchGraphNodeAndRetry: () => patchGraphNodeAndRetry,
       planMeshOnboarding: () => planMeshOnboarding,
       preflightDiskSpace: () => preflightDiskSpace,
       prepareSessionChatTailUpdate: () => prepareSessionChatTailUpdate,
@@ -150937,7 +151848,7 @@ ${e?.stderr || ""}`;
       pruneDeadMeshCoordinators: () => pruneDeadMeshCoordinators,
       pruneOperatingNotes: () => pruneOperatingNotes,
       pruneRetiredMeshConsumers: () => pruneRetiredMeshConsumers,
-      pruneStaleDirectDispatches: () => pruneStaleDirectDispatches3,
+      pruneStaleDirectDispatches: () => pruneStaleDirectDispatches,
       publishMeshRecord: () => publishMeshRecord,
       publishMeshTopicEntry: () => publishMeshTopicEntry,
       quotaRiskSnapshotForCandidates: () => quotaRiskSnapshotForCandidates,
@@ -150984,7 +151895,7 @@ ${e?.stderr || ""}`;
       recoverExpiredWorkspaceSagas: () => recoverExpiredWorkspaceSagas,
       registerExtensionProviders: () => registerExtensionProviders,
       registerMeshCoordinator: () => registerMeshCoordinator,
-      releaseMeshGraphGate: () => releaseMeshGraphGate3,
+      releaseMeshGraphGate: () => releaseMeshGraphGate,
       removeMagiKindPanel: () => removeMagiKindPanel2,
       removeNode: () => removeNode,
       removeWorktree: () => removeWorktree,
@@ -151122,7 +152033,7 @@ ${e?.stderr || ""}`;
       updateNode: () => updateNode,
       updateSessionTaskStatus: () => updateSessionTaskStatus,
       updateTaskStatus: () => updateTaskStatus,
-      upsertMeshMission: () => upsertMeshMission3,
+      upsertMeshMission: () => upsertMeshMission,
       upsertSavedProviderSession: () => upsertSavedProviderSession,
       validateAcpProviderManifest: () => validateAcpProviderManifest,
       validateChangeImpactConfig: () => validateChangeImpactConfig,
@@ -151633,96 +152544,7 @@ ${e?.stderr || ""}`;
     init_routing();
     init_suppression();
     init_mesh_topic_index();
-    init_logger();
-    init_dist();
-    init_mesh_work_queue();
-    init_mesh_events_utils();
-    init_deliver();
-    init_config();
-    var MAX_LISTED_ORPHANS = 5;
-    function titleForTask(task) {
-      const raw = readNonEmptyString(task.message) || "";
-      const firstLine = raw.split("\n").map((s2) => s2.trim()).find(Boolean) || "(no message)";
-      return firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine;
-    }
-    function findTasksOrphanedBySessionStop2(meshId, stoppedSessionId, opts) {
-      const sessionId = readNonEmptyString(stoppedSessionId);
-      if (!sessionId) return [];
-      let queue;
-      try {
-        queue = getQueue(meshId, { status: ["pending"] });
-      } catch (e) {
-        LOG.warn("MeshQueue", `Orphan-pin scan failed to read queue for mesh ${meshId}: ${e?.message || e}`);
-        return [];
-      }
-      const excludeTaskId = readNonEmptyString(opts?.excludeTaskId);
-      const orphans = [];
-      for (const task of queue) {
-        if (excludeTaskId && task.id === excludeTaskId) continue;
-        const pin = readNonEmptyString(task.targetSessionId);
-        if (!pin || !sessionIdsEquivalent(pin, sessionId)) continue;
-        orphans.push({
-          taskId: task.id,
-          title: titleForTask(task),
-          targetSessionId: pin,
-          ...readNonEmptyString(task.targetNodeId) ? { targetNodeId: task.targetNodeId } : {},
-          ...readNonEmptyString(task.missionId) ? { missionId: task.missionId } : {}
-        });
-      }
-      return orphans;
-    }
-    function buildOrphanedPinNotice2(orphans, stoppedSessionId, cause) {
-      const listed = orphans.slice(0, MAX_LISTED_ORPHANS);
-      const overflow = orphans.length - listed.length;
-      const lines = listed.map((o) => `  - ${o.taskId}: "${o.title}"`).join("\n");
-      const more = overflow > 0 ? `
-  ...and ${overflow} more.` : "";
-      const plural2 = orphans.length === 1 ? "task is" : "tasks are";
-      const firstId = listed[0]?.taskId || "<task_id>";
-      return `[System] ${orphans.length} queued mesh ${plural2} now ORPHANED and will never be delivered.
-Cause: ${cause} stopped worker session '${stoppedSessionId}', and these pending tasks are hard-pinned to that session (targetSessionId), so they can neither be delivered (the session is gone) nor start a new session (the pin blocks auto-launch, reported as autoLaunch.reason='target_session_constraint').
-Orphaned:
-${lines}${more}
-Fix \u2014 for each task, clear the dead pin so it can be re-dispatched:
-  mesh_queue_requeue(task_id='${firstId}', keep_target_session=false, clear_target_node=false, reason='pinned session stopped')
-That releases the session pin (keeping the node pin) and the task becomes claimable by a live session on the same node; add clear_target_node=true to free it to any node, or pass target_session_id=<new session> to re-pin it to a replacement session. If the task is no longer wanted, cancel it with mesh_queue_cancel instead.
-The pin is NOT cleared automatically: a pin often encodes required context continuity, so re-targeting is your decision, not the daemon's.`;
-    }
-    function notifyCoordinatorOfOrphanedPins2(meshId, stoppedSessionId, opts) {
-      const orphans = findTasksOrphanedBySessionStop2(meshId, stoppedSessionId, { excludeTaskId: opts?.excludeTaskId });
-      if (orphans.length === 0) return orphans;
-      const cause = readNonEmptyString(opts?.cause) || "A cancellation";
-      const coordinatorMessage = buildOrphanedPinNotice2(orphans, stoppedSessionId, cause);
-      const nodeLabel = readNonEmptyString(opts?.nodeId) || readNonEmptyString(orphans[0]?.targetNodeId) || meshId;
-      const targetCoordinatorDaemonId = readNonEmptyString(getMachineId());
-      const targetCoordinatorSessionId = readNonEmptyString(opts?.coordinatorSessionId);
-      LOG.warn("MeshQueue", `CANCEL-ORPHANS-PINNED-TASK: stopping session ${stoppedSessionId} (mesh ${meshId}) orphaned ${orphans.length} pinned pending task(s): ${orphans.map((o) => o.taskId).join(", ")}`);
-      try {
-        notifyMeshCoordinator({
-          event: "mesh:dispatch_blocked",
-          meshId,
-          nodeLabel,
-          ...readNonEmptyString(opts?.nodeId) ? { nodeId: opts.nodeId } : {},
-          metadataEvent: {
-            source: "mesh_session_stop_orphaned_pins",
-            // taskId anchors the pending-event fingerprint (buildPendingEventFingerprint),
-            // so one notification per orphaned task set rather than a global collapse.
-            taskId: orphans[0].taskId,
-            reason: "pinned_session_stopped",
-            orphanedTaskIds: orphans.map((o) => o.taskId),
-            stoppedSessionId,
-            coordinatorMessage
-          },
-          coordinatorMessage,
-          queuedAt: Date.now(),
-          ...targetCoordinatorDaemonId ? { targetCoordinatorDaemonId } : {},
-          ...targetCoordinatorSessionId ? { targetCoordinatorSessionId } : {}
-        });
-      } catch (e) {
-        LOG.warn("MeshQueue", `Failed to surface orphaned-pin notification for session ${stoppedSessionId} (mesh ${meshId}): ${e?.message || e}`);
-      }
-      return orphans;
-    }
+    init_mesh_orphaned_pin_notify();
     init_mesh_turn_presentation();
     init_contracts();
     init_mesh_events_utils();
@@ -158982,7 +159804,7 @@ async (params) => {
         return {
           mode: "fixture_replay_suite",
           pass: results.every((item) => item.pass),
-          failures: results.flatMap((item) => item.failures.map((failure5) => `${item.fixtureName}: ${failure5}`)),
+          failures: results.flatMap((item) => item.failures.map((failure6) => `${item.fixtureName}: ${failure6}`)),
           result: firstFailure.result,
           assertions: firstFailure.assertions,
           fixture: firstFailure.fixture,
@@ -162226,7 +163048,7 @@ data: ${JSON.stringify(msg.data)}
         });
       }
     };
-    var import_crypto21 = require("crypto");
+    var import_crypto20 = require("crypto");
     var import_session_host_core12 = require_dist();
     var BASE_KEY_SEQUENCES = {
       enter: "\r",
@@ -162324,7 +163146,7 @@ data: ${JSON.stringify(msg.data)}
         const sessionId = String(options.sessionId || "").trim();
         if (!sessionId) throw new Error("sessionId is required");
         const mode = options.mode || "read";
-        const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto21.randomUUID)().slice(0, 8)}`;
+        const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto20.randomUUID)().slice(0, 8)}`;
         const client = options.client || new import_session_host_core12.SessionHostClient({ endpoint: options.endpoint });
         await client.connect();
         const attachResponse = await client.request({
@@ -163678,7 +164500,7 @@ data: ${JSON.stringify(msg.data)}
       }
       LOG.info("Seqscribe", `fleet secret stored (v${version2})`);
     }
-    var import_crypto22 = require("crypto");
+    var import_crypto21 = require("crypto");
     var import_fs26 = require("fs");
     var import_path26 = require("path");
     init_config();
@@ -163740,7 +164562,7 @@ data: ${JSON.stringify(msg.data)}
       LOG.info("Seqscribe", "local authority secret minted (standalone, no fleet secret configured)");
     }
     function mintLocalAuthoritySecret() {
-      return (0, import_crypto22.randomBytes)(32).toString("hex");
+      return (0, import_crypto21.randomBytes)(32).toString("hex");
     }
     function loadOrCreateLocalAuthoritySecret(env2) {
       const existing = loadStoredLocalAuthoritySecret(env2);
@@ -164277,7 +165099,7 @@ data: ${JSON.stringify(msg.data)}
         return null;
       }
       assertNoPlaintextHintTopics(handle.topics);
-      const counters6 = emptyCounters();
+      const counters8 = emptyCounters();
       const scopeOf = opts.topicScope ?? ((vectors) => [
         .../* @__PURE__ */ new Set([
           ...defaultBeaconTopicScope(vectors),
@@ -164291,16 +165113,16 @@ data: ${JSON.stringify(msg.data)}
       const doPut = async (rawReport) => {
         const projected = projectBeaconReport(rawReport);
         if (!projected) {
-          counters6.rejected++;
+          counters8.rejected++;
           LOG.warn("Seqscribe", "beacon report failed the content projection; not sent");
           return;
         }
         lastScope = scopeOf(projected.vectors);
         try {
           await transport.put(projected);
-          counters6.put++;
+          counters8.put++;
         } catch (err) {
-          counters6.putFailed++;
+          counters8.putFailed++;
           LOG.info(
             "Seqscribe",
             `beacon put failed (advisory, ignored): ${err instanceof Error ? err.message : String(err)}`
@@ -164311,10 +165133,10 @@ data: ${JSON.stringify(msg.data)}
       const rawQuery = async (topics) => {
         try {
           const res = await transport.get(topics);
-          counters6.get++;
+          counters8.get++;
           return res;
         } catch (err) {
-          counters6.getFailed++;
+          counters8.getFailed++;
           LOG.debug(
             "Seqscribe",
             `beacon get failed (advisory, ignored): ${err instanceof Error ? err.message : String(err)}`
@@ -164339,7 +165161,7 @@ data: ${JSON.stringify(msg.data)}
         const mid = Math.ceil(topics.length / 2);
         const left = topics.slice(0, mid);
         const right = topics.slice(mid);
-        counters6.splitRetries++;
+        counters8.splitRetries++;
         const [leftRes, rightRes] = await Promise.all([
           queryWithSplitRetry(left, queriesUsed),
           queryWithSplitRetry(right, queriesUsed)
@@ -164361,7 +165183,7 @@ data: ${JSON.stringify(msg.data)}
           throw err;
         }
         if (truncated > 0) {
-          counters6.truncated += truncated;
+          counters8.truncated += truncated;
           LOG.info(
             "Seqscribe",
             `beacon get: ${truncated} peer report(s) remained truncated after split-retry (${queriesUsed.count} quer${queriesUsed.count === 1 ? "y" : "ies"})`
@@ -164409,10 +165231,10 @@ data: ${JSON.stringify(msg.data)}
           }
           LOG.info(
             "Seqscribe",
-            `beacon stopped writer=${handle.writerId} put=${counters6.put}/${counters6.put + counters6.putFailed} get=${counters6.get}/${counters6.get + counters6.getFailed} splitRetries=${counters6.splitRetries} truncated=${counters6.truncated} rejected=${counters6.rejected}`
+            `beacon stopped writer=${handle.writerId} put=${counters8.put}/${counters8.put + counters8.putFailed} get=${counters8.get}/${counters8.get + counters8.getFailed} splitRetries=${counters8.splitRetries} truncated=${counters8.truncated} rejected=${counters8.rejected}`
           );
         },
-        counters: () => ({ ...counters6 }),
+        counters: () => ({ ...counters8 }),
         seedKnownBoard(seed) {
           if (stopped || !Array.isArray(seed?.reports)) return;
           const clean2 = seed.reports.map((report) => projectBeaconReport(report)).filter((report) => report !== null);
@@ -164429,7 +165251,7 @@ data: ${JSON.stringify(msg.data)}
               topicScope,
               capturedAt: Date.now()
             };
-            if (truncated > 0) counters6.truncated += truncated;
+            if (truncated > 0) counters8.truncated += truncated;
             LOG.info(
               "Seqscribe",
               `beacon auth seed writer=${handle.writerId} peers=${clean2.length} topics=${topicScope.length} truncated=${truncated}`
@@ -164752,7 +165574,7 @@ data: ${JSON.stringify(msg.data)}
     }
     init_mesh_publisher();
     init_mesh_record();
-    var import_crypto23 = require("crypto");
+    var import_crypto22 = require("crypto");
     init_dist();
     init_dist();
     init_policy();
@@ -165945,23 +166767,23 @@ data: ${JSON.stringify(msg.data)}
       };
     }
     function runPostCommitEffects(ports, effects, ctx) {
-      const counters6 = { executed: 0, missingPort: 0, failed: 0 };
+      const counters8 = { executed: 0, missingPort: 0, failed: 0 };
       const run2 = (kind, fn) => {
         if (!fn) {
-          counters6.missingPort++;
+          counters8.missingPort++;
           return;
         }
         try {
           const result = fn();
           if (result && typeof result.then === "function") {
             result.then(void 0, (error48) => {
-              counters6.failed++;
+              counters8.failed++;
               ctx.onError(kind, error48);
             });
           }
-          counters6.executed++;
+          counters8.executed++;
         } catch (error48) {
-          counters6.failed++;
+          counters8.failed++;
           ctx.onError(kind, error48);
         }
       };
@@ -165993,7 +166815,7 @@ data: ${JSON.stringify(msg.data)}
       for (const task of ctx.terminalTasks) {
         run2("graph_advance", ports.afterTaskTerminal ? () => ports.afterTaskTerminal(task.meshId, task.taskId) : void 0);
       }
-      return counters6;
+      return counters8;
     }
     init_types2();
     var DEFAULT_LOG = { info: () => {
@@ -166018,7 +166840,7 @@ data: ${JSON.stringify(msg.data)}
       const log = deps.log ?? DEFAULT_LOG;
       const ports = deps.ports ?? {};
       const autoFlush = deps.autoFlush !== false;
-      const counters6 = {
+      const counters8 = {
         observed: 0,
         applied: 0,
         recorded: 0,
@@ -166134,24 +166956,24 @@ data: ${JSON.stringify(msg.data)}
         const ref = evidence.attemptRef;
         if (!ref) {
           txn(() => store2.insertEvent(evidenceRow(evidence, { verdict: "rejected", rejection: "no_attempt", fromState: null, toState: null, attempt: null, notes: ["forward_without_attempt_ref"] }, nowMs2, opts)));
-          counters6.rejected++;
+          counters8.rejected++;
           return { verdict: "rejected", rejection: "no_attempt", attempt: null, effects: [] };
         }
         const entry = buildForwardedEvidenceEntry(evidence, { attemptId: ref.attemptId, generation: ref.generation, ownerDaemonId: owner.daemonId });
         txn(() => store2.insertEvent(evidenceRow(evidence, { verdict: "forwarded", fromState: null, toState: null, attempt: null, notes: [] }, nowMs2, opts, { meshId: owner.meshId, entry })));
-        counters6.forwarded++;
+        counters8.forwarded++;
         if (autoFlush) void flushPublish();
         return { verdict: "forwarded", attempt: null, effects: [] };
       }
       function observe(evidence, opts = {}) {
-        counters6.observed++;
+        counters8.observed++;
         if (!isTurnEvidence(evidence)) {
-          counters6.rejected++;
+          counters8.rejected++;
           log.error(`turn-ledger: refused malformed evidence (${String(evidence?.kind)}) \u2014 fails the mesh-shared content guard`);
           return { verdict: "rejected", rejection: "invalid_evidence", attempt: null, effects: [] };
         }
         if (store2.hasEvent(evidence.eventId)) {
-          counters6.duplicates++;
+          counters8.duplicates++;
           return { verdict: "duplicate", attempt: null, effects: [] };
         }
         const nowMs2 = now();
@@ -166166,15 +166988,15 @@ data: ${JSON.stringify(msg.data)}
           steps = txn(() => applyStep(evidence, attempt, opts, nowMs2));
         } catch (error48) {
           if (error48 instanceof DuplicateEvidence) {
-            counters6.duplicates++;
+            counters8.duplicates++;
             return { verdict: "duplicate", attempt: null, effects: [] };
           }
           throw error48;
         }
         const { result } = steps[steps.length - 1];
-        if (result.verdict === "applied") counters6.applied++;
-        else if (result.verdict === "recorded") counters6.recorded++;
-        else counters6.rejected++;
+        if (result.verdict === "applied") counters8.applied++;
+        else if (result.verdict === "recorded") counters8.recorded++;
+        else counters8.rejected++;
         let publish = false;
         for (const step of steps) {
           if (step.result.verdict === "rejected") continue;
@@ -166183,11 +167005,11 @@ data: ${JSON.stringify(msg.data)}
             nowMs: nowMs2,
             terminalTasks: step.host.terminalTasks,
             onError: (kind, error48) => {
-              counters6.postCommitFailed++;
+              counters8.postCommitFailed++;
               log.error(`turn-ledger: post-commit ${kind} failed for ${step.evidence.eventId}: ${error48 instanceof Error ? error48.message : String(error48)}`);
             }
           });
-          counters6.missingPorts += post.missingPort;
+          counters8.missingPorts += post.missingPort;
           if (isPublishableAttempt(step.result.attempt)) publish = true;
           for (const effect of step.result.effects) {
             if (effect.kind !== "reevaluate" || !effect.evidenceId) continue;
@@ -166206,7 +167028,7 @@ data: ${JSON.stringify(msg.data)}
         };
       }
       function notifyMeshEvent(notice) {
-        const eventId = notice.eventId ?? `mesh_event:${(0, import_crypto23.randomUUID)()}`;
+        const eventId = notice.eventId ?? `mesh_event:${(0, import_crypto22.randomUUID)()}`;
         const at = notice.at ?? now();
         const notifyKind = notice.notify ?? "mesh_event";
         const entry = {
@@ -166297,12 +167119,12 @@ data: ${JSON.stringify(msg.data)}
               const id22 = await publisher.publish(target.meshId, target.entry, target.ref ? { ref: target.ref } : void 0);
               store2.markPublished(row.eventId, id22.writer, id22.seq);
               report.published++;
-              counters6.published++;
+              counters8.published++;
               progressed++;
             } catch (error48) {
               blocked.add(target.meshId);
               report.failed++;
-              counters6.publishFailed++;
+              counters8.publishFailed++;
               log.error(`turn-ledger: publish failed mesh=${target.meshId} eventId=${row.eventId}: ${error48 instanceof Error ? error48.message : String(error48)} \u2014 stays pending`);
             }
           }
@@ -166352,7 +167174,7 @@ data: ${JSON.stringify(msg.data)}
         flushPublish,
         republishPending: flushPublish,
         pendingPublishCount: (olderThanMs) => store2.countPendingPublish(olderThanMs),
-        counters: () => ({ ...counters6 })
+        counters: () => ({ ...counters8 })
       };
     }
     var DuplicateEvidence = class extends Error {
@@ -167273,7 +168095,7 @@ data: ${JSON.stringify(msg.data)}
       const registrations = /* @__PURE__ */ new Map();
       const abort = new AbortController();
       let disposed = false;
-      const counters6 = {
+      const counters8 = {
         meshes: 0,
         ingestEntries: 0,
         ingestFailures: 0,
@@ -167285,7 +168107,7 @@ data: ${JSON.stringify(msg.data)}
         registerFailures: 0
       };
       const ownWriter = node.writerId;
-      if (!opts.skipRetiredPrune) counters6.retiredCursorsPruned = pruneRetiredMeshConsumers(node);
+      if (!opts.skipRetiredPrune) counters8.retiredCursorsPruned = pruneRetiredMeshConsumers(node);
       function ensureMesh(meshId) {
         if (disposed) return false;
         const topic = node.topics.find((d) => meshIdFromEventsTopic(d.topic) === meshId)?.topic;
@@ -167295,39 +168117,39 @@ data: ${JSON.stringify(msg.data)}
         try {
           if (cursors.has("index")) {
             unsubs.push(node.node.onEntry(topic, MESH_INDEX_CONSUMER2, (entry) => {
-              counters6.indexEntries++;
+              counters8.indexEntries++;
               try {
                 handlers.index(toCursorEntry(meshId, topic, entry, ownWriter));
               } catch (error48) {
-                counters6.indexFailures++;
+                counters8.indexFailures++;
                 throw error48;
               }
             }));
           }
           if (cursors.has("ingest")) {
             unsubs.push(node.node.onEntry(topic, TURN_INGEST_CONSUMER, async (entry) => {
-              counters6.ingestEntries++;
+              counters8.ingestEntries++;
               try {
                 await handlers.ingest(toCursorEntry(meshId, topic, entry, ownWriter));
               } catch (error48) {
-                counters6.ingestFailures++;
+                counters8.ingestFailures++;
                 throw error48;
               }
             }));
           }
           if (cursors.has("deliver")) {
             unsubs.push(node.node.onEntry(topic, TURN_DELIVER_CONSUMER, async (entry) => {
-              counters6.deliverEntries++;
+              counters8.deliverEntries++;
               try {
                 await handlers.deliver(toCursorEntry(meshId, topic, entry, ownWriter), abort.signal);
               } catch (error48) {
-                counters6.deliverFailures++;
+                counters8.deliverFailures++;
                 throw error48;
               }
             }));
           }
         } catch (error48) {
-          counters6.registerFailures++;
+          counters8.registerFailures++;
           for (const off of unsubs) {
             try {
               off();
@@ -167338,7 +168160,7 @@ data: ${JSON.stringify(msg.data)}
           return false;
         }
         registrations.set(topic, unsubs);
-        counters6.meshes = registrations.size;
+        counters8.meshes = registrations.size;
         return true;
       }
       function ensureKnownMeshes() {
@@ -167359,7 +168181,7 @@ data: ${JSON.stringify(msg.data)}
         ensureMesh,
         ensureKnownMeshes,
         meshIds: () => [...registrations.keys()].map((t) => meshIdFromEventsTopic(t) ?? t).sort(),
-        counters: () => ({ ...counters6 }),
+        counters: () => ({ ...counters8 }),
         dispose() {
           if (disposed) return;
           disposed = true;
@@ -167377,7 +168199,7 @@ data: ${JSON.stringify(msg.data)}
             }
           }
           registrations.clear();
-          counters6.meshes = 0;
+          counters8.meshes = 0;
         }
       };
     }
@@ -167402,7 +168224,7 @@ data: ${JSON.stringify(msg.data)}
       );
       return "shadow";
     }
-    var counters4 = {
+    var counters5 = {
       written: 0,
       failed: 0,
       dropped: 0,
@@ -167471,7 +168293,7 @@ data: ${JSON.stringify(msg.data)}
         });
         const ceiling = resolveConstants().MAX_ENTRY_BYTES;
         if (estimated > ceiling) {
-          counters4.oversized++;
+          counters5.oversized++;
           warnOnce4(
             `fleet.status shadow skipped an oversized record (further occurrences logged once): estimated=${estimated}B ceiling=${ceiling}B. The entry is a fixed set of scalars \u2014 this is a producer-shape bug, not a transport one.`
           );
@@ -167484,14 +168306,14 @@ data: ${JSON.stringify(msg.data)}
         const attempt = inflightGate.run(
           () => node.node.log(FLEET_STATUS_TOPIC).append(FLEET_STATUS_ENTRY_KIND, payload),
           () => {
-            counters4.written++;
+            counters5.written++;
             if (activeNode2 === configuredNode && activeMode === "shadow" && configurationGeneration === configuredGeneration && thisAppendGeneration >= lastAppendedGeneration) {
               lastAppendedGeneration = thisAppendGeneration;
               lastAppendedEntryForParity = paritySnapshot;
             }
           },
           (error48) => {
-            counters4.failed++;
+            counters5.failed++;
             warnOnce4(
               `fleet.status shadow append failed (further failures logged once): ${error48 instanceof Error ? error48.message : String(error48)}`
             );
@@ -167499,7 +168321,7 @@ data: ${JSON.stringify(msg.data)}
         );
         if (!attempt.admitted) {
           if (attempt.reason === "shed") {
-            counters4.dropped++;
+            counters5.dropped++;
             warnOnce4(
               `fleet.status shadow shedding load \u2014 ${MAX_INFLIGHT} appends in flight; status records are being dropped from the RING only (the WS status_report is unaffected)`
             );
@@ -167509,7 +168331,7 @@ data: ${JSON.stringify(msg.data)}
         }
         return true;
       } catch (error48) {
-        counters4.failed++;
+        counters5.failed++;
         warnOnce4(
           `fleet.status shadow threw synchronously (further throws logged once): ${error48 instanceof Error ? error48.message : String(error48)}`
         );
@@ -167551,7 +168373,7 @@ data: ${JSON.stringify(msg.data)}
     function emptyBuckets() {
       return Object.fromEntries(MISMATCH_KINDS.map((kind) => [kind, 0]));
     }
-    var counters5 = {
+    var counters6 = {
       runs: 0,
       compared: 0,
       mismatches: 0,
@@ -167591,18 +168413,18 @@ data: ${JSON.stringify(msg.data)}
     function summaryLine() {
       return [
         "fleet.status parity summary",
-        `runs=${counters5.runs}`,
-        `compared=${counters5.compared}`,
-        `mismatches=${counters5.mismatches}`,
-        ...MISMATCH_KINDS.map((kind) => `${kind}=${counters5.buckets[kind]}`)
+        `runs=${counters6.runs}`,
+        `compared=${counters6.compared}`,
+        `mismatches=${counters6.mismatches}`,
+        ...MISMATCH_KINDS.map((kind) => `${kind}=${counters6.buckets[kind]}`)
       ].join(" ");
     }
     function recordVerdict(result) {
-      counters5.runs++;
-      if (result.compared) counters5.compared++;
+      counters6.runs++;
+      if (result.compared) counters6.compared++;
       for (const kind of result.mismatches) {
-        counters5.buckets[kind]++;
-        counters5.mismatches++;
+        counters6.buckets[kind]++;
+        counters6.mismatches++;
       }
       if (result.mismatches.length > 0) summaryPending = true;
       const now = activeClock();
@@ -167688,14 +168510,14 @@ data: ${JSON.stringify(msg.data)}
       };
     }
     function fleetStatusParityCounters() {
-      return { ...counters5, buckets: { ...counters5.buckets } };
+      return { ...counters6, buckets: { ...counters6.buckets } };
     }
     function __resetFleetStatusParityForTests() {
       configureFleetStatusParity(null);
-      counters5.runs = 0;
-      counters5.compared = 0;
-      counters5.mismatches = 0;
-      counters5.buckets = emptyBuckets();
+      counters6.runs = 0;
+      counters6.compared = 0;
+      counters6.mismatches = 0;
+      counters6.buckets = emptyBuckets();
       activeClock = () => Date.now();
       activeLog = (message) => LOG.info("Seqscribe", message);
       summaryIntervalMs = FLEET_STATUS_PARITY_SUMMARY_INTERVAL_MS;
@@ -168838,6 +169660,7 @@ ${notice.notice}${supersededHint}`;
     init_cli_detector();
     init_logger();
     init_transcript_parity();
+    init_transcript_transport_selection();
     function buildLocalSeqscribeStats(rt, inputs) {
       if (!rt) return null;
       try {
@@ -168885,7 +169708,17 @@ ${notice.notice}${supersededHint}`;
           // is promoted to persistent only on a session key's SECOND
           // comparison). Only three bucketed fields survive into the cloud
           // frame; the rest land on the local-only transcriptParityDetail.
-          transcriptParity
+          transcriptParity,
+          // G2 transport-selection + zombie-recovery — local-only, see
+          // `stats.ts`'s doc comment on `transcriptTransportSelection` for
+          // why. `replicaSelected`/`legacySelected` are this process's own
+          // counters (transcript-transport-selection.ts, fed by the
+          // `report_transcript_transport` low-family command);
+          // `zombieRecovered` is injected from daemon-cloud, see above.
+          transcriptTransportSelection: {
+            ...transcriptTransportSelectionCounters(),
+            zombieRecovered: inputs.zombieRecovered?.() ?? 0
+          }
         });
       } catch (error48) {
         LOG.warn(
@@ -168897,8 +169730,8 @@ ${notice.notice}${supersededHint}`;
     }
     init_deliver();
     function readMeshDeliveryCounters() {
-      const counters6 = meshNoticeRuntime.current()?.counters();
-      return counters6 ? { ...counters6 } : null;
+      const counters8 = meshNoticeRuntime.current()?.counters();
+      return counters8 ? { ...counters8 } : null;
     }
     function bootCommandPlane(s4) {
       const { cfg, providerLoader, seqscribe, bus } = s4;
@@ -168977,7 +169810,10 @@ ${notice.notice}${supersededHint}`;
         getCdpLogFn: (ideType) => LOG.forComponent(`CDP:${ideType}`).asLogFn(),
         // Local replication-health read surface (get_status_metadata).
         // Aggregate-only by construction — see seqscribe/local-stats.ts.
-        getSeqscribeStats: () => buildLocalSeqscribeStats(seqscribe, { meshDelivery: readMeshDeliveryCounters }),
+        getSeqscribeStats: () => buildLocalSeqscribeStats(seqscribe, {
+          meshDelivery: readMeshDeliveryCounters,
+          zombieRecovered: cfg.mesh?.zombieRecovered
+        }),
         // Beacon staleness / sole-copy (§7.1). Unlike the stats this DOES carry
         // topic names and peer writer ids — LOCAL/P2P only, never status_report.
         // `diagnostics()` does no I/O, so an on-demand read cannot become a
@@ -169115,6 +169951,113 @@ ${notice.notice}${supersededHint}`;
         for (const unsubscribe of unsubscribers.splice(0)) unsubscribe();
       };
     }
+    init_logger();
+    var TRANSCRIPT_PRUNE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
+    var TRANSCRIPT_PRUNE_MAX_ENTRIES = 5e3;
+    var TRANSCRIPT_PRUNE_INTERVAL_MS = 60 * 60 * 1e3;
+    var TRANSCRIPT_TOPIC_PREFIX = "session.";
+    var TRANSCRIPT_TOPIC_SUFFIX = ".transcript";
+    function isTranscriptTopic(topic) {
+      return topic.startsWith(TRANSCRIPT_TOPIC_PREFIX) && topic.endsWith(TRANSCRIPT_TOPIC_SUFFIX);
+    }
+    var ACTIVE_TAIL_SUBSCRIBER_MARKER = "active tail subscriber";
+    function isActiveTailSubscriberRefusal(error48) {
+      return error48 instanceof Error && error48.message.includes(ACTIVE_TAIL_SUBSCRIBER_MARKER);
+    }
+    var counters7 = {
+      runs: 0,
+      topicsInspected: 0,
+      overCapTopics: 0,
+      rowsPruned: 0,
+      skippedActive: 0,
+      errors: 0
+    };
+    async function pruneOneBound(handle, topic, bound) {
+      try {
+        const result = await handle.node.pruneTopic(topic, bound);
+        if (result.prunedRows > 0) {
+          counters7.rowsPruned += result.prunedRows;
+          LOG.info(
+            "Seqscribe",
+            `transcript writer-gc pruned topic=${topic} rows=${result.prunedRows} bound=${JSON.stringify(bound)}`
+          );
+        }
+        return "pruned";
+      } catch (error48) {
+        if (isActiveTailSubscriberRefusal(error48)) {
+          LOG.debug(
+            "Seqscribe",
+            `transcript writer-gc skipped topic=${topic}: active tail subscriber`
+          );
+          return "skippedActive";
+        }
+        counters7.errors++;
+        LOG.warn(
+          "Seqscribe",
+          `transcript writer-gc prune failed topic=${topic}: ${error48 instanceof Error ? error48.message : String(error48)}`
+        );
+        return "error";
+      }
+    }
+    async function runTranscriptWriterGcSweep(handle, opts = {}) {
+      const maxEntries = Math.max(1, opts.maxEntries ?? TRANSCRIPT_PRUNE_MAX_ENTRIES);
+      const maxAgeMs = opts.maxAgeMs ?? TRANSCRIPT_PRUNE_MAX_AGE_MS;
+      const overCap = [];
+      counters7.runs++;
+      try {
+        const stats = handle.node.stats();
+        for (const [topic, topicStats] of Object.entries(stats.topics)) {
+          if (!isTranscriptTopic(topic)) continue;
+          counters7.topicsInspected++;
+          const logRows = topicStats.logRows;
+          if (logRows > maxEntries) {
+            overCap.push({ topic, logRows });
+            counters7.overCapTopics++;
+          }
+          const countResult = await pruneOneBound(handle, topic, { keepNewest: maxEntries });
+          if (countResult === "skippedActive") {
+            counters7.skippedActive++;
+            continue;
+          }
+          const ageResult = await pruneOneBound(handle, topic, { olderThanMs: maxAgeMs });
+          if (ageResult === "skippedActive") {
+            counters7.skippedActive++;
+          }
+        }
+      } catch (error48) {
+        counters7.errors++;
+        LOG.warn(
+          "Seqscribe",
+          `transcript writer-gc sweep failed: ${error48 instanceof Error ? error48.message : String(error48)}`
+        );
+      }
+      return { overCap };
+    }
+    var activeTimer2 = null;
+    var activeHandle2 = null;
+    function configureTranscriptWriterGc(handle, opts = {}) {
+      if (activeTimer2) clearInterval(activeTimer2);
+      activeTimer2 = null;
+      activeHandle2 = null;
+      if (!handle) return null;
+      activeHandle2 = handle;
+      const ownedHandle = handle;
+      const runOnce2 = () => runTranscriptWriterGcSweep(ownedHandle, opts);
+      if (!opts.once) {
+        activeTimer2 = setInterval(() => {
+          void runOnce2();
+        }, Math.max(1, opts.intervalMs ?? TRANSCRIPT_PRUNE_INTERVAL_MS));
+        activeTimer2.unref?.();
+      }
+      LOG.info("Seqscribe", "transcript writer-gc armed");
+      return {
+        runOnce: () => activeHandle2 === ownedHandle ? runOnce2() : Promise.resolve({ overCap: [] }),
+        stop() {
+          if (activeHandle2 !== ownedHandle) return;
+          configureTranscriptWriterGc(null);
+        }
+      };
+    }
     init_runtime_slot();
     function shortId2(sessionId) {
       return sessionId.length <= 8 ? sessionId : `${sessionId.slice(0, 8)}\u2026`;
@@ -169198,6 +170141,13 @@ ${notice.notice}${supersededHint}`;
         offTranscript();
         configureTranscriptProjection(null);
         s5.sessionRegistry.setTranscriptTopicRelease(null);
+      }]);
+      tryStep("Seqscribe", "transcript writer-gc", () => {
+        configureTranscriptWriterGc(node);
+      });
+      step("transcript-writer-gc");
+      undo.push(["transcript-writer-gc", () => {
+        configureTranscriptWriterGc(null);
       }]);
       try {
         const meshIds = listMeshesReadOnly().map((m) => m.id).filter(Boolean);
@@ -169643,11 +170593,11 @@ ${notice.notice}${supersededHint}`;
         probe: (e) => lateProbe.port(e)
       };
       const ledger = createMeshRuntimeTurnLedger({ selfDaemonId, ports });
-      const offEvidencePort = wireTurnEvidencePort(components, ledger);
-      const counters6 = createTurnDeliverCounters();
+      const appendHandoff = rt ? (meshId, kind, payload) => appendMeshHandoff(meshId, kind, payload) : void 0;
+      const offEvidencePort = wireTurnEvidencePort(components, ledger, { appendHandoff });
+      const counters8 = createTurnDeliverCounters();
       const waiter = createDeliverEdgeWaiter({ now: () => Date.now() });
       const resolveHandoff = resolveHandoffOn(rt);
-      const appendHandoff = rt ? (meshId, kind, payload) => appendMeshHandoff(meshId, kind, payload) : void 0;
       const inputPort = components.cliManager.input;
       const deliverLog = { info: (m) => LOG.info("MeshNotice", m), warn: (m) => LOG.warn("MeshNotice", m) };
       const deliverDeps = {
@@ -169659,7 +170609,7 @@ ${notice.notice}${supersededHint}`;
         resolveHandoff,
         statusLine: (meshId) => buildMeshStatusLineForNotification(meshId),
         isControlEvent: (event) => event === "coordinator_catchup",
-        counters: counters6,
+        counters: counters8,
         log: deliverLog
       };
       const notifier = createCoordinatorNotifier({ ledger, selfDaemonIds, ...appendHandoff ? { appendHandoff } : {}, log: deliverLog });
@@ -169689,7 +170639,7 @@ ${notice.notice}${supersededHint}`;
         evidence: ledger,
         ...appendHandoff ? { appendHandoff } : {},
         // Deliver outcomes + the cursors' own counters (the consumer arms below).
-        counters: () => ({ ...counters6, ...consumer?.counters() ?? {} })
+        counters: () => ({ ...counters8, ...consumer?.counters() ?? {} })
       };
       bindMeshNoticeRuntime(notices);
       const index = new MeshTopicIndex(store2.db);
@@ -169699,7 +170649,7 @@ ${notice.notice}${supersededHint}`;
         replicationPending: (meshId) => notices.replicationPending(meshId)
       });
       const abort = new AbortController();
-      const ingest = createTurnIngestHandler({ ledger, selfDaemonIds, releaseAttemptRef: ({ attemptId }) => releaseLocalAttemptRef(components, attemptId), counters: counters6, log: deliverLog });
+      const ingest = createTurnIngestHandler({ ledger, selfDaemonIds, releaseAttemptRef: ({ attemptId }) => releaseLocalAttemptRef(components, attemptId), counters: counters8, log: deliverLog });
       const deliver = createTurnDeliverHandler(deliverDeps);
       let consumer = null;
       if (rt) {
@@ -169788,22 +170738,14 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
-    var PORT_KINDS_FOR_MESH_SESSIONS = /* @__PURE__ */ new Set(["session_error"]);
-    function isMeshBoundSession(components, sessionId) {
-      try {
-        const state = components.instanceManager.getInstance(sessionId)?.getState?.();
-        const settings = state?.settings;
-        return !!settings && (typeof settings.meshNodeFor === "string" && settings.meshNodeFor.length > 0);
-      } catch {
-        return false;
-      }
-    }
-    function wireTurnEvidencePort(components, ledger) {
+    function wireTurnEvidencePort(components, ledger, deps = {}) {
       const port = createTurnEvidencePort({
-        observe: (evidence) => {
-          if (isMeshBoundSession(components, evidence.sessionId) && !PORT_KINDS_FOR_MESH_SESSIONS.has(evidence.kind)) return;
-          ledger.observe(evidence);
+        observe: (evidence, opts) => {
+          ledger.observe(evidence, opts);
         },
+        ownerFor: (sessionId) => resolveEvidenceOwner(components, sessionId),
+        selfDaemonId: ledger.selfDaemonId,
+        ...deps.appendHandoff ? { appendHandoff: deps.appendHandoff } : {},
         attemptRefFor: (sessionId) => {
           const attempt = ledger.openAttemptForSession(sessionId);
           return attempt ? { attemptId: attempt.attemptId, generation: attempt.generation } : null;
@@ -171195,6 +172137,7 @@ ${notice.notice}${supersededHint}`;
     init_snapshot3();
     init_logger();
     init_builders();
+    var TURN_SOURCED_WIRE_NAMES = new Set(TURN_WIRE_EVENT_NAMES);
     function toDaemonStatusEventName(value) {
       switch (value) {
         case "agent:generating_started":
@@ -171234,6 +172177,9 @@ ${notice.notice}${supersededHint}`;
       const eventName = toDaemonStatusEventName(event.event);
       if (!eventName) return null;
       if (eventName.startsWith("provider:")) {
+        return null;
+      }
+      if (TURN_SOURCED_WIRE_NAMES.has(eventName)) {
         return null;
       }
       const payload = {
@@ -171327,7 +172273,7 @@ ${notice.notice}${supersededHint}`;
           }
         }
       }, { name: "host.status-event" });
-      const unsubTurn = deps.turnCommits !== true ? () => {
+      const unsubTurn = deps.turnCommits === false ? () => {
       } : bus.on("turn", (e) => {
         const serverEvent = projectTurnStatusEvent(e, e.at, resolveHideMute);
         if (!serverEvent) return;
@@ -172791,12 +173737,24 @@ var MESH_MISSION_STATUSES = ["active", "paused", "completed", "abandoned"];
 var isMeshMissionStatusValue = makeGuard3(MESH_MISSION_STATUSES);
 var MESH_MISSION_SOURCES = ["magi", "coordinator"];
 var isMeshMissionSourceValue = makeGuard3(MESH_MISSION_SOURCES);
+function isStringArray(value) {
+  return Array.isArray(value) && value.every((v) => typeof v === "string");
+}
+function isMissionBriefWire(value) {
+  if (!isRecord(value) || !hasOnlyKeys2(value, ["goal", "constraints", "doneCriteria", "handoffNotes", "ownedPaths"])) return false;
+  if (typeof value.goal !== "string" || value.goal.trim().length === 0) return false;
+  for (const k of ["constraints", "doneCriteria", "handoffNotes", "ownedPaths"]) {
+    if (value[k] !== void 0 && !isStringArray(value[k])) return false;
+  }
+  return true;
+}
 function isMeshMissionRecordWire(value) {
-  if (!isRecord(value) || !hasOnlyKeys2(value, ["id", "meshId", "title", "goal", "status", "source"])) return false;
+  if (!isRecord(value) || !hasOnlyKeys2(value, ["id", "meshId", "title", "goal", "status", "source", "brief"])) return false;
   if (!isEvidenceIdentifier(value.id) || !isEvidenceIdentifier(value.meshId)) return false;
   if (typeof value.title !== "string" || typeof value.goal !== "string") return false;
   if (!isMeshMissionStatusValue(value.status)) return false;
   if (value.source !== void 0 && !isMeshMissionSourceValue(value.source)) return false;
+  if (value.brief !== void 0 && !isMissionBriefWire(value.brief)) return false;
   return true;
 }
 function isMissionUpsertResponse(value) {
@@ -172835,7 +173793,7 @@ function isMissionListSummaryWire(value) {
   const hasGoal = "goal" in value;
   const hasPreview = "goalPreview" in value && "goalTruncated" in value;
   if (hasGoal === hasPreview) return false;
-  const baseKeys = ["id", "meshId", "title", "status", "source", "tasks", "stats"];
+  const baseKeys = ["id", "meshId", "title", "status", "source", "tasks", "stats", "brief"];
   const allowed = hasGoal ? [...baseKeys, "goal"] : [...baseKeys, "goalPreview", "goalTruncated"];
   if (!hasOnlyKeys2(value, allowed)) return false;
   if (!isEvidenceIdentifier(value.id) || !isEvidenceIdentifier(value.meshId)) return false;
@@ -172844,6 +173802,7 @@ function isMissionListSummaryWire(value) {
   if (value.source !== void 0 && !isMeshMissionSourceValue(value.source)) return false;
   if (!isMeshMissionTaskAggregateWire(value.tasks)) return false;
   if (value.stats !== void 0 && !isMeshMissionStatsWire(value.stats)) return false;
+  if (value.brief !== void 0 && !isMissionBriefWire(value.brief)) return false;
   if (hasGoal && typeof value.goal !== "string") return false;
   if (hasPreview && (typeof value.goalPreview !== "string" || typeof value.goalTruncated !== "boolean")) return false;
   return true;
@@ -172923,6 +173882,9 @@ function isRecordArray(value) {
 function isOptionalRecord(value) {
   return value === void 0 || isRecord(value);
 }
+function isOptionalBoolean(value) {
+  return value === void 0 || typeof value === "boolean";
+}
 function isOptionalString(value) {
   return value === void 0 || typeof value === "string";
 }
@@ -172980,12 +173942,6 @@ function decodeDirectDispatchRecordResponse(value) {
 }
 var GRAPH_AUDIT_EVENTS = ["gate_claimed", "gate_released", "gate_abandoned", "node_patched"];
 var isGraphAuditEvent = makeGuard3(GRAPH_AUDIT_EVENTS);
-function isGraphAuditRecordResponse(value) {
-  return isRecord(value) && hasOnlyKeys2(value, ["recorded"]) && typeof value.recorded === "boolean";
-}
-function decodeGraphAuditRecordResponse(value) {
-  return isGraphAuditRecordResponse(value) ? value : null;
-}
 function isActiveWorkQueryResponse(value) {
   if (!isRecord(value) || !hasOnlyKeys2(value, ["activeWork", "records", "directDispatches", "summary", "schedulingRuntime"])) return false;
   if (value.records !== void 0 && !isRecordArray(value.records)) return false;
@@ -173000,6 +173956,92 @@ function isRecoveryContextQueryResponse(value) {
 }
 function decodeRecoveryContextQueryResponse(value) {
   return isRecoveryContextQueryResponse(value) ? value : null;
+}
+function isGraphGateClaimResponse(value) {
+  if (!isRecord(value) || !hasOnlyKeys2(value, ["claimed", "reason", "gate", "leaseGeneration", "fencingToken", "leaseExpiresAt", "deadlineAt", "ambiguousExternalOutcome", "previousLeaseOwnerSessionId", "convergenceEvidence"])) return false;
+  if (typeof value.claimed !== "boolean") return false;
+  return isOptionalRecord(value.gate) && isOptionalRecord(value.convergenceEvidence) && isOptionalBoolean(value.ambiguousExternalOutcome);
+}
+function decodeGraphGateClaimResponse(value) {
+  return isGraphGateClaimResponse(value) ? value : null;
+}
+function isGraphGateReleaseResponse(value) {
+  if (!isRecord(value)) return false;
+  if (value.released === true) {
+    if (!hasOnlyKeys2(value, ["released", "duplicate", "gate", "materializedNodeIds", "downstreamNodeCount", "graphCompleted"])) return false;
+    if (typeof value.duplicate !== "boolean") return false;
+    if (!Array.isArray(value.materializedNodeIds) || !value.materializedNodeIds.every((n) => typeof n === "string")) return false;
+    if (value.downstreamNodeCount !== void 0 && !isNonNegativeInt(value.downstreamNodeCount)) return false;
+    return isOptionalRecord(value.gate) && isOptionalBoolean(value.graphCompleted);
+  }
+  if (value.released === false) {
+    return hasOnlyKeys2(value, ["released", "refusalCode", "message"]) && typeof value.message === "string" && isOptionalString(value.refusalCode);
+  }
+  return false;
+}
+function decodeGraphGateReleaseResponse(value) {
+  return isGraphGateReleaseResponse(value) ? value : null;
+}
+function isGraphGateAbandonResponse(value) {
+  if (!isRecord(value) || !hasOnlyKeys2(value, ["abandoned", "reason", "gate", "cancelledNodeIds", "cancelledTaskIds", "graphStatus"])) return false;
+  if (typeof value.abandoned !== "boolean") return false;
+  if (!Array.isArray(value.cancelledNodeIds) || !value.cancelledNodeIds.every((n) => typeof n === "string")) return false;
+  if (!Array.isArray(value.cancelledTaskIds) || !value.cancelledTaskIds.every((n) => typeof n === "string")) return false;
+  return isOptionalRecord(value.gate);
+}
+function decodeGraphGateAbandonResponse(value) {
+  return isGraphGateAbandonResponse(value) ? value : null;
+}
+function isGraphNodePatchResponse(value) {
+  if (!isRecord(value)) return false;
+  if (value.patched === true) {
+    if (!hasOnlyKeys2(value, ["patched", "graphId", "nodeId", "ref", "queueTaskId", "materializationVersion", "state", "outcomeKind", "skippedReason", "blockedReason"])) return false;
+    if (!isEvidenceIdentifier(value.graphId) || !isEvidenceIdentifier(value.nodeId)) return false;
+    if (!isNonNegativeInt(value.materializationVersion)) return false;
+    return typeof value.state === "string" && typeof value.outcomeKind === "string";
+  }
+  if (value.patched === false) {
+    return hasOnlyKeys2(value, ["patched", "refusalCode", "message"]) && typeof value.message === "string" && isOptionalString(value.refusalCode);
+  }
+  return false;
+}
+function decodeGraphNodePatchResponse(value) {
+  return isGraphNodePatchResponse(value) ? value : null;
+}
+function isGraphViewQueryResponse(value) {
+  return isRecord(value) && hasOnlyKeys2(value, ["graphs"]) && isRecordArray(value.graphs);
+}
+function decodeGraphViewQueryResponse(value) {
+  return isGraphViewQueryResponse(value) ? value : null;
+}
+function isTaskStatsQueryResponse(value) {
+  return isRecord(value) && hasOnlyKeys2(value, ["tasks", "mission"]) && isRecordArray(value.tasks) && isOptionalRecord(value.mission);
+}
+function decodeTaskStatsQueryResponse(value) {
+  return isTaskStatsQueryResponse(value) ? value : null;
+}
+function isPruneStaleDirectResponse(value) {
+  if (!isRecord(value) || !hasOnlyKeys2(value, ["mode", "includeTerminal", "candidateCount", "prunable", "prunedCount", "preservedUnacknowledged", "preservedLedgerOnly", "preservedNotOrphan"])) return false;
+  if (value.mode !== "execute" && value.mode !== "dry_run") return false;
+  if (typeof value.includeTerminal !== "boolean") return false;
+  if (!isNonNegativeInt(value.candidateCount) || !isNonNegativeInt(value.prunedCount)) return false;
+  return isRecordArray(value.prunable) && isRecordArray(value.preservedUnacknowledged) && isRecordArray(value.preservedLedgerOnly) && isRecordArray(value.preservedNotOrphan);
+}
+function decodePruneStaleDirectResponse(value) {
+  return isPruneStaleDirectResponse(value) ? value : null;
+}
+function isOrphanedPinnedTaskWire(value) {
+  if (!isRecord(value) || !hasOnlyKeys2(value, ["taskId", "title", "targetSessionId", "targetNodeId", "missionId"])) return false;
+  if (!isEvidenceIdentifier(value.taskId) || !isEvidenceIdentifier(value.targetSessionId)) return false;
+  if (typeof value.title !== "string") return false;
+  if (value.targetNodeId !== void 0 && !isEvidenceIdentifier(value.targetNodeId)) return false;
+  return value.missionId === void 0 || isEvidenceIdentifier(value.missionId);
+}
+function isOrphanedPinNotifyResponse(value) {
+  return isRecord(value) && hasOnlyKeys2(value, ["orphans"]) && Array.isArray(value.orphans) && value.orphans.every(isOrphanedPinnedTaskWire);
+}
+function decodeOrphanedPinNotifyResponse(value) {
+  return isOrphanedPinNotifyResponse(value) ? value : null;
 }
 var TURN_IPC_COMMANDS = [
   "turn_observe",
@@ -173026,7 +174068,18 @@ var TURN_IPC_COMMANDS = [
   "direct_dispatch_record",
   "graph_audit_record",
   "active_work_query",
-  "recovery_context_query"
+  "recovery_context_query",
+  // C-W9c additions (2026-09-24 19:00 stamp — the last mcp-server in-process
+  // daemon-core paths: graph gates/plan/patch, mission reads (MAGI), task/
+  // mission stats, orphaned-pin helpers, one prune audit):
+  "graph_gate_claim",
+  "graph_gate_release",
+  "graph_gate_abandon",
+  "graph_node_patch",
+  "graph_view_query",
+  "task_stats_query",
+  "prune_stale_direct",
+  "orphaned_pin_notify"
 ];
 var isTurnIpcCommand = makeGuard3(TURN_IPC_COMMANDS);
 
@@ -173845,14 +174898,35 @@ async function queueRequeue(transport, args) {
 async function directDispatchRecord(transport, args) {
   return dispatch(transport, "direct_dispatch_record", { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeDirectDispatchRecordResponse);
 }
-async function graphAuditRecord(transport, args) {
-  return dispatch(transport, "graph_audit_record", { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphAuditRecordResponse);
-}
 async function activeWorkQuery(transport, args) {
   return dispatch(transport, "active_work_query", { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeActiveWorkQueryResponse);
 }
 async function recoveryContextQuery(transport, args) {
   return dispatch(transport, "recovery_context_query", { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeRecoveryContextQueryResponse);
+}
+async function graphGateClaim(transport, args) {
+  return dispatch(transport, "graph_gate_claim", { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphGateClaimResponse);
+}
+async function graphGateRelease(transport, args) {
+  return dispatch(transport, "graph_gate_release", { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphGateReleaseResponse);
+}
+async function graphGateAbandon(transport, args) {
+  return dispatch(transport, "graph_gate_abandon", { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphGateAbandonResponse);
+}
+async function graphNodePatch(transport, args) {
+  return dispatch(transport, "graph_node_patch", { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphNodePatchResponse);
+}
+async function graphViewQuery(transport, args) {
+  return dispatch(transport, "graph_view_query", { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphViewQueryResponse);
+}
+async function taskStatsQuery(transport, args) {
+  return dispatch(transport, "task_stats_query", { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeTaskStatsQueryResponse);
+}
+async function pruneStaleDirect(transport, args) {
+  return dispatch(transport, "prune_stale_direct", { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodePruneStaleDirectResponse);
+}
+async function orphanedPinNotify(transport, args) {
+  return dispatch(transport, "orphaned_pin_notify", { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeOrphanedPinNotifyResponse);
 }
 
 // src/tools/mesh-node-identity.ts
@@ -177147,9 +178221,9 @@ async function hasRecentDuplicateDispatch(ctx, args) {
   }
   return { duplicate: false };
 }
-function buildMissionInactiveWarning(ctx, missionId) {
+async function buildMissionInactiveWarning(ctx, missionId) {
   if (!missionId) return void 0;
-  const mission = (0, import_daemon_core9.getMeshMission)(ctx.mesh.id, missionId);
+  const mission = (await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id: missionId })).missions[0];
   if (!mission || mission.status === "active") return void 0;
   const hintByStatus = {
     paused: `Mission '${missionId}' (${mission.title}) is paused \u2014 a new task was just attached to it anyway. Mission status is never auto-transitioned; if this mission should be active again, call mesh_mission_upsert(mission_id: '${missionId}', status: 'active').`,
@@ -178372,13 +179446,14 @@ async function meshStatus(ctx, args = {}) {
     } else {
       const missions = (0, import_daemon_core10.getMeshStatusMissionSummaries)(mesh.id, { verbose: true });
       if (missions.length > 0) {
-        response.missions = missions.map((mission) => {
+        response.missions = await Promise.all(missions.map(async (mission) => {
           try {
-            return { ...mission, stats: (0, import_daemon_core10.computeMeshMissionStats)(mesh.id, mission.id) };
+            const { mission: rollup } = await taskStatsQuery(ctx.transport, { meshId: mesh.id, missionId: mission.id, rollup: true });
+            return { ...mission, ...rollup ? { stats: rollup } : {} };
           } catch {
             return mission;
           }
-        });
+        }));
       }
     }
   } catch {
@@ -178533,21 +179608,8 @@ function buildGraphPlanShape(specs, rawEntries, gates, workspaces, hasExplicitBa
     useGraphPath: hasExplicitBatchId || (0, import_daemon_core10.requestUsesGraphV2)({ tasks, gates: gateSpecs, workspaces: workspaceSpecs })
   };
 }
-var GATE_RELEASE_ERROR_CODES = [
-  "gate_not_found",
-  "gate_release_conflict",
-  "gate_already_released",
-  "gate_not_claimed",
-  "stale_fence",
-  "gate_lease_expired",
-  "gate_upstream_unsettled",
-  "gate_patch_not_downstream",
-  "gate_patch_forbidden",
-  "task_already_claimed",
-  "graph_node_not_found"
-];
-function classifyGateError(message) {
-  return GATE_RELEASE_ERROR_CODES.find((code) => message.startsWith(`${code}:`) || message.includes(`${code}:`));
+function gateField(gate, key) {
+  return gate ? gate[key] : void 0;
 }
 function resolveGateSession(ctx, explicit) {
   return readString(explicit) || ctx.coordinatorSessionId || void 0;
@@ -178573,12 +179635,13 @@ async function meshGraphGateClaim(ctx, args) {
   const leaseSeconds = readNumber(args.lease_seconds ?? args.leaseSeconds);
   const extendDeadlineSeconds = readNumber(args.extend_deadline_seconds ?? args.extendDeadlineSeconds);
   try {
-    const result = (0, import_daemon_core10.claimMeshGraphGate)({
+    const result = await graphGateClaim(ctx.transport, {
       meshId: ctx.mesh.id,
       gateId,
       coordinatorSessionId,
       ...leaseSeconds !== void 0 ? { leaseSeconds } : {},
-      ...extendDeadlineSeconds !== void 0 ? { extendDeadlineSeconds } : {}
+      ...extendDeadlineSeconds !== void 0 ? { extendDeadlineSeconds } : {},
+      probeConvergenceEvidence: true
     });
     if (!result.claimed) {
       return JSON.stringify({
@@ -178586,42 +179649,26 @@ async function meshGraphGateClaim(ctx, args) {
         claimed: false,
         code: result.reason ?? "gate_not_claimable",
         gateId,
-        ...result.gate ? { gateState: result.gate.state, action: result.gate.action } : {},
-        error: describeClaimRefusal(result.reason, result.gate?.state)
+        ...result.gate ? { gateState: gateField(result.gate, "state"), action: gateField(result.gate, "action") } : {},
+        error: describeClaimRefusal(result.reason, gateField(result.gate, "state"))
       });
-    }
-    await graphAuditRecord(ctx.transport, { meshId: ctx.mesh.id, event: "gate_claimed", fields: {
-      graphId: result.gate.graphId,
-      gateId,
-      ref: result.gate.ref,
-      action: result.gate.action,
-      generation: result.leaseGeneration,
-      ownerSessionId: coordinatorSessionId,
-      leaseExpiresAt: result.leaseExpiresAt,
-      ambiguousExternalOutcome: result.ambiguousExternalOutcome,
-      previousLeaseOwnerSessionId: result.previousLeaseOwnerSessionId
-    } }).catch(() => void 0);
-    let convergenceEvidence = null;
-    try {
-      convergenceEvidence = await (0, import_daemon_core10.collectGateConvergenceEvidence)(ctx.mesh.id, gateId);
-    } catch {
     }
     return JSON.stringify({
       success: true,
       claimed: true,
       gateId,
-      graphId: result.gate.graphId,
-      ...convergenceEvidence ? { convergenceEvidence } : {},
-      ...result.gate.ref ? { ref: result.gate.ref } : {},
-      action: result.gate.action,
-      ...result.gate.instructions ? { instructions: result.gate.instructions } : {},
+      graphId: gateField(result.gate, "graphId"),
+      ...result.convergenceEvidence ? { convergenceEvidence: result.convergenceEvidence } : {},
+      ...gateField(result.gate, "ref") ? { ref: gateField(result.gate, "ref") } : {},
+      action: gateField(result.gate, "action"),
+      ...gateField(result.gate, "instructions") ? { instructions: gateField(result.gate, "instructions") } : {},
       // ★ Both values are REQUIRED by mesh_graph_gate_release. Losing them
       // means the lease must lapse before anyone can act on the gate again.
       leaseGeneration: result.leaseGeneration,
       fencingToken: result.fencingToken,
       leaseExpiresAt: result.leaseExpiresAt,
       ...result.deadlineAt ? { deadlineAt: result.deadlineAt } : {},
-      onTimeout: result.gate.onTimeout,
+      onTimeout: gateField(result.gate, "onTimeout"),
       ...result.ambiguousExternalOutcome ? {
         ambiguousExternalOutcome: true,
         previousLeaseOwnerSessionId: result.previousLeaseOwnerSessionId,
@@ -178631,7 +179678,7 @@ async function meshGraphGateClaim(ctx, args) {
     });
   } catch (e) {
     const message = e?.message || String(e);
-    return JSON.stringify({ success: false, claimed: false, gateId, code: classifyGateError(message), error: message });
+    return JSON.stringify({ success: false, claimed: false, gateId, error: message });
   }
 }
 function describeClaimRefusal(reason, state) {
@@ -178680,7 +179727,7 @@ async function meshGraphGateRelease(ctx, args) {
     baseSpecPatch: p?.base_spec_patch ?? p?.baseSpecPatch ?? {}
   })).filter((p) => p.node.length > 0);
   try {
-    const result = (0, import_daemon_core10.releaseMeshGraphGate)({
+    const result = await graphGateRelease(ctx.transport, {
       meshId: ctx.mesh.id,
       gateId,
       fencingToken,
@@ -178691,18 +179738,21 @@ async function meshGraphGateRelease(ctx, args) {
       ...args.evidence !== void 0 ? { evidence: args.evidence } : {},
       ...patches.length > 0 ? { patches } : {}
     });
-    await graphAuditRecord(ctx.transport, { meshId: ctx.mesh.id, event: "gate_released", fields: {
-      graphId: result.gate.graphId,
-      gateId,
-      ref: result.gate.ref,
-      action: result.gate.action,
-      outcome,
-      generation: leaseGeneration,
-      releaseDigest: result.gate.releaseEvidenceDigest,
-      materializedNodeIds: result.materializedNodeIds,
-      duplicate: result.duplicate
-    } }).catch(() => void 0);
-    const queueTrigger = result.materializedNodeIds.length > 0 ? await triggerMeshQueueAndReport(ctx) : void 0;
+    if (!result.released) {
+      const code = result.refusalCode;
+      return JSON.stringify({
+        success: false,
+        released: false,
+        gateId,
+        ...code ? { code } : {},
+        error: result.message,
+        ...code === "gate_lease_expired" ? {
+          hint: "The lease expired before the release. Elapsed time is never completion evidence, so the release is refused. Re-claim the gate (you get a HIGHER generation), reconcile whether the external action already landed, then release."
+        } : {},
+        ...code === "stale_fence" ? { hint: "Another coordinator has claimed this gate since your claim. Your token is stale \u2014 re-claim before releasing." } : {},
+        ...code === "gate_release_conflict" ? { hint: "This idempotency_key was already used with a DIFFERENT payload. Use a new key, or re-send the identical payload." } : {}
+      });
+    }
     const releasedNothingDownstream = !result.duplicate && result.materializedNodeIds.length === 0 && result.downstreamNodeCount === 0 && result.graphCompleted !== true;
     return JSON.stringify({
       success: true,
@@ -178711,8 +179761,8 @@ async function meshGraphGateRelease(ctx, args) {
       // error — that is what makes a retried release safe (design :420-421).
       duplicate: result.duplicate,
       gateId,
-      graphId: result.gate.graphId,
-      ...result.gate.ref ? { ref: result.gate.ref } : {},
+      graphId: gateField(result.gate, "graphId"),
+      ...gateField(result.gate, "ref") ? { ref: gateField(result.gate, "ref") } : {},
       outcome,
       materializedNodeIds: result.materializedNodeIds,
       materializedCount: result.materializedNodeIds.length,
@@ -178720,24 +179770,11 @@ async function meshGraphGateRelease(ctx, args) {
       ...releasedNothingDownstream ? {
         noDownstreamAdvisory: "This gate opened nothing downstream: no task declared it in gated_by, so claiming and releasing it bought no scheduling while the rest of the graph is still outstanding. Declare the next step in the same batch and point it at this gate with gated_by, so releasing the gate dispatches it \u2014 or drop the gate and enqueue that step directly."
       } : {},
-      ...queueTrigger ? { queueTrigger } : {},
       ...result.duplicate ? { duplicateHint: "This idempotency_key + payload was already committed; nothing changed. Re-sending an identical release is safe." } : {}
     });
   } catch (e) {
     const message = e?.message || String(e);
-    const code = classifyGateError(message);
-    return JSON.stringify({
-      success: false,
-      released: false,
-      gateId,
-      ...code ? { code } : {},
-      error: message,
-      ...code === "gate_lease_expired" ? {
-        hint: "The lease expired before the release. Elapsed time is never completion evidence, so the release is refused. Re-claim the gate (you get a HIGHER generation), reconcile whether the external action already landed, then release."
-      } : {},
-      ...code === "stale_fence" ? { hint: "Another coordinator has claimed this gate since your claim. Your token is stale \u2014 re-claim before releasing." } : {},
-      ...code === "gate_release_conflict" ? { hint: "This idempotency_key was already used with a DIFFERENT payload. Use a new key, or re-send the identical payload." } : {}
-    });
+    return JSON.stringify({ success: false, released: false, gateId, error: message });
   }
 }
 async function meshGraphGateAbandon(ctx, args) {
@@ -178758,7 +179795,7 @@ async function meshGraphGateAbandon(ctx, args) {
   }
   const coordinatorSessionId = resolveGateSession(ctx, args.coordinator_session_id ?? args.coordinatorSessionId);
   try {
-    const result = (0, import_daemon_core10.abandonMeshGraphGate)({
+    const result = await graphGateAbandon(ctx.transport, {
       meshId: ctx.mesh.id,
       gateId,
       reason,
@@ -178771,27 +179808,11 @@ async function meshGraphGateAbandon(ctx, args) {
         abandoned: false,
         code: result.reason ?? "gate_not_abandonable",
         gateId,
-        ...result.gate ? { gateState: result.gate.state, action: result.gate.action } : {},
-        error: describeAbandonRefusal(result.reason, result.gate?.state)
+        ...result.gate ? { gateState: gateField(result.gate, "state"), action: gateField(result.gate, "action") } : {},
+        error: describeAbandonRefusal(result.reason, gateField(result.gate, "state"))
       });
     }
     const duplicate = result.reason === "gate_already_abandoned";
-    if (!duplicate) {
-      await graphAuditRecord(ctx.transport, { meshId: ctx.mesh.id, event: "gate_abandoned", fields: {
-        graphId: result.gate.graphId,
-        gateId,
-        ref: result.gate.ref,
-        action: result.gate.action,
-        // The gate row already carries `cancelled`; the PRIOR state is what
-        // says whether this closed an open gate or a stranded expired one.
-        priorState: result.gate.state,
-        reason,
-        ...coordinatorSessionId ? { coordinatorSessionId } : {},
-        ...args.force === true ? { force: true } : {},
-        cancelledNodeIds: result.cancelledNodeIds,
-        ...result.graphStatus ? { graphStatus: result.graphStatus } : {}
-      } }).catch(() => void 0);
-    }
     return JSON.stringify({
       success: true,
       abandoned: true,
@@ -178799,9 +179820,9 @@ async function meshGraphGateAbandon(ctx, args) {
       // never has to tell "I did it" from "it was already done".
       duplicate,
       gateId,
-      graphId: result.gate.graphId,
-      ...result.gate.ref ? { ref: result.gate.ref } : {},
-      gateState: result.gate.state,
+      graphId: gateField(result.gate, "graphId"),
+      ...gateField(result.gate, "ref") ? { ref: gateField(result.gate, "ref") } : {},
+      gateState: gateField(result.gate, "state"),
       cancelledNodeIds: result.cancelledNodeIds,
       cancelledCount: result.cancelledNodeIds.length,
       ...result.cancelledTaskIds.length > 0 ? { cancelledTaskIds: result.cancelledTaskIds } : {},
@@ -178829,19 +179850,6 @@ function describeAbandonRefusal(reason, state) {
       return `The gate could not be abandoned (${reason ?? "unknown reason"}).`;
   }
 }
-var NODE_PATCH_ERROR_CODES = [
-  "graph_node_not_found",
-  "graph_not_found",
-  "ambiguous_node_ref",
-  "node_not_patchable",
-  "node_patch_forbidden",
-  "task_already_claimed"
-];
-function classifyNodePatchError(e, message) {
-  const code = e?.code;
-  if (typeof code === "string" && code) return code;
-  return NODE_PATCH_ERROR_CODES.find((c) => message.startsWith(`${c}:`) || message.includes(`${c}:`));
-}
 async function meshGraphNodePatch(ctx, args) {
   await recordMeshCoordinatorToolCall(ctx, "mesh_graph_node_patch");
   const node = readString(args.node) || readString(args.node_id) || readString(args.nodeId) || readString(args.ref);
@@ -178867,26 +179875,28 @@ async function meshGraphNodePatch(ctx, args) {
   }
   const graphId = readString(args.graph_id) || readString(args.graphId);
   try {
-    const result = (0, import_daemon_core10.patchGraphNodeAndRetry)({
+    const result = await graphNodePatch(ctx.transport, {
       meshId: ctx.mesh.id,
       node,
       ...graphId ? { graphId } : {},
       baseSpecPatch: patch
     });
-    const recovered = result.outcome.kind === "materialized";
-    await graphAuditRecord(ctx.transport, { meshId: ctx.mesh.id, event: "node_patched", fields: {
-      graphId: result.graphId,
-      nodeId: result.nodeId,
-      ...result.ref ? { ref: result.ref } : {},
-      ...result.queueTaskId ? { queueTaskId: result.queueTaskId } : {},
-      patchedKeys: Object.keys(patch),
-      outcome: result.outcome.kind,
-      state: result.state,
-      ...result.blockedReason ? { blockedReason: result.blockedReason } : {},
-      materializationVersion: result.materializationVersion,
-      ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}
-    } }).catch(() => void 0);
-    const queueTrigger = recovered ? await triggerMeshQueueAndReport(ctx) : void 0;
+    if (!result.patched) {
+      const code = result.refusalCode;
+      return JSON.stringify({
+        success: false,
+        patched: false,
+        node,
+        ...code ? { code } : {},
+        error: result.message,
+        ...code === "task_already_claimed" ? {
+          hint: "This node's task is already assigned or finished, and an assigned task is immutable. If the work must change, cancel it with mesh_queue_cancel and enqueue the corrected step."
+        } : {},
+        ...code === "node_patch_forbidden" ? { hint: `Only ${import_daemon_core10.MESH_NODE_PATCH_KEYS.join(", ")} may be patched. A task's message, routing, permissions, task mode and model are immutable by policy \u2014 enqueue a new task instead.` } : {},
+        ...code === "ambiguous_node_ref" ? { hint: "That ref exists in more than one live graph. Pass graph_id, or use the exact node id from mesh_graph_view." } : {}
+      });
+    }
+    const recovered = result.outcomeKind === "materialized";
     return JSON.stringify({
       success: true,
       patched: true,
@@ -178898,35 +179908,22 @@ async function meshGraphNodePatch(ctx, args) {
       materializationVersion: result.materializationVersion,
       // ★ The patch and the RETRY are one transaction, so this answers "did
       // it actually work?" now — the caller never has to poll to find out.
-      retryOutcome: result.outcome.kind,
+      retryOutcome: result.outcomeKind,
       recovered,
       state: result.state,
       ...result.blockedReason ? { blockedReason: result.blockedReason } : {},
-      ...queueTrigger ? { queueTrigger } : {},
       ...recovered ? { note: "The node materialized and its task is claimable again." } : {},
-      ...result.outcome.kind === "error" ? {
+      ...result.outcomeKind === "error" ? {
         hint: `The patch was applied but the node still cannot materialize (${result.blockedReason ?? "see blockedReason"}). Read the new reason: \`required_input_missing\` means the upstream genuinely never produced that field \u2014 point the selector at something it did produce, or drop \`required\` \u2014 while \`invalid_selector\` / \`invalid_binding_spec\` mean the replacement is still malformed. Inspect the upstream envelope with mesh_graph_view.`
       } : {},
-      ...result.outcome.kind === "deferred" ? {
+      ...result.outcomeKind === "deferred" ? {
         hint: "The patch was applied but the node is not ready to settle yet \u2014 a predecessor has not completed, or an incoming gate is still unreleased. It will settle on its own when they do; nothing further is needed here."
       } : {},
-      ...result.outcome.kind === "skipped" ? { hint: `The patched run_if evaluated FALSE, so the node is now skipped (${result.outcome.reason}). Skipped is terminal and never satisfies a downstream dependency.` } : {}
+      ...result.outcomeKind === "skipped" ? { hint: `The patched run_if evaluated FALSE, so the node is now skipped (${result.skippedReason}). Skipped is terminal and never satisfies a downstream dependency.` } : {}
     });
   } catch (e) {
     const message = e?.message || String(e);
-    const code = classifyNodePatchError(e, message);
-    return JSON.stringify({
-      success: false,
-      patched: false,
-      node,
-      ...code ? { code } : {},
-      error: message,
-      ...code === "task_already_claimed" ? {
-        hint: "This node's task is already assigned or finished, and an assigned task is immutable. If the work must change, cancel it with mesh_queue_cancel and enqueue the corrected step."
-      } : {},
-      ...code === "node_patch_forbidden" ? { hint: `Only ${import_daemon_core10.MESH_NODE_PATCH_KEYS.join(", ")} may be patched. A task's message, routing, permissions, task mode and model are immutable by policy \u2014 enqueue a new task instead.` } : {},
-      ...code === "ambiguous_node_ref" ? { hint: "That ref exists in more than one live graph. Pass graph_id, or use the exact node id from mesh_graph_view." } : {}
-    });
+    return JSON.stringify({ success: false, patched: false, node, error: message });
   }
 }
 async function meshGraphView(ctx, args) {
@@ -178937,27 +179934,14 @@ async function meshGraphView(ctx, args) {
     const batchId = readString(args.batch_id) || readString(args.batchId);
     const includeTerminal = args.include_terminal === true || args.includeTerminal === true;
     const probeGateEvidence = args.probe_gate_evidence === true || args.probeGateEvidence === true;
-    const graphs = (0, import_daemon_core10.buildMeshGraphViews)(ctx.mesh.id, {
+    const { graphs } = await graphViewQuery(ctx.transport, {
+      meshId: ctx.mesh.id,
       ...graphId ? { graphId } : {},
       ...batchId ? { batchId } : {},
       activeOnly: !includeTerminal,
-      ...readNumber(args.limit) !== void 0 ? { limit: readNumber(args.limit) } : {}
+      ...readNumber(args.limit) !== void 0 ? { limit: readNumber(args.limit) } : {},
+      ...probeGateEvidence ? { probeGateEvidence: true } : {}
     });
-    if (probeGateEvidence) {
-      let probesLeft = 5;
-      for (const graph of graphs) {
-        for (const gate of graph.gates ?? []) {
-          if (probesLeft <= 0) break;
-          if (gate.state !== "awaiting_coordinator" && gate.state !== "expired") continue;
-          probesLeft -= 1;
-          try {
-            const evidence = await (0, import_daemon_core10.collectGateConvergenceEvidence)(ctx.mesh.id, gate.gateId);
-            if (evidence) gate.convergenceEvidence = evidence;
-          } catch {
-          }
-        }
-      }
-    }
     const pendingActions = graphs.flatMap((g) => (g.nextCoordinatorAction ?? []).map((a) => ({ graphId: g.graphId, ...a })));
     return JSON.stringify({
       success: true,
@@ -179009,7 +179993,7 @@ function buildUntargetedCodeChangeWorktreeAdvisory(input) {
     worktreeRoutingAdvisory: 'This untargeted `code_change` will be claimed by whichever node polls first \u2014 usually the BASE node, which gives it no branch isolation. Base nodes are for environment-specific testing (win32 PATH/registry, clean install on one OS, that machine\'s package state, OS-dependent runtime behavior). If this task only changes code, cancel it (mesh_queue_cancel), call mesh_clone_node (~10s, auto-launch starts the session), and re-enqueue with target_node_id set to the returned worktree node id \u2014 or pass prefer_worktree: true to route to the most recent worktree. If it DOES need a specific machine, pin it with required_tags (e.g. ["os=win32"]) or target_node_id and this advisory will not appear.'
   };
 }
-function normalizeEnqueueTaskArgs(ctx, args, callerLabel) {
+async function normalizeEnqueueTaskArgs(ctx, args, callerLabel) {
   const message = readString(args.message);
   if (!message) {
     return {
@@ -179033,7 +180017,7 @@ function normalizeEnqueueTaskArgs(ctx, args, callerLabel) {
   const requiredTags = (0, import_daemon_core10.normalizeMeshCapabilityTags)(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
   const dependsOn = Array.isArray(args.dependsOn) ? args.dependsOn : Array.isArray(args.depends_on) ? args.depends_on : void 0;
   const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
-  if (missionId && !(0, import_daemon_core10.getMeshMission)(ctx.mesh.id, missionId)) {
+  if (missionId && !(await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id: missionId })).missions[0]) {
     return {
       ok: false,
       code: "mission_not_found",
@@ -179211,7 +180195,7 @@ async function eagerPushTaskToRemoteNodes(ctx, task, message, targetNodeId, requ
 }
 async function meshEnqueueTask(ctx, args) {
   await refreshMeshFromDaemon(ctx);
-  const normalized = normalizeEnqueueTaskArgs(ctx, args, "mesh_enqueue_task");
+  const normalized = await normalizeEnqueueTaskArgs(ctx, args, "mesh_enqueue_task");
   if (!normalized.ok) {
     return JSON.stringify({ success: false, code: normalized.code, error: normalized.error, ...normalized.extra ?? {} });
   }
@@ -179285,7 +180269,7 @@ async function meshEnqueueTask(ctx, args) {
       }
     })).entry;
     const duplicateWarning = duplicateSuspect ? { duplicateSuspect: { taskId: duplicateSuspect.id, status: duplicateSuspect.status, assignedNodeId: duplicateSuspect.assignedNodeId, targetNodeId: duplicateSuspect.targetNodeId }, duplicateSuspectHint: "An in-flight task with the same message+target already exists. This new task was enqueued anyway (warn-only). Cancel one via mesh_queue_cancel if it is an accidental re-enqueue, or pass allow_duplicate=true to silence this, or block_duplicate=true to refuse next time." } : {};
-    const missionWarning = buildMissionInactiveWarning(ctx, missionId) ?? {};
+    const missionWarning = await buildMissionInactiveWarning(ctx, missionId) ?? {};
     const worktreeAdvisory = buildUntargetedCodeChangeWorktreeAdvisory({
       taskMode,
       readonly: readonly2,
@@ -179403,7 +180387,7 @@ async function meshEnqueueBatch(ctx, args) {
       });
     }
   }
-  if (batchMissionId && !(0, import_daemon_core10.getMeshMission)(ctx.mesh.id, batchMissionId)) {
+  if (batchMissionId && !(await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id: batchMissionId })).missions[0]) {
     return JSON.stringify({
       success: false,
       code: "mission_not_found",
@@ -179422,7 +180406,7 @@ async function meshEnqueueBatch(ctx, args) {
     const entry = rawTasks[i] ?? {};
     const ref = readString(entry.ref) || void 0;
     const label = ref ? `task '${ref}'` : `task #${i}`;
-    const normalized = normalizeEnqueueTaskArgs(ctx, entry, `mesh_enqueue_batch ${label}`);
+    const normalized = await normalizeEnqueueTaskArgs(ctx, entry, `mesh_enqueue_batch ${label}`);
     if (!normalized.ok) {
       return JSON.stringify({
         success: false,
@@ -179523,7 +180507,8 @@ async function meshEnqueueBatch(ctx, args) {
   const tasks = committed.tasks;
   const graphPlan = committed.graph;
   const distinctMissionIds = [...new Set(specs.map((s) => s.missionId).filter((m) => !!m))];
-  const missionWarning = distinctMissionIds.map((missionId) => buildMissionInactiveWarning(ctx, missionId)).find((w) => w !== null) ?? {};
+  const missionWarnings = await Promise.all(distinctMissionIds.map((missionId) => buildMissionInactiveWarning(ctx, missionId)));
+  const missionWarning = missionWarnings.find((w) => w !== void 0) ?? {};
   const advisoryTasks = [];
   normalizedEntries.forEach((entry, i) => {
     const advisory = buildUntargetedCodeChangeWorktreeAdvisory({
@@ -179803,12 +180788,15 @@ async function meshQueueCancel(ctx, args) {
     let orphanedPinnedTasks = [];
     if (workerStop.attempted && assignedSessionId && workerStop.skipped !== "session_moved_to_other_task") {
       try {
-        orphanedPinnedTasks = (0, import_daemon_core10.notifyCoordinatorOfOrphanedPins)(ctx.mesh.id, assignedSessionId, {
+        const { orphans } = await orphanedPinNotify(ctx.transport, {
+          meshId: ctx.mesh.id,
+          stoppedSessionId: assignedSessionId,
           excludeTaskId: taskId,
           cause: `Cancelling task ${taskId}`,
           ...assignedNodeId ? { nodeId: assignedNodeId } : {},
           ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}
         });
+        orphanedPinnedTasks = orphans;
       } catch {
         orphanedPinnedTasks = [];
       }
@@ -179972,6 +180960,25 @@ function buildMeshRecordReconciliationEvidence(meshId, replicas) {
 }
 
 // src/tools/mesh-tools-mission.ts
+function coerceBriefArg(value) {
+  if (value === void 0) return void 0;
+  if (value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) return void 0;
+  const raw = value;
+  const goal = typeof raw.goal === "string" ? raw.goal : "";
+  if (!goal.trim()) return void 0;
+  const asStringArray2 = (v) => Array.isArray(v) && v.every((x) => typeof x === "string") ? v : void 0;
+  const brief = { goal };
+  const constraints = asStringArray2(raw.constraints);
+  const doneCriteria = asStringArray2(raw.doneCriteria);
+  const handoffNotes = asStringArray2(raw.handoffNotes);
+  const ownedPaths = asStringArray2(raw.ownedPaths);
+  if (constraints) brief.constraints = constraints;
+  if (doneCriteria) brief.doneCriteria = doneCriteria;
+  if (handoffNotes) brief.handoffNotes = handoffNotes;
+  if (ownedPaths) brief.ownedPaths = ownedPaths;
+  return brief;
+}
 async function meshTaskHistory(ctx, args) {
   const { mesh } = ctx;
   const compact = args.verbose === true ? false : args.compact ?? true;
@@ -179995,8 +181002,8 @@ async function meshTaskHistory(ctx, args) {
   try {
     const taskIds = [...new Set(rawEntries.map((e) => typeof e.payload?.taskId === "string" ? e.payload.taskId : "").filter(Boolean))];
     if (taskIds.length > 0) {
-      const stats = (0, import_daemon_core10.computeMeshTaskStats)(mesh.id, { taskIds });
-      if (stats.length > 0) taskStats = stats;
+      const { tasks } = await taskStatsQuery(ctx.transport, { meshId: mesh.id, taskIds });
+      if (tasks.length > 0) taskStats = tasks;
     }
   } catch {
   }
@@ -180234,12 +181241,14 @@ async function meshMissionUpsert(ctx, args) {
         error: `invalid_mission_status: '${statusArg}' (valid: ${import_daemon_core10.MESH_MISSION_STATUSES.join(", ")})`
       });
     }
+    const brief = coerceBriefArg(args.brief);
     const { mission } = await missionUpsert(ctx.transport, {
       meshId: ctx.mesh.id,
       id: readString(args.mission_id) || readString(args.missionId) || void 0,
       title,
       goal: typeof args.goal === "string" ? args.goal : void 0,
-      status: statusArg
+      status: statusArg,
+      ...brief !== void 0 ? { brief } : {}
     });
     return JSON.stringify({
       success: true,
@@ -181302,7 +182311,8 @@ async function meshMagiReview(ctx, args) {
   const waitTimeoutMs = resolveMagiWaitTimeoutMs(args.wait_timeout_ms ?? args.waitTimeoutMs);
   const consensusGroupId = `magi_${(0, import_node_crypto.randomUUID)().replace(/-/g, "")}`;
   const titleQ = question.length > 80 ? `${question.slice(0, 77)}...` : question;
-  const mission = (0, import_daemon_core10.upsertMeshMission)(ctx.mesh.id, {
+  const { mission } = await missionUpsert(ctx.transport, {
+    meshId: ctx.mesh.id,
     title: `MAGI: ${titleQ}`,
     goal: `Cross-verify (read-only) across panel '${panelName}': ${question}${args.target ? `
 Target: ${args.target}` : ""}`,
@@ -181433,7 +182443,7 @@ Target: ${args.target}` : ""}`,
     staleReplicas: collected.staleCount,
     synthesis: synthesisNoRaw
   });
-  closeMagiMissionIfTerminal(ctx, mission.id, collected.terminal);
+  await closeMagiMissionIfTerminal(ctx, mission.id, collected.terminal);
   const cleanupMode = resolveMagiAutoCleanupMode(ctx, args.auto_cleanup ?? args.autoCleanup);
   const cleanupReplicaTasks = findMagiReplicaTasks(await readQueueFromDaemon(ctx), consensusGroupId);
   const cleanup = await cleanupMagiAutoLaunchedSessions(ctx, {
@@ -181494,7 +182504,7 @@ async function meshMagiCollect(ctx, args) {
     staleReplicas: collected.staleCount,
     synthesis: synthesisNoRaw
   });
-  closeMagiMissionIfTerminal(ctx, replicaMissionId, collected.terminal);
+  await closeMagiMissionIfTerminal(ctx, replicaMissionId, collected.terminal);
   const cleanupMode = resolveMagiAutoCleanupMode(ctx, args.auto_cleanup ?? args.autoCleanup);
   const cleanup = await cleanupMagiAutoLaunchedSessions(ctx, {
     replicaTasks,
@@ -181709,17 +182719,20 @@ async function persistMagiSynthesis(ctx, args) {
   } catch {
   }
 }
-function closeMagiMissionIfTerminal(ctx, missionId, terminal) {
+async function closeMagiMissionIfTerminal(ctx, missionId, terminal) {
   if (!terminal) return;
   const id2 = readString(missionId);
   if (!id2) return;
   try {
-    const mission = (0, import_daemon_core10.getMeshMission)(ctx.mesh.id, id2);
+    const { missions } = await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id: id2 });
+    const mission = missions[0];
     if (!mission || mission.status !== "active") return;
-    (0, import_daemon_core10.upsertMeshMission)(ctx.mesh.id, {
+    await missionUpsert(ctx.transport, {
+      meshId: ctx.mesh.id,
       id: id2,
       title: mission.title,
       // Preserve goal: upsert defaults goal to the existing value when omitted.
+      goal: mission.goal,
       status: "completed"
     });
   } catch {
@@ -182316,33 +183329,11 @@ async function meshPruneStaleDirect(ctx, args = {}) {
   }
   const execute = args.execute === true && args.dry_run !== true;
   const includeTerminal = args.include_terminal === true;
-  const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
-  const pruneInputs = await readActiveWorkFromDaemon(ctx, { compute: false, includeInputs: true, recordTail: 500 });
-  const ledgerEntries = pruneInputs.records;
-  const directDispatches = pruneInputs.directDispatches;
-  const pruneQueue = await readQueueFromDaemon(ctx);
-  const result = await (0, import_daemon_core10.pruneStaleDirectDispatches)({
+  const result = await pruneStaleDirect(ctx.transport, {
     meshId: ctx.mesh.id,
-    queue: pruneQueue,
-    ledgerEntries,
-    directDispatches,
-    nodes: liveNodes,
     execute,
     includeTerminal,
-    source: "mesh_prune_stale_direct",
-    // C-W8: each prunable dispatch is an open mesh_direct attempt on the daemon's
-    // turn ledger — close it there (`turn_cancel`), not in this process.
-    closeDispatches: async (taskIds) => {
-      let closed = 0;
-      for (const taskId of taskIds) {
-        try {
-          const res = await turnCancel(ctx.transport, { taskId, reason: "intentional_cleanup" });
-          if (res.verdict === "applied") closed += 1;
-        } catch {
-        }
-      }
-      return closed;
-    }
+    source: "mesh_prune_stale_direct"
   });
   const { prunable, prunedCount, preservedUnacknowledged, preservedLedgerOnly, preservedNotOrphan } = result;
   const summarize = (records) => records.map((r) => ({
@@ -182397,7 +183388,9 @@ async function meshSendTask(ctx, args) {
   const requestedTaskMode = readString(args.task_mode) || readString(args.taskMode);
   const readonly2 = args.readonly === true || args.read_only === true;
   const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
-  if (missionId && !(0, import_daemon_core10.getMeshMission)(ctx.mesh.id, missionId)) {
+  const rawOwnedPaths = args.ownedPaths ?? args.owned_paths;
+  const ownedPaths = Array.isArray(rawOwnedPaths) ? rawOwnedPaths : void 0;
+  if (missionId && !(await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id: missionId })).missions[0]) {
     return JSON.stringify({
       success: false,
       code: "mission_not_found",
@@ -182608,6 +183601,7 @@ async function meshSendTask(ctx, args) {
             message,
             task: {
               ...missionId ? { missionId } : {},
+              ...ownedPaths ? { ownedPaths } : {},
               assignedNodeId: args.node_id,
               assignedSessionId: dispatchedSessionId,
               taskMode,
@@ -182646,7 +183640,7 @@ async function meshSendTask(ctx, args) {
         taskMode,
         ...result2.success && result2.providerType ? { providerType: result2.providerType } : {},
         dispatched: result2.success === true,
-        ...result2.success ? buildMissionInactiveWarning(ctx, missionId) ?? {} : {},
+        ...result2.success ? await buildMissionInactiveWarning(ctx, missionId) ?? {} : {},
         // GRAPH-MEASUREMENT-DIRECT: advisory only, and only on a dispatch that
         // actually happened — a failed dispatch made no routing decision to report on.
         ...result2.success ? orchestrationWarning : {}
@@ -182806,6 +183800,7 @@ async function meshSendTask(ctx, args) {
             ...taskInput ? { input: taskInput } : {},
             ...readonly2 ? { readonly: true } : {},
             ...missionId ? { missionId } : {},
+            ...ownedPaths ? { ownedPaths } : {},
             ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
           } })).entry;
           return JSON.stringify({
@@ -182830,7 +183825,7 @@ async function meshSendTask(ctx, args) {
             message: `Interrupted the in-flight turn on session '${args.session_id}' via ${interruptResult?.keyName || "the stop control"}. That turn was cancelled and its unfinished work is lost. Task '${interruptedTask.id}' is pinned to this session and delivers as soon as it reports idle.`,
             nextAction: interruptResult?.confidence === "proven" ? `Track with mesh_status; no manual resend needed.` : `Interrupt support for '${resolvedProviderType}' is DECLARED by its spec but not live-verified. Confirm with mesh_status that the session returned to idle and picked up the task; if it did not, use mesh_read_terminal to inspect.`,
             ...unrecognizedDeliveryMode ? { deliveryModeWarning: `Unrecognized delivery_mode '${unrecognizedDeliveryMode}' ignored.` } : {},
-            ...buildMissionInactiveWarning(ctx, missionId) ?? {}
+            ...await buildMissionInactiveWarning(ctx, missionId) ?? {}
           });
         }
         if (policyResult.decision === "queued") {
@@ -182844,6 +183839,7 @@ async function meshSendTask(ctx, args) {
             ...taskInput ? { input: taskInput } : {},
             ...readonly2 ? { readonly: true } : {},
             ...missionId ? { missionId } : {},
+            ...ownedPaths ? { ownedPaths } : {},
             ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
           } })).entry;
           return JSON.stringify({
@@ -182864,7 +183860,7 @@ async function meshSendTask(ctx, args) {
             ...unrecognizedDeliveryMode ? {
               deliveryModeWarning: `Unrecognized delivery_mode '${unrecognizedDeliveryMode}' was ignored; this task was queued (when_idle) and the running turn was NOT interrupted. Valid values are 'when_idle' and 'interrupt'.`
             } : {},
-            ...buildMissionInactiveWarning(ctx, missionId) ?? {}
+            ...await buildMissionInactiveWarning(ctx, missionId) ?? {}
           });
         }
       }
@@ -182986,6 +183982,7 @@ async function meshSendTask(ctx, args) {
           message,
           task: {
             ...missionId ? { missionId } : {},
+            ...ownedPaths ? { ownedPaths } : {},
             assignedNodeId: args.node_id,
             assignedSessionId: args.session_id,
             taskMode,
@@ -183024,7 +184021,7 @@ async function meshSendTask(ctx, args) {
         // session whose dispatch row did NOT survive pre-record. A successfully
         // pre-recorded idle dispatch (the NOTIF-DROP / CANON-A path) is not at risk.
         ...computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, args.session_id),
-        ...buildMissionInactiveWarning(ctx, missionId) ?? {},
+        ...await buildMissionInactiveWarning(ctx, missionId) ?? {},
         // GRAPH-MEASUREMENT-DIRECT: advisory only — never blocks, never re-routes.
         ...orchestrationWarning
       });
@@ -183038,6 +184035,7 @@ async function meshSendTask(ctx, args) {
       ...taskInput ? { input: taskInput } : {},
       ...readonly2 ? { readonly: true } : {},
       ...missionId ? { missionId } : {},
+      ...ownedPaths ? { ownedPaths } : {},
       ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
     } })).entry;
     const queueTrigger = await triggerMeshQueueAndReport(ctx);
@@ -183051,7 +184049,7 @@ async function meshSendTask(ctx, args) {
       taskMode: task.taskMode,
       queueTrigger,
       ...buildQueueTriggerGuidance(queueTrigger),
-      ...buildMissionInactiveWarning(ctx, missionId) ?? {}
+      ...await buildMissionInactiveWarning(ctx, missionId) ?? {}
     };
     if (pendingEvents.length > 0) {
       result.pendingCoordinatorEvents = pendingEvents;
@@ -185832,6 +186830,12 @@ async function reportCompletion(transport, credentials, args) {
     const lines = [
       result.duplicate ? `Completion already recorded for task ${result.taskId} \u2014 this repeat was accepted as a duplicate.` : `Completion recorded for task ${result.taskId} (${result.outcome}).`
     ];
+    if (result.ownedPathsMismatch) {
+      const { undeclaredTouched } = result.ownedPathsMismatch;
+      lines.push(
+        `Note: this task declared owned_paths, and touched_files included ${undeclaredTouched.length} file(s) outside that declaration (${undeclaredTouched.slice(0, 5).join(", ")}${undeclaredTouched.length > 5 ? ", \u2026" : ""}). This is informational \u2014 your completion was still recorded.`
+      );
+    }
     if (result.handoffNoteRecorded) {
       lines.push("Handoff note stored \u2014 it will be delivered to related future tasks automatically.");
     } else if (result.handoffNoteError) {

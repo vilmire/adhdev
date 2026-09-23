@@ -52,6 +52,22 @@ import {
     decodeGraphAuditRecordResponse,
     decodeActiveWorkQueryRequest,
     decodeActiveWorkQueryResponse,
+    decodeGraphGateAbandonRequest,
+    decodeGraphGateAbandonResponse,
+    decodeGraphGateClaimRequest,
+    decodeGraphGateClaimResponse,
+    decodeGraphGateReleaseRequest,
+    decodeGraphGateReleaseResponse,
+    decodeGraphNodePatchRequest,
+    decodeGraphNodePatchResponse,
+    decodeGraphViewQueryRequest,
+    decodeGraphViewQueryResponse,
+    decodeOrphanedPinNotifyRequest,
+    decodeOrphanedPinNotifyResponse,
+    decodePruneStaleDirectRequest,
+    decodePruneStaleDirectResponse,
+    decodeTaskStatsQueryRequest,
+    decodeTaskStatsQueryResponse,
     decodeRecoveryContextQueryRequest,
     decodeRecoveryContextQueryResponse,
 } from '../src/turn-ipc'
@@ -87,19 +103,25 @@ describe('turn-ipc — command registry', () => {
     // C-W9a: the event ledger retired and the mcp-server's remaining in-process
     // store access (record appends, queue mutations/reads, active work, recovery
     // hints) moved behind ten more commands. Thirteen became twenty-three.
-    it('declares exactly twenty-three commands', () => {
-        expect(TURN_IPC_COMMANDS).toHaveLength(23)
+    // C-W9c (2026-09-24 19:00 stamp): the last mcp-server in-process daemon-core
+    // paths — graph gates/plan/patch, mission reads (MAGI), task/mission stats,
+    // orphaned-pin helpers, one prune audit — moved behind eight more commands.
+    // Twenty-three became thirty-one.
+    it('declares exactly thirty-one commands', () => {
+        expect(TURN_IPC_COMMANDS).toHaveLength(31)
         expect([...TURN_IPC_COMMANDS].sort()).toEqual([
             'active_work_query', 'direct_dispatch_record', 'graph_audit_record',
+            'graph_gate_abandon', 'graph_gate_claim', 'graph_gate_release', 'graph_node_patch', 'graph_view_query',
             'ledger_query', 'mesh_index_query', 'mesh_record', 'mission_list_query', 'mission_query', 'mission_upsert',
-            'note_forget', 'note_upsert',
-            'operator_status', 'queue_cancel', 'queue_enqueue', 'queue_enqueue_graph', 'queue_query', 'queue_requeue',
-            'record_local', 'recovery_context_query',
+            'note_forget', 'note_upsert', 'operator_status', 'orphaned_pin_notify',
+            'prune_stale_direct',
+            'queue_cancel', 'queue_enqueue', 'queue_enqueue_graph', 'queue_query', 'queue_requeue',
+            'record_local', 'recovery_context_query', 'task_stats_query',
             'tool_call_record', 'turn_cancel', 'turn_observe', 'turn_query',
         ])
     })
 
-    it('isTurnIpcCommand accepts only the twenty-three names', () => {
+    it('isTurnIpcCommand accepts only the thirty-one names', () => {
         for (const name of TURN_IPC_COMMANDS) expect(isTurnIpcCommand(name)).toBe(true)
         expect(isTurnIpcCommand('mesh_status')).toBe(false)
         expect(isTurnIpcCommand('appendLedgerEntry')).toBe(false)
@@ -339,6 +361,64 @@ describe('mission_upsert', () => {
     it('rejects a response mission missing a required field', () => {
         expect(decodeMissionUpsertResponse({ mission: { id: 'mission-1', meshId: 'm1', title: 't', status: 'active' } })).toBeNull()
     })
+
+    // H2 (mission brief, wiring-unification Phase H — docs/design/2026-09-23-
+    // wiring-unification.md §7c).
+    describe('brief (H2)', () => {
+        it('decodes a request carrying a full brief object', () => {
+            const req = {
+                v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', title: 't',
+                brief: {
+                    goal: 'land it',
+                    constraints: ['no npm install'],
+                    doneCriteria: ['tests green'],
+                    handoffNotes: ['see design doc'],
+                    ownedPaths: ['src/mesh/**'],
+                },
+            }
+            expect(decodeMissionUpsertRequest(req)).toEqual(req)
+        })
+
+        it('decodes a request carrying brief: null (explicit clear)', () => {
+            const req = { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', id: 'mission-1', title: 't', brief: null }
+            expect(decodeMissionUpsertRequest(req)).toEqual(req)
+        })
+
+        it('omitting brief entirely still decodes (preserve semantics live in the daemon handler, not this guard)', () => {
+            const req = { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', title: 't' }
+            expect(decodeMissionUpsertRequest(req)).toEqual(req)
+        })
+
+        it('rejects a brief object with no goal', () => {
+            const req = { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', title: 't', brief: { constraints: ['x'] } }
+            expect(decodeMissionUpsertRequest(req)).toBeNull()
+        })
+
+        it('rejects a brief object with a non-string-array field', () => {
+            const req = { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', title: 't', brief: { goal: 'g', constraints: [1, 2] } }
+            expect(decodeMissionUpsertRequest(req)).toBeNull()
+        })
+
+        it('rejects a brief object with an unknown key', () => {
+            const req = { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', title: 't', brief: { goal: 'g', extra: 'nope' } }
+            expect(decodeMissionUpsertRequest(req)).toBeNull()
+        })
+
+        it('round-trips a response mission carrying a brief', () => {
+            const res = {
+                mission: {
+                    id: 'mission-1', meshId: 'm1', title: 't', goal: '', status: 'active' as const,
+                    brief: { goal: 'land it', ownedPaths: ['src/**'] },
+                },
+            }
+            expect(decodeMissionUpsertResponse(res)).toEqual(res)
+        })
+
+        it('a response mission with no brief still decodes (brief optional)', () => {
+            const res = { mission: { id: 'mission-1', meshId: 'm1', title: 't', goal: '', status: 'active' as const } }
+            expect(decodeMissionUpsertResponse(res)).toEqual(res)
+        })
+    })
 })
 
 describe('mission_query', () => {
@@ -502,6 +582,20 @@ describe('turn-ipc — mission_list_query (C-W9b)', () => {
         }
         expect(decodeMissionListQueryResponse(bad)).toBeNull()
     })
+
+    // H2 (mission brief): mesh_mission_list echoes the stored brief back too.
+    it('decodes a mission row carrying a brief (H2)', () => {
+        const res = {
+            missions: [{
+                id: 'mission-1', meshId: 'm1', title: 't', goal: 'the goal',
+                status: 'active' as const,
+                tasks: { total: 1, pending: 1, assigned: 0, completed: 0, failed: 0, cancelled: 0, blocked: 0, lastActivityAt: null },
+                brief: { goal: 'land it', doneCriteria: ['tests green'] },
+            }],
+            historyFold: null, truncated: false, matched: 1,
+        }
+        expect(decodeMissionListQueryResponse(res)).toEqual(res)
+    })
 })
 
 describe('turn-ipc — C-W9a record / queue / active-work commands', () => {
@@ -567,5 +661,84 @@ describe('turn-ipc — C-W9a record / queue / active-work commands', () => {
         expect(decodeRecoveryContextQueryRequest({ v, meshId: 'm' })).toBeNull()
         expect(decodeRecoveryContextQueryResponse({ context: { consecutiveNodeFailures: 0, advice: 'free text' } })).not.toBeNull()
         expect(decodeRecoveryContextQueryResponse({ context: {} })).toBeNull()
+    })
+})
+
+describe('turn-ipc — C-W9c graph gate/plan/patch/view, task stats, prune, orphaned-pin commands', () => {
+    const v = TURN_IPC_PROTOCOL_VERSION
+    const gateRow = { gateId: 'g-1', graphId: 'graph-1', state: 'claimed', action: 'approve' }
+
+    it('graph_gate_claim: coordinatorSessionId required; gate is a JSON passthrough', () => {
+        expect(decodeGraphGateClaimRequest({ v, meshId: 'm', gateId: 'g-1', coordinatorSessionId: 's-1', probeConvergenceEvidence: true })).not.toBeNull()
+        expect(decodeGraphGateClaimRequest({ v, meshId: 'm', gateId: 'g-1' })).toBeNull()
+        expect(decodeGraphGateClaimResponse({ claimed: false, reason: 'gate_lease_held', gate: gateRow })).not.toBeNull()
+        expect(decodeGraphGateClaimResponse({
+            claimed: true, gate: gateRow, leaseGeneration: 1, fencingToken: 'tok', leaseExpiresAt: 'T',
+            convergenceEvidence: { landed: false },
+        })).not.toBeNull()
+        expect(decodeGraphGateClaimResponse({ claimed: 'yes' })).toBeNull()
+    })
+
+    it('graph_gate_release: a thrown domain refusal is a RESULT, not an envelope error', () => {
+        expect(decodeGraphGateReleaseRequest({
+            v, meshId: 'm', gateId: 'g-1', fencingToken: 'tok', leaseGeneration: 1, idempotencyKey: 'k', outcome: 'passed',
+            patches: [{ node: 'n-1', baseSpecPatch: { run_if: true } }],
+        })).not.toBeNull()
+        expect(decodeGraphGateReleaseRequest({ v, meshId: 'm', gateId: 'g-1', fencingToken: '', leaseGeneration: 1, idempotencyKey: 'k', outcome: 'passed' })).toBeNull()
+        expect(decodeGraphGateReleaseResponse({ released: true, duplicate: false, gate: gateRow, materializedNodeIds: ['n-1'], downstreamNodeCount: 1, graphCompleted: false })).not.toBeNull()
+        expect(decodeGraphGateReleaseResponse({ released: false, refusalCode: 'gate_lease_expired', message: 'gate_lease_expired: stale' })).not.toBeNull()
+        // `code` / `error` are the command ENVELOPE's keys — a refusal result must not reuse them.
+        expect(decodeGraphGateReleaseResponse({ released: false, code: 'x', error: 'y' })).toBeNull()
+    })
+
+    it('graph_gate_abandon: reason required; a duplicate (already-abandoned) reply is still success', () => {
+        expect(decodeGraphGateAbandonRequest({ v, meshId: 'm', gateId: 'g-1', reason: 'cancelled upstream', force: true })).not.toBeNull()
+        expect(decodeGraphGateAbandonRequest({ v, meshId: 'm', gateId: 'g-1', reason: '' })).toBeNull()
+        expect(decodeGraphGateAbandonResponse({
+            abandoned: true, gate: gateRow, cancelledNodeIds: ['n-1'], cancelledTaskIds: ['t-1'], graphStatus: 'cancelled',
+        })).not.toBeNull()
+        expect(decodeGraphGateAbandonResponse({ abandoned: false, reason: 'gate_lease_held', cancelledNodeIds: [], cancelledTaskIds: [] })).not.toBeNull()
+    })
+
+    it('graph_node_patch: base_spec_patch must be non-empty; a thrown refusal is a RESULT', () => {
+        expect(decodeGraphNodePatchRequest({ v, meshId: 'm', node: 'n-1', graphId: 'g-1', baseSpecPatch: { run_if: false } })).not.toBeNull()
+        expect(decodeGraphNodePatchRequest({ v, meshId: 'm', node: 'n-1', baseSpecPatch: {} })).toBeNull()
+        expect(decodeGraphNodePatchResponse({
+            patched: true, graphId: 'g-1', nodeId: 'n-1', materializationVersion: 2, state: 'materialized', outcomeKind: 'materialized',
+        })).not.toBeNull()
+        expect(decodeGraphNodePatchResponse({ patched: false, refusalCode: 'node_patch_forbidden', message: 'node_patch_forbidden: x' })).not.toBeNull()
+    })
+
+    it('graph_view_query: graphs is a JSON-passthrough array', () => {
+        expect(decodeGraphViewQueryRequest({ v, meshId: 'm', activeOnly: false, probeGateEvidence: true, limit: 5 })).not.toBeNull()
+        expect(decodeGraphViewQueryResponse({ graphs: [{ graphId: 'g-1', gates: [gateRow] }] })).not.toBeNull()
+        expect(decodeGraphViewQueryResponse({ graphs: 'x' })).toBeNull()
+    })
+
+    it('task_stats_query: rollup requires missionId; tasks/mission are JSON passthroughs', () => {
+        expect(decodeTaskStatsQueryRequest({ v, meshId: 'm', taskIds: ['t-1', 't-2'] })).not.toBeNull()
+        expect(decodeTaskStatsQueryRequest({ v, meshId: 'm', missionId: 'ms-1', rollup: true })).not.toBeNull()
+        expect(decodeTaskStatsQueryRequest({ v, meshId: 'm', rollup: true })).toBeNull()
+        expect(decodeTaskStatsQueryResponse({ tasks: [{ taskId: 't-1', status: 'completed' }], mission: { missionId: 'ms-1', taskCount: 1 } })).not.toBeNull()
+        expect(decodeTaskStatsQueryResponse({ tasks: 'x' })).toBeNull()
+    })
+
+    it('prune_stale_direct: execute/includeTerminal/source are all optional', () => {
+        expect(decodePruneStaleDirectRequest({ v, meshId: 'm', execute: true, includeTerminal: false, source: 'mesh_prune_stale_direct' })).not.toBeNull()
+        expect(decodePruneStaleDirectRequest({ v, meshId: 'm' })).not.toBeNull()
+        expect(decodePruneStaleDirectResponse({
+            mode: 'dry_run', includeTerminal: false, candidateCount: 2, prunable: [{ taskId: 't-1' }], prunedCount: 0,
+            preservedUnacknowledged: [], preservedLedgerOnly: [], preservedNotOrphan: [],
+        })).not.toBeNull()
+        expect(decodePruneStaleDirectResponse({ mode: 'both' })).toBeNull()
+    })
+
+    it('orphaned_pin_notify: title is free text (local IPC), orphans is a typed array', () => {
+        expect(decodeOrphanedPinNotifyRequest({ v, meshId: 'm', stoppedSessionId: 's-1', excludeTaskId: 't-1', cause: 'Cancelling task t-1' })).not.toBeNull()
+        expect(decodeOrphanedPinNotifyRequest({ v, meshId: 'm' })).toBeNull()
+        expect(decodeOrphanedPinNotifyResponse({
+            orphans: [{ taskId: 't-2', title: 'free text title', targetSessionId: 's-1', targetNodeId: 'n-1', missionId: 'ms-1' }],
+        })).not.toBeNull()
+        expect(decodeOrphanedPinNotifyResponse({ orphans: [{ taskId: 't-2' }] })).toBeNull()
     })
 })
