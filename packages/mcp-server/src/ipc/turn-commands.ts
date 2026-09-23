@@ -71,6 +71,30 @@ import {
     type RecordLocalResponse,
     type RecoveryContextQueryRequest,
     type RecoveryContextQueryResponse,
+    decodeGraphGateAbandonResponse,
+    decodeGraphGateClaimResponse,
+    decodeGraphGateReleaseResponse,
+    decodeGraphNodePatchResponse,
+    decodeGraphViewQueryResponse,
+    decodeOrphanedPinNotifyResponse,
+    decodePruneStaleDirectResponse,
+    decodeTaskStatsQueryResponse,
+    type GraphGateAbandonRequest,
+    type GraphGateAbandonResponse,
+    type GraphGateClaimRequest,
+    type GraphGateClaimResponse,
+    type GraphGateReleaseRequest,
+    type GraphGateReleaseResponse,
+    type GraphNodePatchRequest,
+    type GraphNodePatchResponse,
+    type GraphViewQueryRequest,
+    type GraphViewQueryResponse,
+    type OrphanedPinNotifyRequest,
+    type OrphanedPinNotifyResponse,
+    type PruneStaleDirectRequest,
+    type PruneStaleDirectResponse,
+    type TaskStatsQueryRequest,
+    type TaskStatsQueryResponse,
     decodeLedgerQueryResponse,
     decodeMeshIndexQueryResponse,
     decodeMeshRecordResponse,
@@ -498,4 +522,77 @@ export async function recoveryContextQuery(
     args: Omit<RecoveryContextQueryRequest, 'v'>,
 ): Promise<RecoveryContextQueryResponse> {
     return dispatch(transport, 'recovery_context_query', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeRecoveryContextQueryResponse);
+}
+
+// ─── C-W9c: graph gates/plan/patch, task/mission stats, prune audit, orphaned-pin notify ──
+//
+// The last mcp-server call sites that reached daemon-core's MeshRuntimeStore-
+// backed graph/stats/active-work modules in-process (design's 2026-09-24
+// 19:00 stamp). Every one of these now runs in the daemon that owns the rows;
+// `graphAuditRecord` above is superseded for graph gate/patch provenance
+// (mesh-graph-ipc.ts writes its own audit record inline) but stays exported
+// in case another caller still uses the standalone command.
+
+/** Claim a graph gate's coordinator lease (`mesh_graph_gate_claim`'s core, now in the daemon). */
+export async function graphGateClaim(
+    transport: CommandTransport,
+    args: Omit<GraphGateClaimRequest, 'v'>,
+): Promise<GraphGateClaimResponse> {
+    return dispatch(transport, 'graph_gate_claim', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphGateClaimResponse);
+}
+
+/** Release a claimed graph gate. A domain refusal is a RESULT (`released: false` + `refusalCode`), not a thrown error. */
+export async function graphGateRelease(
+    transport: CommandTransport,
+    args: Omit<GraphGateReleaseRequest, 'v'>,
+): Promise<GraphGateReleaseResponse> {
+    return dispatch(transport, 'graph_gate_release', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphGateReleaseResponse);
+}
+
+/** Abandon (permanently deny) a graph gate — cancels every node it was holding. */
+export async function graphGateAbandon(
+    transport: CommandTransport,
+    args: Omit<GraphGateAbandonRequest, 'v'>,
+): Promise<GraphGateAbandonResponse> {
+    return dispatch(transport, 'graph_gate_abandon', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphGateAbandonResponse);
+}
+
+/** Patch a still-pending graph node's base spec and immediately re-settle it. A domain refusal is a RESULT (`patched: false` + `refusalCode`). */
+export async function graphNodePatch(
+    transport: CommandTransport,
+    args: Omit<GraphNodePatchRequest, 'v'>,
+): Promise<GraphNodePatchResponse> {
+    return dispatch(transport, 'graph_node_patch', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphNodePatchResponse);
+}
+
+/** The read-only graph projection (nodes, edges, gates, workspaces, next coordinator actions). */
+export async function graphViewQuery(
+    transport: CommandTransport,
+    args: Omit<GraphViewQueryRequest, 'v'>,
+): Promise<GraphViewQueryResponse> {
+    return dispatch(transport, 'graph_view_query', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphViewQueryResponse);
+}
+
+/** Per-task (and optionally per-mission rollup) time/attempt stats, computed in the daemon. */
+export async function taskStatsQuery(
+    transport: CommandTransport,
+    args: Omit<TaskStatsQueryRequest, 'v'>,
+): Promise<TaskStatsQueryResponse> {
+    return dispatch(transport, 'task_stats_query', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeTaskStatsQueryResponse);
+}
+
+/** Run (or dry-run) the stale-direct-dispatch prune, entirely in the daemon (`mesh_prune_stale_direct`'s core). */
+export async function pruneStaleDirect(
+    transport: CommandTransport,
+    args: Omit<PruneStaleDirectRequest, 'v'>,
+): Promise<PruneStaleDirectResponse> {
+    return dispatch(transport, 'prune_stale_direct', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodePruneStaleDirectResponse);
+}
+
+/** Find + page the coordinator about queue tasks orphaned by a session stop (CANCEL-ORPHANS-PINNED-TASK). */
+export async function orphanedPinNotify(
+    transport: CommandTransport,
+    args: Omit<OrphanedPinNotifyRequest, 'v'>,
+): Promise<OrphanedPinNotifyResponse> {
+    return dispatch(transport, 'orphaned_pin_notify', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeOrphanedPinNotifyResponse);
 }

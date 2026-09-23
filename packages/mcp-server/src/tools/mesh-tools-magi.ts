@@ -18,7 +18,6 @@ import {
     commandForNode,
     compactChatPayload,
     findOptionalNodeWithRefresh,
-    getMeshMission,
     isWeakCompletionEvidence,
     isMeshNodeHealthLaunchable,
     resolveEffectiveMeshNodeHealth,
@@ -39,11 +38,12 @@ import {
     resolveSemanticReplicaTransport,
     triggerMeshQueueAndReport,
     unwrapCommandPayload,
-    upsertMeshMission,
     readQueueFromDaemon,
 } from './mesh-tools-internal.js';
 // C-W9a: MAGI's records (fan-out, synthesis) and replica queue rows are the daemon's — over IPC.
-import { ledgerQuery, queueEnqueue, recordLocal } from '../ipc/turn-commands.js';
+// C-W9c: MAGI's mission reads/writes (upsert-on-start, close-on-collect) are the daemon's too —
+// the same `mission_upsert`/`mission_query` mesh-tools-mission.ts's write path already uses.
+import { ledgerQuery, missionQuery, missionUpsert, queueEnqueue, recordLocal } from '../ipc/turn-commands.js';
 import type { MeshWorkQueueEntry } from '@adhdev/daemon-core';
 import { readTranscriptReplicaForSemanticConsumer } from './mesh-transcript-semantic-read.js';
 import { resolveMagiSessionCleanupMode, type RepoMeshMagiSessionCleanupMode } from '@adhdev/daemon-core';
@@ -1000,7 +1000,10 @@ export async function meshMagiReview(
     // 3. Mission container + shared consensus group id.
     const consensusGroupId = `magi_${randomUUID().replace(/-/g, '')}`;
     const titleQ = question.length > 80 ? `${question.slice(0, 77)}...` : question;
-    const mission = upsertMeshMission(ctx.mesh.id, {
+    // C-W9c: was in-process `upsertMeshMission`; now the `mission_upsert` IPC
+    // round trip mesh-tools-mission.ts's write path already uses.
+    const { mission } = await missionUpsert(ctx.transport, {
+        meshId: ctx.mesh.id,
         title: `MAGI: ${titleQ}`,
         goal: `Cross-verify (read-only) across panel '${panelName}': ${question}${args.target ? `\nTarget: ${args.target}` : ''}`,
         // Tag provenance so the completed inline mission is bounded out of the default
@@ -1159,7 +1162,7 @@ export async function meshMagiReview(
         synthesis: synthesisNoRaw,
     });
     // FIX#3: this inline review owns `mission` — auto-close it once all replicas are terminal.
-    closeMagiMissionIfTerminal(ctx, mission.id, collected.terminal);
+    await closeMagiMissionIfTerminal(ctx, mission.id, collected.terminal);
 
     // Post-review auto-cleanup (default ON): stop+delete ONLY the worker sessions this
     // fan-out auto-launched, gated terminal. Re-read the replica tasks from the live queue
@@ -1274,7 +1277,7 @@ export async function meshMagiCollect(
     });
     // FIX#3: the inline mission id comes from the replica tasks' OWN missionId (MAGI-owned,
     // guard a) — auto-close it once all replicas are terminal.
-    closeMagiMissionIfTerminal(ctx, replicaMissionId, collected.terminal);
+    await closeMagiMissionIfTerminal(ctx, replicaMissionId, collected.terminal);
 
     // Post-collect auto-cleanup (default ON), gated terminal so a partial snapshot never
     // kills still-generating replicas. Reuse the rediscovered replicaTasks. Best-effort.
@@ -1664,19 +1667,25 @@ async function persistMagiSynthesis(
  * Idempotent: a re-collect that finds the mission already 'completed' is a no-op. Best-effort:
  * a missing mission / read failure never breaks collection.
  */
-function closeMagiMissionIfTerminal(ctx: MeshContext, missionId: string | undefined, terminal: boolean): void {
+async function closeMagiMissionIfTerminal(ctx: MeshContext, missionId: string | undefined, terminal: boolean): Promise<void> {
     if (!terminal) return;
     const id = readString(missionId);
     if (!id) return;
     try {
-        const mission = getMeshMission(ctx.mesh.id, id);
+        // C-W9c: was in-process `getMeshMission`/`upsertMeshMission`; now the same
+        // `mission_query`/`mission_upsert` IPC round trips mesh-tools-mission.ts's
+        // write path already uses.
+        const { missions } = await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id });
+        const mission = missions[0];
         // Only close a mission we can see AND that is still active. Skip when missing
         // (already pruned), or already completed/abandoned/paused (guard b).
         if (!mission || mission.status !== 'active') return;
-        upsertMeshMission(ctx.mesh.id, {
+        await missionUpsert(ctx.transport, {
+            meshId: ctx.mesh.id,
             id,
             title: mission.title,
             // Preserve goal: upsert defaults goal to the existing value when omitted.
+            goal: mission.goal,
             status: 'completed',
         });
     } catch { /* mission close is best-effort — never break collection */ }

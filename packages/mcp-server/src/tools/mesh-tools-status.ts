@@ -27,7 +27,6 @@ import {
     compactActiveWorkRecords,
     compactMeshStatusNode,
     compactNodeSeverity,
-    computeMeshMissionStats,
     countUncommittedChanges,
     drainCoordinatorPendingEvents,
     extractGitStatus,
@@ -60,7 +59,7 @@ import type {
 // mesh-tools-internal.ts, imported directly from the package like the other
 // daemon-core symbols mesh-tools-internal.ts itself imports.
 import type { MeshLedgerSummary as MeshLedgerSummaryView, MeshSchedulingRuntime, SessionRecoveryContext } from '@adhdev/daemon-core';
-import { activeWorkQuery, recoveryContextQuery } from '../ipc/turn-commands.js';
+import { activeWorkQuery, recoveryContextQuery, taskStatsQuery } from '../ipc/turn-commands.js';
 
 // The v2 protocol version literal (mirrors MESH_PROTOCOL_VERSION_V2 in
 // daemon-core mesh/contracts.ts). Kept as a local literal so this MCP-side
@@ -927,13 +926,16 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         } else {
             const missions = getMeshStatusMissionSummaries(mesh.id, { verbose: true });
             if (missions.length > 0) {
-                response.missions = missions.map(mission => {
+                // C-W9c: was in-process `computeMeshMissionStats` per mission; now one
+                // `task_stats_query` IPC round trip per mission (computed in the daemon).
+                response.missions = await Promise.all(missions.map(async mission => {
                     try {
-                        return { ...mission, stats: computeMeshMissionStats(mesh.id, mission.id) };
+                        const { mission: rollup } = await taskStatsQuery(ctx.transport, { meshId: mesh.id, missionId: mission.id, rollup: true });
+                        return { ...mission, ...(rollup ? { stats: rollup } : {}) };
                     } catch {
                         return mission;
                     }
-                });
+                }));
             }
         }
     } catch { /* mission read is best-effort */ }
