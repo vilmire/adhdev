@@ -41,11 +41,11 @@ describe('safeSessionId — known answer + collision (design §3.5)', () => {
         expect(sessionTranscriptTopic('a.b')).toBe('session.a_b.transcript');
     });
 
-    it('sessionTranscriptPolicy is ring(500)/subscribe-only/content/adhdev-coordinator', () => {
+    it('sessionTranscriptPolicy is full/subscribe-only/content/adhdev-coordinator (G2b)', () => {
         const policy = sessionTranscriptPolicy();
         expect(policy).toEqual({
             kind: 'append',
-            retention: { mode: 'ring', size: 500 },
+            retention: { mode: 'full' },
             replication: 'subscribe-only',
             access: 'content',
             finalityAuthority: ADHDEV_AUTHORITY_ID,

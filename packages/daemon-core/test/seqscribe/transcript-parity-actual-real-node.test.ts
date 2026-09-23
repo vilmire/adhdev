@@ -25,21 +25,27 @@ import {
  * ★ The regression this file exists for — a REAL seqscribe node, not a mock.
  *
  * `transcript-parity-actual.test.ts` covers the same module against a fake node
- * whose `headOrder` returns `{seq: 3}` unconditionally. That mock encoded an
- * assumption the real library never satisfies for THIS topic: `session.*.
- * transcript` is `ring(500)`, ring entries are never written to `sq_log`, and
- * `headOrder` is a `sq_log` query — so on a real node it returns `null` every
- * time and the reader answered `{status:'missing'}` on every single call. The
- * mock was green throughout; live parity was structurally 100% mismatch.
+ * whose `headOrder` returns `{seq: 3}` unconditionally. That mock originally
+ * encoded an assumption the real library did NOT satisfy back when `session.*.
+ * transcript` was `ring(500)`: ring entries were never written to `sq_log`,
+ * and `headOrder` is a `sq_log` query, so on a real node it returned `null`
+ * every time and the reader answered `{status:'missing'}` on every single
+ * call. The mock was green throughout; live parity was structurally 100%
+ * mismatch.
  *
- * So the rule these tests encode: the parity `actual` reader must be exercised
- * against a node that ACTUALLY applies ring retention. Anything that stubs
- * `headOrder`/`scanEntries` cannot observe the SQLite-vs-in-memory split that
- * caused the defect.
+ * G2b (landed 2026-09-24) switched the real topic to `full` retention, which
+ * DOES write durable `sq_log` rows — see "headOrder is non-null" below,
+ * which now pins the OPPOSITE fact from before. `transcript-parity-actual.ts`
+ * still does not pin to `headOrder` (a second, retention-independent reason
+ * — see that file's comment), so this suite's real job is unchanged: prove
+ * the reader works against what the library ACTUALLY does for this topic,
+ * not a mock's assumption about it. Anything that stubs `headOrder`/
+ * `scanEntries` cannot observe the real SQLite-backed behavior this file
+ * exists to catch drift in.
  */
 
 const SESSION_ID = 'sess-real-1';
-const RING_TOPIC = sessionTranscriptTopic(SESSION_ID);
+const RING_TOPIC = sessionTranscriptTopic(SESSION_ID); // name kept for diff minimality; topic is now full-retention (G2b)
 
 const tmpDirs: string[] = [];
 const handles: SeqscribeNodeHandle[] = [];
@@ -130,16 +136,23 @@ describe('readLocalTranscriptParityActual against a real ring-retention node', (
         }
     });
 
-    it('pins the defect precisely: headOrder is null on a ring topic while the entries ARE readable', async () => {
-        const handle = openNode('headorder-null');
-        await publishRevision(handle, 1, 'ring entries are in-memory only');
+    it('★ G2b: headOrder is now NON-NULL (full retention persists sq_log rows) — and the reader still works', async () => {
+        const handle = openNode('headorder-nonnull');
+        await publishRevision(handle, 1, 'full retention persists durable rows now');
 
-        // This is the exact expression the old implementation gated on. If this
-        // ever stops being null — e.g. seqscribe starts persisting ring rows —
-        // the reasoning in transcript-parity-actual.ts should be revisited.
-        expect(handle.node.headOrder(RING_TOPIC)).toBeNull();
+        // This is the OPPOSITE of the pre-G2b fact this test used to pin (see
+        // the file header): under `ring` retention this was unconditionally
+        // `null`; under `full` retention (current policy) a real durable row
+        // exists and `headOrder` finds it. `transcript-parity-actual.ts`
+        // still does not pin its scan to this value — for the OTHER,
+        // retention-independent reason documented there (a topic-wide head
+        // is not necessarily this writer's own seq) — so this assertion only
+        // documents the retention-mode fact, it does not imply the reader
+        // should start using it.
+        expect(handle.node.headOrder(RING_TOPIC)).not.toBeNull();
 
-        // ...yet the writer-form scan, which merges `core.ringTail()`, sees them.
+        // The writer-form scan (which merges `core.ringTail()` — a no-op for
+        // a non-ring topic — alongside the durable sources) still sees them.
         const scanned = handle.node.scanEntries(RING_TOPIC, { writer: handle.writerId });
         expect(scanned.entries.length).toBeGreaterThan(0);
         expect(readLocalTranscriptParityActual(handle, SESSION_ID, handle.writerId).status).toBe('found');
@@ -192,27 +205,33 @@ describe('readLocalTranscriptParityActual against a real ring-retention node', (
         });
     });
 
-    it('★ ring overflow: an evicted older revision cannot corrupt the newest intact one', async () => {
+    it('★ unanchored-scan window: a stale default window cannot corrupt the newest intact revision', async () => {
         const handle = openNode('overflow');
 
-        // Each revision here is 3 rows (begin + 1 chunk + commit), so publishing
-        // well past SESSION_TRANSCRIPT_RING forces the oldest rows — including
-        // whole `begin` rows — out of the ring. A chunk or commit whose `begin`
-        // was evicted is rejected by the assembler (`chunk_without_begin` /
-        // `commit_without_begin`) without disturbing in-flight state, so the
-        // newest fully-resident revision still assembles. This is the arithmetic
-        // MAX_TRANSCRIPT_REVISION_ROWS (240) vs. ring 500 is sized for.
+        // Each revision here is 3 rows (begin + 1 chunk + commit). Under the
+        // PRE-G2b `ring(500)` policy, publishing well past
+        // SESSION_TRANSCRIPT_RING physically evicted the oldest rows from the
+        // ring. Under the CURRENT `full` retention policy nothing is evicted
+        // (writer-gc.ts's prune sweep is not running in this test) — every
+        // row published below still exists durably. What this test actually
+        // exercises is retention-mode-independent: `scanEntries`'s WRITER
+        // FORM bounds its page as a fixed-width SEQ WINDOW
+        // (`[fromSeq, fromSeq+limit-1]`), not "the last `limit` rows" — so an
+        // UNANCHORED call (default `fromSeq: 1`) still returns only seqs
+        // 1..500 regardless of how many more rows exist beyond that window,
+        // durable or not. `readLocalTranscriptParityActual` anchors `fromSeq`
+        // to the writer's head specifically so it does NOT hit this stale
+        // window — see the long note at its `scanEntries` call.
         const revisions = Math.ceil(SESSION_TRANSCRIPT_RING / 3) + 20;
         for (let r = 1; r <= revisions; r++) await publishRevision(handle, r, `rev-${r}`);
 
         // ★ The unanchored form — `scanEntries({writer})` with its default
-        // `fromSeq: 1` — reads the seq window 1..500 while the ring now holds
-        // the newest 500 seqs. It therefore returns the OLDEST survivors and
-        // misses the newest revision entirely. Pinned here so nobody
-        // "simplifies" the anchored call in the implementation back to this.
+        // `fromSeq: 1` — reads the seq window 1..500, missing every row
+        // published beyond it. Pinned here so nobody "simplifies" the
+        // anchored call in the implementation back to this.
         const unanchored = handle.node.scanEntries(RING_TOPIC, { writer: handle.writerId }).entries;
         const newestSeqUnanchored = unanchored[unanchored.length - 1]?.seq ?? 0;
-        expect(newestSeqUnanchored).toBe(SESSION_TRANSCRIPT_RING); // capped at 500, not the true head
+        expect(newestSeqUnanchored).toBe(SESSION_TRANSCRIPT_RING); // capped at 500 by the default window, not the true head
         expect(newestSeqUnanchored).toBeLessThan(revisions * 3); // ...which is behind the real head
 
         const result = readLocalTranscriptParityActual(handle, SESSION_ID, handle.writerId);

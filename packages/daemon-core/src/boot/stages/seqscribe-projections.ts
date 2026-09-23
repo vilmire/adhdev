@@ -13,10 +13,15 @@
  *   2. fleet.status shadow, then 3. fleet.status parity (only arms over an
  *      active shadow).
  *   4. transcript projection + its bus subscriber (+ the registry's claim release).
- *   5. activate known mesh topics — needs the armed publisher node. NOT a
+ *   5. transcript writer-gc (G2b, `writer-gc.ts`) — after the projection so
+ *      the sweep only ever prunes topics the projection has already had a
+ *      chance to define; arming order between this and mesh topic activation
+ *      below doesn't matter (disjoint topic namespaces), so it goes right
+ *      after its natural predecessor, the transcript projection.
+ *   6. activate known mesh topics — needs the armed publisher node. NOT a
  *      tryStep: a known mesh whose events topic cannot be defined is a mesh
  *      boot failure (C7-1), so the error propagates out of the stage.
- *   6. prune retired durable cursors (the Stage 4A read model, the Stage 3
+ *   7. prune retired durable cursors (the Stage 4A read model, the Stage 3
  *      parity nonces, the Stage 5a terminal redrive — C3 correction 4), BEFORE
  *      S7 registers the turn cursors (`turn.ingest` / `turn.deliver` /
  *      `mesh.index`, `seqscribe/mesh-turn-consumer.ts`), which need the turn
@@ -37,6 +42,7 @@ import { configureTranscriptProjection } from '../../seqscribe/transcript-publis
 import { createLiveTranscriptPublisher } from '../../seqscribe/transcript-publish-runtime.js';
 import { releaseSessionTranscriptTopic } from '../../seqscribe/transcript-activation.js';
 import { subscribeTranscriptProjection } from '../../seqscribe/transcript-bus-subscriber.js';
+import { configureTranscriptWriterGc } from '../../seqscribe/writer-gc.js';
 import { pruneRetiredMeshConsumers } from '../../seqscribe/mesh-turn-consumer.js';
 import { bindSeqscribeRuntime } from '../../seqscribe/runtime-slot.js';
 import type { SeqscribeRuntime } from '../../seqscribe/runtime.js';
@@ -135,7 +141,13 @@ function armProjections(rt: SeqscribeRuntime, s5: CommandPlaneStage, hooks: ArmS
         s5.sessionRegistry.setTranscriptTopicRelease(null);
     }]);
 
-    // 5. Define the events/handoff pair for meshes we already know, instead of
+    // 5. Transcript writer-gc (G2b) — bounds `full`-retention session
+    // transcript topics locally (writer-gc.ts's header has the full account).
+    tryStep('Seqscribe', 'transcript writer-gc', () => { configureTranscriptWriterGc(node); });
+    step('transcript-writer-gc');
+    undo.push(['transcript-writer-gc', () => { configureTranscriptWriterGc(null); }]);
+
+    // 6. Define the events/handoff pair for meshes we already know, instead of
     // waiting for a local write — a consume-only node never makes one, and
     // without it `mutualFull` stays false and sync silently skips the topic.
     // ★ Not a tryStep (C7-1): the events topic is the ONLY mesh event path, so
@@ -157,7 +169,7 @@ function armProjections(rt: SeqscribeRuntime, s5: CommandPlaneStage, hooks: ArmS
     }
     step('activate-topics');
 
-    // 6. GC the retired durable cursors (each holds its topic's archive floor
+    // 7. GC the retired durable cursors (each holds its topic's archive floor
     // open). Best-effort; runs before S7 registers the turn cursors, so no
     // prune can race a live registration.
     tryStep('Seqscribe', 'retired consumer prune', () => { pruneRetiredMeshConsumers(node); });

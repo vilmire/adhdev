@@ -201,15 +201,46 @@ export function meshHandoffPolicy(): TopicPolicy {
 }
 
 /**
- * `session.<id>.transcript` — chat content, so a bounded ring rather than full
- * history, and `subscribe-only`: peers stream the tail instead of negotiating
- * mutual full-sync. NOTE a `full` grant on a subscribe-only topic is a host
- * error the library rejects (seqscribe proposals-v3.5 P1) — grant `serve`.
+ * `session.<id>.transcript` — chat content, `full` retention (durable across
+ * a daemon restart — the G2b goal, design §7e), `subscribe-only`: peers
+ * stream the tail instead of negotiating mutual full-sync. NOTE a `full`
+ * grant on a subscribe-only topic is a host error the library rejects
+ * (seqscribe proposals-v3.5 P1) — grant `serve`.
+ *
+ * ── `full`, not `ring` (G2b, landed 2026-09-24) ─────────────────────────────
+ * An earlier attempt at this switch reverted the same day: the vendor's
+ * built-in `view: 'tail'` SUB view — used for live delivery by both the
+ * daemon (`transcript-replica-store.ts`) and the browser
+ * (`transcript-session-subscription.ts`) — only served `ring` topics and
+ * threw `ERR_UNKNOWN_VIEW` for anything else. That blocker is now resolved
+ * upstream: `tail` also serves `retention:{mode:'full'}` +
+ * `replication:'subscribe-only'` topics with identical SNAP/DELTA/Row wire
+ * shapes (`oss/vendor/seqscribe/src/subs.ts`, `FULL_TAIL_DEFAULT`), and a
+ * cursor-beyond-journal resume gets a SNAP `reset:true` the same way a ring
+ * epoch bump does — so the existing `TranscriptRevisionAssembler`/parity
+ * code needs no redesign.
+ *
+ * A `full`-retention topic accumulates durable `sq_log` rows forever unless
+ * something bounds it, since finality certification for per-session topics
+ * is not wired (they are defined on demand, after boot — see
+ * `transcript-activation.ts` — so they are never in the coordinator's static
+ * certify list). The bound is `writer-gc.ts`'s periodic sweep, which calls
+ * the vendor's `Node.pruneTopic(topic, {olderThanMs, keepNewest})` — a
+ * local-only, queue-safe prune that never deletes below any registered
+ * `onEntry` consumer cursor and refuses outright while a `tail` SUB
+ * subscriber is attached (see that module for how the sweep handles the
+ * refusal).
+ *
+ * The `ringSize` parameter was removed with the ring era — every caller now
+ * calls this with no arguments. `SESSION_TRANSCRIPT_RING` is kept only for
+ * `FLEET_STATUS_RING`-style callers that still want a ring elsewhere (none
+ * today) and as a documented historical default should ring ever return for
+ * a different topic.
  */
-export function sessionTranscriptPolicy(ringSize: number = SESSION_TRANSCRIPT_RING): TopicPolicy {
+export function sessionTranscriptPolicy(): TopicPolicy {
     return {
         kind: 'append',
-        retention: { mode: 'ring', size: ringSize },
+        retention: { mode: 'full' },
         replication: 'subscribe-only',
         access: 'content',
         finalityAuthority: ADHDEV_AUTHORITY_ID,

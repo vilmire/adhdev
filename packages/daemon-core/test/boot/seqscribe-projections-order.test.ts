@@ -34,6 +34,9 @@ vi.mock('../../src/seqscribe/transcript-activation.js', () => ({ releaseSessionT
 vi.mock('../../src/seqscribe/transcript-bus-subscriber.js', () => ({
   subscribeTranscriptProjection: () => { calls.push('transcriptBus'); return () => calls.push('transcriptBus.off') },
 }))
+vi.mock('../../src/seqscribe/writer-gc.js', () => ({
+  configureTranscriptWriterGc: rec('writerGc'),
+}))
 vi.mock('../../src/config/mesh-config.js', () => ({ listMeshesReadOnly: () => [{ id: 'm1' }] }))
 
 import { armSeqscribeProjections } from '../../src/boot/stages/seqscribe-projections.js'
@@ -66,15 +69,16 @@ describe('armSeqscribeProjections', () => {
     const s6 = armSeqscribeProjections(s5, { onStep: s => steps.push(s) })
     expect(steps).toEqual([
       'arm:slot', 'arm:publisher', 'arm:fleet-shadow', 'arm:fleet-parity',
-      'arm:transcript', 'arm:activate-topics', 'arm:prune-consumers',
+      'arm:transcript', 'arm:transcript-writer-gc', 'arm:activate-topics', 'arm:prune-consumers',
     ])
     // Publisher before topic activation / prune; shadow before parity. No read
     // model (C7-2), no redrive (the S7 turn.deliver cursor is redelivery), no
     // mesh parity loop (C7-6). The retired cursors are pruned BEFORE S7 arms
-    // the turn cursors.
+    // the turn cursors. Writer-gc (G2b) arms right after the transcript
+    // projection it depends on.
     expect(calls).toEqual([
       'publisher(node)', 'fleetShadow(node)', 'fleetParity(node)',
-      'transcript(deps)', 'transcriptBus', 'activateTopics', 'prune',
+      'transcript(deps)', 'transcriptBus', 'writerGc(node)', 'activateTopics', 'prune',
     ])
     expect(seqscribeSlot.current()).toBe(rt)
     expect(rt.projections()).toMatchObject({ transcript: { fake: 'service' } })
@@ -89,19 +93,20 @@ describe('armSeqscribeProjections', () => {
     steps.length = 0
     s6.disarmProjections()
     expect(steps).toEqual([
-      'disarm:attach', 'disarm:transcript',
+      'disarm:attach', 'disarm:transcript-writer-gc', 'disarm:transcript',
       'disarm:fleet-parity', 'disarm:fleet-shadow', 'disarm:publisher', 'disarm:slot',
     ])
     // fleet parity detaches before its shadow; the publisher detaches last but the slot.
+    // Writer-gc disarms before the transcript projection it depends on.
     expect(calls).toEqual([
-      'transcriptBus.off', 'transcript(null)',
+      'writerGc(null)', 'transcriptBus.off', 'transcript(null)',
       'fleetParity(null)', 'fleetShadow(null)', 'publisher(null)',
     ])
     expect(seqscribeSlot.current()).toBeNull()
     expect(rt.projections()).toBeNull()
     // Idempotent.
     s6.disarmProjections()
-    expect(steps).toHaveLength(6)
+    expect(steps).toHaveLength(7)
   })
 
   it('a known mesh whose events topic cannot be defined fails the stage (C7-1) and unwinds what it armed', () => {
@@ -109,9 +114,10 @@ describe('armSeqscribeProjections', () => {
     topicActivation.fail = true
     const steps: string[] = []
     expect(() => armSeqscribeProjections(s5, { onStep: s => steps.push(s) })).toThrow(/mesh topic activation failed/)
-    // Nothing past the failed step armed, and the slot/publisher were unwound.
+    // Nothing past the failed step armed, and the slot/publisher/writer-gc were unwound.
     expect(steps).not.toContain('arm:activate-topics')
     expect(calls).toContain('publisher(null)')
+    expect(calls).toContain('writerGc(null)')
     expect(seqscribeSlot.current()).toBeNull()
   })
 

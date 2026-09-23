@@ -42,6 +42,7 @@ import { workerReportSpecs } from './low-family/worker-report.js';
 import { workerMailboxSpecs } from './low-family/worker-mailbox.js';
 import { workerPeerContextSpecs } from './low-family/worker-peer-context.js';
 import { transcriptReplicaSpecs } from './low-family/transcript-replica.js';
+import { transcriptTransportReportSpecs } from './low-family/transcript-transport-report.js';
 import { cliAgentSpecs } from './med-family/cli-agent.js';
 import { ideSpecs } from './med-family/ide.js';
 import { meshCrudSpecs } from './med-family/mesh-crud.js';
@@ -325,6 +326,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...workerMailboxSpecs,
             ...workerPeerContextSpecs,
             ...transcriptReplicaSpecs,
+            ...transcriptTransportReportSpecs,
             ...cliAgentSpecs,
             ...ideSpecs,
             ...meshCrudSpecs,

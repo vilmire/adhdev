@@ -110,7 +110,10 @@ export function bootCommandPlane(s4: SeqscribeNodeStage): CommandPlaneStage {
         getCdpLogFn: (ideType: string) => LOG.forComponent(`CDP:${ideType}`).asLogFn(),
         // Local replication-health read surface (get_status_metadata).
         // Aggregate-only by construction — see seqscribe/local-stats.ts.
-        getSeqscribeStats: () => buildLocalSeqscribeStats(seqscribe, { meshDelivery: readMeshDeliveryCounters }),
+        getSeqscribeStats: () => buildLocalSeqscribeStats(seqscribe, {
+            meshDelivery: readMeshDeliveryCounters,
+            zombieRecovered: cfg.mesh?.zombieRecovered,
+        }),
         // Beacon staleness / sole-copy (§7.1). Unlike the stats this DOES carry
         // topic names and peer writer ids — LOCAL/P2P only, never status_report.
         // `diagnostics()` does no I/O, so an on-demand read cannot become a
