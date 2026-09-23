@@ -682,6 +682,180 @@ export function decodeMissionQueryResponse(value: unknown): MissionQueryResponse
     return isMissionQueryResponse(value) ? value : null
 }
 
+// ─── mission_list_query ─────────────────────────────────────────────────────
+//
+// Wiring-unification Phase C, workstream C-W9b.
+//
+// `mesh-tools-mission.ts`'s own file-header note (2026-09-24, C-W6) flagged
+// this exact gap: `mission_query`'s landed response is `{missions:
+// MeshMissionRecordWire[]}` only — no `verbose`/`includeMagi`/`withStats`/
+// `limit`/`truncated`/`overflowIds`/`historyFold`, all of which
+// `listMeshMissionsForTool` (daemon-core `mesh-missions.ts`) computes for the
+// `mesh_mission_list` tool. Rather than widen `mission_query` itself (an
+// already-landed, already-tested contract other callers rely on for its
+// narrow shape), this is an ADDITIVE sibling command carrying
+// `listMeshMissionsForTool`'s full output shape — request/response fields
+// mirror its options/`MeshMissionListResult` one-for-one (see
+// mesh-missions.ts). `goal`/`goalPreview` are free text, same local-IPC
+// rationale as `mission_upsert`'s `goal` above.
+
+export interface MissionListQueryRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    statuses?: readonly MeshMissionStatusValue[]
+    verbose?: boolean
+    includeMagi?: boolean
+    withStats?: boolean
+    limit?: number
+    historyIdLimit?: number
+}
+
+export interface MeshMissionTaskAggregateWire {
+    total: number
+    pending: number
+    assigned: number
+    completed: number
+    failed: number
+    cancelled: number
+    blocked: number
+    lastActivityAt: string | null
+}
+
+export interface MeshMissionStatsWire {
+    missionId: string
+    taskCount: number
+    completed: number
+    failed: number
+    totalDurationMs: number
+    wallClockMs: number | null
+    retries: number
+    incompleteTaskIds: readonly string[]
+}
+
+/** Verbose (full-goal) mission row. `goal` present, `goalPreview`/`goalTruncated` absent. */
+export interface MissionListSummaryVerboseWire {
+    id: string
+    meshId: string
+    title: string
+    goal: string
+    status: MeshMissionStatusValue
+    source?: MeshMissionSourceValue
+    tasks: MeshMissionTaskAggregateWire
+    stats?: MeshMissionStatsWire
+}
+
+/** Compact (default) mission row. `goalPreview`/`goalTruncated` present, `goal` absent. */
+export interface MissionListSummarySlimWire {
+    id: string
+    meshId: string
+    title: string
+    goalPreview: string
+    goalTruncated: boolean
+    status: MeshMissionStatusValue
+    source?: MeshMissionSourceValue
+    tasks: MeshMissionTaskAggregateWire
+    stats?: MeshMissionStatsWire
+}
+
+export type MissionListSummaryWire = MissionListSummaryVerboseWire | MissionListSummarySlimWire
+
+export interface MeshMissionHistoryFoldWire {
+    count: number
+    byStatus: Record<string, number>
+    missionIds: readonly string[]
+    note: string
+}
+
+export interface MissionListQueryResponse {
+    missions: readonly MissionListSummaryWire[]
+    historyFold: MeshMissionHistoryFoldWire | null
+    truncated: boolean
+    matched: number
+    overflowIds?: readonly string[]
+}
+
+export function isMissionListQueryRequest(value: unknown): value is MissionListQueryRequest {
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'statuses', 'verbose', 'includeMagi', 'withStats', 'limit', 'historyIdLimit'])) return false
+    if (value.v !== TURN_IPC_PROTOCOL_VERSION) return false
+    if (!isEvidenceIdentifier(value.meshId)) return false
+    if (value.statuses !== undefined) {
+        if (!Array.isArray(value.statuses) || value.statuses.length === 0) return false
+        if (!value.statuses.every(isMeshMissionStatusValue)) return false
+    }
+    if (value.verbose !== undefined && typeof value.verbose !== 'boolean') return false
+    if (value.includeMagi !== undefined && typeof value.includeMagi !== 'boolean') return false
+    if (value.withStats !== undefined && typeof value.withStats !== 'boolean') return false
+    if (value.limit !== undefined && !isNonNegativeInt(value.limit)) return false
+    if (value.historyIdLimit !== undefined && !isNonNegativeInt(value.historyIdLimit)) return false
+    return true
+}
+
+export function decodeMissionListQueryRequest(value: unknown): MissionListQueryRequest | null {
+    return isMissionListQueryRequest(value) ? value : null
+}
+
+function isMeshMissionTaskAggregateWire(value: unknown): value is MeshMissionTaskAggregateWire {
+    const keys = ['total', 'pending', 'assigned', 'completed', 'failed', 'cancelled', 'blocked', 'lastActivityAt'] as const
+    if (!isRecord(value) || !hasOnlyKeys(value, keys)) return false
+    for (const k of ['total', 'pending', 'assigned', 'completed', 'failed', 'cancelled', 'blocked'] as const) {
+        if (!isNonNegativeInt(value[k])) return false
+    }
+    return value.lastActivityAt === null || typeof value.lastActivityAt === 'string'
+}
+
+function isMeshMissionStatsWire(value: unknown): value is MeshMissionStatsWire {
+    const keys = ['missionId', 'taskCount', 'completed', 'failed', 'totalDurationMs', 'wallClockMs', 'retries', 'incompleteTaskIds'] as const
+    if (!isRecord(value) || !hasOnlyKeys(value, keys)) return false
+    if (!isEvidenceIdentifier(value.missionId)) return false
+    for (const k of ['taskCount', 'completed', 'failed', 'totalDurationMs', 'retries'] as const) {
+        if (!isNonNegativeInt(value[k])) return false
+    }
+    if (value.wallClockMs !== null && !isNonNegativeInt(value.wallClockMs)) return false
+    if (!Array.isArray(value.incompleteTaskIds) || !value.incompleteTaskIds.every(isEvidenceIdentifier)) return false
+    return true
+}
+
+function isMissionListSummaryWire(value: unknown): value is MissionListSummaryWire {
+    if (!isRecord(value)) return false
+    const hasGoal = 'goal' in value
+    const hasPreview = 'goalPreview' in value && 'goalTruncated' in value
+    if (hasGoal === hasPreview) return false // exactly one of the two shapes
+    const baseKeys = ['id', 'meshId', 'title', 'status', 'source', 'tasks', 'stats'] as const
+    const allowed = hasGoal ? [...baseKeys, 'goal'] : [...baseKeys, 'goalPreview', 'goalTruncated']
+    if (!hasOnlyKeys(value, allowed)) return false
+    if (!isEvidenceIdentifier(value.id) || !isEvidenceIdentifier(value.meshId)) return false
+    if (typeof value.title !== 'string') return false
+    if (!isMeshMissionStatusValue(value.status)) return false
+    if (value.source !== undefined && !isMeshMissionSourceValue(value.source)) return false
+    if (!isMeshMissionTaskAggregateWire(value.tasks)) return false
+    if (value.stats !== undefined && !isMeshMissionStatsWire(value.stats)) return false
+    if (hasGoal && typeof value.goal !== 'string') return false
+    if (hasPreview && (typeof value.goalPreview !== 'string' || typeof value.goalTruncated !== 'boolean')) return false
+    return true
+}
+
+function isMeshMissionHistoryFoldWire(value: unknown): value is MeshMissionHistoryFoldWire {
+    if (!isRecord(value) || !hasOnlyKeys(value, ['count', 'byStatus', 'missionIds', 'note'])) return false
+    if (!isNonNegativeInt(value.count)) return false
+    if (!isRecord(value.byStatus) || !Object.values(value.byStatus).every((n) => isNonNegativeInt(n))) return false
+    if (!Array.isArray(value.missionIds) || !value.missionIds.every(isEvidenceIdentifier)) return false
+    return typeof value.note === 'string'
+}
+
+export function isMissionListQueryResponse(value: unknown): value is MissionListQueryResponse {
+    if (!isRecord(value) || !hasOnlyKeys(value, ['missions', 'historyFold', 'truncated', 'matched', 'overflowIds'])) return false
+    if (!Array.isArray(value.missions) || !value.missions.every(isMissionListSummaryWire)) return false
+    if (value.historyFold !== null && !isMeshMissionHistoryFoldWire(value.historyFold)) return false
+    if (typeof value.truncated !== 'boolean') return false
+    if (!isNonNegativeInt(value.matched)) return false
+    if (value.overflowIds !== undefined && (!Array.isArray(value.overflowIds) || !value.overflowIds.every(isEvidenceIdentifier))) return false
+    return true
+}
+
+export function decodeMissionListQueryResponse(value: unknown): MissionListQueryResponse | null {
+    return isMissionListQueryResponse(value) ? value : null
+}
+
 // ─── note_upsert / note_forget ──────────────────────────────────────────────
 //
 // Decision (2026-09-24, C-W6b; implemented C-W8): coordinator operating notes
@@ -786,6 +960,671 @@ export function decodeNoteForgetResponse(value: unknown): NoteForgetResponse | n
     return isNoteForgetResponse(value) ? value : null
 }
 
+// ─── tool_call_record ───────────────────────────────────────────────────────
+//
+// Wiring-unification Phase C, workstream C-W9b
+// (docs/design/2026-09-23-wiring-unification.md §5 C2 "MCP server" paragraph,
+// 2026-09-24 14:00 stamp "C-W9").
+//
+// Replaces `recordMeshToolCall`/`recordMeshCoordinatorToolCall`
+// (`daemon-core/src/mesh/mesh-direct-dispatch.ts`) — an in-process,
+// per-mesh-tool-call rate-limit/advisory bump mcp-server called directly
+// against its own store handle. Every field is an identifier, a closed enum,
+// a boolean or a counter — squarely inside `mesh_record`'s content boundary,
+// but this is its own command (not a `mesh_record` payload) because it is a
+// COUNTER MUTATION with a computed return value (`rateLimitExceeded`,
+// `callsInWindow`, `advisory`), not an append-only scalar record.
+
+export const TOOL_CALLER_ROLES = ['coordinator', 'unknown'] as const
+export type ToolCallerRole = typeof TOOL_CALLER_ROLES[number]
+export const isToolCallerRole = makeGuard(TOOL_CALLER_ROLES)
+
+export interface ToolCallRecordRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    /** The mesh tool name, e.g. `mesh_status` (identifier, not free text — always a fixed tool-name string). */
+    tool: string
+    sessionId?: string
+    callerRole: ToolCallerRole
+}
+
+export interface ToolCallRecordResponse {
+    rateLimitExceeded: boolean
+    callsInWindow: number
+    /** Short machine-oriented advisory string, or null. Never free text describing content. */
+    advisory: string | null
+}
+
+export function isToolCallRecordRequest(value: unknown): value is ToolCallRecordRequest {
+    return isRecord(value) && hasOnlyKeys(value, ['v', 'meshId', 'tool', 'sessionId', 'callerRole'])
+        && value.v === TURN_IPC_PROTOCOL_VERSION
+        && isEvidenceIdentifier(value.meshId)
+        && isEvidenceIdentifier(value.tool)
+        && isOptionalId(value.sessionId)
+        && isToolCallerRole(value.callerRole)
+}
+
+export function decodeToolCallRecordRequest(value: unknown): ToolCallRecordRequest | null {
+    return isToolCallRecordRequest(value) ? value : null
+}
+
+export function isToolCallRecordResponse(value: unknown): value is ToolCallRecordResponse {
+    return isRecord(value) && hasOnlyKeys(value, ['rateLimitExceeded', 'callsInWindow', 'advisory'])
+        && typeof value.rateLimitExceeded === 'boolean'
+        && isNonNegativeInt(value.callsInWindow)
+        && (value.advisory === null || typeof value.advisory === 'string')
+}
+
+export function decodeToolCallRecordResponse(value: unknown): ToolCallRecordResponse | null {
+    return isToolCallRecordResponse(value) ? value : null
+}
+
+// ─── ledger_query ───────────────────────────────────────────────────────────
+//
+// Wiring-unification Phase C, workstream C-W9b.
+//
+// Replaces the remaining bare `readLedgerEntries(meshId, opts)` /
+// `getLedgerSummary(meshId)` in-process reads that `turn_query` cannot serve
+// (§5 C2's `mesh-tools-mission.ts` file-header note, 2026-09-24: "general
+// ledger browsing by arbitrary `kind`/`since`/`node` filters —
+// `turn_query`'s shape... has no free-form kind-list or node filter, so this
+// is a real API mismatch, not a mechanical rename"). `turn_query` stays
+// scoped to the turn-ledger's own attempt/event rows; `ledger_query` is the
+// general record browse surface (C-W9a: the daemon's `mesh_local_records` plus
+// the turn ledger's task outcomes, `readLocalRecords`) `meshTaskHistory` /
+// `meshLedgerQuery` / the MAGI ledger-scan helpers need.
+//
+// CONTENT BOUNDARY: `MeshLedgerEntry.payload` (daemon-core `mesh-ledger.ts`)
+// is `Record<string, unknown>` — genuinely unbounded JSON (a MAGI synthesis
+// object, a graph plan, a free-text checkpoint message), NOT constrained to
+// `mesh_record`'s scalar allow-list. This is fine for the SAME reason
+// `mission_upsert`'s `goal` and `note_upsert`'s `text` are fine (see that
+// section's note above): this is local IPC between mcp-server and the
+// daemon that owns the ledger, both on the operator's own machine — never a
+// cross-machine or server hop. `entryPayload` below is therefore an
+// intentionally-unvalidated `Record<string, unknown>` passthrough, exactly
+// like `MissionUpsertRequest.goal` is unvalidated free text.
+
+export interface LedgerQueryRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    /** One or more ledger `kind` strings (daemon-core `MeshLedgerKind`; mesh-shared cannot import that union, so these are identifiers here). Omitted = every kind. */
+    kind?: readonly string[]
+    /** ISO-8601 or epoch-ms-as-string — passed through to `readLedgerEntries`'s `since` (parsed via `new Date()`). */
+    since?: string
+    /** Filter to entries whose nodeId is equivalent to this daemon id (matched via `daemonIdsEquivalent` daemon-side, not raw `===`). */
+    node?: string
+    tail?: number
+    /** Also return `getLedgerSummary(meshId)` alongside the entries — saves a second round trip for callers that want both (the common case: every existing call site fetches both together). */
+    includeSummary?: boolean
+}
+
+export interface LedgerQueryEntryWire {
+    id: string
+    meshId: string
+    timestamp: string
+    kind: string
+    nodeId?: string
+    sessionId?: string
+    providerType?: string
+    taskId?: string
+    /** Unbounded JSON passthrough — see file section's CONTENT BOUNDARY note. */
+    payload: Record<string, unknown>
+}
+
+export interface LedgerQuerySummaryWire {
+    meshId: string
+    totalEntries: number
+    taskDispatched: number
+    taskCompleted: number
+    taskFailed: number
+    taskStalled: number
+    sessionLaunched: number
+    checkpointCreated: number
+    lastActivityAt: string | null
+    recentFailures: number
+}
+
+export interface LedgerQueryResponse {
+    entries: readonly LedgerQueryEntryWire[]
+    summary?: LedgerQuerySummaryWire
+}
+
+export function isLedgerQueryRequest(value: unknown): value is LedgerQueryRequest {
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'kind', 'since', 'node', 'tail', 'includeSummary'])) return false
+    if (value.v !== TURN_IPC_PROTOCOL_VERSION) return false
+    if (!isEvidenceIdentifier(value.meshId)) return false
+    if (value.kind !== undefined && (!Array.isArray(value.kind) || value.kind.length === 0 || !value.kind.every(isEvidenceIdentifier))) return false
+    if (value.since !== undefined && typeof value.since !== 'string') return false
+    if (!isOptionalId(value.node)) return false
+    if (value.tail !== undefined && !isNonNegativeInt(value.tail)) return false
+    if (value.includeSummary !== undefined && typeof value.includeSummary !== 'boolean') return false
+    return true
+}
+
+export function decodeLedgerQueryRequest(value: unknown): LedgerQueryRequest | null {
+    return isLedgerQueryRequest(value) ? value : null
+}
+
+const LEDGER_QUERY_ENTRY_KEYS = ['id', 'meshId', 'timestamp', 'kind', 'nodeId', 'sessionId', 'providerType', 'taskId', 'payload'] as const
+
+function isLedgerQueryEntryWire(value: unknown): value is LedgerQueryEntryWire {
+    if (!isRecord(value) || !hasOnlyKeys(value, LEDGER_QUERY_ENTRY_KEYS)) return false
+    if (!isEvidenceIdentifier(value.id) || !isEvidenceIdentifier(value.meshId)) return false
+    if (typeof value.timestamp !== 'string' || typeof value.kind !== 'string') return false
+    if (!isOptionalId(value.nodeId) || !isOptionalId(value.sessionId) || !isOptionalId(value.providerType) || !isOptionalId(value.taskId)) return false
+    if (!isRecord(value.payload)) return false
+    return true
+}
+
+function isLedgerQuerySummaryWire(value: unknown): value is LedgerQuerySummaryWire {
+    const keys = ['meshId', 'totalEntries', 'taskDispatched', 'taskCompleted', 'taskFailed', 'taskStalled', 'sessionLaunched', 'checkpointCreated', 'lastActivityAt', 'recentFailures'] as const
+    if (!isRecord(value) || !hasOnlyKeys(value, keys)) return false
+    if (!isEvidenceIdentifier(value.meshId)) return false
+    for (const k of ['totalEntries', 'taskDispatched', 'taskCompleted', 'taskFailed', 'taskStalled', 'sessionLaunched', 'checkpointCreated', 'recentFailures'] as const) {
+        if (!isNonNegativeInt(value[k])) return false
+    }
+    if (value.lastActivityAt !== null && typeof value.lastActivityAt !== 'string') return false
+    return true
+}
+
+export function isLedgerQueryResponse(value: unknown): value is LedgerQueryResponse {
+    if (!isRecord(value) || !hasOnlyKeys(value, ['entries', 'summary'])) return false
+    if (!Array.isArray(value.entries) || !value.entries.every(isLedgerQueryEntryWire)) return false
+    if (value.summary !== undefined && !isLedgerQuerySummaryWire(value.summary)) return false
+    return true
+}
+
+export function decodeLedgerQueryResponse(value: unknown): LedgerQueryResponse | null {
+    return isLedgerQueryResponse(value) ? value : null
+}
+
+// ─── C-W9a: local records, queue composites, active work ────────────────────
+//
+// Wiring-unification Phase C, workstream C-W9a (the 2026-09-24 14:00 stamp
+// "Left for C-W9"): the event ledger and its JSONL mirror are gone, and every
+// mcp-server call that still reached the daemon's `mesh-runtime.db` in-process
+// — record appends, queue mutations, the queue/active-work reads that fed
+// `buildMeshActiveWork`, recovery hints — moves behind the commands below,
+// executed in the daemon that owns the store.
+//
+// CONTENT BOUNDARY: like `mission_upsert`'s `goal`, `note_upsert`'s `text` and
+// `ledger_query`'s entry payloads, several fields here are free text or
+// unbounded JSON (a task message, a MAGI synthesis, a queue row with its
+// message, an active-work record with its task summary). This is fine for the
+// same reason: local IPC between the mcp-server and the daemon on the
+// operator's own machine — never a cross-machine or server hop. Those fields
+// are documented as passthroughs and validated only for shape (object/array),
+// exactly like `LedgerQueryEntryWire.payload`. Nothing here is ever published
+// to a topic: `record_local`'s topic leg is the daemon's `mesh.record`
+// allow-list projection, which drops free text by construction.
+
+function isRecordArray(value: unknown): value is readonly Record<string, unknown>[] {
+    return Array.isArray(value) && value.every(isRecord)
+}
+
+function isOptionalRecord(value: unknown): boolean {
+    return value === undefined || isRecord(value)
+}
+
+function isOptionalBoolean(value: unknown): boolean {
+    return value === undefined || typeof value === 'boolean'
+}
+
+function isOptionalString(value: unknown): boolean {
+    return value === undefined || typeof value === 'string'
+}
+
+/** A queue row as the daemon's `getQueue` returns it — a JSON passthrough (see the section note). */
+export type QueueEntryWire = Record<string, unknown> & { id: string; status: string }
+
+function isQueueEntryWire(value: unknown): value is QueueEntryWire {
+    return isRecord(value) && isEvidenceIdentifier(value.id) && typeof value.status === 'string'
+}
+
+// ── record_local ──
+//
+// `meshRecord(meshId, kind, scalars, { local: true })` over IPC: the scalar
+// projection goes to `mesh.<id>.events` (content-free), the FULL payload lands
+// in the daemon's `mesh_local_records` (local-only). Replaces every mcp-server
+// `appendLedgerEntry` (dispatch / MAGI question+synthesis / checkpoint message /
+// reconcile records). `payload` is free-form JSON (see the section note).
+
+export interface RecordLocalRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    /** A `MeshLedgerKind` (daemon-core); an identifier here (mesh-shared cannot import that union). */
+    kind: string
+    nodeId?: string
+    sessionId?: string
+    providerType?: string
+    taskId?: string
+    payload: Record<string, unknown>
+}
+
+export interface RecordLocalResponse {
+    eventId: string
+    timestamp: string
+    storedLocally: boolean
+    published: boolean
+}
+
+export function isRecordLocalRequest(value: unknown): value is RecordLocalRequest {
+    return isRecord(value) && hasOnlyKeys(value, ['v', 'meshId', 'kind', 'nodeId', 'sessionId', 'providerType', 'taskId', 'payload'])
+        && value.v === TURN_IPC_PROTOCOL_VERSION
+        && isEvidenceIdentifier(value.meshId)
+        && isEvidenceIdentifier(value.kind)
+        && isOptionalId(value.nodeId) && isOptionalId(value.sessionId) && isOptionalId(value.providerType) && isOptionalId(value.taskId)
+        && isRecord(value.payload)
+}
+
+export function decodeRecordLocalRequest(value: unknown): RecordLocalRequest | null {
+    return isRecordLocalRequest(value) ? value : null
+}
+
+export function isRecordLocalResponse(value: unknown): value is RecordLocalResponse {
+    return isRecord(value) && hasOnlyKeys(value, ['eventId', 'timestamp', 'storedLocally', 'published'])
+        && isEvidenceIdentifier(value.eventId) && typeof value.timestamp === 'string'
+        && typeof value.storedLocally === 'boolean' && typeof value.published === 'boolean'
+}
+
+export function decodeRecordLocalResponse(value: unknown): RecordLocalResponse | null {
+    return isRecordLocalResponse(value) ? value : null
+}
+
+// ── queue_query ──
+
+export interface QueueQueryRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    /** Status filter (queue statuses); omitted = every row. */
+    statuses?: readonly string[]
+    /** One row by id (returns 0 or 1 entries). */
+    taskId?: string
+    /** Project for a VIEW surface: the persisted input envelope → `inputSummary` (summarizeQueueEntryInputForView). */
+    view?: boolean
+}
+
+export interface QueueQueryResponse {
+    entries: readonly QueueEntryWire[]
+}
+
+export function isQueueQueryRequest(value: unknown): value is QueueQueryRequest {
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'statuses', 'taskId', 'view'])) return false
+    if (value.v !== TURN_IPC_PROTOCOL_VERSION || !isEvidenceIdentifier(value.meshId)) return false
+    if (value.statuses !== undefined && (!Array.isArray(value.statuses) || !value.statuses.every(isEvidenceIdentifier))) return false
+    return isOptionalId(value.taskId) && isOptionalBoolean(value.view)
+}
+
+export function decodeQueueQueryRequest(value: unknown): QueueQueryRequest | null {
+    return isQueueQueryRequest(value) ? value : null
+}
+
+export function isQueueQueryResponse(value: unknown): value is QueueQueryResponse {
+    return isRecord(value) && hasOnlyKeys(value, ['entries']) && Array.isArray(value.entries) && value.entries.every(isQueueEntryWire)
+}
+
+export function decodeQueueQueryResponse(value: unknown): QueueQueryResponse | null {
+    return isQueueQueryResponse(value) ? value : null
+}
+
+// ── queue_enqueue ──
+//
+// `enqueueTask(meshId, message, options)` + (when `decision` is given) the
+// single-surface `recordSingleEnqueueDecision` for the new task id, in the
+// daemon. `options` is `MeshEnqueueTaskOptions` (daemon-core) as a JSON
+// passthrough; the daemon's enqueue guards (message, task-mode, difficulty,
+// dependency cycle) run unchanged and a refusal comes back as the error.
+
+export interface QueueEnqueueRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    /** Free text (the task message — see the section note). */
+    message: string
+    options?: Record<string, unknown>
+    /** `recordSingleEnqueueDecision` args minus `taskId` (the daemon fills it). */
+    decision?: Record<string, unknown>
+}
+
+export interface QueueEnqueueResponse {
+    entry: QueueEntryWire
+}
+
+export function isQueueEnqueueRequest(value: unknown): value is QueueEnqueueRequest {
+    return isRecord(value) && hasOnlyKeys(value, ['v', 'meshId', 'message', 'options', 'decision'])
+        && value.v === TURN_IPC_PROTOCOL_VERSION && isEvidenceIdentifier(value.meshId)
+        && typeof value.message === 'string'
+        && isOptionalRecord(value.options) && isOptionalRecord(value.decision)
+}
+
+export function decodeQueueEnqueueRequest(value: unknown): QueueEnqueueRequest | null {
+    return isQueueEnqueueRequest(value) ? value : null
+}
+
+export function isQueueEnqueueResponse(value: unknown): value is QueueEnqueueResponse {
+    return isRecord(value) && hasOnlyKeys(value, ['entry']) && isQueueEntryWire(value.entry)
+}
+
+export function decodeQueueEnqueueResponse(value: unknown): QueueEnqueueResponse | null {
+    return isQueueEnqueueResponse(value) ? value : null
+}
+
+// ── queue_enqueue_graph ──
+//
+// The atomic batch enqueue, both paths, with its audit trail — in the daemon:
+//   - `mode: 'compat'` → `enqueueTaskGraph(meshId, specs)`;
+//   - `mode: 'graph'`  → `commitMeshGraphPlan(plan)` + `recordGraphEnqueueCommitted`.
+// A failure records `recordGraphEnqueueRolledBack` (graph) or
+// `recordGraphEnqueueValidationFailed` (compat) from the catch — the daemon
+// writes the audit AFTER the failed transaction, exactly as design :752-753
+// requires — and answers `{ ok: false, refusalCode?, message, extra? }` (a
+// domain refusal is a RESULT here, not a transport error, so the caller keeps
+// its code/extra for the tool response). NOT `code`/`error`: those two keys
+// belong to the command envelope (`{ success, error, code }`) the client
+// unwraps, so a result must never reuse them.
+
+export interface QueueEnqueueGraphRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    mode: 'compat' | 'graph'
+    /** compat: `MeshTaskGraphEntrySpec[]` (JSON passthrough). */
+    specs?: readonly Record<string, unknown>[]
+    /** graph: `commitMeshGraphPlan` input minus `meshId` (JSON passthrough). */
+    plan?: Record<string, unknown>
+    /** Audit context: batchId / missionId / coordinatorSessionId / onDependencyFailure / orchestrationDecision / taskCount. */
+    audit?: Record<string, unknown>
+}
+
+export type QueueEnqueueGraphResponse =
+    | { ok: true; tasks: readonly QueueEntryWire[]; graph?: Record<string, unknown> }
+    | { ok: false; refusalCode?: string; message: string; extra?: Record<string, unknown> }
+
+export function isQueueEnqueueGraphRequest(value: unknown): value is QueueEnqueueGraphRequest {
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'mode', 'specs', 'plan', 'audit'])) return false
+    if (value.v !== TURN_IPC_PROTOCOL_VERSION || !isEvidenceIdentifier(value.meshId)) return false
+    if (value.mode === 'compat') return isRecordArray(value.specs) && value.plan === undefined && isOptionalRecord(value.audit)
+    if (value.mode === 'graph') return isRecord(value.plan) && value.specs === undefined && isOptionalRecord(value.audit)
+    return false
+}
+
+export function decodeQueueEnqueueGraphRequest(value: unknown): QueueEnqueueGraphRequest | null {
+    return isQueueEnqueueGraphRequest(value) ? value : null
+}
+
+export function isQueueEnqueueGraphResponse(value: unknown): value is QueueEnqueueGraphResponse {
+    if (!isRecord(value)) return false
+    if (value.ok === true) {
+        return hasOnlyKeys(value, ['ok', 'tasks', 'graph']) && Array.isArray(value.tasks) && value.tasks.every(isQueueEntryWire)
+            && isOptionalRecord(value.graph)
+    }
+    if (value.ok === false) {
+        return hasOnlyKeys(value, ['ok', 'refusalCode', 'message', 'extra']) && typeof value.message === 'string'
+            && isOptionalString(value.refusalCode) && isOptionalRecord(value.extra)
+    }
+    return false
+}
+
+export function decodeQueueEnqueueGraphResponse(value: unknown): QueueEnqueueGraphResponse | null {
+    return isQueueEnqueueGraphResponse(value) ? value : null
+}
+
+// ── queue_cancel ──
+
+export interface QueueCancelRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    taskId: string
+    /** Operator reason (free text, local IPC). */
+    reason?: string
+}
+
+export interface QueueCancelResponse {
+    /** The cancelled row, or null when no such task. */
+    task: QueueEntryWire | null
+    /** The row as it was BEFORE the cancel (its assignment is what a caller stops). */
+    before: QueueEntryWire | null
+}
+
+export function isQueueCancelRequest(value: unknown): value is QueueCancelRequest {
+    return isRecord(value) && hasOnlyKeys(value, ['v', 'meshId', 'taskId', 'reason'])
+        && value.v === TURN_IPC_PROTOCOL_VERSION && isEvidenceIdentifier(value.meshId) && isEvidenceIdentifier(value.taskId)
+        && isOptionalString(value.reason)
+}
+
+export function decodeQueueCancelRequest(value: unknown): QueueCancelRequest | null {
+    return isQueueCancelRequest(value) ? value : null
+}
+
+export function isQueueCancelResponse(value: unknown): value is QueueCancelResponse {
+    return isRecord(value) && hasOnlyKeys(value, ['task', 'before'])
+        && (value.task === null || isQueueEntryWire(value.task))
+        && (value.before === null || isQueueEntryWire(value.before))
+}
+
+export function decodeQueueCancelResponse(value: unknown): QueueCancelResponse | null {
+    return isQueueCancelResponse(value) ? value : null
+}
+
+// ── queue_requeue ──
+
+export interface QueueRequeueRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    taskId: string
+    /** `requeueTask` options (reason / targetNodeId / targetSessionId / clear* / force / message / maxRetries / notBefore), JSON passthrough. */
+    options?: Record<string, unknown>
+}
+
+export interface QueueRequeueResponse {
+    task: QueueEntryWire | null
+}
+
+export function isQueueRequeueRequest(value: unknown): value is QueueRequeueRequest {
+    return isRecord(value) && hasOnlyKeys(value, ['v', 'meshId', 'taskId', 'options'])
+        && value.v === TURN_IPC_PROTOCOL_VERSION && isEvidenceIdentifier(value.meshId) && isEvidenceIdentifier(value.taskId)
+        && isOptionalRecord(value.options)
+}
+
+export function decodeQueueRequeueRequest(value: unknown): QueueRequeueRequest | null {
+    return isQueueRequeueRequest(value) ? value : null
+}
+
+export function isQueueRequeueResponse(value: unknown): value is QueueRequeueResponse {
+    return isRecord(value) && hasOnlyKeys(value, ['task']) && (value.task === null || isQueueEntryWire(value.task))
+}
+
+export function decodeQueueRequeueResponse(value: unknown): QueueRequeueResponse | null {
+    return isQueueRequeueResponse(value) ? value : null
+}
+
+// ── direct_dispatch_record ──
+//
+// The post-dispatch bookkeeping of `mesh_send_task`'s direct arms, in the
+// daemon: `recordDirectDispatchTask` (materialise the queue row, stamped with
+// the already-open `mesh_direct` attempt) and `recordDirectDispatchDecision`
+// (GRAPH-MEASUREMENT-DIRECT). Each step is best-effort and reported separately
+// — a dispatch that already happened must never fail on its bookkeeping.
+
+export interface DirectDispatchRecordRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    taskId: string
+    /** Free text (the authored task message — the materialised row keeps it). */
+    message: string
+    /** `recordDirectDispatchTask` options minus `id` (JSON passthrough). */
+    task?: Record<string, unknown>
+    /** `recordDirectDispatchDecision` args minus `taskId` (JSON passthrough). */
+    decision?: Record<string, unknown>
+}
+
+export interface DirectDispatchRecordResponse {
+    taskRecorded: boolean
+    decisionRecorded: boolean
+}
+
+export function isDirectDispatchRecordRequest(value: unknown): value is DirectDispatchRecordRequest {
+    return isRecord(value) && hasOnlyKeys(value, ['v', 'meshId', 'taskId', 'message', 'task', 'decision'])
+        && value.v === TURN_IPC_PROTOCOL_VERSION && isEvidenceIdentifier(value.meshId) && isEvidenceIdentifier(value.taskId)
+        && typeof value.message === 'string' && isOptionalRecord(value.task) && isOptionalRecord(value.decision)
+}
+
+export function decodeDirectDispatchRecordRequest(value: unknown): DirectDispatchRecordRequest | null {
+    return isDirectDispatchRecordRequest(value) ? value : null
+}
+
+export function isDirectDispatchRecordResponse(value: unknown): value is DirectDispatchRecordResponse {
+    return isRecord(value) && hasOnlyKeys(value, ['taskRecorded', 'decisionRecorded'])
+        && typeof value.taskRecorded === 'boolean' && typeof value.decisionRecorded === 'boolean'
+}
+
+export function decodeDirectDispatchRecordResponse(value: unknown): DirectDispatchRecordResponse | null {
+    return isDirectDispatchRecordResponse(value) ? value : null
+}
+
+// ── graph_audit_record ──
+//
+// The coordinator-gate / node-patch provenance records the `mesh_graph_*`
+// tools write after a gate action (design :740-750), written by the daemon's
+// allow-listed recorders (mesh-graph-provenance.ts) — the mcp-server never
+// builds the record payload itself. `fields` is the recorder's argument object.
+
+export const GRAPH_AUDIT_EVENTS = ['gate_claimed', 'gate_released', 'gate_abandoned', 'node_patched'] as const
+export type GraphAuditEvent = typeof GRAPH_AUDIT_EVENTS[number]
+export const isGraphAuditEvent = makeGuard(GRAPH_AUDIT_EVENTS)
+
+export interface GraphAuditRecordRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    event: GraphAuditEvent
+    fields: Record<string, unknown>
+}
+
+export interface GraphAuditRecordResponse {
+    recorded: boolean
+}
+
+export function isGraphAuditRecordRequest(value: unknown): value is GraphAuditRecordRequest {
+    return isRecord(value) && hasOnlyKeys(value, ['v', 'meshId', 'event', 'fields'])
+        && value.v === TURN_IPC_PROTOCOL_VERSION && isEvidenceIdentifier(value.meshId)
+        && isGraphAuditEvent(value.event) && isRecord(value.fields)
+}
+
+export function decodeGraphAuditRecordRequest(value: unknown): GraphAuditRecordRequest | null {
+    return isGraphAuditRecordRequest(value) ? value : null
+}
+
+export function isGraphAuditRecordResponse(value: unknown): value is GraphAuditRecordResponse {
+    return isRecord(value) && hasOnlyKeys(value, ['recorded']) && typeof value.recorded === 'boolean'
+}
+
+export function decodeGraphAuditRecordResponse(value: unknown): GraphAuditRecordResponse | null {
+    return isGraphAuditRecordResponse(value) ? value : null
+}
+
+// ── active_work_query ──
+//
+// The active-work view, COMPUTED in the daemon: it reads the queue, the open
+// direct dispatches (`mesh_direct` attempts) and its local records (+ turn
+// outcomes), and runs `buildMeshActiveWork` over them with the caller's live
+// node probe results. `includeInputs` also returns the records + dispatches it
+// used (the transcript-reconcile pass and the stale-direct prune read them);
+// `compute: false` returns only those inputs. `includeSchedulingRuntime` adds
+// `buildMeshSchedulingRuntime(mesh, queue)` for the caller's `mesh` snapshot.
+// `queue` lets a caller substitute its own annotated queue view.
+
+export interface ActiveWorkQueryRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    /** Live node probe results (`buildMeshActiveWork`'s `nodes`), JSON passthrough. */
+    nodes?: readonly Record<string, unknown>[]
+    /** Substitute queue rows (default: the daemon's `getQueue`). */
+    queue?: readonly Record<string, unknown>[]
+    /** Record tail fed to active work (default 200). */
+    recordTail?: number
+    includeTerminalDirect?: boolean
+    /** Default true. */
+    compute?: boolean
+    includeInputs?: boolean
+    includeSummary?: boolean
+    includeSchedulingRuntime?: boolean
+    /** The caller's mesh snapshot (required for the scheduling runtime), JSON passthrough. */
+    mesh?: Record<string, unknown>
+}
+
+export interface ActiveWorkQueryResponse {
+    /** `MeshActiveWorkEvidence` (daemon-core), JSON passthrough; absent when `compute: false`. */
+    activeWork?: Record<string, unknown>
+    records?: readonly Record<string, unknown>[]
+    directDispatches?: readonly Record<string, unknown>[]
+    /** `MeshLedgerSummary`-shaped record summary. */
+    summary?: Record<string, unknown>
+    schedulingRuntime?: Record<string, unknown>
+}
+
+export function isActiveWorkQueryRequest(value: unknown): value is ActiveWorkQueryRequest {
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'nodes', 'queue', 'recordTail', 'includeTerminalDirect', 'compute', 'includeInputs', 'includeSummary', 'includeSchedulingRuntime', 'mesh'])) return false
+    if (value.v !== TURN_IPC_PROTOCOL_VERSION || !isEvidenceIdentifier(value.meshId)) return false
+    if (value.nodes !== undefined && !isRecordArray(value.nodes)) return false
+    if (value.queue !== undefined && !isRecordArray(value.queue)) return false
+    if (value.recordTail !== undefined && !isNonNegativeInt(value.recordTail)) return false
+    if (value.includeSchedulingRuntime === true && !isRecord(value.mesh)) return false
+    return isOptionalBoolean(value.includeTerminalDirect) && isOptionalBoolean(value.compute) && isOptionalBoolean(value.includeInputs)
+        && isOptionalBoolean(value.includeSummary) && isOptionalBoolean(value.includeSchedulingRuntime) && isOptionalRecord(value.mesh)
+}
+
+export function decodeActiveWorkQueryRequest(value: unknown): ActiveWorkQueryRequest | null {
+    return isActiveWorkQueryRequest(value) ? value : null
+}
+
+export function isActiveWorkQueryResponse(value: unknown): value is ActiveWorkQueryResponse {
+    if (!isRecord(value) || !hasOnlyKeys(value, ['activeWork', 'records', 'directDispatches', 'summary', 'schedulingRuntime'])) return false
+    if (value.records !== undefined && !isRecordArray(value.records)) return false
+    if (value.directDispatches !== undefined && !isRecordArray(value.directDispatches)) return false
+    return isOptionalRecord(value.activeWork) && isOptionalRecord(value.summary) && isOptionalRecord(value.schedulingRuntime)
+}
+
+export function decodeActiveWorkQueryResponse(value: unknown): ActiveWorkQueryResponse | null {
+    return isActiveWorkQueryResponse(value) ? value : null
+}
+
+// ── recovery_context_query ──
+//
+// `getSessionRecoveryContext` (daemon-core `mesh-local-records.ts`) in the
+// daemon. `lastTaskMessage` / `advice` are free text (local IPC).
+
+export interface RecoveryContextQueryRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    nodeId?: string
+    sessionId?: string
+    maxRetries?: number
+}
+
+export interface RecoveryContextQueryResponse {
+    context: Record<string, unknown>
+}
+
+export function isRecoveryContextQueryRequest(value: unknown): value is RecoveryContextQueryRequest {
+    return isRecord(value) && hasOnlyKeys(value, ['v', 'meshId', 'nodeId', 'sessionId', 'maxRetries'])
+        && value.v === TURN_IPC_PROTOCOL_VERSION && isEvidenceIdentifier(value.meshId)
+        && isOptionalId(value.nodeId) && isOptionalId(value.sessionId)
+        && (value.maxRetries === undefined || isNonNegativeInt(value.maxRetries))
+        && (value.nodeId !== undefined || value.sessionId !== undefined)
+}
+
+export function decodeRecoveryContextQueryRequest(value: unknown): RecoveryContextQueryRequest | null {
+    return isRecoveryContextQueryRequest(value) ? value : null
+}
+
+export function isRecoveryContextQueryResponse(value: unknown): value is RecoveryContextQueryResponse {
+    return isRecord(value) && hasOnlyKeys(value, ['context']) && isRecord(value.context)
+        && typeof value.context.consecutiveNodeFailures === 'number'
+}
+
+export function decodeRecoveryContextQueryResponse(value: unknown): RecoveryContextQueryResponse | null {
+    return isRecoveryContextQueryResponse(value) ? value : null
+}
+
 // ─── command registry ───────────────────────────────────────────────────────
 
 /** The complete, closed set of IPC command names this contract defines. */
@@ -800,6 +1639,21 @@ export const TURN_IPC_COMMANDS = [
     'mission_query',
     'note_upsert',
     'note_forget',
+    // C-W9b additions (2026-09-24 14:00 stamp "C-W9"):
+    'tool_call_record',
+    'ledger_query',
+    'mission_list_query',
+    // C-W9a additions (the event ledger retired; the queue behind IPC):
+    'record_local',
+    'queue_query',
+    'queue_enqueue',
+    'queue_enqueue_graph',
+    'queue_cancel',
+    'queue_requeue',
+    'direct_dispatch_record',
+    'graph_audit_record',
+    'active_work_query',
+    'recovery_context_query',
 ] as const
 export type TurnIpcCommand = typeof TURN_IPC_COMMANDS[number]
 export const isTurnIpcCommand = makeGuard(TURN_IPC_COMMANDS)
@@ -816,6 +1670,19 @@ export interface TurnIpcRequestByCommand {
     mission_query: MissionQueryRequest
     note_upsert: NoteUpsertRequest
     note_forget: NoteForgetRequest
+    tool_call_record: ToolCallRecordRequest
+    ledger_query: LedgerQueryRequest
+    mission_list_query: MissionListQueryRequest
+    record_local: RecordLocalRequest
+    queue_query: QueueQueryRequest
+    queue_enqueue: QueueEnqueueRequest
+    queue_enqueue_graph: QueueEnqueueGraphRequest
+    queue_cancel: QueueCancelRequest
+    queue_requeue: QueueRequeueRequest
+    direct_dispatch_record: DirectDispatchRecordRequest
+    graph_audit_record: GraphAuditRecordRequest
+    active_work_query: ActiveWorkQueryRequest
+    recovery_context_query: RecoveryContextQueryRequest
 }
 
 /** Response type keyed by command name — for a generically-typed dispatcher on either end. */
@@ -830,5 +1697,18 @@ export interface TurnIpcResponseByCommand {
     mesh_index_query: MeshIndexQueryResponse
     note_upsert: NoteUpsertResponse
     note_forget: NoteForgetResponse
+    tool_call_record: ToolCallRecordResponse
+    ledger_query: LedgerQueryResponse
+    mission_list_query: MissionListQueryResponse
+    record_local: RecordLocalResponse
+    queue_query: QueueQueryResponse
+    queue_enqueue: QueueEnqueueResponse
+    queue_enqueue_graph: QueueEnqueueGraphResponse
+    queue_cancel: QueueCancelResponse
+    queue_requeue: QueueRequeueResponse
+    direct_dispatch_record: DirectDispatchRecordResponse
+    graph_audit_record: GraphAuditRecordResponse
+    active_work_query: ActiveWorkQueryResponse
+    recovery_context_query: RecoveryContextQueryResponse
 }
 
