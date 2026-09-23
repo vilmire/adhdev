@@ -294,6 +294,31 @@ export interface ISpecDriver {
      * non-FSM drivers may omit it; callers fall back to snapshot().
      */
     snapshotWithScrollback?(): string;
+    /**
+     * APPROVE-LATCH-STALE (live defect, 2026-09-23): re-run one FSM evaluation
+     * against the CURRENT screen and re-emit unconditionally, so the adapter's
+     * latched state/modal is refreshed on demand.
+     *
+     * Why this has to be callable from outside the PTY pump: a modal state whose
+     * only exits are pure CONTENT guards declares no elapsed_ms/stable_ms, so
+     * scheduleWakeForState() arms no timer; the stall watchdog is `generating`-only;
+     * and a focus-event TUI (antigravity's `agy`) repaints only on a keypress. The
+     * latch therefore freezes at whatever the ENTRY frame parsed — and a
+     * priority-90 `busy→approval-timeout` / `signing_in→approval-timeout` entry
+     * has no modal anchor at all, so that entry frame can latch `modal = null`
+     * while the state is authoritatively `approval`. mesh_approve then sees
+     * waiting_approval with no buttons and hard-refuses a session that is in
+     * fact sitting at a fully drawn picker.
+     *
+     * This refreshes the MODAL, never the status derivation: status stays
+     * `statusForState(state)` exactly as adapter-status-projection.ts:81-84
+     * requires ("do not infer status from whether a modal parsed this frame").
+     *
+     * Optional so test doubles and out-of-tree drivers need not provide it;
+     * callers treat its absence as "no refresh available" and fall through to
+     * the latched value.
+     */
+    refreshNow?(): void;
 }
 
 export interface SpecDriverOpts {
@@ -470,6 +495,13 @@ export class FsmDriver implements ISpecDriver {
     /** Timer that re-runs evaluate() when a time-condition would flip true
      *  with no PTY frame to trigger it. */
     private wakeTimer: ReturnType<typeof setTimeout> | null = null;
+    /** APPROVE-LATCH-STALE: how many times reevaluate() has run. The single
+     *  observable that distinguishes "the latch is fresh" from "the latch is
+     *  whatever the entry frame parsed" — a stale latch is invisible in every
+     *  other debug field, because getFsmDebug() re-derives its verdict live and
+     *  so always LOOKS current even when the adapter's latch is minutes old.
+     *  That blind spot is why this defect reached production. Read-only. */
+    private evalCount = 0;
     /** Boot-prompt dismissal (CliSpecV4.startup_dismiss — OPENCODE-UPDATE-MODAL
      *  class). Config normalized once at start(); the shared decision engine
      *  bounds writes by spawn window + attempt cap + per-snapshot dedupe. */
@@ -925,6 +957,8 @@ export class FsmDriver implements ISpecDriver {
         status: string;
         cursor: { row: number; col: number };
         transitions: TransitionEval[];
+        /** @see evalCount — total reevaluate() runs for this driver. */
+        evalCount: number;
     } {
         const now = Date.now();
         const viewportCursor = this.adapter.getCursorPosition();
@@ -947,6 +981,7 @@ export class FsmDriver implements ISpecDriver {
             // internal coordinate shift that would read as a bogus row number.
             cursor: viewportCursor,
             transitions: ev.transitions,
+            evalCount: this.evalCount,
         };
     }
 
@@ -1265,6 +1300,7 @@ export class FsmDriver implements ISpecDriver {
     }
 
     private reevaluate(forceEmit = false): void {
+        this.evalCount += 1;
         const now = Date.now();
         const screen = this.adapter.snapshot();
         this.maybeDismissStartupPrompt(screen, now);
@@ -1678,9 +1714,33 @@ export class FsmDriver implements ISpecDriver {
             // the guard (hold) is already or will be satisfied.
             if (Number.isFinite(condRemain) && condRemain > 0) soonest = Math.min(soonest, condRemain);
         }
+        // APPROVE-LATCH-STALE fix ② (defence in depth): an approval state whose
+        // exits are pure CONTENT guards contributes nothing finite above, so the
+        // loop leaves `soonest = Infinity` and NO timer is armed — the latched
+        // modal then freezes until the next PTY frame, which on a focus-event TUI
+        // (antigravity's `agy`, quiet at a drawn modal) may never come. Fix ① in
+        // handleResolveAction recovers the approve path on demand; this floor keeps
+        // every OTHER reader (mesh_status, the dashboard, the auto-approve gate)
+        // from looking at a minutes-old modal too.
+        //
+        // Scoped to approval-class states only, and only as a FLOOR: a state with
+        // a genuine sooner deadline keeps it. Cost is negligible relative to what
+        // the engine already does — a full reevaluate() runs on every PTY frame
+        // during `generating` (many per second, same bounded 200-line guard
+        // window), so ~0.5/sec while a session sits at a modal is far below the
+        // load already accepted. 2s rather than 1s because nothing here needs
+        // sub-second latency: the reader is a human or a coordinator round-trip,
+        // and 2s halves the idle wakeups for the same practical freshness.
+        const st = stateById(this.spec, this.currentStateId);
+        if (st && statusForState(st) === 'approval') {
+            soonest = Math.min(soonest, FsmDriver.APPROVAL_LATCH_REFRESH_FLOOR_MS);
+        }
         if (!Number.isFinite(soonest)) return;
         this.wakeTimer = setTimeout(() => { this.wakeTimer = null; this.reevaluate(); }, Math.max(soonest + 30, 50));
     }
+
+    /** @see scheduleWakeForState — floor poll interval while parked at a modal. */
+    private static readonly APPROVAL_LATCH_REFRESH_FLOOR_MS = 2000;
 
     // ── Focus-gated stall watchdog (refocus_when_stalled_ms) ──────────────────
     //
@@ -1876,6 +1936,15 @@ export class FsmDriver implements ISpecDriver {
     /** ENTER-LOSS layer ③ — see ISpecDriver.snapshotWithScrollback. */
     snapshotWithScrollback(): string {
         return this.adapter.snapshotWithScrollback();
+    }
+
+    /** APPROVE-LATCH-STALE — see ISpecDriver.refreshNow for the full rationale.
+     *  forceEmit so a re-parse that yields the SAME CurrentEval still re-emits:
+     *  the adapter's latch is refreshed via the state_changed listener, and a
+     *  `changed`-gated emit would skip exactly the null→null case we need to
+     *  distinguish from null→buttons. */
+    refreshNow(): void {
+        this.reevaluate(true);
     }
 
     /** The agent's current coarse status, derived from the FSM node we're in. */
