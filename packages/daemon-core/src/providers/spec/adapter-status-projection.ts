@@ -49,6 +49,26 @@ export interface AdapterStatusInputs {
      * the read preserves the original evaluation ORDER through the extraction.
      */
     readySeen: () => boolean | undefined;
+    /**
+     * Wiring-unification A5-3: the driver's raw PTY output clock and rendered
+     * screen-change clock (ms wall-clock; `undefined` when the driver has no
+     * such surface, 0 when it has one but nothing has been observed yet).
+     * Plain values, not thunks: the adapter reads them with optional chaining
+     * so a driverless adapter (provider-failure tests, pre-spawn) is safe, and
+     * they are carried on EVERY branch — a stopped session's last-output time
+     * is exactly what the termination bridge's `silentForMs` wants.
+     */
+    lastOutputAt: number | undefined;
+    lastScreenChangeAt: number | undefined;
+}
+
+/** A clock is surfaced only once it has ticked: 0 / undefined / non-finite all
+ *  mean "never observed", and consumers already treat absence that way
+ *  (mesh-stall-watchdog anchors on startedAt when the field is missing). */
+function clockField<K extends 'lastOutputAt' | 'lastScreenChangeAt'>(key: K, value: number | undefined): Partial<Record<K, number>> {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0
+        ? ({ [key]: value } as Partial<Record<K, number>>)
+        : {};
 }
 
 export function projectAdapterStatus(input: AdapterStatusInputs): CliAdapterStatus {
@@ -58,6 +78,8 @@ export function projectAdapterStatus(input: AdapterStatusInputs): CliAdapterStat
         activeModal: null,
         activeInteractivePrompt: input.activeInteractivePrompt,
         ...sessionFields,
+        ...clockField('lastOutputAt', input.lastOutputAt),
+        ...clockField('lastScreenChangeAt', input.lastScreenChangeAt),
     };
 
     // A latched provider failure (auth/billing/quota) outranks generic process liveness.

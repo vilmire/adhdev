@@ -52,6 +52,21 @@ export interface CliAdapterStatus {
      */
     fsmReadySeen?: boolean;
     /**
+     * Wall-clock (ms) of the most recent raw PTY output chunk. Advances on every
+     * byte the process emits, including tool/build output that produces no
+     * parsed assistant text. Absent until the first chunk. Liveness watchdogs
+     * use it to tell a real stall (no output at all) from an active turn whose
+     * assistant text is momentarily static while a tool runs.
+     */
+    lastOutputAt?: number;
+    /**
+     * Wall-clock (ms) of the most recent *rendered* screen change. Stricter than
+     * lastOutputAt — only advances when the rendered text actually differs, so
+     * keepalive / cursor-only bytes do not register as progress. Absent until
+     * the first change. Preferred liveness signal for the no-progress watchdog.
+     */
+    lastScreenChangeAt?: number;
+    /**
      * Tracked providers (claude-cli, kimi) only: true when the session's
      * native-history transcript shows causally-owned background tool work that
      * must hold completion — ≥1 unresolved `run_in_background` invocation
@@ -178,7 +193,6 @@ export interface CliAdapter {
     getScriptParsedStatus?(): unknown;
     getDebugSnapshot?(): unknown;
     invokeScript?(scriptName: string, args?: Record<string, unknown>): Promise<unknown>;
-    getPartialResponse(): string;
     saveAndStop?(): Promise<void>;
     shutdown(): void;
     detach?(): void;

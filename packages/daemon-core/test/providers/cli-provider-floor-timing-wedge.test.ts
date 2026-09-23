@@ -47,7 +47,6 @@ describe('FLOOR-TIMING-WEDGE: stall rescue for a session wedged in generating', 
       isWaitingForResponse: opts.hasPending ?? true,
       currentTurnScope: opts.hasPending ?? true ? {} : undefined,
       getScriptParsedStatus() { return { messages: [] } },
-      getPartialResponse() { return opts.hasPending ?? true ? 'still generating' : '' },
     }
     instance.context = { emitProviderEvent: (e: any) => emitted.push(e) }
     instance.completionFinalSummary = () => opts.finalSummary

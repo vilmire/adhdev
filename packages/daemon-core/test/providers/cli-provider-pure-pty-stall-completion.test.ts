@@ -21,7 +21,6 @@ describe('CliProviderInstance.tryReconcileTranscriptCompletionForStall', () => {
     turnStartedAt: number
     meshTaskInjectedAt: number
     finalSummary: string | undefined
-    hasPending?: boolean
     lastEmittedCompletion?: { taskId: string; at: number; weak?: boolean; emittedAtEpoch?: number } | null
   }) {
     const emitted: any[] = []
@@ -43,7 +42,6 @@ describe('CliProviderInstance.tryReconcileTranscriptCompletionForStall', () => {
       isWaitingForResponse: false,
       currentTurnScope: undefined,
       getScriptParsedStatus() { return { messages: [] } },
-      getPartialResponse() { return opts.hasPending ? 'still typing' : '' },
     }
     instance.adapter = adapter
     instance.context = { emitProviderEvent: (e: any) => emitted.push(e) }
@@ -131,19 +129,6 @@ describe('CliProviderInstance.tryReconcileTranscriptCompletionForStall', () => {
         finalSummary: 'done',
       })
       expect(instance.tryReconcileTranscriptCompletionForStall('generating')).toBe(false)
-      expect(emitted).toHaveLength(0)
-    })
-
-    it(`returns false when the adapter still has a pending response (${label} — turn not over)`, () => {
-      const { instance, emitted } = makeInstance({
-        provider,
-        settings: meshSettings,
-        meshTaskInjectedAt: 2_000,
-        turnStartedAt: 3_000,
-        finalSummary: 'done',
-        hasPending: true,
-      })
-      expect(instance.tryReconcileTranscriptCompletionForStall('idle')).toBe(false)
       expect(emitted).toHaveLength(0)
     })
 

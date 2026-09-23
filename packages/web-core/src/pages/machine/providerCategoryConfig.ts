@@ -9,7 +9,11 @@
  * yellow/green already used for status (detected/error/generating/warning)
  * in these same screens.
  */
-export type ProviderCategory = 'ide' | 'cli' | 'acp' | 'extension'
+// Wiring-unification A4: the one ProviderCategory lives in daemon-core
+// (providers/contracts.ts); type-only import, re-exported for the row/badge
+// consumers that import it from here.
+import type { ProviderCategory } from '@adhdev/daemon-core'
+export type { ProviderCategory }
 
 interface ProviderCategoryColor {
     // Badge classes (bg + text + border), for compact category chips.

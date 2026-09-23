@@ -8,7 +8,7 @@
  * Each Instance manages its own status.
  */
 
-import type { ProviderModule, ProviderSettingDef, ProviderResumeCapability } from './contracts.js';
+import type { ProviderModule, ProviderSettingDef, ProviderResumeCapability, ProviderCategory } from './contracts.js';
 import type { AcpConfigOption, AcpMode, ProviderControlSchema, ProviderSummaryMetadata, SessionCapability } from '../shared-types.js';
 import type { MessageInputSupport } from './provider-input-support.js';
 import type { ChatMessage } from '../types.js';
@@ -196,7 +196,7 @@ export interface ProviderInstance {
  /** Provider type */
     readonly type: string;
  /** Provider category */
-    readonly category: 'cli' | 'ide' | 'extension' | 'acp';
+    readonly category: ProviderCategory;
 
  /** initialize */
     init(context: InstanceContext): Promise<void>;

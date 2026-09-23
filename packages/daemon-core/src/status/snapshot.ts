@@ -19,6 +19,7 @@ import type { GitCompactSummary } from '../git/git-types.js';
 import { buildSessionEntries, isCdpConnected, type SessionEntryProfile } from './builders.js';
 import { LIVE_STATUS_ACTIVE_CHAT_OPTIONS, normalizeActiveChatData } from './normalize.js';
 import type { ProviderState } from '../providers/provider-instance.js';
+import type { ProviderCategory } from '../providers/contracts.js';
 import type {
     AvailableProviderInfo,
     DetectedIdeInfo,
@@ -37,13 +38,13 @@ export interface StatusSnapshotOptions {
             type: string;
             icon?: string;
             displayName?: string;
-            category: 'ide' | 'extension' | 'cli' | 'acp';
+            category: ProviderCategory;
         }>;
         getAvailableProviderInfos?: () => Array<{
             type: string;
             icon?: string;
             displayName?: string;
-            category: 'ide' | 'extension' | 'cli' | 'acp';
+            category: ProviderCategory;
             installed?: boolean;
             detectedPath?: string | null;
             enabled?: boolean;
@@ -137,7 +138,7 @@ export function buildAvailableProviders(
         type: string;
         icon?: string;
         displayName?: string;
-        category: 'ide' | 'extension' | 'cli' | 'acp';
+        category: ProviderCategory;
         installed?: boolean;
         detectedPath?: string | null;
         enabled?: boolean;

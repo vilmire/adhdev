@@ -12,6 +12,7 @@ import { existsSync } from 'fs';
 import { execFileSync } from 'child_process';
 import chalk from 'chalk';
 import { createCliAdapter } from '../providers/spec/route.js';
+import type { LaunchableProviderCategory } from '../providers/contracts.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-shared.js';
 import { stripRemovedSpawnArgs } from '../cli-adapters/provider-cli-runtime.js';
 import { detectCLI } from '../detection/cli-detector.js';
@@ -299,7 +300,7 @@ export class DaemonCliManager {
     }
 
     private persistRecentActivity(entry: {
-        kind: 'ide' | 'cli' | 'acp';
+        kind: LaunchableProviderCategory;
         providerType: string;
         providerName: string;
         providerSessionId?: string;
@@ -735,7 +736,6 @@ export class DaemonCliManager {
                         activeModal: state.activeChat?.activeModal || null,
                     };
                 },
-                getPartialResponse: () => '',
                 cancel: () => { instanceManager.removeInstance(key); },
                 isProcessing: () => false,
                 isReady: () => true,

@@ -59,7 +59,6 @@ export interface CompletionDiagnosticsHost {
         getStatus(opts?: { allowParse: boolean }): any;
         getScriptParsedStatus?: () => any;
         isProcessing?: () => boolean;
-        getPartialResponse?: () => string;
     };
     busyEpoch: number;
     autoApproveBusy: boolean;
@@ -86,12 +85,6 @@ export function hasAdapterPendingResponse(host: CompletionDiagnosticsHost): bool
     try {
         if (typeof host.adapter.isProcessing === 'function' && host.adapter.isProcessing()) return true;
     } catch { /* defensive: status rendering must not fail because of adapter diagnostics */ }
-    try {
-        const partial = typeof host.adapter.getPartialResponse === 'function'
-            ? host.adapter.getPartialResponse()
-            : '';
-        if (typeof partial === 'string' && partial.trim()) return true;
-    } catch { /* defensive: missing partial means no pending response evidence */ }
     return false;
 }
 
@@ -135,8 +128,8 @@ export function shouldSuppressStaleParsedBusyStatus(
     if (host.hasAdapterPendingResponse()) return false;
     // Do not suppress when the adapter's raw response buffer is still non-empty.
     // This catches the case where isWaitingForResponse has already flipped to false
-    // (so getPartialResponse() returns '') but the provider's native parser still
-    // reports generating because it's parsing buffered content. Suppressing the
+    // but the provider's native parser still reports generating because it's
+    // parsing buffered content. Suppressing the
     // finalization block here would emit a false completion event while the provider
     // session is still actively processing its response stream.
     const adapterAny = host.adapter as any;
@@ -309,12 +302,6 @@ export function buildCompletionSignalReader(
         adapterWaitingForResponse: () => (host.adapter as any)?.isWaitingForResponse === true,
         adapterTurnScopeActive: () => !!(host.adapter as any)?.currentTurnScope,
         adapterAnyPending: () => host.hasAdapterPendingResponse(),
-        partialResponsePending: () => {
-            const partial = typeof host.adapter.getPartialResponse === 'function'
-                ? host.adapter.getPartialResponse()
-                : '';
-            return typeof partial === 'string' && !!partial.trim();
-        },
         parsedStatus: () => once('parsedStatus', () => {
             const rp = rawParsed();
             if (!rp.ok) return { ok: false as const, error: rp.error };

@@ -21,7 +21,6 @@ describe('chat debug bundle', () => {
         messages: [{ role: 'assistant', content: 'parsed' }],
         providerSessionId: 'ps_123',
       })),
-      getPartialResponse: vi.fn(() => ['partial ', 'sk', '-test-secret-1234567890'].join('')),
       getDebugSnapshot: vi.fn(() => ({
         terminalScreenText: 'visible screen ' + 'api_' + 'key=abc123456789',
         accumulatedTail: 'tail ' + 'Authorization: ' + 'Bearer ' + 'secret-token-1234567890',
@@ -103,7 +102,6 @@ describe('chat debug bundle', () => {
         workingDir: '/tmp/project',
         getStatus: vi.fn(() => ({ status: 'idle', messages: [{ role: 'assistant', content: 'daemon side' }] })),
         getScriptParsedStatus: vi.fn(() => ({ status: 'idle' })),
-        getPartialResponse: vi.fn(() => 'partial daemon evidence'),
         getDebugSnapshot: vi.fn(() => ({ terminalScreenText: 'daemon terminal evidence' })),
         isProcessing: () => false,
         isReady: () => true,
@@ -158,7 +156,6 @@ describe('chat debug bundle', () => {
         transport: 'pty',
         cliParsedStatus: 'idle',
         cliParsedMessageCount: undefined,
-        cliPartialResponseChars: 'partial daemon evidence'.length,
       })
     } finally {
       if (previousDir === undefined) delete process.env.ADHDEV_DEBUG_BUNDLE_DIR

@@ -261,6 +261,18 @@ export interface ISpecDriver {
     getLastBusyAt(): number;
     hasIdleHoldPending(): boolean;
     hasSeenReady(): boolean;
+    /**
+     * Wiring-unification A5-3 — the adapter clocks. Wall-clock (ms) of the most
+     * recent raw PTY chunk (`lastOutputAt`) and of the most recent rendered
+     * screen change (`lastScreenChangeAt`); 0 until first observed. Surfaced by
+     * SpecCliAdapter.getStatus() so the mesh stall watchdog, the completion
+     * engine and the status-transition progress fingerprint read live clocks
+     * rather than the dead `undefined` they got before. Optional so test
+     * doubles implementing ISpecDriver need not provide them (absent → the
+     * status omits the clocks, exactly the pre-fix shape).
+     */
+    getLastOutputAt?(): number;
+    getLastScreenChangeAt?(): number;
     getCompletionIdleDebounceState(): { active: boolean; ageMs: number; holdMs: number; forceAfterMs: number } | null;
     getFsmDebug?(): unknown;
     getFsmSnapshotHistory?(): ReadonlyArray<FsmSnapshotEntry>;
@@ -532,6 +544,13 @@ export class FsmDriver implements ISpecDriver {
      *  on_pty_data — including the echo of text written into the composer — so the
      *  win32 submit settle-gate can tell when input has finished landing. */
     private lastPtyDataAt = 0;
+    /** Wall-clock (ms) of the most recent RENDERED screen change — set from the
+     *  TerminalAdapter's coalesced on_screen_changed, which fires only when the
+     *  rendered text actually differs from the previous snapshot. Stricter than
+     *  lastPtyDataAt (keepalive / cursor-only bytes advance that one but not
+     *  this). Session-global, unlike the per-state stable_ms bookkeeping in
+     *  regionLastChangedAt, which is cleared on every transition. */
+    private lastScreenChangedAt = 0;
     /** Timer driving the win32 verification-based modal-confirm CR resend loop (see
      *  scheduleWin32ModalConfirm). A lone CR that confirms an approval/picker choice
      *  is absorbed by ConPTY the same way a send_message submit CR is, so the confirm
@@ -600,7 +619,10 @@ export class FsmDriver implements ISpecDriver {
                     this.scheduleSpawnPrimeAfterFirstOutput();
                     this.emit({ kind: 'pty_data', chunk });
                 },
-                on_screen_changed: () => this.reevaluate(),
+                on_screen_changed: () => {
+                    this.lastScreenChangedAt = Date.now();
+                    this.reevaluate();
+                },
                 on_exit: (info) => this.handleExit(info),
             },
         );
@@ -1038,6 +1060,14 @@ export class FsmDriver implements ISpecDriver {
      */
     hasSeenReady(): boolean {
         return this.readySeenOnce;
+    }
+    /** @see ISpecDriver.getLastOutputAt — raw PTY chunk clock, 0 until first output. */
+    getLastOutputAt(): number {
+        return this.lastPtyDataAt;
+    }
+    /** @see ISpecDriver.getLastScreenChangeAt — rendered screen-change clock, 0 until first change. */
+    getLastScreenChangeAt(): number {
+        return this.lastScreenChangedAt;
     }
     getCompletionIdleDebounceState(): { active: boolean; ageMs: number; holdMs: number; forceAfterMs: number } | null {
         // Surface the busy→ready transition's stable countdown, if any, so the
@@ -1760,10 +1790,12 @@ export class FsmDriver implements ISpecDriver {
             && Array.isArray(this.spec.send_on_spawn) && this.spec.send_on_spawn.length > 0;
     }
 
-    /** Wall-clock time the screen last changed in the current state, falling
+    /** Wall-clock time the screen last changed IN THE CURRENT STATE, falling
      *  back to state entry when it has not changed since (i.e. fully stalled
-     *  from the start of the state). */
-    private lastScreenChangeAt(): number {
+     *  from the start of the state). State-relative on purpose — the stall
+     *  window is measured from state entry. Not the session-global clock the
+     *  adapter status surfaces; that is getLastScreenChangeAt(). */
+    private stallScreenReferenceAt(): number {
         return this.regionLastChangedAt.get(-1) ?? this.stateEnteredAt;
     }
 
@@ -1779,7 +1811,7 @@ export class FsmDriver implements ISpecDriver {
         const windowMs = this.spec.refocus_when_stalled_ms as number;
         // Cooldown reference: a re-prime defers the next one by a full window,
         // even if the screen has not yet repainted, so we don't tight-loop.
-        const since = Math.max(this.lastScreenChangeAt(), this.lastRefocusAt);
+        const since = Math.max(this.stallScreenReferenceAt(), this.lastRefocusAt);
         const remaining = windowMs - (Date.now() - since);
         this.stallTimer = setTimeout(
             () => { this.stallTimer = null; this.onStallTick(); },
@@ -1795,7 +1827,7 @@ export class FsmDriver implements ISpecDriver {
         if (!st || statusForState(st) !== 'generating') return;
         const windowMs = this.spec.refocus_when_stalled_ms as number;
         const now = Date.now();
-        const stalledFor = now - this.lastScreenChangeAt();
+        const stalledFor = now - this.stallScreenReferenceAt();
         const sinceLastRefocus = now - this.lastRefocusAt;
         if (stalledFor >= windowMs && sinceLastRefocus >= windowMs) {
             if (this.stallRefocusInfoCount < STALL_REFOCUS_INFO_LIMIT) {
