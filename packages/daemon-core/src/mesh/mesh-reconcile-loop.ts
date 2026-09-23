@@ -755,6 +755,11 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     }
 
     for (const [meshId, meshCoordinators] of byMesh) {
+        // The aggregate status cache is the zero-RPC source that actually carries
+        // per-node live session arrays. Static mesh config nodes alone would turn
+        // "not observed" into false orphan evidence, so pass no nodes on cache miss.
+        const cachedSnapshotNodes = components.router?.aggregateMeshStatusCache?.get(meshId)?.snapshot?.nodes;
+        const nodes = Array.isArray(cachedSnapshotNodes) ? cachedSnapshotNodes : undefined;
         // Drain the local queue scoped to this coordinator daemon and inject.
         //     - If an idle coordinator exists, FULL-drain and deliver every event to it
         //       (the idle input box accepts the prompt as a real next turn). The drain
@@ -815,7 +820,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
             // (their behaviour is unchanged: shouldForceInjectMeshEvent no longer sees the
             // approval rows because this drained them). MUST run first so the modal-park
             // orphan-escape and the generating-hold audit only ever see non-approval events.
-            drainAndDeliverApprovalNudges(meshId, drainDaemonIds, localDaemonId, meshCoordinators);
+            drainAndDeliverApprovalNudges(meshId, drainDaemonIds, localDaemonId, meshCoordinators, nodes);
             // If approval nudges were the only queued events, nothing remains to hold — skip
             // the hold branches (and their "holding pending event(s)" log) entirely.
             if (store) {
@@ -962,7 +967,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                         const escapeTargets = reconfirmGenuinelyIdleCoordinators(generatingCoordinators);
                         if (escapeTargets.length > 0) {
                             LOG.info('MeshReconcile', `Reconcile age-escape → generating-hold: held terminal event(s) for mesh ${meshId} aged ${Math.round(heldAgeMs / 1000)}s (≥ ${Math.round(escalateMs / 1000)}s) and ${escapeTargets.length} coordinator(s) re-confirmed genuinely idle on the raw adapter — draining once`);
-                            const drained = drainAndInjectIntoTargets(meshId, drainDaemonIds, localDaemonId, escapeTargets, 'age-escape');
+                            const drained = drainAndInjectIntoTargets(meshId, drainDaemonIds, localDaemonId, escapeTargets, 'age-escape', nodes);
                             if (drained > 0) continue; // delivered → no hold this tick
                         }
                     }
@@ -1022,6 +1027,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                         undefined,
                         components.instanceManager,
                         activeWorkLedgerSnapshots.get(meshId),
+                        nodes,
                     );
                     continue;
                 }
@@ -1032,7 +1038,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         // queued event and deliver it to the idle input box as a real turn. The no-idle case
         // (generating/modal-only) was already held above and never reaches here, so there is
         // no force-drain-into-generating path left — the single delivery is the idle drain.
-        drainAndInjectIntoTargets(meshId, drainDaemonIds, localDaemonId, targetCoordinators, 'idle');
+        drainAndInjectIntoTargets(meshId, drainDaemonIds, localDaemonId, targetCoordinators, 'idle', nodes);
     }
 }
 

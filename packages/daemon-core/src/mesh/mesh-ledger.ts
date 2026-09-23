@@ -46,6 +46,10 @@ export type MeshLedgerKind =
     | 'task_failed'
     | 'task_stalled'
     | 'task_approval_needed'
+    // Retraction for the task_approval_needed LEVEL assertion. Emitted only after
+    // an approval/rejection button was actually dispatched successfully.
+    // payload: { taskId?, event: 'agent:approval_resolved', resolution, source? }
+    | 'task_approval_resolved'
     // A worker is parked on an AskUserQuestion multi-choice prompt (waiting_choice) —
     // distinct from task_approval_needed (a yes/no tool-consent modal). The coordinator
     // answers a question with mesh_answer_question, never mesh_approve (mission f1d25e11).
@@ -360,6 +364,7 @@ const TASK_LIFECYCLE_LEDGER_KINDS: ReadonlySet<MeshLedgerKind> = new Set<MeshLed
     'task_stalled',
     'task_reclaimed',
     'task_approval_needed',
+    'task_approval_resolved',
     'task_question_pending',
     'p2p_dispatch_failed',
     'dispatch_failed',

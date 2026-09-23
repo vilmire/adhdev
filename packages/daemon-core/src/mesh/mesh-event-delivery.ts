@@ -276,6 +276,7 @@ export function buildRelayMetadataEvent(payload: Record<string, unknown>): Recor
         stopReason: readNonEmptyString(payload.stopReason),
         cleanupReason: readNonEmptyString(payload.cleanupReason),
         source: readNonEmptyString(payload.source),
+        resolution: readNonEmptyString(payload.resolution),
     };
 }
 
@@ -353,6 +354,13 @@ export function flushPendingForMeshIdleCoordinators(components: DaemonComponents
     // No live coordinator of EITHER kind → nothing to attempt; leave for the reconcile poll.
     if (idleCoordinators.length === 0 && busyCoordinators.length === 0) return;
 
+    // Reuse the last aggregate status snapshot. Its nodes carry the live session
+    // arrays buildMeshActiveWork needs; static mesh config nodes do not. Absence
+    // stays `undefined` (fail closed) rather than pretending an empty session list
+    // proves every dispatch stale.
+    const cachedSnapshotNodes = components.router?.aggregateMeshStatusCache?.get(meshId)?.snapshot?.nodes;
+    const nodes = Array.isArray(cachedSnapshotNodes) ? cachedSnapshotNodes : undefined;
+
     const drainDaemonIds = resolveCoordinatorDrainDaemonIds(components);
     let pendingEvents: PendingMeshCoordinatorEvent[];
     try {
@@ -413,6 +421,7 @@ export function flushPendingForMeshIdleCoordinators(components: DaemonComponents
                     });
                     const outcome = injectPendingIntoCoordinator(c.instance as any, pending, {
                         mode: splitEligible ? 'mid-generation-split' : 'next-turn-queue',
+                        nodes,
                     });
                     if (outcome.delivered) busyDelivered++;
                 }

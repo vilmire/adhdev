@@ -856,6 +856,7 @@ export async function autoPruneStaleDirectDispatches(
         'task_failed',
         'task_stalled',
         'task_approval_needed',
+        'task_approval_resolved',
         'task_question_pending',
     ]));
 

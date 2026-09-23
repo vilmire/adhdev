@@ -28,6 +28,7 @@ import * as instanceConstants from './cli-provider-instance-constants.js';
 type CliInstanceAdapter = SpecCliAdapter
     & { setInApprovalResumeGraceProbe?: (probe: () => boolean) => void }
     & { setNativeFinalAssistantProbe?: (probe: () => boolean) => void }
+    & { setOnApprovalResolved?: (callback: ((event: { resolvedAt: number; buttonLabel?: string }) => void) | null) => void }
     & { currentTurnTaskId?: string; currentTurnStartedAt?: number };
 import type { CliProviderModule } from '../cli-adapters/provider-cli-shared.js';
 import type { MeshSendKeyItem, MeshSendKeyName } from '../cli-adapters/provider-cli-shared.js';
@@ -53,7 +54,7 @@ import { isTerminalTurnStage } from '../mesh/mesh-turn-ledger.js';
 import { isWorkerMcpEnabled } from '../runtime-defaults.js'; // layer-neutral — see runtime-defaults.ts for why this isn't imported from mesh/worker-mcp-isolation.js
 import { meshTaskAttachments, resolveCompletingTaskId, resolvePendingInjectedAt, type MeshTaskAttachment } from './mesh-task-attachment.js';
 import type { ChatMessage } from '../types.js';
-import { formatAutoApprovalMessage, pickApprovalButton, hasNegativeApprovalOption, hasReliableApprovalAffirmative, normalizeApprovalLabel } from './approval-utils.js';
+import { formatAutoApprovalMessage, pickApprovalButton, hasNegativeApprovalOption, hasReliableApprovalAffirmative, normalizeApprovalLabel, isNegativeApprovalLabel } from './approval-utils.js';
 import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.js';
 import {
     antigravityOwnerToken,
@@ -449,6 +450,21 @@ export class CliProviderInstance implements ProviderInstance {
  // Emit event on status change
         this.adapter.setOnStatusChange(() => {
             this.detectStatusTransition();
+        });
+
+        // APPROVAL-LEVEL-RETRACTION: the adapter is the single point that knows a
+        // modal button was actually matched and dispatched. Route that fact through
+        // the normal provider-event pipeline so mesh_approve, dashboard/manual
+        // resolution, rejection, and worker auto-approve all emit the same durable
+        // task_approval_resolved ledger event. A failed/missing button emits nothing.
+        this.adapter.setOnApprovalResolved?.(({ resolvedAt, buttonLabel }) => {
+            const resolution = isNegativeApprovalLabel(String(buttonLabel || '')) ? 'rejected' : 'approved';
+            this.pushEvent({
+                event: 'agent:approval_resolved',
+                timestamp: resolvedAt,
+                resolution,
+                source: 'modal_button',
+            });
         });
 
  // FALSE-IDLE (Fix 2): let the engine's applyIdle hysteresis consult THIS instance's

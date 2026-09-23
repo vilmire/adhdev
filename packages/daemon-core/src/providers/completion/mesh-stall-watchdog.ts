@@ -41,6 +41,7 @@ export interface MeshStallHost {
     adapter: {
         isAlive?: () => boolean;
         getStatus(opts: { allowParse: boolean }): unknown;
+        getLastApprovalResolvedAt?: () => number;
     };
     meshStallAnchorAt: number;
     meshStallEmittedForAnchor: boolean;
@@ -133,6 +134,19 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
     const stalledMs = now - host.meshStallAnchorAt;
     if (stalledMs < threshold) return;
 
+    // A successfully-dispatched approval decision after the last PTY output is
+    // independent proof that a still-reported waiting_approval is a stale latch.
+    // A genuinely new approval necessarily renders new PTY output after that
+    // decision, so its lastOutputAt moves past resolvedAt and remains protected.
+    let staleResolvedApprovalLatch = false;
+    try {
+        const resolvedAt = host.adapter.getLastApprovalResolvedAt?.() ?? 0;
+        staleResolvedApprovalLatch = observedStatus === 'waiting_approval'
+            && Number.isFinite(resolvedAt)
+            && resolvedAt > 0
+            && resolvedAt > lastOutputAt;
+    } catch { /* missing/failed evidence stays fail-closed: protect the wait */ }
+
     // (APPROVAL-WAIT-BLINDSPOT fix ④, live defect 2026-09-22) A worker PARKED AT
     // A PROMPT IS NOT STALLED — it is waiting for a human, and reporting it as
     // no-progress kills work nobody had any reason to abandon.
@@ -160,7 +174,7 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
     // prompt goes back to the normal clock on the very next tick, and a genuinely
     // wedged GENERATING session is untouched — this branch requires the adapter
     // to be actively reporting a prompt, which a wedged worker is not.
-    if (observedStatus === 'waiting_approval' || observedStatus === 'waiting_choice') {
+    if ((observedStatus === 'waiting_approval' && !staleResolvedApprovalLatch) || observedStatus === 'waiting_choice') {
         traceMeshEventDrop('mesh_worker_stall_waiting_on_human', host.meshTraceCtx('monitor:no_progress'),
             `PTY quiet ${Math.round(stalledMs / 1000)}s but the adapter reports '${observedStatus}' — `
             + 'the session is parked at a prompt awaiting a human decision, not stalled');
@@ -179,7 +193,8 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
     });
     if (turnPresentation.authority === 'turn_reducer' && turnPresentation.stage) {
         const stage = turnPresentation.stage;
-        if (stage === 'waiting_approval' || stage === 'waiting_choice' || stage === 'finalizing' || isTerminalTurnStage(stage)) {
+        if ((stage === 'waiting_approval' && !staleResolvedApprovalLatch)
+            || stage === 'waiting_choice' || stage === 'finalizing' || isTerminalTurnStage(stage)) {
             host.meshStallAnchorAt = now;
             host.meshStallEmittedForAnchor = false;
             return;

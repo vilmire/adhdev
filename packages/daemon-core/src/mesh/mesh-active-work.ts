@@ -169,7 +169,9 @@ function pushTerminalBucket(
         bucket = { real: [], approval: [] };
         buckets.set(key, bucket);
     }
-    (terminal.entry.kind === 'task_approval_needed' ? bucket.approval : bucket.real).push(terminal);
+    (terminal.entry.kind === 'task_approval_needed' || terminal.entry.kind === 'task_approval_resolved'
+        ? bucket.approval
+        : bucket.real).push(terminal);
 }
 
 function pushTerminalQuery(
@@ -187,6 +189,12 @@ function earlierTerminal(a: IndexedTerminal | undefined, b: IndexedTerminal | un
     if (!a) return b;
     if (!b) return a;
     return a.order <= b.order ? a : b;
+}
+
+function laterTransition(a: IndexedTerminal | undefined, b: IndexedTerminal | undefined): IndexedTerminal | undefined {
+    if (!a) return b;
+    if (!b) return a;
+    return a.order >= b.order ? a : b;
 }
 
 /**
@@ -211,7 +219,9 @@ export function buildMeshActiveWorkLedgerSnapshot(
     const nodeBuckets = new Map<string, TerminalBucket>();
     let order = 0;
     for (const entry of entries) {
-        if (!TERMINAL_LEDGER_KINDS.has(entry.kind) && entry.kind !== 'task_approval_needed') continue;
+        if (!TERMINAL_LEDGER_KINDS.has(entry.kind)
+            && entry.kind !== 'task_approval_needed'
+            && entry.kind !== 'task_approval_resolved') continue;
         const timestampMs = timestampByEntry.get(entry)!;
         if (!Number.isFinite(timestampMs)) continue; // legacy >= comparison never matched invalid timestamps
         const indexed = { entry, timestampMs, order: order++ };
@@ -270,9 +280,28 @@ export function buildMeshActiveWorkLedgerSnapshot(
             resolve(taskQueries, taskBuckets, 'real', realByDispatch);
             resolve(sessionQueries, sessionBuckets, 'real', realByDispatch);
             resolve(nodeQueries, nodeBuckets, 'real', realByDispatch);
-            resolve(taskQueries, taskBuckets, 'approval', approvalByDispatch);
-            resolve(sessionQueries, sessionBuckets, 'approval', approvalByDispatch);
-            resolve(nodeQueries, nodeBuckets, 'approval', approvalByDispatch);
+            // Approval rows are LEVEL transitions, not terminals. For each
+            // dispatch the latest matching transition wins: needed asserts the
+            // level, resolved retracts it, and a later needed re-asserts it.
+            const resolveLatestApproval = (
+                queries: Map<string, DispatchTerminalQuery[]>,
+                buckets: Map<string, TerminalBucket>,
+            ): void => {
+                for (const [key, bucketQueries] of queries) {
+                    const transitions = buckets.get(key)?.approval;
+                    const candidate = transitions?.[transitions.length - 1];
+                    if (!candidate) continue;
+                    for (const query of bucketQueries) {
+                        options.onTerminalProbe?.();
+                        if (candidate.timestampMs >= query.timestampMs) {
+                            approvalByDispatch.set(query.dispatch, laterTransition(approvalByDispatch.get(query.dispatch), candidate)!);
+                        }
+                    }
+                }
+            };
+            resolveLatestApproval(taskQueries, taskBuckets);
+            resolveLatestApproval(sessionQueries, sessionBuckets);
+            resolveLatestApproval(nodeQueries, nodeBuckets);
 
             const result = new Map<MeshLedgerEntry, MeshLedgerEntry>();
             for (const dispatch of sortedDispatches) {
@@ -382,13 +411,10 @@ function directDispatchTaskId(entry: MeshLedgerEntry): string {
  * NO live-session sniff to contradict it.
  *
  * The existing contradiction guard in buildLedgerDirectDispatchRecord can only fire
- * when `live.status` is present, i.e. when the caller passed `nodes`. Two of the five
- * buildMeshActiveWork call sites do not — `mesh-notification-status-line.ts` (the
- * `[Mesh] active N: 1 awaiting_approval` line appended to coordinator notifications)
- * and `mesh-idle-reminder.ts` both omit `nodes` entirely. On those surfaces
- * `live.status` is ALWAYS undefined, so the guard is structurally dead and a resolved
- * modal stays pinned forever — observed repeatedly in one day, with the coordinator
- * about to fire mesh_approve at a modal that no longer exists.
+ * when `live.status` is present, i.e. when the caller passed `nodes`. Historically the
+ * notification status line and idle reminder omitted them, so this fallback remains
+ * necessary for version-skewed callers and for cache-miss periods where no safe live
+ * node snapshot is available.
  *
  * The task's OWN terminal already retires it (the snapshot matcher prefers a real
  * terminal over an approval, and such records leave `activeWork` as terminal rows).
@@ -428,6 +454,7 @@ function hasSessionTerminalAfterApproval(
 
 function statusFromTerminal(entry: MeshLedgerEntry): MeshActiveWorkStatus {
     if (entry.kind === 'task_approval_needed') return 'awaiting_approval';
+    if (entry.kind === 'task_approval_resolved') return 'idle';
     // A question (waiting_choice) is a distinct blocked state — kept OUT of
     // awaiting_approval so it is not surfaced in the approval inbox / mesh_approve
     // flow (mission f1d25e11). Answered via mesh_answer_question.
@@ -505,9 +532,9 @@ function buildLedgerDirectDispatchRecord(
     //
     // task_approval_needed / task_question_pending are LEVEL assertions about a
     // modal that was open at that instant — unlike task_completed/task_failed,
-    // which are true terminals. There is no task_approval_resolved ledger kind,
-    // so when the owner answers and the worker resumes NORMAL work it emits no
-    // row that supersedes the blocked one. The unconditional `terminalStatus ||
+    // which are true terminals. task_approval_resolved is now the explicit
+    // retraction; these contradiction guards remain as backward-compatible
+    // recovery for historical/version-skewed ledgers. The unconditional `terminalStatus ||
     // live.status` below therefore let the stale ledger row outrank a live
     // session that had already moved back to generating, and the record stayed
     // in the approval inbox indefinitely.
@@ -524,7 +551,7 @@ function buildLedgerDirectDispatchRecord(
     // so a genuinely-waiting task is still surfaced (APPROVAL-INBOX-BLINDSPOT).
     // `task_question_pending` is included for correctness-by-construction, not
     // because it can reach here today: the terminal index at the top of this
-    // file admits only TERMINAL_LEDGER_KINDS + task_approval_needed, so a
+    // file admits only TERMINAL_LEDGER_KINDS + approval transitions, so a
     // question row is never selected as `terminal` on this path (statusFromTerminal's
     // task_question_pending branch is likewise unreachable from here). Listing it
     // means that if the index is ever widened, a resolved question cannot
@@ -535,9 +562,9 @@ function buildLedgerDirectDispatchRecord(
         && live.status !== 'awaiting_approval'
         && live.status !== 'awaiting_choice';
     // STALE-APPROVAL-NO-LIVE-SNIFF: the live sniff above is the PRIMARY contradiction,
-    // but it needs `nodes` — which the notification-status-line and idle-reminder call
-    // sites never pass, leaving the guard structurally dead exactly where the pinned
-    // `1 awaiting_approval` is rendered. Fall back to session-scoped ledger evidence:
+    // but it needs `nodes`. The notification-status-line and idle-reminder now pass a
+    // cached live snapshot when one exists; cache misses and older callers still need
+    // the session-scoped ledger fallback below:
     // a later non-weak terminal on the SAME session means the worker moved past this
     // modal. Only consulted when the live sniff produced nothing, so a live session
     // still reporting `awaiting_approval` keeps the row (no over-retirement), and a

@@ -186,8 +186,9 @@ export function readTaskStatsEntries(meshId: string, tail: number): ProjectedLed
 // ───────────────────────────────────────────────────────────────────────────
 // ROSTER ENTRY 2 — mesh-reconcile-coordinator-drain.ts:531 (isApprovalNudgeResolved)
 //
-// Asks whether a terminal entry for a node/session landed at or after a nudge
-// was queued. Reads `kind`, `timestamp`, `nodeId`, `sessionId` — all base
+// Asks whether a terminal entry or explicit approval-level retraction for a
+// node/session landed at or after a nudge was queued. Reads `kind`, `timestamp`,
+// `nodeId`, `sessionId` — all base
 // fields — and compares ids with the equivalence helpers, never `===`.
 //
 // ★ Switched to a KIND-FILTERED read. The original called bare
@@ -199,7 +200,7 @@ export function readTaskStatsEntries(meshId: string, tail: number): ProjectedLed
 
 /** Terminal entries for the approval-nudge staleness check. */
 export function readApprovalResolutionEntries(meshId: string): ProjectedLedgerView[] {
-    return readProjectedEntriesByKind(meshId, ['task_completed', 'task_failed']);
+    return readProjectedEntriesByKind(meshId, ['task_completed', 'task_failed', 'task_approval_resolved']);
 }
 
 // ───────────────────────────────────────────────────────────────────────────

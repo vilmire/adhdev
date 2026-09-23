@@ -8,6 +8,9 @@ const MESH_COORDINATOR_EVENTS = new Set([
     'agent:generating_started',
     'agent:generating_completed',
     'agent:waiting_approval',
+    // Silent LEVEL retraction. It is routed through the same provider-event
+    // pipeline as the assertion, but never creates a coordinator notification.
+    'agent:approval_resolved',
     // A worker parked on an AskUserQuestion multi-choice prompt. DISTINCT from
     // agent:waiting_approval (a yes/no tool-consent modal): a question is answered
     // with mesh_answer_question, never mesh_approve (mission f1d25e11). Carries the
@@ -31,6 +34,7 @@ const MESH_COORDINATOR_EVENTS = new Set([
 export const EVENT_TO_LEDGER_KIND: Record<string, MeshLedgerKind> = {
     'agent:generating_completed': 'task_completed',
     'agent:waiting_approval': 'task_approval_needed',
+    'agent:approval_resolved': 'task_approval_resolved',
     'agent:waiting_choice': 'task_question_pending',
     'agent:stopped': 'task_failed',
     'monitor:no_progress': 'task_stalled',

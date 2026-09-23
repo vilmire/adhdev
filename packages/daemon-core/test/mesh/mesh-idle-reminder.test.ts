@@ -152,7 +152,7 @@ describe('mesh idle-active-mission reminder', () => {
         expect(coord.calls[0].payload.input.text).toContain('Deploy pipeline');
     });
 
-    it('reuses a same-tick six-kind ledger snapshot without reading that slice again', () => {
+    it('reuses a same-tick active-work ledger snapshot without reading that slice again', () => {
         upsertMeshMission(meshId, { title: 'Shared snapshot', goal: 'ship it' });
         const coord = makeCoordinator();
         const store = MeshRuntimeStore.getInstance();
@@ -169,8 +169,8 @@ describe('mesh idle-active-mission reminder', () => {
         );
 
         expect(fired).toBe(true);
-        const sixKindReads = readSpy.mock.calls.filter(([, opts]) => opts?.kinds?.length === 6);
-        expect(sixKindReads).toHaveLength(0);
+        const activeWorkReads = readSpy.mock.calls.filter(([, opts]) => opts?.kinds?.includes('task_dispatched'));
+        expect(activeWorkReads).toHaveLength(0);
     });
 
     it('no-op when there are no active missions', () => {
@@ -197,6 +197,46 @@ describe('mesh idle-active-mission reminder', () => {
 
         const fired = maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000);
         expect(fired).toBe(false);
+        expect(coord.calls).toHaveLength(0);
+    });
+
+    it('passes live nodes into the idle gate so an idle session contradicts a stale approval', () => {
+        upsertMeshMission(meshId, { title: 'Resolved approval', goal: 'continue' });
+        const coord = makeCoordinator();
+        appendLedgerEntry(meshId, {
+            kind: 'task_dispatched', timestamp: '2026-09-23T00:00:00.000Z', nodeId: 'node-a', sessionId: 'sess-a',
+            payload: { taskId: 'task-a', source: 'direct', via: 'mesh_send_task', message: 'waiting' },
+        } as any);
+        appendLedgerEntry(meshId, {
+            kind: 'task_approval_needed', timestamp: '2026-09-23T00:01:00.000Z', nodeId: 'node-a', sessionId: 'sess-a',
+            payload: { taskId: 'task-a', event: 'agent:waiting_approval' },
+        } as any);
+        const nodes = [{ id: 'node-a', nodeId: 'node-a', sessions: [{ id: 'sess-a', status: 'idle' }] }] as any;
+
+        expect(maybeInjectIdleActiveMissionReminder(
+            meshId, coord.instance, undefined, new Date('2026-09-23T00:02:00.000Z').getTime(),
+            undefined, undefined, nodes,
+        )).toBe(true);
+        expect(coord.calls).toHaveLength(1);
+    });
+
+    it('does not retire a genuine approval when supplied live nodes still report awaiting_approval', () => {
+        upsertMeshMission(meshId, { title: 'Still blocked', goal: 'wait' });
+        const coord = makeCoordinator();
+        appendLedgerEntry(meshId, {
+            kind: 'task_dispatched', timestamp: '2026-09-23T00:00:00.000Z', nodeId: 'node-a', sessionId: 'sess-a',
+            payload: { taskId: 'task-a', source: 'direct', via: 'mesh_send_task', message: 'waiting' },
+        } as any);
+        appendLedgerEntry(meshId, {
+            kind: 'task_approval_needed', timestamp: '2026-09-23T00:01:00.000Z', nodeId: 'node-a', sessionId: 'sess-a',
+            payload: { taskId: 'task-a', event: 'agent:waiting_approval' },
+        } as any);
+        const nodes = [{ id: 'node-a', nodeId: 'node-a', sessions: [{ id: 'sess-a', status: 'awaiting_approval' }] }] as any;
+
+        expect(maybeInjectIdleActiveMissionReminder(
+            meshId, coord.instance, undefined, new Date('2026-09-23T00:02:00.000Z').getTime(),
+            undefined, undefined, nodes,
+        )).toBe(false);
         expect(coord.calls).toHaveLength(0);
     });
 
@@ -340,7 +380,7 @@ describe('mesh idle-active-mission reminder', () => {
 
         const entries = readLedgerEntriesByKind(meshId, [
             'task_dispatched', 'task_completed', 'task_failed', 'task_stalled',
-            'task_approval_needed', 'task_question_pending',
+            'task_approval_needed', 'task_approval_resolved', 'task_question_pending',
         ]);
         // The terminal row for `task.id` must still be present even though 260 unrelated
         // entries were appended after it — a bare tail:200 window would have evicted it.

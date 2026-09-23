@@ -174,6 +174,35 @@ function remoteEvent(meshId: string, event: string, taskId: string, extra: Recor
 }
 
 describe('STALE-APPROVAL-AFTER-TERMINAL — REMOTE forwarding (handleMeshForwardEvent)', () => {
+  it('records a task-addressed approval retraction for either approval or rejection', () => {
+    const meshId = `mesh_approval_resolved_remote_${Date.now()}`
+    try {
+      mockMesh(meshId)
+      const taskId = 'task-approval-resolution-1'
+      remoteEvent(meshId, 'agent:waiting_approval', taskId)
+      remoteEvent(meshId, 'agent:approval_resolved', taskId, {
+        resolution: 'rejected',
+        source: 'modal_button',
+      })
+
+      const rows = readLedgerEntries(meshId)
+      expect(rows.filter(e => e.kind === 'task_approval_needed')).toHaveLength(1)
+      expect(rows.filter(e => e.kind === 'task_approval_resolved')).toEqual([
+        expect.objectContaining({
+          taskId,
+          payload: expect.objectContaining({
+            taskId,
+            event: 'agent:approval_resolved',
+            resolution: 'rejected',
+            source: 'modal_button',
+          }),
+        }),
+      ])
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('(incident A/B) a late agent:waiting_approval AFTER the committed completion is fully suppressed — no ledger, no projection, no redrive', () => {
     const meshId = `mesh_stale_apr_remote_${Date.now()}`
     try {

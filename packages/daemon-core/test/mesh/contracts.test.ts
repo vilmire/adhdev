@@ -219,6 +219,7 @@ describe('defaultScopeForEvent (B2a)', () => {
   });
   it('maps coordinator-addressed dispatch-plane alerts to unicast (dispatch_blocked pages the originating coordinator)', () => {
     expect(defaultScopeForEvent('mesh:dispatch_blocked')).toBe('unicast');
+    expect(defaultScopeForEvent('agent:approval_resolved')).toBe('unicast');
   });
   it('defaults everything else to broadcast (v1-compatible)', () => {
     expect(defaultScopeForEvent('node_joined')).toBe('broadcast');

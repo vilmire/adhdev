@@ -9,13 +9,12 @@
 // injects the notification. This module renders those numbers as a single
 // appended line so the common case needs no extra MCP call.
 //
-// ★THIS LINE IS A FILTER, NOT AN AUTHORITY ON APPROVALS. buildMeshActiveWork is
-// called here without `nodes`, so sessionStatusFromNodes cannot contribute a live
-// stale/dead-session verdict. Measured failure mode: a durable approval row can
-// outlive its cancelled queue task / stopped session and OVER-report
-// awaiting_approval unless those durable terminal facts fold it away. Treat the line
-// as a cheap snapshot, never as proof that a displayed approval is still actionable.
-// A coordinator that needs the live answer must still call mesh_status / mesh_view_queue.
+// ★THIS LINE IS A FILTER, NOT AN AUTHORITY ON APPROVALS. buildMeshActiveWork now
+// receives the mesh's cached node/session snapshot, so it can apply the same live
+// contradiction rule as the full status surfaces without adding an RPC here. The
+// snapshot can still be stale; task_approval_resolved and durable terminal facts are
+// the authoritative retirement signals. A coordinator that needs a freshly-probed
+// answer must still call mesh_status / mesh_view_queue.
 //
 // ── Three constraints, each load-bearing ────────────────────────────────────
 //
@@ -67,6 +66,7 @@ const ACTIVE_WORK_LEDGER_KINDS = [
     'task_failed',
     'task_stalled',
     'task_approval_needed',
+    'task_approval_resolved',
     'task_question_pending',
     'session_stopped',
 ] as const;
@@ -192,7 +192,7 @@ function clampToBound(line: string): string {
  * injected unchanged. A status line is a convenience; it must never be able to
  * prevent a worker completion from reaching its coordinator.
  */
-export function buildMeshStatusLineForNotification(meshId: string, now?: number): string | null {
+export function buildMeshStatusLineForNotification(meshId: string, now?: number, nodes?: any[]): string | null {
     if (!meshId) return null;
     try {
         const built = buildMeshActiveWork({
@@ -200,6 +200,7 @@ export function buildMeshStatusLineForNotification(meshId: string, now?: number)
             queue: getQueue(meshId),
             directDispatches: getActiveDirectDispatches(meshId),
             ledgerEntries: readLedgerEntriesByKind(meshId, [...ACTIVE_WORK_LEDGER_KINDS]),
+            nodes,
             now: now ?? Date.now(),
         });
         return renderMeshStatusLine({

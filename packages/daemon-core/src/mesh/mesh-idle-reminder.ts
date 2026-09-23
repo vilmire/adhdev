@@ -217,6 +217,7 @@ export function maybeInjectIdleActiveMissionReminder(
     now: number = Date.now(),
     instanceManager?: DaemonComponents['instanceManager'],
     sharedLedgerSnapshot?: MeshActiveWorkLedgerSnapshot,
+    nodes?: any[],
 ): boolean {
     try {
         if (!coordinator) return false;
@@ -228,13 +229,13 @@ export function maybeInjectIdleActiveMissionReminder(
         if (activeMissions.length === 0) return false;
 
         // Fully-idle gate — any non-terminal queue/direct work suppresses the reminder.
-        // We pass no `nodes`: totalActiveCount already counts pending/assigned queue tasks
-        // and un-acknowledged direct dispatches from the store alone, so the check stays
-        // cheap (no per-node status RPC) and conservative.
+        // Reuse the mesh's cached `nodes`: this makes the live contradiction path
+        // available without adding a per-node status RPC. The explicit approval
+        // resolution ledger event remains authoritative when that cache is stale.
         //
         // LEDGER-KIND-TAIL-BLINDSPOT: kind-filtered to exactly the kinds buildMeshActiveWork
         // reads (task_dispatched/task_completed/task_failed/task_stalled/task_approval_needed/
-        // task_question_pending/session_stopped), no bare tail — same class as the refine gate below (:271):
+        // task_approval_resolved/task_question_pending/session_stopped), no bare tail — same class as the refine gate below (:271):
         // a bare tail:200 window can be crowded out by unrelated mesh traffic while a
         // dispatch/terminal row for a still-active task falls out of the window, making this
         // gate wrongly conclude the mesh is fully idle.
@@ -244,6 +245,7 @@ export function maybeInjectIdleActiveMissionReminder(
             'task_failed',
             'task_stalled',
             'task_approval_needed',
+            'task_approval_resolved',
             'task_question_pending',
             'session_stopped',
         ]);
@@ -253,6 +255,7 @@ export function maybeInjectIdleActiveMissionReminder(
             directDispatches: getActiveDirectDispatches(meshId),
             ledgerEntries,
             ledgerSnapshot: sharedLedgerSnapshot,
+            nodes,
             now,
         }).summary;
         if (summary.totalActiveCount !== 0 || summary.generatingCount !== 0) return false;
