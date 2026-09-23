@@ -8,7 +8,7 @@ import type { CliTerminalHandle } from '../CliTerminal';
 import { useTransport } from '../../context/TransportContext';
 import { connectionManager } from '../../compat';
 import { useBaseDaemons } from '../../context/BaseDaemonContext';
-import { getConversationSendBlockMessage, SEND_BLOCKED_PLACEHOLDER } from '../../hooks/dashboardCommandUtils';
+import { getConversationSendBlockMessage, getConversationSendBlockedPlaceholder } from '../../hooks/dashboardCommandUtils';
 import ChatInputBar from './ChatInputBar';
 import {
     DEFAULT_MAX_CLI_TERMINAL_SCALE,
@@ -134,7 +134,7 @@ export default function CliTerminalPane({
     // input only repeats send errors the user must keep seeing while typing.
     const inputStatusMessage = !runtimeReady
         ? runtimeStatusMessage
-        : (sendBlockMessage ? SEND_BLOCKED_PLACEHOLDER : sendFeedbackMessage);
+        : (getConversationSendBlockedPlaceholder(activeConv) || sendFeedbackMessage);
     const inputInlineMessage = runtimeReady ? (sendFeedbackMessage || null) : null;
     const MIN_TERMINAL_SCALE = DEFAULT_MIN_CLI_TERMINAL_SCALE;
     const MAX_TERMINAL_SCALE = DEFAULT_MAX_CLI_TERMINAL_SCALE;

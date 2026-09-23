@@ -560,6 +560,9 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
             <style>{`
                 body { overflow: hidden; overscroll-behavior: none; }
 `}</style>
+            {/* DashboardMobileChatRoom scopes its modal to the mobile-local
+                selected conversation. Keeping this desktop/group-scoped
+                instance mounted too would stack two full-screen modals. */}
             <DashboardOverlays
                 historyModal={{
                     open: historyModalOpen,
@@ -638,6 +641,7 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
                     },
                 }}
                 interactivePrompt={interactivePrompt}
+                suppressInteractivePrompt={showMobileChatMode}
             />
         </div>
     )

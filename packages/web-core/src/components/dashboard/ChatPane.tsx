@@ -36,7 +36,7 @@ import {
     getConversationProviderLabel,
     getCoordinatorRoutingHint,
 } from './conversation-selectors';
-import { getConversationSendBlockMessage, SEND_BLOCKED_PLACEHOLDER } from '../../hooks/dashboardCommandUtils'
+import { getConversationSendBlockMessage, getConversationSendBlockedPlaceholder } from '../../hooks/dashboardCommandUtils'
 import { getDefaultChatTailHydrateLimit, getDefaultVisibleLiveMessages, getRememberedVisibleLiveCount, rememberVisibleLiveCount } from './chat-visibility';
 import { useSessionChatTailController } from './session-chat-tail-controller';
 import { useReplicaDegradedBannerVisible } from './replica-degraded-banner';
@@ -408,7 +408,7 @@ export default function ChatPane({
     // reserved for send errors (kept visible while typing); the block reason
     // reappears there via getInlineSendFailureMessage only when a send bounces.
     const inlineStatusMessage = sendFeedbackMessage || null
-    const chatInputStatusMessage = (sendBlockMessage ? SEND_BLOCKED_PLACEHOLDER : null)
+    const chatInputStatusMessage = getConversationSendBlockedPlaceholder(activeConv)
         || sendFeedbackMessage
         || busyStatusMessage
     const isChatInputBlocked = !!sendBlockMessage

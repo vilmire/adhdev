@@ -31,7 +31,7 @@ import {
     shouldReleaseQueuedSendFeedback,
     useDashboardConversationCommands,
 } from '../../src/hooks/useDashboardConversationCommands'
-import { SEND_BLOCKED_PLACEHOLDER } from '../../src/hooks/dashboardCommandUtils'
+import { getConversationSendBlockedPlaceholder } from '../../src/hooks/dashboardCommandUtils'
 import { buildBusyChatInputStatusMessage } from '../../src/components/dashboard/ChatPane'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
@@ -131,7 +131,7 @@ describe('useDashboardConversationCommands queued-send release (render site)', (
         // send block active and the CLI runtime ready.
         const sendBlockMessage: string | null = null
         const placeholder = (status: string, feedback: string | null) =>
-            (sendBlockMessage ? SEND_BLOCKED_PLACEHOLDER : null)
+            (sendBlockMessage ? getConversationSendBlockedPlaceholder({ status, modalButtons: ['Approve'] } as any) : null)
             || feedback
             || buildBusyChatInputStatusMessage({ status } as any, (key: string) => key)
         const statusLine = (feedback: string | null) => feedback || null

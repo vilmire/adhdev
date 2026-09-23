@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   getConversationSendBlockMessage,
+  getConversationSendBlockedPlaceholder,
   getInlineSendFailureMessage,
 } from '../../src/hooks/dashboardCommandUtils'
 
@@ -13,6 +14,22 @@ describe('dashboard command utils send-state helpers', () => {
   it('maps pending approval to a non-transcript input warning when actionable modal buttons are present', () => {
     expect(getConversationSendBlockMessage({ status: 'idle', modalButtons: ['Approve'] } as any))
       .toBe('Approve or reject the pending request above.')
+  })
+
+  it('labels waiting_choice as an answer instead of an approval in both blocked surfaces', () => {
+    const conversation = { status: 'waiting_choice', modalButtons: ['Yes', 'No'] } as any
+
+    expect(getConversationSendBlockMessage(conversation))
+      .toBe('Answer the pending question above.')
+    expect(getConversationSendBlockedPlaceholder(conversation))
+      .toBe('Waiting for your answer…')
+  })
+
+  it('keeps the approval placeholder for actionable waiting_approval state', () => {
+    expect(getConversationSendBlockedPlaceholder({
+      status: 'waiting_approval',
+      modalButtons: ['Approve', 'Reject'],
+    } as any)).toBe('Waiting for approval…')
   })
 
   it('does not pre-block sends from status alone when waiting approval state has no actionable modal buttons', () => {

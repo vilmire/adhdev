@@ -39,18 +39,31 @@ export function appendWarningToast(
     }])
 }
 
-/** Short, non-wrapping placeholder for the chat input while a modal blocks sending. */
-export const SEND_BLOCKED_PLACEHOLDER = 'Waiting for approval…'
+/** Short, non-wrapping placeholders for the chat input while a modal blocks sending. */
+export const SEND_BLOCKED_APPROVAL_PLACEHOLDER = 'Waiting for approval…'
+export const SEND_BLOCKED_CHOICE_PLACEHOLDER = 'Waiting for your answer…'
 
 export function getConversationSendBlockMessage(
     conv: Pick<ActiveConversation, 'status' | 'modalButtons'> | undefined,
 ): string | null {
     if (!conv) return null
     if (Array.isArray(conv.modalButtons) && conv.modalButtons.length > 0) {
+        if (conv.status === 'waiting_choice') {
+            return 'Answer the pending question above.'
+        }
         return 'Approve or reject the pending request above.'
     }
 
     return null
+}
+
+export function getConversationSendBlockedPlaceholder(
+    conv: Pick<ActiveConversation, 'status' | 'modalButtons'> | undefined,
+): string | null {
+    if (!getConversationSendBlockMessage(conv)) return null
+    return conv?.status === 'waiting_choice'
+        ? SEND_BLOCKED_CHOICE_PLACEHOLDER
+        : SEND_BLOCKED_APPROVAL_PLACEHOLDER
 }
 
 export function getInlineSendFailureMessage(error: unknown): string {
