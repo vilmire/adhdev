@@ -74,9 +74,10 @@ export function renderWorkerProtocolFooter(input: WorkerProtocolFooterInput = {}
         'For work that runs longer than a few minutes, call `progress_update` at natural checkpoints so the '
             + 'coordinator can see you are alive without polling.',
         '`peer_context_pull` shows what sibling tasks in this mission have reported; `git_status` / `git_diff` / '
-            + '`git_log` inspect your own workspace.',
+            + '`git_log` inspect your own workspace (pass its absolute path as `workspace`).',
         'You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. '
-            + 'If you need a decision from the coordinator, finish with `report_completion` and outcome `blocked`.',
+            + 'If you need a decision from the coordinator, finish with `report_completion` and outcome `blocked`, '
+            + 'listing what you need in `blockers`.',
     )
     if (input.enclosedHandoffNotes && input.enclosedHandoffNotes > 0) {
         lines.push(
@@ -85,6 +86,18 @@ export function renderWorkerProtocolFooter(input: WorkerProtocolFooterInput = {}
         )
     }
     return lines.join('\n')
+}
+
+/**
+ * The authored text of a dispatched body: everything before the footer marker.
+ * Ledger descriptors, replay fixtures and tests compare authored text, never
+ * the protocol block.
+ */
+export function stripWorkerProtocolFooter(body: string): string {
+    if (typeof body !== 'string') return body
+    const at = body.indexOf(WORKER_PROTOCOL_FOOTER_MARKER)
+    if (at < 0) return body
+    return body.slice(0, at).replace(/\s+$/, '')
 }
 
 /**

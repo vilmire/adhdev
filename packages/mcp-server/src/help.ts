@@ -1,5 +1,6 @@
+import { WORKER_TOOLS } from '@adhdev/mesh-shared';
+
 import { ALL_MESH_TOOLS } from './tools/mesh-tools.js';
-import { ALL_WORKER_TOOLS } from './tools/worker-tools.js';
 
 const STANDARD_TOOLS = [
   'list_daemons',
@@ -21,7 +22,8 @@ const STANDARD_TOOLS = [
 
 export function buildMcpHelpText(): string {
   const meshTools = ALL_MESH_TOOLS.map(tool => tool.name);
-  const workerTools = ALL_WORKER_TOOLS.map(tool => tool.name);
+  // F1: the worker list is the contract tuple itself, not a hand-maintained copy.
+  const workerTools: readonly string[] = WORKER_TOOLS;
   return `
 ADHDev MCP Server
 
@@ -49,6 +51,6 @@ Environment variables:
 
 Standard tools:   ${STANDARD_TOOLS.join(', ')}
 Mesh tools:       ${meshTools.join(', ')}
-Worker tools:     ${workerTools.join(', ')}, git_status, git_log, git_diff
+Worker tools:     ${workerTools.join(', ')}
 `.trim();
 }

@@ -26,8 +26,19 @@
  * feature exists to close is exactly "the wrong task got the completion".
  */
 
+import {
+  WORKER_BRANCH_STATES,
+  WORKER_REPORT_OUTCOMES,
+  WORKER_TOOLS,
+  enumOf,
+  type WorkerTool,
+} from '@adhdev/mesh-shared';
+
 import type { CommandTransport } from '../transports/mode.js';
-import { annotateAll } from './tool-annotations.js';
+import { annotateAll, type ToolBehaviorAnnotations } from './tool-annotations.js';
+import { GIT_STATUS_TOOL } from './git-status.js';
+import { GIT_LOG_TOOL } from './git-log.js';
+import { GIT_DIFF_TOOL } from './git-diff.js';
 
 /**
  * Credentials read once at startup from the environment the MCP config supplied.
@@ -50,14 +61,6 @@ export function readWorkerCredentials(env: NodeJS.ProcessEnv = process.env): Wor
   return { ...(bind ? { bind } : {}), ...(token ? { token } : {}) };
 }
 
-const BRANCH_STATES = [
-  'merged_to_main',
-  'pushed_feature_branch_needs_merge',
-  'blocked_review',
-  'cleanup_candidate',
-  'not_mergeable',
-];
-
 export const REPORT_COMPLETION_TOOL = {
   name: 'report_completion',
   description:
@@ -68,13 +71,11 @@ export const REPORT_COMPLETION_TOOL = {
   inputSchema: {
     type: 'object' as const,
     properties: {
-      outcome: {
-        type: 'string',
-        enum: ['completed', 'blocked', 'failed'],
-        description:
-          "'completed' = the task is done. 'blocked' = you cannot proceed without something external "
+      outcome: enumOf(
+        WORKER_REPORT_OUTCOMES,
+        "'completed' = the task is done. 'blocked' = you cannot proceed without something external "
           + "(list it in `blockers`). 'failed' = you tried and it did not work.",
-      },
+      ),
       summary: {
         type: 'string',
         description:
@@ -120,13 +121,11 @@ export const REPORT_COMPLETION_TOOL = {
         items: { type: 'string' },
         description: 'Files this task changed.',
       },
-      branch_state: {
-        type: 'string',
-        enum: BRANCH_STATES,
-        description:
-          'Where you left the branch. A task on a non-main branch is not fully complete unless this names '
+      branch_state: enumOf(
+        WORKER_BRANCH_STATES,
+        'Where you left the branch. A task on a non-main branch is not fully complete unless this names '
           + 'the follow-up state.',
-      },
+      ),
       blockers: {
         type: 'array',
         items: { type: 'string' },
@@ -189,6 +188,54 @@ export const PEER_CONTEXT_PULL_TOOL = {
  * fourth worker tool cannot be added here without stating what it does.
  */
 export const ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL]);
+
+/** Shape of a tool definition as worker mode publishes it. */
+export interface WorkerModeTool {
+  name: string;
+  description: string;
+  inputSchema: { type: 'object'; properties?: Record<string, unknown>; required?: string[] };
+  annotations: ToolBehaviorAnnotations;
+}
+
+/**
+ * The three read-only git tools a worker also holds. They are shared consts
+ * published by more than one mode, so they are annotated here at the point of
+ * publication rather than at their definition.
+ */
+export const WORKER_GIT_TOOLS: readonly WorkerModeTool[] = annotateAll([GIT_STATUS_TOOL, GIT_LOG_TOOL, GIT_DIFF_TOOL]);
+
+/**
+ * Everything worker mode publishes, in `WORKER_TOOLS` order (F1 — the tuple in
+ * mesh-shared is the contract; the footer every dispatched task carries and the
+ * coordinator prompt's Workers section are rendered from the same tuple).
+ *
+ * Asserts parity in BOTH directions and throws otherwise, so a schema added
+ * here without a `WORKER_TOOLS` entry — or a `WORKER_TOOLS` entry with no
+ * schema — is a startup failure rather than a silently under- or
+ * over-advertised toolset. `candidates` exists so the parity check itself can
+ * be tested with an injected drift.
+ */
+export function resolveWorkerModeTools(
+  candidates: readonly WorkerModeTool[] = [...ALL_WORKER_TOOLS, ...WORKER_GIT_TOOLS],
+): WorkerModeTool[] {
+  const byName = new Map<string, WorkerModeTool>();
+  for (const tool of candidates) {
+    if (byName.has(tool.name)) {
+      throw new Error(`worker mode: tool '${tool.name}' is defined twice`);
+    }
+    byName.set(tool.name, tool);
+  }
+  const contract = new Set<string>(WORKER_TOOLS);
+  const missingSchema = WORKER_TOOLS.filter((name: WorkerTool) => !byName.has(name));
+  const unlisted = [...byName.keys()].filter((name) => !contract.has(name));
+  if (missingSchema.length || unlisted.length) {
+    throw new Error(
+      'worker mode: tool schemas and WORKER_TOOLS (@adhdev/mesh-shared) disagree — '
+        + `missing schema for [${missingSchema.join(', ')}]; schema not in WORKER_TOOLS [${unlisted.join(', ')}]`,
+    );
+  }
+  return WORKER_TOOLS.map((name: WorkerTool) => byName.get(name)!);
+}
 
 /**
  * Map the tool's snake_case wire shape onto the daemon's camelCase report.

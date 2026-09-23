@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT } from '@adhdev/mesh-shared'
+import { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT, WORKER_TOOLS, renderCoordinatorWorkerSection } from '@adhdev/mesh-shared'
 import { buildCoordinatorSystemPrompt, buildMagiKindPanelsSection } from '../../src/mesh/coordinator-prompt.js'
 
 describe('Repo Mesh coordinator prompt', () => {
@@ -1050,10 +1050,18 @@ describe('Repo Mesh coordinator prompt', () => {
     return [...names]
   }
 
-  it('6-6: the coordinator-prompt tool table exposes exactly the canonical mesh tool registry', () => {
+  // F1: `mesh_notify_worker` is published by the MCP server only while worker MCP
+  // is on (isWorkerMcpEnabled — default on since 2026-09-18), so it is deliberately
+  // NOT in CANONICAL_MESH_TOOL_NAMES (mesh-tool-dispatch.ts keeps it out of the
+  // canonical table on purpose). The prompt must still tell the coordinator it
+  // exists — it is the only way to reach a busy worker — so the table carries it
+  // as the one flag-gated row on top of the canonical registry.
+  const FLAG_GATED_PROMPT_TOOLS = ['mesh_notify_worker'] as const
+
+  it('6-6: the coordinator-prompt tool table exposes exactly the canonical mesh tool registry (+ the flag-gated worker notify)', () => {
     const prompt = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
     const exposed = extractPromptToolTable(prompt).sort()
-    const canonical = [...CANONICAL_MESH_TOOL_NAMES].sort()
+    const canonical = [...CANONICAL_MESH_TOOL_NAMES, ...FLAG_GATED_PROMPT_TOOLS].sort()
 
     // Missing: a canonical (schema-published) tool the coordinator is never told about.
     const missing = canonical.filter(name => !exposed.includes(name))
@@ -1063,9 +1071,53 @@ describe('Repo Mesh coordinator prompt', () => {
     const ghost = exposed.filter(name => !canonical.includes(name as any))
     expect(ghost, `tools advertised in the coordinator-prompt table with no canonical schema entry: ${ghost.join(', ')}`).toEqual([])
 
-    // Full set-equality + count guard (== the barrel "NN tools" comment count).
+    // Full set-equality + count guard (== the barrel "NN tools" comment count,
+    // plus the flag-gated rows).
     expect(exposed).toEqual(canonical)
-    expect(exposed.length).toBe(CANONICAL_MESH_TOOL_COUNT)
+    expect(exposed.length).toBe(CANONICAL_MESH_TOOL_COUNT + FLAG_GATED_PROMPT_TOOLS.length)
+  })
+
+  // ── F1: the Workers section (coordinator half of the worker protocol) ──
+  //
+  // Measured 2026-09-23: 1,075 coordinator mesh_status calls in 14 days against 3
+  // worker reports. The prompt had no section about workers and its only liveness
+  // guidance was "use mesh_status to probe". These pin the section's presence, its
+  // placement next to the tool table, and the rewritten mesh_status guidance.
+  describe('F1 Workers section', () => {
+    it('renders the Workers section from mesh-shared directly under the tool table', () => {
+      const prompt = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
+      expect(prompt).toContain(renderCoordinatorWorkerSection())
+      const toolsAt = prompt.indexOf('## Available Tools')
+      const workersAt = prompt.indexOf('## Workers')
+      const preflightAt = prompt.indexOf('## Tool Exposure Preflight')
+      expect(toolsAt).toBeGreaterThanOrEqual(0)
+      expect(workersAt).toBeGreaterThan(toolsAt)
+      expect(preflightAt).toBeGreaterThan(workersAt)
+      // Nothing else sits between the table and the Workers section.
+      expect(prompt.slice(toolsAt, workersAt)).not.toContain('\n## ')
+    })
+
+    it('names every worker tool and mesh_notify_worker, and forbids progress polling', () => {
+      const prompt = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
+      const workers = prompt.slice(prompt.indexOf('## Workers'), prompt.indexOf('## Tool Exposure Preflight'))
+      for (const tool of WORKER_TOOLS) expect(workers).toContain(`\`${tool}\``)
+      expect(workers).toContain('`mesh_notify_worker`')
+      expect(workers).toContain('never for progress')
+    })
+
+    it('mesh_status guidance under the node list is health/capacity, never progress', () => {
+      const prompt = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
+      expect(prompt).not.toContain('probe live health before delegating')
+      expect(prompt).toContain('Use `mesh_status` for node health and capacity before delegating work')
+      expect(prompt).toContain("never to check on a running worker's progress")
+    })
+
+    it('exposes the Workers section to override templates as {{workers}}', () => {
+      const prompt = buildCoordinatorSystemPrompt({
+        mesh: { ...baseMesh(), coordinator: { systemPromptOverride: 'X\n\n{{workers}}\n\nY' } } as any,
+      })
+      expect(prompt).toContain(renderCoordinatorWorkerSection())
+    })
   })
 
   it('6-6: mesh_mission_list and the G2 requeue tool are exposed (operating-rule + gap coverage)', () => {

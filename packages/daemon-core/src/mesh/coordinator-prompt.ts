@@ -36,7 +36,7 @@ import { getConfigDir } from '../config/config.js';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveCoordinatorRules, splitRulesLayer, type CoordinatorRulesResolution } from './coordinator-rules.js';
 import { isNoteExpired, OPERATING_NOTE_CATEGORY_TTL_DAYS } from './mesh-ledger.js';
-import { MESH_TASK_DIFFICULTIES } from '@adhdev/mesh-shared';
+import { MESH_TASK_DIFFICULTIES, renderCoordinatorWorkerSection } from '@adhdev/mesh-shared';
 import type { MagiKindPanelMap, MagiSlot, MagiTaskKind } from '@adhdev/mesh-shared';
 
 /**
@@ -385,6 +385,12 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
     // ── Tools ──
     sections.push(TOOLS_SECTION);
 
+    // ── Workers (F1) — the coordinator half of the worker protocol. Rides
+    //     directly under the tool table because that is where a coordinator
+    //     reads dispatch guidance; it names the tools a worker holds, what a
+    //     completion event carries, and that mesh_status is never for progress. ──
+    sections.push(WORKERS_SECTION);
+
     // ── Tool Exposure Preflight ──
     sections.push(TOOL_EXPOSURE_PREFLIGHT_SECTION);
 
@@ -479,6 +485,7 @@ function expandPromptPlaceholders(template: string, ctx: CoordinatorPromptContex
         operatingNotes: buildOperatingNotesSection(ctx.operatingNotes) || '',
         policy: buildPolicySection(mergeAndNormalizePolicy(undefined, mesh.policy)),
         tools: TOOLS_SECTION,
+        workers: WORKERS_SECTION,
         workflow: rulesLayer.workflow,
         quota: QUOTA_SECTION,
         onboarding: ONBOARDING_SECTION,
@@ -600,7 +607,7 @@ function buildNodeConfigSection(mesh: LocalMeshEntry): string {
             lines.push(`  📌 Node instruction: ${indentFollowing(nodePrompt, '     ')}`);
         }
     }
-    lines.push('', '_Use `mesh_status` to probe live health before delegating work._');
+    lines.push('', '_Use `mesh_status` for node health and capacity before delegating work — never to check on a running worker\'s progress; completion, progress and blocked reports arrive as events (see Workers)._');
     return lines.join('\n');
 }
 
@@ -1089,6 +1096,7 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_queue_cancel\` | Cancel a queue task (audit history kept) |
 | \`mesh_queue_requeue\` | Return a task to pending for retry |
 | \`mesh_send_task\` | Push a task straight to a specific node/session |
+| \`mesh_notify_worker\` | Deliver an urgent memo to a BUSY worker mid-task — piggybacks on the worker's next tool call, no interrupt. Published only while worker MCP is on (\`ADHDEV_WORKER_MCP\`, default on) |
 | \`mesh_mission_upsert\` | Create/update a persistent mission; set completed/abandoned when decided |
 | \`mesh_mission_list\` | All missions with goal/status/progress — the authority for "what work remains" |
 | \`mesh_launch_session\` | Start a new agent session on a node |
@@ -1136,6 +1144,11 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_node_slots_propose\` | Auto-detect installed CLIs and draft a slot profile (read-only; reports droppedSlots) |
 | \`mesh_coordinator_prompt_append_get\` | Read this daemon's per-machine coordinator prompt APPEND for a CLI type |
 | \`mesh_coordinator_prompt_append_set\` | Write/clear that APPEND (append-only; base prompt is not replaceable) |`;
+
+// WIRING-UNIFICATION F1: the coordinator half of the worker protocol, rendered
+// by mesh-shared next to the footer every dispatched task carries so the two
+// halves cannot drift. Rendered once at module load — the section is static.
+const WORKERS_SECTION = renderCoordinatorWorkerSection();
 
 // GRAPH-ORCHESTRATION Phase F (design "Required tool-discovery instruction").
 // The enqueue-discovery paragraph is deliberately the FIRST thing in this section,

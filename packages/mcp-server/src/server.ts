@@ -45,11 +45,12 @@ import {
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
 import { resolveMeshToolHandler } from './tools/mesh-tool-dispatch.js';
-import { rejectUnknownMeshToolArgs, unknownToolArgsError } from './tools/validate-tool-args.js';
+import { validateMeshToolArgs, unknownToolArgsError } from './tools/validate-tool-args.js';
 import { annotateAll } from './tools/tool-annotations.js';
 import {
-  ALL_WORKER_TOOLS, readWorkerCredentials, reportCompletion, progressUpdate, peerContextPull, drainMailbox,
+  resolveWorkerModeTools, readWorkerCredentials, reportCompletion, progressUpdate, peerContextPull, drainMailbox,
 } from './tools/worker-tools.js';
+import type { WorkerTool } from '@adhdev/mesh-shared';
 
 /**
  * Version reported in the MCP `initialize` response (`serverInfo.version`).
@@ -139,10 +140,11 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       process.exit(1);
     }
 
-    // ALL_WORKER_TOOLS is already annotated at its definition; the three git
-    // tools are shared consts published by more than one mode, so they get
-    // annotated here at the point of publication.
-    const workerTools = [...ALL_WORKER_TOOLS, ...annotateAll([GIT_STATUS_TOOL, GIT_LOG_TOOL, GIT_DIFF_TOOL])];
+    // F1: the advertised list is derived from `WORKER_TOOLS` (@adhdev/mesh-shared)
+    // — ListTools order is the tuple's order, and resolveWorkerModeTools throws
+    // at startup if any tuple entry lacks a schema or any schema is not in the
+    // tuple. The same tuple renders the footer every dispatched task carries.
+    const workerTools = resolveWorkerModeTools();
     const workerToolByName = new Map<string, { inputSchema?: { properties?: Record<string, unknown> } }>(
       workerTools.map(tool => [tool.name, tool]),
     );
@@ -177,6 +179,20 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       return { ...response, content };
     }
 
+    // Keyed by the contract tuple's member type, so a WORKER_TOOLS entry with no
+    // handler is a compile error rather than a runtime "Unknown tool".
+    type WorkerToolResponse = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
+    const asResponse = (result: { text: string; isError?: boolean }): WorkerToolResponse =>
+      ({ content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) });
+    const workerHandlers: Record<WorkerTool, (a: Record<string, any>) => Promise<WorkerToolResponse>> = {
+      report_completion: async (a) => asResponse(await reportCompletion(transport, credentials, a)),
+      progress_update: async (a) => asResponse(await progressUpdate(transport, credentials, a)),
+      peer_context_pull: async (a) => asResponse(await peerContextPull(transport, credentials, a)),
+      git_status: async (a) => asResponse({ text: await gitStatus(transport, { workspace: a.workspace, include_diff: a.include_diff, format: a.format }) }),
+      git_log: async (a) => asResponse({ text: await gitLog(transport, { workspace: a.workspace, limit: a.limit, file: a.file, since: a.since, until: a.until, format: a.format }) }),
+      git_diff: async (a) => asResponse({ text: await gitDiff(transport, { workspace: a.workspace, file: a.file, max_lines: a.max_lines, staged: a.staged, format: a.format }) }),
+    };
+
     server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const { name, arguments: args } = req.params;
       const a = (args ?? {}) as Record<string, any>;
@@ -188,34 +204,13 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       }
 
       try {
-        switch (name) {
-          case 'report_completion': {
-            const result = await reportCompletion(transport, credentials, a);
-            return withMailboxPiggyback({ content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) });
-          }
-          case 'progress_update': {
-            const result = await progressUpdate(transport, credentials, a);
-            return withMailboxPiggyback({ content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) });
-          }
-          case 'peer_context_pull': {
-            const result = await peerContextPull(transport, credentials, a);
-            return withMailboxPiggyback({ content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) });
-          }
-          case 'git_status': {
-            const text = await gitStatus(transport, { workspace: a.workspace, include_diff: a.include_diff, format: a.format });
-            return withMailboxPiggyback({ content: [{ type: 'text', text }] });
-          }
-          case 'git_log': {
-            const text = await gitLog(transport, { workspace: a.workspace, limit: a.limit, file: a.file, since: a.since, until: a.until, format: a.format });
-            return withMailboxPiggyback({ content: [{ type: 'text', text }] });
-          }
-          case 'git_diff': {
-            const text = await gitDiff(transport, { workspace: a.workspace, file: a.file, max_lines: a.max_lines, staged: a.staged, format: a.format });
-            return withMailboxPiggyback({ content: [{ type: 'text', text }] });
-          }
-          default:
-            return withMailboxPiggyback({ content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true });
+        const handler = Object.prototype.hasOwnProperty.call(workerHandlers, name)
+          ? workerHandlers[name as WorkerTool]
+          : undefined;
+        if (!handler) {
+          return withMailboxPiggyback({ content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true });
         }
+        return withMailboxPiggyback(await handler(a));
       } catch (err: any) {
         return withMailboxPiggyback({ content: [{ type: 'text', text: `Error: ${err?.message ?? String(err)}` }], isError: true });
       }
@@ -353,7 +348,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       // Reject mistyped/unknown parameters before dispatch (see
       // validate-tool-args.ts — silently ignoring `session_id` for
       // `session_ids` once deleted a live worker session).
-      const unknownArgsError = rejectUnknownMeshToolArgs(name, a);
+      const unknownArgsError = validateMeshToolArgs(name, a);
       if (unknownArgsError) return { content: [{ type: 'text', text: unknownArgsError }], isError: true };
       // ★Dispatch via the type-enforced registry (mesh-tool-dispatch.ts), not a
       // hand-maintained switch. A canonical tool with no handler is now a
