@@ -47091,34 +47091,67 @@ child.on('exit', () => process.exit(0));
       MESH_CHUNK_KIND: () => MESH_CHUNK_KIND,
       MESH_CHUNK_PAYLOAD_CHARS: () => MESH_CHUNK_PAYLOAD_CHARS,
       MESH_CHUNK_TTL_MS: () => MESH_CHUNK_TTL_MS,
+      MESH_DELIVERY_MODES: () => MESH_DELIVERY_MODES2,
       MESH_MAX_CHUNKS: () => MESH_MAX_CHUNKS,
       MESH_MAX_INLINE_FRAME_BYTES: () => MESH_MAX_INLINE_FRAME_BYTES,
       MESH_MAX_REASSEMBLED_BYTES: () => MESH_MAX_REASSEMBLED_BYTES,
       MESH_TASK_DIFFICULTIES: () => MESH_TASK_DIFFICULTIES2,
+      MESH_TASK_MODES: () => MESH_TASK_MODES2,
+      MESH_TASK_PRIORITIES: () => MESH_TASK_PRIORITIES2,
+      MESH_TASK_STATUSES: () => MESH_TASK_STATUSES2,
+      MESH_TERMINAL_TASK_STATUSES: () => MESH_TERMINAL_TASK_STATUSES2,
+      MESH_THINKING_LEVELS: () => MESH_THINKING_LEVELS2,
       MeshChunkAssembler: () => MeshChunkAssembler,
       QUOTA_SUPPORTED_PROVIDERS: () => QUOTA_SUPPORTED_PROVIDERS,
+      RECENT_SESSION_BUCKETS: () => RECENT_SESSION_BUCKETS,
       SERVER_TO_DAEMON_WS_MSGS: () => SERVER_TO_DAEMON_WS_MSGS,
+      SESSION_STATUSES: () => SESSION_STATUSES2,
+      SESSION_STATUS_ALIASES: () => SESSION_STATUS_ALIASES,
+      SESSION_STATUS_CLASS: () => SESSION_STATUS_CLASS,
       STATUS_PROBE_ARG_KEY: () => STATUS_PROBE_ARG_KEY2,
       UNKNOWN_CLI_SLOT_RECIPE: () => UNKNOWN_CLI_SLOT_RECIPE2,
+      WORKER_BRANCH_STATES: () => WORKER_BRANCH_STATES2,
+      WORKER_PROTOCOL_FOOTER_MARKER: () => WORKER_PROTOCOL_FOOTER_MARKER,
+      WORKER_REPORT_OUTCOMES: () => WORKER_REPORT_OUTCOMES2,
+      WORKER_TOOLS: () => WORKER_TOOLS2,
+      appendWorkerProtocolFooter: () => appendWorkerProtocolFooter,
       argsCarryStatusProbeMarker: () => argsCarryStatusProbeMarker,
       buildMagiPanelProposal: () => buildMagiPanelProposal2,
       buildSlotProposal: () => buildSlotProposal2,
       canonicalDaemonId: () => canonicalDaemonId2,
+      classifySessionStatus: () => classifySessionStatus,
       compareSemver: () => compareSemver,
       daemonIdsEquivalent: () => daemonIdsEquivalent4,
       deriveProviderPriorityFromSlots: () => deriveProviderPriorityFromSlots2,
       deriveSlotsFromLegacy: () => deriveSlotsFromLegacy,
+      enumOf: () => enumOf,
       expandDaemonIdForms: () => expandDaemonIdForms,
       formatQuotaAccount: () => formatQuotaAccount,
       hasGitStatusEvidence: () => hasGitStatusEvidence,
+      hasWorkerProtocolFooter: () => hasWorkerProtocolFooter,
       interpolateArgs: () => interpolateArgs,
       interpolateString: () => interpolateString,
+      isBlockedStatus: () => isBlockedStatus,
+      isBusyStatus: () => isBusyStatus,
       isDaemonToServerWsMsg: () => isDaemonToServerWsMsg,
+      isDeadStatus: () => isDeadStatus,
       isDowngrade: () => isDowngrade,
+      isMeshDeliveryMode: () => isMeshDeliveryMode2,
       isMeshTaskDifficulty: () => isMeshTaskDifficulty2,
+      isMeshTaskMode: () => isMeshTaskMode2,
+      isMeshTaskPriority: () => isMeshTaskPriority2,
+      isMeshTaskStatus: () => isMeshTaskStatus2,
+      isMeshTerminalTaskStatus: () => isMeshTerminalTaskStatus2,
+      isMeshThinkingLevel: () => isMeshThinkingLevel2,
       isPhantomDaemonEntry: () => isPhantomDaemonEntry,
       isRawDaemonDoId: () => isRawDaemonDoId,
+      isReadyStatus: () => isReadyStatus,
       isServerToDaemonWsMsg: () => isServerToDaemonWsMsg,
+      isSessionStatus: () => isSessionStatus,
+      isWorkerBranchState: () => isWorkerBranchState2,
+      isWorkerReportOutcome: () => isWorkerReportOutcome2,
+      isWorkerTool: () => isWorkerTool,
+      isWorkingStatus: () => isWorkingStatus,
       joinRepoPath: () => joinRepoPath,
       machineCoreFromDaemonId: () => machineCoreFromDaemonId,
       measureWorstCaseChunkEnvelopeBytes: () => measureWorstCaseChunkEnvelopeBytes,
@@ -47136,6 +47169,7 @@ child.on('exit', () => process.exit(0));
       normalizeMeshWorkspaceForCompare: () => normalizeMeshWorkspaceForCompare,
       normalizeNodeCapabilitySlot: () => normalizeNodeCapabilitySlot2,
       normalizeNodeCapabilitySlots: () => normalizeNodeCapabilitySlots2,
+      normalizeSessionStatus: () => normalizeSessionStatus,
       normalizeThinkingLevel: () => normalizeThinkingLevel,
       parseJsonRecord: () => parseJsonRecord,
       parseSemver: () => parseSemver,
@@ -47146,10 +47180,13 @@ child.on('exit', () => process.exit(0));
       readRecord: () => readRecord,
       readString: () => readString22,
       readStringArray: () => readStringArray2,
+      renderCoordinatorWorkerSection: () => renderCoordinatorWorkerSection,
+      renderWorkerProtocolFooter: () => renderWorkerProtocolFooter,
       scoreGitStatusCandidate: () => scoreGitStatusCandidate,
       scoreGitUpstreamFreshness: () => scoreGitUpstreamFreshness,
       sessionIdsEquivalent: () => sessionIdsEquivalent,
       splitMeshFrame: () => splitMeshFrame,
+      statusesOfClass: () => statusesOfClass,
       stripStatusProbeMarker: () => stripStatusProbeMarker,
       summarizeGitShape: () => summarizeGitShape,
       supportsQuota: () => supportsQuota,
@@ -47839,6 +47876,95 @@ child.on('exit', () => process.exit(0));
         maxMachines: num2(src.maxMachines, -1)
       };
     }
+    function isSessionStatus(value) {
+      return typeof value === "string" && SESSION_STATUS_SET2.has(value);
+    }
+    function normalizeSessionStatus(raw) {
+      if (typeof raw !== "string") return null;
+      const value = raw.trim().toLowerCase();
+      if (SESSION_STATUS_SET2.has(value)) return value;
+      return SESSION_STATUS_ALIASES[value] ?? null;
+    }
+    function classifySessionStatus(raw) {
+      const status = normalizeSessionStatus(raw);
+      return status ? SESSION_STATUS_CLASS[status] : "unknown";
+    }
+    function isWorkingStatus(raw) {
+      return classifySessionStatus(raw) === "working";
+    }
+    function isBlockedStatus(raw) {
+      return classifySessionStatus(raw) === "blocked";
+    }
+    function isReadyStatus(raw) {
+      return classifySessionStatus(raw) === "ready";
+    }
+    function isDeadStatus(raw) {
+      return classifySessionStatus(raw) === "dead";
+    }
+    function isBusyStatus(raw) {
+      const cls = classifySessionStatus(raw);
+      return cls === "working" || cls === "blocked";
+    }
+    function statusesOfClass(cls) {
+      return SESSION_STATUSES2.filter((status) => SESSION_STATUS_CLASS[status] === cls);
+    }
+    function makeGuard2(values) {
+      const set3 = new Set(values);
+      return (value) => typeof value === "string" && set3.has(value);
+    }
+    function enumOf(values, description) {
+      return {
+        type: "string",
+        enum: [...values],
+        ...description ? { description } : {}
+      };
+    }
+    function isWorkerTool(value) {
+      return typeof value === "string" && WORKER_TOOL_SET2.has(value);
+    }
+    function hasWorkerProtocolFooter(body) {
+      return typeof body === "string" && body.includes(WORKER_PROTOCOL_FOOTER_MARKER);
+    }
+    function renderWorkerProtocolFooter(input = {}) {
+      const lines = [WORKER_PROTOCOL_FOOTER_MARKER];
+      const scope = [];
+      if (input.taskId) scope.push(`task ${input.taskId}`);
+      if (input.taskMode) scope.push(`mode ${input.taskMode}`);
+      if (input.difficulty) scope.push(`difficulty ${input.difficulty}`);
+      if (input.readonly) scope.push("read-only");
+      if (scope.length) lines.push(`You are a delegated worker (${scope.join(", ")}).`);
+      else lines.push("You are a delegated worker.");
+      lines.push(
+        "When your work is finished, blocked, or has failed, call `report_completion` exactly once. Its `summary` is recorded verbatim as the authoritative record of this task \u2014 your terminal is not scraped for it \u2014 so state what you did, what you found, and where you left the branch.",
+        "For work that runs longer than a few minutes, call `progress_update` at natural checkpoints so the coordinator can see you are alive without polling.",
+        "`peer_context_pull` shows what sibling tasks in this mission have reported; `git_status` / `git_diff` / `git_log` inspect your own workspace.",
+        "You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. If you need a decision from the coordinator, finish with `report_completion` and outcome `blocked`."
+      );
+      if (input.enclosedHandoffNotes && input.enclosedHandoffNotes > 0) {
+        lines.push(
+          `The ${input.enclosedHandoffNotes} handoff note(s) above were written by agents who touched this code before you; honour their conflict guidance and add your own in \`handoff_notes\` when you report.`
+        );
+      }
+      return lines.join("\n");
+    }
+    function appendWorkerProtocolFooter(body, input = {}) {
+      if (hasWorkerProtocolFooter(body)) return body;
+      const trimmed = body.replace(/\s+$/, "");
+      return `${trimmed}
+
+${renderWorkerProtocolFooter(input)}`;
+    }
+    function renderCoordinatorWorkerSection() {
+      return [
+        "## Workers",
+        "",
+        `Every task you dispatch is delivered with a worker protocol footer. Workers hold exactly these tools: ${WORKER_TOOLS2.map((tool) => `\`${tool}\``).join(", ")} \u2014 and no \`mesh_*\` tools.`,
+        "- A worker finishes by calling `report_completion`; its structured report (outcome, summary, touched files, branch state, handoff notes) is what reaches you as the completion event. Read that report \u2014 do not re-derive the outcome from `mesh_read_chat` or the terminal unless the report is missing.",
+        "- `progress_update` from a worker arrives as a lightweight progress note. Do NOT poll `mesh_status`, `mesh_view_queue` or `mesh_read_chat` to check on a running worker; completion, progress, blocked and failure all arrive as events.",
+        "- To reach a busy worker mid-task use `mesh_notify_worker`: the memo is delivered on the worker's next tool call (or when it becomes idle). A worker that reports `blocked` is asking you for a decision \u2014 answer it with `mesh_send_task` to the same session.",
+        "- `mesh_status` is for node health and capacity before delegating, never for progress."
+      ].join("\n");
+    }
     var QUOTA_SUPPORTED_PROVIDERS;
     var DAEMON_ID_PREFIXES;
     var MAGI_RAW_ANSWER_CAP3;
@@ -47862,6 +47988,30 @@ child.on('exit', () => process.exit(0));
     var SERVER_TO_DAEMON_WS_MSGS;
     var CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX;
     var CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX;
+    var SESSION_STATUSES2;
+    var RECENT_SESSION_BUCKETS;
+    var SESSION_STATUS_CLASS;
+    var SESSION_STATUS_ALIASES;
+    var SESSION_STATUS_SET2;
+    var MESH_TASK_STATUSES2;
+    var MESH_TERMINAL_TASK_STATUSES2;
+    var MESH_TASK_MODES2;
+    var MESH_TASK_PRIORITIES2;
+    var MESH_THINKING_LEVELS2;
+    var MESH_DELIVERY_MODES2;
+    var WORKER_REPORT_OUTCOMES2;
+    var WORKER_BRANCH_STATES2;
+    var isMeshTaskStatus2;
+    var isMeshTerminalTaskStatus2;
+    var isMeshTaskMode2;
+    var isMeshTaskPriority2;
+    var isMeshThinkingLevel2;
+    var isMeshDeliveryMode2;
+    var isWorkerReportOutcome2;
+    var isWorkerBranchState2;
+    var WORKER_TOOLS2;
+    var WORKER_TOOL_SET2;
+    var WORKER_PROTOCOL_FOOTER_MARKER;
     var init_dist = __esm2({
       "../mesh-shared/dist/index.mjs"() {
         "use strict";
@@ -48154,6 +48304,81 @@ child.on('exit', () => process.exit(0));
         ];
         CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX = "Claude TUI review page is not focused";
         CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX = "Claude TUI answer delivered but not confirmed";
+        SESSION_STATUSES2 = [
+          "idle",
+          "generating",
+          "waiting_approval",
+          "waiting_choice",
+          "finalizing",
+          "error",
+          "stopped",
+          "starting",
+          "panel_hidden",
+          "not_monitored",
+          "disconnected"
+        ];
+        RECENT_SESSION_BUCKETS = ["needs_attention", "working", "task_complete", "idle"];
+        SESSION_STATUS_CLASS = {
+          generating: "working",
+          finalizing: "working",
+          starting: "working",
+          waiting_approval: "blocked",
+          waiting_choice: "blocked",
+          idle: "ready",
+          panel_hidden: "ready",
+          not_monitored: "ready",
+          error: "dead",
+          stopped: "dead",
+          disconnected: "dead"
+        };
+        SESSION_STATUS_ALIASES = {
+          running: "generating",
+          streaming: "generating",
+          busy: "generating",
+          working: "generating",
+          loading: "generating",
+          loading_reference: "generating",
+          thinking: "generating",
+          active: "generating",
+          // Status-lane refinements of a turn that is still owned by the agent.
+          no_progress: "generating",
+          long_generating: "generating",
+          initializing: "starting",
+          waiting: "waiting_approval"
+        };
+        SESSION_STATUS_SET2 = new Set(SESSION_STATUSES2);
+        MESH_TASK_STATUSES2 = ["pending", "assigned", "completed", "failed", "cancelled"];
+        MESH_TERMINAL_TASK_STATUSES2 = ["completed", "failed", "cancelled"];
+        MESH_TASK_MODES2 = ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"];
+        MESH_TASK_PRIORITIES2 = ["low", "normal", "high"];
+        MESH_THINKING_LEVELS2 = ["low", "medium", "high"];
+        MESH_DELIVERY_MODES2 = ["when_idle", "interrupt"];
+        WORKER_REPORT_OUTCOMES2 = ["completed", "blocked", "failed"];
+        WORKER_BRANCH_STATES2 = [
+          "merged_to_main",
+          "pushed_feature_branch_needs_merge",
+          "blocked_review",
+          "cleanup_candidate",
+          "not_mergeable"
+        ];
+        isMeshTaskStatus2 = makeGuard2(MESH_TASK_STATUSES2);
+        isMeshTerminalTaskStatus2 = makeGuard2(MESH_TERMINAL_TASK_STATUSES2);
+        isMeshTaskMode2 = makeGuard2(MESH_TASK_MODES2);
+        isMeshTaskPriority2 = makeGuard2(MESH_TASK_PRIORITIES2);
+        isMeshThinkingLevel2 = makeGuard2(MESH_THINKING_LEVELS2);
+        isMeshDeliveryMode2 = makeGuard2(MESH_DELIVERY_MODES2);
+        isWorkerReportOutcome2 = makeGuard2(WORKER_REPORT_OUTCOMES2);
+        isWorkerBranchState2 = makeGuard2(WORKER_BRANCH_STATES2);
+        WORKER_TOOLS2 = [
+          "report_completion",
+          "progress_update",
+          "peer_context_pull",
+          "git_status",
+          "git_log",
+          "git_diff"
+        ];
+        WORKER_TOOL_SET2 = new Set(WORKER_TOOLS2);
+        WORKER_PROTOCOL_FOOTER_MARKER = "--- adhdev worker protocol ---";
       }
     });
     async function runAsyncBatch(items, worker, options = {}) {
@@ -55217,7 +55442,7 @@ ${lines.join("\n")}
     function normalizeMeshTaskMode(value) {
       if (typeof value !== "string") return void 0;
       const normalized = value.trim();
-      return MESH_TASK_MODES.includes(normalized) ? normalized : void 0;
+      return MESH_TASK_MODES22.includes(normalized) ? normalized : void 0;
     }
     function validateMeshTaskModeRequest3(mode, message, readonly2) {
       const taskMode = normalizeMeshTaskMode(mode);
@@ -66079,8 +66304,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var mesh_work_queue_exports = {};
     __export2(mesh_work_queue_exports, {
       MESH_TASK_GRAPH_MAX_TASKS: () => MESH_TASK_GRAPH_MAX_TASKS3,
-      MESH_TASK_MODES: () => MESH_TASK_MODES,
-      MESH_TASK_PRIORITIES: () => MESH_TASK_PRIORITIES,
+      MESH_TASK_MODES: () => MESH_TASK_MODES22,
+      MESH_TASK_PRIORITIES: () => MESH_TASK_PRIORITIES22,
       NOT_BEFORE_RELATIVE_THRESHOLD_MS: () => NOT_BEFORE_RELATIVE_THRESHOLD_MS,
       REDRIVE_RECLAIM_REASONS: () => REDRIVE_RECLAIM_REASONS,
       REDRIVE_SUPERSEDE_WINDOW_MS: () => REDRIVE_SUPERSEDE_WINDOW_MS,
@@ -66841,8 +67066,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       MeshRuntimeStore.resetForTests();
     }
     var import_crypto11;
-    var MESH_TASK_MODES;
-    var MESH_TASK_PRIORITIES;
+    var MESH_TASK_MODES22;
+    var MESH_TASK_PRIORITIES22;
     var NOT_BEFORE_RELATIVE_THRESHOLD_MS;
     var MESH_TASK_GRAPH_MAX_TASKS3;
     var DEPENDENCY_FAILURE_TERMINALS;
@@ -66878,8 +67103,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_autolaunch_spawn_budget();
         init_mesh_direct_dispatch();
         init_mesh_reconcile_acked_hold();
-        MESH_TASK_MODES = ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"];
-        MESH_TASK_PRIORITIES = ["low", "normal", "high"];
+        MESH_TASK_MODES22 = ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"];
+        MESH_TASK_PRIORITIES22 = ["low", "normal", "high"];
         NOT_BEFORE_RELATIVE_THRESHOLD_MS = 365 * 24 * 60 * 60 * 1e3;
         MESH_TASK_GRAPH_MAX_TASKS3 = 50;
         DEPENDENCY_FAILURE_TERMINALS = /* @__PURE__ */ new Set(["failed", "cancelled"]);
@@ -84646,7 +84871,7 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
     var worker_report_exports = {};
     __export2(worker_report_exports, {
       WORKER_BLOCKERS_MAX: () => WORKER_BLOCKERS_MAX,
-      WORKER_BRANCH_STATES: () => WORKER_BRANCH_STATES,
+      WORKER_BRANCH_STATES: () => WORKER_BRANCH_STATES22,
       WORKER_FOLLOW_UPS_MAX: () => WORKER_FOLLOW_UPS_MAX,
       WORKER_GUIDANCE_MAX_CHARS: () => WORKER_GUIDANCE_MAX_CHARS,
       WORKER_HANDOFF_EVENT_KIND: () => WORKER_HANDOFF_EVENT_KIND,
@@ -84698,10 +84923,10 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
       }
       const touchedFiles = validateStringList(input.touchedFiles, "touchedFiles", WORKER_TOUCHED_FILES_MAX, errors);
       const blockers = validateStringList(input.blockers, "blockers", WORKER_BLOCKERS_MAX, errors);
-      if (input.branchState !== void 0 && !WORKER_BRANCH_STATES.includes(input.branchState)) {
+      if (input.branchState !== void 0 && !WORKER_BRANCH_STATES22.includes(input.branchState)) {
         errors.push({
           field: "branchState",
-          message: `branchState must be one of: ${WORKER_BRANCH_STATES.join(", ")}`
+          message: `branchState must be one of: ${WORKER_BRANCH_STATES22.join(", ")}`
         });
       }
       let handoffNotes;
@@ -85152,7 +85377,7 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
       return { recorded: true, error: null };
     }
     var import_crypto13;
-    var WORKER_BRANCH_STATES;
+    var WORKER_BRANCH_STATES22;
     var WORKER_REPORT_EVENT_KIND;
     var WORKER_PROGRESS_EVENT_KIND;
     var WORKER_HANDOFF_EVENT_KIND;
@@ -85178,7 +85403,7 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
         init_mesh_graph_transition_runner();
         init_mesh_work_queue();
         init_worker_mcp_isolation();
-        WORKER_BRANCH_STATES = [
+        WORKER_BRANCH_STATES22 = [
           "merged_to_main",
           "pushed_feature_branch_needs_merge",
           "blocked_review",
@@ -89548,7 +89773,7 @@ ${cleanBody}`;
       }
     }
     function assertTaskModeEvidenceStrategyIsExhaustive() {
-      const missing = MESH_TASK_MODES.filter((mode) => !(mode in TASK_MODE_EVIDENCE_STRATEGY));
+      const missing = MESH_TASK_MODES22.filter((mode) => !(mode in TASK_MODE_EVIDENCE_STRATEGY));
       if (missing.length > 0) {
         throw new Error(`TASK_MODE_EVIDENCE_STRATEGY is missing an entry for taskMode(s): ${missing.join(", ")} \u2014 every MeshTaskMode must have a completion-evidence strategy (see mesh-completion-side-effect-evidence.ts)`);
       }
@@ -148513,7 +148738,7 @@ ${e?.stderr || ""}`;
       MESH_SCHEDULING_STRATEGIES: () => MESH_SCHEDULING_STRATEGIES,
       MESH_SUPERSEDED_SINGLE_REASONS: () => MESH_SUPERSEDED_SINGLE_REASONS,
       MESH_TASK_GRAPH_MAX_TASKS: () => MESH_TASK_GRAPH_MAX_TASKS3,
-      MESH_TASK_PRIORITIES: () => MESH_TASK_PRIORITIES,
+      MESH_TASK_PRIORITIES: () => MESH_TASK_PRIORITIES22,
       MESH_UNSANCTIONED_DIRECT_HINT: () => MESH_UNSANCTIONED_DIRECT_HINT3,
       MESH_UNSANCTIONED_DIRECT_REASONS: () => MESH_UNSANCTIONED_DIRECT_REASONS,
       MESH_VALID_DIRECT_REASONS: () => MESH_VALID_DIRECT_REASONS3,
@@ -171794,6 +172019,55 @@ var STATUS_PROBE_ARG_KEY = "_statusProbe";
 function withStatusProbeMarker(args = {}) {
   return { ...args, [STATUS_PROBE_ARG_KEY]: true };
 }
+var SESSION_STATUSES = [
+  "idle",
+  "generating",
+  "waiting_approval",
+  "waiting_choice",
+  "finalizing",
+  "error",
+  "stopped",
+  "starting",
+  "panel_hidden",
+  "not_monitored",
+  "disconnected"
+];
+var SESSION_STATUS_SET = new Set(SESSION_STATUSES);
+var MESH_TASK_STATUSES = ["pending", "assigned", "completed", "failed", "cancelled"];
+var MESH_TERMINAL_TASK_STATUSES = ["completed", "failed", "cancelled"];
+var MESH_TASK_MODES = ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"];
+var MESH_TASK_PRIORITIES = ["low", "normal", "high"];
+var MESH_THINKING_LEVELS = ["low", "medium", "high"];
+var MESH_DELIVERY_MODES = ["when_idle", "interrupt"];
+var WORKER_REPORT_OUTCOMES = ["completed", "blocked", "failed"];
+var WORKER_BRANCH_STATES = [
+  "merged_to_main",
+  "pushed_feature_branch_needs_merge",
+  "blocked_review",
+  "cleanup_candidate",
+  "not_mergeable"
+];
+function makeGuard(values) {
+  const set3 = new Set(values);
+  return (value) => typeof value === "string" && set3.has(value);
+}
+var isMeshTaskStatus = makeGuard(MESH_TASK_STATUSES);
+var isMeshTerminalTaskStatus = makeGuard(MESH_TERMINAL_TASK_STATUSES);
+var isMeshTaskMode = makeGuard(MESH_TASK_MODES);
+var isMeshTaskPriority = makeGuard(MESH_TASK_PRIORITIES);
+var isMeshThinkingLevel = makeGuard(MESH_THINKING_LEVELS);
+var isMeshDeliveryMode = makeGuard(MESH_DELIVERY_MODES);
+var isWorkerReportOutcome = makeGuard(WORKER_REPORT_OUTCOMES);
+var isWorkerBranchState = makeGuard(WORKER_BRANCH_STATES);
+var WORKER_TOOLS = [
+  "report_completion",
+  "progress_update",
+  "peer_context_pull",
+  "git_status",
+  "git_log",
+  "git_diff"
+];
+var WORKER_TOOL_SET = new Set(WORKER_TOOLS);
 
 // src/tools/mesh-tools-internal.ts
 var import_daemon_core8 = __toESM(require_dist3());
