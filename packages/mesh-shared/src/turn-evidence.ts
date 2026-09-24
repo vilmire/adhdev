@@ -122,6 +122,11 @@ export type NoProgressObservedStatus = SessionStatus | 'unknown'
 export const HOLD_REASONS = [
     'await_delivery', 'await_consume', 'await_turn', 'liveness', 'hard_ceiling',
     'live_pending', 'transcript_quiet', 'weak_candidate', 'suspension_before_consumed',
+    // A genuine FSM end of a mesh turn whose worker holds a live worker-MCP bind:
+    // the structured report is the primary evidence (design §F2), so the idle edge
+    // only opens this hold (R9r) — a report commits (R17), a new busy edge cancels
+    // it as a false idle (R12r), expiry commits weak (R13r).
+    'await_report',
 ] as const
 export type HoldReason = typeof HOLD_REASONS[number]
 
@@ -211,7 +216,14 @@ export type TurnEvidenceBody =
     | { kind: 'suspension'; modal: SuspensionModal; modalKey?: string }
     | { kind: 'suspension_resolved'; resolution: SuspensionResolution; via: SuspensionResolutionVia }
     | { kind: 'turn_end'; strength: TurnEndStrength; afterFinalizationTimeout?: boolean; hollow?: boolean; summary?: SummaryRef
-        blockReason?: TurnEndBlockReason; releasedByHardCap?: boolean; nativeOutcome?: NativeTurnOutcome; live?: LiveTurnPending }
+        blockReason?: TurnEndBlockReason; releasedByHardCap?: boolean; nativeOutcome?: NativeTurnOutcome; live?: LiveTurnPending
+        /**
+         * Stamped (true only) by the WORKER's daemon when the session holds a live
+         * worker-MCP session bind, i.e. the worker can call report_completion. The
+         * owner then treats a genuine end as a report-awaiting candidate (R9r), not
+         * a commit. Absent = no reporting surface = today's genuine-end commit.
+         */
+        reportExpected?: boolean }
     | { kind: 'transcript_final'; selfAttributing: boolean; nativeRead: boolean; nativeMarker?: NativeTurnMarkerRef
         live: LiveTurnPending; summary?: SummaryRef; messageAt?: number }
     | { kind: 'transcript_activity'; newestActivityAt: number }
@@ -296,6 +308,7 @@ export const TURN_EVIDENCE_FIELD_SPECS: TurnEvidenceFieldSpecs = {
         strength: en(TURN_END_STRENGTHS), afterFinalizationTimeout: boolOpt, hollow: boolOpt,
         summary: { t: 'summary_ref', optional: true }, blockReason: enOpt(TURN_END_BLOCK_REASONS),
         releasedByHardCap: boolOpt, nativeOutcome: enOpt(NATIVE_TURN_OUTCOMES), live: { t: 'live', optional: true },
+        reportExpected: boolOpt,
     },
     transcript_final: {
         selfAttributing: bool, nativeRead: bool, nativeMarker: { t: 'native_marker', optional: true },
