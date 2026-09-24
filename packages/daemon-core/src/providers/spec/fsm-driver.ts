@@ -47,6 +47,7 @@ import { loadFsmSpec, reportFsmSpecWarnings } from './fsm-loader.js';
 // about whether a picker is multi-select.
 import { detectClaudeTuiMultiSelect } from '../types/interactive-prompt.js';
 import { SendSubmitEngine, type ClaimedQueuedSend } from './send-submit-engine.js';
+import { RedrawNudger } from './redraw-nudge.js';
 import { applyPreLaunchTrust } from './pre-launch-trust.js';
 import { applyKimiWorkspaceTrust } from '../kimi-workspace-trust.js';
 import { applyGrokWorkspaceTrust } from '../grok-workspace-trust.js';
@@ -261,6 +262,8 @@ export interface ISpecDriver {
      */
     getLastOutputAt?(): number;
     getLastScreenChangeAt?(): number;
+    /** REDRAW-NUDGE: lifetime count of false-busy resize wiggles (redraw-nudge.ts). */
+    getRedrawNudgeCount?(): number;
     getCompletionIdleDebounceState(): { active: boolean; ageMs: number; holdMs: number; forceAfterMs: number } | null;
     getFsmDebug?(): unknown;
     getFsmSnapshotHistory?(): ReadonlyArray<FsmSnapshotEntry>;
@@ -590,6 +593,8 @@ export class FsmDriver implements ISpecDriver {
      * terminal is idle is precisely the SEND-OVERLAP defect.
      */
     private readonly sends: SendSubmitEngine;
+    /** REDRAW-NUDGE: input-free false-busy recovery (see redraw-nudge.ts). */
+    private readonly redrawNudge: RedrawNudger;
 
     constructor(private readonly opts: SpecDriverOpts) {
         // Object-literal getters below need a lexical handle on the driver; inside
@@ -632,6 +637,14 @@ export class FsmDriver implements ISpecDriver {
             // ★ The engine gates on this but never computes it — see the note on
             // the `sends` field.
             currentStatus: () => this.currentStatus(),
+        });
+        this.redrawNudge = new RedrawNudger({
+            isGenerating: () => this.currentStatus() === 'generating',
+            quietSince: () => Math.max(this.lastPtyDataAt, this.stateEnteredAt),
+            getSize: () => this.adapter.getScreenSize(),
+            resize: (cols, rows) => this.adapter.resize(cols, rows),
+            reevaluate: () => this.reevaluate(),
+            tag: () => this.specTag(),
         });
         if (this.opts.hotReload !== false) this.armSpecWatcher();
     }
@@ -913,6 +926,7 @@ export class FsmDriver implements ISpecDriver {
         this.delegateTimers.clear();
         if (this.wakeTimer) { clearTimeout(this.wakeTimer); this.wakeTimer = null; }
         if (this.stallTimer) { clearTimeout(this.stallTimer); this.stallTimer = null; }
+        this.redrawNudge.dispose();
         if (this.spawnPrimeTimer) { clearTimeout(this.spawnPrimeTimer); this.spawnPrimeTimer = null; }
         if (this.spawnPrimeMaxWaitTimer) { clearTimeout(this.spawnPrimeMaxWaitTimer); this.spawnPrimeMaxWaitTimer = null; }
         this.spawnPrimeAwaitingOutput = false;
@@ -1054,6 +1068,8 @@ export class FsmDriver implements ISpecDriver {
     getLastScreenChangeAt(): number {
         return this.lastScreenChangedAt;
     }
+    /** @see ISpecDriver.getRedrawNudgeCount */
+    getRedrawNudgeCount(): number { return this.redrawNudge.getTotalNudges(); }
     getCompletionIdleDebounceState(): { active: boolean; ageMs: number; holdMs: number; forceAfterMs: number } | null {
         // Surface the busy→ready transition's stable countdown, if any, so the
         // existing panel field stays meaningful.
@@ -1354,6 +1370,7 @@ export class FsmDriver implements ISpecDriver {
             this.emitStateChanged(forceEmit);
             this.scheduleWakeForState();
             this.scheduleStallWatchdog();
+            this.redrawNudge.schedule();
             // Drain queued sends on the SAME frame the machine reaches "ready".
             // The first delegated message is queued in pendingSends until the
             // FSM first enters a non-initial idle state (the prompt is drawn).
@@ -1377,6 +1394,7 @@ export class FsmDriver implements ISpecDriver {
         // Schedule a wake for the soonest pending time-condition.
         this.scheduleWakeForState();
         this.scheduleStallWatchdog();
+        this.redrawNudge.schedule();
         // Drain queued sends once we first reach a "ready" state.
         this.sends.drainPendingSends();
     }
@@ -1401,6 +1419,8 @@ export class FsmDriver implements ISpecDriver {
             matchedRules: summarizeTransition(fired),
         });
         LOG.info('FsmDriver', `[${this.specTag()}] ${from} → ${fired.to} (${fired.label})`);
+        const statusOf = (id: string) => { const st = stateById(this.spec, id); return st ? statusForState(st) : 'idle'; };
+        this.redrawNudge.onTransition(statusOf(from), statusOf(fired.to), fired.label);
     }
 
     /** Snapshot the full FSM evaluation that produced a transition into the

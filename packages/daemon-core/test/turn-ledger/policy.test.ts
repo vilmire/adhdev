@@ -4,19 +4,21 @@ import {
     awaitDeliveryMs,
     consumeGraceFor,
     holdTtlMs,
+    livenessReArmMs,
     resolveTurnPolicy,
     resolveTurnPolicyDetailed,
     unknownLivenessGraceMs,
 } from '../../src/mesh/turn-ledger/policy.js';
 
 describe('TurnPolicy', () => {
-    it('has the 8 design defaults + the await-report window (2026-09-24, raised 180s -> 600s same day per live run 6 on rc.41)', () => {
+    it('has the 8 design defaults + the await-report window (2026-09-24, raised 180s -> 600s same day per live run 6 on rc.41) + the finalizing liveness-probe backoff (same day, run 10 on rc.43)', () => {
         expect(DEFAULT_TURN_POLICY).toEqual({
             tickMs: 4_000, quietWindowMs: 8_000, consumeGraceMs: 90_000, deliveryCeilingMs: 120_000,
             livenessDeadlineMs: 480_000, noTurnDeadlineMs: 900_000, stallNoticeMs: 180_000, hardCeilingMs: 5_400_000,
-            awaitReportMs: 600_000,
+            awaitReportMs: 600_000, livenessProbeIntervalFinalizingMs: 60_000,
         });
         expect(resolveTurnPolicy({ ADHDEV_TURN_AWAIT_REPORT_MS: '5000' }).awaitReportMs).toBe(5_000);
+        expect(resolveTurnPolicy({ ADHDEV_TURN_LIVENESS_PROBE_INTERVAL_FINALIZING_MS: '30000' }).livenessProbeIntervalFinalizingMs).toBe(30_000);
         expect(resolveTurnPolicy({})).toEqual(DEFAULT_TURN_POLICY);
     });
 
@@ -26,6 +28,13 @@ describe('TurnPolicy', () => {
         expect(awaitDeliveryMs(DEFAULT_TURN_POLICY)).toBe(240_000);
         expect(consumeGraceFor(DEFAULT_TURN_POLICY, 'native_source')).toBe(180_000);
         expect(consumeGraceFor(DEFAULT_TURN_POLICY, 'default')).toBe(90_000);
+    });
+
+    it('backs off the liveness re-arm cadence only while await_report is held, and never below the normal cadence', () => {
+        expect(livenessReArmMs(DEFAULT_TURN_POLICY, false)).toBe(12_000); // generating: normal 3×tick cadence, unchanged
+        expect(livenessReArmMs(DEFAULT_TURN_POLICY, true)).toBe(60_000); // finalizing + await_report: back off
+        const fastFinalizing = { ...DEFAULT_TURN_POLICY, livenessProbeIntervalFinalizingMs: 1_000 };
+        expect(livenessReArmMs(fastFinalizing, true)).toBe(12_000); // floor = the normal cadence, never faster
     });
 
     it('honours the legacy env aliases with their historical clamps', () => {

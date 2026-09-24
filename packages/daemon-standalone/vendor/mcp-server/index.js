@@ -57537,6 +57537,10 @@ Next step: ${nextStep}`;
     function unknownLivenessGraceMs(p) {
       return 3 * p.tickMs;
     }
+    function livenessReArmMs(p, awaitReportHeld2) {
+      const normal = unknownLivenessGraceMs(p);
+      return awaitReportHeld2 ? Math.max(normal, p.livenessProbeIntervalFinalizingMs) : normal;
+    }
     function awaitDeliveryMs(p) {
       return 2 * p.deliveryCeilingMs;
     }
@@ -57600,7 +57604,8 @@ Next step: ${nextStep}`;
           noTurnDeadlineMs: 9e5,
           stallNoticeMs: 18e4,
           hardCeilingMs: 54e5,
-          awaitReportMs: 6e5
+          awaitReportMs: 6e5,
+          livenessProbeIntervalFinalizingMs: 6e4
         });
         RECLAIM_BUDGET = 3;
         MAX_REDRIVES_PER_GENERATION = 1;
@@ -57640,7 +57645,8 @@ Next step: ${nextStep}`;
             max: 24 * HOUR,
             aliases: [{ name: "MESH_INFLIGHT_ACKED_HOLD_HARD_CEILING_MS", min: 0, max: 24 * HOUR }]
           },
-          { field: "awaitReportMs", canonical: "ADHDEV_TURN_AWAIT_REPORT_MS", min: 0, max: HOUR, aliases: [] }
+          { field: "awaitReportMs", canonical: "ADHDEV_TURN_AWAIT_REPORT_MS", min: 0, max: HOUR, aliases: [] },
+          { field: "livenessProbeIntervalFinalizingMs", canonical: "ADHDEV_TURN_LIVENESS_PROBE_INTERVAL_FINALIZING_MS", min: 0, max: HOUR, aliases: [] }
         ];
         RETIRED_TURN_ENV_NAMES = [
           "MESH_PENDING_HELD_DRAIN_ESCALATE_MS",
@@ -57990,7 +57996,7 @@ Next step: ${nextStep}`;
           ] },
           { id: "R32u", lane: "current", from: [C, G, S, F], on: ["liveness"], guard: "liveness_unknown", to: "same", verdict: "applied", effects: [
             { e: "act", act: "liveness_unknown" },
-            { e: "hold", reason: "liveness", until: "unknown_grace", onExpire: "escalate" }
+            { e: "hold", reason: "liveness", until: "liveness_reprobe", onExpire: "escalate" }
           ] },
           { id: "R35", lane: "current", from: [C, G, S, F], on: ["git_side_effect"], to: "same", verdict: "applied", effects: [
             { e: "act", act: "store_git" }
@@ -58012,7 +58018,7 @@ Next step: ${nextStep}`;
           ] },
           { id: "H4", lane: "current", from: [C, G, S, F], on: ["hold_expired"], guard: "hold_liveness", to: "same", verdict: "applied", effects: [
             { e: "probe" },
-            { e: "hold", reason: "liveness", until: "unknown_grace", onExpire: "escalate" }
+            { e: "hold", reason: "liveness", until: "liveness_reprobe", onExpire: "escalate" }
           ] },
           { id: "H5", lane: "current", from: "nonterminal", on: ["hold_expired"], guard: "hold_hard_ceiling", to: "failed", verdict: "applied", effects: [
             { e: "commit", outcome: "failed", strength: "genuine", reason: "hard_ceiling" }
@@ -58159,6 +58165,10 @@ Next step: ${nextStep}`;
           return nowMs2 + policy.awaitReportMs;
         case "unknown_grace":
           return nowMs2 + unknownLivenessGraceMs(policy);
+        // H4 / R32u re-arm: the normal 3×tick cadence, except while `await_report`
+        // is open, where the probe backs off (see policy.ts livenessReArmMs).
+        case "liveness_reprobe":
+          return nowMs2 + livenessReArmMs(policy, awaitReportHeld(draft.ctx));
         case "admission": {
           const admission = admissionOf(draft.ctx);
           if (admission?.kind !== "hold") return nowMs2;
@@ -85523,7 +85533,7 @@ ${block2.text}`,
       if (!Number.isFinite(reporterNowMs)) return false;
       return reporterNowMs >= resetsAt;
     }
-    function evaluateProviderQuotaGate2(node, providerType, policy, now = Date.now(), context, target) {
+    function evaluateProviderQuotaGate3(node, providerType, policy, now = Date.now(), context, target) {
       const entry = quotaEntryFor(node, providerType, context, now);
       if (!entry) {
         logAbsentQuotaFailOpen(node, providerType, policy, now, context);
@@ -85607,7 +85617,7 @@ ${block2.text}`,
       const clear = [];
       const gated = [];
       for (const providerType of orderedProviderTypes) {
-        const block2 = evaluateProviderQuotaGate2(
+        const block2 = evaluateProviderQuotaGate3(
           node,
           providerType,
           policy,
@@ -86756,7 +86766,7 @@ ${block2.text}`,
       const { meshId, nodeId, sessionId, providerType, model, trigger, node, mesh, providerLoader, quotaClaimTrace } = args;
       const pinCandidateTaskId = providerPinOverrideCandidateTaskId(meshId, providerType);
       const isPinOverride = !!pinCandidateTaskId;
-      const quotaClaimBlock = evaluateProviderQuotaGate2(
+      const quotaClaimBlock = evaluateProviderQuotaGate3(
         node,
         providerType,
         mesh?.policy?.quotaRouting ?? null,
@@ -125607,6 +125617,143 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         };
       }
     });
+    function envInt(raw, fallback) {
+      if (raw === void 0 || raw.trim() === "") return fallback;
+      const n = Number(raw);
+      return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
+    }
+    function resolveRedrawNudgePolicy(env2 = process.env) {
+      return {
+        silentMs: envInt(env2.ADHDEV_REDRAW_NUDGE_SILENT_MS, DEFAULT_REDRAW_NUDGE_SILENT_MS),
+        maxPerEpisode: envInt(env2.ADHDEV_REDRAW_NUDGE_MAX, DEFAULT_REDRAW_NUDGE_MAX_PER_EPISODE),
+        holdMs: envInt(env2.ADHDEV_REDRAW_NUDGE_HOLD_MS, DEFAULT_REDRAW_NUDGE_HOLD_MS),
+        settleMs: envInt(env2.ADHDEV_REDRAW_NUDGE_SETTLE_MS, DEFAULT_REDRAW_NUDGE_SETTLE_MS)
+      };
+    }
+    var DEFAULT_REDRAW_NUDGE_SILENT_MS;
+    var DEFAULT_REDRAW_NUDGE_MAX_PER_EPISODE;
+    var DEFAULT_REDRAW_NUDGE_HOLD_MS;
+    var DEFAULT_REDRAW_NUDGE_SETTLE_MS;
+    var RedrawNudger;
+    var init_redraw_nudge = __esm2({
+      "src/providers/spec/redraw-nudge.ts"() {
+        "use strict";
+        init_logger();
+        DEFAULT_REDRAW_NUDGE_SILENT_MS = 45e3;
+        DEFAULT_REDRAW_NUDGE_MAX_PER_EPISODE = 4;
+        DEFAULT_REDRAW_NUDGE_HOLD_MS = 750;
+        DEFAULT_REDRAW_NUDGE_SETTLE_MS = 1e3;
+        RedrawNudger = class {
+          constructor(host, policy = resolveRedrawNudgePolicy()) {
+            this.host = host;
+            this.policy = policy;
+          }
+          timer = null;
+          timerDueAt = 0;
+          holdTimer = null;
+          settleTimer = null;
+          episodeNudges = 0;
+          totalNudges = 0;
+          lastNudgeAt = 0;
+          wiggling = false;
+          disposed = false;
+          /** Nudges issued over the driver's lifetime (surfaced to the stall watchdog). */
+          getTotalNudges() {
+            return this.totalNudges;
+          }
+          /** Nudges issued in the current generating episode. */
+          getEpisodeNudges() {
+            return this.episodeNudges;
+          }
+          /** (Re)arm the silence timer for the current state. Called after every FSM
+           *  evaluation, so it is cheap when nothing changed. */
+          schedule() {
+            if (this.disposed || this.policy.silentMs <= 0) return;
+            if (!this.host.isGenerating() || this.episodeNudges >= this.policy.maxPerEpisode) {
+              this.clearTimer();
+              return;
+            }
+            if (this.wiggling) return;
+            const dueAt = Math.max(this.host.quietSince(), this.lastNudgeAt) + this.policy.silentMs;
+            if (this.timer && this.timerDueAt === dueAt) return;
+            this.clearTimer();
+            this.timerDueAt = dueAt;
+            this.timer = setTimeout(() => {
+              this.timer = null;
+              this.onTick();
+            }, Math.max(dueAt - Date.now() + 30, 50));
+          }
+          /** Status edge from the driver's commitTransition. Ends the episode when the
+           *  machine leaves `generating`, and reports a nudge-driven recovery. */
+          onTransition(fromStatus, toStatus, label) {
+            if (fromStatus !== "generating" || toStatus === "generating") return;
+            const now = Date.now();
+            if (this.episodeNudges > 0 && toStatus === "idle" && now - this.lastNudgeAt <= Math.max(this.policy.silentMs, 5e3)) {
+              LOG.info("FsmDriver", `[${this.host.tag()}] false busy: screen redraw revealed idle (${label}) after ${this.episodeNudges} redraw nudge(s), ${now - this.lastNudgeAt}ms after the last`);
+            }
+            this.episodeNudges = 0;
+            this.clearTimer();
+          }
+          dispose() {
+            this.disposed = true;
+            this.clearTimer();
+            if (this.holdTimer) {
+              clearTimeout(this.holdTimer);
+              this.holdTimer = null;
+            }
+            if (this.settleTimer) {
+              clearTimeout(this.settleTimer);
+              this.settleTimer = null;
+            }
+          }
+          clearTimer() {
+            if (this.timer) {
+              clearTimeout(this.timer);
+              this.timer = null;
+            }
+            this.timerDueAt = 0;
+          }
+          onTick() {
+            if (this.disposed || this.wiggling || !this.host.isGenerating()) return;
+            if (this.episodeNudges >= this.policy.maxPerEpisode) return;
+            const now = Date.now();
+            const quietMs = now - Math.max(this.host.quietSince(), this.lastNudgeAt);
+            if (quietMs < this.policy.silentMs) {
+              this.schedule();
+              return;
+            }
+            this.nudge(quietMs);
+          }
+          nudge(quietMs) {
+            const { cols, rows } = this.host.getSize();
+            if (!(cols > 0 && rows > 0)) return;
+            this.episodeNudges += 1;
+            this.totalNudges += 1;
+            this.lastNudgeAt = Date.now();
+            this.wiggling = true;
+            LOG.info("FsmDriver", `[${this.host.tag()}] redraw nudge ${this.episodeNudges}/${this.policy.maxPerEpisode}: generating with no PTY output for ${quietMs}ms \u2014 resize wiggle ${cols}x${rows}\u2192${cols + 1}x${rows}\u2192${cols}x${rows} (SIGWINCH only, no input sent)`);
+            try {
+              this.host.resize(cols + 1, rows);
+            } catch {
+            }
+            this.holdTimer = setTimeout(() => {
+              this.holdTimer = null;
+              try {
+                this.host.resize(cols, rows);
+              } catch {
+              }
+              this.wiggling = false;
+              if (this.disposed) return;
+              this.settleTimer = setTimeout(() => {
+                this.settleTimer = null;
+                if (this.disposed) return;
+                this.host.reevaluate();
+              }, this.policy.settleMs);
+            }, this.policy.holdMs);
+          }
+        };
+      }
+    });
     function kimiHome2(env2 = process.env) {
       const override = env2.KIMI_CODE_HOME?.trim();
       return override ? override : path54.join(os29.homedir(), ".kimi-code");
@@ -126096,6 +126243,7 @@ trust_level = "trusted"
         init_fsm_loader();
         init_interactive_prompt();
         init_send_submit_engine();
+        init_redraw_nudge();
         init_pre_launch_trust();
         init_kimi_workspace_trust();
         init_grok_workspace_trust();
@@ -126154,6 +126302,14 @@ trust_level = "trusted"
               // ★ The engine gates on this but never computes it — see the note on
               // the `sends` field.
               currentStatus: () => this.currentStatus()
+            });
+            this.redrawNudge = new RedrawNudger({
+              isGenerating: () => this.currentStatus() === "generating",
+              quietSince: () => Math.max(this.lastPtyDataAt, this.stateEnteredAt),
+              getSize: () => this.adapter.getScreenSize(),
+              resize: (cols, rows) => this.adapter.resize(cols, rows),
+              reevaluate: () => this.reevaluate(),
+              tag: () => this.specTag()
             });
             if (this.opts.hotReload !== false) this.armSpecWatcher();
           }
@@ -126276,6 +126432,8 @@ trust_level = "trusted"
            * terminal is idle is precisely the SEND-OVERLAP defect.
            */
           sends;
+          /** REDRAW-NUDGE: input-free false-busy recovery (see redraw-nudge.ts). */
+          redrawNudge;
           subscribe(listener) {
             this.listeners.add(listener);
             return () => {
@@ -126519,6 +126677,7 @@ trust_level = "trusted"
               clearTimeout(this.stallTimer);
               this.stallTimer = null;
             }
+            this.redrawNudge.dispose();
             if (this.spawnPrimeTimer) {
               clearTimeout(this.spawnPrimeTimer);
               this.spawnPrimeTimer = null;
@@ -126620,6 +126779,10 @@ trust_level = "trusted"
           /** @see ISpecDriver.getLastScreenChangeAt — rendered screen-change clock, 0 until first change. */
           getLastScreenChangeAt() {
             return this.lastScreenChangedAt;
+          }
+          /** @see ISpecDriver.getRedrawNudgeCount */
+          getRedrawNudgeCount() {
+            return this.redrawNudge.getTotalNudges();
           }
           getCompletionIdleDebounceState() {
             const out = outgoingTransitions(this.spec, this.currentStateId);
@@ -126854,6 +127017,7 @@ trust_level = "trusted"
               this.emitStateChanged(forceEmit);
               this.scheduleWakeForState();
               this.scheduleStallWatchdog();
+              this.redrawNudge.schedule();
               this.sends.drainPendingSends();
               return;
             }
@@ -126861,6 +127025,7 @@ trust_level = "trusted"
             this.emitStateChanged(forceEmit);
             this.scheduleWakeForState();
             this.scheduleStallWatchdog();
+            this.redrawNudge.schedule();
             this.sends.drainPendingSends();
           }
           commitTransition(fired, now, ev) {
@@ -126877,6 +127042,11 @@ trust_level = "trusted"
               matchedRules: summarizeTransition(fired)
             });
             LOG.info("FsmDriver", `[${this.specTag()}] ${from} \u2192 ${fired.to} (${fired.label})`);
+            const statusOf = (id22) => {
+              const st = stateById(this.spec, id22);
+              return st ? statusForState(st) : "idle";
+            };
+            this.redrawNudge.onTransition(statusOf(from), statusOf(fired.to), fired.label);
           }
           /** Snapshot the full FSM evaluation that produced a transition into the
            *  separate fsmSnapshotHistory ring buffer (max 20). The transitions[]
@@ -129610,6 +129780,10 @@ ${text}` : text;
           resize(cols, rows) {
             this.driver.dispatch({ kind: "resize", cols, rows });
           }
+          /** REDRAW-NUDGE: false-busy resize wiggles issued by the FSM driver (read by the mesh stall watchdog). */
+          getRedrawNudgeCount() {
+            return this.driver?.getRedrawNudgeCount?.() ?? 0;
+          }
           resolveModal(buttonIndex) {
             this.resolveModalMatched(buttonIndex);
           }
@@ -132035,8 +132209,17 @@ ${buttons.join("\n")}`;
         return;
       }
       host.meshStallLastFiredAt = now;
+      let redrawNudges = 0;
+      try {
+        redrawNudges = host.adapter.getRedrawNudgeCount?.() ?? 0;
+      } catch {
+      }
       if (host.isMeshWorkerSession()) {
-        traceMeshEventStage("fired", host.meshTraceCtx("monitor:no_progress"), "mesh_worker_stall_watchdog");
+        traceMeshEventStage(
+          "fired",
+          host.meshTraceCtx("monitor:no_progress"),
+          redrawNudges > 0 ? `mesh_worker_stall_watchdog (after ${redrawNudges} redraw nudge(s))` : "mesh_worker_stall_watchdog"
+        );
       }
       const stalledSec = Math.round(stalledMs / 1e3);
       host.pushEvent({
@@ -132050,6 +132233,7 @@ ${buttons.join("\n")}`;
         lastOutputAt: host.meshStallAnchorAt,
         stalledMs,
         observedStatus,
+        redrawNudges,
         taskId: host.completingTurnTaskId()
       });
       if (host.turnEvidencePort) {
@@ -154572,7 +154756,7 @@ ${e?.stderr || ""}`;
       evaluateFleetStatusReadiness: () => evaluateFleetStatusReadiness,
       evaluateFsm: () => evaluateFsm,
       evaluateNotifySuppression: () => evaluateNotifySuppression,
-      evaluateProviderQuotaGate: () => evaluateProviderQuotaGate2,
+      evaluateProviderQuotaGate: () => evaluateProviderQuotaGate3,
       execNpmCommandSync: () => execNpmCommandSync,
       expandDaemonIdForms: () => expandDaemonIdForms,
       exportLegacyTurnTables: () => exportLegacyTurnTables,
@@ -178173,7 +178357,9 @@ var MESH_SEND_TASK_TOOL = {
       },
       orchestrationDecision: { type: "object", description: "CamelCase alias for orchestration_decision." },
       allow_stale_node: { type: "boolean", description: "GIT-GATE: a non-readonly direct dispatch is refused (dirty_workspace / node_stale_behind_upstream) when the target node's git telemetry shows an uncommitted working tree or a branch behind its upstream beyond the mesh's autoFastForward.maxBehind \u2014 the same predicates the claim-time and auto-launch spawn gates apply. Set true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree). Has no effect on a readonly dispatch, which is never gated. Default: false." },
-      allowStaleNode: { type: "boolean", description: "CamelCase alias for allow_stale_node." }
+      allowStaleNode: { type: "boolean", description: "CamelCase alias for allow_stale_node." },
+      allow_quota_exhausted: { type: "boolean", description: "QUOTA-GATE (preview rc.43 run 10): a direct dispatch that NAMES a session_id is refused when that session's provider is measurably quota-exhausted on the target node \u2014 the same fresh/measured predicate (evaluateProviderQuotaGate) the queue claim path already applies before pulling a pending task onto an idle session, now also applied here so a coordinator does not spend minutes talking to a session that cannot work (e.g. 'You've hit your session limit'). A stale/missing/unmarked snapshot always fails OPEN (dispatch proceeds) \u2014 only a fresh measured block refuses. Set true to dispatch anyway (e.g. testing the provider's own quota error). Default: false. Has no effect on a sessionless dispatch that ends up in the queue \u2014 the claim-time gate already covers that path." },
+      allowQuotaExhausted: { type: "boolean", description: "CamelCase alias for allow_quota_exhausted." }
     },
     // session_id is deliberately NOT required: meshSendTask supports a sessionless
     // dispatch (node-scoped on the worker) and the required-arg gate enforces this list.
@@ -180840,6 +181026,36 @@ function buildProviderPinUnsatisfiableFailure(node, providerPins, nodeProviders,
     nextAction: `Leave the task queued (the claim path enforces the pin per session), or launch a '${providerPins[0]}' session on this node with mesh_launch_session, or re-enqueue without the provider pin if any provider is acceptable.`
   };
 }
+function checkDirectDispatchQuotaGate(node, providerType, quotaRoutingPolicy) {
+  if (!providerType) return null;
+  const block = (0, import_daemon_core9.evaluateProviderQuotaGate)(node, providerType, quotaRoutingPolicy ?? null);
+  if (!block) return null;
+  const quota = node?.nodeFacts?.quota?.[providerType];
+  const window = block.window === "session" ? quota?.session : block.window === "weekly" ? quota?.weekly : null;
+  const resetsAt = typeof window?.resetsAt === "number" && Number.isFinite(window.resetsAt) ? window.resetsAt : null;
+  return { block, resetsAt };
+}
+function buildQuotaExhaustedDispatchFailure(node, providerType, sessionId, gate) {
+  const { block, resetsAt } = gate;
+  return {
+    success: false,
+    recoverable: true,
+    code: "provider_quota_exhausted",
+    reason: "provider_quota_exhausted",
+    nodeId: node.id,
+    ...sessionId ? { sessionId } : {},
+    providerType,
+    quotaBlock: {
+      reason: block.reason,
+      window: block.window,
+      remainingPercent: block.remainingPercent,
+      thresholdPercent: block.thresholdPercent,
+      ...resetsAt !== null ? { resetsAt } : {}
+    },
+    error: `Provider '${providerType}' on node '${node.id}' is quota-gated (${block.reason}; ${block.window} window at ${block.remainingPercent}% remaining, threshold ${block.thresholdPercent}%)` + (resetsAt !== null ? ` \u2014 resets at ${new Date(resetsAt).toISOString()}.` : ".") + " Refusing this direct dispatch rather than spending a turn on a session that cannot work right now.",
+    nextAction: "Wait for the quota window to reset, target a different node/session, or pass allow_quota_exhausted: true to dispatch anyway (e.g. deliberately testing the provider's own quota error)."
+  };
+}
 async function ipcDispatchToRemoteAgent(ctx, node, args) {
   const transport = ctx.transport;
   const daemonId = node.daemonId;
@@ -180927,7 +181143,12 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
         }
       } else {
         const sessionProviderFilter = resolvedProviderType || (providerPins.length === 1 ? providerPins[0] : "");
-        const targetSession = chooseDispatchableSession(sessions, sessionProviderFilter, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
+        const dispatchableSessions = args.allowQuotaExhausted ? sessions : sessions.filter((session) => {
+          const sessionProviderType = resolveSessionProviderType(session);
+          if (!sessionProviderType) return true;
+          return !checkDirectDispatchQuotaGate(node, sessionProviderType, ctx.mesh.policy?.quotaRouting ?? null);
+        });
+        const targetSession = chooseDispatchableSession(dispatchableSessions, sessionProviderFilter, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
         if (targetSession?.id || targetSession?.sessionId) {
           sessionId = targetSession.id || targetSession.sessionId;
           if (!resolvedProviderType) {
@@ -180955,6 +181176,12 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
   }
   if (providerPins.length && !providerPins.includes(resolvedProviderType)) {
     return buildProviderPinUnsatisfiableFailure(node, providerPins, readProviderPriority(node.policy), resolvedProviderType);
+  }
+  if (!args.allowQuotaExhausted) {
+    const quotaGate = checkDirectDispatchQuotaGate(node, resolvedProviderType, ctx.mesh.policy?.quotaRouting ?? null);
+    if (quotaGate) {
+      return buildQuotaExhaustedDispatchFailure(node, resolvedProviderType, sessionId || void 0, quotaGate);
+    }
   }
   try {
     const dispatchResult = await transport.meshCommand(daemonId, "agent_command", {
@@ -185934,6 +186161,7 @@ async function meshSendTask(ctx, args) {
     });
   }
   const allowStaleNode = args.allow_stale_node === true || args.allowStaleNode === true;
+  const allowQuotaExhausted = args.allow_quota_exhausted === true || args.allowQuotaExhausted === true;
   if (!allowStaleNode && !(0, import_daemon_core18.isTaskReadonly)({ readonly: readonly2, taskMode })) {
     const dirty = (0, import_daemon_core18.isDirtyNode)(node);
     const maxBehind = (0, import_daemon_core18.resolveAutoFastForwardPolicy)(ctx.mesh).maxBehind;
@@ -186072,6 +186300,7 @@ async function meshSendTask(ctx, args) {
         messageId: taskId,
         policy: { mode: "queue" },
         origin: "mcp",
+        allowQuotaExhausted,
         meshContext: {
           meshId: ctx.mesh.id,
           nodeId: args.node_id,
@@ -186244,6 +186473,12 @@ async function meshSendTask(ctx, args) {
           error: `Local session '${args.session_id}' is live but does not expose providerType/cliType, so agent_command cannot be routed safely.`,
           nextAction: `Relaunch the target session on node '${args.node_id}' or retry without session_id so Repo Mesh can pick a session with provider metadata.`
         });
+      }
+      if (!allowQuotaExhausted) {
+        const quotaGate = checkDirectDispatchQuotaGate(node, resolvedProviderType, ctx.mesh.policy?.quotaRouting ?? null);
+        if (quotaGate) {
+          return JSON.stringify(buildQuotaExhaustedDispatchFailure(node, resolvedProviderType, args.session_id, quotaGate));
+        }
       }
       const localAdmission = await admitExplicitSessionDelivery(ctx, node, args, {
         session: explicitTargetSession,

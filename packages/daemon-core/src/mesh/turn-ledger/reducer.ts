@@ -42,6 +42,7 @@ import {
     RECLAIM_BUDGET,
     awaitDeliveryMs,
     consumeGraceFor,
+    livenessReArmMs,
     unknownLivenessGraceMs,
     weakConfirmMs,
     type TurnPolicy,
@@ -314,6 +315,9 @@ function resolveUntil(expr: UntilExpr, draft: Draft): number | null {
         case 'weak_confirm': return nowMs + weakConfirmMs(policy);
         case 'await_report': return nowMs + policy.awaitReportMs;
         case 'unknown_grace': return nowMs + unknownLivenessGraceMs(policy);
+        // H4 / R32u re-arm: the normal 3×tick cadence, except while `await_report`
+        // is open, where the probe backs off (see policy.ts livenessReArmMs).
+        case 'liveness_reprobe': return nowMs + livenessReArmMs(policy, awaitReportHeld(draft.ctx));
         case 'admission': {
             const admission = admissionOf(draft.ctx);
             if (admission?.kind !== 'hold') return nowMs;

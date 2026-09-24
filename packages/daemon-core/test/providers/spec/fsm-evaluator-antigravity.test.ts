@@ -415,11 +415,20 @@ describe('antigravity-cli v4 FSM — busy→idle bounded fallback (repaint wedge
     });
 
     it('veto: a live braille Generating/Running/Thinking marker blocks the fallback at 61s', () => {
+        // LIVE = animating: the spinner glyph repaints several times a second, so
+        // the whole screen (region -1) changed moments ago. (A FROZEN marker is
+        // the garbled-frame case below — arm 3's domain.)
         for (const [glyph, verb] of [['⠹', 'Generating'], ['⠿', 'Running'], ['⠋', 'Thinking']] as const) {
             const screen = brailleActiveScreen(glyph, verb);
-            const ev = evaluateFsm(spec, 'busy', screen, { row: 39, col: 4 }, undefined, clk(61000, 0, UNSTABLE));
+            const ev = evaluateFsm(spec, 'busy', screen, { row: 39, col: 4 }, undefined, clk(61000, 0, [...UNSTABLE, [-1, 60900]]));
             expect(ev.fired).toBeNull();
         }
+    });
+
+    it('GARBLED-FRAME arm 3: a FROZEN braille marker (whole screen unchanged 15s) no longer wedges busy', () => {
+        const screen = brailleActiveScreen('⠿', 'Running');
+        expect(evaluateFsm(spec, 'busy', screen, { row: 39, col: 4 }, undefined, clk(61000, 0, [...UNSTABLE, [-1, 46500]])).fired).toBeNull();
+        expect(evaluateFsm(spec, 'busy', screen, { row: 39, col: 4 }, undefined, clk(61000, 0, [...UNSTABLE, [-1, 46000]])).fired?.to).toBe('idle');
     });
 
     it('veto: an approval modal with shortcuts footer routes to approval at 61s, never idle', () => {
@@ -442,9 +451,18 @@ describe('antigravity-cli v4 FSM — busy→idle bounded fallback (repaint wedge
     it('the fallback vetoes reuse the shipping regexes (no drift) and no transcript signals', () => {
         const busyToIdle = spec.transitions.find(t => t.label === 'busy→idle')!;
         const arms = (busyToIdle.when as any).any as any[];
-        expect(arms).toHaveLength(2);
+        expect(arms).toHaveLength(3);
         const strict = arms[0].all as any[];
         const fallback = arms[1].all as any[];
+        // Arm 3 (GARBLED-FRAME): same modal / esc-to-cancel / shortcuts guards,
+        // whole-screen freeze instead of the braille veto, same 60s floor.
+        const frozen = arms[2].all as any[];
+        expect(frozen.find(c => c.not?.section === 'modal')?.not?.matches).toBe(strict.find(c => c.not?.section === 'modal')?.not?.matches);
+        expect(frozen.some(c => c.not?.section === 'footer' && c.not.matches === 'esc to cancel')).toBe(true);
+        expect(frozen.some(c => c.section === 'footer' && c.matches === '\\? for shortcuts')).toBe(true);
+        expect(frozen.some(c => c.stable_ms === 15000 && c.cursor_above === undefined && c.section === undefined)).toBe(true);
+        expect(frozen.some(c => c.elapsed_ms === 60000)).toBe(true);
+        expect(frozen.some(c => c.not?.section === 'body')).toBe(false);
         // Modal veto identical to the strict arm / →approval pattern.
         const modalOf = (all: any[]) => all.find(c => c.not?.section === 'modal')?.not?.matches;
         expect(modalOf(fallback)).toBe(modalOf(strict));

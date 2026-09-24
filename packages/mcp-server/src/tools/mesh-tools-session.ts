@@ -8,6 +8,10 @@ import {
     annotateRapidReadChatAdvisory,
     buildCoordinatorP2pRelayFailure,
     buildDirectTaskPayload,
+    // QUOTA GATE (direct dispatch, preview rc.43 run 10) — see checkDirectDispatchQuotaGate's
+    // doc comment (mesh-tools-internal.ts).
+    checkDirectDispatchQuotaGate,
+    buildQuotaExhaustedDispatchFailure,
     // GRAPH-MEASUREMENT-DIRECT — the direct dispatch decision record.
     normalizeOrchestrationDecision,
     MESH_UNSANCTIONED_DIRECT_HINT,
@@ -561,6 +565,8 @@ export async function meshSendTask(
         orchestration_decision?: unknown; orchestrationDecision?: unknown;
         /** GIT-GATE: opt out of the dirty/stale-behind refusal for a non-readonly direct dispatch. */
         allow_stale_node?: boolean; allowStaleNode?: boolean;
+        /** QUOTA-GATE: opt out of the quota-exhausted refusal for a direct dispatch. */
+        allow_quota_exhausted?: boolean; allowQuotaExhausted?: boolean;
     },
 ): Promise<string> {
     // DELIVERY-MSG-GUARD: make the schema's nominal `required: ['message']` real. The
@@ -728,6 +734,9 @@ export async function meshSendTask(
     // "fix the dirty tree" task). Readonly dispatches are exempt — same write-only
     // scope as the claim-path gate.
     const allowStaleNode = args.allow_stale_node === true || args.allowStaleNode === true;
+    // QUOTA-GATE opt-out (preview rc.43 run 10) — see checkDirectDispatchQuotaGate's
+    // doc comment (mesh-tools-internal.ts) for what this gates and why.
+    const allowQuotaExhausted = args.allow_quota_exhausted === true || args.allowQuotaExhausted === true;
     if (!allowStaleNode && !isTaskReadonly({ readonly, taskMode })) {
         const dirty = isDirtyNode(node);
         const maxBehind = resolveAutoFastForwardPolicy(ctx.mesh).maxBehind;
@@ -912,6 +921,7 @@ export async function meshSendTask(
                 messageId: taskId,
                 policy: { mode: 'queue' },
                 origin: 'mcp',
+                allowQuotaExhausted,
                 meshContext: {
                     meshId: ctx.mesh.id,
                     nodeId: args.node_id,
@@ -1117,6 +1127,18 @@ export async function meshSendTask(
                     error: `Local session '${args.session_id}' is live but does not expose providerType/cliType, so agent_command cannot be routed safely.`,
                     nextAction: `Relaunch the target session on node '${args.node_id}' or retry without session_id so Repo Mesh can pick a session with provider metadata.`,
                 });
+            }
+            // QUOTA GATE (direct dispatch, local session) — preview rc.43 run 10: see
+            // checkDirectDispatchQuotaGate's doc comment (mesh-tools-internal.ts). This is
+            // the exact case that motivated the fix — a LOCAL explicit session_id dispatch
+            // to a MainPC worker whose provider had already reported "session limit" — so
+            // it is checked as early as resolvedProviderType is known, before the delivery
+            // admission gate and before anything is sent.
+            if (!allowQuotaExhausted) {
+                const quotaGate = checkDirectDispatchQuotaGate(node, resolvedProviderType, ctx.mesh.policy?.quotaRouting ?? null);
+                if (quotaGate) {
+                    return JSON.stringify(buildQuotaExhaustedDispatchFailure(node, resolvedProviderType, args.session_id, quotaGate));
+                }
             }
             // Apply delivery policy: check session status and decide immediate vs queued vs rejected.
             // Busy/generating sessions must not receive immediate send_chat injection. The gate
