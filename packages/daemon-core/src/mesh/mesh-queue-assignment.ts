@@ -105,19 +105,53 @@ export function localCoordinatorDaemonId(): string | undefined {
 
 
 /**
+ * Why `loadRepoConfigForNode` returned null — distinguishes the ordinary "no repo
+ * config declared here" case from a genuine read/parse failure, so the caller can
+ * decide whether this is worth a WARN at all:
+ *   - 'absent'          — no `.adhdev/mesh.json` at this workspace (or none found via
+ *                          the cwd fallback either). The per-repo file is optional;
+ *                          this is the common, expected state and is never a WARN.
+ *   - 'workspace_mismatch' — a file WAS found (locally or via the cwd fallback) but it
+ *                          does not live under the node's own workspace (remote node,
+ *                          or the coordinator's own cwd leaking into a remote node's
+ *                          resolution — see REMOTE-NODE-AUTO-APPROVE-MODE-DELIVERY
+ *                          below). Also expected/benign, not a WARN.
+ *   - 'invalid'         — a file exists under the node's workspace but failed to
+ *                          parse/validate (or the read threw). This is the only case
+ *                          that indicates something is actually broken.
+ *   - 'no_workspace'    — the node carries no workspace path at all (defensive; should
+ *                          not happen for a launchable node).
+ */
+export type RepoConfigUnavailableReason = 'absent' | 'workspace_mismatch' | 'invalid' | 'no_workspace';
+
+export interface LoadRepoConfigForNodeResult {
+    config: RepoMeshDeclarativeConfig | null;
+    /** Present only when `config` is null — see RepoConfigUnavailableReason. */
+    reason?: RepoConfigUnavailableReason;
+}
+
+/**
  * Load the repo-shared `.adhdev/mesh.json` for a node's workspace, tolerating a
- * missing/invalid file (returns null → resolver falls back to provider-spec
+ * missing/invalid file (returns config:null → resolver falls back to provider-spec
  * defaults, i.e. exactly the pre-providerDefaults behavior). Only the
  * `providerDefaults` zone influences the delegated-worker MODE selection; it never
  * touches the ENABLE decision. When a node carries no workspace path (should not
  * happen for a launchable node, but be defensive), we skip the read entirely.
+ *
+ * The `reason` field on a null result lets callers tell an ordinary "nothing declared
+ * here" outcome from a genuine read/parse failure — see RepoConfigUnavailableReason.
  */
 export function loadRepoConfigForNode(node: any): RepoMeshDeclarativeConfig | null {
+    return loadRepoConfigForNodeDetailed(node).config;
+}
+
+export function loadRepoConfigForNodeDetailed(node: any): LoadRepoConfigForNodeResult {
     const workspace = typeof node?.workspace === 'string' && node.workspace.trim() ? node.workspace.trim() : '';
-    if (!workspace) return null;
+    if (!workspace) return { config: null, reason: 'no_workspace' };
     try {
         const result = loadRepoMeshJsonConfig(workspace);
-        if (result.sourceType !== 'repo_file' || !result.config) return null;
+        if (result.sourceType === 'unavailable') return { config: null, reason: 'absent' };
+        if (result.sourceType === 'invalid' || !result.config) return { config: null, reason: 'invalid' };
         // REMOTE-NODE-AUTO-APPROVE-MODE-DELIVERY: loadRepoMeshJsonConfig falls back to
         // process.cwd() when the requested workspace carries no config. On a coordinator
         // running inside its own checkout, that fallback would return the COORDINATOR's
@@ -125,10 +159,10 @@ export function loadRepoConfigForNode(node: any): RepoMeshDeclarativeConfig | nu
         // attributing one machine's declared modes to another. Only accept a file that
         // actually lives under the node's own workspace; the worker re-resolves its real
         // config at launch time (delegated-worker-mode-delivery.ts).
-        if (!isConfigPathInsideWorkspace(result.path, workspace)) return null;
-        return result.config;
+        if (!isConfigPathInsideWorkspace(result.path, workspace)) return { config: null, reason: 'workspace_mismatch' };
+        return { config: result.config };
     } catch {
-        return null;
+        return { config: null, reason: 'invalid' };
     }
 }
 
@@ -141,17 +175,51 @@ function isConfigPathInsideWorkspace(configPath: string | undefined, workspace: 
     return !!ws && (target === ws || target.startsWith(`${ws}/`));
 }
 
+// ─── Per-node WARN streak dedup for an unreadable repo mesh.json ────────────
+// 2026-09-25 wiring-unification live pass: warnUnreadableRepoConfigForNode used to
+// fire on EVERY loadRepoConfigForNode() miss, including the ordinary "this repo
+// declares no .adhdev/mesh.json" case — a legitimate, common, per-repo-optional
+// state. On a queue claim for a node whose repo has no mesh.json, that meant a WARN
+// on every claim cycle (twice per cycle in the observed log), forever, for a file
+// that was never supposed to exist. Only a file that IS present but unreadable/
+// invalid is worth a WARN, and even that should not repeat on every tick — a
+// streak of the SAME invalid file surfacing once per claim would just trade one
+// noise source for another.
+//
+// This mirrors the existing dedup discipline in mesh-queue-observability.ts
+// (record-on-transition, clear-on-recovery) rather than mesh-event-trace.ts's
+// timed-flush streak collapsing: unlike that module's high-frequency completion-
+// event drops, a claim cycle fires at most a couple of times a minute per node, so
+// "one WARN per node per invalid streak" (no periodic re-surface) is enough to stay
+// visible without a time-based re-flush.
+const warnedInvalidRepoConfigNodes = new Set<string>();
+
+function repoConfigStreakKey(nodeId: string, workspace: string): string {
+    return `${nodeId}\u0000${workspace}`;
+}
+
+/** Test hook: clears in-memory WARN-streak state so tests don't leak into each other. */
+export function __resetRepoConfigWarnStreaksForTests(): void {
+    warnedInvalidRepoConfigNodes.clear();
+}
+
 /**
- * Coordinator-side observability for the previously SILENT downgrade: the repo asked
- * for a mode but this process could not read that node's workspace (the remote-node
- * case), so the envelope carries the provider-spec default instead. The worker
- * re-resolves at launch, but the coordinator log is what makes the gap visible from
- * the side that made the decision.
+ * Coordinator-side observability for a repo `.adhdev/mesh.json` that IS present
+ * under the node's workspace but could not be read/parsed — a genuine misconfig,
+ * as opposed to the ordinary "no repo config declared" case (see
+ * RepoConfigUnavailableReason). The worker re-resolves at launch, but the
+ * coordinator log is what makes the gap visible from the side that made the
+ * decision. Rate-limited to one WARN per node per invalid streak: a later
+ * successful (or absent) read clears the streak so a real recovery/fresh failure
+ * is observable again.
  */
 function warnUnreadableRepoConfigForNode(node: any, providerType: string | undefined): void {
     const workspace = typeof node?.workspace === 'string' && node.workspace.trim() ? node.workspace.trim() : '';
     if (!workspace) return;
     const nodeId = readNonEmptyString(node?.id) || readNonEmptyString(node?.nodeId) || 'unknown-node';
+    const key = repoConfigStreakKey(nodeId, workspace);
+    if (warnedInvalidRepoConfigNodes.has(key)) return;
+    warnedInvalidRepoConfigNodes.add(key);
     LOG.warn(
         'MeshQueue',
         `repo mesh.json unreadable from this daemon for node=${nodeId} workspace=${workspace} `
@@ -160,9 +228,21 @@ function warnUnreadableRepoConfigForNode(node: any, providerType: string | undef
     );
 }
 
+/** Clears the WARN-streak fingerprint once a node's repo config is readable again
+ *  (present+valid, or genuinely absent) so a later re-break is observable again. */
+function clearUnreadableRepoConfigStreak(node: any): void {
+    const workspace = typeof node?.workspace === 'string' && node.workspace.trim() ? node.workspace.trim() : '';
+    if (!workspace) return;
+    const nodeId = readNonEmptyString(node?.id) || readNonEmptyString(node?.nodeId) || 'unknown-node';
+    warnedInvalidRepoConfigNodes.delete(repoConfigStreakKey(nodeId, workspace));
+}
+
 /**
  * Resolve the delegated-worker auto-approve envelope for a node, warning when the
- * repo config that should decide the MODE is not readable from this process.
+ * repo config that should decide the MODE is present but not readable from this
+ * process. A repo that simply declares no `.adhdev/mesh.json` (or whose config
+ * lives outside this node's workspace — the remote-node case) is NOT warned about;
+ * only a present-but-invalid file is.
  */
 export function delegatedWorkerAutoApproveSettingsForNode(
     mesh: any,
@@ -170,8 +250,12 @@ export function delegatedWorkerAutoApproveSettingsForNode(
     provider: any,
     providerType: string | undefined,
 ): ReturnType<typeof delegatedWorkerAutoApproveSettings> {
-    const repoConfig = loadRepoConfigForNode(node);
-    if (!repoConfig) warnUnreadableRepoConfigForNode(node, providerType);
+    const { config: repoConfig, reason } = loadRepoConfigForNodeDetailed(node);
+    if (reason === 'invalid') {
+        warnUnreadableRepoConfigForNode(node, providerType);
+    } else {
+        clearUnreadableRepoConfigStreak(node);
+    }
     return delegatedWorkerAutoApproveSettings(mesh?.policy, node?.policy, provider, repoConfig, providerType);
 }
 
