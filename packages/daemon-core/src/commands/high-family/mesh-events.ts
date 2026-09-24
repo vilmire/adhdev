@@ -12,6 +12,7 @@ import { meshNoticeRuntime } from '../../mesh/turn-ledger/deliver.js';
 import { normalizeInteractivePromptResponse } from '../../providers/types/interactive-prompt.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
+import { componentsNotReadyResult, isDaemonComponentsNotReady } from '../daemon-components-port.js';
 
 export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
     mesh_forward_event: async (ctx: HighFamilyContext, args: any) => {
@@ -19,14 +20,17 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
         // stamps the terminal bootstrap state into the coordinator's inline mesh view
         // and re-fires the queue (which reads getCachedInlineMesh) — both router
         // methods are bound here because the handler only has `ctx.deps`.
-        const result = handleMeshForwardEvent({
-            instanceManager: ctx.deps.instanceManager,
-            router: {
-                markWorktreeBootstrapTerminalState: ctx.markWorktreeBootstrapTerminalState,
-                getCachedInlineMesh: ctx.getCachedInlineMesh,
-            },
-            statusInstanceId: ctx.deps.statusInstanceId,
-        } as any, args as Record<string, unknown>);
+        // The REAL components (S7-attached): a relayed agent:ready / generating_completed
+        // claims through tryAssignQueueTask, which needs the turn ledger a hand-built
+        // `{ instanceManager, router }` shim never had (rc.39 ledger-less claim class).
+        let components;
+        try {
+            components = ctx.components();
+        } catch (e) {
+            if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
+            throw e;
+        }
+        const result = handleMeshForwardEvent(components, args as Record<string, unknown>);
         return { ...result };
     },
 

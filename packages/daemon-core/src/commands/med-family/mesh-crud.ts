@@ -1803,39 +1803,22 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                     };
                     if (typeof ctx.deps.instanceManager?.getByCategory === 'function') {
                         // WORKTREE-BOOTSTRAP-COORD-STATE (remaining path): this runs on the
-                        // WORKER daemon that owns the cloned worktree (clone_mesh_node forwards
-                        // the clone+bootstrap to the source node's machine), so the in-process
-                        // handleMeshForwardEvent call below needs the same bound router stamp
-                        // the HIGH-family mesh_forward_event handler supplies — otherwise it
-                        // throws on `components.router.markWorktreeBootstrapTerminalState`
-                        // (ctx.deps does NOT expose the router itself). Isolated in its own
-                        // try/catch: a thrown stamp failure must still fall through to the
-                        // notifyMeshCoordinator fallback below, not swallow it —
-                        // otherwise the coordinator never even gets a queued event to pull and
-                        // recovers only via the stale-running backstop (30-40 min later).
-                        //
-                        // WORKTREE-BOOTSTRAP-REFIRE-SHIM (3rd remaining path): stamping success
-                        // schedules `setImmediate(() => triggerMeshQueue(components, meshId))`
-                        // inside injectMeshSystemMessage — using this SAME shim object, since it
-                        // is the exact `components` argument handleMeshForwardEvent was called
-                        // with. triggerMeshQueue's first line (getMeshWithCache) unconditionally
-                        // calls `components.router.getCachedInlineMesh(meshId)` (only the
-                        // `.router` access itself is optional-chained, not the method call), so
-                        // a router shim missing that method throws
-                        // "components.router?.getCachedInlineMesh is not a function" — caught
-                        // by triggerMeshQueue's own .catch and only WARN-logged, so it does not
-                        // escape here, but the queue re-fire silently does nothing and the
-                        // deferred claim is stranded until the next natural trigger. Bind it
-                        // alongside markWorktreeBootstrapTerminalState for the same reason.
+                        // WORKER daemon that owns the cloned worktree, and the in-process
+                        // handleMeshForwardEvent needs the router's bootstrap stamp +
+                        // getCachedInlineMesh (for the queue re-fire it schedules) AND the turn
+                        // ledger (a re-fired claim opens its attempt there). Formerly a
+                        // hand-built `{ instanceManager, router }` shim that had the first two
+                        // and silently lacked the third; now the REAL components. Isolated in
+                        // its own try/catch: a throw (incl. daemon_components_not_ready in the
+                        // boot window) must still fall through to the notifyMeshCoordinator
+                        // fallback below, never swallow it.
                         try {
+                            // The REAL components (S7-attached; the router in it IS the router
+                            // whose markWorktreeBootstrapTerminalState/getCachedInlineMesh the
+                            // old shim bound). Not ready → throws into the catch below, which
+                            // falls through to the notifyMeshCoordinator fallback.
                             const forwarded = handleMeshForwardEvent(
-                                {
-                                    instanceManager: ctx.deps.instanceManager,
-                                    router: {
-                                        markWorktreeBootstrapTerminalState: ctx.markWorktreeBootstrapTerminalState,
-                                        getCachedInlineMesh: ctx.getCachedInlineMesh,
-                                    },
-                                } as any,
+                                ctx.components(),
                                 {
                                     event,
                                     meshId,

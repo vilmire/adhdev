@@ -36,11 +36,12 @@ import { getPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js'
 import { triggerMeshQueue } from '../../src/mesh/mesh-queue-assignment.js'
 import { LOG } from '../../src/logging/logger.js'
+import { testTurnLedger } from '../mesh/helpers/mesh-turn-ledger-fixture.js'
 
 const execFileAsync = promisify(execFile)
 
 function createRouter() {
-  return new DaemonCommandRouter({
+  const router = new DaemonCommandRouter({
     commandHandler: { handle: async () => ({ success: false }) } as any,
     cliManager: {} as any,
     cdpManagers: new Map(),
@@ -55,6 +56,10 @@ function createRouter() {
     sessionRegistry: {} as any,
     statusInstanceId: 'daemon-local',
   })
+  // S7: the router gets the REAL components (clone_mesh_node's bootstrap emit reads
+  // them via ctx.components(); without them it would take the not-ready fallback).
+  router.attachComponents({ ...router.deps, router, turnLedger: testTurnLedger('daemon-local') } as any)
+  return router
 }
 
 async function createRepo(prefix: string) {

@@ -223,9 +223,12 @@ export function queueRefineJobEvent(self: DaemonCommandRouter, event: 'refine:ac
             // session-less intendedFor → daemon-level delivery exactly as before.
             ...(handle.targetCoordinatorSessionId ? { targetCoordinatorSessionId: handle.targetCoordinatorSessionId } : {}),
         };
-        if (typeof self.deps.instanceManager?.getByCategory === 'function') {
+        // The REAL components (S7-attached), never an `{ instanceManager }` look-alike.
+        // Inside the boot window there are none yet → the notice-queue fallback below.
+        const components = self.attachedComponentsOrNull();
+        if (components) {
             const forwarded = handleMeshForwardEvent(
-                { instanceManager: self.deps.instanceManager } as any,
+                components,
                 {
                     event,
                     meshId: handle.meshId,

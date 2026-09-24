@@ -10,6 +10,7 @@
  * `components.cliManager` (or its handleCliCommand) mid-test keeps working.
  */
 import { vi } from 'vitest'
+import { withTurnLedger } from './mesh-turn-ledger-fixture.js'
 
 export function meshRouterExecute(components: { cliManager?: any }) {
   return vi.fn(async (cmd: string, args: any, source?: string) => {
@@ -27,5 +28,8 @@ export function withMeshRouter<T extends { cliManager?: any; router?: any }>(com
   const router = components.router ?? { getCachedInlineMesh: () => undefined }
   if (typeof router.execute !== 'function') router.execute = meshRouterExecute(components)
   ;(components as any).router = router
+  // Production components always carry the S7 turn ledger; a claim without one
+  // is refused (rc.39). A fixture that sets `turnLedger` itself (even null) keeps it.
+  withTurnLedger(components as Record<string, any>)
   return components
 }

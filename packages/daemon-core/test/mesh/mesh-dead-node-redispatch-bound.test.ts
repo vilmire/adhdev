@@ -56,7 +56,9 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 
 import { tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
+import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
+import { wipeTurnTablesForTests } from './helpers/mesh-turn-ledger-fixture.js'
 
 const NODE_ID = 'node_d4bc9f12c89c4296b583381ed3eafb35' // the live offender's id
 const WS = '/repo/dead-node'
@@ -105,6 +107,7 @@ function createComponents(meshId: string, dispatch: () => Promise<unknown>) {
 
 function cleanup(meshId: string) {
   __clearMeshQueueForTests(meshId)
+  wipeTurnTablesForTests()
   __resetMeshRuntimeStoreForTests()
   meshConfigMocks.getMesh.mockReset()
   try { fs.rmSync(testTmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
@@ -166,7 +169,13 @@ describe('DEAD-DISPATCH-BOUND — an undeliverable dispatch target must not re-d
       // generous) dispatch-failure budget — MAX_DISPATCH_FAILURES=5 — not requeueCount, so
       // it converges in 6 attempts (5 retries + the terminal one) instead of 2.
       expect(after.status).toBe('failed')
-      expect(after.cancelReason).toMatch(/dispatch_never_started/)
+      // With the production turn ledger on the components (since rc.39 a claim without one
+      // is refused), each failed dispatch is `dispatch_failed` evidence and the LEDGER's
+      // reclaim budget terminalizes the attempt (queue row → failed as a commit effect)
+      // before the queue-side dispatch-failure budget would stamp `dispatch_never_started`.
+      const attemptTerminal = MeshRuntimeStore.getInstance().turnStore().listAttemptsForTask(meshId, task.id).at(-1)?.terminal
+      expect(attemptTerminal?.outcome).toBe('failed')
+      expect(attemptTerminal?.reason).toBe('reclaim_budget_exhausted')
       expect(attempts).toBeLessThan(10)
       // And the dispatch transport was not hammered.
       expect(components.dispatchMeshCommand.mock.calls.length).toBeLessThan(10)

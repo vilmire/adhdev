@@ -98,7 +98,7 @@ async function forwardConversationPrefsToCoordinator(
     // machine-core-canonicalizing daemonIdsEquivalent — a raw === would miss a same-machine anchor
     // that arrives in a different id form (daemon_mach_X vs mach_X), the repeatedly-regressed
     // daemon-id form-mismatch class in this repo, and self-dial anyway.
-    const selfDaemonId = readNonEmptyString((ctx.deps as any).statusInstanceId);
+    const selfDaemonId = readNonEmptyString(ctx.deps.statusInstanceId);
     if (selfDaemonId && daemonIdsEquivalent(coordinatorDaemonId, selfDaemonId)) {
         const refreshLocal = ctx.deps.updateLocalMeshOwnedSession;
         if (refreshLocal) {

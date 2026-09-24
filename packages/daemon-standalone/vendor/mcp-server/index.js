@@ -87737,6 +87737,10 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
     }
     function getMeshWithCache(components, meshId) {
       const localMesh = getMesh(meshId);
+      if (!components.router && !warnedMissingRouterView) {
+        warnedMissingRouterView = true;
+        LOG.warn("MeshQueue", `mesh ${meshId}: components passed to the mesh view have no router (look-alike components?) \u2014 inline-only worktree nodes are invisible to this read`);
+      }
       const cachedMesh = components.router?.getCachedInlineMesh(meshId);
       if (!localMesh) return cachedMesh;
       if (!cachedMesh) return localMesh;
@@ -87803,7 +87807,10 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
     }
     function observeDispatchEvidence(components, evidence) {
       const ledger = turnLedgerOf(components);
-      if (!ledger) return;
+      if (!ledger) {
+        LOG.warn("TurnLedger", `dropping dispatch evidence ${evidence.kind} ${evidence.eventId}: no turn ledger on the components passed in (look-alike components?)`);
+        return;
+      }
       try {
         const result = ledger.observe(evidence);
         if (result.verdict === "rejected") {
@@ -88090,6 +88097,15 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
     }
     function tryAssignQueueTask(components, meshId, nodeId, sessionId, providerType, routingDecision, quotaClaimTrace, trigger = "queue_claim") {
+      const turnLedger = turnLedgerOf(components);
+      if (!turnLedger) {
+        LOG.warn("TurnLedger", `refusing queue claim for node ${nodeId} (${sessionId}) in mesh ${meshId}: no turn ledger on this daemon (claim path ${trigger}) \u2014 task left pending`);
+        return false;
+      }
+      if (typeof components.router?.getCachedInlineMesh !== "function") {
+        LOG.warn("MeshQueue", `refusing queue claim for node ${nodeId} (${sessionId}) in mesh ${meshId}: components carry no router inline-mesh view (claim path ${trigger}) \u2014 task left pending`);
+        return false;
+      }
       const mesh = getMeshWithCache(components, meshId);
       const node = mesh?.nodes.find((n) => meshNodeIdMatches5(n, nodeId));
       if (routingDecision?.source !== "autoLaunch") {
@@ -88195,32 +88211,31 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
       LOG.info("MeshQueue", `Node ${nodeId} (${sessionId}) pulled task ${task.id}`);
       let dispatchAttemptRef;
-      const turnLedger = turnLedgerOf(components);
-      if (turnLedger) {
-        try {
-          const opened = openOrResumeQueueAttempt(turnLedger, {
-            coordinatorDaemonId: localCoordinatorDaemonId2(),
-            meshId,
-            task,
-            nodeId,
-            sessionId,
-            providerType,
-            consumeProfile: assignedTranscriptProfile?.class === "native-source" ? "native_source" : "default",
-            maxTaskRetries: typeof mesh?.policy?.maxTaskRetries === "number" ? mesh.policy.maxTaskRetries : 1
-          });
-          if ("refused" in opened) {
-            LOG.warn("MeshQueue", `Refusing queue claim dispatch of task ${task.id} \u2192 session ${sessionId}: its open attempt ${opened.refused.attemptId} is already ${opened.refused.state}`);
-            updateTaskStatus(meshId, task.id, "pending");
-            return false;
-          }
-          dispatchAttemptRef = opened.ref;
-          task.attemptId = opened.ref.attemptId;
-          MeshRuntimeStore.getInstance().updateQueueEntry(task);
-        } catch (e) {
-          LOG.warn("TurnLedger", `Failed to open turn attempt for task ${task.id} (dispatch proceeds without an attemptRef): ${e?.message || e}`);
+      try {
+        const opened = openOrResumeQueueAttempt(turnLedger, {
+          coordinatorDaemonId: localCoordinatorDaemonId2(),
+          meshId,
+          task,
+          nodeId,
+          sessionId,
+          providerType,
+          consumeProfile: assignedTranscriptProfile?.class === "native-source" ? "native_source" : "default",
+          maxTaskRetries: typeof mesh?.policy?.maxTaskRetries === "number" ? mesh.policy.maxTaskRetries : 1
+        });
+        if ("refused" in opened) {
+          LOG.warn("MeshQueue", `Refusing queue claim dispatch of task ${task.id} \u2192 session ${sessionId}: its open attempt ${opened.refused.attemptId} is already ${opened.refused.state}`);
+          updateTaskStatus(meshId, task.id, "pending");
+          return false;
         }
+        dispatchAttemptRef = opened.ref;
+        task.attemptId = opened.ref.attemptId;
+        MeshRuntimeStore.getInstance().updateQueueEntry(task);
+      } catch (e) {
+        LOG.warn("TurnLedger", `refusing queue claim of task ${task.id} \u2192 session ${sessionId}: failed to open its turn attempt (claim path ${trigger}) \u2014 task left pending: ${e?.message || e}`);
+        updateTaskStatus(meshId, task.id, "pending");
+        return false;
       }
-      const dispatchAttemptId = dispatchAttemptRef?.attemptId;
+      const dispatchAttemptId = dispatchAttemptRef.attemptId;
       if (isWorkerMcpEnabled()) {
         try {
           mintWorkerTaskToken({
@@ -88596,6 +88611,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
     }
     var import_crypto14;
     var warnedInvalidRepoConfigNodes;
+    var warnedMissingRouterView;
     var BOOTSTRAP_TERMINAL_STATUSES;
     var DISPATCH_CONFIRM_TIMEOUT_MS;
     var DISPATCH_CONNECT_TIMEOUT_MS;
@@ -88653,6 +88669,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         init_mesh_claim_refusal();
         init_mesh_autolaunch_integrity();
         warnedInvalidRepoConfigNodes = /* @__PURE__ */ new Set();
+        warnedMissingRouterView = false;
         BOOTSTRAP_TERMINAL_STATUSES = /* @__PURE__ */ new Set(["complete", "failed"]);
         DISPATCH_CONFIRM_TIMEOUT_MS = 12e4;
         DISPATCH_CONNECT_TIMEOUT_MS = MESH_CONNECT_TIMEOUT_MS;
@@ -108787,6 +108804,27 @@ ${marker}`,
         };
       }
     });
+    function isDaemonComponentsNotReady(e) {
+      return e instanceof DaemonComponentsNotReadyError || typeof e === "object" && e !== null && e.code === DAEMON_COMPONENTS_NOT_READY;
+    }
+    function componentsNotReadyResult(e) {
+      return { success: false, code: DAEMON_COMPONENTS_NOT_READY, error: e.message };
+    }
+    var DAEMON_COMPONENTS_NOT_READY;
+    var DaemonComponentsNotReadyError;
+    var init_daemon_components_port = __esm2({
+      "src/commands/daemon-components-port.ts"() {
+        "use strict";
+        DAEMON_COMPONENTS_NOT_READY = "daemon_components_not_ready";
+        DaemonComponentsNotReadyError = class extends Error {
+          code = DAEMON_COMPONENTS_NOT_READY;
+          constructor(what) {
+            super(`${what}: daemon components are not attached yet (boot stage S7 has not completed)`);
+            this.name = "DaemonComponentsNotReadyError";
+          }
+        };
+      }
+    });
     function hashSignatureParts(parts) {
       let hash2 = 2166136261;
       for (const part of parts) {
@@ -120625,7 +120663,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     }
     async function triggerQueueBestEffort(ctx, meshId) {
       try {
-        await triggerMeshQueue(ctx.deps, meshId);
+        await triggerMeshQueue(ctx.components(), meshId);
       } catch (e) {
         LOG.warn("MeshGraphIpc", `post-release/patch queue trigger failed for mesh ${meshId}: ${e?.message ?? String(e)}`);
       }
@@ -138429,6 +138467,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
         init_router();
         init_logger();
         init_command_registry();
+        init_daemon_components_port();
         meshQueueHandlers = {
           get_mesh_queue: async (_ctx, args) => {
             const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
@@ -138531,6 +138570,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
             const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "queue trigger");
             if (ownerFailure) return ownerFailure;
             try {
+              const components = ctx.components();
               const { triggerMeshQueue: triggerMeshQueue2, tryAssignQueueTask: tryAssignQueueTask2 } = await Promise.resolve().then(() => (init_mesh_events(), mesh_events_exports));
               const preferredNodeId = typeof args?.preferredNodeId === "string" ? args.preferredNodeId.trim() : "";
               if (preferredNodeId) {
@@ -138554,14 +138594,15 @@ Run 'adhdev doctor' for detailed diagnostics.`
                   const sessionId = typeof state.instanceId === "string" ? state.instanceId : "";
                   const providerType = readStringValue(state.type, settings.providerType) || "";
                   if (sessionId && providerType) {
-                    tryAssignQueueTask2(ctx.deps, meshId, nodeId, sessionId, providerType);
+                    tryAssignQueueTask2(components, meshId, nodeId, sessionId, providerType, void 0, void 0, "ipc_trigger_preferred_node");
                     break;
                   }
                 }
               }
-              const trigger = await triggerMeshQueue2(ctx.deps, meshId);
+              const trigger = await triggerMeshQueue2(components, meshId);
               return { success: true, trigger };
             } catch (e) {
+              if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
               return { success: false, error: e.message };
             }
           }
@@ -142193,16 +142234,17 @@ ${mergeTreeErr?.stderr || ""}`;
         init_deliver();
         init_interactive_prompt();
         init_command_registry();
+        init_daemon_components_port();
         meshEventsHandlers = {
           mesh_forward_event: async (ctx, args) => {
-            const result = handleMeshForwardEvent({
-              instanceManager: ctx.deps.instanceManager,
-              router: {
-                markWorktreeBootstrapTerminalState: ctx.markWorktreeBootstrapTerminalState,
-                getCachedInlineMesh: ctx.getCachedInlineMesh
-              },
-              statusInstanceId: ctx.deps.statusInstanceId
-            }, args);
+            let components;
+            try {
+              components = ctx.components();
+            } catch (e) {
+              if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
+              throw e;
+            }
+            const result = handleMeshForwardEvent(components, args);
             return { ...result };
           },
           /**
@@ -145269,9 +145311,10 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         // session-less intendedFor → daemon-level delivery exactly as before.
         ...handle.targetCoordinatorSessionId ? { targetCoordinatorSessionId: handle.targetCoordinatorSessionId } : {}
       };
-      if (typeof self.deps.instanceManager?.getByCategory === "function") {
+      const components = self.attachedComponentsOrNull();
+      if (components) {
         const forwarded = handleMeshForwardEvent(
-          { instanceManager: self.deps.instanceManager },
+          components,
           {
             event,
             meshId: handle.meshId,
@@ -146174,9 +146217,10 @@ ${hintLines.join("\n")}` : "",
         // coordinator SESSION so a sibling session cannot consume it.
         ...handle.targetCoordinatorSessionId ? { targetCoordinatorSessionId: handle.targetCoordinatorSessionId } : {}
       };
-      if (typeof self.deps.instanceManager?.getByCategory === "function") {
+      const components = self.attachedComponentsOrNull();
+      if (components) {
         const forwarded = handleMeshForwardEvent(
-          { instanceManager: self.deps.instanceManager },
+          components,
           {
             event,
             meshId: handle.meshId,
@@ -148814,6 +148858,7 @@ ${e?.stderr || ""}`;
         init_mesh_restart();
         init_command_registry();
         init_interaction_context();
+        init_daemon_components_port();
         init_handler_specs();
         init_session_host();
         init_spec_providerdev();
@@ -148919,8 +148964,34 @@ ${e?.stderr || ""}`;
           refineBaseLeases = /* @__PURE__ */ new Map();
           /** Recent interaction ids per target session (bounded). */
           interactionContext = new InteractionContextMap();
+          /**
+           * The daemon's finished `DaemonComponents`, late-bound by boot S7
+           * (`boot/stages/mesh-runtime.ts`). The router is built in S5, before the
+           * components (and their turn ledger) exist — see ./daemon-components-port.ts.
+           */
+          attachedComponents = null;
           constructor(deps) {
             this.deps = deps;
+          }
+          /** S7 attaches the completed components once. They must be the ones this router belongs to. */
+          attachComponents(components) {
+            if (components.router !== this) {
+              throw new Error("attachComponents: components.router is not this router");
+            }
+            this.attachedComponents = components;
+          }
+          /**
+           * The attached components, or null inside the boot window — ONLY for callers
+           * that have a complete non-components fallback (the refine jobs' notice queue).
+           * Everything else uses `requireComponents` / `ctx.components()`.
+           */
+          attachedComponentsOrNull() {
+            return this.attachedComponents;
+          }
+          /** The real `DaemonComponents`; throws `DaemonComponentsNotReadyError` inside the boot window. */
+          requireComponents(what = "command") {
+            if (!this.attachedComponents) throw new DaemonComponentsNotReadyError(what);
+            return this.attachedComponents;
           }
           // ─── Aggregate mesh-status cache ────────────────────────────────────
           // Implementation lives in ./router-aggregate-status.ts (behavior-preserving
@@ -149106,6 +149177,7 @@ ${e?.stderr || ""}`;
           buildMedFamilyContext() {
             const ctx = {
               deps: this.deps,
+              components: () => this.requireComponents("med-family command"),
               getMeshForCommand: this.getMeshForCommand.bind(this),
               getCachedInlineMesh: this.getCachedInlineMesh.bind(this),
               markWorktreeBootstrapTerminalState: this.markWorktreeBootstrapTerminalState.bind(this),
@@ -149142,6 +149214,7 @@ ${e?.stderr || ""}`;
           buildHighFamilyContext() {
             return {
               deps: this.deps,
+              components: () => this.requireComponents("high-family command"),
               getMeshForCommand: this.getMeshForCommand.bind(this),
               getCachedAggregateMeshStatus: this.getCachedAggregateMeshStatus.bind(this),
               rememberAggregateMeshStatus: this.rememberAggregateMeshStatus.bind(this),
@@ -149523,6 +149596,7 @@ ${e?.stderr || ""}`;
               case "low": {
                 const ctx = {
                   deps: this.deps,
+                  components: () => this.requireComponents("low-family command"),
                   getMeshForCommand: this.getMeshForCommand.bind(this)
                 };
                 return spec.run(ctx, args);
@@ -150875,13 +150949,7 @@ ${e?.stderr || ""}`;
                   if (typeof ctx.deps.instanceManager?.getByCategory === "function") {
                     try {
                       const forwarded = handleMeshForwardEvent(
-                        {
-                          instanceManager: ctx.deps.instanceManager,
-                          router: {
-                            markWorktreeBootstrapTerminalState: ctx.markWorktreeBootstrapTerminalState,
-                            getCachedInlineMesh: ctx.getCachedInlineMesh
-                          }
-                        },
+                        ctx.components(),
                         {
                           event,
                           meshId,
@@ -171880,6 +171948,7 @@ ${notice.notice}${supersededHint}`;
       components.turnLedger = turn.ledger;
       components.turnProbePort = turn.probePort;
       components.meshTurn = turn;
+      components.router.attachComponents(components);
       const offForwarding = setupMeshEventForwarding(components);
       components.quotaRefreshLoop = setupQuotaRefreshLoop(components);
       components.quotaEventRefresh = setupQuotaEventRefresh(components);

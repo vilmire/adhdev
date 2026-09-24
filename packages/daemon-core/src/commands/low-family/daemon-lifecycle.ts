@@ -33,7 +33,8 @@ import { LOG } from '../../logging/logger.js';
 import { compareSemver } from '../../version-compare.js';
 import { IDENTITY, TRACK } from '../../track-identity.js';
 import { resolveSessionHostAppName } from '../../session-host/app-name.js';
-import type { LowFamilyContext, LowFamilyHandler } from './types.js';
+import type { LowFamilyContext } from './types.js';
+import type { CommandRouterResult } from '../router.js';
 import { defineCommandSpecs } from '../command-registry.js';
 
 // Matches the installed package directory ("…/@adhdev/daemon-standalone/…" or
@@ -49,8 +50,15 @@ function isStandaloneArgv(argv1: string | undefined): boolean {
     return !!argv1 && ARGV_STANDALONE_PATH_SEGMENT.test(argv1);
 }
 
-export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
-    daemon_upgrade: async (ctx: LowFamilyContext, args: any) => {
+/**
+ * These two read only `ctx.deps` — declared as such so mesh-restart can call
+ * them from the deferred-restart tick (which holds router deps only) without
+ * fabricating a partial `LowFamilyContext`.
+ */
+export type DepsOnlyLowFamilyContext = Pick<LowFamilyContext, 'deps'>;
+
+export const daemonLifecycleHandlers: Record<string, (ctx: DepsOnlyLowFamilyContext, args: any) => Promise<CommandRouterResult>> = {
+    daemon_upgrade: async (ctx: DepsOnlyLowFamilyContext, args: any) => {
         LOG.info('Upgrade', 'Remote upgrade requested from dashboard');
         try {
             // Detect package name for upgrade
@@ -254,7 +262,7 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
     // daemon state (memory leaks, zombie sessions, wedged internals) when the
     // version is already correct — downtime drops to the detached re-spawn.
     // killSessionHost is an explicit opt-in hard refresh (see upgrade-helper).
-    daemon_restart: async (ctx: LowFamilyContext, args: any) => {
+    daemon_restart: async (ctx: DepsOnlyLowFamilyContext, args: any) => {
         LOG.info('Restart', 'Restart-only requested (no package reinstall)');
         try {
             const isStandalone = ctx.deps.packageName === '@adhdev/daemon-standalone'
@@ -303,7 +311,7 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
         }
     },
 
-    set_machine_nickname: async (_ctx: LowFamilyContext, args: any) => {
+    set_machine_nickname: async (_ctx: DepsOnlyLowFamilyContext, args: any) => {
         const nickname = args?.nickname;
         updateConfig({ machineNickname: nickname || null });
         return { success: true };
@@ -314,7 +322,7 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
      * Machine-level config, so it is answered here rather than through
      * `get_provider_settings` (which is scoped to a provider's own manifest).
      */
-    get_quota_account_label: async (_ctx: LowFamilyContext, _args: any) => {
+    get_quota_account_label: async (_ctx: DepsOnlyLowFamilyContext, _args: any) => {
         return { success: true, enabled: loadConfig().quotaShowAccountEmail === true };
     },
 
@@ -326,7 +334,7 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
      * Takes effect on the next quota tick with no restart: the fetcher reads the
      * config through a function at fetch time (quota/fetchers/deps.ts).
      */
-    set_quota_account_label: async (_ctx: LowFamilyContext, args: any) => {
+    set_quota_account_label: async (_ctx: DepsOnlyLowFamilyContext, args: any) => {
         if (typeof args?.enabled !== 'boolean') {
             return { success: false, error: 'enabled (boolean) is required' };
         }
@@ -340,7 +348,7 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
      * and mesh claims: a machine can use a provider and still not want its
      * quota read here. Absent = enabled.
      */
-    get_quota_provider_enabled: async (_ctx: LowFamilyContext, args: any) => {
+    get_quota_provider_enabled: async (_ctx: DepsOnlyLowFamilyContext, args: any) => {
         const providerType = args?.providerType;
         if (typeof providerType !== 'string' || !providerType) {
             return { success: false, error: 'providerType (string) is required' };
@@ -369,7 +377,7 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
      * kimi reads a token — no user-file side effects), so their toggle applies
      * immediately.
      */
-    set_quota_provider_enabled: async (_ctx: LowFamilyContext, args: any) => {
+    set_quota_provider_enabled: async (_ctx: DepsOnlyLowFamilyContext, args: any) => {
         const providerType = args?.providerType;
         if (typeof providerType !== 'string' || !providerType) {
             return { success: false, error: 'providerType (string) is required' };

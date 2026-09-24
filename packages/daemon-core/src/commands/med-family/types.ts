@@ -16,6 +16,7 @@
  * with the context this family needs.
  */
 import type { CommandRouterDeps, CommandRouterResult, MeshGitProbeCache } from '../router.js';
+import type { DaemonComponentsAccessor } from '../daemon-components-port.js';
 import type { RepoMeshSessionCleanupMode } from '../../repo-mesh-types.js';
 import type { WorktreeBootstrapState } from '../../mesh/worktree-bootstrap-config.js';
 
@@ -50,6 +51,14 @@ export type WorktreeRemovalPrecheckResult =
  */
 export interface MedFamilyContext {
     deps: CommandRouterDeps;
+    /**
+     * The daemon's REAL `DaemonComponents` (late-bound by boot S7). Use this —
+     * never `deps` cast to components — wherever a mesh function takes
+     * `DaemonComponents`: `deps` has no turn ledger, and a claim made through it
+     * dispatched without an attempt (rc.39). Throws
+     * `DaemonComponentsNotReadyError` inside the boot window.
+     */
+    components: DaemonComponentsAccessor;
 
     /** Bound `DaemonCommandRouter.getMeshForCommand`. */
     getMeshForCommand: (

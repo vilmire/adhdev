@@ -12,6 +12,7 @@ import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 import { LOG } from '../../logging/logger.js';
 import type { CancelledTaskAssignment } from '../../mesh/mesh-work-queue.js';
 import { defineCommandSpecs } from '../command-registry.js';
+import { componentsNotReadyResult, isDaemonComponentsNotReady } from '../daemon-components-port.js';
 
 /**
  * CANCEL-STICKY-TERMINAL (authoritative cancel): stop the worker a just-cancelled task was
@@ -160,7 +161,7 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
                 const { isSessionActivelyGenerating } = await import('../../mesh/mesh-events.js');
                 const existing = getQueueEntryById(meshId, taskId) as { status?: string; assignedSessionId?: string } | null;
                 if (existing?.status === 'assigned' && existing.assignedSessionId
-                    && isSessionActivelyGenerating(ctx.deps as any, existing.assignedSessionId)) {
+                    && isSessionActivelyGenerating(ctx.deps, existing.assignedSessionId)) {
                     return {
                         success: false,
                         error: `Task '${taskId}' is actively dispatched/generating (live session ${existing.assignedSessionId}); requeue refused to avoid a duplicate second dispatch. Pass force:true to override, or cancel and re-enqueue.`,
@@ -207,6 +208,9 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'queue trigger');
         if (ownerFailure) return ownerFailure;
         try {
+            // The REAL components (S7-attached) — never `ctx.deps`: a claim through the
+            // router deps had no turn ledger and dispatched without an attempt (rc.39).
+            const components = ctx.components();
             const { triggerMeshQueue, tryAssignQueueTask } = await import('../../mesh/mesh-events.js');
 
             // Bug A fix: when preferredNodeId is provided, attempt to claim a pending
@@ -235,15 +239,16 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
                     const sessionId = typeof state.instanceId === 'string' ? state.instanceId : '';
                     const providerType = readStringValue(state.type, settings.providerType) || '';
                     if (sessionId && providerType) {
-                        tryAssignQueueTask(ctx.deps as any, meshId, nodeId, sessionId, providerType);
+                        tryAssignQueueTask(components, meshId, nodeId, sessionId, providerType, undefined, undefined, 'ipc_trigger_preferred_node');
                         break;
                     }
                 }
             }
 
-            const trigger = await triggerMeshQueue(ctx.deps as any, meshId);
+            const trigger = await triggerMeshQueue(components, meshId);
             return { success: true, trigger };
         } catch (e: any) {
+            if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
             return { success: false, error: e.message };
         }
     },
