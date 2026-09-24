@@ -596,6 +596,31 @@ export class MeshRuntimeStore {
         `).all(meshId, ...forms) as Array<{ payload: string }>;
     }
 
+    /**
+     * Every `assigned` row in the mesh, on ANY node/daemon — the scope H1
+     * path-ownership needs (wiring-unification §7c). Unlike
+     * {@link assignedRowsForDaemon} (capacity gates: provider/slot maxParallel,
+     * node-busy — all correctly scoped to ONE machine's resources), path
+     * ownership exists to keep parallel branches from touching the same files
+     * before they converge on main, and two worktrees on two DIFFERENT
+     * machines are exactly as parallel as two worktrees on one machine. A
+     * daemon-scoped query never sees a cross-daemon collision at all (live
+     * finding, preview rc.41 runs 3–7: a direct-dispatch row `assigned` on one
+     * daemon did not stop an overlapping enqueued task from being claimed on a
+     * completely different daemon).
+     *
+     * Filters on the same indexed `(mesh_id, status, created_at)` prefix as the
+     * candidate queries above — `status = 'assigned'` mesh-wide is a single
+     * indexed range scan, not a table scan, and excludes every terminal status
+     * (`done`/`failed`/`cancelled`/pending) by construction.
+     */
+    private assignedRowsMeshWide(meshId: string): Array<{ payload: string }> {
+        return this.db.prepare(`
+            SELECT payload FROM mesh_queue
+            WHERE mesh_id = ? AND status = 'assigned'
+        `).all(meshId) as Array<{ payload: string }>;
+    }
+
     private activeProviderAssignmentCount(
         meshId: string,
         nodeId: string,
@@ -631,6 +656,20 @@ export class MeshRuntimeStore {
             nodeIsWorktree?: boolean;
             assignedTranscriptProfile?: MeshWorkQueueEntry['assignedTranscriptProfile'];
             allowedTaskDifficulties?: readonly import('@adhdev/mesh-shared').MeshTaskDifficulty[];
+            /**
+             * GIT-GATE (owner-requested follow-up to H1): the claiming node's git
+             * telemetry verdict, resolved by the CALLER (mesh-queue-assignment.ts
+             * tryAssignQueueTask, which already has the mesh/node records at hand —
+             * mirrors how `nodeIsWorktree` is threaded rather than the store importing
+             * config/mesh-node-identity itself) via the SAME predicates the auto-launch
+             * spawn gate uses (`isDirtyNode`, `isMeshNodeFreshEnoughToLaunch` +
+             * `resolveAutoFastForwardPolicy(mesh).maxBehind`). Omitted or both flags
+             * false ⇒ no gating (fail-open on unresolved/absent telemetry, matching
+             * those predicates' own fail-open contract). Applies to non-readonly
+             * candidates only — a readonly candidate bypasses this gate entirely, same
+             * as `nodeConflictAllows` above.
+             */
+            nodeGitGate?: { dirty: boolean; staleBehind: boolean; behind?: number; maxBehind?: number };
             /** A6-SILENT-REFUSAL: optional sink the claim fills in when it returns null,
              *  naming WHICH predicate refused. See MeshClaimRefusal. Purely diagnostic —
              *  the return contract (`MeshWorkQueueEntry | null`) is unchanged, so every
@@ -790,19 +829,28 @@ export class MeshRuntimeStore {
             // H1 (path ownership, wiring-unification Phase H — docs/design/2026-09-23-
             // wiring-unification.md §7c): a write (non-readonly) candidate whose declared
             // owned_paths overlaps another currently-ASSIGNED write task's declared
-            // owned_paths, scoped to the same daemon machine (assignedRowsForDaemon —
-            // daemonNodeIds when the caller resolved sibling worktree nodes, else this
-            // single node, mirroring the provider/slot cap scope above), is refused.
+            // owned_paths is refused. Scope is MESH-WIDE (assignedRowsMeshWide — every
+            // node/daemon in the mesh), deliberately DIFFERENT from the provider/slot/
+            // node-busy capacity gates above, which stay scoped to assignedRowsForDaemon
+            // (one machine's resources). Path ownership exists to keep parallel branches
+            // from touching the same files before they converge on main — two worktrees
+            // on two DIFFERENT machines are exactly as parallel as two worktrees on one
+            // machine, so a daemon-scoped query would miss the cross-daemon collision
+            // entirely (live finding, preview rc.41 runs 3–7: a direct-dispatch row
+            // `assigned` on one daemon did not stop an overlapping enqueued task from
+            // being claimed on a completely different daemon).
             // Opt-in only: a candidate OR an in-flight task with no declaration never
             // conflicts (findOwnershipConflicts' own backward-compat contract). This is a
             // PATH-level refinement of the existing NODE-level nodeConflictAllows gate
-            // above — it catches the case that gate cannot: two DIFFERENT nodes (e.g. two
-            // worktrees of the same branch) racing on the same file, which nodeConflictAllows
-            // never sees because it only compares a candidate against ITS OWN node's busy bit.
-            const inFlightOwnership: InFlightOwnership[] = this.assignedRowsForDaemon(meshId, nodeId, opts?.daemonNodeIds)
+            // above — it catches the case that gate cannot: two DIFFERENT nodes (same
+            // daemon OR different daemons) racing on the same file, which
+            // nodeConflictAllows never sees because it only compares a candidate against
+            // ITS OWN node's busy bit.
+            const inFlightOwnership: InFlightOwnership[] = this.assignedRowsMeshWide(meshId)
                 .map((row): InFlightOwnership | null => {
                     try {
                         const parsed = JSON.parse(row.payload) as MeshWorkQueueEntry;
+                        if (parsed.id === undefined) return null;
                         if (!parsed.ownedPaths || isTaskReadonly(parsed)) return null;
                         return { taskId: parsed.id, paths: parsed.ownedPaths };
                     } catch { return null; }
@@ -814,6 +862,28 @@ export class MeshRuntimeStore {
                     : [];
             const ownedPathsAllows = (candidate: MeshWorkQueueEntry): boolean =>
                 ownedPathsConflictFor(candidate).length === 0;
+
+            // GIT-GATE (owner-requested follow-up to H1, wiring-unification): the
+            // auto-launch SPAWN gate already refuses a dirty or stale-behind node
+            // (mesh-queue-autolaunch.ts isDirtyNode / isMeshNodeFreshEnoughToLaunch), but
+            // the CLAIM path for an already-idle/already-running session had no equivalent
+            // — a dirty or stale node's idle session could pull a write task straight
+            // through this atomic claim. `nodeGitGate` is resolved by the caller (the same
+            // predicates, applied to the same node record) and threaded in as a plain
+            // verdict so this DB-layer store never has to import mesh-node-identity /
+            // mesh-auto-fast-forward policy resolution itself — same pattern as
+            // `nodeIsWorktree`. Fail-open: an omitted gate (unresolved/absent telemetry)
+            // never refuses. Applies to WRITE candidates only — a readonly candidate does
+            // not touch the tree, so it bypasses this gate exactly like nodeConflictAllows.
+            const nodeGitGate = opts?.nodeGitGate;
+            const nodeNotDirty = (candidate: MeshWorkQueueEntry): boolean => {
+                if (!nodeGitGate || isTaskReadonly(candidate)) return true;
+                return !nodeGitGate.dirty;
+            };
+            const nodeNotStaleBehind = (candidate: MeshWorkQueueEntry): boolean => {
+                if (!nodeGitGate || isTaskReadonly(candidate)) return true;
+                return !nodeGitGate.staleBehind;
+            };
 
             // G7: delayed execution. A task with a notBefore in the future is held pending
             // (skipped as a claim candidate) until the wall clock passes it. Fail-open on an
@@ -902,6 +972,8 @@ export class MeshRuntimeStore {
                 { reason: 'parallel_cap_reached', test: parallelCapsAllow },
                 { reason: 'node_busy_with_active_assignment', test: nodeConflictAllows },
                 { reason: 'owned_paths_conflict', test: ownedPathsAllows },
+                { reason: 'dirty_workspace', test: nodeNotDirty },
+                { reason: 'node_stale_behind_upstream', test: nodeNotStaleBehind },
             ]);
             if (!selected.entry) {
                 if (!candidates.length) return refuse('no_pending_candidates');
@@ -916,11 +988,33 @@ export class MeshRuntimeStore {
                         : undefined;
                     return refuse('owned_paths_conflict', detail, selected.deepest);
                 }
+                // GIT-GATE: name the concrete git evidence (behind count / maxBehind) rather
+                // than the generic "closest candidate" prose, mirroring the H1 detail above.
+                if (selected.reason === 'dirty_workspace') {
+                    return refuse('dirty_workspace', `node ${nodeId} has a dirty workspace`, selected.deepest);
+                }
+                if (selected.reason === 'node_stale_behind_upstream') {
+                    const behindDetail = nodeGitGate?.behind !== undefined
+                        ? `node ${nodeId} is ${nodeGitGate.behind} commit(s) behind upstream (max ${nodeGitGate.maxBehind ?? 0})`
+                        : `node ${nodeId} is behind upstream beyond the configured maxBehind`;
+                    return refuse('node_stale_behind_upstream', behindDetail, selected.deepest);
+                }
                 return refuse(selected.reason, selected.deepest
                     ? `closest candidate ${selected.deepest.id} of ${candidates.length}` : undefined,
                     selected.deepest);
             }
             const entry = selected.entry;
+
+            // GIT-GATE: a readonly candidate bypasses nodeNotDirty/nodeNotStaleBehind above
+            // (an N-way readonly diagnosis does not touch the tree), but the operator asked
+            // for visibility rather than silence when that happens — one INFO line, not a
+            // refusal.
+            if (nodeGitGate && (nodeGitGate.dirty || nodeGitGate.staleBehind) && isTaskReadonly(entry)) {
+                LOG.info('MeshQueue', `Claiming readonly task ${entry.id} for node ${nodeId} despite git gate `
+                    + `(${nodeGitGate.dirty ? 'dirty_workspace' : ''}${nodeGitGate.dirty && nodeGitGate.staleBehind ? ', ' : ''}`
+                    + `${nodeGitGate.staleBehind ? `node_stale_behind_upstream${nodeGitGate.behind !== undefined ? ` behind=${nodeGitGate.behind}` : ''}` : ''}) `
+                    + `— readonly tasks are exempt from the write-gate.`);
+            }
 
             const now = new Date().toISOString();
             entry.status = 'assigned';
@@ -1135,7 +1229,7 @@ export class MeshRuntimeStore {
 
         if (callsInWindow > maxCalls) {
             const advisory = `Rate limit: ${tool} called ${callsInWindow} times in the last ${windowMs / 1000}s for mesh ${meshId}. `
-                + `Wait for pendingCoordinatorEvents or an explicit user status request before calling again.`;
+                + `Wait for the next coordinator notice (typed into this session, or attached as pendingCoordinatorEvents to every mesh tool response — drained by get_pending_mesh_events) or an explicit user status request before calling again.`;
             return { rateLimitExceeded: true, callsInWindow, advisory };
         }
         return { rateLimitExceeded: false, callsInWindow, advisory: null };

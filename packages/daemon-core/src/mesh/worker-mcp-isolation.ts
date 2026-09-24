@@ -1787,6 +1787,88 @@ export function resolveWorkerMcpIsolation(
     return result;
 }
 
+/**
+ * Short, non-content reason codes for why a worker's MCP server was or was not
+ * delivered at launch. This is the vocabulary `deriveWorkerMcpDeliveryStatus`
+ * classifies `resolveWorkerMcpIsolation`'s outcome into — an enum, never free
+ * text, because `delivered`/`reason` is meant to ride on mesh_status /
+ * mesh_list_nodes session entries and dispatch/claim responses (allow-list
+ * surfaces per CLAUDE.md's server content boundary). The full human-readable
+ * explanation stays in `WorkerMcpIsolation.notes`, which only ever reaches the
+ * daemon's own log.
+ */
+export const WORKER_MCP_DELIVERY_REASONS = [
+    /** Gate off, or this launch was never given mesh bind context — no delivery was ever attempted. */
+    'not_applicable',
+    /** Everything resolved: a server entry plus a live session bind. */
+    'delivered',
+    /** Provider needs a private HOME/config-root and building it threw. */
+    'private_home_failed',
+    /** config_override delivery mode declared, but no server or bind context supplied. */
+    'config_override_missing_context',
+    /** config_override delivery mode declared, but minting the bind or building the descriptor threw. */
+    'config_override_failed',
+    /** Provider declares no `meshCoordinator.mcpConfig.path` at all. */
+    'no_mcp_config_declared',
+    /** Provider's declared config format has no auto-import writer. */
+    'unsupported_config_format',
+    /** Declared path is home-rooted and this provider has no private HOME — refused to touch the coordinator's own config. */
+    'home_rooted_no_private_home',
+    /** Writing the config file itself threw. */
+    'config_write_failed',
+    /** None of the above matched but the isolation object still carries no bind — an unclassified gap, kept distinct from a silent `delivered: true`. */
+    'unknown',
+] as const;
+
+export type WorkerMcpDeliveryReason = typeof WORKER_MCP_DELIVERY_REASONS[number];
+
+/** The allow-list shape this status is carried in on session entries and dispatch/claim responses. */
+export interface WorkerMcpDeliveryStatus {
+    delivered: boolean;
+    /** Present only when `delivered` is false and a bind was actually expected (i.e. not `not_applicable`). */
+    reason?: WorkerMcpDeliveryReason;
+}
+
+/**
+ * Classify what `resolveWorkerMcpIsolation` actually produced into the
+ * coordinator-visible `{ delivered, reason? }` shape.
+ *
+ * `isolation` is the gate's return value for THIS launch (`null` when the
+ * ADHDEV_WORKER_MCP gate is off) and `hadBindContext` is whether the caller
+ * even asked for a worker identity (`input.bindContext` was present) — a
+ * launch with no bind context was never going to deliver anything, and that
+ * is not a failure, so it reads as `not_applicable` rather than `delivered:
+ * false`.
+ */
+export function deriveWorkerMcpDeliveryStatus(
+    isolation: WorkerMcpIsolation | null,
+    hadBindContext: boolean,
+): WorkerMcpDeliveryStatus {
+    if (!hadBindContext) return { delivered: false, reason: 'not_applicable' };
+    if (!isolation) return { delivered: false, reason: 'not_applicable' };
+
+    const delivered = Boolean(isolation.bind) && (isolation.configHasServer === true || !!isolation.delivery);
+    if (delivered) return { delivered: true };
+
+    const notes = isolation.notes.join(' | ');
+    const reason: WorkerMcpDeliveryReason = notes.includes('private HOME unavailable')
+        ? 'private_home_failed'
+        : notes.includes('config_override delivery unavailable')
+            ? 'config_override_missing_context'
+            : notes.includes('config_override delivery failed')
+                ? 'config_override_failed'
+                : notes.includes('no mcpConfig.path declared')
+                    ? 'no_mcp_config_declared'
+                    : notes.includes('is not auto-import writable')
+                        ? 'unsupported_config_format'
+                        : notes.includes('refusing to overwrite the coordinator config')
+                            ? 'home_rooted_no_private_home'
+                            : notes.includes('config write failed')
+                                ? 'config_write_failed'
+                                : 'unknown';
+    return { delivered: false, reason };
+}
+
 // ─── Token exchange (the daemon side of the bind) ───────────────────────
 
 export interface WorkerTokenExchangeResult {

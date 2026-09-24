@@ -45,6 +45,7 @@ import {
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
 import { resolveMeshToolHandler } from './tools/mesh-tool-dispatch.js';
+import { runMeshToolWithPendingEvents } from './tools/mesh-pending-events-attach.js';
 import { validateMeshToolArgs, unknownToolArgsError, enumValueError } from './tools/validate-tool-args.js';
 import { annotateAll } from './tools/tool-annotations.js';
 import {
@@ -356,18 +357,21 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       // compile error rather than a published tool that answers
       // "Unknown tool" at runtime.
       try {
-        let text: string;
+        let run: () => Promise<string>;
         if (name === 'mesh_notify_worker') {
           // Flag-gated rather than alias-shaped: its behaviour depends on a
           // runtime env read, so it cannot be a fixed entry in either table.
-          text = isWorkerMcpEnabled()
+          run = async () => isWorkerMcpEnabled()
             ? await meshNotifyWorker(meshCtx, a as any)
             : JSON.stringify({ success: false, error: 'worker_mcp_disabled' });
         } else {
           const handler = resolveMeshToolHandler(name);
           if (!handler) return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
-          text = await handler(meshCtx, a);
+          run = () => handler(meshCtx, a);
         }
+        // Coordinator notices ride EVERY mesh tool response as
+        // `pendingCoordinatorEvents` (a tool that drained itself is left as is).
+        const text = await runMeshToolWithPendingEvents(meshCtx, run);
         return { content: [{ type: 'text', text }] };
       } catch (err: any) {
         return { content: [{ type: 'text', text: `Error: ${err?.message ?? String(err)}` }], isError: true };

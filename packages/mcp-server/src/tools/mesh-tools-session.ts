@@ -85,6 +85,12 @@ import { evaluateProviderQuotaGate, rankProvidersByQuotaGate } from '@adhdev/dae
 // (yet) re-exported through mesh-tools-internal.ts, imported directly like the
 // quota-gate symbols above.
 import { resolveDispatchMessage } from '@adhdev/daemon-core';
+// GIT-GATE (owner-requested follow-up to H1): the SAME dirty/stale predicates the
+// claim-time gate (mesh-queue-assignment.ts, daemon-side) and the auto-launch spawn gate
+// (mesh-queue-autolaunch.ts) apply — imported rather than reimplemented so a direct
+// dispatch from this MCP tool can never drift onto separate dirty/stale logic. See the
+// re-export note on mesh-auto-fast-forward.ts in daemon-core's index.ts.
+import { isDirtyNode, isMeshNodeFreshEnoughToLaunch, resolveAutoFastForwardPolicy, isTaskReadonly } from '@adhdev/daemon-core';
 // C-W6c: direct-dispatch bookkeeping now drives the NEW turn ledger (C1 reducer)
 // via IPC, instead of the legacy openTurnAttempt/recordTurnAck pair that
 // recordDirectDispatchTask used to trigger in-process. See the design's C2
@@ -553,6 +559,8 @@ export async function meshSendTask(
         delivery_mode?: string; deliveryMode?: string;
         /** GRAPH-MEASUREMENT-DIRECT — optional dispatch-decision record (provenance only). */
         orchestration_decision?: unknown; orchestrationDecision?: unknown;
+        /** GIT-GATE: opt out of the dirty/stale-behind refusal for a non-readonly direct dispatch. */
+        allow_stale_node?: boolean; allowStaleNode?: boolean;
     },
 ): Promise<string> {
     // DELIVERY-MSG-GUARD: make the schema's nominal `required: ['message']` real. The
@@ -708,6 +716,38 @@ export async function meshSendTask(
             error: `Node '${args.node_id}' is a worktree clone; a convergence task is base-only (it merges/pushes onto base). Dispatching it to a worktree session risks a multi-worktree push/deploy race.`,
             nextAction: `Dispatch the convergence task to the base node for this mesh, or run the deterministic fast-forward convergence path (mesh_fast_forward_node / mesh_refine_node) instead of mesh_send_task.`,
         });
+    }
+
+    // GIT-GATE (owner-requested follow-up to H1, wiring-unification): the claim path
+    // (mesh-queue-assignment.ts, daemon-side) already refuses a write claim onto a
+    // dirty/stale-behind node for an ALREADY-idle session, and the auto-launch spawn
+    // gate refuses it before even launching one — but a direct dispatch via
+    // mesh_send_task bypassed both, since it targets a node/session explicitly and
+    // never goes through either gate. Apply the SAME predicates here, fail-closed
+    // unless the caller explicitly opts out with allow_stale_node (e.g. a deliberate
+    // "fix the dirty tree" task). Readonly dispatches are exempt — same write-only
+    // scope as the claim-path gate.
+    const allowStaleNode = args.allow_stale_node === true || args.allowStaleNode === true;
+    if (!allowStaleNode && !isTaskReadonly({ readonly, taskMode })) {
+        const dirty = isDirtyNode(node);
+        const maxBehind = resolveAutoFastForwardPolicy(ctx.mesh).maxBehind;
+        const staleBehind = !isMeshNodeFreshEnoughToLaunch(node, { maxBehind });
+        if (dirty || staleBehind) {
+            const behind = typeof (node as any)?.git?.behind === 'number' ? (node as any).git.behind : undefined;
+            return JSON.stringify({
+                success: false,
+                recoverable: true,
+                code: dirty ? 'dirty_workspace' : 'node_stale_behind_upstream',
+                reason: dirty ? 'dirty_workspace' : 'node_stale_behind_upstream',
+                nodeId: args.node_id,
+                sessionId: args.session_id,
+                taskMode: taskMode || 'unspecified',
+                error: dirty
+                    ? `Node '${args.node_id}' has a dirty workspace (uncommitted changes) — refusing a non-readonly direct dispatch that could race a concurrent edit.`
+                    : `Node '${args.node_id}' is behind its upstream${behind !== undefined ? ` (${behind} commit(s), max ${maxBehind ?? 0})` : ''} — refusing a non-readonly direct dispatch against stale code.`,
+                nextAction: `Let the node's auto fast-forward / clean-up run first, retry with a readonly task_mode, or pass allow_stale_node: true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree).`,
+            });
+        }
     }
 
     let explicitTargetSession: any | undefined;

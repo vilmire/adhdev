@@ -475,9 +475,9 @@ export function buildMeshSystemMessage(args: {
             const stalledMs = typeof args.metadataEvent.stalledMs === 'number' ? args.metadataEvent.stalledMs : undefined;
             const stalledSuffix = stalledMs !== undefined ? ` for ${Math.round(stalledMs / 1000)}s` : '';
             const statusSuffix = observedStatus ? ` (observed status: ${observedStatus})` : '';
-            return `[System] ${args.nodeLabel}: PTY output unchanged${stalledSuffix}${statusSuffix}${metadata}. This is an informational stall — the worker's screen has been static regardless of its reported status; it may be genuinely idle, waiting, or wedged, so this is NOT a failure or auto-restart. Judge whether to inspect it: wait for pendingCoordinatorEvents/a completion event, or make one bounded mesh_read_chat check if you need to see its current screen, then wait again.`;
+            return `[System] ${args.nodeLabel}: PTY output unchanged${stalledSuffix}${statusSuffix}${metadata}. This is an informational stall — the worker's screen has been static regardless of its reported status; it may be genuinely idle, waiting, or wedged, so this is NOT a failure or auto-restart. Judge whether to inspect it: wait for a completion notice (typed into this session, or attached as pendingCoordinatorEvents to every mesh tool response for an MCP-only coordinator — drained by get_pending_mesh_events), or make one bounded mesh_read_chat check if you need to see its current screen, then wait again.`;
         }
-        return `[System] ${args.nodeLabel} is still reported as generating after a long interval${metadata}. Wait for pendingCoordinatorEvents or a completion/status event; if the user explicitly asks for status, make one bounded status check and then wait again.`;
+        return `[System] ${args.nodeLabel} is still reported as generating after a long interval${metadata}. Wait for a completion/status notice (typed into this session, or attached as pendingCoordinatorEvents to every mesh tool response for an MCP-only coordinator — drained by get_pending_mesh_events); if the user explicitly asks for status, make one bounded status check and then wait again.`;
     }
     if (args.event === 'worktree_bootstrap_complete') {
         const worktreePath = readNonEmptyString(args.metadataEvent.worktreePath);

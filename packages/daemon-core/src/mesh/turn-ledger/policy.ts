@@ -35,6 +35,16 @@ export interface TurnPolicy {
      * How long a genuine FSM end of a report-capable mesh worker waits for the
      * structured report before committing weak (R9r → R13r; live rc.40: a Bash
      * tool call showed an idle screen 37 s into a 4-minute turn). Added 2026-09-24.
+     *
+     * Raised 180s → 600s the same day (live run 6 on rc.41): a claude-cli
+     * worker's Bash tool slept 240s; the false-idle opened the hold at +43s,
+     * the OLD 180s ceiling expired it at +223s — 43s before the worker even
+     * resumed (the busy-edge R12r transition never got a chance to fire) and
+     * 48s before its report, so the report landed late against an
+     * already-weak-committed turn. Multi-minute tool calls are normal, and the
+     * hold only ever engages for a session with a live worker-MCP bind (a
+     * reportless session never enters await_report at all — see R9r), so a
+     * longer default costs nothing on the common path.
      */
     awaitReportMs: number;
 }
@@ -48,7 +58,7 @@ export const DEFAULT_TURN_POLICY: Readonly<TurnPolicy> = Object.freeze({
     noTurnDeadlineMs: 900_000,
     stallNoticeMs: 180_000,
     hardCeilingMs: 5_400_000,
-    awaitReportMs: 180_000,
+    awaitReportMs: 600_000,
 });
 
 /** Budgets (counts, not times) — deliberately not env-tunable. */

@@ -506,7 +506,14 @@ export type { WorkspaceDeleteRefusal, WorkspaceInspectReport, WorkspaceSafetySna
 export type { WorkspaceSagaPorts } from './mesh/mesh-graph-workspace-ports.js';
 // Shared node-health resolver + launch gate (single source of truth for the auto-launch
 // gate AND the MAGI fan-out planner — they must agree on what "launchable health" means).
-export { deriveMeshNodeHealthFromGit, resolveEffectiveMeshNodeHealth, isMeshNodeHealthLaunchable } from './mesh/mesh-node-identity.js';
+export { deriveMeshNodeHealthFromGit, resolveEffectiveMeshNodeHealth, isMeshNodeHealthLaunchable, isMeshNodeFreshEnoughToLaunch } from './mesh/mesh-node-identity.js';
+// GIT-GATE (owner-requested follow-up to H1, wiring-unification): the SAME dirty/stale
+// predicates the auto-launch spawn gate applies (mesh-queue-autolaunch.ts), re-exported so
+// mcp-server's mesh_send_task direct-dispatch tool can apply the identical checks before a
+// non-readonly direct dispatch to a node — the two paths (claim-time, in
+// mesh-queue-assignment.ts, and direct-dispatch, in mcp-server) must never drift onto
+// separately-reimplemented logic.
+export { isDirtyNode, resolveAutoFastForwardPolicy } from './mesh/mesh-auto-fast-forward.js';
 export { buildCompactStaleDirectWorkSummary, buildMeshActiveWork, buildMeshActiveWorkSummary, collectPendingApprovals, classifyStaleDirectForPrune, pruneStaleDirectDispatches, PRUNABLE_ORPHAN_STALE_REASONS } from './mesh/mesh-active-work.js';
 export type { StaleDirectPruneClassification, StaleDirectPruneResult, PruneStaleDirectDispatchesOptions } from './mesh/mesh-active-work.js';
 export type { MeshActiveWorkRecord, MeshActiveWorkStatus, MeshActiveWorkSummary, MeshActiveWorkSource, MeshStaleDirectWorkSummary, MeshPendingApproval } from './mesh/mesh-active-work.js';
