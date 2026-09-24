@@ -39,6 +39,7 @@ import { formatTurnLedgerMigrationV2Line } from '../../mesh/turn-ledger/migrate-
 import { formatTurnLedgerMigrationV3Line } from '../../mesh/turn-ledger/migrate-v3.js';
 import { createMeshRuntimeTurnLedger } from '../../mesh/turn-ledger/runtime-ledger.js';
 import { createLateBoundProbePort } from '../../mesh/turn-ledger/scheduler.js';
+import { reconcileOrphanedPlainAttempts, type ReconcileOrphanedPlainAttemptsReport } from '../../mesh/turn-ledger/reconcile.js';
 import { setActiveTurnLedgerForIpc } from '../../commands/low-family/turn-ledger-ipc.js';
 import { createTurnEvidencePort } from '../../providers/turn-evidence-port.js';
 import type { TurnLedger } from '../../mesh/turn-ledger/ledger.js';
@@ -448,4 +449,33 @@ export function bootMeshRuntime(s6: ProjectionsStage): MeshRuntimeStage {
     };
 
     return { ...s6, components, disposeMeshRuntime };
+}
+
+/**
+ * Boot-only orphan closure (wiring-unification follow-up, design §5): a plain
+ * attempt orphaned by a daemon restart (R0a opens it with no hold, unlike a
+ * mesh attempt's `hard_ceiling`) never closes on its own. The caller
+ * (`startLoops`, S8) MUST invoke this exactly once, AFTER
+ * `cliManager.restoreHostedSessions()` has resolved — restore is what
+ * populates `SessionRegistry` for every session that legitimately survived
+ * the restart, so calling this any earlier (e.g. from `wireTurnLedger`/S7,
+ * before S8 even starts) would read an empty/partial registry and
+ * misclassify live, restorable sessions as orphans. `instanceManager` is
+ * checked too (same two-source liveness `resolveProbeLocation` already uses)
+ * so a session tracked only there is never falsely closed.
+ */
+export function reconcileOrphanedPlainAttemptsOnBoot(components: DaemonComponents): ReconcileOrphanedPlainAttemptsReport | null {
+    const ledger = components.turnLedger;
+    if (!ledger) return null;
+    return reconcileOrphanedPlainAttempts({
+        ledger,
+        isSessionLive: (sessionId) => {
+            if (components.sessionRegistry.has(sessionId)) return true;
+            try { return !!components.instanceManager.getInstance(sessionId); } catch { return false; }
+        },
+        log: {
+            info: (m) => LOG.info('TurnLedger', m),
+            warn: (m) => LOG.warn('TurnLedger', m),
+        },
+    });
 }

@@ -40,6 +40,7 @@ import { resolveTurnPolicy } from '../../mesh/turn-ledger/policy.js';
 import { createComponentsProbeReader, type TranscriptAnalyzer, type TranscriptObservation } from '../../mesh/turn-ledger/probe.js';
 import { resolveProbeLocation } from '../../mesh/turn-ledger/targets.js';
 import { startTurnScheduler } from '../../mesh/turn-ledger/scheduler.js';
+import { reconcileOrphanedPlainAttemptsOnBoot } from './mesh-runtime.js';
 
 /**
  * Quota: hydrate the last persisted snapshots, THEN the one-shot boot refresh.
@@ -211,6 +212,13 @@ export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
         } catch (e: any) {
             LOG.warn('Init', `Hosted session restore failed: ${e?.message || e}`);
         }
+    }
+    // Orphaned-plain-attempt closure (wiring-unification follow-up, design §5):
+    // MUST run after restore resolves — restore is what tells this reconciliation
+    // which sessions are legitimately still alive (an earlier check would see an
+    // empty registry and misclassify every one of them as orphaned).
+    try { reconcileOrphanedPlainAttemptsOnBoot(components as TurnWiredComponents); } catch (e: any) {
+        LOG.warn('TurnLedger', `Orphaned-plain-attempt reconciliation failed: ${e?.message || e}`);
     }
 
     scheduleQuotaBootRefresh(components);
