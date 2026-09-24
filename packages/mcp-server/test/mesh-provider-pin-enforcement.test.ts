@@ -5,6 +5,7 @@ import { existsSync, unlinkSync, readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
 import { meshEnqueueTask } from '../src/tools/mesh-tools.js';
+import { ipcDispatchToRemoteAgent } from '../src/tools/mesh-tools-internal.js';
 import { IpcTransport } from '../src/transports/ipc.js';
 import {
   getLedgerDir,
@@ -17,7 +18,9 @@ import { readLocalRecords } from '@adhdev/daemon-core';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // ★PROVIDER-PIN-BYPASS (D2) — `required_tags: ["provider=X"]` was silently bypassed on
-// the enqueue-and-push (`via: p2p_direct`) path.
+// the enqueue-and-push (`via: p2p_direct`) path. (That push is retired since rc.37
+// Finding B — enqueue now delivers only through a claim — but ipcDispatchToRemoteAgent's
+// provider resolution, which the fix hardened, is exercised directly below.)
 //
 // LIVE REPRO (2026-09-21, task 1c225a59, node Jupiter). Three consecutive ledger entries:
 //   ① session_auto_launch  phase=skipped  reason=task_difficulty_floor_unavailable:medium
@@ -59,8 +62,7 @@ function nextMeshId(): string {
 }
 
 /**
- * A transport that satisfies `instanceof IpcTransport` (so meshEnqueueTask takes the
- * cloud eager-push branch) without a websocket. It records every agent_command, which
+ * A transport that satisfies `instanceof IpcTransport` without a websocket. It records every agent_command, which
  * is the signal under test: `agentType` on that command is the provider the task
  * ACTUALLY ran on — the field the live ledger reported as claude-cli.
  *
@@ -115,6 +117,20 @@ function jupiterNode() {
 
 function makeCtx(meshId: string, transport: any, nodes: any[]) {
   return { mesh: { id: meshId, nodes }, transport } as any;
+}
+
+/**
+ * rc.37 Finding B retired the enqueue-and-push, so `meshEnqueueTask` no longer
+ * reaches ipcDispatchToRemoteAgent at all. The provider-resolution half of the pin
+ * fix still lives there (it resolves the concrete provider for every remote send),
+ * so these tests drive it directly with the task's requiredTags.
+ */
+async function dispatchWithTags(ctx: any, node: any, message: string, requiredTags: string[]) {
+  return ipcDispatchToRemoteAgent(ctx, node, {
+    message,
+    ...(requiredTags.length ? { requiredTags } : {}),
+    meshContext: { meshId: ctx.mesh.id, nodeId: node.id, taskId: `t_${randomUUID().slice(0, 8)}` },
+  });
 }
 
 // C-W9a: the records live in the daemon's mesh_local_records (the JSONL mirror retired).
@@ -186,27 +202,19 @@ test('★LIVE REPRO: a provider-pinned task is NOT dispatched to providerPriorit
   const transport = recordingIpcTransport();
   const ctx = makeCtx(meshId, transport, [jupiterNode()]);
 
-  const res = JSON.parse(await meshEnqueueTask(ctx, {
-    message: 'antigravity-pinned work',
-    required_tags: ['provider=antigravity-cli'],
-    difficulty: 'medium',
-  } as any));
-  assert.equal(res.success, true, 'the row still enqueues — the eager push is only an accelerator');
-  await new Promise(resolve => setImmediate(resolve));
+  await dispatchWithTags(ctx, jupiterNode(), 'antigravity-pinned work', ['provider=antigravity-cli']);
 
   const providers = dispatchedProviders(transport);
   assert.ok(
     !providers.includes('claude-cli'),
     `the pinned task must NEVER reach claude-cli (priority[0]); dispatched to: ${JSON.stringify(providers)}`,
   );
-  // The live failure is fully characterized by that one assertion, but state the
-  // positive form too: whatever ran, it satisfied the pin.
   for (const p of providers) {
     assert.equal(p, 'antigravity-cli', `every dispatch must honor the pin; got '${p}'`);
   }
 });
 
-test('★LIVE REPRO: the declined push leaves the task PENDING for the claim path (not failed)', async () => {
+test('enqueue of a pinned task leaves it PENDING and sends nothing — the claim path routes it (rc.37 Finding B)', async () => {
   const meshId = nextMeshId();
   const transport = recordingIpcTransport();
   const ctx = makeCtx(meshId, transport, [jupiterNode()]);
@@ -218,44 +226,25 @@ test('★LIVE REPRO: the declined push leaves the task PENDING for the claim pat
   } as any));
   await new Promise(resolve => setImmediate(resolve));
 
-  // DESIGN DECISION under test: pin-unsatisfiable → stay pending, NOT explicit failure.
-  // A pinned provider that is merely BUSY must wait; only a coordinator can tell a busy
-  // pin from an impossible one, and the claim path enforces the pin per-session anyway.
   assert.equal(res.success, true);
-  assert.equal(res.status, 'pending', 'the task must remain claimable, not be failed by the accelerator');
+  assert.equal(res.status, 'pending', 'the task must remain claimable');
+  assert.deepEqual(dispatchedProviders(transport), [], 'no body is sent at enqueue');
 });
 
-test('★PIN-OBSERVABILITY: a refused eager push is recorded, not silent', async () => {
+test('★PIN-OBSERVABILITY: an unsatisfiable pin is refused with a typed, recoverable reason', async () => {
   const meshId = nextMeshId();
   const transport = recordingIpcTransport();
   const ctx = makeCtx(meshId, transport, [jupiterNode()]);
 
-  await meshEnqueueTask(ctx, {
-    message: 'antigravity-pinned work',
-    required_tags: ['provider=antigravity-cli'],
-    difficulty: 'medium',
-  } as any);
-  await new Promise(resolve => setImmediate(resolve));
-  await new Promise(resolve => setTimeout(resolve, 10));
-
-  const entries = ledgerEntries(meshId);
-  // Whatever the outcome, it must NOT be a task_dispatched onto an unpinned provider —
-  // that is the entry the live incident produced.
-  const wrongDispatch = entries.find(e =>
-    e.kind === 'task_dispatched' && e.payload?.providerType === 'claude-cli');
-  assert.equal(wrongDispatch, undefined,
-    'no task_dispatched may record a provider the task did not pin');
-
-  // And if the push was declined, the decline must have left a trace with a stated
-  // cause — silence would reproduce the defect's worst property.
-  const dispatched = entries.filter(e => e.kind === 'task_dispatched');
-  if (dispatched.length === 0) {
-    const declined = entries.find(e =>
-      e.kind === 'p2p_dispatch_failed' && e.payload?.reason === 'mesh_provider_pin_unsatisfiable');
-    assert.ok(declined, 'a declined eager push must record why — a routing decision with no trace is the original defect');
-    assert.deepEqual(declined.payload.requiredTags, ['provider=antigravity-cli'],
-      'the refusal must name the pin it could not satisfy');
+  const result: any = await dispatchWithTags(ctx, jupiterNode(), 'antigravity-pinned work', ['provider=antigravity-cli']);
+  const providers = dispatchedProviders(transport);
+  if (providers.length === 0) {
+    assert.equal(result.success, false);
+    assert.equal(result.code, 'mesh_provider_pin_unsatisfiable', 'the refusal must state its cause');
+    assert.equal(result.recoverable, true, 'a declined pin leaves the task to the claim path');
   }
+  assert.equal(ledgerEntries(meshId).filter(e => e.kind === 'task_dispatched' && e.payload?.providerType === 'claude-cli').length, 0,
+    'no task_dispatched may record a provider the task did not pin');
 });
 
 test('★PIN-OBSERVABILITY: the enqueue response labels requiredTags as a REQUEST echo', async () => {
@@ -283,11 +272,7 @@ test('CONTROL: an UNPINNED task still falls back to providerPriority[0] (unchang
   const transport = recordingIpcTransport();
   const ctx = makeCtx(meshId, transport, [jupiterNode()]);
 
-  const res = JSON.parse(await meshEnqueueTask(ctx, {
-    message: 'unpinned work', difficulty: 'medium',
-  } as any));
-  assert.equal(res.success, true);
-  await new Promise(resolve => setImmediate(resolve));
+  await dispatchWithTags(ctx, jupiterNode(), 'unpinned work', []);
 
   // THE over-correction guard. With no pin there is no constraint, so the previous
   // behavior must survive byte for byte — a fix that strands unpinned work is worse
@@ -296,7 +281,6 @@ test('CONTROL: an UNPINNED task still falls back to providerPriority[0] (unchang
     dispatchedProviders(transport), ['claude-cli'],
     'an unpinned task must still be dispatched to priority[0] exactly as before',
   );
-  assert.equal(res.providerPin, undefined, 'no pin → no pin advisory');
 });
 
 test('CONTROL: a NON-PROVIDER tag (os=) does not constrain provider selection', async () => {
@@ -304,11 +288,7 @@ test('CONTROL: a NON-PROVIDER tag (os=) does not constrain provider selection', 
   const transport = recordingIpcTransport();
   const ctx = makeCtx(meshId, transport, [jupiterNode()]);
 
-  const res = JSON.parse(await meshEnqueueTask(ctx, {
-    message: 'windows work', required_tags: ['os=win32'], difficulty: 'medium',
-  } as any));
-  assert.equal(res.success, true);
-  await new Promise(resolve => setImmediate(resolve));
+  await dispatchWithTags(ctx, jupiterNode(), 'windows work', ['os=win32']);
 
   // os=/arch=/worktree= are node axes. Reading them as provider constraints would make
   // every platform-tagged task undispatchable.
@@ -323,13 +303,7 @@ test('CONTROL: a SATISFIED pin still dispatches (pinning priority[0] is not bloc
   const transport = recordingIpcTransport();
   const ctx = makeCtx(meshId, transport, [jupiterNode()]);
 
-  const res = JSON.parse(await meshEnqueueTask(ctx, {
-    message: 'claude-pinned work',
-    required_tags: ['provider=claude-cli'],
-    difficulty: 'medium',
-  } as any));
-  assert.equal(res.success, true);
-  await new Promise(resolve => setImmediate(resolve));
+  await dispatchWithTags(ctx, jupiterNode(), 'claude-pinned work', ['provider=claude-cli']);
 
   // A pin that the node CAN honor must behave exactly as an unpinned dispatch would.
   assert.deepEqual(
@@ -358,13 +332,7 @@ test('CONTROL: a pin satisfied by a NON-FIRST slot dispatches to that slot, not 
   const transport = recordingIpcTransport();
   const ctx = makeCtx(meshId, transport, [node]);
 
-  const res = JSON.parse(await meshEnqueueTask(ctx, {
-    message: 'codex-pinned work',
-    required_tags: ['provider=codex-cli'],
-    difficulty: 'medium',
-  } as any));
-  assert.equal(res.success, true);
-  await new Promise(resolve => setImmediate(resolve));
+  await dispatchWithTags(ctx, node, 'codex-pinned work', ['provider=codex-cli']);
 
   const providers = dispatchedProviders(transport);
   assert.ok(!providers.includes('claude-cli'),

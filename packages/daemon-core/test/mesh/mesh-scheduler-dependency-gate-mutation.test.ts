@@ -33,10 +33,9 @@ import { tmpdir } from 'os';
 //         (the INLINE_FORK_PATTERN regex + the gate-call pin, re-implemented here)
 //         FLAGS the mutated copies and PASSES the pristine sources.
 //
-//   The eager-push surface lives in the mcp-server package (node:test runner, no
-//   cross-package module spy), so — exactly as in the invariant suite — it is
-//   covered by the source-text layer only; its runtime behavior is pinned by
-//   oss/packages/mcp-server/test/mesh-dependson-eager-push-gate.test.ts.
+//   The former third surface, the mcp-server's cloud eager P2P push, was retired
+//   (rc.37 Finding B — it delivered unclaimed tasks); the enqueue tools now hand
+//   every task to the claim path, so only the two surfaces below schedule.
 
 const testTmpDir = path.join(tmpdir(), `adhdev-dep-gate-mutation-${randomUUID().slice(0, 8)}`);
 const testConfigDir = path.join(testTmpDir, '.adhdev');
@@ -381,8 +380,6 @@ describe('runtime mutation: inlining dependency logic visibly breaks the gate (d
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = path.resolve(TEST_DIR, '../../src');
-const MCP_TOOLS_QUEUE = path.resolve(TEST_DIR, '../../../mcp-server/src/tools/mesh-tools-queue.ts');
-
 // Same pattern as the invariant suite: `statusById.get(id) === 'completed'`
 // beside a dependsOn scan — readiness computed WITHOUT the predicate.
 const INLINE_FORK_PATTERN = /\b(depStatus|statusById|dependencyStatusById)\s*\.get\([^)]*\)\s*={2,3}\s*'completed'/;
@@ -413,12 +410,6 @@ const SURFACES: SurfaceMutation[] = [
         file: path.join(SRC_ROOT, 'mesh/mesh-queue-autolaunch.ts'),
         gateCall: 'taskDependenciesSatisfied(task, statusById)',
         entryVar: 'task', statusMap: 'statusById', occurrences: 1,
-    },
-    {
-        name: 'cloud eager P2P push (mesh_enqueue_task + mesh_enqueue_batch)',
-        file: MCP_TOOLS_QUEUE,
-        gateCall: 'taskDependenciesSatisfied(task, dependencyStatusById)',
-        entryVar: 'task', statusMap: 'dependencyStatusById', occurrences: 2,
     },
 ];
 

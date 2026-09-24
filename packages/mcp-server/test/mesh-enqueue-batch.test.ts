@@ -4,16 +4,15 @@ import { randomUUID } from 'node:crypto';
 
 import { meshEnqueueBatch } from '../src/tools/mesh-tools.js';
 import { IpcTransport } from '../src/transports/ipc.js';
-import { enqueueTask, getQueue, __writeTaskStatusForTests, upsertMeshMission } from '@adhdev/daemon-core';
+import { getQueue, upsertMeshMission } from '@adhdev/daemon-core';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // G5 — mesh_enqueue_batch: atomic multi-task graph submission.
 //   The tool must (a) insert ALL tasks or NONE (a mid-batch cycle / unknown ref /
 //   invalid difficulty rolls the batch back), (b) resolve batch-local refs to the
 //   generated task ids with forward references allowed, and (c) on the cloud
-//   IpcTransport path eager-push ONLY the roots — dependents stay gated by the
-//   same taskDependenciesSatisfied predicate as the queue claim
-//   (DEPENDSON-GATE-SYMMETRY).
+//   IpcTransport path push NOTHING at enqueue — every task reaches a session only
+//   through the daemon's queue claim (rc.37 Finding B).
 
 const NODE_MAC = 'node_mac_base';
 const NODE_WIN = 'node_win_base';
@@ -22,8 +21,7 @@ function nextMeshId(): string {
   return `mesh_enqueue_batch_${randomUUID().slice(0, 8)}`;
 }
 
-// Same recording double as mesh-dependson-eager-push-gate.test.ts: passes the
-// `instanceof IpcTransport` branch selector without a real websocket.
+// A recording double that passes `instanceof IpcTransport` without a real websocket.
 function recordingIpcTransport() {
   const commands: Array<{ cmd: string; args: any }> = [];
   const meshCommands: Array<{ daemonId: string; cmd: string; args: any }> = [];
@@ -42,7 +40,7 @@ function recordingIpcTransport() {
   return t;
 }
 
-// A local (non-IPC) transport: only the queue trigger runs, no eager push branch.
+// A local (non-IPC) transport: only the queue trigger runs.
 function recordingLocalTransport() {
   const commands: Array<{ cmd: string; args: any }> = [];
   return {
@@ -192,7 +190,10 @@ test('MISSION-UPSERT-SILENT-CREATE: an unresolvable per-entry mission_id rejects
   assert.equal(getQueue(meshId).length, 0, 'atomic — the valid entry must not be inserted either');
 });
 
-test('IpcTransport: only ROOTS are eager-pushed; dependents are deferred (gate symmetry)', async () => {
+// rc.37 Finding B: the IpcTransport "enqueue-and-push" is retired — a batch (roots
+// included) reaches a session only through the daemon's queue claim, never as a
+// direct P2P agent_command from the enqueue tool.
+test('IpcTransport: a batch sends NO agent_command at enqueue — delivery is only through a claim', async () => {
   const meshId = nextMeshId();
   const transport = recordingIpcTransport();
   const ctx = makeCtx(meshId, transport);
@@ -202,34 +203,15 @@ test('IpcTransport: only ROOTS are eager-pushed; dependents are deferred (gate s
       { ref: 'child', message: 'dependent work', depends_on: ['root'], difficulty: 'easy' },
     ],
   } as any));
+  await new Promise(resolve => setImmediate(resolve));
 
   assert.equal(res.success, true);
-  assert.equal(res.eagerPushDeferred, 1, 'exactly the dependent must be deferred');
-  assert.equal(res.eagerPushDeferredReason, 'dependencies_unsatisfied');
-  const rootTaskId = (res.tasks.find((t: any) => t.ref === 'root') as any).taskId;
-  // Every remote-dispatch attempt must reference the ROOT task only — the dependent
-  // must never reach a remote session before its prerequisite completes.
-  for (const mc of transport.meshCommands) {
-    const taskId = mc?.args?.meshContext?.taskId;
-    if (taskId) assert.equal(taskId, rootTaskId);
-  }
-});
-
-test('a dependency on an already-COMPLETED existing task counts as satisfied for the push gate', async () => {
-  const meshId = nextMeshId();
-  const done = enqueueTask(meshId, 'already finished prerequisite', { difficulty: 'easy' });
-  __writeTaskStatusForTests(meshId, done.id, 'completed');
-
-  const transport = recordingIpcTransport();
-  const ctx = makeCtx(meshId, transport);
-  const res = JSON.parse(await meshEnqueueBatch(ctx, {
-    tasks: [
-      { ref: 'next', message: 'runs right away', depends_on: [done.id], difficulty: 'easy' },
-    ],
-  } as any));
-
-  assert.equal(res.success, true);
-  assert.equal(res.eagerPushDeferred, undefined, 'a satisfied dependency must not defer the push');
+  assert.equal(res.eagerPushDeferred, undefined, 'there is no eager push left to defer');
+  assert.equal(
+    transport.meshCommands.filter((c: any) => c.cmd === 'agent_command').length, 0,
+    'no task body may reach a remote session before a claim opened its attempt',
+  );
+  for (const t of res.tasks) assert.equal(t.status, 'pending', `${t.ref} stays pending until a session claims it`);
 });
 
 test('empty and over-shaped input fail loudly without touching the queue', async () => {

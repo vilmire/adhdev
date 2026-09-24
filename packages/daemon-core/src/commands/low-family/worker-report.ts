@@ -29,13 +29,15 @@
  * `taskId` argument on purpose, because an argument can be wrong and a lookup
  * cannot (design §4: "워커가 taskId 를 인자로 넣지 않는다").
  */
-import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
 import { stripRouterInternalArgs } from '../router-internal-args.js';
+import { readMeshNodeDaemonId } from '../../mesh/mesh-node-identity.js';
 import { currentMeshAttemptRef } from '../../providers/cli-provider-mesh-assignment.js';
 import { LOG } from '../../logging/logger.js';
 import type {
+    ForwardedReportSender,
     ForwardedWorkerReportClaim,
     RemoteWorkerIdentity,
     WorkerAssignmentStamp,
@@ -48,6 +50,17 @@ import type {
  * (`dispatchMeshCommand` → the owner's `handleMeshCommand`, source `mesh`).
  */
 export const WORKER_REPORT_FORWARD_COMMAND = 'worker_report_forwarded';
+
+/**
+ * rc.37 Finding A: the router-internal arg the OWNER's mesh transport stamps
+ * with the daemon id of the authenticated P2P peer a command arrived from
+ * (daemon-cloud `CloudCommandTransports.handleMeshCommand`, applied as a
+ * `withMeshDirectDispatch` extra so it OVERRIDES anything the peer put in its
+ * args). Leading underscore = router-internal: strict decoders strip it, and
+ * no wire contract carries it. The forwarded-report handler authorises on it
+ * (the sender must own the node the owner assigned the task to).
+ */
+export const MESH_SENDER_DAEMON_ID_ARG = '_meshSenderDaemonId';
 
 function readNonEmpty(value: unknown): string {
     return typeof value === 'string' ? value.trim() : '';
@@ -106,6 +119,27 @@ export async function resolveRemoteWorker(ctx: LowFamilyContext, args: any): Pro
         readAssignmentStamp: assignmentStampReader(ctx),
         isSelfDaemon: (daemonId) => daemonIdsEquivalent(daemonId, selfDaemonId),
     });
+}
+
+/**
+ * The OWNER's roster answer to "which daemon owns node X?" for one mesh —
+ * resolved once per forwarded report from the router's mesh view (inline cache
+ * first, then local config), through the shared multi-form daemon-id reader.
+ * An unresolvable mesh yields a lookup that knows no node (fail-closed:
+ * `node_unresolved`).
+ */
+async function ownerRosterNodeDaemonLookup(ctx: LowFamilyContext, meshId: string): Promise<(nodeId: string) => string | undefined> {
+    let nodes: any[] = [];
+    try {
+        const record = await ctx?.getMeshForCommand?.(meshId, undefined, { preferInline: true });
+        nodes = Array.isArray(record?.mesh?.nodes) ? record!.mesh.nodes : [];
+    } catch {
+        nodes = [];
+    }
+    return (nodeId: string) => {
+        const node = nodes.find((n: any) => meshNodeIdMatches(n, nodeId));
+        return node ? readMeshNodeDaemonId(node) : undefined;
+    };
 }
 
 /** The command-layer answer for a report result — identical for local and forwarded reports. */
@@ -202,7 +236,7 @@ async function forwardReportToOwner(
     if (!answer) {
         return { success: false, error: 'forward_failed', detail: 'the owner daemon returned no report result', hint: 'Nothing was recorded — call again.' };
     }
-    LOG.info('WorkerReport', `Forwarded ${report.outcome} report for session ${remote.sessionId} (task ${remote.taskId ?? '?'} attempt ${remote.attemptId ?? '?'}) to owner ${remote.ownerDaemonId.slice(0, 16)} → ${answer.success === true ? 'accepted' : `refused (${String(answer.error)})`}`);
+    LOG.info('WorkerReport', `Forwarded ${report.outcome} report for session ${remote.sessionId} (task ${remote.taskId ?? '?'} attempt ${remote.attemptId ?? '?'}) to owner ${remote.ownerDaemonId.slice(0, 16)} → ${answer.success === true ? 'accepted' : `refused (${String(answer.error)}${typeof answer.detail === 'string' && answer.detail ? ` — ${answer.detail}` : ''})`}`);
     return answer;
 }
 
@@ -324,13 +358,31 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
     [WORKER_REPORT_FORWARD_COMMAND]: async (_ctx: LowFamilyContext, args: any) => {
         const decoded = decodeForwardedWorkerReport(args);
         if (!decoded) return { success: false, error: `${WORKER_REPORT_FORWARD_COMMAND}: request failed decode (bad shape)` };
+        const { claim } = decoded;
+        const senderDaemonId = readNonEmpty(args?.[MESH_SENDER_DAEMON_ID_ARG]);
+        const claimLabel = `session ${claim.sessionId} (claimed task ${claim.taskId ?? '?'} attempt ${claim.attemptId ?? '?'}) from ${senderDaemonId ? senderDaemonId.slice(0, 20) : 'an unidentified daemon'}`;
         try {
             const { validateWorkerCompletionReport, acceptForwardedWorkerCompletionReport } =
                 await import('../../mesh/worker-report.js');
             const { report, errors } = validateWorkerCompletionReport(decoded.report);
-            if (!report) return { success: false, error: 'invalid_report', validationErrors: errors };
-            return toReportResponse(acceptForwardedWorkerCompletionReport(decoded.claim, report, { isSelfDaemon: selfDaemonPredicate(_ctx) }));
+            if (!report) {
+                LOG.warn('WorkerReport', `Forwarded report for ${claimLabel} refused: invalid_report (${errors.length} validation error(s))`);
+                return { success: false, error: 'invalid_report', validationErrors: errors };
+            }
+            const sender: ForwardedReportSender = {
+                senderDaemonId,
+                nodeDaemonId: await ownerRosterNodeDaemonLookup(_ctx, claim.meshId),
+            };
+            const result = acceptForwardedWorkerCompletionReport(claim, report, { sender, isSelfDaemon: selfDaemonPredicate(_ctx) });
+            // ONE owner-side line per forwarded report (the refusal used to be silent).
+            if (result.accepted) {
+                LOG.info('WorkerReport', `Forwarded ${report.outcome} report for ${claimLabel} → accepted as task ${result.taskId} attempt ${result.attemptId ?? '?'}${result.late ? ` (late, after ${result.late.terminalOutcome})` : ''}${result.duplicate ? ' (duplicate)' : ''}`);
+            } else {
+                LOG.warn('WorkerReport', `Forwarded ${report.outcome} report for ${claimLabel} → refused ${result.refusal}${result.detail ? ` — ${result.detail}` : ''}`);
+            }
+            return toReportResponse(result);
         } catch (e: any) {
+            LOG.warn('WorkerReport', `Forwarded report for ${claimLabel} failed: ${e?.message || e}`);
             return { success: false, error: e?.message || String(e) };
         }
     },

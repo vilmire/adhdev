@@ -310,7 +310,7 @@ test('E-2 ★ OLD PATH GREEN: a plain depends_on batch creates NO graph and bloc
     assert.deepEqual(fix.dependsOn, [investigate.id]);
 });
 
-test('E-2 ★ OLD PATH GREEN: eager push still fires for roots and defers dependents', async () => {
+test('E-2 ★ OLD PATH GREEN: a batch pushes nothing at enqueue — roots and dependents wait for a claim (rc.37 Finding B)', async () => {
     const meshId = nextMeshId();
     const transport = recordingIpcTransport();
     const ctx = makeCtx(meshId, transport);
@@ -320,9 +320,10 @@ test('E-2 ★ OLD PATH GREEN: eager push still fires for roots and defers depend
             { ref: 'child', message: 'child work', depends_on: ['root'], difficulty: 'easy' },
         ],
     } as any));
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(res.success, true);
-    assert.equal(res.eagerPushDeferred, 1, 'the dependent must be deferred, the root pushed');
-    assert.ok(transport.meshCommands.length > 0, 'the root must still be eager-pushed');
+    assert.equal(res.eagerPushDeferred, undefined, 'there is no eager push left to defer');
+    assert.equal(transport.meshCommands.filter((c: any) => c.cmd === 'agent_command').length, 0, 'no body is sent at enqueue');
 });
 
 test('E-2: on_dependency_failure is PERSISTED on the graph row (C3 left this to E)', async () => {

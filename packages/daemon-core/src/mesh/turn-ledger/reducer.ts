@@ -356,7 +356,13 @@ function commit(
         outcome, strength, reason, source: ev.source, ...(summary ? { summary } : {}),
     });
     releaseHolds(draft, '*');
-    if (attempt.scope === 'mesh_queue' && attempt.meshId && attempt.taskId) {
+    // Both mesh scopes carry a queue row: `mesh_queue` owns one, and a
+    // `mesh_direct` dispatch materialises one pre-assigned
+    // (`recordDirectDispatchTask`) for mission attribution + status. Gating this
+    // on `mesh_queue` alone left a committed direct dispatch's row `assigned`
+    // forever (live, rc.37: task 2cb0ab79). A direct attempt with no row is a
+    // no-op at the host (`applyTaskTerminalInTxn` finds no entry).
+    if (isMeshScope(attempt) && attempt.meshId && attempt.taskId) {
         draft.effects.push({ kind: 'queue_status', meshId: attempt.meshId, taskId: attempt.taskId, status: outcome, reason });
         draft.effects.push({ kind: 'graph_advance', meshId: attempt.meshId, taskId: attempt.taskId, outcome });
     }

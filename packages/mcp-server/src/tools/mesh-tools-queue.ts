@@ -12,7 +12,6 @@ import {
     buildActiveWorkPollingGuidance,
     buildCompactQueueMaintenanceReport,
     buildCompactStaleDirectWorkSummary,
-    buildMeshNodeCapabilityTags,
     buildQueueMaintenanceReport,
     buildQueueStatusSummary,
     buildMissionInactiveWarning,
@@ -30,11 +29,7 @@ import {
     normalizeMeshTaskPriority,
     resolveNotBefore,
     filterQueueForView,
-    ipcDispatchToRemoteAgent,
-    isLocalControlPlaneNode,
-    isMeshNodeHealthLaunchable,
     meshNodeIdMatches,
-    nodeSatisfiesRequiredTags,
     normalizeMeshCapabilityTags,
     providerPinsFromRequiredTags,
     normalizeQueueViewMode,
@@ -47,25 +42,22 @@ import {
     readQueueFromDaemon,
     recordMeshCoordinatorToolCall,
     refreshMeshFromDaemon,
-    resolveCoordinatorDaemonId,
     resolvePreferredWorktreeNodeId,
     sanitizeQueueStatusFilter,
     summarizeTaskMessage,
-    taskDependenciesSatisfied,
     triggerMeshQueueAndReport,
     unwrapCommandPayload,
 } from './mesh-tools-internal.js';
-// MESH-IMAGE-DISPATCH / F1: view-surface projection and worker-protocol footer
-// materialization — not (yet) re-exported through mesh-tools-internal.ts,
+// MESH-IMAGE-DISPATCH: view-surface projection — not (yet) re-exported through mesh-tools-internal.ts,
 // imported directly from the package like the other daemon-core symbols
 // mesh-tools-internal.ts itself imports.
-import { summarizeQueueEntryInputForView, resolveDispatchMessage, type DispatchableTask } from '@adhdev/daemon-core';
+import { summarizeQueueEntryInputForView } from '@adhdev/daemon-core';
 import { buildGraphPlanShape } from './mesh-tools-graph.js';
 // C-W9a: the queue and the records are the daemon's — every read and mutation
 // below goes over its IPC commands (the mcp-server never opens mesh-runtime.db).
 // C-W9c: + mission_query (mission_id existence check) and orphaned_pin_notify
 // (CANCEL-ORPHANS-PINNED-TASK) — the last in-process daemon-core calls this file made.
-import { missionQuery, orphanedPinNotify, queueCancel, queueEnqueue, queueEnqueueGraph, queueQuery, queueRequeue, recordLocal } from '../ipc/turn-commands.js';
+import { missionQuery, orphanedPinNotify, queueCancel, queueEnqueue, queueEnqueueGraph, queueRequeue } from '../ipc/turn-commands.js';
 import { MESH_TASK_GRAPH_MAX_TASKS } from '@adhdev/daemon-core';
 import type { MeshGraphPlanResult, MeshWorkQueueEntry } from '@adhdev/daemon-core';
 import type { GraphTaskFieldsShape, GraphWorkspaceDeclarationShape } from './mesh-tools-graph.js';
@@ -182,6 +174,8 @@ interface EnqueueTaskArgsShape {
     difficulty?: string;
     notBefore?: string | number; not_before?: string | number;
     maxRetries?: number; max_retries?: number;
+    /** H1 (path ownership) — see mesh-work-queue.ts MeshEnqueueTaskOptions.ownedPaths. */
+    owned_paths?: unknown; ownedPaths?: unknown;
 }
 
 interface NormalizedEnqueueTaskArgs {
@@ -202,6 +196,8 @@ interface NormalizedEnqueueTaskArgs {
     explicitTargetRaw: string | undefined;
     preferWorktree: boolean;
     targetNodeId: string | undefined;
+    /** H1: raw declaration, normalized/validated by the daemon's enqueueTask. */
+    ownedPaths: unknown[] | undefined;
 }
 
 type NormalizeEnqueueTaskResult =
@@ -325,66 +321,32 @@ async function normalizeEnqueueTaskArgs(
     } else if (preferWorktree) {
         targetNodeId = resolvePreferredWorktreeNodeId(ctx) || undefined;
     }
+    // H1 (path ownership): the mesh_enqueue_task schema has always advertised
+    // owned_paths, but this normalizer dropped it, so an enqueued task never carried
+    // its declaration (rc.37: task 5470f2e1's row had no ownedPaths while the
+    // mesh_send_task row beside it did) and the claim-time overlap gate could not
+    // fire for it. Same raw-array passthrough mesh_send_task uses; the daemon's
+    // enqueueTask normalizes and rejects bad paths.
+    const rawOwnedPaths = args.ownedPaths ?? args.owned_paths;
+    const ownedPaths = Array.isArray(rawOwnedPaths) ? rawOwnedPaths : undefined;
     return {
         ok: true,
         value: {
             message, taskMode, input, readonly, requiredTags, dependsOn, missionId, priority,
             model, thinkingLevel, difficulty, notBefore, maxRetries,
-            explicitTargetRaw, preferWorktree, targetNodeId,
+            explicitTargetRaw, preferWorktree, targetNodeId, ownedPaths,
         },
     };
 }
 
-/**
- * EAGERPUSH-FANOUT-FENCE (R1) — select the SINGLE remote node that may receive the
- * eager P2P push for one task.
- *
- * Before this fence the caller looped over every remote node and pushed to each one
- * that satisfied requiredTags. For a TARGETED task that was already a single node
- * (the `targetNodeId && node.id !== targetNodeId` skip), but an UNTARGETED task was
- * BROADCAST to the whole fleet: every eligible machine's daemon received the same
- * taskId and injected it into an idle session. Observed live — one readonly task ran
- * to completion on two machines at once. Had it been a write task that is a double
- * commit, and it bypasses daemon-core's write guards (nodeConflictAllows /
- * convergenceAllows) entirely, because those guard the queue-CLAIM path inside one
- * daemon process and cannot see a push another process already made.
- *
- * A task is a single unit of work with a single assignee, so the push must name one
- * receiver. Selection is deliberately simple — the first eligible node in mesh order —
- * because this is a best-effort accelerator, not the scheduler: if the chosen node
- * cannot actually take the task, the row stays `pending` and the queue-claim path
- * (which owns the real fitness/slot/difficulty logic in daemon-core) hands it to
- * whichever node claims it. Picking a poor receiver costs a delay; picking several
- * costs duplicate execution. Order is mesh-node order, which is stable for a given
- * snapshot, so the choice is deterministic rather than racy.
- *
- * Eligibility is the pre-existing predicate (not local, has a daemonId, satisfies
- * requiredTags, honours a target pin) plus a health check, so an offline node is not
- * chosen as the single receiver while an online peer is skipped — with a fan-out that
- * could not happen, since every eligible node got a copy.
- *
- * ★PROVIDER-PIN-BYPASS SCOPE NOTE (D2). The requiredTags test here is deliberately the
- * NODE-level one (`buildMeshNodeCapabilityTags(node)` with no provider pinned), which
- * asks "could some provider on this node satisfy the pin?". That is the correct
- * question for choosing a RECEIVER, and it must stay this shape — narrowing it here
- * would make the accelerator refuse nodes the queue-claim path would happily use.
- * What was missing is that the answer is NOT a guarantee the dispatch will run on the
- * pinned provider: a node declaring [claude-cli, antigravity-cli] passes a
- * provider=antigravity-cli pin on the strength of a slot the dispatch may never
- * select. Honoring the pin is therefore ipcDispatchToRemoteAgent's job (it is the code
- * that picks the concrete provider), and the caller now hands it requiredTags so it
- * can. Do not "fix" the bypass by tightening this predicate instead.
- *
- * Returns null when no node is eligible; the task then simply waits for the queue.
- */
 /**
  * ★PIN-OBSERVABILITY (D2) — tell the coordinator that `requiredTags` in this response
  * is its own REQUEST echoed back, not a confirmation.
  *
  * ★WHY THIS EXISTS. The enqueue response has always echoed `requiredTags: task.requiredTags`.
  * A coordinator reading it naturally concludes the pin is in force — but the response is
- * written BEFORE any dispatch happens (the eager push is fire-and-forget, and an untargeted
- * task may be claimed minutes later by a different node entirely). When a provider pin was
+ * written BEFORE any dispatch happens (a task may be claimed minutes later, by a node the
+ * queue drain picks). When a provider pin was
  * silently bypassed downstream, this echo is what made it invisible: the request said
  * antigravity-cli, the response said antigravity-cli, and only `task_dispatched.providerType`
  * in the ledger — which nobody had reason to check — said claude-cli.
@@ -398,161 +360,8 @@ function buildProviderPinAdvisory(requiredTags: string[]): Record<string, unknow
     if (!pins.length) return {};
     return {
         providerPin: pins,
-        providerPinHint: `requiredTags above is the REQUEST as parsed, not a dispatch confirmation — the provider is chosen later, when a node claims or the eager push lands. To verify the pin was honored, read the task's task_dispatched ledger entry: its providerType is the provider that actually ran, and it now carries requiredTags alongside. A refused eager push records p2p_dispatch_failed with reason 'mesh_provider_pin_unsatisfiable' and leaves the task pending for the claim path.`,
+        providerPinHint: `requiredTags above is the REQUEST as parsed, not a dispatch confirmation — the provider is chosen later, when a node's session claims the task. To verify the pin was honored, read the task's task_dispatched ledger entry: its providerType is the provider that actually ran.`,
     };
-}
-
-function selectEagerPushReceiver(
-    ctx: MeshContext,
-    targetNodeId: string | undefined,
-    requiredTags: string[],
-): MeshContext['mesh']['nodes'][number] | null {
-    const eligible = ctx.mesh.nodes.filter(node => {
-        if (isLocalControlPlaneNode(ctx, node) || !node.daemonId) return false;
-        // When the task targets a specific node, only that node's daemon
-        // should receive the P2P push; others would steal the work.
-        if (targetNodeId && node.id !== targetNodeId) return false;
-        return nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(node));
-    });
-    if (eligible.length === 0) return null;
-    // Prefer a node we believe is reachable; 'unknown' health counts as launchable, so a
-    // node with no telemetry is not excluded. If none is launchable, fall back to the
-    // first eligible node rather than dropping the push — the queue still backs it up.
-    return eligible.find(node => isMeshNodeHealthLaunchable(node)) ?? eligible[0];
-}
-
-/**
- * IpcTransport (Cloud Mesh) enqueue-and-push: directly P2P-dispatch a just-enqueued
- * task to ONE remote node's idle session (the local queue file is invisible to other
- * machines' daemons). Shared by mesh_enqueue_task and mesh_enqueue_batch — the
- * caller is responsible for the DEPENDSON-GATE-SYMMETRY check (only push a task
- * whose dependencies are already satisfied). Returns fire-and-forget promises
- * (0 or 1 element; an array keeps both call sites' spread/concat shape).
- */
-async function eagerPushTaskToRemoteNodes(
-    ctx: MeshContext,
-    task: DispatchableTask,
-    message: string,
-    targetNodeId: string | undefined,
-    requiredTags: string[],
-    coordinatorDaemonId: string | undefined,
-): Promise<Promise<void>[]> {
-    const dispatchPromises: Promise<void>[] = [];
-    // EAGERPUSH-STATUS-RECHECK (R3): re-read the row's LIVE status immediately before
-    // pushing. The caller enqueued it moments ago, but the local queue drain
-    // (triggerMeshQueueAndReport) runs in between and a local node may already have
-    // claimed it — pushing then injects an ALREADY-ASSIGNED task into a second session,
-    // reproducing the double-execution this fence exists to stop. Only a still-`pending`
-    // row may be eager-pushed. Anything else (assigned/completed/cancelled/failed) is
-    // someone else's work now. Best-effort read: if the row is missing from the queue
-    // (never expected — we just inserted it) we do not push, the fail-closed direction.
-    const liveStatus = (await queueQuery(ctx.transport, { meshId: ctx.mesh.id, taskId: task.id }).catch(() => ({ entries: [] }))).entries[0]?.status;
-    if (liveStatus !== 'pending') return dispatchPromises;
-
-    const node = selectEagerPushReceiver(ctx, targetNodeId, requiredTags);
-    if (node) {
-        // MISROUTE-INJECT-SPLIT: stamp meshContext (nodeId) onto the eager P2P push so the
-        // worker's agent_command handler scopes it to THIS node's session via the
-        // fail-closed findMeshNodeAdapter, instead of the provider-only fuzzy fallback that
-        // can land a freshly-launched worktree node's task on a co-located idle BASE session
-        // (the base-leak). Without nodeId the receiver's meshScopeNodeId is empty and it falls
-        // through to findAdapter's first-same-cliType match. The queue-claim path already
-        // carries this context; the enqueue-and-push path was the only dispatch missing it.
-        dispatchPromises.push(
-            ipcDispatchToRemoteAgent(ctx, node, {
-                // F1: materialize the worker-protocol footer (and any relevant handoff
-                // notes) onto the DISPATCHED body only — the ledger/dispatch rows below
-                // keep the authored `message` (see summarizeTaskMessage(message) further
-                // down, which must describe what the coordinator wrote, not the footer).
-                message: resolveDispatchMessage({ ...task, message }, ctx.mesh.id, node),
-                // ★PROVIDER-PIN-BYPASS (D2): carry the pin INTO provider resolution.
-                // selectEagerPushReceiver above only answered "could some provider on
-                // this node satisfy the pin?" — a node-level question. Without the tags
-                // here, ipcDispatchToRemoteAgent then re-derived the provider from
-                // providerPriority[0] and could land the task on an unpinned provider
-                // while the ledger recorded the pin as honored (live: an
-                // antigravity-cli-pinned task ran on claude-cli).
-                ...(requiredTags.length ? { requiredTags } : {}),
-                meshContext: {
-                    meshId: ctx.mesh.id,
-                    nodeId: node.id,
-                    taskId: task.id,
-                    ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
-                },
-            })
-                .then(async result => {
-                    if (result.success) {
-                        try {
-                            const providerType = result.providerType;
-                            const descriptor = summarizeTaskMessage(message);
-                            await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
-                                kind: 'task_dispatched',
-                                nodeId: node.id,
-                                sessionId: result.sessionId,
-                                providerType,
-                                payload: {
-                                    source: 'queue',
-                                    via: 'p2p_direct',
-                                    taskId: task.id,
-                                    message,
-                                    taskTitle: descriptor.taskTitle,
-                                    taskSummary: descriptor.taskSummary,
-                                    ...(task.taskMode ? { taskMode: task.taskMode } : {}),
-                                    ...(providerType ? { providerType } : {}),
-                                    targetSessionId: result.sessionId,
-                                    // ★PIN-OBSERVABILITY: record the pin ALONGSIDE the provider
-                                    // actually dispatched to, so "was the pin honored?" is answerable
-                                    // from one entry. Previously the only trace of a pin was the
-                                    // enqueue response echoing back the REQUESTED tags, which says
-                                    // nothing about what happened — the live bypass was invisible
-                                    // until someone compared providerType against the request by eye.
-                                    ...(requiredTags.length ? { requiredTags } : {}),
-                                },
-                            });
-                        } catch { /* best-effort */ }
-                    } else if ((result as any)?.code === 'mesh_provider_pin_unsatisfiable') {
-                        // ★PIN-OBSERVABILITY: a REFUSED eager push is a routing fact, not a
-                        // transport error. Record it as its own ledger kind so the task sitting
-                        // `pending` has a stated cause — silence here would reproduce the original
-                        // defect's worst property (a routing decision with no trace).
-                        try {
-                            await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
-                                kind: 'p2p_dispatch_failed',
-                                nodeId: node.id,
-                                payload: {
-                                    source: 'queue',
-                                    via: 'p2p_direct',
-                                    taskId: task.id,
-                                    reason: 'mesh_provider_pin_unsatisfiable',
-                                    requiredTags,
-                                    ...((result as any).resolvedProviderType
-                                        ? { resolvedProviderType: (result as any).resolvedProviderType } : {}),
-                                    error: (result as any).error,
-                                    eagerPushDeclined: true,
-                                    dispatchFailedAt: new Date().toISOString(),
-                                },
-                            });
-                        } catch { /* best-effort */ }
-                    }
-                })
-                .catch(async (err: any) => {
-                    try {
-                        await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
-                            kind: 'p2p_dispatch_failed',
-                            nodeId: node.id,
-                            payload: {
-                                source: 'queue',
-                                via: 'p2p_direct',
-                                taskId: task.id,
-                                error: err?.message || String(err),
-                                dispatchFailedAt: new Date().toISOString(),
-                            },
-                        });
-                    } catch { /* best-effort */ }
-                }),
-        );
-    }
-    return dispatchPromises;
 }
 
 export async function meshEnqueueTask(
@@ -579,7 +388,7 @@ export async function meshEnqueueTask(
     const {
         message, taskMode, input, readonly, requiredTags, dependsOn, missionId, priority,
         model, thinkingLevel, difficulty, notBefore, maxRetries,
-        explicitTargetRaw, preferWorktree, targetNodeId,
+        explicitTargetRaw, preferWorktree, targetNodeId, ownedPaths,
     } = normalized.value;
     // G4: duplicate detection. Default is warn-only; block is opt-in (block_duplicate=true).
     // allow_duplicate=true silences the warning entirely (explicit intentional re-enqueue).
@@ -649,6 +458,7 @@ export async function meshEnqueueTask(
                 ...(difficulty ? { difficulty } : {}),
                 ...(notBefore ? { notBefore } : {}),
                 ...(maxRetries !== undefined ? { maxRetries } : {}),
+                ...(ownedPaths ? { ownedPaths } : {}),
                 ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
             },
             decision: {
@@ -678,79 +488,37 @@ export async function meshEnqueueTask(
             ...(task.maxRetries !== undefined ? { maxRetries: task.maxRetries } : {}),
         };
 
-        // ── LocalTransport: queue-based pull (standalone daemon, all local) ─────
-        if (!(ctx.transport instanceof IpcTransport)) {
-            const queueTrigger = await triggerMeshQueueAndReport(ctx);
-            return JSON.stringify({
-                success: true,
-                source: 'queue',
-                taskId: task.id,
-                status: task.status,
-                taskMode: task.taskMode,
-                requiredTags: task.requiredTags,
-                ...buildProviderPinAdvisory(requiredTags),
-                ...enqueueEcho,
-                ...(targetNodeId ? { targetNodeId } : {}),
-                ...(preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {}),
-                ...duplicateWarning,
-                ...missionWarning,
-                ...worktreeAdvisory,
-                ...orchestrationWarning,
-                queueTrigger,
-                ...buildQueueTriggerGuidance(queueTrigger),
-            });
-        }
-
-        // ── IpcTransport (Cloud Mesh): the queue file lives on THIS machine only.
-        //    Remote daemons on other machines cannot read the local queue file.
-        //    Strategy: trigger local queue for local nodes, and for remote nodes
-        //    directly P2P-dispatch to the first idle session found (enqueue-and-push).
-        {
-            // 1. Trigger local queue for local node pick-up
-            const queueTrigger = await triggerMeshQueueAndReport(ctx);
-
-            // 2. For each remote node, directly dispatch to an idle session via P2P
-            //
-            // DEPENDSON-GATE-SYMMETRY: gate the eager push with the SAME predicate the
-            // queue-claim (claimNextQueueTask) and auto-launch paths use. If the task we
-            // just enqueued still has unmet dependencies (or a system block), pushing it
-            // straight to a remote idle session would bypass the gate the pull path
-            // enforces and run the task BEFORE its prerequisites. Defer it entirely to the
-            // queue drain (claim path), which re-evaluates the same predicate once the
-            // dependency completes. Tasks with no dependsOn are unaffected (predicate is
-            // true), preserving the prior eager-push behavior. The status index spans the
-            // FULL queue (incl. completed) so terminal dependency states are visible.
-            const dependencyStatusById = new Map(
-                (await readQueueFromDaemon(ctx)).map(t => [t.id, t.status] as const),
-            );
-            const eagerPushDeferred = !taskDependenciesSatisfied(task, dependencyStatusById);
-            const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
-            const dispatchPromises: Promise<void>[] = eagerPushDeferred
-                ? []
-                : await eagerPushTaskToRemoteNodes(ctx, task, message, targetNodeId, requiredTags, coordinatorDaemonId);
-            // Fire-and-forget — don't block the coordinator response
-            Promise.all(dispatchPromises).catch(() => {});
-
-            return JSON.stringify({
-                success: true,
-                source: 'queue',
-                taskId: task.id,
-                status: task.status,
-                taskMode: task.taskMode,
-                requiredTags: task.requiredTags,
-                ...buildProviderPinAdvisory(requiredTags),
-                ...enqueueEcho,
-                ...(targetNodeId ? { targetNodeId } : {}),
-                ...(preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {}),
-                ...(eagerPushDeferred ? { eagerPushDeferred: true, eagerPushDeferredReason: 'dependencies_unsatisfied' } : {}),
-                ...duplicateWarning,
-                ...missionWarning,
-                ...worktreeAdvisory,
-                ...orchestrationWarning,
-                queueTrigger,
-                ...buildQueueTriggerGuidance(queueTrigger),
-            });
-        }
+        // ── Delivery is ONLY through a claim (rc.37 Finding B). ─────────────────
+        //    Both transports hand the new row to the daemon's queue drain
+        //    (`triggerMeshQueue` → `tryAssignQueueTask`), which claims it for a local
+        //    OR remote idle session (remote-idle store) or auto-launches one, and opens
+        //    the turn-ledger attempt (`dispatch_accepted`) BEFORE the body is sent.
+        //    The retired IpcTransport "enqueue-and-push" P2P-sent a still-`pending`
+        //    row straight to a remote node's session with no claim and no attempt:
+        //    live, it injected a pinned task into a session that was mid-way through
+        //    another task (the node one-active gate had just refused it), re-stamped
+        //    that session's mesh assignment (orphaning the in-flight task's report)
+        //    and ran the body while the queue row stayed `pending`. A task the claim
+        //    gates leave pending must never reach a session.
+        const queueTrigger = await triggerMeshQueueAndReport(ctx);
+        return JSON.stringify({
+            success: true,
+            source: 'queue',
+            taskId: task.id,
+            status: task.status,
+            taskMode: task.taskMode,
+            requiredTags: task.requiredTags,
+            ...buildProviderPinAdvisory(requiredTags),
+            ...enqueueEcho,
+            ...(targetNodeId ? { targetNodeId } : {}),
+            ...(preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {}),
+            ...duplicateWarning,
+            ...missionWarning,
+            ...worktreeAdvisory,
+            ...orchestrationWarning,
+            queueTrigger,
+            ...buildQueueTriggerGuidance(queueTrigger),
+        });
     } catch (e: any) {
         const message = e?.message || String(e);
         if (message.includes('live_debug_readonly_guardrail_violation')) {
@@ -1022,7 +790,7 @@ export async function meshEnqueueBatch(
     const graphPlan = committed.graph as unknown as Omit<MeshGraphPlanResult, 'tasks'> | undefined;
 
     // ── Post-insert (best-effort, never undoes the committed batch): mission
-    //    warnings, routing advisories, queue drain, cloud eager push for roots. ──
+    //    warnings, routing advisories, queue drain. ──
     const distinctMissionIds = [...new Set(specs.map(s => s.missionId).filter((m): m is string => !!m))];
     const missionWarnings = await Promise.all(distinctMissionIds.map(missionId => buildMissionInactiveWarning(ctx, missionId)));
     const missionWarning = missionWarnings.find(w => w !== undefined) ?? {};
@@ -1046,37 +814,7 @@ export async function meshEnqueueBatch(
 
     const queueTrigger = await triggerMeshQueueAndReport(ctx);
 
-    // IpcTransport (Cloud Mesh): eager-push only the ROOTS of the just-inserted graph.
-    // DEPENDSON-GATE-SYMMETRY: the same taskDependenciesSatisfied predicate gates the
-    // push, evaluated over the post-insert queue so a dependency on an
-    // already-completed existing task still counts as satisfied.
-    let eagerPushDeferredCount = 0;
-    if (ctx.transport instanceof IpcTransport) {
-        const liveQueue = await readQueueFromDaemon(ctx);
-        const dependencyStatusById = new Map(liveQueue.map(t => [t.id, t.status] as const));
-        // Re-read each row from the LIVE queue rather than trusting the insert-time
-        // snapshot: a system block may have been applied to a row AFTER it was
-        // returned, and the predicate refuses any row carrying a blockedReason.
-        // This is NOT a second gate — the identical predicate call below is still
-        // the only decision; this only makes sure it sees the row's current state.
-        const liveById = new Map(liveQueue.map(t => [t.id, t] as const));
-        const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
-        const dispatchPromises: Promise<void>[] = [];
-        for (let i = 0; i < tasks.length; i++) {
-            const snapshot = tasks[i];
-            const task = liveById.get(snapshot.id) ?? snapshot;
-            if (!taskDependenciesSatisfied(task, dependencyStatusById)) {
-                eagerPushDeferredCount++;
-                continue;
-            }
-            dispatchPromises.push(...await eagerPushTaskToRemoteNodes(
-                ctx, task, normalizedEntries[i].message, normalizedEntries[i].targetNodeId,
-                normalizedEntries[i].requiredTags, coordinatorDaemonId,
-            ));
-        }
-        // Fire-and-forget — don't block the coordinator response
-        Promise.all(dispatchPromises).catch(() => {});
-    }
+    // Delivery is only through a claim — see the note in meshEnqueueTask (rc.37 Finding B).
 
     return JSON.stringify({
         success: true,
@@ -1140,7 +878,6 @@ export async function meshEnqueueBatch(
             : {}),
         ...missionWarning,
         ...worktreeAdvisory,
-        ...(eagerPushDeferredCount > 0 ? { eagerPushDeferred: eagerPushDeferredCount, eagerPushDeferredReason: 'dependencies_unsatisfied' } : {}),
         queueTrigger,
         ...buildQueueTriggerGuidance(queueTrigger),
     });
