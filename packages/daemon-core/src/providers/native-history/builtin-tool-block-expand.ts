@@ -20,25 +20,22 @@
  *               is its OWN record — blockIndex is -1)
  *   grok-cli    ~/.grok/sessions/<cwd>/<uuid>/chat_history.jsonl (ditto, -1)
  *
- * `hermes-cli` and `antigravity-cli` are deliberately absent, and this is a
- * measured decision rather than an omission:
+ * Plus `antigravity-cli`, whose live store is a per-conversation SQLite db
+ * (conversations/<uuid>.db) rather than a JSONL file. It still qualifies: the
+ * ref's `recordIndex` is the step's `idx` PRIMARY KEY — append-only, so it
+ * never renumbers the way a re-run session query would — and `blockIndex` is
+ * the call's position in the model step (or -1 for a result row). The reader
+ * resolves it by key (`readAntigravityToolBlockAt`) instead of by array
+ * position. (Its legacy brain-transcript path carries content in FULL and
+ * never stamps a ref, so nothing there reaches this resolver.)
  *
- *   hermes-cli   reads a shared SQLite `state.db` and emits every row as
- *                `kind:'standard'` — it produces no tool bubbles at all, so
- *                there is nothing to expand. A sqlite row also has no stable
- *                positional index across reads (the session query re-runs and
- *                the cluster walk can change membership), so even if it did,
- *                a positional ref could not address it safely.
- *   antigravity-cli  its live store is a per-conversation SQLite db of protobuf
- *                `step_payload` blobs, and that path emits only
- *                `kind:'standard'`. The legacy brain-transcript path does emit
- *                tool bubbles, but it carries the row's content in FULL and
- *                never truncates — expanding it would hand back the identical
- *                string, which is exactly the "expand shows the same text"
- *                failure the truncation gate exists to prevent.
- *
- * Both therefore return `unsupported_source`, which is a truthful answer the
- * dashboard can render as "no more to fetch" rather than a broken button.
+ * `hermes-cli` is deliberately absent, and this is a measured decision rather
+ * than an omission: it reads a shared SQLite `state.db` and emits every row as
+ * `kind:'standard'` — it produces no tool bubbles at all, so there is nothing
+ * to expand. A sqlite row there also has no stable key across reads (the
+ * session query re-runs and the cluster walk can change membership). It
+ * returns `unsupported_source`, which is a truthful answer the dashboard can
+ * render as "no more to fetch" rather than a broken button.
  *
  * OSS code (AGPL-3.0). Must not import from packages/ (proprietary).
  */
@@ -54,6 +51,7 @@ import { statMtimeMs } from './fs-utils.js';
 import { readClaudeRecords, readClaudeToolBlockAt } from './claude-cli-transcript.js';
 import { readCodexRecords, readCodexToolBlockAt } from './codex-cli-transcript.js';
 import { readGrokRecords, readGrokToolBlockAt } from './grok-cli-transcript.js';
+import { readAntigravityToolBlockAt } from './antigravity-cli-transcript.js';
 
 /** One addressed block, already read at full length. */
 interface RawToolBlock {
@@ -77,8 +75,8 @@ export function expandBuiltinReaderToolBlock(
     input: NativeHistoryInput,
     ref: NativeHistoryToolBlockRef,
 ): ToolBlockExpandResult {
-    if (reader !== 'claude-cli' && reader !== 'codex-cli' && reader !== 'grok-cli') {
-        // hermes/antigravity — see the module header. Nothing to expand.
+    if (reader !== 'claude-cli' && reader !== 'codex-cli' && reader !== 'grok-cli' && reader !== 'antigravity-cli') {
+        // hermes — see the module header. Nothing to expand.
         return { ok: false, reason: 'unsupported_source' };
     }
 
@@ -101,17 +99,22 @@ export function expandBuiltinReaderToolBlock(
     if (!(currentMtimeMs > 0)) return { ok: false, reason: 'source_unavailable' };
     if (currentMtimeMs !== ref.sourceMtimeMs) return { ok: false, reason: 'source_changed' };
 
-    let records: Record<string, unknown>[];
-    try {
-        records = readRecords(reader, sourcePath);
-    } catch {
-        return { ok: false, reason: 'source_unavailable' };
+    let block: RawToolBlock | null;
+    if (reader === 'antigravity-cli') {
+        // Keyed (steps.idx), not positional — see the module header.
+        block = readAntigravityToolBlockAt(sourcePath, ref.recordIndex, ref.blockIndex);
+    } else {
+        let records: Record<string, unknown>[];
+        try {
+            records = readRecords(reader, sourcePath);
+        } catch {
+            return { ok: false, reason: 'source_unavailable' };
+        }
+        if (ref.recordIndex >= records.length) return { ok: false, reason: 'block_not_found' };
+        const record = records[ref.recordIndex];
+        if (record == null || typeof record !== 'object') return { ok: false, reason: 'block_not_found' };
+        block = readBlock(reader, record, ref.blockIndex);
     }
-    if (ref.recordIndex >= records.length) return { ok: false, reason: 'block_not_found' };
-    const record = records[ref.recordIndex];
-    if (record == null || typeof record !== 'object') return { ok: false, reason: 'block_not_found' };
-
-    const block = readBlock(reader, record, ref.blockIndex);
     if (!block) return { ok: false, reason: 'not_a_tool_block' };
 
     if (block.callArgs !== undefined) {

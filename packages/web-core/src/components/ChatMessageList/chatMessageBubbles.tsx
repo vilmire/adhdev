@@ -586,6 +586,12 @@ export const ChatMessageRow = memo(function ChatMessageRow({
         // exactly where there is more text to fetch — and never on a bubble
         // whose expanded form would be identical.
         const expandableRef = message.toolBlockRef;
+        // Header label: the daemon derives meta.label from the reader's
+        // toolName (e.g. 'read_file') when it resolved one, falling back to the
+        // generic senderName:'Tool' marker otherwise — see
+        // chat-commands-read-native-normalize.ts. Same pattern as the
+        // thought/terminal branches above, which already read message.meta.label.
+        const toolLabel = typeof message.meta?.label === 'string' && message.meta.label ? message.meta.label : 'Tool';
         const fullText = toolExpand?.text ?? contentStr;
         const canLocalExpand = !expandableRef
             && !hasStructuredRenderer
@@ -604,7 +610,7 @@ export const ChatMessageRow = memo(function ChatMessageRow({
                 </span>
                 <div className="chat-msg-tool-meta" aria-label="Tool message">
                     <span className="tool-icon" aria-hidden="true" />
-                    <span className="tool-label">Tool</span>
+                    <span className="tool-label">{toolLabel}</span>
                 </div>
                 {hasStructuredRenderer && structuredParts ? (
                     <div className="tool-text w-full">

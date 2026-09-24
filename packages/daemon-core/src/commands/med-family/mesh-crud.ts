@@ -1493,6 +1493,29 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         if (!meshId) return { success: false, error: 'meshId required' };
         if (!sourceNodeId) return { success: false, error: 'sourceNodeId required' };
         if (!branch) return { success: false, error: 'branch required' };
+
+        // CLONE-AFTER-IDLE-REMINDER guard (2026-09-24 incident): a coordinator
+        // autonomously cloned two worktrees in direct response to the idle-mission
+        // reminder's nudge, which only ever intended "check state and report".
+        // See mesh-idle-reminder.ts's CLONE_AFTER_IDLE_REMINDER_GUARD_MS doc for why
+        // this — a short reason-required window keyed off the reminder's own
+        // timestamp — was chosen over gating on mission/task counts.
+        if (!readMeshDirectDispatchFlag(args)) {
+            const { MeshRuntimeStore } = await import('../../mesh/mesh-runtime-store.js');
+            const { cloneRequiresIdleReminderReason } = await import('../../mesh/mesh-idle-reminder.js');
+            const lastReminder = MeshRuntimeStore.getInstance().getIdleReminderState(meshId);
+            if (cloneRequiresIdleReminderReason(lastReminder, Date.now(), args)) {
+                return {
+                    success: false,
+                    code: 'clone_requires_reason_after_idle_reminder',
+                    error: 'An idle-mission reminder just fired for this mesh. Pass an explicit `reason` '
+                        + '(or `taskId`) explaining why this clone is needed, or wait for the guard window '
+                        + 'to elapse. This is not a refusal to clone — it exists so an idle nudge to "check '
+                        + 'state and report" cannot be read as license to clone/launch/enqueue on its own.',
+                };
+            }
+        }
+
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'worktree clone');
         if (ownerFailure) return ownerFailure;
 

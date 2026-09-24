@@ -24,8 +24,10 @@ import {
     buildIdleReminderMessage,
     missionSetHash,
     localNonCoordinatorSessionBusy,
+    cloneRequiresIdleReminderReason,
     IDLE_REMINDER_DEBOUNCE_MS,
     LOCAL_SESSION_STALE_MS,
+    CLONE_AFTER_IDLE_REMINDER_GUARD_MS,
 } from '../../src/mesh/mesh-idle-reminder.js';
 import { upsertMeshMission } from '../../src/mesh/mesh-missions.js';
 import { enqueueTask } from '../../src/mesh/mesh-work-queue.js';
@@ -147,6 +149,22 @@ describe('mesh idle-active-mission reminder', () => {
             const many = Array.from({ length: 13 }, (_, i) => mission(`m${i}`, `T${i}`));
             const msg = buildIdleReminderMessage(many);
             expect(msg).toContain('…and 3 more');
+        });
+
+        /**
+         * ★2026-09-24: this reminder's earlier wording let a coordinator
+         * autonomously clone two worktrees in response to an idle nudge whose
+         * whole intent was "check state and report" — nothing about deciding a
+         * mission's outcome implies cloning nodes, launching sessions, or
+         * enqueueing tasks. The text must say so explicitly and boundedly: check
+         * + report is always fine, but node/session/task creation is gated on
+         * the mission's OWN plan already calling for that specific step.
+         */
+        it('explicitly bounds the reminder to check-and-report — no autonomous clone/launch/enqueue', async () => {
+            const msg = buildIdleReminderMessage([mission('m1', 'Ship X')]);
+            expect(msg).toContain('Check each mission\'s state and report');
+            expect(msg).toMatch(/Do NOT clone nodes, launch sessions,? (?:or )?enqueue tasks/);
+            expect(msg).toContain('unless the mission\'s own plan already calls for that specific next step');
         });
     });
 
@@ -647,5 +665,57 @@ describe('mesh idle-active-mission reminder', () => {
         const fired = await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000, throwingManager);
         expect(fired).toBe(true);
         expect(coord.calls).toHaveLength(1);
+    });
+});
+
+/**
+ * CLONE-AFTER-IDLE-REMINDER guard (2026-09-24 incident) — pure decision function
+ * covering the `clone_mesh_node` reason requirement. See mesh-idle-reminder.ts's
+ * CLONE_AFTER_IDLE_REMINDER_GUARD_MS doc for why a reason-required window keyed
+ * off the reminder's own emittedAt was chosen over a mission/task-count gate.
+ */
+describe('cloneRequiresIdleReminderReason', () => {
+    it('never requires a reason when no reminder has fired for this mesh', () => {
+        expect(cloneRequiresIdleReminderReason(null, 1_000, {})).toBe(false);
+    });
+
+    it('requires a reason immediately after a reminder fires', () => {
+        const last = { emittedAt: 1_000 };
+        expect(cloneRequiresIdleReminderReason(last, 1_001, {})).toBe(true);
+    });
+
+    it('stops requiring a reason once the guard window elapses', () => {
+        const last = { emittedAt: 1_000 };
+        expect(cloneRequiresIdleReminderReason(last, 1_000 + CLONE_AFTER_IDLE_REMINDER_GUARD_MS + 1, {})).toBe(false);
+    });
+
+    it('is satisfied by a non-empty `reason` string', () => {
+        const last = { emittedAt: 1_000 };
+        expect(cloneRequiresIdleReminderReason(last, 1_001, { reason: 'mission plan step 3 needs a second node' })).toBe(false);
+    });
+
+    it('rejects a blank/whitespace-only reason as no reason at all', () => {
+        const last = { emittedAt: 1_000 };
+        expect(cloneRequiresIdleReminderReason(last, 1_001, { reason: '   ' })).toBe(true);
+    });
+
+    it('is satisfied by a `taskId` justification instead of a reason', () => {
+        const last = { emittedAt: 1_000 };
+        expect(cloneRequiresIdleReminderReason(last, 1_001, { taskId: 'task_123' })).toBe(false);
+    });
+
+    it('also accepts the snake_case `task_id` spelling', () => {
+        const last = { emittedAt: 1_000 };
+        expect(cloneRequiresIdleReminderReason(last, 1_001, { task_id: 'task_123' })).toBe(false);
+    });
+
+    it('is exactly at the boundary — window edge itself still requires a reason', () => {
+        const last = { emittedAt: 1_000 };
+        expect(cloneRequiresIdleReminderReason(last, 1_000 + CLONE_AFTER_IDLE_REMINDER_GUARD_MS, {})).toBe(true);
+    });
+
+    it('ignores a non-string reason/taskId rather than throwing', () => {
+        const last = { emittedAt: 1_000 };
+        expect(cloneRequiresIdleReminderReason(last, 1_001, { reason: 42, taskId: {} } as any)).toBe(true);
     });
 });

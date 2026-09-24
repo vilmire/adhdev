@@ -98,6 +98,7 @@ export function loadPreLaunchTrustFromSpecPath(specPath: unknown): PreLaunchTrus
         if (candidate.scheme === 'kimi_workspace_file') return { scheme: 'kimi_workspace_file' };
         if (candidate.scheme === 'grok_toml_file') return { scheme: 'grok_toml_file' };
         if (candidate.scheme === 'codex_toml_file') return { scheme: 'codex_toml_file' };
+        if (candidate.scheme === 'claude_json_projects') return { scheme: 'claude_json_projects' };
         if (typeof candidate.settings_path === 'string' && candidate.settings_path.trim()
             && typeof candidate.key === 'string' && candidate.key.trim()) {
             return { settings_path: candidate.settings_path, key: candidate.key };

@@ -21,9 +21,9 @@
  * restating 240/600, so a future cap change cannot leave a test green against a
  * stale number.
  *
- * The two NON-participating readers (hermes/antigravity) are asserted to refuse
- * with a typed reason, since "no tool bubbles to expand" must be a truthful
- * answer rather than a crash or an empty body.
+ * The NON-participating reader (hermes) is asserted to refuse with a typed
+ * reason, since "no tool bubbles to expand" must be a truthful answer rather
+ * than a crash or an empty body.
  */
 
 import * as fs from 'fs';
@@ -270,16 +270,28 @@ describe('grok-cli built-in reader', () => {
 
 describe('readers with nothing to expand', () => {
     // Not an oversight — measured. hermes emits every row as `kind:'standard'`
-    // (no tool bubbles at all) and antigravity's live .db path does the same,
-    // while its legacy brain path carries row content in full and never
-    // truncates. Neither has a positional record index a ref could address.
-    it.each(['hermes-cli', 'antigravity-cli'])('refuses %s with a typed reason', (reader) => {
+    // (no tool bubbles at all) and its sqlite store has no stable record key a
+    // ref could address.
+    it('refuses hermes-cli with a typed reason', () => {
         const expanded = expandBuiltinReaderToolBlock(
-            reader,
+            'hermes-cli',
             { sessionId: SESSION_ID, workspace: '/tmp/ws' },
             { sourceMtimeMs: 1, recordIndex: 0, blockIndex: -1 },
         );
         expect(expanded).toEqual({ ok: false, reason: 'unsupported_source' });
+    });
+
+    // (AGY-TOOL-BUBBLES) antigravity's .db path now mints keyed refs (steps.idx),
+    // so it participates — with no store on disk it reports the source missing
+    // rather than "unsupported". Round-trips are covered in
+    // antigravity-cli-tool-bubbles.test.ts.
+    it('treats antigravity-cli as a participating reader (source_unavailable without a store)', () => {
+        const expanded = expandBuiltinReaderToolBlock(
+            'antigravity-cli',
+            { sessionId: SESSION_ID, workspace: '/tmp/ws' },
+            { sourceMtimeMs: 1, recordIndex: 0, blockIndex: -1 },
+        );
+        expect(expanded).toEqual({ ok: false, reason: 'source_unavailable' });
     });
 
     it('refuses an unknown reader rather than throwing', () => {

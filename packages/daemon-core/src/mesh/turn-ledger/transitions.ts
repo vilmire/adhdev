@@ -268,6 +268,16 @@ export const TRANSITIONS: readonly TransitionRule[] = [
         { e: 'commit', outcome: 'completed', strength: 'genuine', reason: 'transcript_final' },
     ] },
     { id: 'R15', lane: 'current', from: [C, G, S], on: ['transcript_final'], guard: 'final_weak', to: F, verdict: 'applied', effects: weakCandidate },
+    // R16 stays live-pending-only even once a report is recorded (guard has no
+    // `!reportedThisGeneration`): a hold admission (modal/adapter-pending/
+    // trailing-tool/transcript-growing) is genuine ongoing activity, and R16's
+    // reevaluate re-observes the same evidence once it clears, landing on R9t.
+    // R16a is content-decline-only (guard excludes reportedThisGeneration,
+    // 2026-09-25): a decline has no reevaluate, so once a report is on file
+    // R9t's `finished_after_report` claims the decline branch instead — the
+    // report already supplies the completion proof the scrape is missing.
+    // Before this fix a report-recorded decline sat on R16a (a dead end) until
+    // the unrelated await_end hold expired ~1 min later (live rc.45 run 14).
     { id: 'R16', lane: 'current', from: [C, G, S, F], on: ['turn_end', 'transcript_final'], guard: 'admission_hold', to: 'same', verdict: 'applied', effects: [
         { e: 'hold', reason: 'from_admission', until: 'admission', onExpire: 'reevaluate' },
     ] },
@@ -322,12 +332,22 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     // printing its last message, or the FSM has not shown idle yet). It is the
     // verdict, so it is recorded on the attempt (generation-scoped) and a short
     // `await_end` hold waits for the idle edge as corroboration: R9t commits
-    // the report on the next idle signal (turn_end, admitted transcript_final,
-    // no_progress with a final message) instead of R9r opening a second
-    // await_report window; R13t commits it when the hold expires, so a session
-    // whose FSM never shows the idle edge again does not wait for liveness /
-    // hard_ceiling. Before this rule the report never reached the reducer and
-    // the idle end re-opened await_report — 10 min, then committed WEAK.
+    // the report on the next idle signal — turn_end (any admission incl. a
+    // content decline), transcript_final (ditto), or no_progress with a final
+    // message — instead of R9r opening a second await_report window; R13t
+    // commits it when the hold expires, so a session whose FSM never shows the
+    // idle edge again does not wait for liveness / hard_ceiling. Before this
+    // rule the report never reached the reducer and the idle end re-opened
+    // await_report — 10 min, then committed WEAK.
+    // A live-pending HOLD admission (modal/adapter-pending/trailing-tool/
+    // transcript-growing) is genuine ongoing activity, not idle corroboration —
+    // finished_after_report excludes it, so that case still yields to R16 and
+    // re-reduces once the hold clears (see R16's comment). A content DECLINE
+    // (native marker absent / no final assistant summary) is different: the
+    // scrape just failed to find the completion proof the report already
+    // supplies, so R9t claims it too (2026-09-25, live rc.45 run 14 — R16a had
+    // no reevaluate, so a report-recorded decline sat dead until the unrelated
+    // await_end hold expired ~1 min later instead of committing immediately).
     { id: 'R17g', lane: 'current', from: [C, G, S], on: ['worker_report'], to: 'same', verdict: 'applied', effects: [
         { e: 'act', act: 'record_report' },
         { e: 'hold', reason: 'await_end', until: 'await_end', onExpire: 'commit', meshOnly: true },

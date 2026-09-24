@@ -30,9 +30,14 @@
  *          natural-language answer lives at payload field 20 → field 1
  *          (identical to field 8). Field 20 → field 3 is the internal
  *          reasoning summary and is intentionally NOT surfaced.
- *        - other step types are tool calls / ephemeral system context.
+ *        - a step_type 15 that CALLS tools carries each call at field 20 → 7;
+ *          the call's execution is a later step (per-tool step_type) repeating
+ *          it at field 5 → 4 with the output alongside; step_type 101 is an
+ *          injected background-task notification. These become `kind:'tool'`
+ *          bubbles — see "Tool steps" below for the measured shapes.
+ *        - other step types are ephemeral system context.
  *      We read the blobs with a tiny dependency-free protobuf field walker
- *      (no proto schema / codegen needed) and map the two message step types.
+ *      (no proto schema / codegen needed).
  *      Because the daemon does NOT read this db, native history previously
  *      returned 0 rows for these sessions and read_chat fell back to the
  *      pty parser (which only echoes the user's own input) — assistant
@@ -75,6 +80,12 @@ import { LOG } from '../../logging/logger.js';
 export type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 import type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 import { statMtimeMs } from './fs-utils.js';
+import {
+  oneLine,
+  TOOL_CALL_SUMMARY_MAX,
+  TOOL_RESULT_SUMMARY_MAX,
+} from '../spec/native-history-tool-blocks.js';
+import type { NativeHistoryToolBlockRef } from '../spec/native-history-types.js';
 
 export interface NativeHistoryMessage {
   ts: string;
@@ -83,11 +94,22 @@ export interface NativeHistoryMessage {
   content: string;
   kind: NativeHistoryKind;
   senderName?: string;
+  /** (AGY-TOOL-BUBBLES) Tool name on `kind:'tool'` bubbles from the .db path. */
+  toolName?: string;
   agent: 'antigravity-cli';
   historySessionId: string;
   workspace?: string;
   /** Stable per-message identity (v2 contract). */
   providerUnitKey?: string;
+  /**
+   * (TOOL-EXPAND) Address of the step this tool bubble was summarised from —
+   * `recordIndex` = the step's `idx` (the `steps` PRIMARY KEY, append-only, so
+   * it never renumbers), `blockIndex` = the call's position in the model
+   * step's repeated 20.7 list, or -1 for an execution/notification row. Present
+   * only when the summary cap actually truncated. Resolved by
+   * `readAntigravityToolBlockAt`.
+   */
+  toolBlockRef?: NativeHistoryToolBlockRef;
 }
 
 export interface NativeHistorySession {
@@ -677,12 +699,290 @@ function recoverMessageText(payload: Buffer, excludeTexts: string[]): string {
   return best;
 }
 
+// ─── Tool steps (call / result / task notification) ──────────────────────────
+//
+// (AGY-TOOL-BUBBLES) Decoded shapes, measured across every real store on the
+// dev Mac (291 conversations; 4,666 tool-execution rows):
+//
+//   CALL — carried by the MODEL step (step_type 15) that decided to call it, at
+//     field 20 → field 7 (REPEATED: 154 model steps issue parallel calls):
+//       20.7.1 call id ("call_2069159" / "6j9mkaph")
+//       20.7.2 tool name ("run_command", "view_file", "grep_search", …)
+//       20.7.3 arguments, a JSON object string ({"CommandLine":…,"Cwd":…})
+//       20.7.7 opaque signature blob (never surfaced)
+//     A model step that only calls a tool has NO answer at 20.1/20.8 — which is
+//     why this reader used to drop it and show nothing for the whole tool turn.
+//
+//   RESULT — one EXECUTION step per call, at a later idx. The step_type is
+//     per-tool (132 generic, 21 run_command, 8 view_file, 7 grep_search, 9
+//     list_dir, 5 write_to_file, 17 invalid-call, 25 find_by_name, 38
+//     call_mcp_tool, …), so it is recognised by SHAPE, not by step_type: every
+//     execution step repeats the call at field 5 → field 4 (same 1/2/3 layout).
+//     Pairing is exact — 4,666/4,666 execution steps match a model-step call
+//     id, 0 unmatched either way, and the execution always has the larger idx.
+//     Output location:
+//       - generic (field 140): 140.2.1 is the tool's text result
+//         ("The command exited with code 0.\nOutput:\n…"); 140.2.6 embeds a
+//         whole copy of the Step (args included) and is never read.
+//       - per-tool legacy fields (14 view_file, 13 grep_search, 28
+//         run_command, 47 call_mcp_tool, 24 invalid call, …): heterogeneous
+//         sub-messages; the longest text leaf is the result body (file
+//         contents, grep output, mcp response, command output).
+//     Failure: status 4 (invalid args), 6 (failed/cancelled), 7 (denied) carry
+//     `error_details` (field 1 = one-line message) and/or payload field 31.
+//     Status 2 (running) has no result yet and is skipped until it settles.
+//
+//   TASK NOTIFICATION — step_type 101, field 114: 114.2.1 title ("Wait for
+//     task: Timer has expired"), 114.2.{2,10} body, 114.3 = "task_notification".
+//     Injected by antigravity when a background task (async run_command /
+//     schedule timer) resolves.
+//
+// Every one of these becomes a `kind:'tool'` assistant bubble — an ACTIVITY
+// message (chat-message-normalization isActivityKind), so it never satisfies
+// the completion gate's "final assistant message" test and never becomes a
+// session preview.
+
+/** High-volume non-tool step types, excluded in SQL purely to save IO:
+ *  90 = EPHEMERAL_MESSAGE system reminders, 98 = empty context marker. Anything
+ *  else is admitted and recognised by shape (field 5 → 4 call header). */
+const AGY_STEP_TYPES_NEVER_TOOL = [90, 98];
+/** Execution-step statuses that carry a settled result. 2 (running) does not. */
+const AGY_TOOL_SETTLED_STATUSES = new Set([3, 4, 6]);
+/** Status 7 settles only when it carries an error (observed: 53/53 do). */
+const AGY_STATUS_DENIED = 7;
+/** Top-level execution-step fields that are header/metadata, never output. */
+const AGY_TOOL_STEP_NON_OUTPUT_FIELDS = new Set([1, 2, 3, 4, 5, 31, 56, 133, 140, 147, 148]);
+/** Argument keys that are antigravity UI hints, not arguments. */
+const AGY_UI_ONLY_ARG_KEYS = ['toolAction', 'toolSummary'];
+
+interface AgyToolCall {
+  name: string;
+  argsJson: string;
+}
+
+/** Every length-delimited field `field` in `buf`, in wire order. */
+function allLenFields(buf: Buffer, field: number): Buffer[] {
+  const out: Buffer[] = [];
+  for (const f of decodeProtoFields(buf)) {
+    if (f.field === field && f.wireType === 2 && f.bytes) out.push(f.bytes);
+  }
+  return out;
+}
+
+/** Text of the first length-delimited field `field`, or null. */
+function textField(buf: Buffer | null, field: number): string | null {
+  if (!buf) return null;
+  const bytes = firstLenField(buf, field);
+  if (!bytes || bytes.length === 0 || !looksLikeText(bytes)) return null;
+  return bytes.toString('utf-8');
+}
+
+/** Decode a call record (20.7 / 5.4 layout). Null unless it names a tool. */
+function decodeToolCall(buf: Buffer | null): AgyToolCall | null {
+  const name = textField(buf, 2)?.trim();
+  if (!name) return null;
+  return { name, argsJson: (textField(buf, 3) ?? '').trim() };
+}
+
+/** Tool calls a MODEL step issued, in order (field 20 → 7, repeated). */
+function extractModelToolCalls(payload: Buffer): AgyToolCall[] {
+  const inner = firstLenField(payload, 20);
+  if (!inner) return [];
+  const calls: AgyToolCall[] = [];
+  for (const raw of allLenFields(inner, 7)) {
+    const call = decodeToolCall(raw);
+    if (call) calls.push(call);
+  }
+  return calls;
+}
+
+/**
+ * Strict protobuf decode: succeeds only when the WHOLE buffer parses as a
+ * message. Used to tell a sub-message from a text leaf when walking the
+ * heterogeneous per-tool result fields — the lenient decodeProtoFields would
+ * happily "decode" the first few bytes of a text string.
+ */
+function decodeProtoStrict(buf: Buffer): ProtoField[] | null {
+  const fields: ProtoField[] = [];
+  let i = 0;
+  while (i < buf.length) {
+    const [key, afterKey] = readVarint(buf, i);
+    if (afterKey === i || afterKey > buf.length) return null;
+    i = afterKey;
+    const field = Math.floor(key / 8);
+    const wireType = key & 7;
+    if (field <= 0 || field > 1000) return null;
+    if (wireType === 0) {
+      const [value, next] = readVarint(buf, i);
+      if (next === i || next > buf.length || (buf[next - 1] & 0x80) !== 0) return null;
+      i = next;
+      fields.push({ field, wireType, varint: value });
+    } else if (wireType === 2) {
+      const [len, afterLen] = readVarint(buf, i);
+      if (afterLen === i || afterLen + len > buf.length) return null;
+      fields.push({ field, wireType, bytes: buf.subarray(afterLen, afterLen + len) });
+      i = afterLen + len;
+    } else if (wireType === 5 && i + 4 <= buf.length) {
+      i += 4;
+    } else if (wireType === 1 && i + 8 <= buf.length) {
+      i += 8;
+    } else {
+      return null;
+    }
+  }
+  return fields.length > 0 ? fields : null;
+}
+
+/** A lone `file://…` URI — per-tool results echo their target this way. */
+function isBareUri(text: string): boolean {
+  return /^file:\/\/\S*$/.test(text);
+}
+
+/** Leaf preference: any real text beats a bare URI echo; then longer wins. */
+function isBetterLeaf(candidate: string, best: string): boolean {
+  if (!candidate) return false;
+  if (!best) return true;
+  const candidateUri = isBareUri(candidate);
+  if (candidateUri !== isBareUri(best)) return !candidateUri;
+  return candidate.length > best.length;
+}
+
+/**
+ * Best text leaf under `buf` (sub-messages recursed), skipping `exclude`: the
+ * longest one, except that a bare `file://` URI (view_file / list_dir echo
+ * their target) only wins when nothing else is there.
+ */
+function longestTextLeaf(buf: Buffer, exclude: ReadonlySet<string>, depth = 0): string {
+  const fields = depth < 8 ? decodeProtoStrict(buf) : null;
+  if (!fields) {
+    if (!looksLikeText(buf)) return '';
+    const text = buf.toString('utf-8').trim();
+    return exclude.has(text) ? '' : text;
+  }
+  let best = '';
+  for (const f of fields) {
+    if (f.wireType !== 2 || !f.bytes || f.bytes.length === 0) continue;
+    const leaf = longestTextLeaf(f.bytes, exclude, depth + 1);
+    if (isBetterLeaf(leaf, best)) best = leaf;
+  }
+  return best;
+}
+
+/**
+ * One-line call summary, mirroring claude's `name: args` bubble. run_command's
+ * `CommandLine` is preferred (claude prefers `command`); otherwise the args
+ * JSON minus antigravity's UI-only hint keys.
+ */
+function summarizeAgyToolCallArgs(argsJson: string): { text: string; truncated: boolean } {
+  if (!argsJson) return { text: '', truncated: false };
+  let parsed: unknown;
+  try { parsed = JSON.parse(argsJson); } catch { parsed = undefined; }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const args = parsed as Record<string, unknown>;
+    const command = args.CommandLine;
+    if (typeof command === 'string' && command.trim()) return oneLine(command, TOOL_CALL_SUMMARY_MAX);
+    const rest: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(args)) {
+      if (!AGY_UI_ONLY_ARG_KEYS.includes(key)) rest[key] = value;
+    }
+    if (Object.keys(rest).length === 0) return { text: '', truncated: false };
+    return oneLine(JSON.stringify(rest), TOOL_CALL_SUMMARY_MAX);
+  }
+  return oneLine(argsJson, TOOL_CALL_SUMMARY_MAX);
+}
+
+/** Top-level string values of a call's args JSON (trimmed). */
+function argStringValues(argsJson: string): string[] {
+  try {
+    const parsed = JSON.parse(argsJson);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+    return Object.values(parsed as Record<string, unknown>)
+      .filter((v): v is string => typeof v === 'string')
+      .map((v) => v.trim());
+  } catch {
+    return [];
+  }
+}
+
+/** Full call args for the expand path — the WHOLE object, pretty-printed. */
+function fullAgyToolCallArgs(argsJson: string): string {
+  try { return JSON.stringify(JSON.parse(argsJson), null, 2) ?? argsJson; } catch { return argsJson; }
+}
+
+/**
+ * Full result text of an EXECUTION step (null when the row is not one, or
+ * carries nothing to show). `status` null = the store has no status column.
+ */
+function extractToolStepResult(
+  payload: Buffer,
+  errorDetails: Buffer | null,
+  status: number | null,
+): { name: string; text: string } | null {
+  const header = firstLenField(payload, 5);
+  const call = decodeToolCall(header ? firstLenField(header, 4) : null);
+  if (!call) return null;
+
+  const errorText = (
+    textField(errorDetails, 1)
+    ?? textField(errorDetails, 2)
+    ?? textField(firstLenField(payload, 31), 1)
+    ?? ''
+  ).trim();
+
+  let output = '';
+  const generic = firstLenField(payload, 140);
+  if (generic) {
+    output = (textField(firstLenField(generic, 2), 1) ?? '').trim();
+  } else {
+    // A leaf equal to the call's own name/args (or one arg value — e.g. a
+    // zero-hit find_by_name whose only text leaf is its SearchDirectory) is an
+    // echo of the input, not output.
+    const exclude = new Set<string>([call.argsJson, call.name, ...argStringValues(call.argsJson)].filter(Boolean));
+    for (const f of decodeProtoFields(payload)) {
+      if (f.wireType !== 2 || !f.bytes || AGY_TOOL_STEP_NON_OUTPUT_FIELDS.has(f.field)) continue;
+      const leaf = longestTextLeaf(f.bytes, exclude);
+      if (isBetterLeaf(leaf, output)) output = leaf;
+    }
+  }
+
+  const failed = status !== null && status !== AGY_STATUS_DONE;
+  if (errorText && (failed || !output)) {
+    // Keep real output (a failed command's stderr) but not a target-URI echo.
+    const detail = output && !isBareUri(output) ? `\n${output}` : '';
+    return { name: call.name, text: `Error: ${errorText}${detail}` };
+  }
+  return output ? { name: call.name, text: output } : null;
+}
+
+/** Full text of a step_type 101 task notification (null when absent). */
+function extractTaskNotification(payload: Buffer): { name: string; text: string } | null {
+  const note = firstLenField(payload, 114);
+  if (!note) return null;
+  const name = textField(note, 3)?.trim() || 'task_notification';
+  const body = firstLenField(note, 2);
+  const title = (textField(body, 1) ?? '').trim();
+  const detail = body ? longestTextLeaf(body, new Set(title ? [title] : [])) : '';
+  const text = [title, detail].filter(Boolean).join('\n') || (textField(note, 1) ?? '').trim();
+  return text ? { name, text } : null;
+}
+
+/** Does this execution-step status carry a settled result worth showing? */
+function isSettledToolStatus(status: number | null, errorDetails: Buffer | null): boolean {
+  if (status === null) return true; // no status column (legacy/synthetic store)
+  if (AGY_TOOL_SETTLED_STATUSES.has(status)) return true;
+  return status === AGY_STATUS_DENIED && !!errorDetails && errorDetails.length > 0;
+}
+
 interface AgyDbStepRow {
   idx: number;
   step_type: number;
   step_payload: Buffer | null;
   /** Absent when the store's `steps` table has no `metadata` column. */
   metadata?: Buffer | null;
+  /** Absent when the store's `steps` table has no `status` column. */
+  status?: number;
+  /** Absent when the store's `steps` table has no `error_details` column. */
+  error_details?: Buffer | null;
 }
 
 /**
@@ -765,7 +1065,12 @@ function parseConversationDb(
   filePath: string,
   sessionId: string,
   workspace?: string,
+  options: { includeTools?: boolean } = {},
 ): NativeHistoryMessage[] | null {
+  // (AGY-TOOL-BUBBLES) Tool rows are read by default. listSessions opts out:
+  // it only needs counts/preview, and tool payloads (file contents, command
+  // output) are the bulk of a store's bytes.
+  const includeTools = options.includeTools !== false;
   let Database: any;
   try {
     Database = loadBetterSqlite3();
@@ -809,12 +1114,20 @@ function parseConversationDb(
       }
       const hasStatus = columns.has('status');
       const hasMetadata = columns.has('metadata');
+      const hasErrorDetails = columns.has('error_details');
+      // Message steps keep their DONE-only filter (see AGY_STATUS_DONE). Tool
+      // rows are admitted at any status and settled-filtered in code, because
+      // "settled" for them depends on error_details (isSettledToolStatus).
+      const messageClause =
+        `(step_type IN (${AGY_STEP_TYPE_USER}, ${AGY_STEP_TYPE_MODEL})${hasStatus ? ` AND status = ${AGY_STATUS_DONE}` : ''})`;
+      const toolClause = includeTools
+        ? ` OR step_type NOT IN (${[AGY_STEP_TYPE_USER, AGY_STEP_TYPE_MODEL, ...AGY_STEP_TYPES_NEVER_TOOL].join(', ')})`
+        : '';
       rows = db
         .prepare(
-          `SELECT idx, step_type, step_payload${hasMetadata ? ', metadata' : ''}
+          `SELECT idx, step_type, step_payload${hasMetadata ? ', metadata' : ''}${hasStatus ? ', status' : ''}${hasErrorDetails ? ', error_details' : ''}
              FROM steps
-            WHERE step_type IN (${AGY_STEP_TYPE_USER}, ${AGY_STEP_TYPE_MODEL})
-              ${hasStatus ? `AND status = ${AGY_STATUS_DONE}` : ''}
+            WHERE ${messageClause}${toolClause}
             ORDER BY idx ASC`,
         )
         .all() as AgyDbStepRow[];
@@ -855,8 +1168,37 @@ function parseConversationDb(
   if (!Array.isArray(rows) || rows.length === 0) return null;
 
   const normalizedWorkspace = typeof workspace === 'string' ? workspace.trim() : '';
-  const baseTs = statMtimeMs(filePath) || Date.now();
+  const sealMtimeMs = statMtimeMs(filePath);
+  const baseTs = sealMtimeMs || Date.now();
   const messages: NativeHistoryMessage[] = [];
+
+  const pushToolMessage = (
+    receivedAt: number,
+    toolName: string,
+    summary: { text: string; truncated: boolean },
+    recordIndex: number,
+    blockIndex: number,
+  ): void => {
+    if (!summary.text) return;
+    const msg: NativeHistoryMessage = {
+      ts: new Date(receivedAt).toISOString(),
+      receivedAt,
+      role: 'assistant',
+      content: summary.text,
+      kind: 'tool',
+      senderName: 'Tool',
+      toolName,
+      agent: 'antigravity-cli',
+      historySessionId: sessionId,
+    };
+    // Same stamping rule as claude's stampToolBlockRef: only when the cap bit,
+    // and only with a real seal — a 0 seal can never resolve.
+    if (summary.truncated && sealMtimeMs > 0 && recordIndex >= 0) {
+      msg.toolBlockRef = { sourceMtimeMs: sealMtimeMs, recordIndex, blockIndex };
+    }
+    if (normalizedWorkspace) msg.workspace = normalizedWorkspace;
+    messages.push(msg);
+  };
 
   for (const row of rows) {
     const payload = row.step_payload;
@@ -904,7 +1246,32 @@ function parseConversationDb(
       if (normalizedWorkspace) msg.workspace = normalizedWorkspace;
       messages.push(msg);
     } else if (row.step_type === AGY_STEP_TYPE_MODEL) {
+      // (AGY-TOOL-BUBBLES) A model step that calls tools carries them at
+      // 20 → 7. Its prose answer (if any) is emitted FIRST, then one tool
+      // bubble per call — the model writes prose, then acts — so a row with
+      // both becomes [standard, tool…] and neither is double-counted.
+      const toolCalls = includeTools ? extractModelToolCalls(payload) : [];
+      const emitToolCalls = (): void => {
+        toolCalls.forEach((call, blockIndex) => {
+          const args = summarizeAgyToolCallArgs(call.argsJson);
+          pushToolMessage(
+            receivedAt,
+            call.name,
+            { text: args.text ? `${call.name}: ${args.text}` : call.name, truncated: args.truncated },
+            row.idx,
+            blockIndex,
+          );
+        });
+      };
       let content = extractModelAnswer(payload);
+      if (!content && toolCalls.length > 0) {
+        // A decoded call at 20 → 7 proves the 20.x layout is current, so a
+        // missing 20 → 1/8 answer is the ordinary "tool-only step", NOT schema
+        // drift — skip the printable-run recovery, which could otherwise lift a
+        // stray run into a fake prose bubble next to the real tool bubble.
+        emitToolCalls();
+        continue;
+      }
       if (!content) {
         // The known answer path (field 20 → 1/8) yielded nothing. This is either
         // (a) a legitimate reasoning-only / tool-planning step — the common case,
@@ -943,10 +1310,73 @@ function parseConversationDb(
       };
       if (normalizedWorkspace) msg.workspace = normalizedWorkspace;
       messages.push(msg);
+      emitToolCalls();
+    } else if (includeTools) {
+      // Execution step (any step_type carrying the 5 → 4 call header) or a
+      // step_type 101 task notification. Everything else (task boundaries,
+      // system context) yields null and is skipped.
+      const status = typeof row.status === 'number' ? row.status : null;
+      const errorDetails = row.error_details && Buffer.isBuffer(row.error_details) ? row.error_details : null;
+      const block = row.step_type === AGY_STEP_TYPE_TASK_MESSAGE
+        ? extractTaskNotification(payload)
+        : isSettledToolStatus(status, errorDetails)
+          ? extractToolStepResult(payload, errorDetails, status)
+          : null;
+      if (block) pushToolMessage(receivedAt, block.name, oneLine(block.text, TOOL_RESULT_SUMMARY_MAX), row.idx, -1);
     }
   }
 
   return messages.length > 0 ? messages : null;
+}
+
+/**
+ * (TOOL-EXPAND) Re-read one tool bubble's source step at full length — the
+ * resolver for the refs parseConversationDb stamps. Addressed by the step's
+ * `idx` PRIMARY KEY, which antigravity only ever appends, so an address cannot
+ * silently shift onto a neighbouring step; the caller's mtime seal is the
+ * freshness check on top. Returns null when the address names no tool block.
+ */
+export function readAntigravityToolBlockAt(
+  filePath: string,
+  idx: number,
+  blockIndex: number,
+): { toolName?: string; callArgs?: string; result?: string } | null {
+  if (!filePath.endsWith('.db') || !Number.isInteger(idx) || idx < 0) return null;
+  let Database: any;
+  try { Database = loadBetterSqlite3(); } catch { return null; }
+  let row: AgyDbStepRow | undefined;
+  let db: any;
+  try {
+    db = new Database(filePath, { readonly: true, fileMustExist: true });
+    try { db.pragma(`busy_timeout = ${AGY_DB_BUSY_TIMEOUT_MS}`); } catch { /* ignore */ }
+    const columns = new Set<string>(
+      (db.prepare('PRAGMA table_info(steps)').all() as Array<{ name?: unknown }>).map((c) => String(c?.name ?? '')),
+    );
+    row = db
+      .prepare(
+        `SELECT idx, step_type, step_payload${columns.has('status') ? ', status' : ''}${columns.has('error_details') ? ', error_details' : ''}
+           FROM steps WHERE idx = ?`,
+      )
+      .get(idx) as AgyDbStepRow | undefined;
+  } catch {
+    return null;
+  } finally {
+    try { db?.close(); } catch { /* ignore */ }
+  }
+  const payload = row?.step_payload;
+  if (!row || !payload || !Buffer.isBuffer(payload)) return null;
+
+  if (row.step_type === AGY_STEP_TYPE_MODEL) {
+    const call = blockIndex >= 0 ? extractModelToolCalls(payload)[blockIndex] : undefined;
+    return call ? { toolName: call.name, callArgs: fullAgyToolCallArgs(call.argsJson) } : null;
+  }
+  if (blockIndex !== -1) return null;
+  const status = typeof row.status === 'number' ? row.status : null;
+  const errorDetails = row.error_details && Buffer.isBuffer(row.error_details) ? row.error_details : null;
+  const block = row.step_type === AGY_STEP_TYPE_TASK_MESSAGE
+    ? extractTaskNotification(payload)
+    : extractToolStepResult(payload, errorDetails, status);
+  return block ? { toolName: block.name, result: block.text } : null;
 }
 
 // ─── Background-task lifecycle reader (completion-hold authority) ────────────
@@ -1493,7 +1923,9 @@ export async function listSessions(_watchPath: string): Promise<NativeHistorySes
         // Parse the db so listSessions reports accurate counts/preview and the
         // session surfaces with full coverage (assistant answers included).
         const workspace = workspaceBySession.get(uuid);
-        const messages = parseConversationDb(files.db, uuid, workspace);
+        // Tool bubbles are skipped here: they would only become the preview /
+        // title and inflate the count, and their payloads dominate store size.
+        const messages = parseConversationDb(files.db, uuid, workspace, { includeTools: false });
         const dbMtime = statMtimeMs(files.db);
         if (messages && messages.length > 0) {
           const lastMsg = messages[messages.length - 1];

@@ -299,9 +299,28 @@ export interface PreLaunchTrustSettingsArray {
  * session hash), so the store is empty on every launch and the prompt fires on
  * every launch. Without a pre-launch grant, every fresh codex worker parks in
  * `trust` with its dispatched task queued until a human approves.
+ *
+ * 'claude_json_projects' is the fourth such scheme, for claude-cli. The store
+ * is neither an array, a per-workspace file, nor a shared TOML table: it is
+ * `~/.claude.json`'s top-level `projects` key, a JSON OBJECT keyed by the
+ * ABSOLUTE realpath, whose value carries a boolean `hasTrustDialogAccepted`
+ * among many session-history fields Claude Code itself owns. The writer is
+ * therefore sparse — it sets ONLY `hasTrustDialogAccepted: true` on the one
+ * key for this workspace, creating the key if absent and leaving every other
+ * field (on this entry and every sibling entry) untouched. Exact projection
+ * lives in providers/claude-workspace-trust.ts (verified live against this
+ * machine's own real `~/.claude.json`).
+ *
+ * ★Why claude-cli needs it despite the FSM detecting its trust modal: unlike
+ * antigravity/kimi/grok/codex, claude-cli has NO worker-private HOME (absent
+ * from `WORKER_PRIVATE_HOME_SPECS`), so a delegated worker runs with the REAL
+ * HOME and this scheme always targets the owner's actual `~/.claude.json` —
+ * there is no isolation axis to thread. Without a pre-launch grant, every
+ * fresh worktree clone still hits "Is this a project you trust" and depends
+ * on the FSM's reactive auto-approve.
  */
 export interface PreLaunchTrustScheme {
-    scheme: 'kimi_workspace_file' | 'grok_toml_file' | 'codex_toml_file';
+    scheme: 'kimi_workspace_file' | 'grok_toml_file' | 'codex_toml_file' | 'claude_json_projects';
 }
 
 export type PreLaunchTrust = PreLaunchTrustSettingsArray | PreLaunchTrustScheme;

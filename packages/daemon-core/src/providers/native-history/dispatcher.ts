@@ -63,12 +63,26 @@ export interface NativeHistoryResult {
         /**
          * (TOOL-EXPAND) Content-free address of the tool block this bubble was
          * summarised from, present only when the reader actually truncated it.
-         * Stamped by the JSONL readers (claude/codex/grok); absent for readers
-         * whose store has no positional record index (hermes/antigravity
-         * sqlite), which is what lets the dashboard tell "nothing more to
-         * fetch" from "not addressable".
+         * Stamped by the JSONL readers (claude/codex/grok) and by antigravity's
+         * .db path (keyed by steps.idx); absent for hermes, whose sqlite store
+         * has no stable record key, which is what lets the dashboard tell
+         * "nothing more to fetch" from "not addressable".
          */
         toolBlockRef?: NativeHistoryToolBlockRef;
+        /**
+         * Display label for a tool/terminal bubble (e.g. 'Tool', 'Terminal', or a
+         * provider-supplied sender). Consumed by chat-commands-read-native-
+         * normalize.ts to derive meta.label. Set by claude/codex/antigravity/
+         * hermes readers on tool/terminal messages; absent otherwise.
+         */
+        senderName?: string;
+        /**
+         * The specific tool being invoked (e.g. 'read_file'), when the reader
+         * resolves one — distinct from the generic senderName:'Tool'. Currently
+         * only antigravity's reader stamps this; other readers fold the tool
+         * name into `content` instead.
+         */
+        toolName?: string;
     }>;
     providerSessionId?: string;
     sourcePath: string;
@@ -122,6 +136,17 @@ function toNativeHistoryMessage(m: any, workspace: string): NativeHistoryResult[
         // spread: a malformed ref reaching the dashboard would render an
         // expand button that can only ever fail.
         ...(isToolBlockRef(m.toolBlockRef) ? { toolBlockRef: m.toolBlockRef } : {}),
+        // Every native-history reader (claude/codex/antigravity/hermes/grok) may
+        // stamp senderName (display label for tool/terminal bubbles — see
+        // chat-commands-read-native-normalize.ts's meta.label derivation) and,
+        // for readers that resolve a specific tool call (currently antigravity),
+        // toolName (the actual tool being invoked, e.g. "read_file" — distinct
+        // from the generic senderName:'Tool'). Same allow-list style as
+        // toolBlockRef above: named explicitly rather than spread, so an
+        // unrelated property on the reader's internal record never rides this
+        // wire by accident.
+        ...(typeof m.senderName === 'string' && m.senderName ? { senderName: m.senderName } : {}),
+        ...(typeof m.toolName === 'string' && m.toolName ? { toolName: m.toolName } : {}),
     };
 }
 

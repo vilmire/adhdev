@@ -14,6 +14,7 @@ import {
   liveWorkerTaskTokenCount,
   mintWorkerTaskToken,
   prepareWorkerPrivateHome,
+  removeWorkerMcpConfigEntry,
   resolvePrivateWorkerMcpConfigPath,
   resolveWorkerMcpConfigPath,
   resolveWorkerMcpIsolation,
@@ -370,6 +371,205 @@ describe('writeWorkerMcpConfig', () => {
       serverName: 's',
       workspace: tmp('adhdev-ws-badfmt-'),
     })).toThrow(/unsupported_format/)
+  })
+})
+
+/**
+ * SHARED-WORKSPACE CLOBBER fix. A worker on the BASE node writes into the
+ * SAME `.mcp.json` the coordinator (or the owner, by hand) reads — for the
+ * auto-importing providers with no forced-config-file flag (cursor-cli,
+ * grok-cli, kimi, opencode, and claude-cli itself when NOT forced), that file
+ * is not worker-private. `writeWorkerMcpConfig` must MERGE onto it rather than
+ * replace it wholesale, exactly like the coordinator's own writer
+ * (`mesh-coordinator-launch.ts`) merges for the identical reason.
+ */
+describe('writeWorkerMcpConfig — shared-workspace MERGE (not replace)', () => {
+  it('preserves the coordinator entry AND the owner\'s own server when writing a shared .mcp.json', () => {
+    const workspace = tmp('adhdev-ws-merge-')
+    const target = join(workspace, '.mcp.json')
+    writeFileSync(target, JSON.stringify({
+      mcpServers: {
+        'adhdev-mesh': { command: 'adhdev', args: ['mcp', '--repo-mesh', 'mesh_x'] },
+        mine: { command: 'my-server' },
+      },
+    }))
+
+    writeWorkerMcpConfig({
+      declaredPath: '.mcp.json',
+      format: 'claude_mcp_json',
+      serverName: 'adhdev-worker',
+      workspace,
+      server: { command: 'adhdev', args: ['mcp', '--mode', 'ipc', '--worker'] },
+      token: 'wtk_merge',
+    })
+
+    const written = JSON.parse(readFileSync(target, 'utf-8'))
+    // The coordinator's own entry survives byte-for-byte.
+    expect(written.mcpServers['adhdev-mesh']).toEqual({ command: 'adhdev', args: ['mcp', '--repo-mesh', 'mesh_x'] })
+    // The owner's unrelated server survives too.
+    expect(written.mcpServers.mine).toEqual({ command: 'my-server' })
+    // The worker's entry is present alongside them, not instead of them.
+    expect(written.mcpServers['adhdev-worker'].args).toContain('--worker')
+    expect(written.mcpServers['adhdev-worker'].env).toEqual({ ADHDEV_WORKER_TASK_TOKEN: 'wtk_merge' })
+  })
+
+  it('preserves non-mcpServers top-level keys in the shared file', () => {
+    const workspace = tmp('adhdev-ws-merge-toplevel-')
+    const target = join(workspace, '.mcp.json')
+    writeFileSync(target, JSON.stringify({ $schema: 'https://example.com/schema.json', mcpServers: {} }))
+
+    writeWorkerMcpConfig({
+      declaredPath: '.mcp.json', format: 'claude_mcp_json', serverName: 'adhdev-worker', workspace,
+      server: { command: 'adhdev', args: ['mcp', '--mode', 'ipc', '--worker'] },
+    })
+
+    const written = JSON.parse(readFileSync(target, 'utf-8'))
+    expect(written.$schema).toBe('https://example.com/schema.json')
+    expect(written.mcpServers['adhdev-worker']).toBeTruthy()
+  })
+
+  it('a second worker write REPLACES only its own prior entry, not siblings', () => {
+    const workspace = tmp('adhdev-ws-merge-idempotent-')
+    const target = join(workspace, '.mcp.json')
+    writeFileSync(target, JSON.stringify({ mcpServers: { mine: { command: 'my-server' } } }))
+
+    writeWorkerMcpConfig({
+      declaredPath: '.mcp.json', format: 'claude_mcp_json', serverName: 'adhdev-worker', workspace,
+      server: { command: 'adhdev', args: ['mcp', '--mode', 'ipc', '--worker'] }, token: 'wtk_1',
+    })
+    writeWorkerMcpConfig({
+      declaredPath: '.mcp.json', format: 'claude_mcp_json', serverName: 'adhdev-worker', workspace,
+      server: { command: 'adhdev', args: ['mcp', '--mode', 'ipc', '--worker'] }, token: 'wtk_2',
+    })
+
+    const written = JSON.parse(readFileSync(target, 'utf-8'))
+    expect(written.mcpServers.mine).toEqual({ command: 'my-server' })
+    expect(written.mcpServers['adhdev-worker'].env).toEqual({ ADHDEV_WORKER_TASK_TOKEN: 'wtk_2' })
+  })
+
+  it('starts from {} exactly as before when no shared file exists yet — no change for the fresh-workspace case', () => {
+    const workspace = tmp('adhdev-ws-merge-fresh-')
+    const written = writeWorkerMcpConfig({
+      declaredPath: '.mcp.json', format: 'claude_mcp_json', serverName: 'adhdev-mesh', workspace,
+    })
+    expect(JSON.parse(readFileSync(written, 'utf-8'))).toEqual({ mcpServers: {} })
+  })
+
+  it('still REPLACES wholesale for a PRIVATE target (per-session file) — merge is shared-target only', () => {
+    const workspace = tmp('adhdev-ws-private-still-replaces-')
+    const baseDir = tmp('adhdev-worker-base-still-replaces-')
+    const privateConfigPath = resolvePrivateWorkerMcpConfigPath({
+      declaredPath: '.mcp.json', sessionKey: 'sess_replace', forcedConfigFile: true, baseDir,
+    })!
+    mkdirSync(privateConfigPath.substring(0, privateConfigPath.lastIndexOf('/')), { recursive: true })
+    writeFileSync(privateConfigPath, JSON.stringify({ mcpServers: { stale: { command: 'stale-server' } } }))
+
+    writeWorkerMcpConfig({
+      declaredPath: '.mcp.json', format: 'claude_mcp_json', serverName: 'adhdev-worker', workspace,
+      privateConfigPath, server: { command: 'adhdev', args: ['mcp', '--mode', 'ipc', '--worker'] },
+    })
+
+    const written = JSON.parse(readFileSync(privateConfigPath, 'utf-8'))
+    expect(written.mcpServers.stale).toBeUndefined()
+    expect(Object.keys(written.mcpServers)).toEqual(['adhdev-worker'])
+  })
+
+  it('still REPLACES wholesale for a worker-private HOME target — merge is shared-target only', () => {
+    const workspace = tmp('adhdev-ws-workerhome-still-replaces-')
+    const workerHome = tmp('adhdev-workerhome-still-replaces-')
+    const target = join(workerHome, '.mcp.json')
+    writeFileSync(target, JSON.stringify({ mcpServers: { stale: { command: 'stale-server' } } }))
+
+    writeWorkerMcpConfig({
+      declaredPath: '~/.mcp.json', format: 'claude_mcp_json', serverName: 'adhdev-worker', workspace,
+      workerHome, server: { command: 'adhdev', args: ['mcp', '--mode', 'ipc', '--worker'] },
+    })
+
+    const written = JSON.parse(readFileSync(target, 'utf-8'))
+    expect(written.mcpServers.stale).toBeUndefined()
+    expect(Object.keys(written.mcpServers)).toEqual(['adhdev-worker'])
+  })
+
+  it('refuses to guess when the existing shared file is malformed JSON — throws rather than silently overwriting', () => {
+    const workspace = tmp('adhdev-ws-merge-malformed-')
+    writeFileSync(join(workspace, '.mcp.json'), '{ not valid json')
+    expect(() => writeWorkerMcpConfig({
+      declaredPath: '.mcp.json', format: 'claude_mcp_json', serverName: 'adhdev-worker', workspace,
+      server: { command: 'adhdev', args: ['mcp', '--mode', 'ipc', '--worker'] },
+    })).toThrow(/worker_mcp_shared_config_parse_failed/)
+    // And the owner's (malformed but present) file is left untouched.
+    expect(readFileSync(join(workspace, '.mcp.json'), 'utf-8')).toBe('{ not valid json')
+  })
+})
+
+/**
+ * Cleanup counterpart: when a delegated worker session on a SHARED target
+ * ends, its own entry should be removable without disturbing the coordinator
+ * or the owner's other servers.
+ */
+describe('removeWorkerMcpConfigEntry', () => {
+  it('removes only the named entry, preserving every sibling and top-level key', () => {
+    const workspace = tmp('adhdev-ws-cleanup-')
+    const target = join(workspace, '.mcp.json')
+    writeFileSync(target, JSON.stringify({
+      $schema: 'https://example.com/schema.json',
+      mcpServers: {
+        'adhdev-mesh': { command: 'adhdev', args: ['mcp', '--repo-mesh', 'mesh_x'] },
+        'adhdev-worker': { command: 'adhdev', args: ['mcp', '--mode', 'ipc', '--worker'] },
+        mine: { command: 'my-server' },
+      },
+    }))
+
+    const removed = removeWorkerMcpConfigEntry({
+      declaredPath: '.mcp.json', format: 'claude_mcp_json', serverName: 'adhdev-worker', workspace,
+    })
+
+    expect(removed).toBe(true)
+    const written = JSON.parse(readFileSync(target, 'utf-8'))
+    expect(written.$schema).toBe('https://example.com/schema.json')
+    expect(written.mcpServers['adhdev-worker']).toBeUndefined()
+    expect(written.mcpServers['adhdev-mesh']).toEqual({ command: 'adhdev', args: ['mcp', '--repo-mesh', 'mesh_x'] })
+    expect(written.mcpServers.mine).toEqual({ command: 'my-server' })
+  })
+
+  it('is a no-op when the file does not exist', () => {
+    const workspace = tmp('adhdev-ws-cleanup-missing-')
+    expect(removeWorkerMcpConfigEntry({
+      declaredPath: '.mcp.json', format: 'claude_mcp_json', serverName: 'adhdev-worker', workspace,
+    })).toBe(false)
+  })
+
+  it('is a no-op when the entry is not present', () => {
+    const workspace = tmp('adhdev-ws-cleanup-absent-entry-')
+    writeFileSync(join(workspace, '.mcp.json'), JSON.stringify({ mcpServers: { mine: { command: 'my-server' } } }))
+    expect(removeWorkerMcpConfigEntry({
+      declaredPath: '.mcp.json', format: 'claude_mcp_json', serverName: 'adhdev-worker', workspace,
+    })).toBe(false)
+    expect(JSON.parse(readFileSync(join(workspace, '.mcp.json'), 'utf-8')).mcpServers.mine).toEqual({ command: 'my-server' })
+  })
+
+  it('never touches a PRIVATE target — per-session/worker-home files are torn down as a whole directory instead', () => {
+    const workspace = tmp('adhdev-ws-cleanup-private-')
+    const privateConfigPath = join(tmp('adhdev-worker-base-cleanup-'), 'sessdir', '.mcp.json')
+    mkdirSync(privateConfigPath.substring(0, privateConfigPath.lastIndexOf('/')), { recursive: true })
+    writeFileSync(privateConfigPath, JSON.stringify({ mcpServers: { 'adhdev-worker': { command: 'adhdev' } } }))
+
+    expect(removeWorkerMcpConfigEntry({
+      declaredPath: '.mcp.json', format: 'claude_mcp_json', serverName: 'adhdev-worker', workspace, privateConfigPath,
+    })).toBe(false)
+    // Untouched — cleanup for a private target is a directory removal elsewhere, not per-entry surgery.
+    expect(JSON.parse(readFileSync(privateConfigPath, 'utf-8')).mcpServers['adhdev-worker']).toBeTruthy()
+  })
+
+  it('is a no-op (not a throw) on malformed existing JSON', () => {
+    const workspace = tmp('adhdev-ws-cleanup-malformed-')
+    writeFileSync(join(workspace, '.mcp.json'), '{ not valid json')
+    expect(() => removeWorkerMcpConfigEntry({
+      declaredPath: '.mcp.json', format: 'claude_mcp_json', serverName: 'adhdev-worker', workspace,
+    })).not.toThrow()
+    expect(removeWorkerMcpConfigEntry({
+      declaredPath: '.mcp.json', format: 'claude_mcp_json', serverName: 'adhdev-worker', workspace,
+    })).toBe(false)
   })
 })
 

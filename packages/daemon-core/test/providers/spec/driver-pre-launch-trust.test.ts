@@ -397,9 +397,53 @@ describe('FsmDriver -- pre_launch_trust', () => {
         expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'kimi_workspace_file' } }))).toEqual([]);
         expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'grok_toml_file' } }))).toEqual([]);
         expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'codex_toml_file' } }))).toEqual([]);
+        expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'claude_json_projects' } }))).toEqual([]);
         expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'unknown_scheme' } })))
-            .toContain('pre_launch_trust.scheme must be "kimi_workspace_file", "grok_toml_file" or "codex_toml_file"');
+            .toContain('pre_launch_trust.scheme must be "kimi_workspace_file", "grok_toml_file", "codex_toml_file" or "claude_json_projects"');
         expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'kimi_workspace_file', key: 'x' } })))
             .toContain('pre_launch_trust with scheme excludes settings_path/key');
+    });
+
+    /**
+     * claude-cli has NO worker-private HOME (absent from
+     * WORKER_PRIVATE_HOME_SPECS), so unlike grok/codex there is no
+     * GROK_HOME/CODEX_HOME-style override to redirect through — the driver
+     * always writes into whatever `~/.claude.json` the launch env resolves to.
+     * This test drives the REAL FsmDriver.start() (not a direct
+     * applyClaudeWorkspaceTrust() call) so a regression that stops the driver
+     * from reaching the writer is caught, matching the grok/codex tests above.
+     */
+    it('scheme "claude_json_projects" sets hasTrustDialogAccepted on start()', () => {
+        const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-claude-home-'));
+        const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-claude-ws-'));
+        const factory = new StubFactory();
+        const driver = new FsmDriver({
+            specPath: writeSpec(baseSpec({ id: 'claude-cli', pre_launch_trust: { scheme: 'claude_json_projects' } })),
+            workingDir: workspace,
+            extraEnv: { HOME: claudeHome },
+            hotReload: false,
+            transportFactory: factory,
+        });
+        try {
+            driver.start();
+            const store = path.join(claudeHome, '.claude.json');
+            expect(fs.existsSync(store)).toBe(true);
+            const json = JSON.parse(fs.readFileSync(store, 'utf8'));
+            const real = fs.realpathSync(workspace);
+            expect(json.projects[real]).toEqual({ hasTrustDialogAccepted: true });
+        } finally {
+            driver.shutdown();
+            fs.rmSync(claudeHome, { recursive: true, force: true });
+            fs.rmSync(workspace, { recursive: true, force: true });
+        }
+    });
+
+    it('the published claude-cli spec declares the claude_json_projects scheme', () => {
+        const specPath = path.resolve(
+            __dirname, '../../../../../../adhdev-providers/cli/claude-cli/specs/4.0.json',
+        );
+        if (!fs.existsSync(specPath)) return; // providers submodule not checked out
+        const spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+        expect(spec.pre_launch_trust).toEqual({ scheme: 'claude_json_projects' });
     });
 });

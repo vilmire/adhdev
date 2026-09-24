@@ -140,6 +140,18 @@ function eventKindsForTask(meshId: string, taskId: string): string[] {
   return rows.map(r => r.kind)
 }
 
+/** The raw evidence body of the (first) `dispatch_failed` event recorded for a task. */
+function dispatchFailedEvidence(meshId: string, taskId: string): Record<string, unknown> | undefined {
+  const attempts = MeshRuntimeStore.getInstance().turnStore().listAttemptsForTask(meshId, taskId)
+  if (attempts.length === 0) return undefined
+  const placeholders = attempts.map(() => '?').join(',')
+  const row = MeshRuntimeStore.getInstance().db
+    .prepare(`SELECT payload_json FROM turn_events WHERE attempt_id IN (${placeholders}) AND kind = 'dispatch_failed' LIMIT 1`)
+    .get(...attempts.map(a => a.attemptId)) as { payload_json: string } | undefined
+  if (!row) return undefined
+  return (JSON.parse(row.payload_json)?.evidence ?? {}) as Record<string, unknown>
+}
+
 describe('REFUSAL-BOOKED-AS-DELIVERED — a resolved {success:false} answer is a dispatch failure, not delivery', () => {
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers(); vi.clearAllMocks() })
@@ -173,6 +185,16 @@ describe('REFUSAL-BOOKED-AS-DELIVERED — a resolved {success:false} answer is a
       const eventKinds = eventKindsForTask(meshId, task.id)
       expect(eventKinds).not.toContain('delivered')
       expect(eventKinds).toContain('dispatch_failed')
+
+      // Live-gap fix (2026-09-25): the worker's own refusal code is preserved
+      // (sanitized) on the evidence — previously dispatch_failed carried only
+      // {workerAbsent, reason:'rejected_by_worker'}, with the actual WHY dropped.
+      const evidence = dispatchFailedEvidence(meshId, task.id)!
+      expect(evidence.workerAbsent).toBe(false)
+      expect(evidence.reason).toBe('rejected_by_worker')
+      expect(evidence.refusalCode).toBe('mesh_sender_not_session_coordinator')
+      // Content boundary: the free-text `detail` field must never reach the evidence.
+      expect(JSON.stringify(evidence)).not.toContain('sender is not the coordinator')
     } finally {
       cleanup(meshId)
     }
@@ -237,6 +259,12 @@ describe('REFUSAL-BOOKED-AS-DELIVERED — a resolved {success:false} answer is a
       const eventKinds = eventKindsForTask(meshId, task.id)
       expect(eventKinds).not.toContain('delivered')
       expect(eventKinds).toContain('dispatch_failed')
+
+      // A genuine transport throw carries no worker answer at all, so no refusalCode
+      // is synthesized — `reason` stays classified from the message text as before.
+      const evidence = dispatchFailedEvidence(meshId, task.id)!
+      expect(evidence.refusalCode).toBeUndefined()
+      expect(evidence.reason).toBe('transport_error')
     } finally {
       cleanup(meshId)
     }
