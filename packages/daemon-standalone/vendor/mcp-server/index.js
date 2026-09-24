@@ -43345,7 +43345,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         NATIVE_TURN_OUTCOMES2 = ["completed", "aborted"];
         LIVENESS_RESULTS2 = ["alive", "unknown", "read_failed", "dead"];
         PROVIDER_FAILURES2 = ["auth_failed", "billing_failed"];
-        SESSION_ERROR_REASONS2 = ["provider_error", "adapter_error", "spawn_failed", "auth_failed", "billing_failed", "unknown"];
+        SESSION_ERROR_REASONS2 = ["provider_error", "adapter_error", "spawn_failed", "auth_failed", "billing_failed", "unknown", "daemon_restart"];
         CANCEL_REASONS2 = ["operator_cancel", "intentional_cleanup", "task_removed", "mission_abandoned", "superseded"];
         OPERATOR_STATUSES2 = ["completed", "failed"];
         OPERATOR_STATUS_REASONS2 = ["operator_update", "refine_terminal", "validation_terminal"];
@@ -60332,10 +60332,75 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         };
       }
     });
+    function socketOpen(ws) {
+      if (typeof ws.isOpen === "function")
+        return ws.isOpen();
+      return ws.readyState === 1 || ws.readyState === "open";
+    }
+    function webSocketChannel(ws) {
+      let messageCb = null;
+      let closeCb = null;
+      let closed = false;
+      const preOpen = [];
+      const flushPreOpen = () => {
+        for (const m of preOpen.splice(0))
+          ws.send(m);
+      };
+      ws.addEventListener("message", (ev) => {
+        if (!messageCb)
+          return;
+        const d = ev.data;
+        if (typeof d === "string")
+          messageCb(d);
+        else if (d instanceof Uint8Array)
+          messageCb(textDec.decode(d));
+        else if (d instanceof ArrayBuffer)
+          messageCb(textDec.decode(new Uint8Array(d)));
+      });
+      ws.addEventListener("close", () => {
+        if (closed)
+          return;
+        closed = true;
+        closeCb?.();
+      });
+      ws.addEventListener("open", () => {
+        flushPreOpen();
+      });
+      return {
+        send(msg) {
+          if (closed)
+            return;
+          if (socketOpen(ws)) {
+            flushPreOpen();
+            ws.send(msg);
+          } else if (preOpen.length < PRE_OPEN_CAP) {
+            preOpen.push(msg);
+          }
+        },
+        onMessage(cb) {
+          messageCb = cb;
+        },
+        onClose(cb) {
+          closeCb = cb;
+        },
+        close() {
+          if (closed)
+            return;
+          closed = true;
+          try {
+            ws.close();
+          } catch {
+          }
+          closeCb?.();
+        }
+      };
+    }
+    var PRE_OPEN_CAP;
     var textDec;
     var init_ws = __esm2({
       "../../vendor/seqscribe/dist/ws.js"() {
         "use strict";
+        PRE_OPEN_CAP = 1024;
         textDec = new globalThis.TextDecoder();
       }
     });
@@ -78283,8 +78348,8 @@ ${systemPrompt}`;
               if (sentinel && existing.includes(sentinel)) {
                 const closing = wrapper.split("{prompt}")[1]?.trim();
                 const safeOpen = sentinel.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-                const safeClose = closing ? closing.replace(/[.+^${}()|[\]\\]/g, "\\$&") : "";
-                const re = closing ? new RegExp(`${safeOpen}[\\s\\S]*?${safeClose}`, "g") : new RegExp(`${safeOpen}[\\s\\S]*$`, "g");
+                const safeClose2 = closing ? closing.replace(/[.+^${}()|[\]\\]/g, "\\$&") : "";
+                const re = closing ? new RegExp(`${safeOpen}[\\s\\S]*?${safeClose2}`, "g") : new RegExp(`${safeOpen}[\\s\\S]*$`, "g");
                 (0, import_node_fs3.writeFileSync)(target, existing.replace(re, rendered), "utf-8");
               } else {
                 (0, import_node_fs3.writeFileSync)(target, `${existing}
@@ -87253,16 +87318,17 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
     function localCoordinatorDaemonId2() {
       return canonicalDaemonId3(readNonEmptyString(getMachineId()));
     }
-    function loadRepoConfigForNode(node) {
+    function loadRepoConfigForNodeDetailed(node) {
       const workspace = typeof node?.workspace === "string" && node.workspace.trim() ? node.workspace.trim() : "";
-      if (!workspace) return null;
+      if (!workspace) return { config: null, reason: "no_workspace" };
       try {
         const result = loadRepoMeshJsonConfig3(workspace);
-        if (result.sourceType !== "repo_file" || !result.config) return null;
-        if (!isConfigPathInsideWorkspace(result.path, workspace)) return null;
-        return result.config;
+        if (result.sourceType === "unavailable") return { config: null, reason: "absent" };
+        if (result.sourceType === "invalid" || !result.config) return { config: null, reason: "invalid" };
+        if (!isConfigPathInsideWorkspace(result.path, workspace)) return { config: null, reason: "workspace_mismatch" };
+        return { config: result.config };
       } catch {
-        return null;
+        return { config: null, reason: "invalid" };
       }
     }
     function isConfigPathInsideWorkspace(configPath, workspace) {
@@ -87272,18 +87338,34 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const target = toPosix2(configPath);
       return !!ws && (target === ws || target.startsWith(`${ws}/`));
     }
+    function repoConfigStreakKey(nodeId, workspace) {
+      return `${nodeId}\0${workspace}`;
+    }
     function warnUnreadableRepoConfigForNode(node, providerType) {
       const workspace = typeof node?.workspace === "string" && node.workspace.trim() ? node.workspace.trim() : "";
       if (!workspace) return;
       const nodeId = readNonEmptyString(node?.id) || readNonEmptyString(node?.nodeId) || "unknown-node";
+      const key2 = repoConfigStreakKey(nodeId, workspace);
+      if (warnedInvalidRepoConfigNodes.has(key2)) return;
+      warnedInvalidRepoConfigNodes.add(key2);
       LOG.warn(
         "MeshQueue",
         `repo mesh.json unreadable from this daemon for node=${nodeId} workspace=${workspace} provider=${providerType || "unknown"} \u2014 delegated auto-approve MODE falls back to the provider default here; the worker daemon re-resolves it from its own checkout at launch`
       );
     }
+    function clearUnreadableRepoConfigStreak(node) {
+      const workspace = typeof node?.workspace === "string" && node.workspace.trim() ? node.workspace.trim() : "";
+      if (!workspace) return;
+      const nodeId = readNonEmptyString(node?.id) || readNonEmptyString(node?.nodeId) || "unknown-node";
+      warnedInvalidRepoConfigNodes.delete(repoConfigStreakKey(nodeId, workspace));
+    }
     function delegatedWorkerAutoApproveSettingsForNode(mesh, node, provider, providerType) {
-      const repoConfig = loadRepoConfigForNode(node);
-      if (!repoConfig) warnUnreadableRepoConfigForNode(node, providerType);
+      const { config: repoConfig, reason } = loadRepoConfigForNodeDetailed(node);
+      if (reason === "invalid") {
+        warnUnreadableRepoConfigForNode(node, providerType);
+      } else {
+        clearUnreadableRepoConfigStreak(node);
+      }
       return delegatedWorkerAutoApproveSettings(mesh?.policy, node?.policy, provider, repoConfig, providerType);
     }
     function getMeshWithCache(components, meshId) {
@@ -88146,6 +88228,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       });
     }
     var import_crypto14;
+    var warnedInvalidRepoConfigNodes;
     var BOOTSTRAP_TERMINAL_STATUSES;
     var DISPATCH_CONFIRM_TIMEOUT_MS;
     var DISPATCH_CONNECT_TIMEOUT_MS;
@@ -88202,6 +88285,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         init_mesh_queue_autolaunch();
         init_mesh_claim_refusal();
         init_mesh_autolaunch_integrity();
+        warnedInvalidRepoConfigNodes = /* @__PURE__ */ new Set();
         BOOTSTRAP_TERMINAL_STATUSES = /* @__PURE__ */ new Set(["complete", "failed"]);
         DISPATCH_CONFIRM_TIMEOUT_MS = 12e4;
         DISPATCH_CONNECT_TIMEOUT_MS = MESH_CONNECT_TIMEOUT_MS;
@@ -130010,7 +130094,9 @@ ${buttons.join("\n")}`;
       const isQuestionPicker = rawStatus === "waiting_approval" && !!interactivePrompt && (!activeModal || activeModalKind === "picker");
       const autoApproveActive = host.maybeAutoApproveStatus(adapterStatus, now);
       const autoApproveHoldIdle = host.autoApproveBusy && rawStatus === "idle";
-      const newStatus = isQuestionPicker ? "waiting_choice" : autoApproveActive || autoApproveHoldIdle ? "generating" : rawStatus;
+      const noTurnStartedThisBoot = !host.adapter?.currentTurnTaskId;
+      const startupMaskWithNoActiveTurn = noTurnStartedThisBoot && !host.hasAdapterPendingResponse();
+      const newStatus = isQuestionPicker ? "waiting_choice" : (autoApproveActive || autoApproveHoldIdle) && !startupMaskWithNoActiveTurn ? "generating" : rawStatus;
       const dirName = workingDirBasename(host.workingDir);
       const chatTitle = `${host.provider.name} \xB7 ${dirName}`;
       const progressFingerprint = newStatus === "generating" ? `scr=${adapterStatus.lastScreenChangeAt ?? 0}::out=${adapterStatus.lastOutputAt ?? 0}` : void 0;
@@ -130342,7 +130428,7 @@ ${buttons.join("\n")}`;
         host.lastStatus = newStatus;
         emitStatusEdge(host.lifecyclePort, host.instanceId, previousStatus, newStatus, cliStatusCause({
           questionPicker: isQuestionPicker,
-          autoApproveMasked: (autoApproveActive || autoApproveHoldIdle) && rawStatus !== "generating",
+          autoApproveMasked: (autoApproveActive || autoApproveHoldIdle) && !startupMaskWithNoActiveTurn && rawStatus !== "generating",
           adapterCause
         }), host.type);
       }
@@ -151332,6 +151418,7 @@ ${e?.stderr || ""}`;
       MAX_PROJECTED_STRING: () => MAX_PROJECTED_STRING,
       MAX_SESSIONS_PER_MESH: () => MAX_SESSIONS_PER_MESH,
       MAX_SIZE_ROTATION_GENERATIONS: () => MAX_SIZE_ROTATION_GENERATIONS,
+      MAX_STANDALONE_SEQSCRIBE_LANES: () => MAX_STANDALONE_SEQSCRIBE_LANES,
       MESH_CONVERGE_FAST_FORWARD_TAG: () => MESH_CONVERGE_FAST_FORWARD_TAG,
       MESH_CONVERGE_REFINE_TAG: () => MESH_CONVERGE_REFINE_TAG,
       MESH_DECLARED_ELIGIBLE_SINGLE_HINT: () => MESH_DECLARED_ELIGIBLE_SINGLE_HINT3,
@@ -151411,12 +151498,15 @@ ${e?.stderr || ""}`;
       STALE_MAGI_WINDOW_MS: () => STALE_MAGI_WINDOW_MS,
       STALE_TERMINAL_REFINE_WINDOW_MS: () => STALE_TERMINAL_REFINE_WINDOW_MS,
       STANDALONE_CDP_SCAN_INTERVAL_MS: () => STANDALONE_CDP_SCAN_INTERVAL_MS,
+      STANDALONE_SEQSCRIBE_PEER_CLASS: () => STANDALONE_SEQSCRIBE_PEER_CLASS,
+      STANDALONE_SEQSCRIBE_WS_PATH: () => STANDALONE_SEQSCRIBE_WS_PATH,
       STOP_CONTROL_ID: () => STOP_CONTROL_ID,
       SYM: () => SYM,
       SessionHostController: () => SessionHostController,
       SessionHostPtyTransportFactory: () => SessionHostPtyTransportFactory,
       SessionOutputFanout: () => SessionOutputFanout,
       SessionRegistry: () => SessionRegistry,
+      StandaloneTranscriptLane: () => StandaloneTranscriptLane,
       StatuslineInstallError: () => StatuslineInstallError,
       TRACK: () => TRACK,
       TREE_DIGEST_ALGORITHM: () => TREE_DIGEST_ALGORITHM,
@@ -151599,6 +151689,7 @@ ${e?.stderr || ""}`;
       deriveDependencyFailures: () => deriveDependencyFailures,
       deriveMeshNodeHealthFromGit: () => deriveMeshNodeHealthFromGit,
       deriveMeshReviewInboxItems: () => deriveMeshReviewInboxItems,
+      deriveStandaloneTranscriptGrants: () => deriveStandaloneTranscriptGrants,
       deriveWorkspaceBranchIdentity: () => deriveWorkspaceBranchIdentity,
       deriveWorkspaceOwnerTag: () => deriveWorkspaceOwnerTag,
       describeDiskSpace: () => describeDiskSpace,
@@ -152069,6 +152160,7 @@ ${e?.stderr || ""}`;
       toJsonValue: () => toJsonValue,
       totalTokens: () => totalTokens,
       transcriptParityCounters: () => transcriptParityCounters,
+      transcriptTopicSessionSegment: () => transcriptTopicSessionSegment,
       triggerMeshQueue: () => triggerMeshQueue,
       tryOpenDaemonSeqscribeNode: () => tryOpenDaemonSeqscribeNode,
       turnLedgerIpcHandlers: () => turnLedgerIpcHandlers,
@@ -170485,6 +170577,60 @@ ${notice.notice}${supersededHint}`;
     init_migrate_v1();
     init_migrate_v2();
     init_migrate_v3();
+    var NOOP_LOG3 = { info: () => {
+    }, warn: () => {
+    } };
+    function isOrphanCandidate(attempt) {
+      return attempt.scope === "plain";
+    }
+    function reconcileOrphanedPlainAttempts(deps) {
+      const log = deps.log ?? NOOP_LOG3;
+      const now = deps.now ?? (() => Date.now());
+      const observedBy = deps.observedBy ?? deps.ledger.selfDaemonId;
+      const report = { checked: 0, closed: 0, closedAttemptIds: [] };
+      let candidates;
+      try {
+        candidates = deps.ledger.store.listOpenAttempts({ ownerDaemonId: observedBy }).filter(isOrphanCandidate);
+      } catch (error48) {
+        log.warn(`turn-ledger: orphaned-plain-attempt reconciliation could not list open attempts: ${error48 instanceof Error ? error48.message : String(error48)}`);
+        return report;
+      }
+      for (const attempt of candidates) {
+        report.checked++;
+        let live;
+        try {
+          live = deps.isSessionLive(attempt.sessionId);
+        } catch {
+          continue;
+        }
+        if (live) continue;
+        const evidence = {
+          eventId: `daemon_restart:${attempt.attemptId}:g${attempt.generation}`,
+          at: now(),
+          source: "session_registry",
+          sessionId: attempt.sessionId,
+          attemptRef: { attemptId: attempt.attemptId, generation: attempt.generation },
+          observedBy,
+          kind: "session_error",
+          reason: "daemon_restart"
+        };
+        try {
+          const result = deps.ledger.observe(evidence);
+          if (result.verdict === "applied") {
+            report.closed++;
+            report.closedAttemptIds.push(attempt.attemptId);
+          } else if (result.verdict !== "rejected" || result.rejection !== "already_terminal") {
+            log.warn(`turn-ledger: orphaned-plain-attempt reconciliation observed ${attempt.attemptId} with unexpected verdict ${result.verdict}${result.rejection ? `/${result.rejection}` : ""}`);
+          }
+        } catch (error48) {
+          log.warn(`turn-ledger: orphaned-plain-attempt reconciliation failed for ${attempt.attemptId}: ${error48 instanceof Error ? error48.message : String(error48)}`);
+        }
+      }
+      if (report.closed > 0) {
+        log.info(`turn-ledger: closed ${report.closed} orphaned plain attempt(s) after restart`);
+      }
+      return report;
+    }
     init_turn_ledger_ipc();
     init_turn_evidence_port();
     init_deliver();
@@ -170890,6 +171036,25 @@ ${notice.notice}${supersededHint}`;
         }
       };
       return { ...s6, components, disposeMeshRuntime };
+    }
+    function reconcileOrphanedPlainAttemptsOnBoot(components) {
+      const ledger = components.turnLedger;
+      if (!ledger) return null;
+      return reconcileOrphanedPlainAttempts({
+        ledger,
+        isSessionLive: (sessionId) => {
+          if (components.sessionRegistry.has(sessionId)) return true;
+          try {
+            return !!components.instanceManager.getInstance(sessionId);
+          } catch {
+            return false;
+          }
+        },
+        log: {
+          info: (m) => LOG.info("TurnLedger", m),
+          warn: (m) => LOG.warn("TurnLedger", m)
+        }
+      });
     }
     init_logger();
     init_runtime_defaults();
@@ -172113,6 +172278,11 @@ ${notice.notice}${supersededHint}`;
           LOG.warn("Init", `Hosted session restore failed: ${e?.message || e}`);
         }
       }
+      try {
+        reconcileOrphanedPlainAttemptsOnBoot(components);
+      } catch (e) {
+        LOG.warn("TurnLedger", `Orphaned-plain-attempt reconciliation failed: ${e?.message || e}`);
+      }
       scheduleQuotaBootRefresh(components);
       scheduleModelDiscovery(components);
       setImmediate(() => void s7.router.resumePendingRefineJobsOnStartup());
@@ -172202,6 +172372,137 @@ ${notice.notice}${supersededHint}`;
       };
     }
     init_runtime_slot();
+    init_dist2();
+    init_logger();
+    init_mesh_publisher();
+    var STANDALONE_SEQSCRIBE_WS_PATH = "/ws/seqscribe";
+    var STANDALONE_SEQSCRIBE_PEER_CLASS = "content";
+    var MAX_STANDALONE_SEQSCRIBE_LANES = 8;
+    function transcriptTopicSessionSegment(topic) {
+      if (!topic.startsWith("session.") || !topic.endsWith(".transcript")) return null;
+      const segment = topic.slice("session.".length, -".transcript".length);
+      if (segment.length === 0 || segment.includes(".")) return null;
+      return segment;
+    }
+    function deriveStandaloneTranscriptGrants(topics) {
+      const grants = {};
+      for (const { topic, policy } of topics) {
+        if (transcriptTopicSessionSegment(topic) === null) continue;
+        if (policy.replication !== "subscribe-only") continue;
+        grants[topic] = "serve";
+      }
+      return grants;
+    }
+    var StandaloneTranscriptLane = class {
+      constructor(seqscribe, options = {}) {
+        this.seqscribe = seqscribe;
+        this.maxLanes = Math.max(1, options.maxLanes ?? MAX_STANDALONE_SEQSCRIBE_LANES);
+        this.unsubscribeTopicActivation = onTopicActivated(seqscribe, (topic) => {
+          if (transcriptTopicSessionSegment(topic) === null) return;
+          this.readvertiseAll(topic);
+        });
+      }
+      lanes = /* @__PURE__ */ new Map();
+      unsubscribeTopicActivation;
+      maxLanes;
+      laneSeq = 0;
+      closed = false;
+      /** Current grant map every lane is advertised (tests / diagnostics). */
+      grants() {
+        return deriveStandaloneTranscriptGrants(this.seqscribe.topics);
+      }
+      /** Live lane count (tests / diagnostics). */
+      laneCount() {
+        return this.lanes.size;
+      }
+      /**
+       * Attach one authenticated socket as a seqscribe peer.
+       *
+       * The caller MUST have already enforced the standalone auth gate — this
+       * method has no way to tell an authenticated socket from any other.
+       * Returns the local peer id, or null when the lane refused (closed lane,
+       * or the node rejected the attach); a refused socket is closed.
+       */
+      accept(socket) {
+        if (this.closed) {
+          safeClose(socket);
+          return null;
+        }
+        while (this.lanes.size >= this.maxLanes) {
+          const oldest = this.lanes.keys().next().value;
+          if (oldest === void 0) break;
+          LOG.info("Seqscribe", `standalone replica lane evicted peer=${oldest} reason=lane_cap`);
+          this.detach(oldest);
+        }
+        this.laneSeq += 1;
+        const peerId = `standalone_dashboard_${this.laneSeq}`;
+        let peer;
+        try {
+          peer = this.seqscribe.node.attach(webSocketChannel(socket), {
+            peerId,
+            peerClass: STANDALONE_SEQSCRIBE_PEER_CLASS,
+            grants: this.grants()
+          });
+        } catch (error48) {
+          LOG.warn(
+            "Seqscribe",
+            `standalone replica lane attach refused peer=${peerId}: ${error48 instanceof Error ? error48.message : String(error48)}`
+          );
+          safeClose(socket);
+          return null;
+        }
+        this.lanes.set(peerId, { peer, socket });
+        peer.onLifecycle((event) => {
+          if (event.event !== "closed") return;
+          if (this.lanes.get(peerId)?.peer === peer) this.lanes.delete(peerId);
+          LOG.info("Seqscribe", `standalone replica lane closed peer=${peerId} reason=${event.reason ?? "unknown"}`);
+        });
+        LOG.info(
+          "Seqscribe",
+          `standalone replica lane attached peer=${peerId} transcriptTopics=${Object.keys(this.grants()).length}`
+        );
+        return peerId;
+      }
+      /** Detach one lane (closes its socket). Idempotent. */
+      detach(peerId) {
+        const entry = this.lanes.get(peerId);
+        if (!entry) return;
+        this.lanes.delete(peerId);
+        try {
+          entry.peer.detach();
+        } catch {
+        }
+        safeClose(entry.socket);
+      }
+      /** Detach every lane and stop listening for topic activation. Idempotent. */
+      close() {
+        if (this.closed) return;
+        this.closed = true;
+        this.unsubscribeTopicActivation();
+        for (const peerId of [...this.lanes.keys()]) this.detach(peerId);
+      }
+      /** Never throws — runs inside a transcript publish (via the activation announcement). */
+      readvertiseAll(topic) {
+        if (this.lanes.size === 0) return;
+        const grants = this.grants();
+        for (const [peerId, { peer }] of this.lanes) {
+          try {
+            peer.updateGrants(grants);
+          } catch (error48) {
+            LOG.warn(
+              "Seqscribe",
+              `standalone replica lane grant re-advertisement failed peer=${peerId} topic=${topic}: ${error48 instanceof Error ? error48.message : String(error48)}`
+            );
+          }
+        }
+      }
+    };
+    function safeClose(socket) {
+      try {
+        socket.close();
+      } catch {
+      }
+    }
     init_launch_record();
     init_dist();
     init_model_launch_args();
@@ -173578,7 +173879,7 @@ var TURN_END_BLOCK_REASONS = [
 var NATIVE_TURN_OUTCOMES = ["completed", "aborted"];
 var LIVENESS_RESULTS = ["alive", "unknown", "read_failed", "dead"];
 var PROVIDER_FAILURES = ["auth_failed", "billing_failed"];
-var SESSION_ERROR_REASONS = ["provider_error", "adapter_error", "spawn_failed", "auth_failed", "billing_failed", "unknown"];
+var SESSION_ERROR_REASONS = ["provider_error", "adapter_error", "spawn_failed", "auth_failed", "billing_failed", "unknown", "daemon_restart"];
 var CANCEL_REASONS = ["operator_cancel", "intentional_cleanup", "task_removed", "mission_abandoned", "superseded"];
 var OPERATOR_STATUSES = ["completed", "failed"];
 var OPERATOR_STATUS_REASONS = ["operator_update", "refine_terminal", "validation_terminal"];

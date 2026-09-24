@@ -90,7 +90,14 @@ export type LivenessResult = typeof LIVENESS_RESULTS[number]
 export const PROVIDER_FAILURES = ['auth_failed', 'billing_failed'] as const
 export type ProviderFailure = typeof PROVIDER_FAILURES[number]
 
-export const SESSION_ERROR_REASONS = ['provider_error', 'adapter_error', 'spawn_failed', 'auth_failed', 'billing_failed', 'unknown'] as const
+/**
+ * `daemon_restart` (wiring-unification follow-up, design §5): a boot-time
+ * reconciliation observes this for a plain attempt whose session is gone
+ * after a restart — the daemon never saw the session's own exit, so it is
+ * not `provider_error`/`adapter_error`/etc.; it is the daemon itself
+ * reporting "this session no longer exists".
+ */
+export const SESSION_ERROR_REASONS = ['provider_error', 'adapter_error', 'spawn_failed', 'auth_failed', 'billing_failed', 'unknown', 'daemon_restart'] as const
 export type SessionErrorReason = typeof SESSION_ERROR_REASONS[number]
 
 export const CANCEL_REASONS = ['operator_cancel', 'intentional_cleanup', 'task_removed', 'mission_abandoned', 'superseded'] as const
