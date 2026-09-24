@@ -881,6 +881,11 @@ export class SpecCliAdapter implements CliAdapter {
         this.driver.dispatch({ kind: 'resize', cols, rows });
     }
 
+    /** REDRAW-NUDGE: false-busy resize wiggles issued by the FSM driver (read by the mesh stall watchdog). */
+    getRedrawNudgeCount(): number {
+        return this.driver?.getRedrawNudgeCount?.() ?? 0;
+    }
+
     resolveModal(buttonIndex: number): void {
         this.resolveModalMatched(buttonIndex);
     }

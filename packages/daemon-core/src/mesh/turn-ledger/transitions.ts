@@ -79,7 +79,7 @@ export type ActionId =
 /** Hold deadline expressions, resolved against policy + ledger clock. */
 export type UntilExpr =
     | 'await_delivery' | 'await_consume' | 'await_turn' | 'liveness' | 'hard_ceiling'
-    | 'weak_confirm' | 'unknown_grace' | 'admission' | 'await_report' | 'none';
+    | 'weak_confirm' | 'unknown_grace' | 'liveness_reprobe' | 'admission' | 'await_report' | 'none';
 
 export type EffectTemplate =
     | { e: 'act'; act: ActionId }
@@ -363,7 +363,7 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     ] },
     { id: 'R32u', lane: 'current', from: [C, G, S, F], on: ['liveness'], guard: 'liveness_unknown', to: 'same', verdict: 'applied', effects: [
         { e: 'act', act: 'liveness_unknown' },
-        { e: 'hold', reason: 'liveness', until: 'unknown_grace', onExpire: 'escalate' },
+        { e: 'hold', reason: 'liveness', until: 'liveness_reprobe', onExpire: 'escalate' },
     ] },
     { id: 'R35', lane: 'current', from: [C, G, S, F], on: ['git_side_effect'], to: 'same', verdict: 'applied', effects: [
         { e: 'act', act: 'store_git' },
@@ -386,7 +386,7 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     ] },
     { id: 'H4', lane: 'current', from: [C, G, S, F], on: ['hold_expired'], guard: 'hold_liveness', to: 'same', verdict: 'applied', effects: [
         { e: 'probe' },
-        { e: 'hold', reason: 'liveness', until: 'unknown_grace', onExpire: 'escalate' },
+        { e: 'hold', reason: 'liveness', until: 'liveness_reprobe', onExpire: 'escalate' },
     ] },
     { id: 'H5', lane: 'current', from: 'nonterminal', on: ['hold_expired'], guard: 'hold_hard_ceiling', to: 'failed', verdict: 'applied', effects: [
         { e: 'commit', outcome: 'failed', strength: 'genuine', reason: 'hard_ceiling' },

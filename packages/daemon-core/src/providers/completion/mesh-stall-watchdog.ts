@@ -49,6 +49,8 @@ export interface MeshStallHost {
         isAlive?: () => boolean;
         getStatus(opts: { allowParse: boolean }): unknown;
         getLastApprovalResolvedAt?: () => number;
+        /** REDRAW-NUDGE: false-busy resize wiggles the spec driver already tried (0/absent for non-spec adapters). */
+        getRedrawNudgeCount?: () => number;
     };
     meshStallAnchorAt: number;
     meshStallEmittedForAnchor: boolean;
@@ -331,8 +333,14 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
 
     // observedStatus is context only — deliberately NOT the reconciliation-triggering
     // `status` field (see mesh-events-stale.buildNoProgressCompletionReconciliation).
+    // REDRAW-NUDGE: the spec driver resize-wiggles a silent generating screen well
+    // before this 180s+ watchdog; say how many ran, so a no_progress that fires
+    // anyway reads as "a repaint did not reveal idle" rather than an untried wedge.
+    let redrawNudges = 0;
+    try { redrawNudges = host.adapter.getRedrawNudgeCount?.() ?? 0; } catch { /* diagnostics only */ }
     if (host.isMeshWorkerSession()) {
-        traceMeshEventStage('fired', host.meshTraceCtx('monitor:no_progress'), 'mesh_worker_stall_watchdog');
+        traceMeshEventStage('fired', host.meshTraceCtx('monitor:no_progress'),
+            redrawNudges > 0 ? `mesh_worker_stall_watchdog (after ${redrawNudges} redraw nudge(s))` : 'mesh_worker_stall_watchdog');
     }
 
     const stalledSec = Math.round(stalledMs / 1000);
@@ -347,6 +355,7 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
         lastOutputAt: host.meshStallAnchorAt,
         stalledMs,
         observedStatus,
+        redrawNudges,
         taskId: host.completingTurnTaskId(),
     });
     // Turn-evidence (C5/C-W5): a pure observation, mirroring the provider event

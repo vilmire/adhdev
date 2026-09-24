@@ -102,14 +102,13 @@ describe('built-in specs are lint-clean', () => {
         expect(specFiles.length).toBeGreaterThanOrEqual(providers.size);
     });
 
-    // The ONE known advisory hit across all built-ins, reviewed 2026-09-08 and
-    // deliberately left as-is: claude-cli's busy→idle guard consumes trailing
-    // lines to the END OF THE `body` SECTION, so a bare `$` (whole-haystack
-    // anchor, no `m`) is the CORRECT semantics — not the per-line mistake the
-    // lint targets. It is listed here rather than silenced in the engine so a
-    // NEW violation still turns this test red. This is exactly why the lint is a
-    // warning and never an error.
-    const KNOWN_ADVISORY: Record<string, number> = { 'claude-cli/specs/4.0.json': 1 };
+    // Zero known advisories. Until 2026-09-24 claude-cli 4.0's busy→idle body
+    // regex (transitions[4].when.all[1]) was listed here: it consumes trailing
+    // lines to the END OF THE `body` SECTION, so its bare `$` was semantically
+    // right but tripped this lint on every session start (live preview WRN
+    // spam). The spec now spells that end anchor `(?![\s\S])` — identical
+    // end-of-input semantics without the m flag — so any hit is a NEW violation.
+    const KNOWN_ADVISORY: Record<string, number> = {};
 
     it.each(specFiles.map(f => [path.relative(CLI_ROOT, f), f]))('%s has zero unreviewed lint warnings', (name, file) => {
         const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -118,8 +117,33 @@ describe('built-in specs are lint-clean', () => {
         expect(warns).toHaveLength(KNOWN_ADVISORY[name as string] ?? 0);
     });
 
-    it('the known-advisory list stays minimal (one entry, one hit)', () => {
-        expect(Object.values(KNOWN_ADVISORY)).toEqual([1]);
+    it('the known-advisory list stays empty', () => {
+        expect(Object.values(KNOWN_ADVISORY)).toEqual([]);
+    });
+
+    it('claude-cli busy→idle end anchor (?![\\s\\S]) matches exactly like the old bare $', () => {
+        const file = specFiles.find(f => f.endsWith(path.join('claude-cli', 'specs', '4.0.json')))!;
+        const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+        const t = raw.transitions[4];
+        expect(t.label).toBe('busy→idle');
+        const src: string = t.when.all[1].matches;
+        expect(src.endsWith('(?![\\s\\S])')).toBe(true);
+        const now = new RegExp(src, t.when.all[1].flags ?? 'i');
+        const old = new RegExp(src.slice(0, -'(?![\\s\\S])'.length) + '$', t.when.all[1].flags ?? 'i');
+        const samples = [
+            '✻ Worked for 12s',
+            '✻ Worked for 12s\n',
+            '✻ Worked for 1m 3s\n\n> \n? for shortcuts',
+            // live spinner below the summary — must NOT match (still busy)
+            '✻ Worked for 12s\n✶ Thinking… (3s · ↑ 1.2k tokens)',
+            '✻ Worked for 12s\n\n· Reading files...\nmore',
+            // token counter on the summary line itself — not a completion line
+            '✻ Brewing for 12s · ↑ 3k tokens',
+            'no summary at all',
+        ];
+        for (const s of samples) expect([s, now.test(s)]).toEqual([s, old.test(s)]);
+        expect(now.test(samples[2])).toBe(true);
+        expect(now.test(samples[3])).toBe(false);
     });
 
     it('loadFsmSpec surfaces a warnings array on the ok result', () => {

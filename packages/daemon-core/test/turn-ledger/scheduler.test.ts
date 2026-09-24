@@ -397,3 +397,66 @@ describe('report gate — the rc.40 false-idle sequence commits once, on the rep
         expect(r.host.calls).toContain('graph:t1:completed');
     });
 });
+
+// Live rc.43 run 10 (2026-09-24, owner ledger, mesh_direct:ed31090f…, session
+// f437e525): R9r opened `await_report` (600 s) at t=0 while the `liveness`
+// hold armed by R4/livenessExtend was still running toward its own 480 s
+// deadline — the two holds are independent. Once liveness expired at ~480 s,
+// H4 re-armed it at the 12 s `unknown_grace` cadence and kept re-arming every
+// 12 s for the REST of the await_report window: 11 remote transcript probes
+// in under 2 minutes on an attempt already bounded by its own 600 s deadline.
+describe('liveness probe backoff during await_report (rc.43 run 10)', () => {
+    it('H4 re-arms at the normal 12 s cadence in generating, but backs off to the finalizing interval once await_report is held', async () => {
+        const r = rig();
+        toGenerating(r);
+        // generating: unchanged cadence.
+        r.advance(P.livenessDeadlineMs + 1);
+        await r.scheduler.tick();
+        expect(r.ports.calls.filter((c) => c === 'probe:s1')).toHaveLength(1);
+        expect(r.ledger.store.activeHolds('a1').find((h) => h.reason === 'liveness')!.until).toBe(r.now + 12_000);
+
+        // A genuine end with reportExpected opens await_report (R9r) without
+        // touching the still-running liveness hold.
+        expect(r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true })).rule).toBe('R9r');
+        expect(r.ledger.getAttempt('a1')!.state).toBe('finalizing');
+
+        // The pre-existing liveness hold (armed at the *generating* cadence,
+        // now re-armed once already above) expires again inside the
+        // await_report window: from here every re-arm must use the finalizing
+        // interval (60 s default), not 12 s.
+        r.advance(12_000 + 1);
+        await r.scheduler.tick();
+        expect(r.ports.calls.filter((c) => c === 'probe:s1')).toHaveLength(2);
+        const rearmed = r.ledger.store.activeHolds('a1').find((h) => h.reason === 'liveness')!;
+        expect(rearmed.until).toBe(r.now + P.livenessProbeIntervalFinalizingMs);
+
+        // Simulate the rest of run 10's 2-minute window at the OLD 12 s cadence
+        // (what H4 used to re-arm at): with the fix, ticking every 12 s must NOT
+        // produce a probe every tick — only every ~60 s.
+        const probesBefore = r.ports.calls.filter((c) => c === 'probe:s1').length;
+        for (let i = 0; i < 10; i++) {
+            r.advance(12_000);
+            await r.scheduler.tick();
+        }
+        const probesAfter = r.ports.calls.filter((c) => c === 'probe:s1').length - probesBefore;
+        // 120 s elapsed at a >=60 s floor → at most 2 further probes (break-once:
+        // before this fix every 12 s tick produced one, i.e. 10).
+        expect(probesAfter).toBeLessThanOrEqual(2);
+        expect(r.ledger.getAttempt('a1')!.terminal).toBeNull(); // await_report's own 600 s deadline still governs the commit, untouched
+
+        // The R13r commit path is unaffected: it still fires off the
+        // await_report hold's own deadline, not the liveness hold.
+        r.advance(P.awaitReportMs);
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' });
+    });
+
+    it('liveness_unknown (R32u) also backs off while await_report is held', async () => {
+        const r = rig();
+        toGenerating(r);
+        expect(r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true })).rule).toBe('R9r');
+        expect(r.ledger.observe(evd('liveness', { result: 'unknown' })).rule).toBe('R32u');
+        const hold = r.ledger.store.activeHolds('a1').find((h) => h.reason === 'liveness')!;
+        expect(hold.until).toBe(r.now + P.livenessProbeIntervalFinalizingMs);
+    });
+});

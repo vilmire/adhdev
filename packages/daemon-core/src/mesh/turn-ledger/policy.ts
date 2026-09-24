@@ -47,6 +47,20 @@ export interface TurnPolicy {
      * longer default costs nothing on the common path.
      */
     awaitReportMs: number;
+    /**
+     * Liveness re-arm cadence while an `await_report` hold is open (2026-09-24,
+     * preview rc.43 run 10): H4/R32u normally re-arm the `liveness` hold at
+     * `unknownLivenessGraceMs` (3×tick = 12 s) after each expiry, which is a
+     * remote transcript probe every 12 s. That is fine in `generating` — the
+     * probe is how a dead worker is detected — but once the false-idle gate has
+     * opened `await_report` the attempt already has its own 600 s deadline
+     * (R13r commits weak when it expires), so re-probing every 12 s for the
+     * whole window is a liveness-probe storm with nothing new to learn (run 10:
+     * 11 probes in 2 min, same `finalizing` attempt, same worker). The liveness
+     * hold still re-arms while `await_report` is held — a genuinely dead worker
+     * must still be caught — just at this slower cadence instead.
+     */
+    livenessProbeIntervalFinalizingMs: number;
 }
 
 export const DEFAULT_TURN_POLICY: Readonly<TurnPolicy> = Object.freeze({
@@ -59,6 +73,7 @@ export const DEFAULT_TURN_POLICY: Readonly<TurnPolicy> = Object.freeze({
     stallNoticeMs: 180_000,
     hardCeilingMs: 5_400_000,
     awaitReportMs: 600_000,
+    livenessProbeIntervalFinalizingMs: 60_000,
 });
 
 /** Budgets (counts, not times) — deliberately not env-tunable. */
@@ -74,6 +89,17 @@ export function holdTtlMs(p: TurnPolicy): number { return Math.round(1.5 * p.qui
 export function weakConfirmMs(p: TurnPolicy): number { return Math.round(1.5 * p.quietWindowMs); }
 /** Grace after a liveness probe answers `unknown` (was RECLAIM_UNKNOWN_GRACE_TICKS × tick). */
 export function unknownLivenessGraceMs(p: TurnPolicy): number { return 3 * p.tickMs; }
+/**
+ * Liveness re-arm interval after H4/R32u: the normal cadence (`unknown_grace`,
+ * 3×tick) everywhere, except while an `await_report` hold is open, where the
+ * probe backs off to `livenessProbeIntervalFinalizingMs` — never faster than
+ * the normal cadence, so a policy misconfigured below it cannot make things
+ * worse.
+ */
+export function livenessReArmMs(p: TurnPolicy, awaitReportHeld: boolean): number {
+    const normal = unknownLivenessGraceMs(p);
+    return awaitReportHeld ? Math.max(normal, p.livenessProbeIntervalFinalizingMs) : normal;
+}
 /** Accepted-but-never-delivered deadline (stranded-unconfirmed 300→240 s). */
 export function awaitDeliveryMs(p: TurnPolicy): number { return 2 * p.deliveryCeilingMs; }
 /** Max age of a transcript read that may still be treated as authoritative. */
@@ -117,6 +143,7 @@ export const TURN_POLICY_ENV_BINDINGS: readonly EnvBinding[] = [
     { field: 'hardCeilingMs', canonical: 'ADHDEV_TURN_HARD_CEILING_MS', min: 0, max: 24 * HOUR,
       aliases: [{ name: 'MESH_INFLIGHT_ACKED_HOLD_HARD_CEILING_MS', min: 0, max: 24 * HOUR }] },
     { field: 'awaitReportMs', canonical: 'ADHDEV_TURN_AWAIT_REPORT_MS', min: 0, max: HOUR, aliases: [] },
+    { field: 'livenessProbeIntervalFinalizingMs', canonical: 'ADHDEV_TURN_LIVENESS_PROBE_INTERVAL_FINALIZING_MS', min: 0, max: HOUR, aliases: [] },
 ];
 
 /**

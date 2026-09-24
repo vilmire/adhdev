@@ -79,7 +79,13 @@ import {
     buildMeshTaskModeViolationError,
     classifySessionBusyWithTask,
     SESSION_BUSY_WITH_TASK_CODE,
+    // QUOTA GATE (direct-dispatch path, preview rc.43 run 10): the SAME judgement
+    // module the manual-launch path (mesh_launch_session, below) and the daemon-side
+    // claim/auto-launch paths use — see checkDirectDispatchQuotaGate's doc comment.
+    evaluateProviderQuotaGate,
+    type ProviderQuotaGateBlock,
 } from '@adhdev/daemon-core';
+import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { readString } from './mesh-tool-shared.js';
 import type { MeshTaskInput } from './mesh-tool-shared.js';
 import {
@@ -1321,6 +1327,82 @@ function buildProviderPinUnsatisfiableFailure(
 }
 
 /**
+ * QUOTA GATE (direct-dispatch path, preview rc.43 run 10). The queue CLAIM
+ * path (mesh-queue-assignment.ts's `evaluateQuotaClaimGateForAssignment`,
+ * daemon-side) already refuses to pull a pending task onto an idle session
+ * whose provider is measurably quota-exhausted — but `mesh_send_task`'s
+ * DIRECT dispatch (this file, naming a node/session_id explicitly) went
+ * straight to `agent_command`/local inject with no such check. Live evidence:
+ * the owner ledger's mesh_direct attempt `ed31090f…` spent ~10 minutes
+ * talking to a MainPC claude-cli worker session whose own chat already showed
+ * "You've hit your session limit · resets 10:10pm (Asia/Seoul)" — the claim
+ * path would have diverted this candidate; the direct path had nothing to
+ * divert it.
+ *
+ * Reuses `evaluateProviderQuotaGate` — the SAME predicate the claim gate and
+ * the manual-launch path (`meshLaunchSession` below) already call — so this
+ * path can never independently decide what "out of quota" means. Called with
+ * no `QuotaFactsContext` (mirrors the manual-launch call site): a direct
+ * dispatch reads only the node's reported `nodeFacts.quota` snapshot, never
+ * triggers a fetch. Fail-open is therefore inherited unchanged: a missing,
+ * stale, or unmarked-fresh snapshot never blocks — only a FRESH measured
+ * block (an 'ok' window under threshold, or the provider's own
+ * 'quota-exhausted' verdict) does.
+ *
+ * Returns `null` when the dispatch may proceed (unknown/healthy). Returns the
+ * block plus, when resolvable, the offending window's own `resetsAt` (read
+ * directly off `node.nodeFacts.quota[providerType]` — the same bundle
+ * `evaluateProviderQuotaGate` itself reads) so a refusal names WHEN the
+ * window resets instead of just that it is closed. Antigravity's per-pool
+ * bucket decomposition and the exhausted-with-no-named-window case are not
+ * resolvable this way (the exact window is internal to mesh-quota-routing.ts)
+ * — `resetsAt` is omitted rather than guessed.
+ */
+export function checkDirectDispatchQuotaGate(
+    node: LocalMeshNodeEntry,
+    providerType: string,
+    quotaRoutingPolicy: unknown,
+): { block: ProviderQuotaGateBlock; resetsAt: number | null } | null {
+    if (!providerType) return null;
+    const block = evaluateProviderQuotaGate(node, providerType, (quotaRoutingPolicy as never) ?? null);
+    if (!block) return null;
+    const quota = (node as any)?.nodeFacts?.quota?.[providerType] as MeshNodeFactsProviderQuota | undefined;
+    const window = block.window === 'session' ? quota?.session : block.window === 'weekly' ? quota?.weekly : null;
+    const resetsAt = typeof window?.resetsAt === 'number' && Number.isFinite(window.resetsAt) ? window.resetsAt : null;
+    return { block, resetsAt };
+}
+
+/** Shared refusal payload for `checkDirectDispatchQuotaGate` — same shape from every call site. */
+export function buildQuotaExhaustedDispatchFailure(
+    node: LocalMeshNodeEntry,
+    providerType: string,
+    sessionId: string | undefined,
+    gate: { block: ProviderQuotaGateBlock; resetsAt: number | null },
+): Record<string, unknown> {
+    const { block, resetsAt } = gate;
+    return {
+        success: false,
+        recoverable: true,
+        code: 'provider_quota_exhausted',
+        reason: 'provider_quota_exhausted',
+        nodeId: node.id,
+        ...(sessionId ? { sessionId } : {}),
+        providerType,
+        quotaBlock: {
+            reason: block.reason,
+            window: block.window,
+            remainingPercent: block.remainingPercent,
+            thresholdPercent: block.thresholdPercent,
+            ...(resetsAt !== null ? { resetsAt } : {}),
+        },
+        error: `Provider '${providerType}' on node '${node.id}' is quota-gated (${block.reason}; ${block.window} window at ${block.remainingPercent}% remaining, threshold ${block.thresholdPercent}%)`
+            + (resetsAt !== null ? ` — resets at ${new Date(resetsAt).toISOString()}.` : '.')
+            + ' Refusing this direct dispatch rather than spending a turn on a session that cannot work right now.',
+        nextAction: 'Wait for the quota window to reset, target a different node/session, or pass allow_quota_exhausted: true to dispatch anyway (e.g. deliberately testing the provider\'s own quota error).',
+    };
+}
+
+/**
  * For IpcTransport + remote node: resolve an active session on the node and
  * dispatch an agent_command directly via P2P relay (mesh_relay_command).
  *
@@ -1361,6 +1443,8 @@ export async function ipcDispatchToRemoteAgent(
         messageId?: string;
         policy?: { mode: 'queue' | 'send_now' | 'interrupt' };
         origin?: 'mcp' | 'mesh';
+        /** QUOTA GATE opt-out — see checkDirectDispatchQuotaGate's doc comment. */
+        allowQuotaExhausted?: boolean;
     },
 ): Promise<RemoteAgentDispatchResult> {
     const transport = ctx.transport as IpcTransport;
@@ -1500,7 +1584,21 @@ export async function ipcDispatchToRemoteAgent(
                 // the node resolution left the type blank. Unpinned dispatches still
                 // pass '' and keep the any-session behavior.
                 const sessionProviderFilter = resolvedProviderType || (providerPins.length === 1 ? providerPins[0] : '');
-                const targetSession = chooseDispatchableSession(sessions, sessionProviderFilter, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
+                // QUOTA GATE (sessionless auto-pick): mirror the claim path's candidate
+                // filtering — never auto-pick an idle session whose provider is
+                // measurably quota-exhausted, the same predicate checkDirectDispatchQuotaGate
+                // applies to an explicit session_id below. A pre-filter here (rather than
+                // gating only the final pick) lets chooseDispatchableSession fall through
+                // to the NEXT idle session on this node when one exists, instead of
+                // treating "the first idle session happens to be gated" as "no session
+                // available". allowQuotaExhausted also disables this pre-filter, so the
+                // opt-out has one consistent meaning across both call sites.
+                const dispatchableSessions = args.allowQuotaExhausted ? sessions : sessions.filter((session: any) => {
+                    const sessionProviderType = resolveSessionProviderType(session);
+                    if (!sessionProviderType) return true;
+                    return !checkDirectDispatchQuotaGate(node, sessionProviderType, ctx.mesh.policy?.quotaRouting ?? null);
+                });
+                const targetSession = chooseDispatchableSession(dispatchableSessions, sessionProviderFilter, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
 
                 if (targetSession?.id || targetSession?.sessionId) {
                     sessionId = targetSession.id || targetSession.sessionId;
@@ -1539,6 +1637,18 @@ export async function ipcDispatchToRemoteAgent(
     // specific message wins when nothing resolved at all.
     if (providerPins.length && !providerPins.includes(resolvedProviderType)) {
         return buildProviderPinUnsatisfiableFailure(node, providerPins, readProviderPriority(node.policy), resolvedProviderType);
+    }
+    // QUOTA GATE (direct dispatch) — see checkDirectDispatchQuotaGate's doc comment.
+    // Placed after pin resolution (a pin refusal is more specific and should win) and
+    // before the actual send. The sessionless auto-pick above already pre-filtered
+    // candidate sessions, but this still catches an EXPLICIT session_id (the run-10
+    // case) and the sessionless-fallback-to-priority-list route, where no session
+    // filtering ran at all.
+    if (!args.allowQuotaExhausted) {
+        const quotaGate = checkDirectDispatchQuotaGate(node, resolvedProviderType, ctx.mesh.policy?.quotaRouting ?? null);
+        if (quotaGate) {
+            return buildQuotaExhaustedDispatchFailure(node, resolvedProviderType, sessionId || undefined, quotaGate) as RemoteAgentDispatchResult;
+        }
     }
 
     try {
