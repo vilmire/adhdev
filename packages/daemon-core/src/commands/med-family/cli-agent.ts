@@ -419,7 +419,10 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
 };
 
 export const cliAgentSpecs = defineCommandSpecs('med', cliAgentHandlers, {
-    launch_cli: { invalidates: ['daemon.metadata'], fastFlush: true, blockedDuringMandatoryUpdate: true },
+    // Mesh: any authenticated peer may launch, but a coordinator anchor the launch
+    // stamps must name the sender, and a mesh worker launch needs this daemon's
+    // mesh-host evidence for the sender (first use may record it).
+    launch_cli: { invalidates: ['daemon.metadata'], fastFlush: true, blockedDuringMandatoryUpdate: true, meshSender: 'mesh_launch' },
     // Mesh: only the session's coordinator (the turn ledger's stale-worker stop, the
     // queue's cancel) may stop a worker session; never a local user's session.
     stop_cli: { invalidates: ['daemon.metadata'], session: { scope: 'optional', aliasSessionId: true }, meshSender: 'session_coordinator' },

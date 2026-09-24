@@ -47,6 +47,8 @@ const EXPECTED_CLASSES: Record<string, string> = {
     get_mesh_node_logs: 'any_member_mesh',
     // the joining member is not on the host roster yet
     apply_mesh_host_join: 'pairing_member',
+    // launch is open, but a coordinator anchor it stamps must be backed by host evidence
+    launch_cli: 'mesh_launch',
 };
 
 describe('mesh sender policy — registry', () => {

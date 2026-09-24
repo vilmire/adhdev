@@ -149,6 +149,7 @@ import {
 import { resolveRemoteMeshSessionOwnerDaemonId } from './router-mesh-session-owner.js';
 import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from './command-args.js';
 import { evaluateMeshSender, meshSenderRefusalResult, MESH_SENDER_DAEMON_ID_ARG, type MeshSenderGateDeps } from './mesh-sender.js';
+import { listMeshHostRecords, readMeshHostRecord, writeMeshHostRecord } from '../mesh/mesh-host-memory.js';
 import { unwrapMeshRelayResult } from './mesh-relay-result.js';
 import { resolveForwardedEventMeshId } from '../mesh/mesh-event-forwarding.js';
 
@@ -1356,6 +1357,11 @@ export class DaemonCommandRouter {
                 return out;
             },
             resolveForwardEventMeshId: (payload) => resolveForwardedEventMeshId(payload),
+            // Per-mesh host record (pairing / learned) — the roster-less worker
+            // daemon's restart-surviving evidence of who hosts a mesh.
+            getMeshHostRecord: (meshId) => readMeshHostRecord(meshId),
+            listMeshHostRecords: () => listMeshHostRecords(),
+            recordMeshHost: (meshId, hostDaemonId, source) => writeMeshHostRecord(meshId, hostDaemonId, source),
         };
     }
 

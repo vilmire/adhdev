@@ -220,6 +220,16 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
                 ctx.inlineMeshCache.set(meshId, joined.mesh);
                 ctx.invalidateAggregateMeshStatus(meshId);
             }
+            // The host this member just paired with is its mesh host for the
+            // mesh sender gate (commands/mesh-sender.ts) — persisted per mesh so
+            // it holds for an inline-only mesh and across daemon restarts.
+            const pairedHostDaemonId = typeof hostResult.meshHost?.hostDaemonId === 'string' && hostResult.meshHost.hostDaemonId.trim()
+                ? hostResult.meshHost.hostDaemonId.trim()
+                : hostDaemonId;
+            if (pairedHostDaemonId) {
+                const { writeMeshHostRecord } = await import('../../mesh/mesh-host-memory.js');
+                writeMeshHostRecord(meshId, pairedHostDaemonId, 'pairing');
+            }
             return {
                 success: true,
                 code: 'mesh_host_join_applied',
