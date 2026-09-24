@@ -33,6 +33,7 @@
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import type { MeshLedgerKind } from '../../mesh/mesh-ledger.js';
 import { defineCommandSpecs } from '../command-registry.js';
+import { resolveRemoteWorker } from './worker-report.js';
 
 /** Index event kinds that carry sibling lifecycle signal worth surfacing. */
 const PEER_EVENT_KINDS: MeshLedgerKind[] = [
@@ -55,7 +56,14 @@ export const workerPeerContextHandlers: Record<string, LowFamilyHandler> = {
     worker_peer_context_pull: async (_ctx: LowFamilyContext, args: any) => {
         try {
             const { resolveWorkerIdentity } = await import('../../mesh/worker-report.js');
-            const identity = resolveWorkerIdentity({ token: args?.token, bind: args?.bind });
+            // F7: a worker whose task a REMOTE coordinator daemon owns has no local
+            // identity; its assignment stamp still scopes the (replicated) index read.
+            const remote = resolveWorkerIdentity({ token: args?.token, bind: args?.bind })
+                ? null
+                : await resolveRemoteWorker(_ctx, args);
+            const identity: { meshId: string; taskId: string } | null =
+                resolveWorkerIdentity({ token: args?.token, bind: args?.bind })
+                ?? (remote ? { meshId: remote.meshId, taskId: remote.taskId ?? '' } : null);
             if (!identity) {
                 return {
                     success: false,

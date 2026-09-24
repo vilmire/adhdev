@@ -29,8 +29,210 @@
  * `taskId` argument on purpose, because an argument can be wrong and a lookup
  * cannot (design §4: "워커가 taskId 를 인자로 넣지 않는다").
  */
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
+import { stripRouterInternalArgs } from '../router-internal-args.js';
+import { currentMeshAttemptRef } from '../../providers/cli-provider-mesh-assignment.js';
+import { LOG } from '../../logging/logger.js';
+import type {
+    ForwardedWorkerReportClaim,
+    RemoteWorkerIdentity,
+    WorkerAssignmentStamp,
+    WorkerCompletionReport,
+    WorkerReportResult,
+} from '../../mesh/worker-report.js';
+
+/**
+ * F7: the owner-side command a REMOTE worker daemon relays a report through
+ * (`dispatchMeshCommand` → the owner's `handleMeshCommand`, source `mesh`).
+ */
+export const WORKER_REPORT_FORWARD_COMMAND = 'worker_report_forwarded';
+
+function readNonEmpty(value: unknown): string {
+    return typeof value === 'string' ? value.trim() : '';
+}
+
+/**
+ * The assignment stamp THIS daemon wrote on a live worker session when it
+ * received the dispatch (`attachMeshAssignment`). Read off the instance, never
+ * off the caller's args.
+ */
+function assignmentStampReader(ctx: LowFamilyContext): (sessionId: string) => WorkerAssignmentStamp | null {
+    return (sessionId: string) => {
+        let settings: Record<string, any> | undefined;
+        try {
+            const state: any = ctx?.deps?.instanceManager?.getInstance?.(sessionId)?.getState?.();
+            settings = state?.settings && typeof state.settings === 'object' ? state.settings : undefined;
+        } catch {
+            return null;
+        }
+        if (!settings) return null;
+        const meshId = readNonEmpty(settings.meshNodeFor);
+        const ownerDaemonId = readNonEmpty(settings.meshCoordinatorDaemonId);
+        if (!meshId || !ownerDaemonId) return null;
+        // Task + attempt markers are present while the task is live; after the
+        // owner terminalizes it they are released (F7b late report) and only the
+        // membership remains — the owner then resolves from its own ledger.
+        const attemptRef = currentMeshAttemptRef(settings);
+        const taskId = readNonEmpty(settings.meshActiveTaskId);
+        const nodeId = readNonEmpty(settings.meshNodeId) || readNonEmpty(settings.meshLastNodeId);
+        return {
+            meshId,
+            ownerDaemonId,
+            ...(taskId ? { taskId } : {}),
+            ...(attemptRef ? { attemptId: attemptRef.attemptId } : {}),
+            ...(nodeId ? { nodeId } : {}),
+        };
+    };
+}
+
+/** This daemon's own-id predicate, or undefined when the host never told us our id. */
+function selfDaemonPredicate(ctx: LowFamilyContext): ((daemonId: string) => boolean) | undefined {
+    const selfDaemonId = readNonEmpty(ctx?.deps?.statusInstanceId);
+    return selfDaemonId ? (daemonId: string) => daemonIdsEquivalent(daemonId, selfDaemonId) : undefined;
+}
+
+/**
+ * F7: when no LOCAL task resolves, is this a worker whose task another daemon
+ * owns? Unknown self id ⇒ no (fail closed — forwarding to an id that might be
+ * our own would self-dial).
+ */
+export async function resolveRemoteWorker(ctx: LowFamilyContext, args: any): Promise<RemoteWorkerIdentity | null> {
+    const selfDaemonId = readNonEmpty(ctx?.deps?.statusInstanceId);
+    if (!selfDaemonId) return null;
+    const { resolveRemoteWorkerIdentity } = await import('../../mesh/worker-report.js');
+    return resolveRemoteWorkerIdentity({ bind: args?.bind }, {
+        readAssignmentStamp: assignmentStampReader(ctx),
+        isSelfDaemon: (daemonId) => daemonIdsEquivalent(daemonId, selfDaemonId),
+    });
+}
+
+/** The command-layer answer for a report result — identical for local and forwarded reports. */
+function toReportResponse(result: WorkerReportResult): Record<string, unknown> & { success: boolean } {
+    if (!result.accepted) {
+        return {
+            success: false,
+            error: result.refusal,
+            ...(result.detail ? { detail: result.detail } : {}),
+            hint: result.refusal === 'unauthenticated'
+                ? 'No live task is bound to this worker session — the task may already be terminal or reassigned.'
+                : result.refusal === 'invalid_for_task_mode'
+                    ? 'Fix the touchedFiles list to match the task mode and call again.'
+                    : result.refusal === 'storage_failed'
+                        ? 'Nothing was recorded — call again.'
+                        : 'The completion was refused by the turn ledger; the task state is authoritative.',
+        };
+    }
+    return {
+        success: true,
+        taskId: result.taskId,
+        ...(result.attemptId ? { attemptId: result.attemptId } : {}),
+        outcome: result.outcome,
+        duplicate: result.duplicate,
+        handoffNoteRecorded: result.handoffNoteRecorded,
+        // ★F5: carries WHY a note did not persist, so the tool layer can
+        // warn instead of printing the unconditional "stored" line.
+        ...(result.handoffNoteError ? { handoffNoteError: result.handoffNoteError } : {}),
+        // H1 (path ownership): present only on a declared-but-mismatched report —
+        // evidence, never a refusal (the completion above already committed).
+        ...(result.ownedPathsMismatch ? { ownedPathsMismatch: result.ownedPathsMismatch } : {}),
+        // F7b: accepted as evidence after the ledger already terminalized the attempt.
+        ...(result.late ? { late: true, terminalOutcome: result.late.terminalOutcome } : {}),
+    };
+}
+
+/** A relay answer may arrive wrapped (`{ result }` / `{ payload }`); find the handler's own object. */
+function unwrapRelayResult(raw: unknown): (Record<string, unknown> & { success: boolean }) | null {
+    let cursor: unknown = raw;
+    for (let depth = 0; depth < 4 && cursor && typeof cursor === 'object'; depth++) {
+        const record = cursor as Record<string, unknown>;
+        if (typeof record.success === 'boolean') return record as Record<string, unknown> & { success: boolean };
+        if (record.result && typeof record.result === 'object') { cursor = record.result; continue; }
+        if (record.payload && typeof record.payload === 'object') { cursor = record.payload; continue; }
+        break;
+    }
+    return null;
+}
+
+/**
+ * F7: relay a validated report to the attempt's OWNER daemon over the mesh
+ * command relay. Nothing is written on this (the worker's) daemon — the owner
+ * holds the queue row, the attempt and the token, and its reducer is the only
+ * terminal writer. The owner's answer is returned as-is, so the worker sees
+ * the same result a local report would give.
+ */
+async function forwardReportToOwner(
+    ctx: LowFamilyContext,
+    remote: RemoteWorkerIdentity,
+    report: WorkerCompletionReport,
+): Promise<Record<string, unknown> & { success: boolean }> {
+    const dispatch = ctx?.deps?.dispatchMeshCommand;
+    if (!dispatch) {
+        return {
+            success: false,
+            error: 'unauthenticated',
+            detail: `this worker's task is owned by daemon ${remote.ownerDaemonId}, and this daemon has no mesh transport to reach it`,
+            hint: 'No live task is bound to this worker session — the task may already be terminal or reassigned.',
+        };
+    }
+    const claim: ForwardedWorkerReportClaim = {
+        meshId: remote.meshId,
+        sessionId: remote.sessionId,
+        ...(remote.taskId ? { taskId: remote.taskId } : {}),
+        ...(remote.attemptId ? { attemptId: remote.attemptId } : {}),
+    };
+    let raw: unknown;
+    try {
+        raw = await dispatch(remote.ownerDaemonId, WORKER_REPORT_FORWARD_COMMAND, {
+            ...claim,
+            ...(remote.nodeId ? { nodeId: remote.nodeId } : {}),
+            report,
+        });
+    } catch (e: any) {
+        LOG.warn('WorkerReport', `Forwarding report for session ${remote.sessionId} (task ${remote.taskId ?? '?'}) to owner ${remote.ownerDaemonId.slice(0, 16)} failed: ${e?.message || e}`);
+        return {
+            success: false,
+            error: 'forward_failed',
+            detail: e?.message || String(e),
+            hint: 'Nothing was recorded — call again.',
+        };
+    }
+    const answer = unwrapRelayResult(raw);
+    if (!answer) {
+        return { success: false, error: 'forward_failed', detail: 'the owner daemon returned no report result', hint: 'Nothing was recorded — call again.' };
+    }
+    LOG.info('WorkerReport', `Forwarded ${report.outcome} report for session ${remote.sessionId} (task ${remote.taskId ?? '?'} attempt ${remote.attemptId ?? '?'}) to owner ${remote.ownerDaemonId.slice(0, 16)} → ${answer.success === true ? 'accepted' : `refused (${String(answer.error)})`}`);
+    return answer;
+}
+
+const FORWARD_KEYS = new Set(['meshId', 'taskId', 'attemptId', 'sessionId', 'nodeId', 'report']);
+
+/**
+ * Strict decoder for the forwarded-report request: exactly the claim fields,
+ * an optional nodeId, and the report object (validated separately by the same
+ * validator a local report goes through). Router-internal `_` keys stripped.
+ */
+export function decodeForwardedWorkerReport(args: unknown): { claim: ForwardedWorkerReportClaim; report: unknown } | null {
+    const input = stripRouterInternalArgs(args);
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+    const record = input as Record<string, unknown>;
+    for (const key of Object.keys(record)) if (!FORWARD_KEYS.has(key)) return null;
+    const meshId = readNonEmpty(record.meshId);
+    const sessionId = readNonEmpty(record.sessionId);
+    if (!meshId || !sessionId) return null;
+    // Optional consistency checks — but a present one must be a non-empty string.
+    for (const key of ['taskId', 'attemptId', 'nodeId'] as const) {
+        if (record[key] !== undefined && !readNonEmpty(record[key])) return null;
+    }
+    if (!record.report || typeof record.report !== 'object' || Array.isArray(record.report)) return null;
+    const taskId = readNonEmpty(record.taskId);
+    const attemptId = readNonEmpty(record.attemptId);
+    return {
+        claim: { meshId, sessionId, ...(taskId ? { taskId } : {}), ...(attemptId ? { attemptId } : {}) },
+        report: record.report,
+    };
+}
 
 export const workerReportHandlers: Record<string, LowFamilyHandler> = {
     /**
@@ -49,6 +251,18 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
             const { resolveWorkerIdentity } = await import('../../mesh/worker-report.js');
             const identity = resolveWorkerIdentity({ token: args?.token, bind: args?.bind });
             if (!identity) {
+                // F7: a task owned by a remote coordinator daemon is still a live task.
+                const remote = await resolveRemoteWorker(_ctx, args);
+                if (remote?.taskId && remote.attemptId) {
+                    return {
+                        success: true,
+                        meshId: remote.meshId,
+                        taskId: remote.taskId,
+                        attemptId: remote.attemptId,
+                        sessionId: remote.sessionId,
+                        ...(remote.nodeId ? { nodeId: remote.nodeId } : {}),
+                    };
+                }
                 return {
                     success: false,
                     error: 'worker_not_bound',
@@ -78,41 +292,44 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
      */
     worker_report_completion: async (_ctx: LowFamilyContext, args: any) => {
         try {
-            const { validateWorkerCompletionReport, acceptWorkerCompletionReport } =
+            const { validateWorkerCompletionReport, acceptWorkerCompletionReport, hasLocalWorkerIdentity } =
                 await import('../../mesh/worker-report.js');
             const { report, errors } = validateWorkerCompletionReport(args?.report);
             if (!report) {
                 return { success: false, error: 'invalid_report', validationErrors: errors };
             }
-            const result = acceptWorkerCompletionReport({ token: args?.token, bind: args?.bind }, report);
-            if (!result.accepted) {
-                return {
-                    success: false,
-                    error: result.refusal,
-                    ...(result.detail ? { detail: result.detail } : {}),
-                    hint: result.refusal === 'unauthenticated'
-                        ? 'No live task is bound to this worker session — the task may already be terminal or reassigned.'
-                        : result.refusal === 'invalid_for_task_mode'
-                            ? 'Fix the touchedFiles list to match the task mode and call again.'
-                            : result.refusal === 'storage_failed'
-                                ? 'Nothing was recorded — call again.'
-                                : 'The completion was refused by the turn ledger; the task state is authoritative.',
-                };
+            const credential = { token: args?.token, bind: args?.bind };
+            // F7: the task may be owned by a REMOTE coordinator daemon (queue row,
+            // attempt and token all live there). No local identity + a valid
+            // assignment stamp naming another owner ⇒ relay to that owner; nothing
+            // is written here.
+            const isSelfDaemon = selfDaemonPredicate(_ctx);
+            if (!hasLocalWorkerIdentity(credential, { isSelfDaemon })) {
+                const remote = await resolveRemoteWorker(_ctx, args);
+                if (remote) return await forwardReportToOwner(_ctx, remote, report);
             }
-            return {
-                success: true,
-                taskId: result.taskId,
-                ...(result.attemptId ? { attemptId: result.attemptId } : {}),
-                outcome: result.outcome,
-                duplicate: result.duplicate,
-                handoffNoteRecorded: result.handoffNoteRecorded,
-                // ★F5: carries WHY a note did not persist, so the tool layer can
-                // warn instead of printing the unconditional "stored" line.
-                ...(result.handoffNoteError ? { handoffNoteError: result.handoffNoteError } : {}),
-                // H1 (path ownership): present only on a declared-but-mismatched report —
-                // evidence, never a refusal (the completion above already committed).
-                ...(result.ownedPathsMismatch ? { ownedPathsMismatch: result.ownedPathsMismatch } : {}),
-            };
+            return toReportResponse(acceptWorkerCompletionReport(credential, report, { isSelfDaemon }));
+        } catch (e: any) {
+            return { success: false, error: e?.message || String(e) };
+        }
+    },
+
+    /**
+     * F7, OWNER side: a report a remote worker daemon relayed here (it has no
+     * local attempt; this daemon owns the queue row, the attempt and the
+     * token). The claim is re-resolved against this daemon's own state
+     * (`resolveForwardedWorkerIdentity`) — nothing in it is trusted — and the
+     * report then takes the local acceptance body verbatim.
+     */
+    [WORKER_REPORT_FORWARD_COMMAND]: async (_ctx: LowFamilyContext, args: any) => {
+        const decoded = decodeForwardedWorkerReport(args);
+        if (!decoded) return { success: false, error: `${WORKER_REPORT_FORWARD_COMMAND}: request failed decode (bad shape)` };
+        try {
+            const { validateWorkerCompletionReport, acceptForwardedWorkerCompletionReport } =
+                await import('../../mesh/worker-report.js');
+            const { report, errors } = validateWorkerCompletionReport(decoded.report);
+            if (!report) return { success: false, error: 'invalid_report', validationErrors: errors };
+            return toReportResponse(acceptForwardedWorkerCompletionReport(decoded.claim, report, { isSelfDaemon: selfDaemonPredicate(_ctx) }));
         } catch (e: any) {
             return { success: false, error: e?.message || String(e) };
         }
@@ -146,4 +363,8 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
     },
 };
 
-export const workerReportSpecs = defineCommandSpecs('low', workerReportHandlers);
+export const workerReportSpecs = defineCommandSpecs('low', workerReportHandlers, {
+    // Only another daemon's relay may present a forwarded report (never a
+    // dashboard, the API, or a local worker MCP over IPC).
+    [WORKER_REPORT_FORWARD_COMMAND]: { sources: ['mesh'] },
+});
