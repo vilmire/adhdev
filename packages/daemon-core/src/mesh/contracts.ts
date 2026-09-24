@@ -392,6 +392,10 @@ const COORDINATOR_ALERT_EVENTS: ReadonlySet<string> = new Set([
   // they do not own. Filtered at the producer (shouldSurfaceProgressToCoordinator)
   // so this carries milestones, not a log tail.
   'mesh:worker_progress',
+  // F7b: a worker's structured report that arrived after the ledger had already
+  // terminalized its attempt (worker-report.ts WORKER_LATE_REPORT_EVENT_NAME).
+  // Unicast to the dispatching coordinator, like the completion it follows.
+  'mesh:worker_late_report',
 ]);
 
 /**

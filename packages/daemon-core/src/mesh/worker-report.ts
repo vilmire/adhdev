@@ -66,8 +66,11 @@ import { queueWorkerProgressNotice } from './worker-progress-notify.js';
 import { commitTaskTerminalAndAdvanceGraph } from './mesh-graph-transition-runner.js';
 import { isTaskReadonly } from './mesh-work-queue.js';
 import { meshRecord } from './mesh-record.js';
+import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import {
     exchangeWorkerSessionBind,
+    findWorkerTaskTokenForSession,
+    verifyWorkerSessionBind,
     verifyWorkerTaskToken,
     type WorkerTokenExchangeResult,
 } from './worker-mcp-isolation.js';
@@ -518,6 +521,12 @@ export type WorkerReportResult =
          * task declared no owned_paths (opt-out) or every touched file was covered.
          */
         ownedPathsMismatch?: { declared: string[]; touched: string[]; undeclaredTouched: string[] };
+        /**
+         * F7b: the report arrived after the ledger had already terminalized the
+         * attempt (within `WORKER_LATE_REPORT_GRACE_MS`). Recorded as evidence and
+         * surfaced to the coordinator once; the terminal state is unchanged.
+         */
+        late?: { terminalOutcome: string };
     }
     | { accepted: false; refusal: WorkerReportRefusal; detail?: string };
 
@@ -626,11 +635,42 @@ function checkReportAgainstTaskMode(
 export function acceptWorkerCompletionReport(
     credential: { token?: unknown; bind?: unknown },
     report: WorkerCompletionReport,
-    opts: { nowMs?: number } = {},
+    opts: { nowMs?: number; isSelfDaemon?: (daemonId: string) => boolean } = {},
 ): WorkerReportResult {
     const identity = resolveWorkerIdentity(credential);
-    if (!identity) return { accepted: false, refusal: 'unauthenticated' };
+    if (identity) return acceptWorkerCompletionReportForIdentity(identity, report, opts);
+    // F7b: the task went terminal before the report arrived (a completion flush
+    // that beat a pending MCP call). A recently-terminal attempt still takes it.
+    const nowMs = opts.nowMs ?? Date.now();
+    const late = resolveLateWorkerIdentity(credential, nowMs, opts.isSelfDaemon);
+    if (late) return acceptLateWorkerCompletionReport(late, report, nowMs);
+    return { accepted: false, refusal: 'unauthenticated' };
+}
 
+/**
+ * Does this daemon itself hold the worker's task — live, or recently terminal?
+ * `false` is what sends the command layer to the remote-owner path (F7).
+ */
+export function hasLocalWorkerIdentity(
+    credential: { token?: unknown; bind?: unknown },
+    opts: { nowMs?: number; isSelfDaemon?: (daemonId: string) => boolean } = {},
+): boolean {
+    return !!resolveWorkerIdentity(credential)
+        || !!resolveLateWorkerIdentity(credential, opts.nowMs ?? Date.now(), opts.isSelfDaemon);
+}
+
+/**
+ * The acceptance body, once identity is PROVEN. Shared by the local path
+ * (bind/token resolved on this daemon) and the forwarded path (F7: a remote
+ * worker's report, re-resolved against this — the owning — daemon's queue row
+ * and token registry by `resolveForwardedWorkerIdentity`). One body means a
+ * forwarded report records exactly the rows a local one does.
+ */
+function acceptWorkerCompletionReportForIdentity(
+    identity: WorkerTokenExchangeResult,
+    report: WorkerCompletionReport,
+    opts: { nowMs?: number },
+): WorkerReportResult {
     // ★F6: the read-only axis is only knowable HERE. `validateWorkerCompletionReport`
     // sees the raw payload and no task, so it cannot tell a read-only verification
     // task (which touches nothing by definition) from a code change that forgot to
@@ -841,6 +881,447 @@ export function acceptWorkerCompletionReport(
         ...(handoffNoteError ? { handoffNoteError } : {}),
         ...(ownedPathsMismatch ? { ownedPathsMismatch } : {}),
     };
+}
+
+// ─── Late report (F7b): the attempt is already terminal ─────────────────
+
+/**
+ * How long after the ledger terminalized an attempt its worker's structured
+ * report is still ACCEPTED (as evidence, without a state change).
+ *
+ * ★Why this exists (F7b, preview rc.36): the completion flush declares a turn
+ * genuine a few seconds after the PTY FSM sees idle — and a worker blocked in a
+ * pending `report_completion` MCP call LOOKS idle. Measured: FSM idle at
+ * 03:15:13, flush + commit + attempt-ref release at 03:15:17, the worker's
+ * report after that → refused "may already be terminal", and the coordinator
+ * got the screen-scraped summary instead of the structured one. The design's
+ * R27 rule ("a late completion is recorded, not dropped") applies: the report
+ * is the better record of the same turn, so it is kept.
+ *
+ * 15 minutes covers a slow MCP round trip plus a worker that re-tries after an
+ * error, and is short enough that a report for a long-finished task — which is
+ * almost certainly a confused or replayed worker — is still refused.
+ */
+export const WORKER_LATE_REPORT_GRACE_MS = 15 * 60 * 1000;
+
+/** Pending-event name of the one follow-up notice a late report produces (unicast, contracts.ts). */
+export const WORKER_LATE_REPORT_EVENT_NAME = 'mesh:worker_late_report';
+
+/** A worker identity whose attempt the ledger already terminalized (recently). */
+export interface LateWorkerIdentity extends WorkerTokenExchangeResult {
+    attemptId: string;
+    terminalOutcome: string;
+    terminalAtMs: number;
+}
+
+/**
+ * The session's most recent MESH attempt, when it is terminal within the grace
+ * window AND still its task's current attempt (a retry supersedes it — a report
+ * for a superseded attempt is stale, not late). Null otherwise; fail-closed.
+ * `isSelfDaemon` (when the caller knows its own id) additionally requires the
+ * attempt to be OWNED here — only the owner's ledger may take the report.
+ */
+function resolveRecentlyTerminalAttempt(
+    meshId: string,
+    sessionId: string,
+    nowMs: number,
+    isSelfDaemon?: (daemonId: string) => boolean,
+): { attemptId: string; taskId: string; nodeId?: string; terminalOutcome: string; terminalAtMs: number } | null {
+    try {
+        const turns = MeshRuntimeStore.getInstance().turnStore();
+        const found = turns.findPresentationAttemptForSession(sessionId);
+        const attempt = found?.attempt;
+        if (!attempt?.terminal || attempt.meshId !== meshId || !attempt.taskId) return null;
+        if (!sessionIdsEquivalent(attempt.sessionId, sessionId)) return null;
+        if (isSelfDaemon && !isSelfDaemon(attempt.ownerDaemonId)) return null;
+        const age = nowMs - attempt.terminal.at;
+        if (!(age >= 0 && age <= WORKER_LATE_REPORT_GRACE_MS)) return null;
+        if (turns.findLatestAttemptForTask(meshId, attempt.taskId)?.attemptId !== attempt.attemptId) return null;
+        return {
+            attemptId: attempt.attemptId,
+            taskId: attempt.taskId,
+            ...(attempt.nodeId ? { nodeId: attempt.nodeId } : {}),
+            terminalOutcome: attempt.terminal.outcome,
+            terminalAtMs: attempt.terminal.at,
+        };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * F7b, local: a BIND whose session's attempt this daemon's ledger terminalized
+ * within the grace window. Only a bind — the token died with the terminal.
+ */
+export function resolveLateWorkerIdentity(
+    credential: { bind?: unknown },
+    nowMs = Date.now(),
+    isSelfDaemon?: (daemonId: string) => boolean,
+): LateWorkerIdentity | null {
+    const binding = verifyWorkerSessionBind(credential.bind);
+    if (!binding) return null;
+    const attempt = resolveRecentlyTerminalAttempt(binding.meshId, binding.sessionId, nowMs, isSelfDaemon);
+    if (!attempt) return null;
+    const nodeId = attempt.nodeId || binding.nodeId;
+    return {
+        token: '',
+        meshId: binding.meshId,
+        taskId: attempt.taskId,
+        attemptId: attempt.attemptId,
+        sessionId: binding.sessionId,
+        ...(nodeId ? { nodeId } : {}),
+        terminalOutcome: attempt.terminalOutcome,
+        terminalAtMs: attempt.terminalAtMs,
+    };
+}
+
+/** The coordinator-facing line for a late report. */
+export function buildWorkerLateReportNotice(opts: {
+    taskId: string;
+    nodeLabel: string;
+    terminalOutcome: string;
+    report: WorkerCompletionReport;
+}): string {
+    const r = opts.report;
+    const parts = [
+        `[System] ${opts.nodeLabel} filed its structured report for task ${opts.taskId} AFTER the task was already marked ${opts.terminalOutcome}`
+        + ` — reported outcome: ${r.outcome}.`,
+        `Summary: ${r.summary}`,
+    ];
+    if (r.blockers?.length) parts.push(`Blockers: ${r.blockers.join('; ')}`);
+    if (r.branchState) parts.push(`Branch state: ${r.branchState}`);
+    if (r.handoffNotes) parts.push(`Handoff intent: ${r.handoffNotes.intent}`);
+    const agrees = (r.outcome === 'completed') === (opts.terminalOutcome === 'completed');
+    parts.push(agrees
+        ? 'This supersedes the earlier completion summary for the same turn; the task state is unchanged.'
+        : `★The reported outcome differs from the recorded terminal (${opts.terminalOutcome}); the task state was NOT changed — decide whether follow-up work is needed.`);
+    return parts.join('\n');
+}
+
+/** Sink for the late-report coordinator notice. `undefined` = production; `null` = disabled. TESTS set it. */
+export type WorkerLateReportNoticeSink = (notice: {
+    meshId: string;
+    taskId: string;
+    attemptId: string;
+    nodeId?: string;
+    sessionId?: string;
+    coordinatorMessage: string;
+    nowMs: number;
+}) => void;
+
+let lateNoticeSinkOverride: WorkerLateReportNoticeSink | null | undefined;
+
+/** TESTS ONLY — replace the late-report notice sink; see `__setHandoffNoteSinkForTests`. */
+export function __setWorkerLateReportNoticeSinkForTests(sink: WorkerLateReportNoticeSink | null | undefined): void {
+    lateNoticeSinkOverride = sink;
+}
+
+/**
+ * Production sink: one unicast notice to the coordinator session that
+ * dispatched the task (the queue row's `sourceCoordinatorSessionId`, the same
+ * anchor a completion and a progress note route by). Runs on the OWNER daemon —
+ * the only place a report is accepted — so the daemon axis is this daemon.
+ */
+const queueWorkerLateReportNotice: WorkerLateReportNoticeSink = (notice) => {
+    let targetCoordinatorSessionId = '';
+    try {
+        const task = MeshRuntimeStore.getInstance().findQueueEntryById(notice.meshId, notice.taskId);
+        const sid = task?.sourceCoordinatorSessionId;
+        if (typeof sid === 'string' && sid.trim()) targetCoordinatorSessionId = sid.trim();
+    } catch { /* degrade to any coordinator of the mesh */ }
+    notifyMeshCoordinator({
+        event: WORKER_LATE_REPORT_EVENT_NAME,
+        meshId: notice.meshId,
+        nodeLabel: notice.nodeId || notice.sessionId || notice.taskId,
+        ...(notice.nodeId ? { nodeId: notice.nodeId } : {}),
+        metadataEvent: {
+            source: WORKER_REPORT_EVENT_KIND,
+            taskId: notice.taskId,
+            attemptId: notice.attemptId,
+            ...(notice.sessionId ? { sessionId: notice.sessionId } : {}),
+            // Never terminal: the ledger already committed; this is evidence.
+            terminal: false,
+            coordinatorMessage: notice.coordinatorMessage,
+        },
+        coordinatorMessage: notice.coordinatorMessage,
+        // One notice per attempt, however often the worker re-calls.
+        eventId: `worker_late_report:${notice.attemptId}`,
+        queuedAt: notice.nowMs,
+        ...(targetCoordinatorSessionId ? { targetCoordinatorSessionId } : {}),
+    });
+};
+
+/**
+ * F7b acceptance body: the attempt is terminal, so NOTHING about task state
+ * changes — no fence, no terminal commit, no graph advance (the reducer already
+ * decided, and it is the only terminal writer). What the report adds is kept:
+ * the content-free evidence row (`worker_tool_report`, flagged `late`), the
+ * handoff note (index row + text on `mesh.<id>.handoff`), the verbatim summary
+ * for the shadowing guard, and ONE coordinator notice so the structured result
+ * is seen even though the completion notice already went out.
+ */
+function acceptLateWorkerCompletionReport(
+    identity: LateWorkerIdentity,
+    report: WorkerCompletionReport,
+    nowMs: number,
+): WorkerReportResult {
+    const taskModeError = checkReportAgainstTaskMode(identity, report);
+    if (taskModeError) return { accepted: false, refusal: 'invalid_for_task_mode', detail: taskModeError };
+
+    const nowIso = new Date(nowMs).toISOString();
+    const turns = MeshRuntimeStore.getInstance().turnStore();
+    REPORTED_SUMMARY_STORE.set(summaryKey(identity.meshId, identity.taskId), { summary: report.summary, recordedAtMs: nowMs });
+
+    let inserted = false;
+    try {
+        inserted = turns.insertWorkerEvent({
+            eventId: randomUUID(),
+            attemptId: identity.attemptId,
+            sessionId: identity.sessionId || null,
+            kind: WORKER_REPORT_EVENT_KIND,
+            dedupeKey: report.outcome,
+            payload: {
+                outcome: report.outcome,
+                summaryLength: report.summary.length,
+                touchedFileCount: report.touchedFiles?.length ?? 0,
+                blockerCount: report.blockers?.length ?? 0,
+                hasHandoffNotes: !!report.handoffNotes,
+                ...(report.branchState ? { branchState: report.branchState } : {}),
+                late: true,
+                terminalOutcome: identity.terminalOutcome,
+                lateByMs: Math.max(0, nowMs - identity.terminalAtMs),
+            },
+            atMs: nowMs,
+        });
+    } catch (e: any) {
+        LOG.error('WorkerReport', `Failed to record late report evidence for task ${identity.taskId}: ${e?.message || e}`);
+        return { accepted: false, refusal: 'storage_failed', detail: `could not persist the report evidence row for task ${identity.taskId}` };
+    }
+    // `false` = the UNIQUE key already holds this outcome: an idempotent re-call.
+    const duplicate = !inserted;
+
+    let handoffNoteRecorded = false;
+    let handoffNoteError: string | null = null;
+    if (report.handoffNotes && !duplicate) {
+        const noteResult = recordHandoffNote(identity, report.handoffNotes, nowMs, nowIso);
+        handoffNoteRecorded = noteResult.recorded;
+        handoffNoteError = noteResult.error;
+    } else if (report.handoffNotes) {
+        handoffNoteRecorded = true;
+    }
+
+    if (!duplicate) {
+        const sink = lateNoticeSinkOverride === undefined ? queueWorkerLateReportNotice : lateNoticeSinkOverride;
+        if (sink) {
+            try {
+                sink({
+                    meshId: identity.meshId,
+                    taskId: identity.taskId,
+                    attemptId: identity.attemptId,
+                    ...(identity.nodeId ? { nodeId: identity.nodeId } : {}),
+                    ...(identity.sessionId ? { sessionId: identity.sessionId } : {}),
+                    coordinatorMessage: buildWorkerLateReportNotice({
+                        taskId: identity.taskId,
+                        nodeLabel: identity.nodeId || identity.sessionId || identity.taskId,
+                        terminalOutcome: identity.terminalOutcome,
+                        report,
+                    }),
+                    nowMs,
+                });
+            } catch (e: any) {
+                // The evidence is recorded; a notice failure must not refuse it.
+                LOG.warn('WorkerReport', `Failed to queue late-report notice for task ${identity.taskId}: ${e?.message || e}`);
+            }
+        }
+    }
+
+    LOG.info(
+        'WorkerReport',
+        `Accepted LATE ${report.outcome} report for task ${identity.taskId} attempt ${identity.attemptId}`
+        + ` (already ${identity.terminalOutcome} ${Math.round((nowMs - identity.terminalAtMs) / 1000)}s ago)`
+        + (duplicate ? ' (duplicate replay)' : '')
+        + (handoffNoteRecorded ? ' with handoff note' : ''),
+    );
+    return {
+        accepted: true,
+        taskId: identity.taskId,
+        attemptId: identity.attemptId,
+        outcome: report.outcome,
+        duplicate,
+        handoffNoteRecorded,
+        ...(handoffNoteError ? { handoffNoteError } : {}),
+        late: { terminalOutcome: identity.terminalOutcome },
+    };
+}
+
+// ─── Remote worker (F7): the report is owned by another daemon ─────────
+
+/**
+ * What THIS daemon stamped on a worker session when it received a mesh
+ * dispatch (`attachMeshAssignment`: `meshNodeFor` / `meshActiveTaskId` /
+ * `meshActiveAttemptId` / `meshCoordinatorDaemonId`). Daemon state, never a
+ * caller argument — the command layer reads it off the live instance.
+ *
+ * `taskId`/`attemptId` are OPTIONAL: when the owner terminalizes the attempt,
+ * this daemon releases the attempt ref (and a detach clears the task marker)
+ * while a coordinator-launched member keeps its mesh + coordinator membership.
+ * A late report (F7b) then carries only the membership, and the owner resolves
+ * the attempt from its own ledger.
+ */
+export interface WorkerAssignmentStamp {
+    meshId: string;
+    /** The coordinator daemon that dispatched the task — it owns the attempt. */
+    ownerDaemonId: string;
+    taskId?: string;
+    attemptId?: string;
+    nodeId?: string;
+}
+
+/** A worker whose task lives on ANOTHER daemon's ledger (the attempt's owner). */
+export interface RemoteWorkerIdentity {
+    meshId: string;
+    sessionId: string;
+    ownerDaemonId: string;
+    taskId?: string;
+    attemptId?: string;
+    nodeId?: string;
+}
+
+/**
+ * F7 (wiring-unification live pass, rc.36): resolve a worker whose task is
+ * owned by a REMOTE coordinator daemon.
+ *
+ * The worker's MCP talks to its LOCAL daemon, but the queue row, the turn
+ * attempt and the minted task token all live on the OWNER (the token is minted
+ * where the attempt opens — `dispatch_accepted` / the queue claim). So
+ * `resolveWorkerIdentity` here finds no assigned row and no token and refuses,
+ * even though the task is live. The only local proof this daemon holds is the
+ * assignment stamp it wrote when it received the dispatch.
+ *
+ * Fail-closed at every branch:
+ *   - only a BIND credential (a token is minted by the owner; one presented
+ *     here that this daemon does not know proves nothing);
+ *   - the stamp must be on the bind's own session, for the bind's own mesh,
+ *     and name an owner;
+ *   - an owner that is THIS daemon is not remote — the local path already
+ *     answered, and its refusal stands.
+ * The OWNER re-resolves everything against its own state before accepting
+ * (`resolveForwardedWorkerIdentity`), so this is a routing decision, not an
+ * authority: a stale stamp is refused there.
+ */
+export function resolveRemoteWorkerIdentity(
+    credential: { bind?: unknown },
+    deps: {
+        readAssignmentStamp: (sessionId: string) => WorkerAssignmentStamp | null;
+        isSelfDaemon: (daemonId: string) => boolean;
+    },
+): RemoteWorkerIdentity | null {
+    const binding = verifyWorkerSessionBind(credential.bind);
+    if (!binding) return null;
+    let stamp: WorkerAssignmentStamp | null = null;
+    try {
+        stamp = deps.readAssignmentStamp(binding.sessionId);
+    } catch {
+        return null;
+    }
+    if (!stamp) return null;
+    const trim = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+    const meshId = trim(stamp.meshId);
+    const ownerDaemonId = trim(stamp.ownerDaemonId);
+    if (!meshId || !ownerDaemonId) return null;
+    if (meshId !== binding.meshId) return null;
+    if (deps.isSelfDaemon(ownerDaemonId)) return null;
+    const taskId = trim(stamp.taskId);
+    const attemptId = trim(stamp.attemptId);
+    const nodeId = trim(stamp.nodeId) || binding.nodeId;
+    return {
+        meshId,
+        sessionId: binding.sessionId,
+        ownerDaemonId,
+        ...(taskId ? { taskId } : {}),
+        ...(attemptId ? { attemptId } : {}),
+        ...(nodeId ? { nodeId } : {}),
+    };
+}
+
+/**
+ * The identity claim a worker daemon forwards to the owner (never trusted
+ * as-is). `taskId`/`attemptId` are consistency checks only: when present they
+ * must agree with what the owner resolves.
+ */
+export interface ForwardedWorkerReportClaim {
+    meshId: string;
+    sessionId: string;
+    taskId?: string;
+    attemptId?: string;
+}
+
+/**
+ * F7, OWNER side: re-resolve a forwarded claim against THIS daemon's state.
+ *
+ *  1. live — exactly a local bind exchange: the session's assigned queue row
+ *     names the task (`findAssignedBySession`), the live minted token names
+ *     the attempt;
+ *  2. late (F7b) — the session's latest mesh attempt on this ledger is terminal
+ *     within the grace window and still its task's current attempt.
+ * The claim's task/attempt, when given, must agree with the resolved one.
+ */
+export function resolveForwardedWorkerIdentity(
+    claim: ForwardedWorkerReportClaim,
+    nowMs = Date.now(),
+    isSelfDaemon?: (daemonId: string) => boolean,
+): { live: WorkerTokenExchangeResult } | { late: LateWorkerIdentity } | null {
+    const agrees = (taskId: string, attemptId: string | undefined) =>
+        (!claim.taskId || claim.taskId === taskId) && (!claim.attemptId || claim.attemptId === attemptId);
+
+    const current = resolveCurrentTaskForSession(claim.meshId, claim.sessionId);
+    if (current?.taskId) {
+        const token = findWorkerTaskTokenForSession(claim.meshId, current.taskId, claim.sessionId);
+        if (!token?.attemptId || !agrees(current.taskId, token.attemptId)) return null;
+        return {
+            live: {
+                token: token.token,
+                meshId: claim.meshId,
+                taskId: current.taskId,
+                attemptId: token.attemptId,
+                sessionId: claim.sessionId,
+                ...(token.nodeId ? { nodeId: token.nodeId } : {}),
+            },
+        };
+    }
+
+    const attempt = resolveRecentlyTerminalAttempt(claim.meshId, claim.sessionId, nowMs, isSelfDaemon);
+    if (!attempt || !agrees(attempt.taskId, attempt.attemptId)) return null;
+    return {
+        late: {
+            token: '',
+            meshId: claim.meshId,
+            taskId: attempt.taskId,
+            attemptId: attempt.attemptId,
+            sessionId: claim.sessionId,
+            ...(attempt.nodeId ? { nodeId: attempt.nodeId } : {}),
+            terminalOutcome: attempt.terminalOutcome,
+            terminalAtMs: attempt.terminalAtMs,
+        },
+    };
+}
+
+/**
+ * F7, OWNER side: accept a report a remote worker daemon forwarded over the mesh
+ * command relay. Same bodies as a local report — live: the same fence, evidence
+ * row, handoff note (text appended to `mesh.<id>.handoff` by this daemon) and
+ * terminal chokepoint; late: the F7b evidence-only body.
+ */
+export function acceptForwardedWorkerCompletionReport(
+    claim: ForwardedWorkerReportClaim,
+    report: WorkerCompletionReport,
+    opts: { nowMs?: number; isSelfDaemon?: (daemonId: string) => boolean } = {},
+): WorkerReportResult {
+    const nowMs = opts.nowMs ?? Date.now();
+    const resolved = resolveForwardedWorkerIdentity(claim, nowMs, opts.isSelfDaemon);
+    if (!resolved) return { accepted: false, refusal: 'unauthenticated' };
+    if ('late' in resolved) return acceptLateWorkerCompletionReport(resolved.late, report, nowMs);
+    return acceptWorkerCompletionReportForIdentity(resolved.live, report, { nowMs });
 }
 
 /**
