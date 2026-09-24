@@ -31,6 +31,7 @@
  */
 
 import { renderMissionBriefBlock, type MissionBrief } from './mission-brief'
+import { isMeshTaskDifficulty } from './brain-routing'
 
 export const WORKER_TOOLS = [
     'report_completion',
@@ -78,7 +79,23 @@ export function renderWorkerProtocolFooter(input: WorkerProtocolFooterInput = {}
     const scope: string[] = []
     if (input.taskId) scope.push(`task ${input.taskId}`)
     if (input.taskMode) scope.push(`mode ${input.taskMode}`)
-    if (input.difficulty) scope.push(`difficulty ${input.difficulty}`)
+    // MCP-usage-audit item 2: validate against the canonical difficulty set
+    // (this package's own brain-routing vocabulary — never duplicated here)
+    // rather than rendering an internal caller's typo or stale value verbatim.
+    // The MCP tool-schema enum already blocks a bad value AT THE TOOLS; this
+    // covers internal callers that can still construct a task with one.
+    if (input.difficulty) {
+        if (isMeshTaskDifficulty(input.difficulty)) {
+            scope.push(`difficulty ${input.difficulty}`)
+        } else {
+            // eslint-disable-next-line no-console -- mesh-shared is a dependency-free
+            // leaf with no logger abstraction; this is the one place that matters.
+            console.warn(
+                `[worker-protocol] task ${input.taskId ?? '(unknown)'}: dropping invalid difficulty '${input.difficulty}' `
+                    + `from the worker footer (expected one of easy, medium, difficult, freeform)`,
+            )
+        }
+    }
     if (input.readonly) scope.push('read-only')
     if (scope.length) lines.push(`You are a delegated worker (${scope.join(', ')}).`)
     else lines.push('You are a delegated worker.')
@@ -89,10 +106,15 @@ export function renderWorkerProtocolFooter(input: WorkerProtocolFooterInput = {}
         'For work that runs longer than a few minutes, call `progress_update` at natural checkpoints so the '
             + 'coordinator can see you are alive without polling.',
         '`peer_context_pull` shows what sibling tasks in this mission have reported; `git_status` / `git_diff` / '
-            + '`git_log` inspect your own workspace (pass its absolute path as `workspace`).',
+            + '`git_log` inspect your own workspace — all three REQUIRE the absolute path to it as `workspace`.',
         'You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. '
             + 'If you need a decision from the coordinator, finish with `report_completion` and outcome `blocked`, '
             + 'listing what you need in `blockers`.',
+        'On a code-changing task, `report_completion` with outcome `completed` requires `touched_files` — send '
+            + '`[]` if you changed nothing, omitting the field is what gets refused. `blocked`/`failed` never need it, '
+            + 'and a read-only task should omit it or send `[]`.',
+        'If `report_completion` is refused, the response carries `validationErrors` (or a `hint`) naming exactly '
+            + 'what to fix — correct that field and call it again; a refusal records nothing.',
     )
     if (input.enclosedHandoffNotes && input.enclosedHandoffNotes > 0) {
         lines.push(

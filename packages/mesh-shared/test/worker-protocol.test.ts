@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
     WORKER_PROTOCOL_FOOTER_MARKER,
     appendWorkerProtocolFooter,
@@ -82,5 +82,81 @@ describe('renderCoordinatorWorkerSection — owned_paths mention (H1 integration
         expect(section).toMatch(/owned_paths/)
         expect(section).toMatch(/claim time/)
         expect(section).toMatch(/touched_files/)
+    })
+})
+
+/**
+ * MCP-usage-audit items 1 and 2: the footer must state (a) that git_status/
+ * git_log/git_diff need the absolute `workspace` path, (b) what to do on a
+ * report_completion refusal, (c) the touched_files rule — and must validate
+ * `difficulty` against the canonical set rather than rendering an internal
+ * caller's bad value verbatim.
+ */
+describe('renderWorkerProtocolFooter — MCP usage audit (workspace/refusal/touched_files/difficulty)', () => {
+    it('tells the worker git_status/git_log/git_diff need the absolute workspace path', () => {
+        const footer = renderWorkerProtocolFooter({ taskId: 't1' })
+        expect(footer).toMatch(/`git_status`.*`git_diff`.*`git_log`.*absolute path.*`workspace`/)
+    })
+
+    it('tells the worker what to do when report_completion is refused', () => {
+        const footer = renderWorkerProtocolFooter({ taskId: 't1' })
+        expect(footer).toMatch(/refused/)
+        expect(footer).toContain('`validationErrors`')
+        expect(footer).toContain('`hint`')
+        expect(footer).toMatch(/refusal records nothing/)
+    })
+
+    it('states the touched_files rule: required on completed+code-changing, [] means nothing changed, not needed on blocked/failed', () => {
+        const footer = renderWorkerProtocolFooter({ taskId: 't1' })
+        expect(footer).toMatch(/`touched_files`/)
+        expect(footer).toMatch(/completed/)
+        expect(footer).toMatch(/\[\]/)
+        expect(footer).toMatch(/omitting the field is what gets refused/)
+        expect(footer).toMatch(/`blocked`\/`failed` never need it/)
+        expect(footer).toMatch(/read-only task should omit it or send `\[\]`/)
+    })
+
+    it('renders a valid difficulty verbatim', () => {
+        for (const difficulty of ['easy', 'medium', 'difficult', 'freeform']) {
+            const footer = renderWorkerProtocolFooter({ taskId: 't1', difficulty })
+            expect(footer).toContain(`difficulty ${difficulty}`)
+        }
+    })
+
+    describe('with an invalid difficulty value', () => {
+        let warnSpy: ReturnType<typeof vi.spyOn>
+
+        beforeEach(() => {
+            warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        })
+
+        afterEach(() => {
+            warnSpy.mockRestore()
+        })
+
+        it('omits the difficulty phrase entirely rather than rendering "unknown (<value>)" or the raw value', () => {
+            const footer = renderWorkerProtocolFooter({ taskId: 't1', difficulty: 'super-hard' })
+            expect(footer).not.toContain('super-hard')
+            expect(footer).not.toMatch(/unknown/i)
+            expect(footer).toContain('You are a delegated worker (task t1).')
+        })
+
+        it('logs exactly one WARN naming the task and the bad value', () => {
+            renderWorkerProtocolFooter({ taskId: 't42', difficulty: 'super-hard' })
+            expect(warnSpy).toHaveBeenCalledTimes(1)
+            const [message] = warnSpy.mock.calls[0]
+            expect(message).toContain('t42')
+            expect(message).toContain('super-hard')
+        })
+
+        it('falls back to the unscoped worker line when difficulty is the only scope fact and it is invalid', () => {
+            const footer = renderWorkerProtocolFooter({ difficulty: 'super-hard' })
+            expect(footer).toContain('You are a delegated worker.')
+        })
+
+        it('does not warn for a valid difficulty', () => {
+            renderWorkerProtocolFooter({ taskId: 't1', difficulty: 'medium' })
+            expect(warnSpy).not.toHaveBeenCalled()
+        })
     })
 })

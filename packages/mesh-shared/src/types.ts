@@ -153,4 +153,12 @@ export interface RepoMeshSessionStatus {
     startedAt?: string | null
     lastActivityAt?: string | null
     isCached?: boolean
+    /**
+     * Worker MCP delivery outcome for this session's launch (present only for a
+     * mesh-delegated launch). `reason` is a short enum code, never free text —
+     * see `WORKER_MCP_DELIVERY_REASONS` (daemon-core's `mesh/worker-mcp-isolation.ts`,
+     * the source of the vocabulary this field's values are drawn from; not
+     * re-exported here so mesh-shared stays a dependency-free leaf).
+     */
+    workerMcp?: { delivered: boolean; reason?: string }
 }
