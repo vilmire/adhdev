@@ -650,6 +650,8 @@ export const MESH_SEND_TASK_TOOL = {
                     + 'Optional and never rejected: omitting it is recorded as decision_missing. Provenance only — it never changes execution.',
             },
             orchestrationDecision: { type: 'object', description: 'CamelCase alias for orchestration_decision.' },
+            allow_stale_node: { type: 'boolean', description: "GIT-GATE: a non-readonly direct dispatch is refused (dirty_workspace / node_stale_behind_upstream) when the target node's git telemetry shows an uncommitted working tree or a branch behind its upstream beyond the mesh's autoFastForward.maxBehind — the same predicates the claim-time and auto-launch spawn gates apply. Set true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree). Has no effect on a readonly dispatch, which is never gated. Default: false." },
+            allowStaleNode: { type: 'boolean', description: 'CamelCase alias for allow_stale_node.' },
         },
         // session_id is deliberately NOT required: meshSendTask supports a sessionless
         // dispatch (node-scoped on the worker) and the required-arg gate enforces this list.

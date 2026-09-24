@@ -22,7 +22,7 @@ import { resolveDaemonSiblingNodeIds } from './mesh-daemon-slot-axis.js';
 import { recordLastQuotaRanking, recordLastQuotaRankingOutcome } from './mesh-quota-routing.js';
 import { evaluateQuotaClaimGateForAssignment } from './mesh-queue-claim-gate.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
-import { readMeshNodeDaemonId } from './mesh-node-identity.js';
+import { readMeshNodeDaemonId, isMeshNodeFreshEnoughToLaunch, readNumberValue } from './mesh-node-identity.js';
 import { shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
 import { beginTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { isModelAllowedBySlot } from './slot-model-enforcement.js';
@@ -32,7 +32,7 @@ import { withMeshDirectDispatch } from '../commands/command-args.js';
 import { unwrapMeshRelayResult } from '../commands/mesh-relay-result.js';
 import type { TurnAttemptRef, TurnEvidence } from '@adhdev/mesh-shared';
 import { classifyDuplicateMeshDispatch } from './mesh-duplicate-dispatch.js';
-import { isWorkspaceAutoFastForwardInFlight, maybeAutoFastForwardIdleNode } from './mesh-auto-fast-forward.js';
+import { isWorkspaceAutoFastForwardInFlight, maybeAutoFastForwardIdleNode, isDirtyNode, resolveAutoFastForwardPolicy } from './mesh-auto-fast-forward.js';
 import { retractActionableSkipIfPreviouslyNotified } from './mesh-skip-notify.js';
 import { notifyCoordinatorOfPinnedDispatchFailure } from './mesh-dispatch-failed-notify.js';
 import { activeWriteAssignedCount, activeReadonlyAssignedCount, sessionHasActiveAssignment, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, nodeActiveLoad, type IdleCandidate } from './mesh-scheduling-fitness.js';
@@ -1296,6 +1296,37 @@ export function tryAssignQueueTask(
     // each carried their own `opus: 1` and ran three opus processes against a cap of
     // one. Remote machines declare their own daemonId and so keep separate budgets.
     const daemonNodeIds = resolveDaemonSiblingNodeIds(nodeId, mesh?.nodes);
+    // GIT-GATE (owner-requested follow-up to H1): the auto-launch SPAWN gate already
+    // refuses a dirty or stale-behind node before it ever launches a session
+    // (mesh-queue-autolaunch.ts isDirtyNode / isMeshNodeFreshEnoughToLaunch), but an
+    // ALREADY-idle session reaches this atomic claim through a completely different
+    // path (event-driven agent:ready, idle drain, reconcile re-drive) with no
+    // equivalent check — so a node that went dirty or fell behind AFTER its session
+    // was already idle could still pull a write task. Resolve the SAME predicates
+    // against the SAME node record here (this function already has it — getMeshWithCache
+    // above), then thread the verdict into the atomic claim as a plain opt so the
+    // store's candidate filter (a frozen file-size baseline, dependency-light DB
+    // layer) never has to import auto-fast-forward policy resolution itself — same
+    // pattern as `nodeIsWorktree`/`daemonNodeIds` just above. Fail-open by
+    // construction: both predicates return true/false only on POSITIVE telemetry,
+    // never on absence (see their own docs), so an unresolved `node` (undefined)
+    // yields dirty:false, staleBehind:false — no gating.
+    const gitGateMaxBehind = resolveAutoFastForwardPolicy(mesh).maxBehind;
+    const nodeGitBehind = readNumberValue(node?.git?.behind, node?.cachedStatus?.git?.behind);
+    const nodeGitGate = {
+        dirty: isDirtyNode(node),
+        staleBehind: !isMeshNodeFreshEnoughToLaunch(node, { maxBehind: gitGateMaxBehind }),
+        ...(nodeGitBehind !== undefined ? { behind: nodeGitBehind } : {}),
+        ...(gitGateMaxBehind !== undefined ? { maxBehind: gitGateMaxBehind } : {}),
+    };
+    // Before refusing on staleness, kick one immediate fast-forward attempt for this
+    // node if continuous auto-ff is enabled — best-effort, fire-and-forget (the
+    // function is already self-throttled/async and must never block this claim call).
+    // The NEXT drain tick (not this one) picks up the result via
+    // isWorkspaceAutoFastForwardInFlight/the refreshed git telemetry.
+    if (nodeGitGate.staleBehind && resolveAutoFastForwardPolicy(mesh).mode === 'continuous') {
+        void maybeAutoFastForwardIdleNode(components, { meshId, nodeId, sessionId, providerType }).catch(() => { /* best-effort */ });
+    }
     // A6-SILENT-REFUSAL: collect WHICH gate refused so the `!task` exit below stops being
     // the silent funnel that made a permanently-stuck task look like an idle queue.
     const claimRefusal: MeshClaimRefusal = {};
@@ -1303,6 +1334,7 @@ export function tryAssignQueueTask(
         providerType,
         ...(providerMaxParallel !== undefined ? { providerMaxParallel } : {}),
         ...(assignedModel ? { assignedModel } : {}),
+        nodeGitGate,
         ...(slotMaxParallel !== undefined ? { slotMaxParallel } : {}),
         daemonNodeIds,
         nodeIsWorktree,

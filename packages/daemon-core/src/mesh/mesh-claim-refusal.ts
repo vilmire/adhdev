@@ -55,9 +55,23 @@ export type MeshClaimRefusalReason =
     | 'node_busy_with_active_assignment'
     /** H1 (path ownership, wiring-unification Phase H — docs/design/2026-09-23-wiring-
      *  unification.md §7c): a `code_change` candidate's declared `owned_paths` overlaps
-     *  another in-flight (`assigned`) task's declared `owned_paths` on the same node.
-     *  Opt-in — a candidate or in-flight task with no declaration never triggers this. */
-    | 'owned_paths_conflict';
+     *  another in-flight (`assigned`) task's declared `owned_paths`, MESH-WIDE (any
+     *  node/daemon). Opt-in — a candidate or in-flight task with no declaration never
+     *  triggers this. */
+    | 'owned_paths_conflict'
+    /** GIT-GATE (owner-requested follow-up to H1): a write (non-readonly) candidate
+     *  cannot be claimed by a node whose git telemetry proves its working tree dirty
+     *  (uncommitted changes) — the same `isDirtyNode` predicate the auto-launch spawn
+     *  gate already applies (mesh-queue-autolaunch.ts). Fail-open on missing/absent
+     *  telemetry; readonly candidates bypass this gate entirely (an N-way readonly
+     *  diagnosis does not touch the tree). */
+    | 'dirty_workspace'
+    /** GIT-GATE: a write (non-readonly) candidate cannot be claimed by a node whose git
+     *  telemetry proves it behind its upstream beyond the mesh's configured
+     *  `autoFastForward.maxBehind` — the same `isMeshNodeFreshEnoughToLaunch` freshness
+     *  predicate the auto-launch spawn gate already applies. Fail-open on missing
+     *  telemetry; readonly candidates bypass this gate entirely. */
+    | 'node_stale_behind_upstream';
 
 /** Sink passed in by a caller that wants to know why a claim returned null; mutated in place
  *  by `claimNextQueueTask`. Omitting it preserves the exact prior behavior. */

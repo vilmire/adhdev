@@ -22,6 +22,7 @@ import { resolveSessionTurnPresentation } from './mesh-turn-presentation.js';
 import type { MeshReportedMemberState } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
 import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
+import { WORKER_MCP_DELIVERY_REASONS, type WorkerMcpDeliveryReason } from './worker-mcp-isolation.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from '../mesh/mesh-warmup-deadline.js';
 import { isWorktreeBootstrapStaleRunning, isRemoteWorktreeBootstrapStaleRunning } from './worktree-bootstrap-config.js';
 import * as fs from 'fs';
@@ -2082,8 +2083,28 @@ export async function hydrateInlineMeshDirectTruth(args: {
     };
 }
 
+/**
+ * Item 3 (MCP usage audit): re-read `resolveWorkerMcpIsolation`'s outcome —
+ * stamped onto session meta as `workerMcpDelivered`/`workerMcpDeliveryReason`
+ * by `launchCli` (cli-manager.ts) at launch time — for the mesh_status /
+ * mesh_list_nodes session entry. `undefined` (not a worker launch, or launched
+ * before this field existed) omits the key entirely rather than guessing.
+ * `reason` is validated against the enum so a stale/foreign value on an old
+ * session record cannot leak as if it were current vocabulary.
+ */
+function readWorkerMcpDeliveryFromMeta(meta: Record<string, unknown>): { delivered: boolean; reason?: WorkerMcpDeliveryReason } | undefined {
+    const delivered = readBooleanValue(meta.workerMcpDelivered);
+    if (delivered === undefined) return undefined;
+    const rawReason = readStringValue(meta.workerMcpDeliveryReason);
+    const reason = rawReason && (WORKER_MCP_DELIVERY_REASONS as readonly string[]).includes(rawReason)
+        ? (rawReason as WorkerMcpDeliveryReason)
+        : undefined;
+    return { delivered, ...(reason ? { reason } : {}) };
+}
+
 export function summarizeMeshSessionRecord(record: any): Record<string, unknown> {
     const meta = readObjectRecord(record?.meta);
+    const workerMcp = readWorkerMcpDeliveryFromMeta(meta);
     const isSelfCoordinator = Boolean(readStringValue(meta.meshCoordinatorFor));
     let chatStatus = readStringValue(record?.chatStatus, record?.activeChat?.status, meta.chatStatus, meta.sessionStatus);
     const state = readLiveMeshSessionState(record);
@@ -2120,6 +2141,7 @@ export function summarizeMeshSessionRecord(record: any): Record<string, unknown>
         startedAt: toIsoTimestamp(record?.startedAt ?? record?.started_at ?? record?.spawnedAtMs ?? record?.spawned_at_ms),
         lastActivityAt: toIsoTimestamp(record?.updatedAt ?? record?.lastActivityAt ?? record?.last_activity_at),
         isCached: false,
+        ...(workerMcp ? { workerMcp } : {}),
     };
 }
 

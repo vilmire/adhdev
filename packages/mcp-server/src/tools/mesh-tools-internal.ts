@@ -474,6 +474,13 @@ export interface MeshContext {
      * Surfaced by mesh_status as `replication: 'pending'`.
      */
     lastNoticeReplication?: 'pending';
+    /**
+     * Number of inbox reads (drainCoordinatorPendingEvents) made through this
+     * context. The mesh-mode CallTool post-processor compares it before/after a
+     * tool runs so a tool that already drained is not drained a second time in
+     * the same call (see mesh-pending-events-attach.ts).
+     */
+    noticeDrainCount?: number;
 }
 
 /**
@@ -2047,14 +2054,26 @@ export async function drainCoordinatorPendingEvents(
 ): Promise<any[]> {
     const matchesCurrentMesh = (event: any) => readString(event?.meshId) === ctx.mesh.id;
     const coordinatorDaemonId = readString(ctx.localDaemonId);
+    // NOTICE-THEFT: only an MCP server that IS a PTY-hosted coordinator (the
+    // daemon injected ADHDEV_COORDINATOR_SESSION_ID at its launch) may claim
+    // notices while that daemon hosts a live CLI coordinator — it is reading its
+    // own inbox. An external / per-call MCP client has no coordinator session:
+    // it omits the flag, so the daemon leaves notices to the live coordinator's
+    // cursor (`deliveredByCursor`, empty) and only hands this client the
+    // no-coordinator backlog when no CLI coordinator is hosted there.
     const args = {
         meshId: ctx.mesh.id,
         ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
-        selfCoordinatorInboxRead: true,
-        // COORD-EVENT-MISROUTE: a sibling coordinator session's unicast notice
-        // on the same daemon is not surfaced to this one.
-        ...(ctx.coordinatorSessionId ? { sessionId: ctx.coordinatorSessionId } : {}),
+        ...(ctx.coordinatorSessionId
+            ? {
+                selfCoordinatorInboxRead: true,
+                // COORD-EVENT-MISROUTE: a sibling coordinator session's unicast notice
+                // on the same daemon is not surfaced to this one.
+                sessionId: ctx.coordinatorSessionId,
+            }
+            : {}),
     };
+    ctx.noticeDrainCount = (ctx.noticeDrainCount ?? 0) + 1;
     let raw: any;
     try {
         raw = await ctx.transport.command('get_pending_mesh_events', args);

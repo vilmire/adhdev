@@ -42,7 +42,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
   listMeshes: meshConfigMocks.listMeshes,
 }))
 
-import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask } from '../../src/mesh/mesh-work-queue.js'
+import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, recordDirectDispatchTask } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import type { MeshClaimRefusal } from '../../src/mesh/mesh-runtime-store.js'
 
@@ -214,6 +214,130 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
     }
   })
 
+  it('owned_paths_conflict — MESH-WIDE: overlap across two DIFFERENT DAEMONS (no shared daemonNodeIds) is refused', () => {
+    // Live finding (preview rc.41, runs 3–7): T1 (direct dispatch, owned_paths
+    // ["docs/CONCEPTS.md"], assigned on node MainPC) did not stop T2 (enqueued with
+    // the same owned_paths, pinned to node MoltBook on a DIFFERENT daemon) from being
+    // claimed immediately. The old gate built inFlightOwnership from
+    // assignedRowsForDaemon — scoped to the CLAIMING node's own daemonNodeIds — so a
+    // row `assigned` on a completely different machine was invisible. Neither claim
+    // here passes a `daemonNodeIds` that includes the other's node: this is the
+    // cross-daemon case the capacity gates correctly do NOT widen to, but path
+    // ownership must.
+    const meshId = `mesh_refuse_ownedpaths_crossdaemon_${randomUUID().slice(0, 8)}`
+    const NODE_MAINPC = 'node_mainpc'
+    const NODE_MOLTBOOK = 'node_moltbook'
+    try {
+      // T1: direct dispatch, already `assigned` on MainPC — mirrors the live repro,
+      // which used mesh_direct (recordDirectDispatchTask), not the enqueue+claim path.
+      const t1 = recordDirectDispatchTask(meshId, 'T1 direct dispatch', {
+        id: `t1_${randomUUID().slice(0, 8)}`,
+        assignedNodeId: NODE_MAINPC,
+        assignedSessionId: 'session_mainpc',
+        taskMode: 'code_change',
+        difficulty: 'medium',
+        ownedPaths: ['docs/CONCEPTS.md'],
+      })
+      expect(t1).not.toBeNull()
+
+      // T2: enqueued, pinned to MoltBook, on a DIFFERENT daemon than MainPC. No
+      // daemonNodeIds passed for either side — each node's own capacity scope, exactly
+      // as the live claim call sites resolve it.
+      const t2 = enqueueTask(meshId, 'T2 enqueued', {
+        taskMode: 'code_change', difficulty: 'medium', targetNodeId: NODE_MOLTBOOK,
+        ownedPaths: ['docs/CONCEPTS.md'],
+      })
+      const { task, refusal } = claim(meshId, {}, { nodeId: NODE_MOLTBOOK, sessionId: 'session_moltbook' })
+      expect(task).toBeNull()
+      expect(refusal.reason).toBe('owned_paths_conflict')
+      expect(refusal.detail).toContain(t1!.id)
+      void t2
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('owned_paths non-overlapping declarations across DIFFERENT daemons both claim fine', () => {
+    const meshId = `mesh_refuse_ownedpaths_crossdaemon_ok_${randomUUID().slice(0, 8)}`
+    const NODE_MAINPC = 'node_mainpc'
+    const NODE_MOLTBOOK = 'node_moltbook'
+    try {
+      const t1 = recordDirectDispatchTask(meshId, 'T1 direct dispatch', {
+        id: `t1_${randomUUID().slice(0, 8)}`,
+        assignedNodeId: NODE_MAINPC,
+        assignedSessionId: 'session_mainpc',
+        taskMode: 'code_change',
+        difficulty: 'medium',
+        ownedPaths: ['docs/CONCEPTS.md'],
+      })
+      expect(t1).not.toBeNull()
+
+      const t2 = enqueueTask(meshId, 'T2 enqueued', {
+        taskMode: 'code_change', difficulty: 'medium', targetNodeId: NODE_MOLTBOOK,
+        ownedPaths: ['docs/OTHER.md'],
+      })
+      const { task, refusal } = claim(meshId, {}, { nodeId: NODE_MOLTBOOK, sessionId: 'session_moltbook' })
+      expect(task?.id).toBe(t2.id)
+      expect(refusal.reason).toBeUndefined()
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('owned_paths_conflict — MESH-WIDE gate never refuses a READONLY in-flight task across daemons', () => {
+    const meshId = `mesh_refuse_ownedpaths_crossdaemon_readonly_${randomUUID().slice(0, 8)}`
+    const NODE_MAINPC = 'node_mainpc'
+    const NODE_MOLTBOOK = 'node_moltbook'
+    try {
+      const t1 = recordDirectDispatchTask(meshId, 'T1 direct dispatch readonly', {
+        id: `t1_${randomUUID().slice(0, 8)}`,
+        assignedNodeId: NODE_MAINPC,
+        assignedSessionId: 'session_mainpc',
+        taskMode: 'live_debug_readonly',
+        readonly: true,
+        difficulty: 'medium',
+        ownedPaths: ['docs/CONCEPTS.md'],
+      })
+      expect(t1).not.toBeNull()
+
+      const t2 = enqueueTask(meshId, 'T2 enqueued', {
+        taskMode: 'code_change', difficulty: 'medium', targetNodeId: NODE_MOLTBOOK,
+        ownedPaths: ['docs/CONCEPTS.md'],
+      })
+      const { task, refusal } = claim(meshId, {}, { nodeId: NODE_MOLTBOOK, sessionId: 'session_moltbook' })
+      expect(task?.id).toBe(t2.id)
+      expect(refusal.reason).toBeUndefined()
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('owned_paths_conflict across daemons is OPT-IN — an in-flight task with no declaration never conflicts', () => {
+    const meshId = `mesh_refuse_ownedpaths_crossdaemon_optin_${randomUUID().slice(0, 8)}`
+    const NODE_MAINPC = 'node_mainpc'
+    const NODE_MOLTBOOK = 'node_moltbook'
+    try {
+      const t1 = recordDirectDispatchTask(meshId, 'T1 direct dispatch, no declaration', {
+        id: `t1_${randomUUID().slice(0, 8)}`,
+        assignedNodeId: NODE_MAINPC,
+        assignedSessionId: 'session_mainpc',
+        taskMode: 'code_change',
+        difficulty: 'medium',
+      })
+      expect(t1).not.toBeNull()
+
+      const t2 = enqueueTask(meshId, 'T2 enqueued', {
+        taskMode: 'code_change', difficulty: 'medium', targetNodeId: NODE_MOLTBOOK,
+        ownedPaths: ['docs/CONCEPTS.md'],
+      })
+      const { task, refusal } = claim(meshId, {}, { nodeId: NODE_MOLTBOOK, sessionId: 'session_moltbook' })
+      expect(task?.id).toBe(t2.id)
+      expect(refusal.reason).toBeUndefined()
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
   it('owned_paths non-overlapping declarations on sibling nodes both claim fine', () => {
     const meshId = `mesh_refuse_ownedpaths_ok_${randomUUID().slice(0, 8)}`
     const NODE_B = 'node_beta'
@@ -274,6 +398,76 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
       })
       const { task, refusal } = claim(meshId, { daemonNodeIds }, { nodeId: NODE_B, sessionId: 'session_beta' })
       expect(task?.id).toBe(second.id)
+      expect(refusal.reason).toBeUndefined()
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('dirty_workspace — a write candidate cannot be claimed by a node whose git gate reports dirty', () => {
+    // GIT-GATE (owner-requested follow-up to H1). The gate is resolved by the CALLER
+    // (mesh-queue-assignment.ts, via isDirtyNode) and threaded in as a plain opt — this
+    // suite exercises the store-level candidate filter's reaction to that opt directly,
+    // mirroring how the H1 tests exercise ownedPathsAllows without going through the
+    // caller that resolves node records.
+    const meshId = `mesh_refuse_dirty_${randomUUID().slice(0, 8)}`
+    try {
+      enqueueTask(meshId, 'write work', { taskMode: 'code_change', difficulty: 'medium' })
+      const { task, refusal } = claim(meshId, { nodeGitGate: { dirty: true, staleBehind: false } })
+      expect(task).toBeNull()
+      expect(refusal.reason).toBe('dirty_workspace')
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('node_stale_behind_upstream — a write candidate cannot be claimed by a node whose git gate reports stale-behind', () => {
+    const meshId = `mesh_refuse_stale_${randomUUID().slice(0, 8)}`
+    try {
+      enqueueTask(meshId, 'write work', { taskMode: 'code_change', difficulty: 'medium' })
+      const { task, refusal } = claim(meshId, { nodeGitGate: { dirty: false, staleBehind: true, behind: 7, maxBehind: 0 } })
+      expect(task).toBeNull()
+      expect(refusal.reason).toBe('node_stale_behind_upstream')
+      // Names the concrete evidence (behind count / maxBehind), not generic prose.
+      expect(refusal.detail).toContain('7')
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('git gate: behind within threshold (staleBehind:false) still claims fine', () => {
+    // The caller (isMeshNodeFreshEnoughToLaunch) already decided behind<=maxBehind is
+    // fresh and reports staleBehind:false — the store gate must not re-derive or
+    // second-guess that verdict.
+    const meshId = `mesh_refuse_stale_within_threshold_${randomUUID().slice(0, 8)}`
+    try {
+      const first = enqueueTask(meshId, 'write work', { taskMode: 'code_change', difficulty: 'medium' })
+      const { task, refusal } = claim(meshId, { nodeGitGate: { dirty: false, staleBehind: false, behind: 2, maxBehind: 5 } })
+      expect(task?.id).toBe(first.id)
+      expect(refusal.reason).toBeUndefined()
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('git gate: missing telemetry (nodeGitGate omitted) never refuses — fail-open', () => {
+    const meshId = `mesh_refuse_no_git_telemetry_${randomUUID().slice(0, 8)}`
+    try {
+      const first = enqueueTask(meshId, 'write work', { taskMode: 'code_change', difficulty: 'medium' })
+      const { task, refusal } = claim(meshId, {})
+      expect(task?.id).toBe(first.id)
+      expect(refusal.reason).toBeUndefined()
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('git gate: a READONLY candidate claims fine on a dirty/stale node — write-only gate', () => {
+    const meshId = `mesh_refuse_dirty_readonly_${randomUUID().slice(0, 8)}`
+    try {
+      const first = enqueueTask(meshId, 'readonly work', { taskMode: 'live_debug_readonly', difficulty: 'medium' })
+      const { task, refusal } = claim(meshId, { nodeGitGate: { dirty: true, staleBehind: true, behind: 12, maxBehind: 0 } })
+      expect(task?.id).toBe(first.id)
       expect(refusal.reason).toBeUndefined()
     } finally {
       cleanup(meshId)

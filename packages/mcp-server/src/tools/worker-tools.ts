@@ -67,7 +67,10 @@ export const REPORT_COMPLETION_TOOL = {
     'Report the structured outcome of the task you were dispatched to do. Call this ONCE when your work is '
     + 'finished, blocked, or has failed. Your `summary` is recorded verbatim — it is not scraped from your '
     + 'terminal — so write what the coordinator actually needs to know. You do not pass a task id: the daemon '
-    + 'knows which task you hold.',
+    + 'knows which task you hold. On a code-changing task, outcome \'completed\' requires `touched_files` — send '
+    + '`[]` if you changed nothing; omitting the field is what gets refused, not an empty list. If the call is '
+    + 'refused, the response carries `validationErrors` (or a `hint`) naming exactly what to fix — correct that '
+    + 'field and call again; a refusal records nothing.',
   inputSchema: {
     type: 'object' as const,
     properties: {

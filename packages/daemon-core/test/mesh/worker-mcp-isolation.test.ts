@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import {
   __resetWorkerTaskTokensForTest,
   deriveCursorWorkspaceSlug,
+  deriveWorkerMcpDeliveryStatus,
   expandWorkerIsolationPlaceholders,
   expireWorkerTaskTokensForTask,
   findWorkerPrivateHomeSpec,
@@ -20,6 +21,7 @@ import {
   verifyWorkerTaskToken,
   WORKER_TOKEN_CANARY_PREFIX,
   writeWorkerMcpConfig,
+  type WorkerMcpIsolation,
 } from '../../src/mesh/worker-mcp-isolation'
 
 const ON = { ADHDEV_WORKER_MCP: '1' } as NodeJS.ProcessEnv
@@ -1612,5 +1614,64 @@ describe('★config-root imports resolve from the real home (rc.16 regression)',
       expect(spec.homeEnvVar).toBeUndefined()
       expect(spec.configRootPrefix).toBeUndefined()
     }
+  })
+})
+
+// ─── MCP-usage-audit item 3: worker-MCP delivery visibility ─────────────────
+describe('deriveWorkerMcpDeliveryStatus', () => {
+  function isolation(partial: Partial<WorkerMcpIsolation>): WorkerMcpIsolation {
+    return { notes: [], ...partial }
+  }
+
+  it('reads not_applicable when the launch never asked for a worker identity (no bindContext)', () => {
+    // This is the ordinary non-mesh launch (user-initiated CLI, or a delegated
+    // launch with no mesh identity yet) — not a failure, so it must not read
+    // like one.
+    expect(deriveWorkerMcpDeliveryStatus(null, false)).toEqual({ delivered: false, reason: 'not_applicable' })
+    expect(deriveWorkerMcpDeliveryStatus(isolation({ bind: 'wtb_x', configHasServer: true }), false))
+      .toEqual({ delivered: false, reason: 'not_applicable' })
+  })
+
+  it('reads not_applicable when bindContext was supplied but the gate is off (isolation is null)', () => {
+    expect(deriveWorkerMcpDeliveryStatus(null, true)).toEqual({ delivered: false, reason: 'not_applicable' })
+  })
+
+  it('reads delivered when a bind and a server surface (config-written) both landed', () => {
+    expect(deriveWorkerMcpDeliveryStatus(isolation({ bind: 'wtb_x', configHasServer: true }), true))
+      .toEqual({ delivered: true })
+  })
+
+  it('reads delivered for the config_override delivery path (bind + delivery descriptor, no configHasServer)', () => {
+    expect(deriveWorkerMcpDeliveryStatus(
+      isolation({ bind: 'wtb_x', delivery: { mode: 'config_override', flag: '--f', serverName: 's', commandTemplate: 'c', argsTemplate: 'a', envVarsTemplate: 'e', enabledTemplate: 't', command: 'c', args: [], envVars: [], bindEnvVar: 'ADHDEV_WORKER_SESSION_BIND' } }),
+      true,
+    )).toEqual({ delivered: true })
+  })
+
+  it('reads delivered:false with no reason match as unknown, never as a silent pass', () => {
+    expect(deriveWorkerMcpDeliveryStatus(isolation({}), true)).toEqual({ delivered: false, reason: 'unknown' })
+  })
+
+  const FAILURE_CASES: Array<{ note: string; reason: string }> = [
+    { note: 'private HOME unavailable (boom) — falling back to declared isolation only', reason: 'private_home_failed' },
+    { note: 'worker MCP config_override delivery unavailable for x — missing server or bind context', reason: 'config_override_missing_context' },
+    { note: 'worker MCP config_override delivery failed (boom)', reason: 'config_override_failed' },
+    { note: 'no mcpConfig.path declared for x — no worker config written', reason: 'no_mcp_config_declared' },
+    { note: 'mcpConfig.format foo is not auto-import writable — relying on declared arg isolation', reason: 'unsupported_config_format' },
+    { note: '~/.foo is home-rooted but x has no private HOME — refusing to overwrite the coordinator config', reason: 'home_rooted_no_private_home' },
+    { note: 'worker MCP config write failed (boom)', reason: 'config_write_failed' },
+  ]
+
+  for (const { note, reason } of FAILURE_CASES) {
+    it(`maps the daemon note "${note.slice(0, 40)}…" to reason '${reason}'`, () => {
+      expect(deriveWorkerMcpDeliveryStatus(isolation({ notes: [note] }), true)).toEqual({ delivered: false, reason })
+    })
+  }
+
+  it('never claims delivered when configHasServer is true but no bind was minted', () => {
+    // A server entry with no live bind is not a reportable worker — the bind
+    // is what the worker exchanges for its task identity.
+    expect(deriveWorkerMcpDeliveryStatus(isolation({ configHasServer: true, notes: ['worker MCP config write failed (x)'] }), true))
+      .toEqual({ delivered: false, reason: 'config_write_failed' })
   })
 })

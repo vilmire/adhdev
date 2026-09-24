@@ -1037,6 +1037,9 @@ export function claimNextTask(
         assignedTranscriptProfile?: MeshWorkQueueEntry['assignedTranscriptProfile'];
         /** Classified task grades this concrete/unknown-model session can safely run. */
         allowedTaskDifficulties?: readonly MeshTaskDifficulty[];
+        /** GIT-GATE: the claiming node's git telemetry verdict (dirty / stale-behind),
+         *  resolved by the caller — see MeshRuntimeStore.claimNextQueueTask's own doc. */
+        nodeGitGate?: { dirty: boolean; staleBehind: boolean; behind?: number; maxBehind?: number };
         /** A6-SILENT-REFUSAL: optional sink naming WHICH gate refused when this returns
          *  null. Diagnostic only — omitting it preserves the exact prior behavior. */
         outRefusal?: MeshClaimRefusal;

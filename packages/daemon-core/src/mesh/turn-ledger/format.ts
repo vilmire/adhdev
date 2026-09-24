@@ -433,9 +433,9 @@ function renderNoProgress(input: RenderTurnNotifyInput): string {
     if (s.meshWorkerStall) {
         const stalledSuffix = s.stalledMs !== undefined ? ` for ${Math.round(s.stalledMs / 1000)}s` : '';
         const statusSuffix = s.observedStatus ? ` (observed status: ${s.observedStatus})` : '';
-        return `[System] ${s.nodeLabel}: PTY output unchanged${stalledSuffix}${statusSuffix}. This is an informational stall — the worker's screen has been static regardless of its reported status; it may be genuinely idle, waiting, or wedged, so this is NOT a failure or auto-restart. Judge whether to inspect it: wait for pendingCoordinatorEvents/a completion event, or make one bounded mesh_read_chat check if you need to see its current screen, then wait again.`;
+        return `[System] ${s.nodeLabel}: PTY output unchanged${stalledSuffix}${statusSuffix}. This is an informational stall — the worker's screen has been static regardless of its reported status; it may be genuinely idle, waiting, or wedged, so this is NOT a failure or auto-restart. Judge whether to inspect it: wait for a completion notice (typed into this session, or attached as pendingCoordinatorEvents to every mesh tool response for an MCP-only coordinator — drained by get_pending_mesh_events), or make one bounded mesh_read_chat check if you need to see its current screen, then wait again.`;
     }
-    return `[System] ${s.nodeLabel} is still reported as generating after a long interval. Wait for pendingCoordinatorEvents or a completion/status event; if the user explicitly asks for status, make one bounded status check and then wait again.`;
+    return `[System] ${s.nodeLabel} is still reported as generating after a long interval. Wait for a completion/status notice (typed into this session, or attached as pendingCoordinatorEvents to every mesh tool response for an MCP-only coordinator — drained by get_pending_mesh_events); if the user explicitly asks for status, make one bounded status check and then wait again.`;
 }
 
 function renderProgress(input: RenderTurnNotifyInput, missing: SummaryRef[]): string {

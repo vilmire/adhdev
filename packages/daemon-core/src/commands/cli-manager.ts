@@ -80,6 +80,8 @@ export {
 
 export { expandModelLaunchArgs } from './model-launch-args.js';
 
+import { deriveWorkerMcpDeliveryStatus, type WorkerMcpDeliveryStatus } from '../mesh/worker-mcp-isolation.js';
+
 import {
     commandExists,
     normalizeDirForCompare,
@@ -1636,6 +1638,29 @@ export class DaemonCliManager {
                     : {}),
             })
             : null;
+        // ★WORKER-MCP DELIVERY VISIBILITY: classify what the isolation gate above
+        // actually produced into the coordinator-visible {delivered, reason?} shape
+        // (see worker-mcp-isolation.ts doc). `hadBindContext` mirrors the exact
+        // condition used to build `bindContext` above — a delegated launch with no
+        // mesh identity was never going to deliver a worker server, so that reads
+        // as `not_applicable`, not a failure. Stamped into `settingsOverride` so it
+        // rides into session meta the same way every other launch-settings field
+        // does (`launchSettings` below), which is what `summarizeMeshSessionRecord`
+        // reads for mesh_status / mesh_list_nodes; also returned from this call so
+        // the dispatch/claim response that triggered this launch sees it immediately.
+        const workerMcpDelivery: WorkerMcpDeliveryStatus | undefined = delegatedMeshId
+            ? deriveWorkerMcpDeliveryStatus(delegatedLaunch?.workerIsolation ?? null, Boolean(delegatedMeshId && delegatedSessionKey))
+            : undefined;
+        if (workerMcpDelivery && settingsOverride) {
+            settingsOverride = {
+                ...settingsOverride,
+                workerMcpDelivered: workerMcpDelivery.delivered,
+                ...(workerMcpDelivery.reason ? { workerMcpDeliveryReason: workerMcpDelivery.reason } : {}),
+            };
+        }
+        if (workerMcpDelivery && !workerMcpDelivery.delivered && workerMcpDelivery.reason !== 'not_applicable') {
+            LOG.warn('WorkerMcp', `[${cliType}] worker MCP not delivered for this launch (${workerMcpDelivery.reason}) — see WorkerMcp notes above for detail`);
+        }
         // ★ISOLATION-OBSERVABILITY: stamp the resolved bundle version on
         // every delegated-launch diagnostic, so a stale in-memory provider
         // is legible from the log line itself.
@@ -1743,6 +1768,10 @@ export class DaemonCliManager {
             providerSessionId: started.providerSessionId,
             launchSource,
             ...(ledgerLaunchRecorded ? { ledgerLaunchRecorded: true } : {}),
+            // ★See workerMcpDelivery comment above: only present for a delegated
+            // (mesh-identified) launch, so an ordinary user-initiated launch_cli
+            // response is unchanged.
+            ...(workerMcpDelivery ? { workerMcp: workerMcpDelivery } : {}),
         };
     }
 

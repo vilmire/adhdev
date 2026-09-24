@@ -10,11 +10,11 @@ import {
 } from '../../src/mesh/turn-ledger/policy.js';
 
 describe('TurnPolicy', () => {
-    it('has the 8 design defaults + the await-report window (2026-09-24)', () => {
+    it('has the 8 design defaults + the await-report window (2026-09-24, raised 180s -> 600s same day per live run 6 on rc.41)', () => {
         expect(DEFAULT_TURN_POLICY).toEqual({
             tickMs: 4_000, quietWindowMs: 8_000, consumeGraceMs: 90_000, deliveryCeilingMs: 120_000,
             livenessDeadlineMs: 480_000, noTurnDeadlineMs: 900_000, stallNoticeMs: 180_000, hardCeilingMs: 5_400_000,
-            awaitReportMs: 180_000,
+            awaitReportMs: 600_000,
         });
         expect(resolveTurnPolicy({ ADHDEV_TURN_AWAIT_REPORT_MS: '5000' }).awaitReportMs).toBe(5_000);
         expect(resolveTurnPolicy({})).toEqual(DEFAULT_TURN_POLICY);

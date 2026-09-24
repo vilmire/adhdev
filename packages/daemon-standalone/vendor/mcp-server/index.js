@@ -41460,15 +41460,25 @@ ${line}` : line;
       const scope = [];
       if (input.taskId) scope.push(`task ${input.taskId}`);
       if (input.taskMode) scope.push(`mode ${input.taskMode}`);
-      if (input.difficulty) scope.push(`difficulty ${input.difficulty}`);
+      if (input.difficulty) {
+        if (isMeshTaskDifficulty2(input.difficulty)) {
+          scope.push(`difficulty ${input.difficulty}`);
+        } else {
+          console.warn(
+            `[worker-protocol] task ${input.taskId ?? "(unknown)"}: dropping invalid difficulty '${input.difficulty}' from the worker footer (expected one of easy, medium, difficult, freeform)`
+          );
+        }
+      }
       if (input.readonly) scope.push("read-only");
       if (scope.length) lines.push(`You are a delegated worker (${scope.join(", ")}).`);
       else lines.push("You are a delegated worker.");
       lines.push(
         "When your work is finished, blocked, or has failed, call `report_completion` exactly once. Its `summary` is recorded verbatim as the authoritative record of this task \u2014 your terminal is not scraped for it \u2014 so state what you did, what you found, and where you left the branch.",
         "For work that runs longer than a few minutes, call `progress_update` at natural checkpoints so the coordinator can see you are alive without polling.",
-        "`peer_context_pull` shows what sibling tasks in this mission have reported; `git_status` / `git_diff` / `git_log` inspect your own workspace (pass its absolute path as `workspace`).",
-        "You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. If you need a decision from the coordinator, finish with `report_completion` and outcome `blocked`, listing what you need in `blockers`."
+        "`peer_context_pull` shows what sibling tasks in this mission have reported; `git_status` / `git_diff` / `git_log` inspect your own workspace \u2014 all three REQUIRE the absolute path to it as `workspace`.",
+        "You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. If you need a decision from the coordinator, finish with `report_completion` and outcome `blocked`, listing what you need in `blockers`.",
+        "On a code-changing task, `report_completion` with outcome `completed` requires `touched_files` \u2014 send `[]` if you changed nothing, omitting the field is what gets refused. `blocked`/`failed` never need it, and a read-only task should omit it or send `[]`.",
+        "If `report_completion` is refused, the response carries `validationErrors` (or a `hint`) naming exactly what to fix \u2014 correct that field and call it again; a refusal records nothing."
       );
       if (input.enclosedHandoffNotes && input.enclosedHandoffNotes > 0) {
         lines.push(
@@ -54730,12 +54740,14 @@ ${blocks.join("\n\n")}`;
     __export2(worker_mcp_isolation_exports, {
       WORKER_BIND_CANARY_PREFIX: () => WORKER_BIND_CANARY_PREFIX,
       WORKER_HOME_PLACEHOLDER: () => WORKER_HOME_PLACEHOLDER,
+      WORKER_MCP_DELIVERY_REASONS: () => WORKER_MCP_DELIVERY_REASONS,
       WORKER_PRIVATE_HOME_SPECS: () => WORKER_PRIVATE_HOME_SPECS,
       WORKER_SESSION_BIND_ENV: () => WORKER_SESSION_BIND_ENV,
       WORKER_TOKEN_CANARY_PREFIX: () => WORKER_TOKEN_CANARY_PREFIX,
       __resetWorkerSessionBindsForTest: () => __resetWorkerSessionBindsForTest,
       __resetWorkerTaskTokensForTest: () => __resetWorkerTaskTokensForTest,
       deriveCursorWorkspaceSlug: () => deriveCursorWorkspaceSlug,
+      deriveWorkerMcpDeliveryStatus: () => deriveWorkerMcpDeliveryStatus,
       exchangeWorkerSessionBind: () => exchangeWorkerSessionBind,
       expandWorkerIsolationPlaceholders: () => expandWorkerIsolationPlaceholders,
       expireWorkerTaskTokensForTask: () => expireWorkerTaskTokensForTask,
@@ -55109,6 +55121,15 @@ ${blocks.join("\n\n")}`;
       }
       return result;
     }
+    function deriveWorkerMcpDeliveryStatus(isolation, hadBindContext) {
+      if (!hadBindContext) return { delivered: false, reason: "not_applicable" };
+      if (!isolation) return { delivered: false, reason: "not_applicable" };
+      const delivered = Boolean(isolation.bind) && (isolation.configHasServer === true || !!isolation.delivery);
+      if (delivered) return { delivered: true };
+      const notes = isolation.notes.join(" | ");
+      const reason = notes.includes("private HOME unavailable") ? "private_home_failed" : notes.includes("config_override delivery unavailable") ? "config_override_missing_context" : notes.includes("config_override delivery failed") ? "config_override_failed" : notes.includes("no mcpConfig.path declared") ? "no_mcp_config_declared" : notes.includes("is not auto-import writable") ? "unsupported_config_format" : notes.includes("refusing to overwrite the coordinator config") ? "home_rooted_no_private_home" : notes.includes("config write failed") ? "config_write_failed" : "unknown";
+      return { delivered: false, reason };
+    }
     function exchangeWorkerSessionBind(bind, resolveCurrentTask) {
       const binding = verifyWorkerSessionBind(bind);
       if (!binding) return null;
@@ -55140,6 +55161,7 @@ ${blocks.join("\n\n")}`;
     var WORKER_PRIVATE_HOME_SPECS;
     var WORKER_HOME_PLACEHOLDER;
     var WORKER_SESSION_BIND_ENV;
+    var WORKER_MCP_DELIVERY_REASONS;
     var init_worker_mcp_isolation = __esm2({
       "src/mesh/worker-mcp-isolation.ts"() {
         "use strict";
@@ -55640,6 +55662,28 @@ ${blocks.join("\n\n")}`;
         ];
         WORKER_HOME_PLACEHOLDER = "{{workerHome}}";
         WORKER_SESSION_BIND_ENV = "ADHDEV_WORKER_SESSION_BIND";
+        WORKER_MCP_DELIVERY_REASONS = [
+          /** Gate off, or this launch was never given mesh bind context — no delivery was ever attempted. */
+          "not_applicable",
+          /** Everything resolved: a server entry plus a live session bind. */
+          "delivered",
+          /** Provider needs a private HOME/config-root and building it threw. */
+          "private_home_failed",
+          /** config_override delivery mode declared, but no server or bind context supplied. */
+          "config_override_missing_context",
+          /** config_override delivery mode declared, but minting the bind or building the descriptor threw. */
+          "config_override_failed",
+          /** Provider declares no `meshCoordinator.mcpConfig.path` at all. */
+          "no_mcp_config_declared",
+          /** Provider's declared config format has no auto-import writer. */
+          "unsupported_config_format",
+          /** Declared path is home-rooted and this provider has no private HOME — refused to touch the coordinator's own config. */
+          "home_rooted_no_private_home",
+          /** Writing the config file itself threw. */
+          "config_write_failed",
+          /** None of the above matched but the isolation object still carries no bind — an unclassified gap, kept distinct from a silent `delivered: true`. */
+          "unknown"
+        ];
       }
     });
     var worker_mailbox_exports = {};
@@ -57055,7 +57099,7 @@ ${lines.join("\n")}
     }
     function validateMeshTaskModeRequest3(mode, message, readonly2) {
       const taskMode = normalizeMeshTaskMode(mode);
-      const isReadonly = isTaskReadonly2({ readonly: readonly2, taskMode });
+      const isReadonly = isTaskReadonly3({ readonly: readonly2, taskMode });
       if (!isReadonly) {
         return taskMode ? { valid: true, taskMode, violations: [] } : { valid: true, violations: [] };
       }
@@ -57385,9 +57429,9 @@ Do NOT retry on this node. Consider reassigning to a different node or asking th
           const stalledMs = typeof args.metadataEvent.stalledMs === "number" ? args.metadataEvent.stalledMs : void 0;
           const stalledSuffix = stalledMs !== void 0 ? ` for ${Math.round(stalledMs / 1e3)}s` : "";
           const statusSuffix = observedStatus ? ` (observed status: ${observedStatus})` : "";
-          return `[System] ${args.nodeLabel}: PTY output unchanged${stalledSuffix}${statusSuffix}${metadata}. This is an informational stall \u2014 the worker's screen has been static regardless of its reported status; it may be genuinely idle, waiting, or wedged, so this is NOT a failure or auto-restart. Judge whether to inspect it: wait for pendingCoordinatorEvents/a completion event, or make one bounded mesh_read_chat check if you need to see its current screen, then wait again.`;
+          return `[System] ${args.nodeLabel}: PTY output unchanged${stalledSuffix}${statusSuffix}${metadata}. This is an informational stall \u2014 the worker's screen has been static regardless of its reported status; it may be genuinely idle, waiting, or wedged, so this is NOT a failure or auto-restart. Judge whether to inspect it: wait for a completion notice (typed into this session, or attached as pendingCoordinatorEvents to every mesh tool response for an MCP-only coordinator \u2014 drained by get_pending_mesh_events), or make one bounded mesh_read_chat check if you need to see its current screen, then wait again.`;
         }
-        return `[System] ${args.nodeLabel} is still reported as generating after a long interval${metadata}. Wait for pendingCoordinatorEvents or a completion/status event; if the user explicitly asks for status, make one bounded status check and then wait again.`;
+        return `[System] ${args.nodeLabel} is still reported as generating after a long interval${metadata}. Wait for a completion/status notice (typed into this session, or attached as pendingCoordinatorEvents to every mesh tool response for an MCP-only coordinator \u2014 drained by get_pending_mesh_events); if the user explicitly asks for status, make one bounded status check and then wait again.`;
       }
       if (args.event === "worktree_bootstrap_complete") {
         const worktreePath = readNonEmptyString(args.metadataEvent.worktreePath);
@@ -57556,7 +57600,7 @@ Next step: ${nextStep}`;
           noTurnDeadlineMs: 9e5,
           stallNoticeMs: 18e4,
           hardCeilingMs: 54e5,
-          awaitReportMs: 18e4
+          awaitReportMs: 6e5
         });
         RECLAIM_BUDGET = 3;
         MAX_REDRIVES_PER_GENERATION = 1;
@@ -58921,9 +58965,9 @@ Do NOT retry on this node. Consider reassigning to a different node or asking th
       if (s2.meshWorkerStall) {
         const stalledSuffix = s2.stalledMs !== void 0 ? ` for ${Math.round(s2.stalledMs / 1e3)}s` : "";
         const statusSuffix = s2.observedStatus ? ` (observed status: ${s2.observedStatus})` : "";
-        return `[System] ${s2.nodeLabel}: PTY output unchanged${stalledSuffix}${statusSuffix}. This is an informational stall \u2014 the worker's screen has been static regardless of its reported status; it may be genuinely idle, waiting, or wedged, so this is NOT a failure or auto-restart. Judge whether to inspect it: wait for pendingCoordinatorEvents/a completion event, or make one bounded mesh_read_chat check if you need to see its current screen, then wait again.`;
+        return `[System] ${s2.nodeLabel}: PTY output unchanged${stalledSuffix}${statusSuffix}. This is an informational stall \u2014 the worker's screen has been static regardless of its reported status; it may be genuinely idle, waiting, or wedged, so this is NOT a failure or auto-restart. Judge whether to inspect it: wait for a completion notice (typed into this session, or attached as pendingCoordinatorEvents to every mesh tool response for an MCP-only coordinator \u2014 drained by get_pending_mesh_events), or make one bounded mesh_read_chat check if you need to see its current screen, then wait again.`;
       }
-      return `[System] ${s2.nodeLabel} is still reported as generating after a long interval. Wait for pendingCoordinatorEvents or a completion/status event; if the user explicitly asks for status, make one bounded status check and then wait again.`;
+      return `[System] ${s2.nodeLabel} is still reported as generating after a long interval. Wait for a completion/status notice (typed into this session, or attached as pendingCoordinatorEvents to every mesh tool response for an MCP-only coordinator \u2014 drained by get_pending_mesh_events); if the user explicitly asks for status, make one bounded status check and then wait again.`;
     }
     function renderProgress(input, missing) {
       const s2 = input.scalars;
@@ -60062,7 +60106,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
       return { ...rest, inputSummary: { partCount: input.parts.length, partTypes } };
     }
-    function isTaskReadonly2(task) {
+    function isTaskReadonly3(task) {
       if (!task) return false;
       return task.readonly === true || task.taskMode === "live_debug_readonly";
     }
@@ -69197,7 +69241,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       isMeshTaskPriority: () => isMeshTaskPriority2,
       isMeshTaskStatus: () => isMeshTaskStatus2,
       isMeshTerminalTaskStatus: () => isMeshTerminalTaskStatus2,
-      isTaskReadonly: () => isTaskReadonly2,
+      isTaskReadonly: () => isTaskReadonly3,
       isTerminalQueueStatus: () => isTerminalQueueStatus,
       meshTaskNotBeforeReady: () => meshTaskNotBeforeReady,
       meshTaskPriorityRank: () => meshTaskPriorityRank2,
@@ -70754,7 +70798,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         };
       }
     });
-    function parseJsonObject(text) {
+    function parseJsonObject2(text) {
       if (!text) return {};
       try {
         const parsed = JSON.parse(text);
@@ -70765,7 +70809,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function parseSummary(text) {
       if (!text) return void 0;
-      const parsed = parseJsonObject(text);
+      const parsed = parseJsonObject2(text);
       return typeof parsed.topic === "string" && typeof parsed.writer === "string" && typeof parsed.seq === "number" ? { topic: parsed.topic, writer: parsed.writer, seq: parsed.seq } : void 0;
     }
     function attemptFromRow(row) {
@@ -70810,7 +70854,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           at: row.terminal_at ?? row.updated_at,
           ...summary ? { summary } : {}
         } : null,
-        data: parseJsonObject(row.data_json)
+        data: parseJsonObject2(row.data_json)
       };
     }
     function eventFromRow(row) {
@@ -70828,7 +70872,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         dedupeKey: row.dedupe_key,
         fromState: row.from_state,
         toState: row.to_state,
-        payload: parseJsonObject(row.payload_json),
+        payload: parseJsonObject2(row.payload_json),
         observedBy: row.observed_by,
         srcWriter: row.src_writer,
         srcSeq: row.src_seq,
@@ -70846,7 +70890,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         reason: row.reason,
         until: row.until_ms,
         onExpire: row.on_expire,
-        data: parseJsonObject(row.data_json),
+        data: parseJsonObject2(row.data_json),
         createdAt: row.created_at
       };
     }
@@ -71242,7 +71286,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               tombstonedAt: r.tombstoned_at,
               callerSessionId: r.caller_session_id,
               createdAt: r.created_at,
-              meta: parseJsonObject(r.meta_json)
+              meta: parseJsonObject2(r.meta_json)
             }));
           }
         };
@@ -74176,7 +74220,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       inlineMeshCarriesTransientNodeTruth: () => inlineMeshCarriesTransientNodeTruth,
       isDeadLocalWorktreeNode: () => isDeadLocalWorktreeNode,
       isInlineMeshAutoFastForwardEligible: () => isInlineMeshAutoFastForwardEligible,
-      isMeshNodeFreshEnoughToLaunch: () => isMeshNodeFreshEnoughToLaunch,
+      isMeshNodeFreshEnoughToLaunch: () => isMeshNodeFreshEnoughToLaunch2,
       isMeshNodeHealthLaunchable: () => isMeshNodeHealthLaunchable3,
       logRepoMeshStatusDebug: () => logRepoMeshStatusDebug,
       normalizeInlineMeshNodeIdentity: () => normalizeInlineMeshNodeIdentity,
@@ -74818,7 +74862,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const cachedStatus = readObjectRecord(node?.cachedStatus);
       return readObjectRecord(cachedStatus.git);
     }
-    function isMeshNodeFreshEnoughToLaunch(node, opts) {
+    function isMeshNodeFreshEnoughToLaunch2(node, opts) {
       const git3 = resolveEffectiveNodeGit(node);
       if (Object.keys(git3).length === 0) return true;
       if (readBooleanValue(git3.isGitRepo) === false) return true;
@@ -75320,8 +75364,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         deadNodeIds
       };
     }
+    function readWorkerMcpDeliveryFromMeta(meta3) {
+      const delivered = readBooleanValue(meta3.workerMcpDelivered);
+      if (delivered === void 0) return void 0;
+      const rawReason = readStringValue(meta3.workerMcpDeliveryReason);
+      const reason = rawReason && WORKER_MCP_DELIVERY_REASONS.includes(rawReason) ? rawReason : void 0;
+      return { delivered, ...reason ? { reason } : {} };
+    }
     function summarizeMeshSessionRecord(record22) {
       const meta3 = readObjectRecord(record22?.meta);
+      const workerMcp = readWorkerMcpDeliveryFromMeta(meta3);
       const isSelfCoordinator = Boolean(readStringValue(meta3.meshCoordinatorFor));
       let chatStatus = readStringValue(record22?.chatStatus, record22?.activeChat?.status, meta3.chatStatus, meta3.sessionStatus);
       const state = readLiveMeshSessionState(record22);
@@ -75351,7 +75403,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         createdAt: toIsoTimestamp(record22?.createdAt ?? record22?.created_at),
         startedAt: toIsoTimestamp(record22?.startedAt ?? record22?.started_at ?? record22?.spawnedAtMs ?? record22?.spawned_at_ms),
         lastActivityAt: toIsoTimestamp(record22?.updatedAt ?? record22?.lastActivityAt ?? record22?.last_activity_at),
-        isCached: false
+        isCached: false,
+        ...workerMcp ? { workerMcp } : {}
       };
     }
     function liveSessionRecordMatchesMeshNode(record22, meshId, nodeId, nodeWorkspace = "", nodeIsMissingLocalWorktree = false) {
@@ -75516,6 +75569,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_turn_presentation();
         init_logger();
         init_runtime_surface();
+        init_worker_mcp_isolation();
         init_mesh_warmup_deadline();
         init_worktree_bootstrap_config();
         fs15 = __toESM2(require("fs"));
@@ -76989,6 +77043,30 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id IN (${placeholders})
         `).all(meshId, ...forms);
           }
+          /**
+           * Every `assigned` row in the mesh, on ANY node/daemon — the scope H1
+           * path-ownership needs (wiring-unification §7c). Unlike
+           * {@link assignedRowsForDaemon} (capacity gates: provider/slot maxParallel,
+           * node-busy — all correctly scoped to ONE machine's resources), path
+           * ownership exists to keep parallel branches from touching the same files
+           * before they converge on main, and two worktrees on two DIFFERENT
+           * machines are exactly as parallel as two worktrees on one machine. A
+           * daemon-scoped query never sees a cross-daemon collision at all (live
+           * finding, preview rc.41 runs 3–7: a direct-dispatch row `assigned` on one
+           * daemon did not stop an overlapping enqueued task from being claimed on a
+           * completely different daemon).
+           *
+           * Filters on the same indexed `(mesh_id, status, created_at)` prefix as the
+           * candidate queries above — `status = 'assigned'` mesh-wide is a single
+           * indexed range scan, not a table scan, and excludes every terminal status
+           * (`done`/`failed`/`cancelled`/pending) by construction.
+           */
+          assignedRowsMeshWide(meshId) {
+            return this.db.prepare(`
+            SELECT payload FROM mesh_queue
+            WHERE mesh_id = ? AND status = 'assigned'
+        `).all(meshId);
+          }
           activeProviderAssignmentCount(meshId, nodeId, providerType, daemonNodeIds) {
             const rows = this.assignedRowsForDaemon(meshId, nodeId, daemonNodeIds);
             let count = 0;
@@ -77027,7 +77105,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               const slotCapDeclared = providerType && typeof slotMaxParallel === "number" && Number.isFinite(slotMaxParallel) && slotMaxParallel >= 0;
               const liveSlotCount = slotCapDeclared ? this.activeSlotAssignmentCount(meshId, nodeId, providerType, assignedModel, opts?.daemonNodeIds) : 0;
               const parallelCapsAllow = (candidate) => {
-                const readonlyCandidate = isTaskReadonly2(candidate);
+                const readonlyCandidate = isTaskReadonly3(candidate);
                 if (providerCapDeclared) {
                   const cap = effectiveSlotCap(providerMaxParallel, readonlyCandidate);
                   if (cap !== void 0 && liveProviderCount >= cap) return false;
@@ -77072,20 +77150,30 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               }
               const dependenciesSatisfied = (candidate) => taskDependenciesSatisfied3(candidate, depStatus);
               const nodeConflictAllows = (candidate) => {
-                if (isTaskReadonly2(candidate)) return true;
+                if (isTaskReadonly3(candidate)) return true;
                 return !nodeBusy;
               };
-              const inFlightOwnership = this.assignedRowsForDaemon(meshId, nodeId, opts?.daemonNodeIds).map((row) => {
+              const inFlightOwnership = this.assignedRowsMeshWide(meshId).map((row) => {
                 try {
                   const parsed = JSON.parse(row.payload);
-                  if (!parsed.ownedPaths || isTaskReadonly2(parsed)) return null;
+                  if (parsed.id === void 0) return null;
+                  if (!parsed.ownedPaths || isTaskReadonly3(parsed)) return null;
                   return { taskId: parsed.id, paths: parsed.ownedPaths };
                 } catch {
                   return null;
                 }
               }).filter((v) => v !== null);
-              const ownedPathsConflictFor = (candidate) => candidate.ownedPaths && !isTaskReadonly2(candidate) ? findOwnershipConflicts(candidate.ownedPaths, inFlightOwnership) : [];
+              const ownedPathsConflictFor = (candidate) => candidate.ownedPaths && !isTaskReadonly3(candidate) ? findOwnershipConflicts(candidate.ownedPaths, inFlightOwnership) : [];
               const ownedPathsAllows = (candidate) => ownedPathsConflictFor(candidate).length === 0;
+              const nodeGitGate = opts?.nodeGitGate;
+              const nodeNotDirty = (candidate) => {
+                if (!nodeGitGate || isTaskReadonly3(candidate)) return true;
+                return !nodeGitGate.dirty;
+              };
+              const nodeNotStaleBehind = (candidate) => {
+                if (!nodeGitGate || isTaskReadonly3(candidate)) return true;
+                return !nodeGitGate.staleBehind;
+              };
               const claimNowMs = Date.now();
               const notBeforeReady = (candidate) => meshTaskNotBeforeReady(candidate, claimNowMs);
               const nodeIsWorktree = opts?.nodeIsWorktree === true;
@@ -77110,7 +77198,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
                 { reason: "difficulty_floor_unmet", test: difficultyAllows },
                 { reason: "parallel_cap_reached", test: parallelCapsAllow },
                 { reason: "node_busy_with_active_assignment", test: nodeConflictAllows },
-                { reason: "owned_paths_conflict", test: ownedPathsAllows }
+                { reason: "owned_paths_conflict", test: ownedPathsAllows },
+                { reason: "dirty_workspace", test: nodeNotDirty },
+                { reason: "node_stale_behind_upstream", test: nodeNotStaleBehind }
               ]);
               if (!selected.entry) {
                 if (!candidates.length) return refuse2("no_pending_candidates");
@@ -77119,6 +77209,13 @@ CREATE TABLE IF NOT EXISTS sq_archive (
                   const detail = conflicts.length ? `owned_paths overlap with task(s): ${conflicts.map((c) => `${c.taskId} [${c.overlappingPaths.join(", ")}]`).join("; ")}` : void 0;
                   return refuse2("owned_paths_conflict", detail, selected.deepest);
                 }
+                if (selected.reason === "dirty_workspace") {
+                  return refuse2("dirty_workspace", `node ${nodeId} has a dirty workspace`, selected.deepest);
+                }
+                if (selected.reason === "node_stale_behind_upstream") {
+                  const behindDetail = nodeGitGate?.behind !== void 0 ? `node ${nodeId} is ${nodeGitGate.behind} commit(s) behind upstream (max ${nodeGitGate.maxBehind ?? 0})` : `node ${nodeId} is behind upstream beyond the configured maxBehind`;
+                  return refuse2("node_stale_behind_upstream", behindDetail, selected.deepest);
+                }
                 return refuse2(
                   selected.reason,
                   selected.deepest ? `closest candidate ${selected.deepest.id} of ${candidates.length}` : void 0,
@@ -77126,6 +77223,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
                 );
               }
               const entry = selected.entry;
+              if (nodeGitGate && (nodeGitGate.dirty || nodeGitGate.staleBehind) && isTaskReadonly3(entry)) {
+                LOG.info("MeshQueue", `Claiming readonly task ${entry.id} for node ${nodeId} despite git gate (${nodeGitGate.dirty ? "dirty_workspace" : ""}${nodeGitGate.dirty && nodeGitGate.staleBehind ? ", " : ""}${nodeGitGate.staleBehind ? `node_stale_behind_upstream${nodeGitGate.behind !== void 0 ? ` behind=${nodeGitGate.behind}` : ""}` : ""}) \u2014 readonly tasks are exempt from the write-gate.`);
+              }
               const now = (/* @__PURE__ */ new Date()).toISOString();
               entry.status = "assigned";
               entry.assignedNodeId = nodeId;
@@ -77287,7 +77387,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               ).run(now - Math.max(windowMs * 10, 6e4));
             }
             if (callsInWindow > maxCalls) {
-              const advisory = `Rate limit: ${tool} called ${callsInWindow} times in the last ${windowMs / 1e3}s for mesh ${meshId}. Wait for pendingCoordinatorEvents or an explicit user status request before calling again.`;
+              const advisory = `Rate limit: ${tool} called ${callsInWindow} times in the last ${windowMs / 1e3}s for mesh ${meshId}. Wait for the next coordinator notice (typed into this session, or attached as pendingCoordinatorEvents to every mesh tool response \u2014 drained by get_pending_mesh_events) or an explicit user status request before calling again.`;
               return { rateLimitExceeded: true, callsInWindow, advisory };
             }
             return { rateLimitExceeded: false, callsInWindow, advisory: null };
@@ -80835,7 +80935,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         return null;
       }
       if (!task) return null;
-      const readonly2 = isTaskReadonly2(task);
+      const readonly2 = isTaskReadonly3(task);
       const declaredFiles = [
         ...report.touchedFiles || [],
         ...report.handoffNotes?.touchedFiles || []
@@ -81833,7 +81933,7 @@ ${block2.text}`,
         taskId: task.id,
         ...readNonEmpty2(task.taskMode) ? { taskMode: task.taskMode.trim() } : {},
         ...readNonEmpty2(task.difficulty) ? { difficulty: task.difficulty.trim() } : {},
-        ...isTaskReadonly2(task) ? { readonly: true } : {},
+        ...isTaskReadonly3(task) ? { readonly: true } : {},
         ...enclosedHandoffNotes > 0 ? { enclosedHandoffNotes } : {},
         ...missionBrief ? { missionBrief } : {}
       });
@@ -85882,10 +85982,10 @@ ${block2.text}`,
       }
     }
     function activeWriteAssignedCount(meshId) {
-      return getQueue(meshId, { status: ["assigned"] }).filter((task) => !isTaskReadonly2(task)).length;
+      return getQueue(meshId, { status: ["assigned"] }).filter((task) => !isTaskReadonly3(task)).length;
     }
     function activeReadonlyAssignedCount(meshId) {
-      return getQueue(meshId, { status: ["assigned"] }).filter(isTaskReadonly2).length;
+      return getQueue(meshId, { status: ["assigned"] }).filter(isTaskReadonly3).length;
     }
     function nodeHasActiveAssignment(meshId, nodeId) {
       return getQueue(meshId, { status: ["assigned"] }).some((task) => daemonIdsEquivalent4(task.assignedNodeId, nodeId));
@@ -86942,10 +87042,10 @@ ${block2.text}`,
       continuousAutoFastForwardLastScan.clear();
       autoFastForwardWorkspaceLease.clear();
     }
-    function isDirtyNode(node) {
+    function isDirtyNode2(node) {
       return node?.health === "dirty" || node?.git?.dirty === true;
     }
-    function resolveAutoFastForwardPolicy(mesh) {
+    function resolveAutoFastForwardPolicy2(mesh) {
       const record22 = mesh?.policy?.autoFastForward && typeof mesh.policy.autoFastForward === "object" && !Array.isArray(mesh.policy.autoFastForward) ? mesh.policy.autoFastForward : {};
       const maxBehind = Number(record22.maxBehind);
       return {
@@ -87087,7 +87187,7 @@ ${block2.text}`,
       const node = mesh?.nodes?.find((candidate) => meshNodeIdMatches5(candidate, args.nodeId));
       const workspace = readNonEmptyString(node?.workspace);
       if (!workspace) return;
-      const policy = resolveAutoFastForwardPolicy(mesh);
+      const policy = resolveAutoFastForwardPolicy2(mesh);
       if (!policy.enabled) return;
       if (nodeHasActiveMeshWork(components, args.meshId, args.nodeId, args.sessionId)) return;
       const throttleKey = `${args.meshId}:${args.nodeId}`;
@@ -87136,7 +87236,7 @@ ${block2.text}`,
     }
     async function runContinuousAutoFastForwardScan(components, mesh) {
       if (!components.dispatchMeshCommand) return;
-      const policy = resolveAutoFastForwardPolicy(mesh);
+      const policy = resolveAutoFastForwardPolicy2(mesh);
       if (!policy.enabled || !policy.remoteNodes || policy.mode !== "continuous") return;
       const meshId = readNonEmptyString(mesh?.id);
       if (!meshId) return;
@@ -88443,7 +88543,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         }
       }
       if (!pending.length) return false;
-      const freshnessGate = { maxBehind: resolveAutoFastForwardPolicy(mesh).maxBehind };
+      const freshnessGate = { maxBehind: resolveAutoFastForwardPolicy2(mesh).maxBehind };
       const maxParallelTasks = resolveMaxParallelTasks(mesh?.policy?.maxParallelTasks);
       const maxReadonlyParallelTasks = resolveMaxReadonlyParallelTasks(maxParallelTasks);
       for (const task of pending) {
@@ -88462,7 +88562,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
             markAutoLaunch(meshId, task.id, { status: "skipped", reason: "not_before_delayed" });
             continue;
           }
-          const isReadonly = isTaskReadonly2(task);
+          const isReadonly = isTaskReadonly3(task);
           if (isReadonly) {
             if (activeReadonlyAssignedCount(meshId) >= maxReadonlyParallelTasks) {
               markAutoLaunch(meshId, task.id, { status: "skipped", reason: "max_readonly_parallel_tasks_reached" });
@@ -88593,7 +88693,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
               markSkip(nodeId, "auto_launch_cooldown");
               continue;
             }
-            if (isDirtyNode(node)) {
+            if (isDirtyNode2(node)) {
               markSkip(nodeId, "dirty_workspace");
               continue;
             }
@@ -88601,7 +88701,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
               markSkip(nodeId, "node_health_not_launchable");
               continue;
             }
-            if (!isMeshNodeFreshEnoughToLaunch(node, freshnessGate)) {
+            if (!isMeshNodeFreshEnoughToLaunch2(node, freshnessGate)) {
               markSkip(nodeId, "node_stale_behind_upstream");
               continue;
             }
@@ -88616,7 +88716,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
               markSkip(nodeId, "node_has_live_session_pending_claim");
               continue;
             }
-            if (!isTaskReadonly2(task) && nodeHasActiveAssignment(meshId, nodeId)) {
+            if (!isTaskReadonly3(task) && nodeHasActiveAssignment(meshId, nodeId)) {
               markSkip(nodeId, "node_has_active_assignment");
               continue;
             }
@@ -89444,11 +89544,24 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const nodeIsWorktree = node?.isLocalWorktree === true;
       const assignedTranscriptProfile = resolveClaimingSessionTranscriptProfile(components, sessionId);
       const daemonNodeIds = resolveDaemonSiblingNodeIds(nodeId, mesh?.nodes);
+      const gitGateMaxBehind = resolveAutoFastForwardPolicy2(mesh).maxBehind;
+      const nodeGitBehind = readNumberValue(node?.git?.behind, node?.cachedStatus?.git?.behind);
+      const nodeGitGate = {
+        dirty: isDirtyNode2(node),
+        staleBehind: !isMeshNodeFreshEnoughToLaunch2(node, { maxBehind: gitGateMaxBehind }),
+        ...nodeGitBehind !== void 0 ? { behind: nodeGitBehind } : {},
+        ...gitGateMaxBehind !== void 0 ? { maxBehind: gitGateMaxBehind } : {}
+      };
+      if (nodeGitGate.staleBehind && resolveAutoFastForwardPolicy2(mesh).mode === "continuous") {
+        void maybeAutoFastForwardIdleNode(components, { meshId, nodeId, sessionId, providerType }).catch(() => {
+        });
+      }
       const claimRefusal = {};
       const task = claimNextTask(meshId, nodeId, sessionId, capabilityTags, {
         providerType,
         ...providerMaxParallel !== void 0 ? { providerMaxParallel } : {},
         ...assignedModel ? { assignedModel } : {},
+        nodeGitGate,
         ...slotMaxParallel !== void 0 ? { slotMaxParallel } : {},
         daemonNodeIds,
         nodeIsWorktree,
@@ -120630,8 +120743,8 @@ ${marker}`,
       const maxParallelTasks = resolveMaxParallelTasks(mesh?.policy?.maxParallelTasks);
       const maxReadonlyParallelTasks = resolveMaxReadonlyParallelTasks(maxParallelTasks);
       const assignedTasks = (Array.isArray(queue) ? queue : []).filter(isAssigned);
-      const activeWriteAssigned = assignedTasks.filter((t) => !isTaskReadonly2(t)).length;
-      const activeReadonlyAssigned = assignedTasks.filter(isTaskReadonly2).length;
+      const activeWriteAssigned = assignedTasks.filter((t) => !isTaskReadonly3(t)).length;
+      const activeReadonlyAssigned = assignedTasks.filter(isTaskReadonly3).length;
       const globalWriteCapReached = activeWriteAssigned >= maxParallelTasks;
       const globalReadonlyCapReached = activeReadonlyAssigned >= maxReadonlyParallelTasks;
       const writeAssignedByNode = /* @__PURE__ */ new Map();
@@ -120641,7 +120754,7 @@ ${marker}`,
         const nodeId = typeof task.assignedNodeId === "string" ? task.assignedNodeId.trim() : "";
         if (!nodeId) continue;
         assignedByNode.set(nodeId, (assignedByNode.get(nodeId) ?? 0) + 1);
-        if (!isTaskReadonly2(task)) {
+        if (!isTaskReadonly3(task)) {
           writeAssignedByNode.set(nodeId, (writeAssignedByNode.get(nodeId) ?? 0) + 1);
         }
         const provider = typeof task.assignedProviderType === "string" ? task.assignedProviderType : "";
@@ -138194,6 +138307,7 @@ ${rawInput}` : rawInput;
         init_trust_provenance_ledger();
         init_cli_delegated_launch();
         init_model_launch_args();
+        init_worker_mcp_isolation();
         init_cli_manager_agent_status();
         init_cli_session_binding();
         chalkModule = import_chalk.default;
@@ -139126,6 +139240,17 @@ Run 'adhdev doctor' for detailed diagnostics.`
                 }
               } : {}
             }) : null;
+            const workerMcpDelivery = delegatedMeshId ? deriveWorkerMcpDeliveryStatus(delegatedLaunch?.workerIsolation ?? null, Boolean(delegatedMeshId && delegatedSessionKey)) : void 0;
+            if (workerMcpDelivery && settingsOverride) {
+              settingsOverride = {
+                ...settingsOverride,
+                workerMcpDelivered: workerMcpDelivery.delivered,
+                ...workerMcpDelivery.reason ? { workerMcpDeliveryReason: workerMcpDelivery.reason } : {}
+              };
+            }
+            if (workerMcpDelivery && !workerMcpDelivery.delivered && workerMcpDelivery.reason !== "not_applicable") {
+              LOG.warn("WorkerMcp", `[${cliType}] worker MCP not delivered for this launch (${workerMcpDelivery.reason}) \u2014 see WorkerMcp notes above for detail`);
+            }
             const delegatedProviderLabel = provLookup?.providerVersion ? `${cliType}@${provLookup.providerVersion}` : `${cliType}@unknown-version`;
             if (delegatedLaunch?.isolationNotes?.length) {
               LOG.info("WorkerIsolation", `[${delegatedProviderLabel}] ${delegatedLaunch.isolationNotes.join("; ")}`);
@@ -139197,7 +139322,11 @@ Run 'adhdev doctor' for detailed diagnostics.`
               sessionId: started.runtimeSessionId,
               providerSessionId: started.providerSessionId,
               launchSource,
-              ...ledgerLaunchRecorded ? { ledgerLaunchRecorded: true } : {}
+              ...ledgerLaunchRecorded ? { ledgerLaunchRecorded: true } : {},
+              // ★See workerMcpDelivery comment above: only present for a delegated
+              // (mesh-identified) launch, so an ordinary user-initiated launch_cli
+              // response is unchanged.
+              ...workerMcpDelivery ? { workerMcp: workerMcpDelivery } : {}
             };
           }
           /** `stop_cli`: stop the addressed CLI session (hard or save mode). */
@@ -154367,6 +154496,7 @@ ${e?.stderr || ""}`;
       isCommandSource: () => isCommandSource,
       isCoordinatorSpawnedHiddenWorker: () => isCoordinatorSpawnedHiddenWorker,
       isCrossTrackConfigDirOverride: () => isCrossTrackConfigDirOverride,
+      isDirtyNode: () => isDirtyNode2,
       isEmptyUsage: () => isEmptyUsage,
       isExtensionInstalled: () => isExtensionInstalled,
       isGitCommandName: () => isGitCommandName,
@@ -154376,6 +154506,7 @@ ${e?.stderr || ""}`;
       isManagedStatusWaiting: () => isManagedStatusWaiting,
       isManagedStatusWorking: () => isManagedStatusWorking,
       isMeshHostOwner: () => isMeshHostOwner,
+      isMeshNodeFreshEnoughToLaunch: () => isMeshNodeFreshEnoughToLaunch2,
       isMeshNodeHealthLaunchable: () => isMeshNodeHealthLaunchable3,
       isMeshPublisherArmed: () => isMeshPublisherArmed,
       isMeshSenderRefusalResult: () => isMeshSenderRefusalResult,
@@ -154395,7 +154526,7 @@ ${e?.stderr || ""}`;
       isSetupComplete: () => isSetupComplete,
       isSyntheticTestCoordinatorSession: () => isSyntheticTestCoordinatorSession,
       isSyntheticTestMeshId: () => isSyntheticTestMeshId,
-      isTaskReadonly: () => isTaskReadonly2,
+      isTaskReadonly: () => isTaskReadonly3,
       isTurnCompletionEdge: () => isTurnCompletionEdge,
       isUserFacingChatMessage: () => isUserFacingChatMessage,
       isWeakCompletionEvidence: () => isWeakCompletionEvidence2,
@@ -154592,6 +154723,7 @@ ${e?.stderr || ""}`;
       resetState: () => resetState,
       resolveAllowSendKeysDestructive: () => resolveAllowSendKeysDestructive3,
       resolveAutoConvergeCodeChange: () => resolveAutoConvergeCodeChange,
+      resolveAutoFastForwardPolicy: () => resolveAutoFastForwardPolicy2,
       resolveBackoffMs: () => resolveBackoffMs,
       resolveBeaconMode: () => resolveBeaconMode,
       resolveBuildTrack: () => resolveBuildTrack,
@@ -155213,6 +155345,7 @@ ${e?.stderr || ""}`;
     init_mesh_graph_provenance();
     init_mesh_orchestration_decision();
     init_mesh_node_identity();
+    init_mesh_auto_fast_forward();
     init_mesh_active_work();
     init_mesh_idle_reminder();
     init_mesh_refine_status();
@@ -175417,15 +175550,25 @@ function renderWorkerProtocolFooter(input = {}) {
   const scope = [];
   if (input.taskId) scope.push(`task ${input.taskId}`);
   if (input.taskMode) scope.push(`mode ${input.taskMode}`);
-  if (input.difficulty) scope.push(`difficulty ${input.difficulty}`);
+  if (input.difficulty) {
+    if (isMeshTaskDifficulty(input.difficulty)) {
+      scope.push(`difficulty ${input.difficulty}`);
+    } else {
+      console.warn(
+        `[worker-protocol] task ${input.taskId ?? "(unknown)"}: dropping invalid difficulty '${input.difficulty}' from the worker footer (expected one of easy, medium, difficult, freeform)`
+      );
+    }
+  }
   if (input.readonly) scope.push("read-only");
   if (scope.length) lines.push(`You are a delegated worker (${scope.join(", ")}).`);
   else lines.push("You are a delegated worker.");
   lines.push(
     "When your work is finished, blocked, or has failed, call `report_completion` exactly once. Its `summary` is recorded verbatim as the authoritative record of this task \u2014 your terminal is not scraped for it \u2014 so state what you did, what you found, and where you left the branch.",
     "For work that runs longer than a few minutes, call `progress_update` at natural checkpoints so the coordinator can see you are alive without polling.",
-    "`peer_context_pull` shows what sibling tasks in this mission have reported; `git_status` / `git_diff` / `git_log` inspect your own workspace (pass its absolute path as `workspace`).",
-    "You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. If you need a decision from the coordinator, finish with `report_completion` and outcome `blocked`, listing what you need in `blockers`."
+    "`peer_context_pull` shows what sibling tasks in this mission have reported; `git_status` / `git_diff` / `git_log` inspect your own workspace \u2014 all three REQUIRE the absolute path to it as `workspace`.",
+    "You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. If you need a decision from the coordinator, finish with `report_completion` and outcome `blocked`, listing what you need in `blockers`.",
+    "On a code-changing task, `report_completion` with outcome `completed` requires `touched_files` \u2014 send `[]` if you changed nothing, omitting the field is what gets refused. `blocked`/`failed` never need it, and a read-only task should omit it or send `[]`.",
+    "If `report_completion` is refused, the response carries `validationErrors` (or a `hint`) naming exactly what to fix \u2014 correct that field and call it again; a refusal records nothing."
   );
   if (input.enclosedHandoffNotes && input.enclosedHandoffNotes > 0) {
     lines.push(
@@ -177835,7 +177978,9 @@ var MESH_SEND_TASK_TOOL = {
         type: "object",
         description: "Record of your dispatch decision, for adoption measurement: {decision, direct_reason, ready_worker_tasks, known_graph_steps, capability_blockers}. On this DIRECT surface, direct_reason says why dispatching into an existing session beat queueing a task \u2014 one of same_subject_continuation, investigation_handoff, idle_session_reuse, queue_bypass_urgent, new_subject, legacy_client, operator_override. These are the cases the operating rules name: same-subject continuation, the investigate\u2192fix handoff, reusing an idle session for a follow-up/retry/cleanup delta, or a deliberate queue bypass. new_subject is the one the rules do NOT endorse \u2014 a genuinely new topic should get its own task even when a session sits idle \u2014 and reporting it returns an unsanctioned_direct_dispatch advisory. Report it honestly anyway: it is recorded, never refused. Optional and never rejected: omitting it is recorded as decision_missing. Provenance only \u2014 it never changes execution."
       },
-      orchestrationDecision: { type: "object", description: "CamelCase alias for orchestration_decision." }
+      orchestrationDecision: { type: "object", description: "CamelCase alias for orchestration_decision." },
+      allow_stale_node: { type: "boolean", description: "GIT-GATE: a non-readonly direct dispatch is refused (dirty_workspace / node_stale_behind_upstream) when the target node's git telemetry shows an uncommitted working tree or a branch behind its upstream beyond the mesh's autoFastForward.maxBehind \u2014 the same predicates the claim-time and auto-launch spawn gates apply. Set true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree). Has no effect on a readonly dispatch, which is never gated. Default: false." },
+      allowStaleNode: { type: "boolean", description: "CamelCase alias for allow_stale_node." }
     },
     // session_id is deliberately NOT required: meshSendTask supports a sessionless
     // dispatch (node-scoped on the worker) and the required-arg gate enforces this list.
@@ -180871,11 +181016,14 @@ async function drainCoordinatorPendingEvents(ctx, _opts) {
   const args = {
     meshId: ctx.mesh.id,
     ...coordinatorDaemonId ? { coordinatorDaemonId } : {},
-    selfCoordinatorInboxRead: true,
-    // COORD-EVENT-MISROUTE: a sibling coordinator session's unicast notice
-    // on the same daemon is not surfaced to this one.
-    ...ctx.coordinatorSessionId ? { sessionId: ctx.coordinatorSessionId } : {}
+    ...ctx.coordinatorSessionId ? {
+      selfCoordinatorInboxRead: true,
+      // COORD-EVENT-MISROUTE: a sibling coordinator session's unicast notice
+      // on the same daemon is not surfaced to this one.
+      sessionId: ctx.coordinatorSessionId
+    } : {}
   };
+  ctx.noticeDrainCount = (ctx.noticeDrainCount ?? 0) + 1;
   let raw;
   try {
     raw = await ctx.transport.command("get_pending_mesh_events", args);
@@ -185223,6 +185371,7 @@ async function readTranscriptReplicaForDisplay(transport, key) {
 // src/tools/mesh-tools-session.ts
 var import_daemon_core16 = __toESM(require_dist3());
 var import_daemon_core17 = __toESM(require_dist3());
+var import_daemon_core18 = __toESM(require_dist3());
 function computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, sessionId) {
   if (!sessionWasIdle || dispatchPreRecorded) return {};
   return {
@@ -185590,6 +185739,26 @@ async function meshSendTask(ctx, args) {
       error: `Node '${args.node_id}' is a worktree clone; a convergence task is base-only (it merges/pushes onto base). Dispatching it to a worktree session risks a multi-worktree push/deploy race.`,
       nextAction: `Dispatch the convergence task to the base node for this mesh, or run the deterministic fast-forward convergence path (mesh_fast_forward_node / mesh_refine_node) instead of mesh_send_task.`
     });
+  }
+  const allowStaleNode = args.allow_stale_node === true || args.allowStaleNode === true;
+  if (!allowStaleNode && !(0, import_daemon_core18.isTaskReadonly)({ readonly: readonly2, taskMode })) {
+    const dirty = (0, import_daemon_core18.isDirtyNode)(node);
+    const maxBehind = (0, import_daemon_core18.resolveAutoFastForwardPolicy)(ctx.mesh).maxBehind;
+    const staleBehind = !(0, import_daemon_core18.isMeshNodeFreshEnoughToLaunch)(node, { maxBehind });
+    if (dirty || staleBehind) {
+      const behind = typeof node?.git?.behind === "number" ? node.git.behind : void 0;
+      return JSON.stringify({
+        success: false,
+        recoverable: true,
+        code: dirty ? "dirty_workspace" : "node_stale_behind_upstream",
+        reason: dirty ? "dirty_workspace" : "node_stale_behind_upstream",
+        nodeId: args.node_id,
+        sessionId: args.session_id,
+        taskMode: taskMode || "unspecified",
+        error: dirty ? `Node '${args.node_id}' has a dirty workspace (uncommitted changes) \u2014 refusing a non-readonly direct dispatch that could race a concurrent edit.` : `Node '${args.node_id}' is behind its upstream${behind !== void 0 ? ` (${behind} commit(s), max ${maxBehind ?? 0})` : ""} \u2014 refusing a non-readonly direct dispatch against stale code.`,
+        nextAction: `Let the node's auto fast-forward / clean-up run first, retry with a readonly task_mode, or pass allow_stale_node: true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree).`
+      });
+    }
   }
   let explicitTargetSession;
   if (args.session_id && isWorkerTaskMode(taskMode, readonly2)) {
@@ -187529,8 +187698,8 @@ var import_node_os2 = __toESM(require("os"));
 var import_types = require("@modelcontextprotocol/sdk/types.js");
 
 // src/transports/local.ts
-var import_daemon_core18 = __toESM(require_dist3());
-var DEFAULT_PORT = import_daemon_core18.DEFAULT_STANDALONE_PORT;
+var import_daemon_core19 = __toESM(require_dist3());
+var DEFAULT_PORT = import_daemon_core19.DEFAULT_STANDALONE_PORT;
 var STATUS_TIMEOUT_MS = 1e4;
 function describeFetchFailure(what, timeoutMs, error48) {
   const name = error48?.name;
@@ -188700,6 +188869,32 @@ function resolveMeshToolHandler(name) {
   return MESH_TOOL_DISPATCH[name] ?? MESH_ALIAS_DISPATCH[name];
 }
 
+// src/tools/mesh-pending-events-attach.ts
+function parseJsonObject(text) {
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+async function attachPendingCoordinatorEventsToResponse(ctx, text, drainCountBefore) {
+  if ((ctx.noticeDrainCount ?? 0) !== drainCountBefore) return text;
+  const parsed = parseJsonObject(text);
+  if (!parsed || Object.prototype.hasOwnProperty.call(parsed, "pendingCoordinatorEvents")) return text;
+  const events = await drainCoordinatorPendingEvents(ctx);
+  if (events.length === 0) return text;
+  const pretty = /\n/.test(text);
+  return JSON.stringify({ ...parsed, pendingCoordinatorEvents: events }, null, pretty ? 2 : void 0);
+}
+async function runMeshToolWithPendingEvents(ctx, run) {
+  const before = ctx.noticeDrainCount ?? 0;
+  const text = await run();
+  return attachPendingCoordinatorEventsToResponse(ctx, text, before);
+}
+
 // src/tools/validate-tool-args.ts
 function isEnumProperty(value) {
   return !!value && typeof value === "object" && Array.isArray(value.enum);
@@ -188852,7 +189047,7 @@ function readWorkerCredentials(env2 = process.env) {
 }
 var REPORT_COMPLETION_TOOL = {
   name: "report_completion",
-  description: "Report the structured outcome of the task you were dispatched to do. Call this ONCE when your work is finished, blocked, or has failed. Your `summary` is recorded verbatim \u2014 it is not scraped from your terminal \u2014 so write what the coordinator actually needs to know. You do not pass a task id: the daemon knows which task you hold.",
+  description: "Report the structured outcome of the task you were dispatched to do. Call this ONCE when your work is finished, blocked, or has failed. Your `summary` is recorded verbatim \u2014 it is not scraped from your terminal \u2014 so write what the coordinator actually needs to know. You do not pass a task id: the daemon knows which task you hold. On a code-changing task, outcome 'completed' requires `touched_files` \u2014 send `[]` if you changed nothing; omitting the field is what gets refused, not an empty list. If the call is refused, the response carries `validationErrors` (or a `hint`) naming exactly what to fix \u2014 correct that field and call again; a refusal records nothing.",
   inputSchema: {
     type: "object",
     properties: {
@@ -189270,14 +189465,15 @@ async function startMcpServer(opts) {
       const unknownArgsError = validateMeshToolArgs(name, a);
       if (unknownArgsError) return { content: [{ type: "text", text: unknownArgsError }], isError: true };
       try {
-        let text;
+        let run;
         if (name === "mesh_notify_worker") {
-          text = isWorkerMcpEnabled() ? await meshNotifyWorker(meshCtx, a) : JSON.stringify({ success: false, error: "worker_mcp_disabled" });
+          run = async () => isWorkerMcpEnabled() ? await meshNotifyWorker(meshCtx, a) : JSON.stringify({ success: false, error: "worker_mcp_disabled" });
         } else {
           const handler = resolveMeshToolHandler(name);
           if (!handler) return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
-          text = await handler(meshCtx, a);
+          run = () => handler(meshCtx, a);
         }
+        const text = await runMeshToolWithPendingEvents(meshCtx, run);
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: `Error: ${err?.message ?? String(err)}` }], isError: true };
