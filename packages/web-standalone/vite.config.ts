@@ -27,6 +27,13 @@ export default defineConfig({
             { find: /^@adhdev\/web-core\/constants\/supported$/, replacement: localWebCoreSupported },
         ],
     },
+    // The transcript worker (web-core transcript-worker-entry.ts) loads
+    // @sqlite.org/sqlite-wasm, whose ESM loader resolves sqlite3.wasm next to
+    // its own module URL. Vite's dev pre-bundling moves the module into
+    // .vite/deps/, where no .wasm sits, so the fetch falls through to the SPA
+    // index.html ('expected magic word 00 61 73 6d, found 3c 21 44 4f').
+    // Production builds emit the wasm as an asset and are unaffected.
+    optimizeDeps: { exclude: ['@sqlite.org/sqlite-wasm'] },
     define: {
         __APP_VERSION__: JSON.stringify(packageJson.version),
     },
