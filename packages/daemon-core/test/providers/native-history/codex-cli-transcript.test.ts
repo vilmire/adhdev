@@ -193,6 +193,11 @@ describe('codex-cli-transcript — readSession', () => {
     expect(toolMessages.some((m) => m.content.includes('shell') && m.content.includes('ls /tmp'))).toBe(true);
     expect(toolMessages.some((m) => m.content.includes('file1.txt'))).toBe(true);
     expect(toolMessages.every((m) => m.role === 'assistant' && m.senderName === 'Tool')).toBe(true);
+    // TOOL-LABEL: the function_call bubble carries the invoked tool's name for the
+    // dashboard card label; the output bubble has no name of its own.
+    const callMessage = toolMessages.find((m) => m.content.startsWith('shell'));
+    expect(callMessage?.toolName).toBe('shell');
+    expect(toolMessages.filter((m) => m !== callMessage).every((m) => m.toolName === undefined)).toBe(true);
 
     expect(standardMessages.some((m) => m.content === 'Run ls' && m.role === 'user')).toBe(true);
     expect(standardMessages.some((m) => m.content === 'Found 2 files.' && m.role === 'assistant')).toBe(true);

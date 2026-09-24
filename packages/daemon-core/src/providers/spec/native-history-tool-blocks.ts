@@ -86,7 +86,7 @@ export function projectToolBlock(
         const name = String(jsonPathGet(block, tmap.call_name || '$.name') ?? 'tool').trim() || 'tool';
         const { text: args, truncated } = oneLine(stringifyContent(jsonPathGet(block, tmap.call_args || '$.input')), TOOL_CALL_SUMMARY_MAX);
         const content = args ? `↗ ${name}: ${args}` : `↗ ${name}`;
-        const msg: NativeHistoryMessage = { role: 'assistant', content, receivedAt: 0, kind: 'tool' };
+        const msg: NativeHistoryMessage = { role: 'assistant', content, receivedAt: 0, kind: 'tool', toolName: name };
         if (truncated && isResolvableToolBlockRef(ref)) msg.toolBlockRef = ref;
         return msg;
     }

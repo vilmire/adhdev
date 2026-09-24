@@ -79,6 +79,21 @@ describe('mapTranscriptSnapshotToChatTailUpdate', () => {
     expect(update.messageSource).toBeUndefined()
   })
 
+  it('maps toolName onto the bubble AND derives meta.label from it — the live lane has no meta.label (TOOL-LABEL)', () => {
+    const snapshot = buildSnapshot({
+      messages: [
+        { role: 'assistant', kind: 'tool', content: '↗ Write: {"path":"x"}', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: 'Tool', toolName: 'Write', streaming: null },
+        { role: 'assistant', kind: 'tool', content: '↘ ok', receivedAt: 2, timestamp: 2, turnKey: 't1', bubbleState: 'final', senderName: 'Tool', toolName: null, streaming: null },
+      ],
+    })
+    const update = mapTranscriptSnapshotToChatTailUpdate(snapshot, { subscriptionKey: 'key-1', omittedBefore: false, stale: false })
+    expect(update.messages[0].toolName).toBe('Write')
+    expect(update.messages[0].meta?.label).toBe('Write')
+    // A result bubble has no tool name of its own: nothing is invented for it.
+    expect(update.messages[1].toolName).toBeUndefined()
+    expect(update.messages[1].meta?.label).toBeUndefined()
+  })
+
   it('carries toolBlockRef through so a truncated tool bubble stays expandable, and omits it when null', () => {
     const ref = { sourceMtimeMs: 123456, recordIndex: 4, blockIndex: 1 }
     const snapshot = buildSnapshot({

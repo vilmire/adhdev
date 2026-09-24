@@ -70,6 +70,8 @@ export interface NativeHistoryMessage {
   content: string;
   kind: NativeHistoryKind;
   senderName?: string;
+  /** The tool a function_call invoked (e.g. 'shell'); the dashboard tool card label. */
+  toolName?: string;
   agent: 'codex-cli';
   historySessionId: string;
   workspace?: string;
@@ -185,16 +187,16 @@ function summarizeToolArguments(value: unknown): string {
 /**
  * Build a human-readable summary of a Codex tool call payload.
  */
-function summarizeToolCall(payload: Record<string, unknown>): { content: string; truncated: boolean } {
+function summarizeToolCall(payload: Record<string, unknown>): { content: string; truncated: boolean; toolName: string } {
   const name = String(payload.name ?? payload.type ?? 'tool').trim() || 'tool';
   const argumentValue = codexToolCallArguments(payload);
-  if (!argumentValue) return { content: name, truncated: false };
+  if (!argumentValue) return { content: name, truncated: false, toolName: name };
   // Cap here rather than at the call site so the truncation verdict is decided
   // on the same string that gets rendered — `summarizeToolArguments` can
   // already pick a short `command` field out of a large object, and that is NOT
   // a truncation the reader can recover anything from by expanding.
   const { text, truncated } = oneLine(argumentValue, TOOL_CALL_SUMMARY_MAX);
-  return { content: text ? `${name}: ${text}` : name, truncated };
+  return { content: text ? `${name}: ${text}` : name, truncated, toolName: name };
 }
 
 /**
@@ -572,7 +574,7 @@ function parseSessionFile(
       if (detectedWorkspace) msg.workspace = detectedWorkspace;
       records.push(msg);
     } else if (payloadType === 'function_call' || payloadType === 'custom_tool_call') {
-      const { content, truncated } = summarizeToolCall(payload);
+      const { content, truncated, toolName } = summarizeToolCall(payload);
       if (!content) continue;
 
       const msg: NativeHistoryMessage = {
@@ -582,6 +584,7 @@ function parseSessionFile(
         content,
         kind: 'tool',
         senderName: 'Tool',
+        toolName,
         agent: 'codex-cli',
         historySessionId: sessionId,
       };

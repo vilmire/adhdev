@@ -108,6 +108,7 @@ function validateMessage(message: unknown, source: string, index: number): ChatM
   if (Array.isArray(message.toolCalls)) normalized.toolCalls = message.toolCalls as ChatMessage['toolCalls']
   if (isPlainObject(message.meta)) normalized.meta = message.meta as ChatMessage['meta']
   if (typeof message.senderName === 'string') normalized.senderName = message.senderName
+  if (typeof message.toolName === 'string' && message.toolName) normalized.toolName = message.toolName
   if (typeof message._type === 'string') normalized._type = message._type
   if (typeof message._sub === 'string') normalized._sub = message._sub
   if (typeof message.visibility === 'string') normalized.visibility = message.visibility

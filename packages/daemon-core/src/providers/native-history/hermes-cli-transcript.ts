@@ -20,6 +20,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { loadBetterSqlite3 } from '../../system/load-better-sqlite3.js';
+import { oneLine, TOOL_CALL_SUMMARY_MAX, TOOL_RESULT_SUMMARY_MAX } from '../spec/native-history-tool-blocks.js';
 import {
     foldUsageRecords,
     makeUsage,
@@ -33,6 +34,8 @@ export interface NativeHistoryMessage {
     content: string;
     receivedAt: number;
     kind?: string;
+    /** TOOL-LABEL: the tool(s) a tool-call bubble invoked — the dashboard card label. */
+    toolName?: string;
 }
 
 export interface NativeHistorySession {
@@ -137,7 +140,7 @@ function loadMessagesForSession(db: any, sessionId: string): NativeHistoryMessag
     // `content` OR `tool_calls` is non-empty, and project `tool_calls` into the
     // content slot when `content` is empty so the bubble still carries text.
     const rows: any[] = db.prepare(
-        `SELECT id, role, COALESCE(NULLIF(content, ''), tool_calls) AS content, timestamp
+        `SELECT id, role, content, tool_calls, timestamp
          FROM messages
          WHERE session_id IN (${placeholders})
            AND ((content IS NOT NULL AND content != '') OR (tool_calls IS NOT NULL AND tool_calls != ''))
@@ -146,18 +149,80 @@ function loadMessagesForSession(db: any, sessionId: string): NativeHistoryMessag
     const out: NativeHistoryMessage[] = [];
     for (const r of rows) {
         const role = normalizeHermesRole(r.role);
-        // Hermes stores some tool/system rows under role='tool'; surface as
-        // 'assistant' so they don't get dropped on the daemon's chat schema
-        // validation (role must be user/assistant/system).
+        const receivedAt = Math.floor(Number(r.timestamp) * 1000);
+        const text = typeof r.content === 'string' ? r.content : '';
+        // TOOL-LABEL (standalone matrix run, 2026-09-25): a tool-call turn has
+        // an EMPTY content and its payload in `tool_calls`; projecting that JSON
+        // into the content slot rendered `[{"id": "tool_…", "function": …}]` as
+        // a prose bubble. Project it as a tool bubble instead — same
+        // `↗ {name}: {args}` shape and caps as the spec tool-block builder.
+        if (!text.trim() && r.tool_calls) {
+            const projected = projectHermesToolCalls(String(r.tool_calls));
+            if (!projected) continue;
+            out.push({
+                id: String(r.id),
+                role: 'assistant',
+                content: projected.content,
+                receivedAt,
+                kind: 'tool',
+                toolName: projected.toolName,
+            });
+            continue;
+        }
+        // Hermes stores tool results under role='tool'; surface them as
+        // assistant tool bubbles (`↘ {result}`) so they neither get dropped on
+        // the daemon's chat schema validation (role must be user/assistant/
+        // system) nor read as the agent's prose.
+        if (String(r.role || '').trim().toLowerCase() === 'tool') {
+            const { text: result } = oneLine(text, TOOL_RESULT_SUMMARY_MAX);
+            if (!result) continue;
+            out.push({
+                id: String(r.id),
+                role: 'assistant',
+                content: `↘ ${result}`,
+                receivedAt,
+                kind: 'tool',
+            });
+            continue;
+        }
         out.push({
             id: String(r.id),
             role,
-            content: String(r.content),
-            receivedAt: Math.floor(Number(r.timestamp) * 1000),
+            content: text,
+            receivedAt,
             kind: 'standard',
         });
     }
     return out;
+}
+
+/**
+ * Project a hermes `messages.tool_calls` JSON column (OpenAI-style array:
+ * `[{ id, type: 'function', function: { name, arguments } }]`, older rows
+ * `{ name, arguments }` flat) into one tool bubble. Returns null when nothing
+ * parseable is inside — the caller then drops the row instead of surfacing
+ * raw JSON.
+ */
+export function projectHermesToolCalls(raw: string): { content: string; toolName: string } | null {
+    let calls: unknown;
+    try { calls = JSON.parse(raw); } catch { return null; }
+    const list = Array.isArray(calls) ? calls : (calls && typeof calls === 'object' ? [calls] : []);
+    const names: string[] = [];
+    const args: string[] = [];
+    for (const call of list) {
+        if (!call || typeof call !== 'object') continue;
+        const c = call as Record<string, unknown>;
+        const fn = c.function && typeof c.function === 'object' ? c.function as Record<string, unknown> : null;
+        const name = String((fn?.name ?? c.name) ?? '').trim();
+        if (name) names.push(name);
+        const argument = fn?.arguments ?? c.arguments;
+        if (typeof argument === 'string' && argument.trim()) args.push(argument.trim());
+        else if (argument && typeof argument === 'object') args.push(JSON.stringify(argument));
+    }
+    if (names.length === 0 && args.length === 0) return null;
+    const toolName = names.length > 0 ? names.join(', ') : 'tool';
+    const { text: summary } = oneLine(args.join(' '), TOOL_CALL_SUMMARY_MAX);
+    return { content: summary ? `↗ ${toolName}: ${summary}` : `↗ ${toolName}`, toolName };
 }
 
 /** Usage columns on `sessions`, absent on hermes older than the billing schema. */
