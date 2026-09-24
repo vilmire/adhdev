@@ -32,6 +32,9 @@ import { meshRecord } from '../../src/mesh/mesh-record.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, recordDirectDispatchTask } from '../../src/mesh/mesh-work-queue.js';
 import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js';
+import { setActiveTurnLedger } from '../../src/mesh/turn-ledger/active-ledger.js';
+import { acceptWorkerCompletionReport } from '../../src/mesh/worker-report.js';
+import { __resetWorkerTaskTokensForTest, mintWorkerTaskToken } from '../../src/mesh/worker-mcp-isolation.js';
 import { SUMMARY, evd, fakePublisher, recordingPorts } from './ledger-harness.js';
 
 function meshId(): string {
@@ -62,11 +65,16 @@ describe('runtime ledger over mesh-runtime.db', () => {
         const mesh = meshId();
         try {
             const { task, store, ledger, ref } = setup(mesh);
-            const result = ledger.observe(
+            // Report while generating: recorded, awaits the idle edge (R17g).
+            const recorded = ledger.observe(
                 evd('worker_report', { outcome: 'completed', summary: SUMMARY, hasHandoffNotes: false }, { ...ref, source: 'worker_tool' }),
                 { envelope: { workerResult: { decision: 'ok' }, finalSummary: 'local text' } },
             );
-            expect(result).toMatchObject({ rule: 'R17', attempt: { state: 'completed' } });
+            expect(recorded).toMatchObject({ rule: 'R17g', attempt: { state: 'generating' } });
+            expect(store.findQueueEntryById(mesh, task.id)?.status).toBe('assigned');
+            // The idle edge commits the REPORT — its envelope is the output version's.
+            const result = ledger.observe(evd('turn_end', { strength: 'genuine' }, { ...ref, source: 'completion_flush_genuine' }), { envelope: { finalSummary: 'scraped text' } });
+            expect(result).toMatchObject({ rule: 'R9t', attempt: { state: 'completed', terminal: { strength: 'tool_report', reason: 'worker_reported' } } });
             expect(store.findQueueEntryById(mesh, task.id)?.status).toBe('completed');
             const output = store.graphStore().getLatestOutput(task.id);
             expect(output).toMatchObject({ version: 1, attempt: 1, status: 'completed' });
@@ -150,8 +158,46 @@ describe('mesh_direct commit flips its materialised queue row (rc.37 Finding C)'
         const mesh = meshId();
         try {
             const { taskId, store, ledger, ref } = openDirect(mesh);
-            ledger.observe(evd('worker_report', { outcome: 'failed', summary: SUMMARY, hasHandoffNotes: false }, { ...ref, source: 'worker_tool' }));
+            expect(ledger.observe(evd('worker_report', { outcome: 'failed', summary: SUMMARY, hasHandoffNotes: false }, { ...ref, source: 'worker_tool' })).rule).toBe('R17g');
+            expect(ledger.observe(evd('turn_end', { strength: 'genuine' }, ref)).rule).toBe('R9t');
             expect(store.findQueueEntryById(mesh, taskId)?.status).toBe('failed');
+        } finally {
+            __clearMeshQueueForTests(mesh);
+        }
+    });
+});
+
+// Live preview rc.44 run 12: `report_completion` was accepted (queue row flipped,
+// `worker_tool_report` audit row) but the turn ledger never saw it — the idle end
+// that followed re-opened await_report and the attempt committed WEAK 10 min later.
+describe('report_completion reaches the turn ledger (design §F2, rc.44 run 12)', () => {
+    afterEach(() => {
+        setActiveTurnLedger(null);
+        __resetWorkerTaskTokensForTest();
+    });
+
+    it('an accepted report while generating is observed (R17g, await_end); the idle end commits it (R9t) with one completion notice', () => {
+        const mesh = meshId();
+        try {
+            const { task, store, ledger, ref } = setup(mesh);
+            setActiveTurnLedger(ledger);
+            const attemptId = ref.attemptRef.attemptId;
+            const token = mintWorkerTaskToken({ meshId: mesh, taskId: task.id, attemptId, sessionId: 's1' });
+            const accepted = acceptWorkerCompletionReport({ token: token.token }, { outcome: 'completed', summary: 'run-12 report text', touchedFiles: [] });
+            expect(accepted).toMatchObject({ accepted: true, outcome: 'completed' });
+            const attempt = ledger.getAttempt(attemptId)!;
+            expect(attempt).toMatchObject({ state: 'generating', terminal: null, data: { report: { generation: 0, outcome: 'completed' } } });
+            expect(store.turnStore().activeHolds(attemptId).map((h) => h.reason)).toContain('await_end');
+
+            const end = ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }, { ...ref, source: 'completion_flush_genuine' }));
+            expect(end.rule).toBe('R9t');
+            expect(ledger.getAttempt(attemptId)!.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report', reason: 'worker_reported' });
+            expect(store.turnStore().activeHolds(attemptId)).toEqual([]);
+            expect(store.findQueueEntryById(mesh, task.id)?.status).toBe('completed');
+            const events = store.turnStore().listEvents(attemptId);
+            expect(events.filter((e) => e.kind === 'committed')).toHaveLength(1);
+            expect(events.filter((e) => e.kind === 'notify' && (e.payload as { notify?: string }).notify === 'completed')).toHaveLength(1);
+            expect(events.filter((e) => e.kind === 'turn_end').map((e) => e.rule)).toEqual(['R9t']);
         } finally {
             __clearMeshQueueForTests(mesh);
         }

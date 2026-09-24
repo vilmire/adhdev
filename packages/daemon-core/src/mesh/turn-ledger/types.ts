@@ -9,6 +9,7 @@
 // ---------------------------------------------------------------------------
 
 import type {
+    WorkerReportOutcome,
     CommitStrength,
     ConsumeProfile,
     EvidenceSourceId,
@@ -53,6 +54,13 @@ export interface TurnAttemptData {
     gitSideEffect?: { dirty: boolean; commitsSinceDispatch: number; attributable: boolean; at: number };
     /** R12r: how many report-awaiting idle ends the worker resumed from (false idles). Diagnostics only. */
     falseIdleCount?: number;
+    /**
+     * R17g: the worker report recorded while the session was still generating —
+     * content-free (outcome enum, the local evidence id whose envelope holds the
+     * text, the handoff pointer when one was published). Scoped to `generation`:
+     * a reclaim leaves it behind and the guards ignore it for the new generation.
+     */
+    report?: { generation: number; outcome: WorkerReportOutcome; eventId: string; at: number; summary?: SummaryRef };
 }
 
 export interface TurnAttempt {

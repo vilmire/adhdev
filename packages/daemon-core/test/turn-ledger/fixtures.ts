@@ -124,7 +124,7 @@ export function variantsFor(kind: TurnEvidenceKind): Array<{ label: string; evid
         case 'coordinator_ack': return [v('ack', ev(kind, { notify: 'completed', outcome: 'delivered' }))];
         case 'hold_expired': return ([
             'await_delivery', 'await_consume', 'await_turn', 'liveness', 'hard_ceiling',
-            'live_pending', 'transcript_quiet', 'weak_candidate', 'suspension_before_consumed', 'await_report',
+            'live_pending', 'transcript_quiet', 'weak_candidate', 'suspension_before_consumed', 'await_report', 'await_end',
         ] as const).map((reason) => v(reason, expired(reason), [makeHold(reason)])).concat([v('missing', expired('liveness'), [])]);
     }
 }

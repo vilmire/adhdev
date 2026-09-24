@@ -11,12 +11,13 @@ import {
 } from '../../src/mesh/turn-ledger/policy.js';
 
 describe('TurnPolicy', () => {
-    it('has the 8 design defaults + the await-report window (2026-09-24, raised 180s -> 600s same day per live run 6 on rc.41) + the finalizing liveness-probe backoff (same day, run 10 on rc.43)', () => {
+    it('has the 8 design defaults + the await-report window (2026-09-24, raised 180s -> 600s same day per live run 6 on rc.41) + the finalizing liveness-probe backoff (same day, run 10 on rc.43) + the await-end window (2026-09-25, rc.44 run 12)', () => {
         expect(DEFAULT_TURN_POLICY).toEqual({
             tickMs: 4_000, quietWindowMs: 8_000, consumeGraceMs: 90_000, deliveryCeilingMs: 120_000,
             livenessDeadlineMs: 480_000, noTurnDeadlineMs: 900_000, stallNoticeMs: 180_000, hardCeilingMs: 5_400_000,
-            awaitReportMs: 600_000, livenessProbeIntervalFinalizingMs: 60_000,
+            awaitReportMs: 600_000, livenessProbeIntervalFinalizingMs: 60_000, awaitEndMs: 60_000,
         });
+        expect(resolveTurnPolicy({ ADHDEV_TURN_AWAIT_END_MS: '15000' }).awaitEndMs).toBe(15_000);
         expect(resolveTurnPolicy({ ADHDEV_TURN_AWAIT_REPORT_MS: '5000' }).awaitReportMs).toBe(5_000);
         expect(resolveTurnPolicy({ ADHDEV_TURN_LIVENESS_PROBE_INTERVAL_FINALIZING_MS: '30000' }).livenessProbeIntervalFinalizingMs).toBe(30_000);
         expect(resolveTurnPolicy({})).toEqual(DEFAULT_TURN_POLICY);

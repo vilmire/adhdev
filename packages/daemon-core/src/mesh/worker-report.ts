@@ -68,6 +68,8 @@ import { commitTaskTerminalAndAdvanceGraph } from './mesh-graph-transition-runne
 import { isTaskReadonly } from './mesh-work-queue.js';
 import { meshRecord } from './mesh-record.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
+import { getActiveTurnLedger } from './turn-ledger/active-ledger.js';
+import { observeAcceptedWorkerReport } from './turn-ledger/worker-report-evidence.js';
 import {
     exchangeWorkerSessionBind,
     findWorkerTaskTokenForSession,
@@ -865,6 +867,32 @@ function acceptWorkerCompletionReportForIdentity(
 
     if (!commit.committed) {
         return { accepted: false, refusal: 'unknown_task', detail: `no queue row for task ${identity.taskId}` };
+    }
+
+    // (5) Design §F2: the report is the primary completion evidence — the turn
+    // ledger reduces it (R17 commit after the idle edge; R17g record + await_end
+    // while still generating). AFTER the queue commit above, so that commit's
+    // output version (report envelope) is the one persisted; the ledger's own
+    // graph_advance then hits the replay fence. Best-effort: the report is
+    // already accepted, and without a ledger the idle end still commits.
+    const ledger = getActiveTurnLedger();
+    if (ledger) {
+        try {
+            observeAcceptedWorkerReport(ledger, {
+                meshId: identity.meshId,
+                taskId: identity.taskId,
+                ...(identity.attemptId ? { attemptId: identity.attemptId } : {}),
+                ...(identity.sessionId ? { sessionId: identity.sessionId } : {}),
+                outcome: report.outcome,
+                summary: report.summary,
+                hasHandoffNotes: !!report.handoffNotes,
+                touchedFileCount: report.touchedFiles?.length ?? 0,
+                ...(report.branchState ? { branchState: report.branchState } : {}),
+                atMs: nowMs,
+            });
+        } catch (e: any) {
+            LOG.warn('WorkerReport', `Turn-ledger observe of the report for task ${identity.taskId} failed: ${e?.message || e}`);
+        }
     }
 
     // H1 (path ownership): compare the worker's reported touchedFiles against the

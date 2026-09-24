@@ -184,6 +184,33 @@ function reportAwaitedEnd(ctx: GuardCtx): boolean {
         && !!ctx.attempt && isMeshScope(ctx.attempt);
 }
 
+/**
+ * R17g recorded a worker report for the attempt's CURRENT generation (the
+ * report arrived before the idle edge). A reclaim bumps the generation, so a
+ * report of a cut generation never satisfies this.
+ */
+function reportedThisGeneration(ctx: GuardCtx): boolean {
+    const attempt = ctx.attempt;
+    return !!attempt && attempt.data.report?.generation === attempt.generation;
+}
+
+/**
+ * An idle signal after a recorded report (R9t): any admitted turn_end (strong
+ * or weak, hollow or not — the report is the verdict), an admitted
+ * transcript_final, or a no-progress watchdog that sees the final message. A
+ * live-pending/quiet hold admission is not an idle signal; it still goes to R16
+ * and re-reduces (R9t) once the hold clears.
+ */
+function finishedAfterReport(ctx: GuardCtx): boolean {
+    if (!reportedThisGeneration(ctx)) return false;
+    const ev = ctx.evidence;
+    if (ev.kind === 'turn_end' || ev.kind === 'transcript_final') {
+        const admission = admissionOf(ctx);
+        return admission?.kind === 'strong' || admission?.kind === 'weak';
+    }
+    return ev.kind === 'no_progress' && ev.finalAssistantPresent;
+}
+
 /** The attempt is inside an R9r window (an active `await_report` hold). */
 function awaitReportHeld(ctx: GuardCtx): boolean {
     const attempt = ctx.attempt;
@@ -207,18 +234,21 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     reclaiming_refusal: (ctx) => ctx.evidence.kind === 'delivery_refused'
         && (RECLAIMING_SEND_REFUSALS as readonly string[]).includes(ctx.evidence.reason),
     suspension_changed: (ctx) => ctx.evidence.kind === 'suspension' && ctx.attempt?.suspension !== ctx.evidence.modal,
-    end_genuine: (ctx) => { const e = turnEnd(ctx); return !!e && e.strength === 'genuine' && !e.hollow && notHeld(ctx) && !reportAwaitedEnd(ctx); },
-    end_report_awaited: (ctx) => reportAwaitedEnd(ctx) && notHeld(ctx) && !awaitReportHeld(ctx),
-    end_report_awaited_held: (ctx) => reportAwaitedEnd(ctx) && notHeld(ctx) && awaitReportHeld(ctx),
-    final_strong_report_awaited: (ctx) => ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'strong' && awaitReportHeld(ctx),
+    // Every idle-signal guard below yields to R9t once a report is recorded for
+    // this generation (`!reportedThisGeneration`): the report is the verdict.
+    end_genuine: (ctx) => { const e = turnEnd(ctx); return !!e && e.strength === 'genuine' && !e.hollow && notHeld(ctx) && !reportAwaitedEnd(ctx) && !reportedThisGeneration(ctx); },
+    end_report_awaited: (ctx) => reportAwaitedEnd(ctx) && notHeld(ctx) && !awaitReportHeld(ctx) && !reportedThisGeneration(ctx),
+    end_report_awaited_held: (ctx) => reportAwaitedEnd(ctx) && notHeld(ctx) && awaitReportHeld(ctx) && !reportedThisGeneration(ctx),
+    final_strong_report_awaited: (ctx) => ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'strong' && awaitReportHeld(ctx) && !reportedThisGeneration(ctx),
+    finished_after_report: finishedAfterReport,
     false_idle_resumed: (ctx) => (ctx.evidence.kind === 'turn_started' || ctx.evidence.kind === 'transcript_activity')
         && afterWeakSince(ctx) && awaitReportHeld(ctx),
-    end_weak: (ctx) => { const e = turnEnd(ctx); return !!e && e.strength === 'weak' && !e.afterFinalizationTimeout && !e.hollow && notHeld(ctx); },
-    end_weak_after_timeout: (ctx) => { const e = turnEnd(ctx); return !!e && e.strength === 'weak' && !!e.afterFinalizationTimeout && !e.hollow && notHeld(ctx); },
-    hollow_retry: (ctx) => { const e = turnEnd(ctx); return !!e && !!e.hollow && notHeld(ctx) && ctx.attempt!.hollowCount < ctx.attempt!.maxTaskRetries; },
-    hollow_exhausted: (ctx) => { const e = turnEnd(ctx); return !!e && !!e.hollow && notHeld(ctx) && ctx.attempt!.hollowCount >= ctx.attempt!.maxTaskRetries; },
-    final_strong: (ctx) => ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'strong',
-    final_weak: (ctx) => ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'weak',
+    end_weak: (ctx) => { const e = turnEnd(ctx); return !!e && e.strength === 'weak' && !e.afterFinalizationTimeout && !e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx); },
+    end_weak_after_timeout: (ctx) => { const e = turnEnd(ctx); return !!e && e.strength === 'weak' && !!e.afterFinalizationTimeout && !e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx); },
+    hollow_retry: (ctx) => { const e = turnEnd(ctx); return !!e && !!e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx) && ctx.attempt!.hollowCount < ctx.attempt!.maxTaskRetries; },
+    hollow_exhausted: (ctx) => { const e = turnEnd(ctx); return !!e && !!e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx) && ctx.attempt!.hollowCount >= ctx.attempt!.maxTaskRetries; },
+    final_strong: (ctx) => ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'strong' && !reportedThisGeneration(ctx),
+    final_weak: (ctx) => ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'weak' && !reportedThisGeneration(ctx),
     genuine_end_or_strong_final: (ctx) => GUARDS.end_genuine(ctx) || (GUARDS.final_strong(ctx) && !awaitReportHeld(ctx)),
     weak_end_or_final: (ctx) => GUARDS.end_weak(ctx) || GUARDS.final_weak(ctx),
     admission_hold: (ctx) => admissionOf(ctx)?.kind === 'hold',
@@ -241,7 +271,7 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     provider_failure: (ctx) => ctx.evidence.kind === 'process_exit' && !!ctx.evidence.providerFailure,
     no_provider_failure: (ctx) => ctx.evidence.kind === 'process_exit' && !ctx.evidence.providerFailure,
     holder_is_this_attempt: (ctx) => ctx.evidence.kind === 'duplicate_dispatch_refusal' && ctx.evidence.holderAttemptId === ctx.attempt?.attemptId,
-    final_present: (ctx) => ctx.evidence.kind === 'no_progress' && ctx.evidence.finalAssistantPresent,
+    final_present: (ctx) => ctx.evidence.kind === 'no_progress' && ctx.evidence.finalAssistantPresent && !reportedThisGeneration(ctx),
     hold_await_delivery: (ctx) => holdIs(ctx, 'await_delivery'),
     hold_await_consume_redrive: (ctx) => holdIs(ctx, 'await_consume') && ctx.attempt!.redriveCount < MAX_REDRIVES_PER_GENERATION,
     hold_await_consume_exhausted: (ctx) => holdIs(ctx, 'await_consume') && ctx.attempt!.redriveCount >= MAX_REDRIVES_PER_GENERATION,
@@ -252,6 +282,7 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     hold_weak_candidate: (ctx) => holdIs(ctx, 'weak_candidate'),
     hold_admission: (ctx) => holdIs(ctx, 'live_pending', 'transcript_quiet'),
     hold_await_report: (ctx) => holdIs(ctx, 'await_report'),
+    hold_await_end: (ctx) => holdIs(ctx, 'await_end') && reportedThisGeneration(ctx),
 };
 
 function laneCandidates(lane: RuleLane, state: TurnAttempt['state'] | null, kind: TurnEvidenceKind): TransitionRule[] {
@@ -314,6 +345,7 @@ function resolveUntil(expr: UntilExpr, draft: Draft): number | null {
         case 'hard_ceiling': return nowMs + policy.hardCeilingMs;
         case 'weak_confirm': return nowMs + weakConfirmMs(policy);
         case 'await_report': return nowMs + policy.awaitReportMs;
+        case 'await_end': return nowMs + policy.awaitEndMs;
         case 'unknown_grace': return nowMs + unknownLivenessGraceMs(policy);
         // H4 / R32u re-arm: the normal 3×tick cadence, except while `await_report`
         // is open, where the probe backs off (see policy.ts livenessReArmMs).
@@ -364,7 +396,7 @@ function notify(draft: Draft, kind: NotifyKind, opts: { generation?: number; sum
 }
 
 /** Holds that commit on expiry keep the text pointer of the evidence that opened them. */
-const TEXT_CARRYING_HOLDS: readonly HoldReason[] = ['weak_candidate', 'await_report'];
+const TEXT_CARRYING_HOLDS: readonly HoldReason[] = ['weak_candidate', 'await_report', 'await_end'];
 
 /**
  * The text of a commit on hold expiry (R13a/R13r) is the text of the end that
@@ -388,16 +420,27 @@ function summaryOf(ev: TurnEvidence): SummaryRef | undefined {
     return undefined;
 }
 
+/**
+ * The text of a commit on a report R17g recorded (R9t/R13t): the report's own
+ * pointer + local evidence row, never the idle edge's scrape.
+ */
+function recordedReportText(draft: Draft): { summary?: SummaryRef; textEventId?: string } {
+    const report = draft.attempt!.data.report;
+    if (!report) return {};
+    return { ...(report.summary ? { summary: report.summary } : {}), textEventId: report.eventId };
+}
+
 function commit(
     draft: Draft,
     outcome: TurnOutcome,
     strength: NonNullable<TurnAttempt['terminal']>['strength'],
     reason: TurnReason,
+    text?: { summary?: SummaryRef; textEventId?: string },
 ): void {
     const attempt = draft.attempt!;
     const ev = draft.ctx.evidence;
-    const held = heldText(draft);
-    const summary = summaryOf(ev) ?? held.summary;
+    const held = text ?? heldText(draft);
+    const summary = text ? text.summary : summaryOf(ev) ?? held.summary;
     attempt.state = outcome;
     attempt.suspension = null;
     attempt.terminal = { outcome, reason, source: ev.source, strength, at: ev.at, ...(summary ? { summary } : {}) };
@@ -676,6 +719,14 @@ const ACTIONS: Record<ActionId, (draft: Draft) => void> = {
     stamp_no_progress_notice: (draft) => {
         draft.attempt!.lastNoProgressNoticeAt = draft.ctx.nowMs;
     },
+    record_report: (draft) => {
+        const attempt = draft.attempt!;
+        const ev = draft.ctx.evidence as TurnEvidenceOf<'worker_report'>;
+        attempt.data = {
+            ...attempt.data,
+            report: { generation: attempt.generation, outcome: ev.outcome, eventId: ev.eventId, at: ev.at, ...(ev.summary ? { summary: ev.summary } : {}) },
+        };
+    },
 };
 
 function resolveNote(note: string, draft: Draft): string {
@@ -761,6 +812,9 @@ function applyTemplate(template: EffectTemplate, draft: Draft): void {
             let outcome: TurnOutcome;
             if (template.outcome === 'from_report') {
                 outcome = (ev as TurnEvidenceOf<'worker_report'>).outcome === 'completed' ? 'completed' : 'failed';
+            } else if (template.outcome === 'from_recorded_report') {
+                // 'blocked' is not a terminal the ledger knows: failed (as R17).
+                outcome = draft.attempt!.data.report?.outcome === 'completed' ? 'completed' : 'failed';
             } else if (template.outcome === 'from_operator') {
                 outcome = (ev as TurnEvidenceOf<'operator_status'>).status;
             } else {
@@ -772,7 +826,7 @@ function applyTemplate(template: EffectTemplate, draft: Draft): void {
             else if (template.reason === 'from_provider_failure') {
                 reason = (ev as TurnEvidenceOf<'process_exit'>).providerFailure === 'billing_failed' ? 'provider_billing_failed' : 'provider_auth_failed';
             } else reason = template.reason;
-            commit(draft, outcome, template.strength, reason);
+            commit(draft, outcome, template.strength, reason, template.text === 'recorded_report' ? recordedReportText(draft) : undefined);
             return;
         }
         case 'reclaim': {

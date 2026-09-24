@@ -378,8 +378,11 @@ describe('report gate — the rc.40 false-idle sequence commits once, on the rep
         await r.scheduler.tick();
         expect(r.ledger.getAttempt('a1')!.terminal).toBeNull();
         const report = r.ledger.observe(evd('worker_report', { outcome: 'completed', summary: { topic: 'mesh.m1.handoff', writer: 'w-dw', seq: 11 }, hasHandoffNotes: false }, { source: 'worker_tool', at: T0 + 256_000 }));
-        expect(report.rule).toBe('R17');
-        expect(r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }, { source: 'completion_flush_genuine', at: T0 + 268_000 })).rule).toBe('R18');
+        // The report lands while the session is generating again (after R12r):
+        // recorded + await_end (R17g); the idle end that follows commits it (R9t)
+        // instead of opening a second await_report window (live rc.44 run 12).
+        expect(report.rule).toBe('R17g');
+        expect(r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }, { source: 'completion_flush_genuine', at: T0 + 268_000 })).rule).toBe('R9t');
         expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report', reason: 'worker_reported' });
         expect(rowsOf(r.db, 'committed', 'a1')).toHaveLength(1);
         const notices = rowsOf(r.db, 'notify', 'a1').map((row) => JSON.parse(String(row.payload_json)) as { notify?: string });

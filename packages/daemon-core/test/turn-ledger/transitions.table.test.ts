@@ -48,6 +48,8 @@ interface Fixture {
 }
 
 const G = (o: Partial<TurnAttempt> = {}) => makeAttempt('generating', o);
+/** R17g recorded a report for generation 1 (the fixtures' current generation). */
+const REPORTED = { data: { report: { generation: 1, outcome: 'completed' as const, eventId: 'ev-report', at: NOW - 5, summary: REF } } };
 const LIVE_IDLE = { modal: false, adapterPending: false, trailingTool: false };
 const noRef = { attemptRef: undefined };
 
@@ -92,7 +94,10 @@ const FIRES: Record<string, Fixture> = {
     R15: { attempt: G(), evidence: ev('transcript_final', { selfAttributing: false, nativeRead: false, live: LIVE_IDLE, summary: REF }), state: 'finalizing', effects: ['hold', 'notify_coordinator'] },
     R16: { attempt: G(), evidence: ev('turn_end', { strength: 'genuine', live: { ...LIVE_IDLE, trailingTool: true } }), state: 'generating', effects: ['hold'] },
     R16a: { attempt: G(), evidence: ev('transcript_final', { selfAttributing: false, nativeRead: true, live: LIVE_IDLE, summary: REF }), state: 'generating', effects: ['record'] },
-    R17: { attempt: G(), evidence: ev('worker_report', { outcome: 'completed', summary: REF, hasHandoffNotes: true }, { source: 'worker_tool' }), state: 'completed', effects: ['commit', 'notify_coordinator'] },
+    R17: { attempt: makeAttempt('finalizing'), holds: [makeHold('await_report')], evidence: ev('worker_report', { outcome: 'completed', summary: REF, hasHandoffNotes: true }, { source: 'worker_tool' }), state: 'completed', effects: ['commit', 'notify_coordinator'] },
+    R17g: { attempt: G(), evidence: ev('worker_report', { outcome: 'completed', summary: REF, hasHandoffNotes: true }, { source: 'worker_tool' }), state: 'generating', effects: ['hold', 'record'] },
+    R9t: { attempt: G(REPORTED), holds: [makeHold('await_end')], evidence: ev('turn_end', { strength: 'genuine', summary: REF, reportExpected: true }), state: 'completed', effects: ['commit', 'release_hold', 'notify_coordinator'] },
+    R13t: { attempt: G(REPORTED), holds: [makeHold('await_end')], evidence: expired('await_end'), state: 'completed', effects: ['commit', 'notify_coordinator'] },
     R17p: { attempt: G(), evidence: ev('worker_progress', { note: REF }, { source: 'worker_tool' }), state: 'generating', effects: ['bus', 'notify_coordinator'] },
     R18: { attempt: makeAttempt('completed', { terminal: { outcome: 'completed', reason: 'worker_reported', source: 'worker_tool', strength: 'tool_report', at: NOW - 5 } }), evidence: ev('transcript_final', { selfAttributing: false, nativeRead: false, live: LIVE_IDLE, summary: REF }), state: 'completed', effects: ['record'] },
     R19: { attempt: makeAttempt('completed'), evidence: ev('turn_end', { strength: 'genuine' }), state: 'completed', effects: ['record'] },
@@ -162,6 +167,8 @@ describe('rule matching is unambiguous', () => {
         makeAttempt(state, { redriveCount: 1, hollowCount: 1, livenessFailStreak: 2, suspension: 'choice', weakSince: NOW + 1 }),
         makeAttempt(state, { scope: 'plain', meshId: null, taskId: null, prevGeneration: null }),
         ...(state === 'completed' ? [makeAttempt(state, { terminal: { outcome: 'completed', reason: 'worker_reported', source: 'worker_tool', strength: 'tool_report', at: NOW } })] : []),
+        // R17g recorded a report for this generation (2026-09-25): every idle-signal guard yields to R9t/R13t.
+        ...(['accepted', 'delivered', 'consumed', 'generating', 'suspended', 'finalizing'].includes(state) ? [makeAttempt(state, REPORTED)] : []),
     ];
 
     it('at most one rule matches any (state, kind, guard variant, attempt variant)', () => {
@@ -186,10 +193,11 @@ describe('rule matching is unambiguous', () => {
             }
         }
         expect(ambiguous).toEqual([]);
-        // 57 evidence variants (all 23 kinds; +6 report-gate variants 2026-09-24) × (1 no-attempt + 28 attempt variants × 2 lanes).
+        // 58 evidence variants (all 23 kinds; +6 report-gate variants 2026-09-24, +1 await_end expiry 2026-09-25)
+        // × (1 no-attempt + 34 attempt variants (+6 reported, 2026-09-25) × 2 lanes).
         const variantCount = TURN_EVIDENCE_KINDS.reduce((n, kind) => n + variantsFor(kind).length, 0);
-        expect(variantCount).toBe(57);
-        expect(visited).toBe(57 * (1 + 28 * 2));
+        expect(variantCount).toBe(58);
+        expect(visited).toBe(58 * (1 + 34 * 2));
     });
 });
 

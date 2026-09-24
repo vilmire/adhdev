@@ -102,8 +102,11 @@ describe('generation rule — older/other-generation evidence is recorded, never
 });
 
 describe('F2 — the worker report is primary; a later scrape adds nothing', () => {
-    it('worker_report commits tool_report and notifies at once; later turn_end/transcript_final are recorded with no second notice', () => {
-        const start = makeAttempt('generating');
+    // After the idle edge (finalizing) the report commits at once (R17). While
+    // the session is still generating it is recorded and awaits the idle edge
+    // (R17g → R9t/R13t, 2026-09-25) — see "report before the idle edge" below.
+    it('worker_report after the idle edge commits tool_report and notifies at once; later turn_end/transcript_final are recorded with no second notice', () => {
+        const start = makeAttempt('finalizing');
         const reported = step(start, ev('worker_report', { outcome: 'completed', summary: REF, hasHandoffNotes: true }, { source: 'worker_tool' }));
         expect(reported.rule).toBe('R17');
         expect(reported.attempt?.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report', reason: 'worker_reported', summary: REF });
@@ -124,7 +127,7 @@ describe('F2 — the worker report is primary; a later scrape adds nothing', () 
     });
 
     it('a blocked report commits failed', () => {
-        const r = step(makeAttempt('generating'), ev('worker_report', { outcome: 'blocked', summary: REF, hasHandoffNotes: false }, { source: 'worker_tool' }));
+        const r = step(makeAttempt('finalizing'), ev('worker_report', { outcome: 'blocked', summary: REF, hasHandoffNotes: false }, { source: 'worker_tool' }));
         expect(r.attempt?.terminal?.outcome).toBe('failed');
     });
 

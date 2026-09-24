@@ -64,7 +64,8 @@ export type GuardId =
     | 'final_present'
     | 'hold_await_delivery' | 'hold_await_consume_redrive' | 'hold_await_consume_exhausted' | 'hold_await_turn'
     | 'hold_liveness' | 'hold_hard_ceiling' | 'hold_suspension_before_consumed' | 'hold_weak_candidate' | 'hold_admission'
-    | 'hold_await_report';
+    | 'hold_await_report'
+    | 'finished_after_report' | 'hold_await_end';
 
 /** Named attempt mutations (reducer.ts ACTIONS). */
 export type ActionId =
@@ -74,18 +75,21 @@ export type ActionId =
     | 'weak_candidate' | 'clear_weak' | 'await_report' | 'false_idle'
     | 'activity' | 'liveness_unknown' | 'liveness_failure' | 'worker_absent'
     | 'rebind_to_holder' | 'rebind'
-    | 'hollow' | 'mark_notified' | 'store_git' | 'redrive' | 'stamp_no_progress_notice';
+    | 'hollow' | 'mark_notified' | 'store_git' | 'redrive' | 'stamp_no_progress_notice'
+    | 'record_report';
 
 /** Hold deadline expressions, resolved against policy + ledger clock. */
 export type UntilExpr =
     | 'await_delivery' | 'await_consume' | 'await_turn' | 'liveness' | 'hard_ceiling'
-    | 'weak_confirm' | 'unknown_grace' | 'liveness_reprobe' | 'admission' | 'await_report' | 'none';
+    | 'weak_confirm' | 'unknown_grace' | 'liveness_reprobe' | 'admission' | 'await_report' | 'await_end' | 'none';
 
 export type EffectTemplate =
     | { e: 'act'; act: ActionId }
     | { e: 'hold'; reason: HoldReason | 'from_admission'; until: UntilExpr; onExpire: HoldOnExpire; meshOnly?: true; generationAgnostic?: true }
     | { e: 'release'; reasons: readonly HoldReason[] | '*' | 'expired_hold' }
-    | { e: 'commit'; outcome: TurnOutcome | 'from_report' | 'from_operator'; strength: CommitStrength; reason: TurnReason | 'from_cancel' | 'from_operator' | 'from_provider_failure' }
+    | { e: 'commit'; outcome: TurnOutcome | 'from_report' | 'from_recorded_report' | 'from_operator'; strength: CommitStrength; reason: TurnReason | 'from_cancel' | 'from_operator' | 'from_provider_failure'
+        /** `recorded_report` = the text (summary pointer + local text event) of the report R17g recorded on the attempt, not the committing evidence's. */
+        text?: 'recorded_report' }
     | { e: 'reclaim'; reason: TurnReason | 'from_refusal' | 'from_exit_state' }
     | { e: 'notify'; notify: NotifyKind | 'from_modal'; when?: 'candidate_once' | 'no_progress_due'
         /** `evidence` = the notice names the evidence's (stale) generation, not the attempt's. */
@@ -308,8 +312,32 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     ] },
 
     // ── worker MCP (F2): the report is the primary completion evidence ──
-    { id: 'R17', lane: 'current', from: 'nonterminal', on: ['worker_report'], to: 'outcome', verdict: 'applied', effects: [
+    // Before the turn started, after the idle edge (await_report / weak
+    // candidate): the report commits at once.
+    { id: 'R17', lane: 'current', from: [A, D, F], on: ['worker_report'], to: 'outcome', verdict: 'applied', effects: [
         { e: 'commit', outcome: 'from_report', strength: 'tool_report', reason: 'worker_reported' },
+    ] },
+    // ── report before the idle edge (live rc.44 run 12, 2026-09-25) ────
+    // The report arrived while the session is still generating (the worker is
+    // printing its last message, or the FSM has not shown idle yet). It is the
+    // verdict, so it is recorded on the attempt (generation-scoped) and a short
+    // `await_end` hold waits for the idle edge as corroboration: R9t commits
+    // the report on the next idle signal (turn_end, admitted transcript_final,
+    // no_progress with a final message) instead of R9r opening a second
+    // await_report window; R13t commits it when the hold expires, so a session
+    // whose FSM never shows the idle edge again does not wait for liveness /
+    // hard_ceiling. Before this rule the report never reached the reducer and
+    // the idle end re-opened await_report — 10 min, then committed WEAK.
+    { id: 'R17g', lane: 'current', from: [C, G, S], on: ['worker_report'], to: 'same', verdict: 'applied', effects: [
+        { e: 'act', act: 'record_report' },
+        { e: 'hold', reason: 'await_end', until: 'await_end', onExpire: 'commit', meshOnly: true },
+        { e: 'record', note: 'report_awaits_end' },
+    ] },
+    { id: 'R9t', lane: 'current', from: [C, G, S, F], on: ['turn_end', 'transcript_final', 'no_progress'], guard: 'finished_after_report', to: 'outcome', verdict: 'applied', effects: [
+        { e: 'commit', outcome: 'from_recorded_report', strength: 'tool_report', reason: 'worker_reported', text: 'recorded_report' },
+    ] },
+    { id: 'R13t', lane: 'current', from: [C, G, S, F], on: ['hold_expired'], guard: 'hold_await_end', to: 'outcome', verdict: 'applied', effects: [
+        { e: 'commit', outcome: 'from_recorded_report', strength: 'tool_report', reason: 'worker_reported', text: 'recorded_report' },
     ] },
     { id: 'R17p', lane: 'current', from: 'nonterminal', on: ['worker_progress'], to: 'same', verdict: 'applied', effects: [
         { e: 'bus', phase: 'progress' },

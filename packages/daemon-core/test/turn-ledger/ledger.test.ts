@@ -63,7 +63,9 @@ describe('commit path', () => {
         const ports = recordingPorts();
         const ledger = ledgerOn(db, { host, ports, publisher: fakePublisher() });
         driveToGenerating(ledger, { scope: 'mesh_queue' });
-        ledger.observe(evd('worker_report', { outcome: 'completed', summary: SUMMARY, hasHandoffNotes: false }, { source: 'worker_tool' }));
+        expect(ledger.observe(evd('worker_report', { outcome: 'completed', summary: SUMMARY, hasHandoffNotes: false }, { source: 'worker_tool' })).rule).toBe('R17g');
+        expect(host.calls).toEqual([]);
+        expect(ledger.observe(evd('turn_end', { strength: 'genuine' })).rule).toBe('R9t');
         expect(host.calls).toEqual(['graph:t1:completed']);
         expect(ports.calls).toContain('after:m1/t1');
     });
