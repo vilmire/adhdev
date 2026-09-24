@@ -68,6 +68,17 @@ function fakeGeminiHome(opts: { onboarded?: boolean } = {}): string {
 beforeEach(() => { __resetWorkerTaskTokensForTest() })
 afterEach(() => { __resetWorkerTaskTokensForTest() })
 
+// ★Platform stub — same convention as
+// test/mesh/refine-config-win32-exec-token.test.ts. Needed for the
+// antigravity oauth-token `required` predicate (darwin/win32 keyring-auth vs
+// linux file-auth), which reads `process.platform` directly with no env seam.
+let platformDescriptor: PropertyDescriptor | undefined
+beforeEach(() => { platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform') })
+afterEach(() => { if (platformDescriptor) Object.defineProperty(process, 'platform', platformDescriptor) })
+function setPlatform(value: NodeJS.Platform): void {
+  Object.defineProperty(process, 'platform', { value, configurable: true })
+}
+
 describe('worker MCP flag gate', () => {
   // ★Default flipped OFF → ON on 2026-09-18 (owner approval, after the live
   // verification found 6 of 7 CLIs healthy on both delivery and isolation).
@@ -508,8 +519,9 @@ describe('antigravity worker-private HOME', () => {
   it('★launches fine on a host that has never completed agy onboarding (import is optional)', () => {
     // Cross-platform defence: linux/win32 hosts, and macs that have authed but
     // never run agy, have no cache/onboarding.json. That must SKIP, not throw —
-    // cf. antigravity-oauth-token, whose `required: true` makes win32 workers
-    // fail isolation outright.
+    // cf. antigravity-oauth-token, whose `required` predicate makes a missing
+    // file fail isolation outright on LINUX (its only credential source), but
+    // not on darwin/win32 (see the platform-specific tests above).
     const realHome = fakeGeminiHome() // deliberately has no cache/ dir
     const rel = join('.gemini', 'antigravity-cli', 'cache', 'onboarding.json')
     const spec = findWorkerPrivateHomeSpec('antigravity-cli')!
@@ -584,12 +596,78 @@ describe('antigravity worker-private HOME', () => {
     expect(attempt).toThrow(/insecure_source/)
   })
 
-  it('errors when the required auth file is absent', () => {
+  it('errors when the required auth file is absent — LINUX only (the only platform that writes it)', () => {
+    // ★2026-09-25: `antigravity-oauth-token`'s `required` flag is now a
+    // per-platform predicate — see the spec comment and
+    // quota/fetchers/antigravity.ts's "CREDENTIAL SOURCE" header. linux has no
+    // Secret Service, so this file is the CLI's ONLY credential source there;
+    // a missing file on linux is a genuine "not signed in" and must still
+    // fail closed.
+    setPlatform('linux')
     const realHome = tmp('adhdev-noauth-')
     const spec = findWorkerPrivateHomeSpec('antigravity-cli')!
     expect(() => prepareWorkerPrivateHome(spec, {
       workspace: tmp('adhdev-ws-noauth-'), sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase7-'),
     })).toThrow(/missing_required_import/)
+  })
+
+  it('★darwin: builds the private HOME even when the oauth-token FILE is absent — keyring is HOME-independent', () => {
+    // The live defect this fix closes: on darwin `agy` authenticates through
+    // the macOS Keychain (`security find-generic-password -s gemini -a
+    // antigravity`), which is looked up by a fixed service/account pair, NOT
+    // by `$HOME`. So a worker-private HOME does not affect what the CLI reads
+    // from the keychain, and the file being absent (the ordinary case on a
+    // machine that has never fallen back to it) must not abort the private
+    // root — that was the `worker_private_home_missing_required_import`
+    // regression reported live on node MoltBook (preview, 2026-09-25).
+    setPlatform('darwin')
+    const realHome = tmp('adhdev-noauth-darwin-')
+    const spec = findWorkerPrivateHomeSpec('antigravity-cli')!
+    const rel = join('.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+    let prepared: ReturnType<typeof prepareWorkerPrivateHome>
+    expect(() => {
+      prepared = prepareWorkerPrivateHome(spec, {
+        workspace: tmp('adhdev-ws-noauth-darwin-'), sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase-darwin-'),
+      })
+    }).not.toThrow()
+    expect(prepared!.skipped).toContain(rel)
+    expect(existsSync(join(prepared!.home, rel))).toBe(false)
+    // The rest of the private HOME still materializes — the isolation itself
+    // (empty .gemini/config) is unaffected by the credential file's absence.
+    expect(existsSync(join(prepared!.home, '.gemini', 'config'))).toBe(true)
+  })
+
+  it('★win32: builds the private HOME even when the oauth-token FILE is absent — wincred is HOME-independent', () => {
+    // Mirror of the darwin case: win32 authenticates via CredRead against the
+    // machine-wide wincred store (`LegacyGeneric:target=gemini:antigravity`),
+    // which is likewise not scoped by `$HOME`.
+    setPlatform('win32')
+    const realHome = tmp('adhdev-noauth-win32-')
+    const spec = findWorkerPrivateHomeSpec('antigravity-cli')!
+    const rel = join('.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-noauth-win32-'), sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase-win32-'),
+    })
+    expect(prepared.skipped).toContain(rel)
+    expect(existsSync(join(prepared.home, rel))).toBe(false)
+  })
+
+  it('★darwin: still SYMLINKS the oauth-token when the file IS present — unchanged from before', () => {
+    // The predicate only changes what happens when the file is ABSENT. When
+    // present (e.g. a linux-style fallback that did get written, or a probe
+    // fixture), darwin must still import it exactly as before — this is the
+    // "present → symlinked as before" break-once case.
+    setPlatform('darwin')
+    const realHome = fakeGeminiHome()
+    const spec = findWorkerPrivateHomeSpec('antigravity-cli')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-agy-darwin-present-'), sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase-darwin-present-'),
+    })
+    const rel = join('.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+    const token = join(prepared.home, rel)
+    expect(prepared.imported).toContain(rel)
+    expect(lstatSync(token).isSymbolicLink()).toBe(true)
+    expect(realpathSync(token)).toBe(realpathSync(join(realHome, rel)))
   })
 
   it('skips optional imports that do not exist yet', () => {

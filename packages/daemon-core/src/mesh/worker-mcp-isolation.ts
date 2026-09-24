@@ -383,8 +383,16 @@ export interface WorkerHomeImport {
      */
     relativePath: string;
     mode: 'symlink' | 'copy';
-    /** When true, a missing source is an error rather than a skip. */
-    required?: boolean;
+    /**
+     * When true, a missing source is an error rather than a skip.
+     *
+     * Also accepts a per-platform predicate (`(platform) => boolean`) for a
+     * surface whose "the auth store is HOME-independent" status differs by
+     * OS — see the antigravity `antigravity-oauth-token` entry below for the
+     * measured case this exists for. A plain boolean applies to every
+     * platform, matching prior behavior for every other entry in this file.
+     */
+    required?: boolean | ((platform: NodeJS.Platform) => boolean);
     /**
      * Assert the source is owner-only (0600/0700) before importing. Set on
      * credential material; leave off for shared data directories, which are
@@ -653,7 +661,40 @@ export const WORKER_PRIVATE_HOME_SPECS: readonly WorkerPrivateHomeSpec[] = [
             // platform-agnostic: hosts without this path use the generic
             // missing-import skip contract below.
             { relativePath: path.join('Library', 'Keychains'), mode: 'symlink' },
-            { relativePath: path.join('.gemini', 'antigravity-cli', 'antigravity-oauth-token'), mode: 'symlink', required: true, requireOwnerOnly: true },
+            // ★`required` only on linux (fixed 2026-09-25, live rc.44 defect).
+            //
+            // This file is a DEAD FALLBACK on darwin/win32 — see
+            // `quota/fetchers/antigravity.ts` header ("CREDENTIAL SOURCE") for the
+            // measured evidence: on those two platforms `agy` authenticates through
+            // the OS keyring (macOS Keychain via `/usr/bin/security`, win32 wincred
+            // via CredRead), logged `ChainedAuth: authenticated via keyring
+            // (effective: keyring)` 15/15 times on the survey machine, and the file
+            // never gets written or refreshed there — its mtime "stayed frozen weeks
+            // in the past while the keychain item was rewritten on every login".
+            // Only headless linux (no Secret Service) writes this path at all.
+            //
+            // Both keyring backends are looked up by a fixed service/account pair
+            // (`security find-generic-password -s gemini -a antigravity`;
+            // `LegacyGeneric:target=gemini:antigravity`) — neither is keyed by
+            // `$HOME`, so a worker-private HOME does not affect what the CLI can
+            // read from either store. The `Library/Keychains` symlink above already
+            // carries the darwin keyring through; win32 wincred is a machine-wide
+            // store with no per-HOME scoping to carry through at all.
+            //
+            // Making this entry unconditionally `required: true` therefore aborted
+            // EVERY darwin/win32 private-HOME build over a file those platforms were
+            // never going to use anyway — the exact fail-CLOSED-in-the-wrong-place
+            // bug `worker_private_home_missing_required_import` exists to name. The
+            // owner had `agy` logged in the whole time; the file just was not there
+            // to symlink. On linux it stays required: it is the ONLY credential
+            // source on that platform, so a missing file there is a genuine
+            // "not signed in", not a dead fallback.
+            {
+                relativePath: path.join('.gemini', 'antigravity-cli', 'antigravity-oauth-token'),
+                mode: 'symlink',
+                required: (platform) => platform === 'linux',
+                requireOwnerOnly: true,
+            },
             { relativePath: path.join('.gemini', 'antigravity-cli', 'settings.json'), mode: 'copy', requireOwnerOnly: true },
             // First-run onboarding completion — COPIED, never symlinked. Without
             // it the CLI opens its colour-scheme picker and then the Terms of
@@ -1184,9 +1225,27 @@ export function prepareWorkerPrivateHome(
         const source = path.join(sourceBase, entry.relativePath);
         const target = path.join(home, entry.relativePath);
         if (!existsSync(source)) {
-            if (entry.required) {
+            const isRequired = typeof entry.required === 'function'
+                ? entry.required(process.platform)
+                : Boolean(entry.required);
+            if (isRequired) {
                 throw new Error(
                     `worker_private_home_missing_required_import: ${entry.relativePath} not found under ${sourceBase}`,
+                );
+            }
+            // ★Antigravity's oauth-token entry is a per-platform predicate (see its
+            // spec comment) precisely because darwin/win32 auth through the OS
+            // keyring rather than this file — a skip here is the EXPECTED steady
+            // state on those platforms, not a degraded one, so it gets its own INFO
+            // line rather than folding silently into the generic `skipped` list.
+            if (
+                spec.providerType === 'antigravity-cli'
+                && entry.relativePath === path.join('.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+                && (process.platform === 'darwin' || process.platform === 'win32')
+            ) {
+                LOG.info(
+                    'WorkerMcp',
+                    `[antigravity-cli] oauth-token file absent on ${process.platform} — keyring auth expected, private HOME still isolates`,
                 );
             }
             skipped.push(entry.relativePath);

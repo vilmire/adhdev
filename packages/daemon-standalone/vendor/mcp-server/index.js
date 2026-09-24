@@ -43375,7 +43375,13 @@ ${renderWorkerProtocolFooter2(input)}`;
           // the structured report is the primary evidence (design §F2), so the idle edge
           // only opens this hold (R9r) — a report commits (R17), a new busy edge cancels
           // it as a false idle (R12r), expiry commits weak (R13r).
-          "await_report"
+          "await_report",
+          // A worker report recorded while the session is still generating (R17g):
+          // the report is the verdict, the idle edge is only awaited as corroboration
+          // — a turn_end commits the report (R9t), expiry commits it anyway (R13t) so
+          // a session whose FSM never shows the idle edge again does not wait for
+          // liveness / hard_ceiling.
+          "await_end"
         ];
         TURN_OUTCOMES2 = ["completed", "failed", "cancelled"];
         COMMIT_STRENGTHS2 = ["genuine", "weak", "tool_report", "operator"];
@@ -43493,7 +43499,7 @@ ${renderWorkerProtocolFooter2(input)}`;
           session_error: { reason: en2(SESSION_ERROR_REASONS2) },
           worker_report: {
             outcome: en2(WORKER_REPORT_OUTCOMES2),
-            summary: { t: "summary_ref" },
+            summary: { t: "summary_ref", optional: true },
             hasHandoffNotes: bool3,
             branchState: enOpt2(WORKER_BRANCH_STATES2),
             touchedFileCount: intOpt2
@@ -54885,9 +54891,16 @@ ${blocks.join("\n\n")}`;
         const source = path22.join(sourceBase, entry.relativePath);
         const target = path22.join(home, entry.relativePath);
         if (!(0, import_fs7.existsSync)(source)) {
-          if (entry.required) {
+          const isRequired = typeof entry.required === "function" ? entry.required(process.platform) : Boolean(entry.required);
+          if (isRequired) {
             throw new Error(
               `worker_private_home_missing_required_import: ${entry.relativePath} not found under ${sourceBase}`
+            );
+          }
+          if (spec.providerType === "antigravity-cli" && entry.relativePath === path22.join(".gemini", "antigravity-cli", "antigravity-oauth-token") && (process.platform === "darwin" || process.platform === "win32")) {
+            LOG.info(
+              "WorkerMcp",
+              `[antigravity-cli] oauth-token file absent on ${process.platform} \u2014 keyring auth expected, private HOME still isolates`
             );
           }
           skipped.push(entry.relativePath);
@@ -55186,7 +55199,40 @@ ${blocks.join("\n\n")}`;
               // platform-agnostic: hosts without this path use the generic
               // missing-import skip contract below.
               { relativePath: path22.join("Library", "Keychains"), mode: "symlink" },
-              { relativePath: path22.join(".gemini", "antigravity-cli", "antigravity-oauth-token"), mode: "symlink", required: true, requireOwnerOnly: true },
+              // ★`required` only on linux (fixed 2026-09-25, live rc.44 defect).
+              //
+              // This file is a DEAD FALLBACK on darwin/win32 — see
+              // `quota/fetchers/antigravity.ts` header ("CREDENTIAL SOURCE") for the
+              // measured evidence: on those two platforms `agy` authenticates through
+              // the OS keyring (macOS Keychain via `/usr/bin/security`, win32 wincred
+              // via CredRead), logged `ChainedAuth: authenticated via keyring
+              // (effective: keyring)` 15/15 times on the survey machine, and the file
+              // never gets written or refreshed there — its mtime "stayed frozen weeks
+              // in the past while the keychain item was rewritten on every login".
+              // Only headless linux (no Secret Service) writes this path at all.
+              //
+              // Both keyring backends are looked up by a fixed service/account pair
+              // (`security find-generic-password -s gemini -a antigravity`;
+              // `LegacyGeneric:target=gemini:antigravity`) — neither is keyed by
+              // `$HOME`, so a worker-private HOME does not affect what the CLI can
+              // read from either store. The `Library/Keychains` symlink above already
+              // carries the darwin keyring through; win32 wincred is a machine-wide
+              // store with no per-HOME scoping to carry through at all.
+              //
+              // Making this entry unconditionally `required: true` therefore aborted
+              // EVERY darwin/win32 private-HOME build over a file those platforms were
+              // never going to use anyway — the exact fail-CLOSED-in-the-wrong-place
+              // bug `worker_private_home_missing_required_import` exists to name. The
+              // owner had `agy` logged in the whole time; the file just was not there
+              // to symlink. On linux it stays required: it is the ONLY credential
+              // source on that platform, so a missing file there is a genuine
+              // "not signed in", not a dead fallback.
+              {
+                relativePath: path22.join(".gemini", "antigravity-cli", "antigravity-oauth-token"),
+                mode: "symlink",
+                required: (platform11) => platform11 === "linux",
+                requireOwnerOnly: true
+              },
               { relativePath: path22.join(".gemini", "antigravity-cli", "settings.json"), mode: "copy", requireOwnerOnly: true },
               // First-run onboarding completion — COPIED, never symlinked. Without
               // it the CLI opens its colour-scheme picker and then the Terms of
@@ -57605,7 +57651,8 @@ Next step: ${nextStep}`;
           stallNoticeMs: 18e4,
           hardCeilingMs: 54e5,
           awaitReportMs: 6e5,
-          livenessProbeIntervalFinalizingMs: 6e4
+          livenessProbeIntervalFinalizingMs: 6e4,
+          awaitEndMs: 6e4
         });
         RECLAIM_BUDGET = 3;
         MAX_REDRIVES_PER_GENERATION = 1;
@@ -57646,7 +57693,8 @@ Next step: ${nextStep}`;
             aliases: [{ name: "MESH_INFLIGHT_ACKED_HOLD_HARD_CEILING_MS", min: 0, max: 24 * HOUR }]
           },
           { field: "awaitReportMs", canonical: "ADHDEV_TURN_AWAIT_REPORT_MS", min: 0, max: HOUR, aliases: [] },
-          { field: "livenessProbeIntervalFinalizingMs", canonical: "ADHDEV_TURN_LIVENESS_PROBE_INTERVAL_FINALIZING_MS", min: 0, max: HOUR, aliases: [] }
+          { field: "livenessProbeIntervalFinalizingMs", canonical: "ADHDEV_TURN_LIVENESS_PROBE_INTERVAL_FINALIZING_MS", min: 0, max: HOUR, aliases: [] },
+          { field: "awaitEndMs", canonical: "ADHDEV_TURN_AWAIT_END_MS", min: 0, max: HOUR, aliases: [] }
         ];
         RETIRED_TURN_ENV_NAMES = [
           "MESH_PENDING_HELD_DRAIN_ESCALATE_MS",
@@ -57944,8 +57992,32 @@ Next step: ${nextStep}`;
             { e: "commit", outcome: "failed", strength: "genuine", reason: "hollow_max_retries" }
           ] },
           // ── worker MCP (F2): the report is the primary completion evidence ──
-          { id: "R17", lane: "current", from: "nonterminal", on: ["worker_report"], to: "outcome", verdict: "applied", effects: [
+          // Before the turn started, after the idle edge (await_report / weak
+          // candidate): the report commits at once.
+          { id: "R17", lane: "current", from: [A, D, F], on: ["worker_report"], to: "outcome", verdict: "applied", effects: [
             { e: "commit", outcome: "from_report", strength: "tool_report", reason: "worker_reported" }
+          ] },
+          // ── report before the idle edge (live rc.44 run 12, 2026-09-25) ────
+          // The report arrived while the session is still generating (the worker is
+          // printing its last message, or the FSM has not shown idle yet). It is the
+          // verdict, so it is recorded on the attempt (generation-scoped) and a short
+          // `await_end` hold waits for the idle edge as corroboration: R9t commits
+          // the report on the next idle signal (turn_end, admitted transcript_final,
+          // no_progress with a final message) instead of R9r opening a second
+          // await_report window; R13t commits it when the hold expires, so a session
+          // whose FSM never shows the idle edge again does not wait for liveness /
+          // hard_ceiling. Before this rule the report never reached the reducer and
+          // the idle end re-opened await_report — 10 min, then committed WEAK.
+          { id: "R17g", lane: "current", from: [C, G, S], on: ["worker_report"], to: "same", verdict: "applied", effects: [
+            { e: "act", act: "record_report" },
+            { e: "hold", reason: "await_end", until: "await_end", onExpire: "commit", meshOnly: true },
+            { e: "record", note: "report_awaits_end" }
+          ] },
+          { id: "R9t", lane: "current", from: [C, G, S, F], on: ["turn_end", "transcript_final", "no_progress"], guard: "finished_after_report", to: "outcome", verdict: "applied", effects: [
+            { e: "commit", outcome: "from_recorded_report", strength: "tool_report", reason: "worker_reported", text: "recorded_report" }
+          ] },
+          { id: "R13t", lane: "current", from: [C, G, S, F], on: ["hold_expired"], guard: "hold_await_end", to: "outcome", verdict: "applied", effects: [
+            { e: "commit", outcome: "from_recorded_report", strength: "tool_report", reason: "worker_reported", text: "recorded_report" }
           ] },
           { id: "R17p", lane: "current", from: "nonterminal", on: ["worker_progress"], to: "same", verdict: "applied", effects: [
             { e: "bus", phase: "progress" },
@@ -58112,6 +58184,19 @@ Next step: ${nextStep}`;
       const e = turnEnd(ctx);
       return !!e && e.strength === "genuine" && !e.hollow && e.reportExpected === true && !!ctx.attempt && isMeshScope(ctx.attempt);
     }
+    function reportedThisGeneration(ctx) {
+      const attempt = ctx.attempt;
+      return !!attempt && attempt.data.report?.generation === attempt.generation;
+    }
+    function finishedAfterReport(ctx) {
+      if (!reportedThisGeneration(ctx)) return false;
+      const ev = ctx.evidence;
+      if (ev.kind === "turn_end" || ev.kind === "transcript_final") {
+        const admission = admissionOf(ctx);
+        return admission?.kind === "strong" || admission?.kind === "weak";
+      }
+      return ev.kind === "no_progress" && ev.finalAssistantPresent;
+    }
     function awaitReportHeld(ctx) {
       const attempt = ctx.attempt;
       return !!attempt && ctx.holds.some((h) => h.reason === "await_report" && h.attemptId === attempt.attemptId);
@@ -58163,6 +58248,8 @@ Next step: ${nextStep}`;
           return nowMs2 + weakConfirmMs(policy);
         case "await_report":
           return nowMs2 + policy.awaitReportMs;
+        case "await_end":
+          return nowMs2 + policy.awaitEndMs;
         case "unknown_grace":
           return nowMs2 + unknownLivenessGraceMs(policy);
         // H4 / R32u re-arm: the normal 3×tick cadence, except while `await_report`
@@ -58222,11 +58309,16 @@ Next step: ${nextStep}`;
       if (ev.kind === "turn_end" || ev.kind === "transcript_final" || ev.kind === "worker_report") return ev.summary;
       return void 0;
     }
-    function commit(draft, outcome, strength, reason) {
+    function recordedReportText(draft) {
+      const report = draft.attempt.data.report;
+      if (!report) return {};
+      return { ...report.summary ? { summary: report.summary } : {}, textEventId: report.eventId };
+    }
+    function commit(draft, outcome, strength, reason, text) {
       const attempt = draft.attempt;
       const ev = draft.ctx.evidence;
-      const held = heldText(draft);
-      const summary = summaryOf(ev) ?? held.summary;
+      const held = text ?? heldText(draft);
+      const summary = text ? text.summary : summaryOf(ev) ?? held.summary;
       attempt.state = outcome;
       attempt.suspension = null;
       attempt.terminal = { outcome, reason, source: ev.source, strength, at: ev.at, ...summary ? { summary } : {} };
@@ -58441,6 +58533,8 @@ Next step: ${nextStep}`;
           let outcome;
           if (template.outcome === "from_report") {
             outcome = ev.outcome === "completed" ? "completed" : "failed";
+          } else if (template.outcome === "from_recorded_report") {
+            outcome = draft.attempt.data.report?.outcome === "completed" ? "completed" : "failed";
           } else if (template.outcome === "from_operator") {
             outcome = ev.status;
           } else {
@@ -58452,7 +58546,7 @@ Next step: ${nextStep}`;
           else if (template.reason === "from_provider_failure") {
             reason = ev.providerFailure === "billing_failed" ? "provider_billing_failed" : "provider_auth_failed";
           } else reason = template.reason;
-          commit(draft, outcome, template.strength, reason);
+          commit(draft, outcome, template.strength, reason, template.text === "recorded_report" ? recordedReportText(draft) : void 0);
           return;
         }
         case "reclaim": {
@@ -58629,32 +58723,35 @@ Next step: ${nextStep}`;
           stale_session_distinct: (ctx) => !!ctx.attempt && !sessionIdsEquivalent(ctx.evidence.sessionId, ctx.attempt.sessionId),
           reclaiming_refusal: (ctx) => ctx.evidence.kind === "delivery_refused" && RECLAIMING_SEND_REFUSALS.includes(ctx.evidence.reason),
           suspension_changed: (ctx) => ctx.evidence.kind === "suspension" && ctx.attempt?.suspension !== ctx.evidence.modal,
+          // Every idle-signal guard below yields to R9t once a report is recorded for
+          // this generation (`!reportedThisGeneration`): the report is the verdict.
           end_genuine: (ctx) => {
             const e = turnEnd(ctx);
-            return !!e && e.strength === "genuine" && !e.hollow && notHeld(ctx) && !reportAwaitedEnd(ctx);
+            return !!e && e.strength === "genuine" && !e.hollow && notHeld(ctx) && !reportAwaitedEnd(ctx) && !reportedThisGeneration(ctx);
           },
-          end_report_awaited: (ctx) => reportAwaitedEnd(ctx) && notHeld(ctx) && !awaitReportHeld(ctx),
-          end_report_awaited_held: (ctx) => reportAwaitedEnd(ctx) && notHeld(ctx) && awaitReportHeld(ctx),
-          final_strong_report_awaited: (ctx) => ctx.evidence.kind === "transcript_final" && admissionOf(ctx)?.kind === "strong" && awaitReportHeld(ctx),
+          end_report_awaited: (ctx) => reportAwaitedEnd(ctx) && notHeld(ctx) && !awaitReportHeld(ctx) && !reportedThisGeneration(ctx),
+          end_report_awaited_held: (ctx) => reportAwaitedEnd(ctx) && notHeld(ctx) && awaitReportHeld(ctx) && !reportedThisGeneration(ctx),
+          final_strong_report_awaited: (ctx) => ctx.evidence.kind === "transcript_final" && admissionOf(ctx)?.kind === "strong" && awaitReportHeld(ctx) && !reportedThisGeneration(ctx),
+          finished_after_report: finishedAfterReport,
           false_idle_resumed: (ctx) => (ctx.evidence.kind === "turn_started" || ctx.evidence.kind === "transcript_activity") && afterWeakSince(ctx) && awaitReportHeld(ctx),
           end_weak: (ctx) => {
             const e = turnEnd(ctx);
-            return !!e && e.strength === "weak" && !e.afterFinalizationTimeout && !e.hollow && notHeld(ctx);
+            return !!e && e.strength === "weak" && !e.afterFinalizationTimeout && !e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx);
           },
           end_weak_after_timeout: (ctx) => {
             const e = turnEnd(ctx);
-            return !!e && e.strength === "weak" && !!e.afterFinalizationTimeout && !e.hollow && notHeld(ctx);
+            return !!e && e.strength === "weak" && !!e.afterFinalizationTimeout && !e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx);
           },
           hollow_retry: (ctx) => {
             const e = turnEnd(ctx);
-            return !!e && !!e.hollow && notHeld(ctx) && ctx.attempt.hollowCount < ctx.attempt.maxTaskRetries;
+            return !!e && !!e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx) && ctx.attempt.hollowCount < ctx.attempt.maxTaskRetries;
           },
           hollow_exhausted: (ctx) => {
             const e = turnEnd(ctx);
-            return !!e && !!e.hollow && notHeld(ctx) && ctx.attempt.hollowCount >= ctx.attempt.maxTaskRetries;
+            return !!e && !!e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx) && ctx.attempt.hollowCount >= ctx.attempt.maxTaskRetries;
           },
-          final_strong: (ctx) => ctx.evidence.kind === "transcript_final" && admissionOf(ctx)?.kind === "strong",
-          final_weak: (ctx) => ctx.evidence.kind === "transcript_final" && admissionOf(ctx)?.kind === "weak",
+          final_strong: (ctx) => ctx.evidence.kind === "transcript_final" && admissionOf(ctx)?.kind === "strong" && !reportedThisGeneration(ctx),
+          final_weak: (ctx) => ctx.evidence.kind === "transcript_final" && admissionOf(ctx)?.kind === "weak" && !reportedThisGeneration(ctx),
           genuine_end_or_strong_final: (ctx) => GUARDS.end_genuine(ctx) || GUARDS.final_strong(ctx) && !awaitReportHeld(ctx),
           weak_end_or_final: (ctx) => GUARDS.end_weak(ctx) || GUARDS.final_weak(ctx),
           admission_hold: (ctx) => admissionOf(ctx)?.kind === "hold",
@@ -58675,7 +58772,7 @@ Next step: ${nextStep}`;
           provider_failure: (ctx) => ctx.evidence.kind === "process_exit" && !!ctx.evidence.providerFailure,
           no_provider_failure: (ctx) => ctx.evidence.kind === "process_exit" && !ctx.evidence.providerFailure,
           holder_is_this_attempt: (ctx) => ctx.evidence.kind === "duplicate_dispatch_refusal" && ctx.evidence.holderAttemptId === ctx.attempt?.attemptId,
-          final_present: (ctx) => ctx.evidence.kind === "no_progress" && ctx.evidence.finalAssistantPresent,
+          final_present: (ctx) => ctx.evidence.kind === "no_progress" && ctx.evidence.finalAssistantPresent && !reportedThisGeneration(ctx),
           hold_await_delivery: (ctx) => holdIs(ctx, "await_delivery"),
           hold_await_consume_redrive: (ctx) => holdIs(ctx, "await_consume") && ctx.attempt.redriveCount < MAX_REDRIVES_PER_GENERATION,
           hold_await_consume_exhausted: (ctx) => holdIs(ctx, "await_consume") && ctx.attempt.redriveCount >= MAX_REDRIVES_PER_GENERATION,
@@ -58685,9 +58782,10 @@ Next step: ${nextStep}`;
           hold_suspension_before_consumed: (ctx) => holdIs(ctx, "suspension_before_consumed"),
           hold_weak_candidate: (ctx) => holdIs(ctx, "weak_candidate"),
           hold_admission: (ctx) => holdIs(ctx, "live_pending", "transcript_quiet"),
-          hold_await_report: (ctx) => holdIs(ctx, "await_report")
+          hold_await_report: (ctx) => holdIs(ctx, "await_report"),
+          hold_await_end: (ctx) => holdIs(ctx, "await_end") && reportedThisGeneration(ctx)
         };
-        TEXT_CARRYING_HOLDS = ["weak_candidate", "await_report"];
+        TEXT_CARRYING_HOLDS = ["weak_candidate", "await_report", "await_end"];
         RECLAIM_TURN_REASONS = [
           "dispatch_refused_session_exited",
           "dispatch_refused_no_target",
@@ -58821,6 +58919,14 @@ Next step: ${nextStep}`;
           },
           stamp_no_progress_notice: (draft) => {
             draft.attempt.lastNoProgressNoticeAt = draft.ctx.nowMs;
+          },
+          record_report: (draft) => {
+            const attempt = draft.attempt;
+            const ev = draft.ctx.evidence;
+            attempt.data = {
+              ...attempt.data,
+              report: { generation: attempt.generation, outcome: ev.outcome, eventId: ev.eventId, at: ev.at, ...ev.summary ? { summary: ev.summary } : {} }
+            };
           }
         };
       }
@@ -80690,6 +80796,30 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         };
       }
     });
+    function observeAcceptedWorkerReport(ledger, report) {
+      const attempt = report.attemptId ? ledger.getAttempt(report.attemptId) : ledger.store.findLatestAttemptForTask(report.meshId, report.taskId);
+      if (!attempt || attempt.taskId !== report.taskId) return null;
+      const evidence = {
+        eventId: `worker_report:${attempt.attemptId}:g${attempt.generation}:${report.outcome}`,
+        at: report.atMs,
+        source: "worker_tool",
+        sessionId: report.sessionId ?? attempt.sessionId,
+        attemptRef: { attemptId: attempt.attemptId, generation: attempt.generation },
+        taskId: report.taskId,
+        observedBy: ledger.selfDaemonId,
+        kind: "worker_report",
+        outcome: report.outcome,
+        hasHandoffNotes: report.hasHandoffNotes,
+        ...typeof report.touchedFileCount === "number" ? { touchedFileCount: report.touchedFileCount } : {},
+        ...report.branchState ? { branchState: report.branchState } : {}
+      };
+      return ledger.observe(evidence, { envelope: { finalSummary: report.summary } });
+    }
+    var init_worker_report_evidence = __esm2({
+      "src/mesh/turn-ledger/worker-report-evidence.ts"() {
+        "use strict";
+      }
+    });
     var worker_report_exports = {};
     __export2(worker_report_exports, {
       WORKER_BLOCKERS_MAX: () => WORKER_BLOCKERS_MAX,
@@ -81077,6 +81207,25 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       }
       if (!commit2.committed) {
         return { accepted: false, refusal: "unknown_task", detail: `no queue row for task ${identity.taskId}` };
+      }
+      const ledger = getActiveTurnLedger();
+      if (ledger) {
+        try {
+          observeAcceptedWorkerReport(ledger, {
+            meshId: identity.meshId,
+            taskId: identity.taskId,
+            ...identity.attemptId ? { attemptId: identity.attemptId } : {},
+            ...identity.sessionId ? { sessionId: identity.sessionId } : {},
+            outcome: report.outcome,
+            summary: report.summary,
+            hasHandoffNotes: !!report.handoffNotes,
+            touchedFileCount: report.touchedFiles?.length ?? 0,
+            ...report.branchState ? { branchState: report.branchState } : {},
+            atMs: nowMs2
+          });
+        } catch (e) {
+          LOG.warn("WorkerReport", `Turn-ledger observe of the report for task ${identity.taskId} failed: ${e?.message || e}`);
+        }
       }
       let ownedPathsMismatch;
       try {
@@ -81586,6 +81735,8 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         init_mesh_work_queue();
         init_mesh_record();
         init_deliver();
+        init_active_ledger();
+        init_worker_report_evidence();
         init_worker_mcp_isolation();
         WORKER_REPORT_EVENT_KIND = "worker_tool_report";
         WORKER_PROGRESS_EVENT_KIND = "worker_progress_update";
@@ -169070,6 +169221,7 @@ data: ${JSON.stringify(msg.data)}
       return counters8;
     }
     init_types2();
+    var REPORT_GATE_RULES = /* @__PURE__ */ new Set(["R9r", "R12r", "R13r", "R17g", "R9t", "R13t"]);
     var DEFAULT_LOG = { info: () => {
     }, warn: () => {
     }, error: () => {
@@ -169144,10 +169296,21 @@ data: ${JSON.stringify(msg.data)}
           recordedAt: nowMs2
         };
       }
+      function recordedReportEnvelope(attempt, evidence) {
+        const report = attempt?.data.report;
+        if (!attempt?.terminal || evidence.kind === "worker_report" || !report || report.generation !== attempt.generation) return void 0;
+        if (attempt.terminal.reason !== "worker_reported") return void 0;
+        const local = store2.getEvent(report.eventId)?.payload.local;
+        const envelope = local && typeof local === "object" ? local.envelope : void 0;
+        return envelope && typeof envelope === "object" ? envelope : void 0;
+      }
       function logReportGate(rule, attempt) {
-        if (!attempt || rule !== "R9r" && rule !== "R12r" && rule !== "R13r") return;
+        if (!attempt || !rule || !REPORT_GATE_RULES.has(rule)) return;
         const who = `attempt ${attempt.attemptId} g${attempt.generation} (task ${attempt.taskId ?? "?"}, session ${attempt.sessionId})`;
-        if (rule === "R9r") log.info(`turn-ledger: idle end of ${who} awaits the worker report (await_report hold ${Math.round(policy.awaitReportMs / 1e3)}s)`);
+        if (rule === "R17g") log.info(`turn-ledger: worker report recorded while ${who} is still generating \u2014 awaiting the idle edge (await_end hold ${Math.round(policy.awaitEndMs / 1e3)}s)`);
+        else if (rule === "R9t") log.info(`turn-ledger: idle edge after the worker report \u2014 ${who} committed from the report`);
+        else if (rule === "R13t") log.info(`turn-ledger: no idle edge within ${Math.round(policy.awaitEndMs / 1e3)}s of the worker report \u2014 ${who} committed from the report`);
+        else if (rule === "R9r") log.info(`turn-ledger: idle end of ${who} awaits the worker report (await_report hold ${Math.round(policy.awaitReportMs / 1e3)}s)`);
         else if (rule === "R12r") log.info(`turn-ledger: false idle: worker resumed \u2014 ${who} back to generating (falseIdleCount=${attempt.data.falseIdleCount ?? 0})`);
         else log.info(`turn-ledger: no worker report within ${Math.round(policy.awaitReportMs / 1e3)}s \u2014 ${who} committed weak`);
       }
@@ -169207,7 +169370,8 @@ data: ${JSON.stringify(msg.data)}
             if (row.kind === "committed") throw new Error(`turn-ledger invariant: second commit for ${subject.attemptId} g${row.generation}`);
           }
         }
-        const host = result.verdict === "applied" && next ? applyHostEffects(deps.host ?? null, result.effects, { attempt: next, evidence, nowMs: nowMs2, ...opts.envelope ? { envelope: opts.envelope } : {} }) : { terminalTasks: [] };
+        const envelope = recordedReportEnvelope(next, evidence) ?? opts.envelope;
+        const host = result.verdict === "applied" && next ? applyHostEffects(deps.host ?? null, result.effects, { attempt: next, evidence, nowMs: nowMs2, ...envelope ? { envelope } : {} }) : { terminalTasks: [] };
         steps.push({ evidence, result, host });
         return steps;
       }
@@ -176028,7 +176192,13 @@ var HOLD_REASONS = [
   // the structured report is the primary evidence (design §F2), so the idle edge
   // only opens this hold (R9r) — a report commits (R17), a new busy edge cancels
   // it as a false idle (R12r), expiry commits weak (R13r).
-  "await_report"
+  "await_report",
+  // A worker report recorded while the session is still generating (R17g):
+  // the report is the verdict, the idle edge is only awaited as corroboration
+  // — a turn_end commits the report (R9t), expiry commits it anyway (R13t) so
+  // a session whose FSM never shows the idle edge again does not wait for
+  // liveness / hard_ceiling.
+  "await_end"
 ];
 var TURN_OUTCOMES = ["completed", "failed", "cancelled"];
 var COMMIT_STRENGTHS = ["genuine", "weak", "tool_report", "operator"];
@@ -176146,7 +176316,7 @@ var TURN_EVIDENCE_FIELD_SPECS = {
   session_error: { reason: en(SESSION_ERROR_REASONS) },
   worker_report: {
     outcome: en(WORKER_REPORT_OUTCOMES),
-    summary: { t: "summary_ref" },
+    summary: { t: "summary_ref", optional: true },
     hasHandoffNotes: bool,
     branchState: enOpt(WORKER_BRANCH_STATES),
     touchedFileCount: intOpt

@@ -168,6 +168,8 @@ export interface TurnLedger {
     counters(): TurnLedgerCounters;
 }
 
+const REPORT_GATE_RULES: ReadonlySet<string> = new Set(['R9r', 'R12r', 'R13r', 'R17g', 'R9t', 'R13t']);
+
 const DEFAULT_LOG: TurnLedgerLog = { info: () => {}, warn: () => {}, error: () => {} };
 const PUBLISH_BATCH = 256;
 
@@ -241,11 +243,28 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
 
     interface Step { evidence: TurnEvidence; result: ReduceResult; host: TxnHostResult }
 
-    /** The report gate (R9r/R12r/R13r) is rare and load-bearing for diagnosis: always INFO. */
+    /**
+     * R9t/R13t commit a report R17g recorded earlier: the graph's output version
+     * takes the REPORT's local envelope (the primary evidence), not the idle
+     * edge's / scheduler's that happened to trigger the commit.
+     */
+    function recordedReportEnvelope(attempt: TurnAttempt | null, evidence: TurnEvidence): TurnCompletionEnvelope | undefined {
+        const report = attempt?.data.report;
+        if (!attempt?.terminal || evidence.kind === 'worker_report' || !report || report.generation !== attempt.generation) return undefined;
+        if (attempt.terminal.reason !== 'worker_reported') return undefined;
+        const local = store.getEvent(report.eventId)?.payload.local;
+        const envelope = local && typeof local === 'object' ? (local as { envelope?: unknown }).envelope : undefined;
+        return envelope && typeof envelope === 'object' ? envelope as TurnCompletionEnvelope : undefined;
+    }
+
+    /** The report gate (R9r/R12r/R13r, R17g/R9t/R13t) is rare and load-bearing for diagnosis: always INFO. */
     function logReportGate(rule: string | undefined, attempt: TurnAttempt | null): void {
-        if (!attempt || (rule !== 'R9r' && rule !== 'R12r' && rule !== 'R13r')) return;
+        if (!attempt || !rule || !REPORT_GATE_RULES.has(rule)) return;
         const who = `attempt ${attempt.attemptId} g${attempt.generation} (task ${attempt.taskId ?? '?'}, session ${attempt.sessionId})`;
-        if (rule === 'R9r') log.info(`turn-ledger: idle end of ${who} awaits the worker report (await_report hold ${Math.round(policy.awaitReportMs / 1000)}s)`);
+        if (rule === 'R17g') log.info(`turn-ledger: worker report recorded while ${who} is still generating — awaiting the idle edge (await_end hold ${Math.round(policy.awaitEndMs / 1000)}s)`);
+        else if (rule === 'R9t') log.info(`turn-ledger: idle edge after the worker report — ${who} committed from the report`);
+        else if (rule === 'R13t') log.info(`turn-ledger: no idle edge within ${Math.round(policy.awaitEndMs / 1000)}s of the worker report — ${who} committed from the report`);
+        else if (rule === 'R9r') log.info(`turn-ledger: idle end of ${who} awaits the worker report (await_report hold ${Math.round(policy.awaitReportMs / 1000)}s)`);
         else if (rule === 'R12r') log.info(`turn-ledger: false idle: worker resumed — ${who} back to generating (falseIdleCount=${attempt.data.falseIdleCount ?? 0})`);
         else log.info(`turn-ledger: no worker report within ${Math.round(policy.awaitReportMs / 1000)}s — ${who} committed weak`);
     }
@@ -327,8 +346,9 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
                 if (row.kind === 'committed') throw new Error(`turn-ledger invariant: second commit for ${subject.attemptId} g${row.generation}`);
             }
         }
+        const envelope = recordedReportEnvelope(next, evidence) ?? opts.envelope;
         const host = result.verdict === 'applied' && next
-            ? applyHostEffects(deps.host ?? null, result.effects, { attempt: next, evidence, nowMs, ...(opts.envelope ? { envelope: opts.envelope } : {}) })
+            ? applyHostEffects(deps.host ?? null, result.effects, { attempt: next, evidence, nowMs, ...(envelope ? { envelope } : {}) })
             : { terminalTasks: [] };
         steps.push({ evidence, result, host });
         return steps;

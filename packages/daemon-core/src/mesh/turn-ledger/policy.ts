@@ -61,6 +61,16 @@ export interface TurnPolicy {
      * must still be caught — just at this slower cadence instead.
      */
     livenessProbeIntervalFinalizingMs: number;
+    /**
+     * How long a worker report recorded while the session is still generating
+     * waits for the FSM idle edge before the report commits on its own (R17g →
+     * R13t; added 2026-09-25, preview rc.44 run 12). The report is the verdict
+     * (design §F2); the idle edge is only corroboration, so this is short — it
+     * exists so a session whose FSM never shows the idle edge again (a torn
+     * screen, a worker that keeps printing) does not sit until liveness /
+     * hard_ceiling. A turn_end before the deadline commits at once (R9t).
+     */
+    awaitEndMs: number;
 }
 
 export const DEFAULT_TURN_POLICY: Readonly<TurnPolicy> = Object.freeze({
@@ -74,6 +84,7 @@ export const DEFAULT_TURN_POLICY: Readonly<TurnPolicy> = Object.freeze({
     hardCeilingMs: 5_400_000,
     awaitReportMs: 600_000,
     livenessProbeIntervalFinalizingMs: 60_000,
+    awaitEndMs: 60_000,
 });
 
 /** Budgets (counts, not times) — deliberately not env-tunable. */
@@ -144,6 +155,7 @@ export const TURN_POLICY_ENV_BINDINGS: readonly EnvBinding[] = [
       aliases: [{ name: 'MESH_INFLIGHT_ACKED_HOLD_HARD_CEILING_MS', min: 0, max: 24 * HOUR }] },
     { field: 'awaitReportMs', canonical: 'ADHDEV_TURN_AWAIT_REPORT_MS', min: 0, max: HOUR, aliases: [] },
     { field: 'livenessProbeIntervalFinalizingMs', canonical: 'ADHDEV_TURN_LIVENESS_PROBE_INTERVAL_FINALIZING_MS', min: 0, max: HOUR, aliases: [] },
+    { field: 'awaitEndMs', canonical: 'ADHDEV_TURN_AWAIT_END_MS', min: 0, max: HOUR, aliases: [] },
 ];
 
 /**
