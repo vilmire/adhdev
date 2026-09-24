@@ -46,6 +46,8 @@ export interface NativeHistoryMessage {
     content: string;
     receivedAt: number;
     kind?: string;
+    /** TOOL-LABEL: the tool a `kind:'tool'` call bubble invoked (e.g. 'Write', 'run_command') — the dashboard card label. */
+    toolName?: string;
     workspace?: string;
     /**
      * Present only on `kind:'tool'` bubbles whose summary was truncated —

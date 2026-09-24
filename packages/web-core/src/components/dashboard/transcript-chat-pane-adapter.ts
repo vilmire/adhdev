@@ -111,14 +111,6 @@ export function buildTranscriptReadSourceAttributes(state: {
  * that every field the encoder puts on the wire is still read back out here —
  * dropping one at this hop loses it exactly as completely as never encoding it.
  *
- * ★ The gate's decode set deliberately excludes `toolName`, which is why this
- * adapter's asymmetry with the mesh-side one (below) needs no per-site
- * exclusion: the field is allow-listed on the WIRE but has no `ChatMessage`
- * field to land in, so requiring it here would demand an assignment to a
- * property that does not exist. That is a property of the field, not of this
- * site, so it lives in the gate's `DECODE_CARRY_FIELDS` comment rather than
- * being re-declared at each decoder.
- *
  * ★ Identity mapping is deliberately NARROW. `turnKey` goes to `_turnKey` only —
  * it is TURN-grained (one value per user message, shared by every bubble of the
  * turn) and must never be assigned to the per-BUBBLE `bubbleId`, or all bubbles
@@ -126,15 +118,15 @@ export function buildTranscriptReadSourceAttributes(state: {
  * per-session integer) IS per-message and carries through. `providerUnitKey`
  * stays off the wire on purpose: it embeds a content hash.
  *
- * ★ `toolName` is deliberately NOT mapped, and its absence here is not the
- * asymmetry with the mesh-side adapter it looks like. Two independent reasons:
- * `ChatMessage` (daemon-core types.ts) has no `toolName` field at all, so there
- * is nothing to assign it to; and the producer hardcodes `toolName: undefined`
- * (`commands/transcript-observation-builder.ts`), so the wire value is
- * structurally always null. Mapping it would add a field that is dead on both
- * ends. The tool NAME a reader sees is already inside the bubble's own
- * rendered content (`↗ {name}: …`), and the expand response carries it
- * separately. Do not "restore" this for symmetry. */
+ * ★ `toolName` (TOOL-LABEL, 2026-09-25): mapped since daemon-core's `ChatMessage`
+ * gained the field and the producer (`commands/transcript-observation-builder.ts`)
+ * forwards the reader's tool name instead of hardcoding `undefined`. It is the
+ * ONLY way the tool card label reaches this lane: `meta.label` (what the REST
+ * read_chat path derives) never travels — the wire carries `meta.streaming`
+ * alone — so this adapter re-derives `meta.label` from `toolName` exactly as
+ * `chat-commands-read-native-normalize.ts` does for the REST path. Without it
+ * every card on the live dashboard read the literal 'Tool' (standalone matrix
+ * run: kimi Write/Bash, hermes write_file all rendered as TOOL). */
 function mapTranscriptMessage(message: ReplicatedTranscriptMessageV1): DashboardMessage {
     const mapped: ChatMessage = {
         role: message.role,
@@ -145,6 +137,12 @@ function mapTranscriptMessage(message: ReplicatedTranscriptMessageV1): Dashboard
     if (message.timestamp !== null) mapped.timestamp = message.timestamp
     if (message.bubbleState !== null) mapped.bubbleState = message.bubbleState
     if (message.senderName !== null) mapped.senderName = message.senderName
+    if (message.toolName !== null && message.toolName) {
+        mapped.toolName = message.toolName
+        // Same derivation as the REST path (toolName preferred over the generic
+        // senderName:'Tool' marker) so both lanes label the card identically.
+        mapped.meta = { ...(mapped.meta ?? {}), label: message.toolName }
+    }
     if (message.toolBlockRef !== null) mapped.toolBlockRef = message.toolBlockRef
     if (message.turnKey !== null) {
         // `_turnKey` ONLY. `turnKey` is TURN-grained — the producer increments it

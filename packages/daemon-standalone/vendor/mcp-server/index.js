@@ -95423,6 +95423,7 @@ ${effect.notification.body || ""}`.trim();
       if (Array.isArray(message.toolCalls)) normalized.toolCalls = message.toolCalls;
       if (isPlainObject3(message.meta)) normalized.meta = message.meta;
       if (typeof message.senderName === "string") normalized.senderName = message.senderName;
+      if (typeof message.toolName === "string" && message.toolName) normalized.toolName = message.toolName;
       if (typeof message._type === "string") normalized._type = message._type;
       if (typeof message._sub === "string") normalized._sub = message._sub;
       if (typeof message.visibility === "string") normalized.visibility = message.visibility;
@@ -101069,7 +101070,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const name = String(jsonPathGet2(block2, tmap.call_name || "$.name") ?? "tool").trim() || "tool";
         const { text: args, truncated } = oneLine(stringifyContent2(jsonPathGet2(block2, tmap.call_args || "$.input")), TOOL_CALL_SUMMARY_MAX);
         const content = args ? `\u2197 ${name}: ${args}` : `\u2197 ${name}`;
-        const msg = { role: "assistant", content, receivedAt: 0, kind: "tool" };
+        const msg = { role: "assistant", content, receivedAt: 0, kind: "tool", toolName: name };
         if (truncated && isResolvableToolBlockRef(ref)) msg.toolBlockRef = ref;
         return msg;
       }
@@ -102542,6 +102543,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             content: args ? `${name}: ${args}` : name,
             kind: "tool",
             senderName: "Tool",
+            toolName: name,
             blockIndex,
             truncated
           });
@@ -102728,6 +102730,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
               historySessionId: sessionId
             };
             if (part.senderName) msg.senderName = part.senderName;
+            if (part.toolName) msg.toolName = part.toolName;
             if (detectedWorkspace) msg.workspace = detectedWorkspace;
             stampToolBlockRef(msg, part, recordIndex, sourceMtimeMs);
             records.push(msg);
@@ -102744,6 +102747,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
               historySessionId: sessionId
             };
             if (part.senderName) msg.senderName = part.senderName;
+            if (part.toolName) msg.toolName = part.toolName;
             if (detectedWorkspace) msg.workspace = detectedWorkspace;
             stampToolBlockRef(msg, part, recordIndex, sourceMtimeMs);
             records.push(msg);
@@ -102885,9 +102889,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     function summarizeToolCall(payload) {
       const name = String(payload.name ?? payload.type ?? "tool").trim() || "tool";
       const argumentValue = codexToolCallArguments(payload);
-      if (!argumentValue) return { content: name, truncated: false };
+      if (!argumentValue) return { content: name, truncated: false, toolName: name };
       const { text, truncated } = oneLine(argumentValue, TOOL_CALL_SUMMARY_MAX);
-      return { content: text ? `${name}: ${text}` : name, truncated };
+      return { content: text ? `${name}: ${text}` : name, truncated, toolName: name };
     }
     function codexToolCallArguments(payload) {
       const rawArguments = payload.arguments ?? payload.input;
@@ -103151,7 +103155,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           if (detectedWorkspace) msg.workspace = detectedWorkspace;
           records.push(msg);
         } else if (payloadType === "function_call" || payloadType === "custom_tool_call") {
-          const { content, truncated } = summarizeToolCall(payload);
+          const { content, truncated, toolName } = summarizeToolCall(payload);
           if (!content) continue;
           const msg = {
             ts: new Date(receivedAt).toISOString(),
@@ -103160,6 +103164,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             content,
             kind: "tool",
             senderName: "Tool",
+            toolName,
             agent: "codex-cli",
             historySessionId: sessionId
           };
@@ -104307,7 +104312,7 @@ ${output}` : "";
       if (clusterIds.length === 0) return [];
       const placeholders = clusterIds.map(() => "?").join(", ");
       const rows = db.prepare(
-        `SELECT id, role, COALESCE(NULLIF(content, ''), tool_calls) AS content, timestamp
+        `SELECT id, role, content, tool_calls, timestamp
          FROM messages
          WHERE session_id IN (${placeholders})
            AND ((content IS NOT NULL AND content != '') OR (tool_calls IS NOT NULL AND tool_calls != ''))
@@ -104316,15 +104321,67 @@ ${output}` : "";
       const out = [];
       for (const r of rows) {
         const role = normalizeHermesRole(r.role);
+        const receivedAt = Math.floor(Number(r.timestamp) * 1e3);
+        const text = typeof r.content === "string" ? r.content : "";
+        if (!text.trim() && r.tool_calls) {
+          const projected = projectHermesToolCalls(String(r.tool_calls));
+          if (!projected) continue;
+          out.push({
+            id: String(r.id),
+            role: "assistant",
+            content: projected.content,
+            receivedAt,
+            kind: "tool",
+            toolName: projected.toolName
+          });
+          continue;
+        }
+        if (String(r.role || "").trim().toLowerCase() === "tool") {
+          const { text: result } = oneLine(text, TOOL_RESULT_SUMMARY_MAX);
+          if (!result) continue;
+          out.push({
+            id: String(r.id),
+            role: "assistant",
+            content: `\u2198 ${result}`,
+            receivedAt,
+            kind: "tool"
+          });
+          continue;
+        }
         out.push({
           id: String(r.id),
           role,
-          content: String(r.content),
-          receivedAt: Math.floor(Number(r.timestamp) * 1e3),
+          content: text,
+          receivedAt,
           kind: "standard"
         });
       }
       return out;
+    }
+    function projectHermesToolCalls(raw) {
+      let calls;
+      try {
+        calls = JSON.parse(raw);
+      } catch {
+        return null;
+      }
+      const list = Array.isArray(calls) ? calls : calls && typeof calls === "object" ? [calls] : [];
+      const names = [];
+      const args = [];
+      for (const call of list) {
+        if (!call || typeof call !== "object") continue;
+        const c = call;
+        const fn = c.function && typeof c.function === "object" ? c.function : null;
+        const name = String(fn?.name ?? c.name ?? "").trim();
+        if (name) names.push(name);
+        const argument = fn?.arguments ?? c.arguments;
+        if (typeof argument === "string" && argument.trim()) args.push(argument.trim());
+        else if (argument && typeof argument === "object") args.push(JSON.stringify(argument));
+      }
+      if (names.length === 0 && args.length === 0) return null;
+      const toolName = names.length > 0 ? names.join(", ") : "tool";
+      const { text: summary } = oneLine(args.join(" "), TOOL_CALL_SUMMARY_MAX);
+      return { content: summary ? `\u2197 ${toolName}: ${summary}` : `\u2197 ${toolName}`, toolName };
     }
     function resolveHermesUsageColumns(db) {
       try {
@@ -104479,6 +104536,7 @@ ${output}` : "";
         path38 = __toESM2(require("path"));
         os19 = __toESM2(require("os"));
         init_load_better_sqlite3();
+        init_native_history_tool_blocks();
         init_usage_normalize();
         HERMES_STATE_DB = path38.join(os19.homedir(), ".hermes", "state.db");
         HERMES_LEGACY_SESSIONS_DIR = path38.join(os19.homedir(), ".hermes", "sessions");
@@ -104622,7 +104680,9 @@ ${output}` : "";
       if (type2 === "reasoning") return null;
       if (type2 === "user") {
         if (typeof record22.synthetic_reason === "string" && record22.synthetic_reason) return null;
-        const text = unwrapUserQuery(blocksToText(record22.content));
+        const rawText = blocksToText(record22.content);
+        if (/^\s*<user_info>/.test(rawText) && !USER_QUERY_RE.test(rawText)) return null;
+        const text = unwrapUserQuery(rawText);
         if (!text) return null;
         return { role: "user", content: text, kind: "standard" };
       }
@@ -104634,9 +104694,9 @@ ${output}` : "";
           const names = toolCalls.map((call) => call && typeof call === "object" ? call.name : null).filter((name) => typeof name === "string" && name.length > 0);
           const label = names.length > 0 ? names.join(", ") : "tool";
           const args = grokToolCallArguments(toolCalls);
-          if (!args) return { role: "assistant", content: `[tool: ${label}]`, kind: "tool" };
+          if (!args) return { role: "assistant", content: `[tool: ${label}]`, kind: "tool", toolName: label };
           const { text: summary, truncated } = oneLine(args, TOOL_CALL_SUMMARY_MAX);
-          return { role: "assistant", content: `[tool: ${label}] ${summary}`, kind: "tool", truncated };
+          return { role: "assistant", content: `[tool: ${label}] ${summary}`, kind: "tool", truncated, toolName: label };
         }
         return { role: "assistant", content: text, kind: "standard" };
       }
@@ -104699,6 +104759,7 @@ ${output}` : "";
           role: message.role,
           content: message.content,
           kind: message.kind,
+          ...message.toolName ? { toolName: message.toolName } : {},
           agent: "grok-cli",
           historySessionId: sessionId || providerSessionId,
           ...workspace ? { workspace } : {},
@@ -112263,7 +112324,11 @@ ${marker}`,
         sequence: message.sequence,
         bubbleState: message.bubbleState,
         senderName: message.senderName,
-        toolName: void 0,
+        // TOOL-LABEL (2026-09-25): the invoked tool's name rides the wire so the
+        // dashboard tool card can label the bubble ('Write', 'run_command') —
+        // `meta.label` never travels (only `meta.streaming` does), so this typed
+        // field is the only way the label reaches the durable transcript lane.
+        toolName: typeof message.toolName === "string" && message.toolName ? message.toolName : void 0,
         // (TOOL-EXPAND) The expand ref must survive THIS hop too. It is three
         // integers addressing a block in the provider's own transcript file —
         // content-free, so it is safe on the P2P transcript wire — and without

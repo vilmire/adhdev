@@ -89,6 +89,9 @@ describe('dispatcher — senderName/toolName pass-through (TOOL-LABEL)', () => {
     const toolMessage = result!.messages.find((m) => m.kind === 'tool');
     expect(toolMessage).toBeDefined();
     expect(toolMessage!.senderName).toBe('Tool');
+    // TOOL-LABEL: the claude reader now also stamps the invoked tool's name so the
+    // dashboard card reads 'Bash', not the generic 'Tool' (label prefers toolName).
+    expect(toolMessage!.toolName).toBe('Bash');
     // A non-tool bubble must NOT pick up a stray senderName — the pass-through
     // forwards what the reader stamped, it does not invent one.
     const standardMessage = result!.messages.find((m) => m.role === 'user');

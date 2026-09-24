@@ -41,6 +41,8 @@ export interface NativeHistoryMessage {
   content: string;
   kind: NativeHistoryKind;
   senderName?: string;
+  /** The tool a `tool_use` block invoked (e.g. 'Write', 'Bash'); the dashboard tool card label. */
+  toolName?: string;
   agent: 'claude-cli';
   historySessionId: string;
   workspace?: string;
@@ -109,6 +111,7 @@ interface ContentPart {
   content: string;
   kind: NativeHistoryKind;
   senderName?: string;
+  toolName?: string;
   /** Index in the record's raw `content` array; -1 when not array-addressed. */
   blockIndex: number;
   /** True when a summary cap dropped text — the gate for stamping a ref. */
@@ -168,6 +171,7 @@ function extractAssistantContentParts(content: unknown): ContentPart[] {
         content: args ? `${name}: ${args}` : name,
         kind: 'tool',
         senderName: 'Tool',
+        toolName: name,
         blockIndex,
         truncated,
       });
@@ -524,6 +528,7 @@ function parseTranscriptFile(
           historySessionId: sessionId,
         };
         if (part.senderName) msg.senderName = part.senderName;
+        if (part.toolName) msg.toolName = part.toolName;
         if (detectedWorkspace) msg.workspace = detectedWorkspace;
         stampToolBlockRef(msg, part, recordIndex, sourceMtimeMs);
         records.push(msg);
@@ -540,6 +545,7 @@ function parseTranscriptFile(
           historySessionId: sessionId,
         };
         if (part.senderName) msg.senderName = part.senderName;
+        if (part.toolName) msg.toolName = part.toolName;
         if (detectedWorkspace) msg.workspace = detectedWorkspace;
         stampToolBlockRef(msg, part, recordIndex, sourceMtimeMs);
         records.push(msg);

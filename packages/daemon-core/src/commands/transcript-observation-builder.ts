@@ -74,7 +74,11 @@ function flattenMessage(message: ChatMessage): TranscriptObservation['messages']
         sequence: message.sequence,
         bubbleState: message.bubbleState,
         senderName: message.senderName,
-        toolName: undefined,
+        // TOOL-LABEL (2026-09-25): the invoked tool's name rides the wire so the
+        // dashboard tool card can label the bubble ('Write', 'run_command') —
+        // `meta.label` never travels (only `meta.streaming` does), so this typed
+        // field is the only way the label reaches the durable transcript lane.
+        toolName: typeof message.toolName === 'string' && message.toolName ? message.toolName : undefined,
         // (TOOL-EXPAND) The expand ref must survive THIS hop too. It is three
         // integers addressing a block in the provider's own transcript file —
         // content-free, so it is safe on the P2P transcript wire — and without

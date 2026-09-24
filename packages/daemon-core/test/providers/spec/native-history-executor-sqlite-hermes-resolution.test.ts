@@ -42,11 +42,22 @@ function hermesCfg(dbFile: string) {
             session_query:
                 "SELECT id FROM sessions WHERE source = 'cli' AND EXISTS (SELECT 1 FROM messages m WHERE m.session_id = sessions.id) AND started_at >= ? - 2 ORDER BY started_at DESC LIMIT 1",
             message_query:
-                "SELECT role, COALESCE(NULLIF(content, ''), tool_calls) AS content, CAST(timestamp * 1000 AS INTEGER) AS ts_ms FROM messages WHERE session_id = ? AND ((content IS NOT NULL AND content != '') OR (tool_calls IS NOT NULL AND tool_calls != '')) AND role IN ('user', 'assistant', 'system', 'tool') ORDER BY timestamp ASC, id ASC",
+                "SELECT role, CASE WHEN role = 'assistant' AND (content IS NULL OR content = '') AND tool_calls IS NOT NULL AND tool_calls != '' THEN 'tool_call' ELSE role END AS block_type, COALESCE(NULLIF(content, ''), tool_calls) AS content, json_extract(tool_calls, '$[0].function.name') AS tool_name, json_extract(tool_calls, '$[0].function.arguments') AS tool_args, CAST(timestamp * 1000 AS INTEGER) AS ts_ms FROM messages WHERE session_id = ? AND ((content IS NOT NULL AND content != '') OR (tool_calls IS NOT NULL AND tool_calls != '')) AND role IN ('user', 'assistant', 'system', 'tool') ORDER BY timestamp ASC, id ASC",
             message_map: {
                 role: '$.role',
                 content: '$.content',
                 timestamp_ms: '$.ts_ms',
+                // TOOL-LABEL (2026-09-25): a tool_calls turn is a `tool_call`
+                // block (name/args SELECTed out of the JSON column), a role='tool'
+                // row is its result — both render as kind:'tool' bubbles.
+                tools: {
+                    block_type: '$.block_type',
+                    call_types: ['tool_call'],
+                    call_name: '$.tool_name',
+                    call_args: '$.tool_args',
+                    result_types: ['tool'],
+                    result_content: '$.content',
+                },
             },
         },
     };
@@ -129,7 +140,8 @@ describe('executeSqlite — hermes transcript resolution gap', () => {
             // Assistant turn whose terminal message is a tool call: EMPTY
             // content, payload in tool_calls. The OLD `content != ''` filter
             // dropped this row entirely.
-            ins.run('sess_tool', 'assistant', '', '[{"name":"run","args":{"cmd":"ls"}}]', 'tool_calls', base + 2);
+            ins.run('sess_tool', 'assistant', '', '[{"id":"tool_1","type":"function","function":{"name":"run","arguments":"{\\"cmd\\":\\"ls\\"}"}}]', 'tool_calls', base + 2);
+            ins.run('sess_tool', 'tool', '{"exit":0}', null, null, base + 2.5);
             // A normal stop-with-content assistant row must still survive.
             ins.run('sess_tool', 'assistant', 'here is the answer', null, 'stop', base + 3);
         });
@@ -141,8 +153,14 @@ describe('executeSqlite — hermes transcript resolution gap', () => {
         expect(result?.providerSessionId).toBe('sess_tool');
         const contents = result?.messages.map(m => m.content) ?? [];
         expect(contents).toContain('do the thing');
-        // tool_calls payload projected into the content slot (not dropped).
-        expect(contents).toContain('[{"name":"run","args":{"cmd":"ls"}}]');
+        // TOOL-LABEL: the tool_calls turn is a tool bubble naming the call — not
+        // the raw JSON column as prose (the pre-2026-09-25 projection).
+        const call = result?.messages.find(m => m.kind === 'tool' && m.content.startsWith('↗'));
+        expect(call?.content).toBe('↗ run: {"cmd":"ls"}');
+        expect(call?.toolName).toBe('run');
+        expect(result?.messages.some(m => m.kind === 'standard' && m.content.includes('"function"'))).toBe(false);
+        // the role='tool' result row is its `↘` result bubble.
+        expect(result?.messages.find(m => m.content === '↘ {"exit":0}')?.kind).toBe('tool');
         // normal stop row not regressed.
         expect(contents).toContain('here is the answer');
     });

@@ -591,7 +591,9 @@ export const ChatMessageRow = memo(function ChatMessageRow({
         // generic senderName:'Tool' marker otherwise — see
         // chat-commands-read-native-normalize.ts. Same pattern as the
         // thought/terminal branches above, which already read message.meta.label.
-        const toolLabel = typeof message.meta?.label === 'string' && message.meta.label ? message.meta.label : 'Tool';
+        const toolLabel = typeof message.meta?.label === 'string' && message.meta.label
+            ? message.meta.label
+            : (typeof message.toolName === 'string' && message.toolName ? message.toolName : 'Tool');
         const fullText = toolExpand?.text ?? contentStr;
         const canLocalExpand = !expandableRef
             && !hasStructuredRenderer

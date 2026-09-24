@@ -124,6 +124,29 @@ describe('buildTranscriptObservationFromReadChat (design §5.2 choke point)', ()
         expect(encodeTranscriptMessage(result!.messages[0]!).toolBlockRef).toEqual(ref);
     });
 
+    it('carries toolName through the builder AND the wire encoder (TOOL-LABEL: the live lane label)', () => {
+        const messages: ChatMessage[] = [
+            { role: 'assistant', kind: 'tool', content: '↗ Write: {"path":"x"}', senderName: 'Tool', toolName: 'Write' },
+            { role: 'assistant', kind: 'tool', content: '↘ ok', senderName: 'Tool' },
+        ];
+        const result = buildTranscriptObservationFromReadChat({
+            sessionId: 'sess-1',
+            providerType: 'claude-code',
+            status: 'idle',
+            providerObservedStatus: 'idle',
+            turn: null,
+            messages,
+            coverage: BASE_COVERAGE,
+        });
+        // Hop 1 — this file used to hardcode `toolName: undefined` here, so the
+        // dashboard's live lane labelled every tool card 'Tool'.
+        expect(result?.messages[0]?.toolName).toBe('Write');
+        expect(result?.messages[1]?.toolName).toBeUndefined();
+        // Hop 2 — survives the wire allow-list as a typed string / null.
+        expect(encodeTranscriptMessage(result!.messages[0]!).toolName).toBe('Write');
+        expect(encodeTranscriptMessage(result!.messages[1]!).toolName).toBeNull();
+    });
+
     it('leaves toolBlockRef null for a bubble that was never truncated', () => {
         const messages: ChatMessage[] = [{ role: 'assistant', kind: 'tool', content: 'short' }];
         const result = buildTranscriptObservationFromReadChat({

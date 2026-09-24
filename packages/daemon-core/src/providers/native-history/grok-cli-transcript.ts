@@ -63,6 +63,8 @@ export interface GrokNativeHistoryMessage {
   role: NativeHistoryRole;
   content: string;
   kind: NativeHistoryKind;
+  /** TOOL-LABEL: present on tool-call bubbles — the invoked tool name(s). */
+  toolName?: string;
   agent: 'grok-cli';
   historySessionId: string;
   workspace?: string;
@@ -198,6 +200,8 @@ interface ParsedRecord {
    * never capped.
    */
   truncated?: boolean;
+  /** TOOL-LABEL: the tool(s) a tool-only turn called — the dashboard card label. */
+  toolName?: string;
 }
 
 /**
@@ -286,7 +290,14 @@ export function parseGrokRecord(raw: unknown): ParsedRecord | null {
     // CLI-injected context (system-reminders, MCP notices) — not authored by
     // the user, so it must not render as a user bubble.
     if (typeof record.synthetic_reason === 'string' && record.synthetic_reason) return null;
-    const text = unwrapUserQuery(blocksToText(record.content));
+    const rawText = blocksToText(record.content);
+    // grok's own `<user_info>` environment preamble (OS/shell/cwd/date) is a
+    // record of its own on the first turn — not something the user typed. The
+    // dashboard rendered it as the session's first user bubble (standalone
+    // matrix run, 2026-09-25). A record that carries a real `<user_query>` next
+    // to the preamble still unwraps to the query below.
+    if (/^\s*<user_info>/.test(rawText) && !USER_QUERY_RE.test(rawText)) return null;
+    const text = unwrapUserQuery(rawText);
     if (!text) return null;
     return { role: 'user', content: text, kind: 'standard' };
   }
@@ -305,9 +316,9 @@ export function parseGrokRecord(raw: unknown): ParsedRecord | null {
         .filter((name): name is string => typeof name === 'string' && name.length > 0);
       const label = names.length > 0 ? names.join(', ') : 'tool';
       const args = grokToolCallArguments(toolCalls);
-      if (!args) return { role: 'assistant', content: `[tool: ${label}]`, kind: 'tool' };
+      if (!args) return { role: 'assistant', content: `[tool: ${label}]`, kind: 'tool', toolName: label };
       const { text: summary, truncated } = oneLine(args, TOOL_CALL_SUMMARY_MAX);
-      return { role: 'assistant', content: `[tool: ${label}] ${summary}`, kind: 'tool', truncated };
+      return { role: 'assistant', content: `[tool: ${label}] ${summary}`, kind: 'tool', truncated, toolName: label };
     }
     return { role: 'assistant', content: text, kind: 'standard' };
   }
@@ -388,6 +399,7 @@ export function readSession(
       role: message.role,
       content: message.content,
       kind: message.kind,
+      ...(message.toolName ? { toolName: message.toolName } : {}),
       agent: 'grok-cli',
       historySessionId: sessionId || providerSessionId,
       ...(workspace ? { workspace } : {}),

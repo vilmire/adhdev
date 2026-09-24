@@ -65,6 +65,10 @@ describe('grok-cli transcript — record parsing', () => {
     expect(parseGrokRecord(SYSTEM)).toBeNull();
   });
 
+  it('drops the <user_info> environment preamble record (not a user turn)', () => {
+    expect(parseGrokRecord(USER_INFO)).toBeNull();
+  });
+
   it('drops CLI-injected synthetic context (system-reminder)', () => {
     // Regression guard: without the synthetic_reason check these render as if
     // the user had typed the MCP/skills reminder into the chat.
@@ -87,6 +91,7 @@ describe('grok-cli transcript — record parsing', () => {
 
   it('names the tool AND its arguments instead of emitting an empty bubble for a tool-call turn', () => {
     const parsed = parseGrokRecord(ASSISTANT_TOOL_CALL);
+    expect(parsed!.toolName).toBe('read_file');
     // The arguments ride along because the name alone does not say WHAT was
     // called — `read_file` is only useful with the path next to it. Short
     // arguments like this one fit under the cap, so no expand ref is warranted.
@@ -95,6 +100,7 @@ describe('grok-cli transcript — record parsing', () => {
       content: '[tool: read_file] { "target_file": "/tmp/blue64.png" }',
       kind: 'tool',
       truncated: false,
+      toolName: 'read_file',
     });
   });
 
@@ -161,7 +167,9 @@ describe('grok-cli transcript — session read/list', () => {
 
     const shape = session!.messages.map((m) => [m.role, m.kind, m.content]);
     expect(shape).toEqual([
-      ['user', 'standard', '<user_info>\nOS Version: macos\n</user_info>'],
+      // The <user_info> environment preamble is grok's own record, not a user
+      // turn — it no longer renders as a user bubble (standalone matrix run,
+      // 2026-09-25).
       ['user', 'standard', 'What color is this image?'],
       ['assistant', 'tool', '[tool: read_file] { "target_file": "/tmp/blue64.png" }'],
       ['assistant', 'tool', 'Read image file: /tmp/blue64.png'],
@@ -225,9 +233,10 @@ describe('grok-cli transcript — session read/list', () => {
     expect(file).toContain(sessionId);
   });
 
-  it('falls back to the preamble when a session has no real prompt yet', () => {
+  it('lists nothing for a session that holds only the <user_info> preamble (no user turn survives)', () => {
+    const sessionId = '5b5e4b4c-0000-4000-8000-000000000002';
     writeSession(sessionId, [USER_INFO], '2026-08-15T03:36:23.102979Z');
     const listed = listSessions(workspace);
-    expect(listed[0].sessionTitle).toContain('<user_info>');
+    expect(listed.find((entry) => entry.sessionId === sessionId)).toBeUndefined();
   });
 });
