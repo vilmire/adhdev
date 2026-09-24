@@ -79958,25 +79958,72 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         ...nodeId ? { nodeId } : {}
       };
     }
-    function resolveForwardedWorkerIdentity(claim, nowMs2 = Date.now(), isSelfDaemon) {
-      const agrees = (taskId, attemptId) => (!claim.taskId || claim.taskId === taskId) && (!claim.attemptId || claim.attemptId === attemptId);
-      const current2 = resolveCurrentTaskForSession(claim.meshId, claim.sessionId);
-      if (current2?.taskId) {
-        const token = findWorkerTaskTokenForSession(claim.meshId, current2.taskId, claim.sessionId);
-        if (!token?.attemptId || !agrees(current2.taskId, token.attemptId)) return null;
+    function resolveForwardedWorkerIdentity(claim, sender, nowMs2 = Date.now(), isSelfDaemon) {
+      const refuse = (reason, detail) => ({ refused: reason, detail });
+      const senderDaemonId = typeof sender.senderDaemonId === "string" ? sender.senderDaemonId.trim() : "";
+      if (!senderDaemonId) return refuse("sender_unknown", "the mesh transport did not identify the relaying daemon");
+      const senderOwnsNode = (nodeId) => {
+        if (!nodeId) return refuse("node_unresolved", "the owner's record of this task names no node");
+        let owner;
+        try {
+          owner = sender.nodeDaemonId(nodeId);
+        } catch {
+          owner = void 0;
+        }
+        if (!owner) return refuse("node_unresolved", `node ${nodeId} is not on the owner's mesh roster`);
+        if (!daemonIdsEquivalent4(owner, senderDaemonId)) {
+          return refuse("sender_not_node_owner", `node ${nodeId} belongs to daemon ${owner}, not the relaying daemon ${senderDaemonId}`);
+        }
+        return null;
+      };
+      const store2 = MeshRuntimeStore.getInstance();
+      let row = null;
+      try {
+        row = store2.findAssignedBySession(claim.meshId, claim.sessionId, void 0, claim.taskId);
+      } catch {
+        row = null;
+      }
+      if (row?.id) {
+        if (claim.taskId && claim.taskId !== row.id) {
+          return refuse("task_mismatch", `the owner has task ${row.id} assigned to session ${claim.sessionId}, not ${claim.taskId}${describeOwnerRow(store2, claim.meshId, claim.taskId)}`);
+        }
+        const nodeRefusal2 = senderOwnsNode(row.assignedNodeId);
+        if (nodeRefusal2) return nodeRefusal2;
+        let attemptId = row.attemptId;
+        if (!attemptId) {
+          try {
+            attemptId = store2.turnStore().findLatestAttemptForTask(claim.meshId, row.id)?.attemptId;
+          } catch {
+            attemptId = void 0;
+          }
+        }
+        if (claim.attemptId && claim.attemptId !== attemptId) {
+          return refuse("attempt_mismatch", `task ${row.id}'s attempt on the owner is ${attemptId ?? "(none)"}, not ${claim.attemptId}`);
+        }
+        const token = findWorkerTaskTokenForSession(claim.meshId, row.id, claim.sessionId);
         return {
           live: {
-            token: token.token,
+            token: token?.token ?? "",
             meshId: claim.meshId,
-            taskId: current2.taskId,
-            attemptId: token.attemptId,
+            taskId: row.id,
+            ...attemptId ? { attemptId } : {},
             sessionId: claim.sessionId,
-            ...token.nodeId ? { nodeId: token.nodeId } : {}
+            nodeId: row.assignedNodeId
           }
         };
       }
       const attempt = resolveRecentlyTerminalAttempt(claim.meshId, claim.sessionId, nowMs2, isSelfDaemon);
-      if (!attempt || !agrees(attempt.taskId, attempt.attemptId)) return null;
+      if (!attempt) {
+        return refuse("no_live_task", `the owner has no task assigned to session ${claim.sessionId} and no attempt of it that ended in the last ${Math.round(WORKER_LATE_REPORT_GRACE_MS / 6e4)} min${claim.taskId ? describeOwnerRow(store2, claim.meshId, claim.taskId) : ""}`);
+      }
+      if (claim.taskId && claim.taskId !== attempt.taskId) {
+        return refuse("task_mismatch", `session ${claim.sessionId}'s latest attempt on the owner is for task ${attempt.taskId}, not ${claim.taskId}${describeOwnerRow(store2, claim.meshId, claim.taskId)}`);
+      }
+      if (claim.attemptId && claim.attemptId !== attempt.attemptId) {
+        return refuse("attempt_mismatch", `task ${attempt.taskId}'s attempt on the owner is ${attempt.attemptId}, not ${claim.attemptId}`);
+      }
+      const nodeRefusal = senderOwnsNode(attempt.nodeId);
+      if (nodeRefusal) return nodeRefusal;
       return {
         late: {
           token: "",
@@ -79990,10 +80037,20 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         }
       };
     }
-    function acceptForwardedWorkerCompletionReport(claim, report, opts = {}) {
+    function describeOwnerRow(store2, meshId, taskId) {
+      try {
+        const entry = store2.findQueueEntryById(meshId, taskId);
+        if (!entry) return ` (task ${taskId} is unknown to the owner)`;
+        const session = entry.assignedSessionId ? `, assigned to session ${entry.assignedSessionId}` : ", never claimed by a session";
+        return ` (task ${taskId} is ${entry.status} on the owner${session})`;
+      } catch {
+        return "";
+      }
+    }
+    function acceptForwardedWorkerCompletionReport(claim, report, opts) {
       const nowMs2 = opts.nowMs ?? Date.now();
-      const resolved = resolveForwardedWorkerIdentity(claim, nowMs2, opts.isSelfDaemon);
-      if (!resolved) return { accepted: false, refusal: "unauthenticated" };
+      const resolved = resolveForwardedWorkerIdentity(claim, opts.sender, nowMs2, opts.isSelfDaemon);
+      if ("refused" in resolved) return { accepted: false, refusal: "unauthenticated", detail: `${resolved.refused}: ${resolved.detail}` };
       if ("late" in resolved) return acceptLateWorkerCompletionReport(resolved.late, report, nowMs2);
       return acceptWorkerCompletionReportForIdentity(resolved.live, report, { nowMs: nowMs2 });
     }
@@ -80484,7 +80541,7 @@ ${block2.text}`,
     function readNonEmpty2(value) {
       return typeof value === "string" && value.trim() ? value.trim() : void 0;
     }
-    function resolveDispatchMessage3(task, meshId, node) {
+    function resolveDispatchMessage2(task, meshId, node) {
       if (hasWorkerProtocolFooter2(task.message)) {
         LOG.debug("WorkerProtocol", `Task ${task.id} body already carries the worker protocol footer \u2014 not re-materializing`);
         return task.message;
@@ -88122,7 +88179,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           LOG.warn("WorkerMcp", `Failed to mint worker task token for ${task.id}: ${e?.message || e}`);
         }
       }
-      const dispatchMessage = resolveDispatchMessage3(task, meshId, node);
+      const dispatchMessage = resolveDispatchMessage2(task, meshId, node);
       try {
         meshRecord(meshId, "task_claimed", {
           nodeId,
@@ -121773,6 +121830,19 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         isSelfDaemon: (daemonId) => daemonIdsEquivalent4(daemonId, selfDaemonId)
       });
     }
+    async function ownerRosterNodeDaemonLookup(ctx, meshId) {
+      let nodes = [];
+      try {
+        const record2 = await ctx?.getMeshForCommand?.(meshId, void 0, { preferInline: true });
+        nodes = Array.isArray(record2?.mesh?.nodes) ? record2.mesh.nodes : [];
+      } catch {
+        nodes = [];
+      }
+      return (nodeId) => {
+        const node = nodes.find((n) => meshNodeIdMatches5(n, nodeId));
+        return node ? readMeshNodeDaemonId(node) : void 0;
+      };
+    }
     function toReportResponse(result) {
       if (!result.accepted) {
         return {
@@ -121852,7 +121922,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       if (!answer) {
         return { success: false, error: "forward_failed", detail: "the owner daemon returned no report result", hint: "Nothing was recorded \u2014 call again." };
       }
-      LOG.info("WorkerReport", `Forwarded ${report.outcome} report for session ${remote.sessionId} (task ${remote.taskId ?? "?"} attempt ${remote.attemptId ?? "?"}) to owner ${remote.ownerDaemonId.slice(0, 16)} \u2192 ${answer.success === true ? "accepted" : `refused (${String(answer.error)})`}`);
+      LOG.info("WorkerReport", `Forwarded ${report.outcome} report for session ${remote.sessionId} (task ${remote.taskId ?? "?"} attempt ${remote.attemptId ?? "?"}) to owner ${remote.ownerDaemonId.slice(0, 16)} \u2192 ${answer.success === true ? "accepted" : `refused (${String(answer.error)}${typeof answer.detail === "string" && answer.detail ? ` \u2014 ${answer.detail}` : ""})`}`);
       return answer;
     }
     function decodeForwardedWorkerReport(args) {
@@ -121875,6 +121945,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       };
     }
     var WORKER_REPORT_FORWARD_COMMAND;
+    var MESH_SENDER_DAEMON_ID_ARG;
     var FORWARD_KEYS;
     var workerReportHandlers;
     var workerReportSpecs;
@@ -121884,9 +121955,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         init_dist();
         init_command_registry();
         init_router_internal_args();
+        init_mesh_node_identity();
         init_cli_provider_mesh_assignment();
         init_logger();
         WORKER_REPORT_FORWARD_COMMAND = "worker_report_forwarded";
+        MESH_SENDER_DAEMON_ID_ARG = "_meshSenderDaemonId";
         FORWARD_KEYS = /* @__PURE__ */ new Set(["meshId", "taskId", "attemptId", "sessionId", "nodeId", "report"]);
         workerReportHandlers = {
           /**
@@ -121970,12 +122043,29 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           [WORKER_REPORT_FORWARD_COMMAND]: async (_ctx, args) => {
             const decoded = decodeForwardedWorkerReport(args);
             if (!decoded) return { success: false, error: `${WORKER_REPORT_FORWARD_COMMAND}: request failed decode (bad shape)` };
+            const { claim } = decoded;
+            const senderDaemonId = readNonEmpty3(args?.[MESH_SENDER_DAEMON_ID_ARG]);
+            const claimLabel = `session ${claim.sessionId} (claimed task ${claim.taskId ?? "?"} attempt ${claim.attemptId ?? "?"}) from ${senderDaemonId ? senderDaemonId.slice(0, 20) : "an unidentified daemon"}`;
             try {
               const { validateWorkerCompletionReport: validateWorkerCompletionReport2, acceptForwardedWorkerCompletionReport: acceptForwardedWorkerCompletionReport2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
               const { report, errors } = validateWorkerCompletionReport2(decoded.report);
-              if (!report) return { success: false, error: "invalid_report", validationErrors: errors };
-              return toReportResponse(acceptForwardedWorkerCompletionReport2(decoded.claim, report, { isSelfDaemon: selfDaemonPredicate(_ctx) }));
+              if (!report) {
+                LOG.warn("WorkerReport", `Forwarded report for ${claimLabel} refused: invalid_report (${errors.length} validation error(s))`);
+                return { success: false, error: "invalid_report", validationErrors: errors };
+              }
+              const sender = {
+                senderDaemonId,
+                nodeDaemonId: await ownerRosterNodeDaemonLookup(_ctx, claim.meshId)
+              };
+              const result = acceptForwardedWorkerCompletionReport2(claim, report, { sender, isSelfDaemon: selfDaemonPredicate(_ctx) });
+              if (result.accepted) {
+                LOG.info("WorkerReport", `Forwarded ${report.outcome} report for ${claimLabel} \u2192 accepted as task ${result.taskId} attempt ${result.attemptId ?? "?"}${result.late ? ` (late, after ${result.late.terminalOutcome})` : ""}${result.duplicate ? " (duplicate)" : ""}`);
+              } else {
+                LOG.warn("WorkerReport", `Forwarded ${report.outcome} report for ${claimLabel} \u2192 refused ${result.refusal}${result.detail ? ` \u2014 ${result.detail}` : ""}`);
+              }
+              return toReportResponse(result);
             } catch (e) {
+              LOG.warn("WorkerReport", `Forwarded report for ${claimLabel} failed: ${e?.message || e}`);
               return { success: false, error: e?.message || String(e) };
             }
           },
@@ -152485,7 +152575,7 @@ ${e?.stderr || ""}`;
       resolveDelegatedWorkerAutoApprove: () => resolveDelegatedWorkerAutoApprove3,
       resolveDelegatedWorkerDangerousModeAllow: () => resolveDelegatedWorkerDangerousModeAllow3,
       resolveDeliveryDecision: () => resolveDeliveryDecision,
-      resolveDispatchMessage: () => resolveDispatchMessage3,
+      resolveDispatchMessage: () => resolveDispatchMessage2,
       resolveEffectiveMeshNodeHealth: () => resolveEffectiveMeshNodeHealth3,
       resolveFleetSecret: () => resolveFleetSecret,
       resolveGitRepository: () => resolveGitRepository,
@@ -166756,7 +166846,7 @@ data: ${JSON.stringify(msg.data)}
         ...summary ? { summary } : {}
       });
       releaseHolds(draft, "*");
-      if (attempt.scope === "mesh_queue" && attempt.meshId && attempt.taskId) {
+      if (isMeshScope(attempt) && attempt.meshId && attempt.taskId) {
         draft.effects.push({ kind: "queue_status", meshId: attempt.meshId, taskId: attempt.taskId, status: outcome, reason });
         draft.effects.push({ kind: "graph_advance", meshId: attempt.meshId, taskId: attempt.taskId, outcome });
       }
@@ -180874,6 +180964,8 @@ async function normalizeEnqueueTaskArgs(ctx, args, callerLabel) {
   } else if (preferWorktree) {
     targetNodeId = resolvePreferredWorktreeNodeId(ctx) || void 0;
   }
+  const rawOwnedPaths = args.ownedPaths ?? args.owned_paths;
+  const ownedPaths = Array.isArray(rawOwnedPaths) ? rawOwnedPaths : void 0;
   return {
     ok: true,
     value: {
@@ -180892,7 +180984,8 @@ async function normalizeEnqueueTaskArgs(ctx, args, callerLabel) {
       maxRetries,
       explicitTargetRaw,
       preferWorktree,
-      targetNodeId
+      targetNodeId,
+      ownedPaths
     }
   };
 }
@@ -180901,118 +180994,8 @@ function buildProviderPinAdvisory(requiredTags) {
   if (!pins.length) return {};
   return {
     providerPin: pins,
-    providerPinHint: `requiredTags above is the REQUEST as parsed, not a dispatch confirmation \u2014 the provider is chosen later, when a node claims or the eager push lands. To verify the pin was honored, read the task's task_dispatched ledger entry: its providerType is the provider that actually ran, and it now carries requiredTags alongside. A refused eager push records p2p_dispatch_failed with reason 'mesh_provider_pin_unsatisfiable' and leaves the task pending for the claim path.`
+    providerPinHint: `requiredTags above is the REQUEST as parsed, not a dispatch confirmation \u2014 the provider is chosen later, when a node's session claims the task. To verify the pin was honored, read the task's task_dispatched ledger entry: its providerType is the provider that actually ran.`
   };
-}
-function selectEagerPushReceiver(ctx, targetNodeId, requiredTags) {
-  const eligible = ctx.mesh.nodes.filter((node) => {
-    if (isLocalControlPlaneNode(ctx, node) || !node.daemonId) return false;
-    if (targetNodeId && node.id !== targetNodeId) return false;
-    return (0, import_daemon_core10.nodeSatisfiesRequiredTags)(requiredTags, (0, import_daemon_core10.buildMeshNodeCapabilityTags)(node));
-  });
-  if (eligible.length === 0) return null;
-  return eligible.find((node) => (0, import_daemon_core10.isMeshNodeHealthLaunchable)(node)) ?? eligible[0];
-}
-async function eagerPushTaskToRemoteNodes(ctx, task, message, targetNodeId, requiredTags, coordinatorDaemonId) {
-  const dispatchPromises = [];
-  const liveStatus = (await queueQuery(ctx.transport, { meshId: ctx.mesh.id, taskId: task.id }).catch(() => ({ entries: [] }))).entries[0]?.status;
-  if (liveStatus !== "pending") return dispatchPromises;
-  const node = selectEagerPushReceiver(ctx, targetNodeId, requiredTags);
-  if (node) {
-    dispatchPromises.push(
-      ipcDispatchToRemoteAgent(ctx, node, {
-        // F1: materialize the worker-protocol footer (and any relevant handoff
-        // notes) onto the DISPATCHED body only — the ledger/dispatch rows below
-        // keep the authored `message` (see summarizeTaskMessage(message) further
-        // down, which must describe what the coordinator wrote, not the footer).
-        message: (0, import_daemon_core12.resolveDispatchMessage)({ ...task, message }, ctx.mesh.id, node),
-        // ★PROVIDER-PIN-BYPASS (D2): carry the pin INTO provider resolution.
-        // selectEagerPushReceiver above only answered "could some provider on
-        // this node satisfy the pin?" — a node-level question. Without the tags
-        // here, ipcDispatchToRemoteAgent then re-derived the provider from
-        // providerPriority[0] and could land the task on an unpinned provider
-        // while the ledger recorded the pin as honored (live: an
-        // antigravity-cli-pinned task ran on claude-cli).
-        ...requiredTags.length ? { requiredTags } : {},
-        meshContext: {
-          meshId: ctx.mesh.id,
-          nodeId: node.id,
-          taskId: task.id,
-          ...coordinatorDaemonId ? { coordinatorDaemonId } : {}
-        }
-      }).then(async (result) => {
-        if (result.success) {
-          try {
-            const providerType = result.providerType;
-            const descriptor = summarizeTaskMessage(message);
-            await recordLocal(ctx.transport, {
-              meshId: ctx.mesh.id,
-              kind: "task_dispatched",
-              nodeId: node.id,
-              sessionId: result.sessionId,
-              providerType,
-              payload: {
-                source: "queue",
-                via: "p2p_direct",
-                taskId: task.id,
-                message,
-                taskTitle: descriptor.taskTitle,
-                taskSummary: descriptor.taskSummary,
-                ...task.taskMode ? { taskMode: task.taskMode } : {},
-                ...providerType ? { providerType } : {},
-                targetSessionId: result.sessionId,
-                // ★PIN-OBSERVABILITY: record the pin ALONGSIDE the provider
-                // actually dispatched to, so "was the pin honored?" is answerable
-                // from one entry. Previously the only trace of a pin was the
-                // enqueue response echoing back the REQUESTED tags, which says
-                // nothing about what happened — the live bypass was invisible
-                // until someone compared providerType against the request by eye.
-                ...requiredTags.length ? { requiredTags } : {}
-              }
-            });
-          } catch {
-          }
-        } else if (result?.code === "mesh_provider_pin_unsatisfiable") {
-          try {
-            await recordLocal(ctx.transport, {
-              meshId: ctx.mesh.id,
-              kind: "p2p_dispatch_failed",
-              nodeId: node.id,
-              payload: {
-                source: "queue",
-                via: "p2p_direct",
-                taskId: task.id,
-                reason: "mesh_provider_pin_unsatisfiable",
-                requiredTags,
-                ...result.resolvedProviderType ? { resolvedProviderType: result.resolvedProviderType } : {},
-                error: result.error,
-                eagerPushDeclined: true,
-                dispatchFailedAt: (/* @__PURE__ */ new Date()).toISOString()
-              }
-            });
-          } catch {
-          }
-        }
-      }).catch(async (err) => {
-        try {
-          await recordLocal(ctx.transport, {
-            meshId: ctx.mesh.id,
-            kind: "p2p_dispatch_failed",
-            nodeId: node.id,
-            payload: {
-              source: "queue",
-              via: "p2p_direct",
-              taskId: task.id,
-              error: err?.message || String(err),
-              dispatchFailedAt: (/* @__PURE__ */ new Date()).toISOString()
-            }
-          });
-        } catch {
-        }
-      })
-    );
-  }
-  return dispatchPromises;
 }
 async function meshEnqueueTask(ctx, args) {
   await refreshMeshFromDaemon(ctx);
@@ -181036,7 +181019,8 @@ async function meshEnqueueTask(ctx, args) {
     maxRetries,
     explicitTargetRaw,
     preferWorktree,
-    targetNodeId
+    targetNodeId,
+    ownedPaths
   } = normalized.value;
   const allowDuplicate = args.allowDuplicate === true || args.allow_duplicate === true;
   const blockDuplicate = args.blockDuplicate === true || args.block_duplicate === true;
@@ -181078,6 +181062,7 @@ async function meshEnqueueTask(ctx, args) {
         ...difficulty ? { difficulty } : {},
         ...notBefore ? { notBefore } : {},
         ...maxRetries !== void 0 ? { maxRetries } : {},
+        ...ownedPaths ? { ownedPaths } : {},
         ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
       },
       decision: {
@@ -181103,57 +181088,25 @@ async function meshEnqueueTask(ctx, args) {
       ...task.notBefore ? { notBefore: task.notBefore } : {},
       ...task.maxRetries !== void 0 ? { maxRetries: task.maxRetries } : {}
     };
-    if (!(ctx.transport instanceof IpcTransport)) {
-      const queueTrigger = await triggerMeshQueueAndReport(ctx);
-      return JSON.stringify({
-        success: true,
-        source: "queue",
-        taskId: task.id,
-        status: task.status,
-        taskMode: task.taskMode,
-        requiredTags: task.requiredTags,
-        ...buildProviderPinAdvisory(requiredTags),
-        ...enqueueEcho,
-        ...targetNodeId ? { targetNodeId } : {},
-        ...preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {},
-        ...duplicateWarning,
-        ...missionWarning,
-        ...worktreeAdvisory,
-        ...orchestrationWarning,
-        queueTrigger,
-        ...buildQueueTriggerGuidance(queueTrigger)
-      });
-    }
-    {
-      const queueTrigger = await triggerMeshQueueAndReport(ctx);
-      const dependencyStatusById = new Map(
-        (await readQueueFromDaemon(ctx)).map((t) => [t.id, t.status])
-      );
-      const eagerPushDeferred = !(0, import_daemon_core10.taskDependenciesSatisfied)(task, dependencyStatusById);
-      const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
-      const dispatchPromises = eagerPushDeferred ? [] : await eagerPushTaskToRemoteNodes(ctx, task, message, targetNodeId, requiredTags, coordinatorDaemonId);
-      Promise.all(dispatchPromises).catch(() => {
-      });
-      return JSON.stringify({
-        success: true,
-        source: "queue",
-        taskId: task.id,
-        status: task.status,
-        taskMode: task.taskMode,
-        requiredTags: task.requiredTags,
-        ...buildProviderPinAdvisory(requiredTags),
-        ...enqueueEcho,
-        ...targetNodeId ? { targetNodeId } : {},
-        ...preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {},
-        ...eagerPushDeferred ? { eagerPushDeferred: true, eagerPushDeferredReason: "dependencies_unsatisfied" } : {},
-        ...duplicateWarning,
-        ...missionWarning,
-        ...worktreeAdvisory,
-        ...orchestrationWarning,
-        queueTrigger,
-        ...buildQueueTriggerGuidance(queueTrigger)
-      });
-    }
+    const queueTrigger = await triggerMeshQueueAndReport(ctx);
+    return JSON.stringify({
+      success: true,
+      source: "queue",
+      taskId: task.id,
+      status: task.status,
+      taskMode: task.taskMode,
+      requiredTags: task.requiredTags,
+      ...buildProviderPinAdvisory(requiredTags),
+      ...enqueueEcho,
+      ...targetNodeId ? { targetNodeId } : {},
+      ...preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {},
+      ...duplicateWarning,
+      ...missionWarning,
+      ...worktreeAdvisory,
+      ...orchestrationWarning,
+      queueTrigger,
+      ...buildQueueTriggerGuidance(queueTrigger)
+    });
   } catch (e) {
     const message2 = e?.message || String(e);
     if (message2.includes("live_debug_readonly_guardrail_violation")) {
@@ -181346,32 +181299,6 @@ async function meshEnqueueBatch(ctx, args) {
     worktreeRoutingAdvisoryTasks: advisoryTasks
   } : {};
   const queueTrigger = await triggerMeshQueueAndReport(ctx);
-  let eagerPushDeferredCount = 0;
-  if (ctx.transport instanceof IpcTransport) {
-    const liveQueue = await readQueueFromDaemon(ctx);
-    const dependencyStatusById = new Map(liveQueue.map((t) => [t.id, t.status]));
-    const liveById = new Map(liveQueue.map((t) => [t.id, t]));
-    const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
-    const dispatchPromises = [];
-    for (let i = 0; i < tasks.length; i++) {
-      const snapshot = tasks[i];
-      const task = liveById.get(snapshot.id) ?? snapshot;
-      if (!(0, import_daemon_core10.taskDependenciesSatisfied)(task, dependencyStatusById)) {
-        eagerPushDeferredCount++;
-        continue;
-      }
-      dispatchPromises.push(...await eagerPushTaskToRemoteNodes(
-        ctx,
-        task,
-        normalizedEntries[i].message,
-        normalizedEntries[i].targetNodeId,
-        normalizedEntries[i].requiredTags,
-        coordinatorDaemonId
-      ));
-    }
-    Promise.all(dispatchPromises).catch(() => {
-    });
-  }
   return JSON.stringify({
     success: true,
     source: "queue",
@@ -181419,7 +181346,6 @@ async function meshEnqueueBatch(ctx, args) {
     } : {},
     ...missionWarning,
     ...worktreeAdvisory,
-    ...eagerPushDeferredCount > 0 ? { eagerPushDeferred: eagerPushDeferredCount, eagerPushDeferredReason: "dependencies_unsatisfied" } : {},
     queueTrigger,
     ...buildQueueTriggerGuidance(queueTrigger)
   });

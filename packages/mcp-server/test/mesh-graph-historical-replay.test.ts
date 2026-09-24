@@ -8,7 +8,6 @@ import {
     meshSendTask,
 } from '../src/tools/mesh-tools.js';
 import { IpcTransport } from '../src/transports/ipc.js';
-import { hasWorkerProtocolFooter, stripWorkerProtocolFooter } from '@adhdev/mesh-shared';
 import { getQueue, __writeTaskStatusForTests, taskDependenciesSatisfied } from '@adhdev/daemon-core';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
@@ -184,23 +183,15 @@ async function replayLegacyBatch(fixture: LegacyBatchFixture) {
     assert.equal(res.graphId, undefined, 'a static batch must not manufacture a graph');
     assert.equal(res.batchId, undefined);
     assert.equal(res.graphHeldTasks, undefined);
-    // Only dependents are deferred from the eager push; every root is pushed.
+    // rc.37 Finding B: the enqueue tool no longer pushes anything — every task
+    // (roots included) reaches a session only through the daemon's queue claim.
+    // The dispatch split the old eager push recorded is asserted below as the
+    // claimable set (`initial dispatch set = the roots`), which is the claim
+    // path's own predicate.
+    assert.equal(res.eagerPushDeferred, undefined, 'there is no eager push to defer');
     assert.equal(
-        res.eagerPushDeferred,
-        fixture.tasks.length - fixture.roots.length,
-        'dependents deferred, roots pushed — the recorded dispatch split',
-    );
-    const pushedBodies = transport.meshCommands
-        .filter(c => c.cmd === 'agent_command')
-        .map(c => String(c.args?.message ?? ''));
-    // Wiring-unification F1: every delivered body carries the worker protocol footer;
-    // the replay compares the AUTHORED text, which the footer never changes.
-    assert.ok(pushedBodies.every(hasWorkerProtocolFooter), 'every dispatched body carries the worker protocol footer');
-    const pushedMessages = pushedBodies.map(stripWorkerProtocolFooter);
-    assert.deepEqual(
-        pushedMessages.sort(),
-        fixture.roots.map(r => fixture.tasks.find(t => t.ref === r)!.message).sort(),
-        'exactly the root messages were dispatched, and no dependent was',
+        transport.meshCommands.filter(c => c.cmd === 'agent_command').length, 0,
+        'no body is sent at enqueue — delivery is only through a claim',
     );
 
     // ── Same rows: messages, targets, dependency wiring ──

@@ -859,14 +859,14 @@ test('mesh_task_history returns pending async refine failure events instead of d
   }
 });
 
-test('mesh_enqueue_task enqueue-and-push remains queue-sourced active work', async () => {
+test('mesh_enqueue_task on a remote (IPC) mesh stays queue-sourced and is never pushed (rc.37 Finding B)', async () => {
   const meshId = 'mesh-enqueue-push-source-test';
   cleanupMesh(meshId);
   const { ctx } = createRemoteCtx(meshId);
 
   try {
     const enqueued = JSON.parse(await meshEnqueueTask(ctx as any, {
-      message: 'Queue-backed task that may be pushed to a remote idle session',
+      message: 'Queue-backed task that waits for a claim',
       difficulty: 'medium',
     } as any));
     assert.equal(enqueued.success, true);
@@ -875,13 +875,12 @@ test('mesh_enqueue_task enqueue-and-push remains queue-sourced active work', asy
 
     await new Promise(resolve => setImmediate(resolve));
 
+    // The retired enqueue-and-push wrote a `task_dispatched via:p2p_direct` row for a
+    // body it sent with no claim; delivery is now only through the daemon's claim.
     const dispatch = readLocalRecords(meshId).find(entry => entry.kind === 'task_dispatched' && entry.payload?.taskId === enqueued.taskId);
-    assert.ok(dispatch, 'expected enqueue-and-push dispatch ledger row');
-    assert.equal(dispatch.payload.source, 'queue');
-    assert.equal(dispatch.payload.via, 'p2p_direct');
+    assert.equal(dispatch, undefined, 'no dispatch is recorded at enqueue');
 
     const status = JSON.parse(await meshStatus(ctx as any));
-    assert.ok(status.activeWork.some((entry: any) => entry.source === 'queue' && entry.taskId === enqueued.taskId));
     assert.equal(status.activeWork.some((entry: any) => entry.source === 'direct' && entry.taskId === enqueued.taskId), false);
   } finally {
     cleanupMesh(meshId);

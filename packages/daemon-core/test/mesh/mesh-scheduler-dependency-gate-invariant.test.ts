@@ -300,14 +300,15 @@ describe('SURFACE auto-launch (maybeAutoLaunchOneQueueSession) routes through th
     });
 });
 
-// ── 4. Structural pins over ALL THREE surfaces (incl. eager push) ────────────
+// ── 4. Structural pins over BOTH scheduling surfaces ─────────────────────────
 //
-// The eager-push gate lives in the mcp-server package (mesh-tools-queue.ts), whose
-// node:test runner cannot module-spy. Its BEHAVIOR is already pinned by
-// oss/packages/mcp-server/test/mesh-dependson-eager-push-gate.test.ts and
-// mesh-enqueue-batch.test.ts; here we pin the STRUCTURE of every surface so that
-// inlining the dependency logic (design :783 mutation test) or bolting graph
-// checks onto a surface (design :984-986) fails this suite.
+// Pins the STRUCTURE of every surface so that inlining the dependency logic
+// (design :783 mutation test) or bolting graph checks onto a surface (design
+// :984-986) fails this suite. The former third surface — the mcp-server's cloud
+// eager P2P push in mesh-tools-queue.ts — was retired (rc.37 Finding B: it sent
+// still-`pending` rows straight to a remote session with no claim and no
+// attempt); a pin below keeps the enqueue tools from becoming a scheduling
+// surface again.
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = path.resolve(TEST_DIR, '../../src');
@@ -339,12 +340,6 @@ const SCHEDULER_SURFACES: SurfacePin[] = [
         gateCalls: ['taskDependenciesSatisfied(task, statusById)'],
         forbidGraphTokens: true,
     },
-    {
-        name: 'cloud eager P2P push (mesh_enqueue_task + mesh_enqueue_batch)',
-        file: MCP_TOOLS_QUEUE,
-        gateCalls: ['taskDependenciesSatisfied(task, dependencyStatusById)'],
-        forbidGraphTokens: true,
-    },
 ];
 
 // A forked gate looks like `depStatus.get(id) === 'completed'` beside a dependsOn
@@ -355,11 +350,10 @@ const INLINE_FORK_PATTERN = /\b(depStatus|statusById|dependencyStatusById)\s*\.g
 const GRAPH_TOKEN_PATTERN = /run_if|inputs_from|workspace_ref|coordinator_gate|graph_materialization_pending/;
 
 describe('structural pins: every scheduler surface gates through the one predicate (design :71-97)', () => {
-    it('enumerates exactly the three known scheduling surfaces', () => {
+    it('enumerates exactly the two known scheduling surfaces', () => {
         expect(SCHEDULER_SURFACES.map(s => s.name)).toEqual([
             'queue claim (claimNextQueueTask)',
             'auto-launch candidate filter (maybeAutoLaunchOneQueueSession)',
-            'cloud eager P2P push (mesh_enqueue_task + mesh_enqueue_batch)',
         ]);
     });
 
@@ -401,10 +395,15 @@ describe('structural pins: every scheduler surface gates through the one predica
         });
     }
 
-    it('eager push gates BOTH the single and batch enqueue paths', () => {
+    it('the enqueue tools are NOT a scheduling surface: they never send a task body themselves (rc.37 Finding B)', () => {
         const src = fs.readFileSync(MCP_TOOLS_QUEUE, 'utf8');
-        const occurrences = src.split('taskDependenciesSatisfied(task, dependencyStatusById)').length - 1;
-        expect(occurrences).toBe(2);
+        // Delivery is only through a claim (tryAssignQueueTask opens the attempt,
+        // then sends). A direct send from the enqueue tools bypasses the claim
+        // gates, the attempt and the dependency predicate all at once.
+        expect(/\bipcDispatchToRemoteAgent\b/.test(src), 'mesh-tools-queue.ts must not dispatch to a remote agent').toBe(false);
+        // (agent_command action:'stop' on cancel is legitimate; a SEND is not.)
+        expect(src.includes("'send_chat'"), 'mesh-tools-queue.ts must not send a chat body').toBe(false);
+        expect(src.includes('taskDependenciesSatisfied('), 'no gate call left to keep in sync — the claim path gates').toBe(false);
     });
 
     it('the predicate itself is unchanged: no graph/run_if/gate/workspace/skip handling inside it', () => {

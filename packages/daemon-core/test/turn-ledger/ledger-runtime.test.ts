@@ -30,7 +30,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 
 import { meshRecord } from '../../src/mesh/mesh-record.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
-import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js';
+import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, recordDirectDispatchTask } from '../../src/mesh/mesh-work-queue.js';
 import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js';
 import { SUMMARY, evd, fakePublisher, recordingPorts } from './ledger-harness.js';
 
@@ -103,6 +103,55 @@ describe('runtime ledger over mesh-runtime.db', () => {
             // A legacy writer flips nothing new; a second (recorded) scrape cannot re-advance.
             ledger.observe(evd('turn_end', { strength: 'genuine' }, ref));
             expect(store.graphStore().getLatestOutput(task.id)?.version).toBe(1);
+        } finally {
+            __clearMeshQueueForTests(mesh);
+        }
+    });
+});
+
+describe('mesh_direct commit flips its materialised queue row (rc.37 Finding C)', () => {
+    // mesh_send_task opens a `mesh_direct` attempt (dispatch_accepted, no
+    // attemptRef, eventId = taskId) and recordDirectDispatchTask materialises a
+    // pre-assigned row. The reducer used to emit queue_status/graph_advance for
+    // `mesh_queue` only, so the row stayed `assigned` after the ledger committed
+    // (live: 2cb0ab79 committed by the scheduler, row still assigned).
+    function openDirect(mesh: string) {
+        const taskId = `direct-${randomUUID().slice(0, 8)}`;
+        const ports = recordingPorts();
+        const ledger = createMeshRuntimeTurnLedger({ selfDaemonId: 'dc', publisher: fakePublisher(), ports: { bus: ports.bus, cancelDispatch: ports.cancelDispatch } });
+        const opened = ledger.observe(evd('dispatch_accepted', {
+            scope: 'mesh_direct', messageId: taskId, meshId: mesh, nodeId: 'n1', providerType: 'claude-cli',
+        } as any, { eventId: taskId, taskId, sessionId: 's1', source: 'dispatch', observedBy: 'dc', attemptRef: undefined }));
+        const attemptId = opened.attempt!.attemptId;
+        recordDirectDispatchTask(mesh, 'direct work', {
+            id: taskId, assignedNodeId: 'n1', assignedSessionId: 's1', taskMode: 'code_change', difficulty: 'medium', attemptId,
+        });
+        const store = MeshRuntimeStore.getInstance();
+        expect(store.findQueueEntryById(mesh, taskId)?.status).toBe('assigned');
+        const ref = { attemptRef: { attemptId, generation: 0 }, taskId };
+        ledger.observe(evd('delivered', { messageId: taskId, outcome: 'delivered', via: 'p2p' } as any, { ...ref, source: 'dispatch' }));
+        ledger.observe(evd('turn_started', { retro: false }, ref));
+        return { taskId, attemptId, store, ledger, ref };
+    }
+
+    it('a genuine turn_end commit moves the direct row assigned → completed', () => {
+        const mesh = meshId();
+        try {
+            const { taskId, store, ledger, ref } = openDirect(mesh);
+            const result = ledger.observe(evd('turn_end', { strength: 'genuine' }, ref));
+            expect(result.attempt?.state).toBe('completed');
+            expect(store.findQueueEntryById(mesh, taskId)?.status).toBe('completed');
+        } finally {
+            __clearMeshQueueForTests(mesh);
+        }
+    });
+
+    it('a failed worker report moves the direct row assigned → failed', () => {
+        const mesh = meshId();
+        try {
+            const { taskId, store, ledger, ref } = openDirect(mesh);
+            ledger.observe(evd('worker_report', { outcome: 'failed', summary: SUMMARY, hasHandoffNotes: false }, { ...ref, source: 'worker_tool' }));
+            expect(store.findQueueEntryById(mesh, taskId)?.status).toBe('failed');
         } finally {
             __clearMeshQueueForTests(mesh);
         }

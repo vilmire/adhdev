@@ -37,6 +37,7 @@ import {
   mintWorkerTaskToken,
 } from '../../src/mesh/worker-mcp-isolation'
 import { seedMeshAttempt } from '../helpers/turn-attempt-seed'
+import { LOG } from '../../src/logging/logger'
 
 const WORKER_DAEMON = 'daemon_mach_worker_f7'
 // The seed helper stamps every attempt `ownerDaemonId: 'test-daemon'` — the owner in these tests.
@@ -87,7 +88,32 @@ function workerCtx(
   }
 }
 
-const ownerCtx: any = { deps: { statusInstanceId: OWNER_DAEMON, instanceManager: { getInstance: () => undefined } } }
+/**
+ * The owner's mesh roster (rc.37 Finding A): the forwarded path authorises on
+ * "the sender daemon owns the node the owner assigned the task to", so every
+ * seeded task's node is registered here as belonging to WORKER_DAEMON.
+ */
+const roster = new Map<string, Array<{ id: string; daemonId: string }>>()
+function registerNode(meshId: string, nodeId: string, daemonId = WORKER_DAEMON) {
+  const nodes = roster.get(meshId) ?? []
+  nodes.push({ id: nodeId, daemonId })
+  roster.set(meshId, nodes)
+}
+
+const ownerCtx: any = {
+  deps: { statusInstanceId: OWNER_DAEMON, instanceManager: { getInstance: () => undefined } },
+  getMeshForCommand: async (meshId: string) => ({ mesh: { id: meshId, nodes: roster.get(meshId) ?? [] }, inline: true, source: 'inline_cache' }),
+}
+
+/**
+ * What the owner's mesh transport hands the handler: the relayed args plus the
+ * authenticated sender (`_meshSenderDaemonId`, stamped by daemon-cloud's
+ * handleMeshCommand — never taken from the peer's payload).
+ */
+function ownerRelay(sender = WORKER_DAEMON) {
+  return vi.fn((_d: string, cmd: string, args: Record<string, unknown>) =>
+    workerReportHandlers[cmd](ownerCtx, { ...args, _meshSenderDaemonId: sender }))
+}
 
 /** Owner-side state for a live task: assigned queue row, open attempt, minted token. */
 function seedOwnerLiveTask(ids: ReturnType<typeof freshIds>): string {
@@ -104,6 +130,7 @@ function seedOwnerLiveTask(ids: ReturnType<typeof freshIds>): string {
   } as any)
   const attempt = seedMeshAttempt({ meshId: ids.meshId, taskId: ids.taskId, sessionId: ids.sessionId, nodeId: ids.nodeId, scope: 'mesh_direct', stage: 'consumed' })
   mintWorkerTaskToken({ meshId: ids.meshId, taskId: ids.taskId, attemptId: attempt.attemptId, sessionId: ids.sessionId, nodeId: ids.nodeId })
+  registerNode(ids.meshId, ids.nodeId)
   return attempt.attemptId
 }
 
@@ -118,6 +145,7 @@ function seedOwnerTerminalTask(ids: ReturnType<typeof freshIds>, agoMs: number):
     meshId: ids.meshId, taskId: ids.taskId, sessionId: ids.sessionId, nodeId: ids.nodeId,
     scope: 'mesh_direct', stage: 'completed', nowMs: Date.now() - agoMs,
   })
+  registerNode(ids.meshId, ids.nodeId)
   return attempt.attemptId
 }
 
@@ -260,6 +288,7 @@ describe('F7 — owner daemon: forwarded report', () => {
       nodeId: ids.nodeId,
       report: REPORT,
       _meshDirectDispatch: true,
+      _meshSenderDaemonId: WORKER_DAEMON,
     })
     expect(res).toMatchObject({ success: true, taskId: ids.taskId, attemptId, outcome: 'completed', duplicate: false, handoffNoteRecorded: true })
     expect(workerEventKinds(ids.meshId, ids.taskId)).toEqual(oracleKinds)
@@ -272,8 +301,8 @@ describe('F7 — owner daemon: forwarded report', () => {
     const ids = freshIds()
     const attemptId = seedOwnerLiveTask(ids)
     const bind = mintWorkerSessionBind({ meshId: ids.meshId, sessionId: ids.sessionId, nodeId: ids.nodeId }).bind
-    const relay = vi.fn((_d: string, cmd: string, args: Record<string, unknown>) =>
-      workerReportHandlers[cmd](ownerCtx, args).then((result) => ({ result })))
+    const toOwner = ownerRelay()
+    const relay = vi.fn((d: string, cmd: string, args: Record<string, unknown>) => toOwner(d, cmd, args).then((result) => ({ result })))
     const res: any = await workerReportHandlers.worker_report_completion(
       workerCtx(ids.sessionId, stampSettings(ids, attemptId), relay),
       { bind, report: REPORT },
@@ -286,7 +315,7 @@ describe('F7 — owner daemon: forwarded report', () => {
     const attemptId = seedOwnerTerminalTask(ids, WORKER_LATE_REPORT_GRACE_MS + 60_000)
     // The terminal chokepoint expired the token; the worker daemon still carries the stamp.
     const bind = mintWorkerSessionBind({ meshId: ids.meshId, sessionId: ids.sessionId }).bind
-    const relay = vi.fn((_d: string, cmd: string, args: Record<string, unknown>) => workerReportHandlers[cmd](ownerCtx, args))
+    const relay = ownerRelay()
     const res: any = await workerReportHandlers.worker_report_completion(
       workerCtx(ids.sessionId, stampSettings(ids, attemptId), relay),
       { bind, report: REPORT },
@@ -301,7 +330,7 @@ describe('F7 — owner daemon: forwarded report', () => {
   it('refuses a claim whose attempt or task disagrees with the owner state', async () => {
     const ids = freshIds()
     const attemptId = seedOwnerLiveTask(ids)
-    const base = { meshId: ids.meshId, taskId: ids.taskId, attemptId, sessionId: ids.sessionId, report: REPORT }
+    const base = { meshId: ids.meshId, taskId: ids.taskId, attemptId, sessionId: ids.sessionId, report: REPORT, _meshSenderDaemonId: WORKER_DAEMON }
     for (const claim of [
       { ...base, attemptId: 'mesh_direct:superseded' },
       { ...base, taskId: 'task_somebody_else' },
@@ -328,6 +357,113 @@ describe('F7 — owner daemon: forwarded report', () => {
   it('is accepted only from the mesh relay source', () => {
     const spec = workerReportSpecs.find((s) => s.name === WORKER_REPORT_FORWARD_COMMAND)
     expect(spec?.sources).toEqual(['mesh'])
+  })
+})
+
+describe('rc.37 Finding A — owner authorises a forwarded report without the worker token', () => {
+  /** Owner state exactly as the live DB had it: assigned direct row naming the session + node, open attempt, NO token here. */
+  function seedOwnerLiveTaskWithoutToken(ids: ReturnType<typeof freshIds>): string {
+    const attemptId = seedOwnerLiveTask(ids)
+    // The token is minted where the attempt opens and never reaches the remote
+    // worker — model the owner losing it too (restart / never minted) so the
+    // test proves acceptance does not depend on it.
+    __resetWorkerTaskTokensForTest()
+    return attemptId
+  }
+
+  it('★accepts on the owner row + sender-owns-node + agreeing task/attempt, with no token present', async () => {
+    const ids = freshIds()
+    const attemptId = seedOwnerLiveTaskWithoutToken(ids)
+    const info = vi.spyOn(LOG, 'info')
+    const res: any = await workerReportHandlers[WORKER_REPORT_FORWARD_COMMAND](ownerCtx, {
+      meshId: ids.meshId, taskId: ids.taskId, attemptId, sessionId: ids.sessionId, nodeId: ids.nodeId,
+      report: REPORT, _meshDirectDispatch: true, _meshSenderDaemonId: WORKER_DAEMON,
+    })
+    expect(res).toMatchObject({ success: true, taskId: ids.taskId, attemptId, outcome: 'completed', handoffNoteRecorded: true })
+    expect(workerEventKinds(ids.meshId, ids.taskId)).toEqual([WORKER_REPORT_EVENT_KIND, WORKER_HANDOFF_EVENT_KIND])
+    expect(MeshRuntimeStore.getInstance().findQueueEntryById(ids.meshId, ids.taskId)?.status).toBe('completed')
+    const forwardedLines = info.mock.calls.filter(([cat, msg]) => cat === 'WorkerReport' && String(msg).startsWith('Forwarded'))
+    expect(forwardedLines).toHaveLength(1)
+    expect(String(forwardedLines[0][1])).toMatch(new RegExp(`accepted as task ${ids.taskId}`))
+    info.mockRestore()
+  })
+
+  it('a claim WITHOUT task/attempt (released stamp) resolves to the session\'s live row', async () => {
+    const ids = freshIds()
+    const attemptId = seedOwnerLiveTaskWithoutToken(ids)
+    const res: any = await workerReportHandlers[WORKER_REPORT_FORWARD_COMMAND](ownerCtx, {
+      meshId: ids.meshId, sessionId: ids.sessionId, report: REPORT, _meshSenderDaemonId: WORKER_DAEMON,
+    })
+    expect(res).toMatchObject({ success: true, taskId: ids.taskId, attemptId })
+  })
+
+  it('★LIVE SHAPE: a clobbered stamp naming an UNCLAIMED task is refused loudly with the owner\'s view, and nothing is recorded', async () => {
+    const ids = freshIds()
+    seedOwnerLiveTaskWithoutToken(ids)
+    // Task 2: enqueued, pinned to the same node, never claimed (the eager push delivered it anyway).
+    const now = new Date().toISOString()
+    MeshRuntimeStore.getInstance().insertQueueEntry({
+      id: `${ids.taskId}_second`, meshId: ids.meshId, message: 'second', status: 'pending',
+      targetNodeId: ids.nodeId, createdAt: now, updatedAt: now,
+    } as any)
+    const warn = vi.spyOn(LOG, 'warn')
+    const res: any = await workerReportHandlers[WORKER_REPORT_FORWARD_COMMAND](ownerCtx, {
+      meshId: ids.meshId, taskId: `${ids.taskId}_second`, sessionId: ids.sessionId, nodeId: ids.nodeId,
+      report: REPORT, _meshSenderDaemonId: WORKER_DAEMON,
+    })
+    expect(res.success).toBe(false)
+    expect(res.error).toBe('unauthenticated')
+    expect(res.detail).toMatch(/^task_mismatch: /)
+    expect(res.detail).toContain(`the owner has task ${ids.taskId} assigned to session ${ids.sessionId}`)
+    expect(res.detail).toContain('is pending on the owner, never claimed by a session')
+    // Not re-pointed at the live task: that would commit it with another body's summary.
+    expect(workerEventKinds(ids.meshId, ids.taskId)).toEqual([])
+    expect(workerEventKinds(ids.meshId, `${ids.taskId}_second`)).toEqual([])
+    expect(MeshRuntimeStore.getInstance().findQueueEntryById(ids.meshId, ids.taskId)?.status).toBe('assigned')
+    const lines = warn.mock.calls.filter(([cat, msg]) => cat === 'WorkerReport' && String(msg).startsWith('Forwarded'))
+    expect(lines).toHaveLength(1)
+    expect(String(lines[0][1])).toMatch(/refused unauthenticated — task_mismatch/)
+    warn.mockRestore()
+  })
+
+  it('refuses a sender that does not own the node, an unidentified sender, and a node off the roster', async () => {
+    const ids = freshIds()
+    const attemptId = seedOwnerLiveTaskWithoutToken(ids)
+    const claim = { meshId: ids.meshId, taskId: ids.taskId, attemptId, sessionId: ids.sessionId, report: REPORT }
+
+    const other: any = await workerReportHandlers[WORKER_REPORT_FORWARD_COMMAND](ownerCtx, { ...claim, _meshSenderDaemonId: 'daemon_mach_someone_else' })
+    expect(other.detail).toMatch(/^sender_not_node_owner: /)
+
+    const anon: any = await workerReportHandlers[WORKER_REPORT_FORWARD_COMMAND](ownerCtx, claim)
+    expect(anon.detail).toMatch(/^sender_unknown: /)
+
+    roster.set(ids.meshId, [])
+    const offRoster: any = await workerReportHandlers[WORKER_REPORT_FORWARD_COMMAND](ownerCtx, { ...claim, _meshSenderDaemonId: WORKER_DAEMON })
+    expect(offRoster.detail).toMatch(/^node_unresolved: /)
+
+    for (const r of [other, anon, offRoster]) expect(r.success).toBe(false)
+    expect(workerEventKinds(ids.meshId, ids.taskId)).toEqual([])
+  })
+
+  it('accepts a legacy-form sender id for the node\'s daemon (canon identity)', async () => {
+    const ids = freshIds()
+    const attemptId = seedOwnerLiveTaskWithoutToken(ids)
+    const res: any = await workerReportHandlers[WORKER_REPORT_FORWARD_COMMAND](ownerCtx, {
+      meshId: ids.meshId, taskId: ids.taskId, attemptId, sessionId: ids.sessionId, report: REPORT,
+      _meshSenderDaemonId: 'mach_worker_f7',
+    })
+    expect(res.success).toBe(true)
+  })
+
+  it('the worker daemon surfaces the owner\'s refusal reason (no bare "attempt ?/unauthenticated")', async () => {
+    const ids = freshIds()
+    seedOwnerLiveTaskWithoutToken(ids)
+    const bind = mintWorkerSessionBind({ meshId: ids.meshId, sessionId: ids.sessionId, nodeId: ids.nodeId }).bind
+    const clobbered = { ...stampSettings(ids, 'x'), meshActiveTaskId: `${ids.taskId}_second` }
+    delete (clobbered as any).meshActiveAttemptId
+    const res: any = await workerReportHandlers.worker_report_completion(workerCtx(ids.sessionId, clobbered, ownerRelay()), { bind, report: REPORT })
+    expect(res.success).toBe(false)
+    expect(res.detail).toMatch(/^(task_mismatch|no_live_task): /)
   })
 })
 
@@ -398,7 +534,7 @@ describe('F7b — late report against a recently-terminal attempt', () => {
     const bind = mintWorkerSessionBind({ meshId: ids.meshId, sessionId: ids.sessionId, nodeId: ids.nodeId }).bind
     // After the owner committed: attempt ref released, task marker detached, membership kept.
     const released = { meshNodeFor: ids.meshId, meshLastNodeId: ids.nodeId, meshCoordinatorDaemonId: OWNER_DAEMON, launchedByCoordinator: true }
-    const relay = vi.fn((_d: string, cmd: string, args: Record<string, unknown>) => workerReportHandlers[cmd](ownerCtx, args))
+    const relay = ownerRelay()
     const res: any = await workerReportHandlers.worker_report_completion(workerCtx(ids.sessionId, released, relay), { bind, report: REPORT })
     expect(relay).toHaveBeenCalledTimes(1)
     const args = (relay.mock.calls[0] as unknown as [string, string, Record<string, unknown>])[2]
@@ -413,7 +549,7 @@ describe('F7b — late report against a recently-terminal attempt', () => {
     const ids = freshIds()
     const attemptId = seedOwnerTerminalTask(ids, 4_000)
     const bind = mintWorkerSessionBind({ meshId: ids.meshId, sessionId: ids.sessionId }).bind
-    const relay = vi.fn((_d: string, cmd: string, args: Record<string, unknown>) => workerReportHandlers[cmd](ownerCtx, args))
+    const relay = ownerRelay()
     const wrong: any = await workerReportHandlers.worker_report_completion(
       workerCtx(ids.sessionId, stampSettings(ids, 'mesh_direct:someone_else'), relay), { bind, report: REPORT })
     expect(wrong.error).toBe('unauthenticated')
@@ -428,7 +564,7 @@ describe('F7b — late report against a recently-terminal attempt', () => {
     seedOwnerTerminalTask(ids, WORKER_LATE_REPORT_GRACE_MS + 1_000)
     const bind = mintWorkerSessionBind({ meshId: ids.meshId, sessionId: ids.sessionId }).bind
     const released = { meshNodeFor: ids.meshId, meshCoordinatorDaemonId: OWNER_DAEMON }
-    const relay = vi.fn((_d: string, cmd: string, args: Record<string, unknown>) => workerReportHandlers[cmd](ownerCtx, args))
+    const relay = ownerRelay()
     const res: any = await workerReportHandlers.worker_report_completion(workerCtx(ids.sessionId, released, relay), { bind, report: REPORT })
     expect(relay).toHaveBeenCalledTimes(1)
     expect(res.error).toBe('unauthenticated')
