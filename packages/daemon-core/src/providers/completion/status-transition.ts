@@ -286,9 +286,41 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
     // push notification. The adapter's status is otherwise authoritative — native
     // transcript shape does NOT override the FSM's busy/idle decision.
     const autoApproveHoldIdle = host.autoApproveBusy && rawStatus === 'idle';
+    // NO-TURN-EVIDENCE-AFTER-STARTUP-MASK (F2, live 2026-09-25): the auto-approve
+    // mask exists to protect an IN-PROGRESS turn's UI from a momentary blip — it
+    // presumes a turn is already underway. A startup-phase consent modal (e.g. a
+    // "trust this folder?" prompt shown before any task was ever dispatched) is
+    // auto-approved through the exact same maybeAutoApproveStatus/autoApproveBusy
+    // path, but there is no turn to protect: no turn has EVER started this boot
+    // and none is in flight (hasAdapterPendingResponse() false, mirroring the
+    // startingToGeneratingWithActiveTurn discriminator above). Masking that edge
+    // to 'generating' anyway pins host.lastStatus at 'generating' with no
+    // corresponding arm ever running — a stale value the tick has no reason to
+    // ever revisit once the modal settles, because the adapter's own FSM does not
+    // re-fire onChange while it sits quietly at idle. The FIRST real turn then
+    // arrives as idle→generating on-screen but generating→generating on
+    // lastStatus (no edge), so the idle→generating arm — the only place that sets
+    // generatingStartedAt, arms the debounce and emits turn_started evidence —
+    // never runs, and that turn's completion has no evidence trail at all.
+    //
+    // "No turn has EVER started this boot" is deliberately NOT read off
+    // generatingStartedAt (it also gets armed — and later reset back to 0 on
+    // completion — by non-turn busy phases such as the waiting_approval /
+    // waiting_choice arms below, which a startup consent modal itself enters; a
+    // guard keyed on generatingStartedAt would stop applying the moment THAT
+    // arm ran, then re-apply after it completes, re-opening the exact same hole
+    // one edge later). Instead reuse adapter.currentTurnTaskId — set ONLY by
+    // onTurnStarted (a genuine inject) and persisting past completion for the
+    // rest of the boot — the same persists-past-completion discriminator
+    // maybeSynthesizeStartupGraceCollapse already relies on below. That keeps
+    // the exemption live across the ENTIRE pre-first-turn sequence (however
+    // many masked waiting_approval/generating frames a startup modal produces)
+    // and turns off permanently, atomically, the instant a real turn starts.
+    const noTurnStartedThisBoot = !(host.adapter as any)?.currentTurnTaskId;
+    const startupMaskWithNoActiveTurn = noTurnStartedThisBoot && !host.hasAdapterPendingResponse();
     const newStatus = isQuestionPicker
         ? 'waiting_choice'
-        : autoApproveActive || autoApproveHoldIdle ? 'generating' : rawStatus;
+        : (autoApproveActive || autoApproveHoldIdle) && !startupMaskWithNoActiveTurn ? 'generating' : rawStatus;
     const dirName = workingDirBasename(host.workingDir);
     const chatTitle = `${host.provider.name} · ${dirName}`;
     // Liveness fingerprint for the no-progress watchdog. Previously this
@@ -865,7 +897,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
         // this edge's provider events, with the real prev/next.
         emitStatusEdge(host.lifecyclePort, host.instanceId, previousStatus, newStatus, cliStatusCause({
             questionPicker: isQuestionPicker,
-            autoApproveMasked: (autoApproveActive || autoApproveHoldIdle) && rawStatus !== 'generating',
+            autoApproveMasked: (autoApproveActive || autoApproveHoldIdle) && !startupMaskWithNoActiveTurn && rawStatus !== 'generating',
             adapterCause,
         }), host.type);
     }

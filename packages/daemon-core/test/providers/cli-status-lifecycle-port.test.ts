@@ -142,6 +142,13 @@ describe('CLI status tick → lifecycle port status edges', () => {
       lastStatus: 'idle',
       adapterStatus: { status: 'waiting_approval', activeModal: { message: 'Allow Bash?', buttons: ['Yes', 'No'], kind: 'approval' } },
     })
+    // F2 (2026-09-25): the mask now exempts a session where no turn has EVER
+    // started this boot (adapter.currentTurnTaskId unset) — that startup-only
+    // case is covered by status-transition-startup-mask-turn-evidence.test.ts.
+    // This test is about a MID-SESSION consent (the ordinary blip-protection
+    // case the mask still owns unconditionally), so stamp currentTurnTaskId to
+    // say a real turn is/was underway, exactly like a genuine onTurnStarted.
+    instance.adapter.currentTurnTaskId = 'task-mid-session'
     instance.maybeAutoApproveStatus = () => true
     tick('fsm_state')
     expect(statusCalls(calls)).toEqual([
@@ -152,6 +159,9 @@ describe('CLI status tick → lifecycle port status edges', () => {
 
   it('labels the auto-approve idle hold (raw idle held as generating) auto_approve_mask', () => {
     const { instance, calls, tick } = makeInstance({ lastStatus: 'idle', adapterStatus: { status: 'idle', activeModal: null } })
+    // F2 (2026-09-25): same as above — this is the mid-session idle-hold case,
+    // not the startup-with-no-turn exemption, so stamp currentTurnTaskId.
+    instance.adapter.currentTurnTaskId = 'task-mid-session'
     // The 2 s post-fire busy window; the gate itself is stubbed so a disabled
     // auto-approve mode does not reset the window before the hold is read.
     instance.maybeAutoApproveStatus = () => false
