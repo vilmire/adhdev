@@ -1417,6 +1417,16 @@ export type {
 export { bindSeqscribeRuntime, seqscribeSlot } from './seqscribe/runtime-slot.js';
 export { buildLocalSeqscribeStats } from './seqscribe/local-stats.js';
 export { subscribeTranscriptProjection } from './seqscribe/transcript-bus-subscriber.js';
+// G6 prerequisite — standalone dashboard replica lane (localhost WS peer).
+export {
+  StandaloneTranscriptLane,
+  STANDALONE_SEQSCRIBE_WS_PATH,
+  STANDALONE_SEQSCRIBE_PEER_CLASS,
+  MAX_STANDALONE_SEQSCRIBE_LANES,
+  deriveStandaloneTranscriptGrants,
+  transcriptTopicSessionSegment,
+} from './seqscribe/standalone-transcript-lane.js';
+export type { StandaloneTranscriptLaneOptions } from './seqscribe/standalone-transcript-lane.js';
 // ─── Session launch provenance (wiring-unification Phase E) ───
 export {
   buildSessionLaunchRecord,

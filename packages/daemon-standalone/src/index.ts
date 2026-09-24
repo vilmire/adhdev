@@ -5,6 +5,7 @@
  * 1. DaemonCore init (IDE detection, CDP connection, Provider loading)
  * 2. HTTP REST API — /api/v1/status, /api/v1/command
  * 3. WebSocket — ws://localhost:3847/ws (real-time status broadcast + command execution)
+ *    + ws://localhost:3847/ws/seqscribe (dashboard transcript replica lane — raw seqscribe frames)
  * 4. Static file serving — web-standalone build output
  *
  * Usage:
@@ -44,6 +45,8 @@ import {
   DEFAULT_DAEMON_PORT,
   DAEMON_WS_PATH,
   DEFAULT_STANDALONE_PORT,
+  StandaloneTranscriptLane,
+  STANDALONE_SEQSCRIBE_WS_PATH,
   type DaemonHostRuntime,
   type DaemonRuntime,
   type DevServer,
@@ -68,6 +71,11 @@ import { createRouterInteractivePromptService } from './interactive-prompt-http.
 import { StandaloneHttpApi } from './standalone-http.js';
 import { StandaloneChatTailFanout } from './standalone-chat-tail.js';
 import { normalizeCommandEnvelope } from './standalone-command-envelope.js';
+import {
+  isStandaloneTranscriptLaneDisabled,
+  rejectStandaloneUpgrade,
+  routeStandaloneUpgrade,
+} from './standalone-seqscribe-upgrade.js';
 import { standaloneIpcEnabled, startStandaloneIpcCompatServer } from './standalone-ipc-compat.js';
 import { broadcastToOpenClients, createStandaloneHostTransport } from './standalone-host-transport.js';
 import {
@@ -169,6 +177,12 @@ class StandaloneServer {
   private sessionHost: SessionHostHandle | null = null;
   private devServer: DevServer | null = null;
   private offBus: Array<() => void> = [];
+  /**
+   * The dashboard's seqscribe transcript replica lane (`/ws/seqscribe`,
+   * wiring-unification G6 prerequisite). Null when the node did not open or
+   * the lane is switched off — the dashboard then stays on legacy chat-tail.
+   */
+  private transcriptLane: StandaloneTranscriptLane | null = null;
   private readonly chatTail = new StandaloneChatTailFanout({
     clients: () => this.clients,
     host: () => this.host,
@@ -306,6 +320,9 @@ class StandaloneServer {
     this.offBus.push(this.runtime.bus.on('terminated', (e) => this.chatTail.forgetSession(e.sessionId), {
       name: 'standalone.chat-tail-forget',
     }));
+    if (this.runtime.seqscribe && !isStandaloneTranscriptLaneDisabled(process.env)) {
+      this.transcriptLane = new StandaloneTranscriptLane(this.runtime.seqscribe.node);
+    }
 
     // DevServer (optional) — shared with cloud, with provider hot reload.
     if (options.dev) {
@@ -320,26 +337,30 @@ class StandaloneServer {
     // 6. WebSocket Server (upgrade)
     this.wss = new WebSocketServer({ noServer: true });
     this.httpServer.on('upgrade', (req, socket, head) => {
-      const wsUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-      if (wsUrl.pathname === '/ws') {
-        // Validate Origin before upgrade (same gate as the HTTP CORS check):
-        // without it any page could open a WS to this daemon, subscribe to
-        // topic_update streams and dispatch commands.
-        if (!this.http.isAllowedOrigin(req)) {
-          socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-          socket.destroy();
+      // Both legs (/ws JSON dashboard lane, /ws/seqscribe transcript replica
+      // lane) pass the SAME Origin + token/password gate before upgrading —
+      // without it any page could open a WS to this daemon, subscribe to
+      // topic_update streams and dispatch commands.
+      const route = routeStandaloneUpgrade(req, this.http, {
+        seqscribePath: STANDALONE_SEQSCRIBE_WS_PATH,
+        seqscribeLaneAvailable: this.transcriptLane !== null,
+      });
+      switch (route.kind) {
+        case 'dashboard':
+          this.wss!.handleUpgrade(req, socket, head, (ws) => {
+            this.handleWsConnection(ws);
+          });
           return;
-        }
-        if (!this.http.isRequestAuthenticated(req, req.url || '/')) {
-          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-          socket.destroy();
+        case 'seqscribe':
+          this.wss!.handleUpgrade(req, socket, head, (ws) => {
+            this.handleSeqscribeLaneConnection(ws);
+          });
           return;
-        }
-        this.wss!.handleUpgrade(req, socket, head, (ws) => {
-          this.handleWsConnection(ws);
-        });
-      } else {
-        socket.destroy();
+        case 'reject':
+          rejectStandaloneUpgrade(socket, route.status);
+          return;
+        default:
+          socket.destroy();
       }
     });
 
@@ -511,6 +532,24 @@ class StandaloneServer {
     });
   }
 
+  /**
+   * One authenticated transcript replica lane. The socket carries raw
+   * seqscribe frames only (daemon-core `StandaloneTranscriptLane` wraps it with
+   * `webSocketChannel`); it is NOT a dashboard client — no status pushes, no
+   * commands, not counted against the `/ws` client cap.
+   */
+  private handleSeqscribeLaneConnection(ws: WebSocket): void {
+    // `ws` is an EventEmitter: an 'error' with no listener would throw and take
+    // the daemon down. The lane observes the subsequent 'close' and detaches.
+    ws.on('error', () => { /* close follows */ });
+    const lane = this.transcriptLane;
+    if (!lane) {
+      try { ws.close(1013, 'transcript lane unavailable'); } catch { /* noop */ }
+      return;
+    }
+    lane.accept(ws);
+  }
+
   private registerWsConnection(ws: WebSocket): string {
     let id = this.wsConnectionIds.get(ws);
     if (id) return id;
@@ -638,6 +677,9 @@ class StandaloneServer {
     }
     this.clients.clear();
     this.chatTail.clear();
+    // Replica lanes detach BEFORE the node closes (runtime.shutdown below).
+    this.transcriptLane?.close();
+    this.transcriptLane = null;
     this.lastWsStatusSignature = null;
 
     // Close WSS

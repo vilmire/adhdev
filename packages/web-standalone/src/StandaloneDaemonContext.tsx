@@ -13,11 +13,14 @@ import {
     subscriptionManager,
     statusPayloadToEntries,
     eventManager,
+    noteTerminalStatusEventForControllers,
 } from '@adhdev/web-core'
 import type { ConnectionStatus } from '@adhdev/web-core'
 import type { StandaloneWsStatusPayload, SubscribeRequest, TopicUpdateEnvelope, UnsubscribeRequest } from '@adhdev/daemon-core'
 import { standaloneConnectionManager } from './connection-manager'
 import { routeStandaloneStatusEvent } from './standalone-status-event'
+import { isStandaloneWsDataFrame } from './standalone-transcript-lane'
+import { startStandaloneTranscriptLane } from './standalone-transcript-lane-wiring'
 
 import { getStandaloneToken } from './standalone-auth-client'
 
@@ -103,10 +106,12 @@ export async function sendCommandViaWs(
     throw new Error(`WS command channel unavailable: ${command}`)
 }
 
-export function sendDataViaWs(_daemonId: string, data: SubscribeRequest | UnsubscribeRequest): boolean {
+export function sendDataViaWs(_daemonId: string, data: SubscribeRequest | UnsubscribeRequest | Record<string, unknown>): boolean {
     const ws = _wsInstance
     if (!ws || ws.readyState !== WebSocket.OPEN) return false
-    if (!data || (data as any).type !== 'subscribe' && (data as any).type !== 'unsubscribe') return false
+    // Topic subscribe/unsubscribe, plus the chat-tail controller's
+    // `report_transcript_transport` telemetry command (see isStandaloneWsDataFrame).
+    if (!isStandaloneWsDataFrame(data)) return false
     try {
         ws.send(JSON.stringify(data))
         return true
@@ -313,7 +318,7 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                     }
 
                     // Toasts / approval modals (B5): same projection web-cloud gets over P2P.
-                    if (routeStandaloneStatusEvent(msg, _lastStatusDaemonId, eventManager)) return
+                    if (routeStandaloneStatusEvent(msg, _lastStatusDaemonId, eventManager, noteTerminalStatusEventForControllers)) return
 
                     if (msg.type === 'topic_update') {
                         const update = msg.update as TopicUpdateEnvelope | undefined
@@ -472,8 +477,13 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
         }
 
         connect()
+        // Transcript replica lane (/ws/seqscribe) — independent socket with its
+        // own backoff; legacy chat-tail on /ws keeps running until the
+        // controller sees a verified replica snapshot.
+        const stopTranscriptLane = startStandaloneTranscriptLane()
 
         return () => {
+            stopTranscriptLane()
             mountedRef.current = false
             cleaningUpRef.current = true
             daemonMetadataUnsubscribeRef.current?.()
