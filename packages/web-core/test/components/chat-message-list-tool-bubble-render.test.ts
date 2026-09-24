@@ -152,4 +152,49 @@ describe('ChatMessageList — kind:tool default-transcript render', () => {
     expect(optedOut).not.toContain('ran the thing')
     expect(optedOut).toContain('do the thing')
   })
+
+  /**
+   * (TOOL-LABEL) The tool card header used to hardcode "Tool" regardless of
+   * what the daemon resolved. chat-commands-read-native-normalize.ts derives
+   * meta.label from the reader's toolName (antigravity) or senderName
+   * (claude/codex/hermes) — see dispatcher.ts toNativeHistoryMessage — so the
+   * bubble must render that label when present, and fall back to the generic
+   * "Tool" only when it is absent (older daemons / readers that set neither).
+   */
+  it('renders the daemon-derived meta.label as the tool card header when present', () => {
+    const html = renderMessages([
+      {
+        role: 'user',
+        kind: 'standard',
+        content: 'read the readme',
+        receivedAt: 1,
+        sequence: 0,
+      } as ChatMessage,
+      {
+        role: 'assistant',
+        kind: 'tool',
+        content: 'read_file: README.md',
+        receivedAt: 2,
+        sequence: 1,
+        meta: { label: 'read_file' },
+      } as ChatMessage,
+    ])
+
+    expect(html).toContain('class="tool-label">read_file<')
+    expect(html).not.toContain('class="tool-label">Tool<')
+  })
+
+  it('falls back to the generic "Tool" header when meta.label is absent', () => {
+    const html = renderMessages([
+      {
+        role: 'assistant',
+        kind: 'tool',
+        content: '↘ ran the thing',
+        receivedAt: 1,
+        sequence: 0,
+      } as ChatMessage,
+    ])
+
+    expect(html).toContain('class="tool-label">Tool<')
+  })
 })

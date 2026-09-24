@@ -132,6 +132,51 @@ export function applyPreLaunchTrust(trust: PreLaunchTrust, plan: ResolvedTrustPl
                 LOG.info('pre-launch-trust', `materialized ${plan.origin} codex project trust in ${settingsPath}`);
                 return real;
             }
+            if (trust.scheme === 'claude_json_projects') {
+                // ★`~/.claude.json`'s `projects` is an OBJECT-OF-OBJECTS keyed by
+                // realpath, not an array or a per-folder TOML table — see
+                // providers/claude-workspace-trust.ts for the full shape
+                // (verified live). The write must be SPARSE: only the one
+                // `hasTrustDialogAccepted` field is ever touched, on only the one
+                // key for this workspace. A brand-new key gets exactly
+                // `{ hasTrustDialogAccepted: true }`; an existing key keeps every
+                // other session-history field Claude Code itself owns
+                // (mcpServers, lastSessionId, allowedTools, …) byte-for-byte.
+                // Idempotence is keyed on the CURRENT VALUE of that one field,
+                // not mere key presence, so a second call is a true no-op.
+                let root: Record<string, unknown> = {};
+                try {
+                    const text = fs.readFileSync(settingsPath, 'utf8');
+                    if (text.trim().length > 0) {
+                        const parsed = JSON.parse(text);
+                        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                            root = parsed as Record<string, unknown>;
+                        }
+                    }
+                } catch (err: any) {
+                    if (err?.code !== 'ENOENT') throw err;
+                }
+                const projectsRaw = root.projects;
+                const projects: Record<string, unknown> = (projectsRaw && typeof projectsRaw === 'object' && !Array.isArray(projectsRaw))
+                    ? projectsRaw as Record<string, unknown>
+                    : {};
+                const existingRaw = projects[real];
+                const existing: Record<string, unknown> = (existingRaw && typeof existingRaw === 'object' && !Array.isArray(existingRaw))
+                    ? existingRaw as Record<string, unknown>
+                    : {};
+                if (existing.hasTrustDialogAccepted === true) {
+                    LOG.debug('pre-launch-trust', `[${settingsPath}] ${real} already trusted — no change`);
+                    return null;
+                }
+                projects[real] = { ...existing, hasTrustDialogAccepted: true };
+                root.projects = projects;
+                fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+                const tmp = `${settingsPath}.${process.pid}.${Date.now()}.tmp`;
+                fs.writeFileSync(tmp, `${JSON.stringify(root, null, 2)}\n`, 'utf8');
+                fs.renameSync(tmp, settingsPath);
+                LOG.info('pre-launch-trust', `materialized ${plan.origin} claude project trust in ${settingsPath}`);
+                return real;
+            }
             return null;
         }
 

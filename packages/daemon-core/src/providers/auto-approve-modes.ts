@@ -11,6 +11,10 @@ const KNOWN_DANGEROUS_LAUNCH_ARGS = new Set([
   'bypassPermissions',
   'sandbox_mode=danger-full-access',
   'approval_policy=never',
+  // opencode's own --help labels this "(dangerous!)" — it auto-approves every
+  // permission that is not explicitly denied (no intermediate accept-edits-only
+  // tier exists for opencode's launch-arg surface).
+  '--auto',
 ]);
 
 export interface ResolvedAutoApproveMode {

@@ -149,6 +149,62 @@ export const IDLE_REMINDER_DEBOUNCE_MS = 300_000; // 5 minutes
 /** How many missions to name individually before folding the rest into "and M more". */
 const MISSION_LIST_CAP = 10;
 
+/**
+ * CLONE-AFTER-IDLE-REMINDER guard window (2026-09-24 incident).
+ *
+ * The idle-mission reminder's nudge text let a coordinator autonomously clone
+ * two worktrees in response to a reminder whose only intent was "check state
+ * and report" — the model read "decide the mission's outcome" as license to
+ * take new mesh-mutating action. The text fix above (buildIdleReminderMessage)
+ * addresses the common case, but a text-only fix is not enforceable: nothing
+ * stops a future wording regression, or a differently-tuned model, from
+ * reading the same nudge the same way again.
+ *
+ * The chosen enforcement is the LEAST intrusive of the two options considered:
+ * requiring `clone_mesh_node` to carry an explicit `reason` string whenever the
+ * request arrives within this window after an idle reminder fired FOR THE SAME
+ * MESH — rather than gating on "mission has zero pending/assigned tasks",
+ * which would need the clone handler to reach into queue/task state it does
+ * not otherwise touch, and would wrongly block a legitimate clone a
+ * coordinator makes for a mission that has already dispatched all its tasks
+ * (zero pending is the NORMAL end state of a healthy mission, not evidence of
+ * an idle-reminder-triggered impulse clone).
+ *
+ * A `reason` is cheap for a coordinator that actually decided to clone (it is
+ * one extra string in a tool call it is already making) and costs nothing for
+ * the overwhelmingly common case of a clone made outside this window, which is
+ * untouched. The window is intentionally short: it only needs to cover the
+ * reflexive same-turn response to a reminder, not put a standing tax on clones
+ * made minutes later once the coordinator has moved on to genuine work.
+ */
+export const CLONE_AFTER_IDLE_REMINDER_GUARD_MS = 120_000; // 2 minutes
+
+/**
+ * True when a `clone_mesh_node` request for `meshId` must carry an explicit
+ * `reason` to proceed — i.e. an idle reminder fired for this mesh within the
+ * guard window and the request supplies no reason. Pure so it is independently
+ * testable without touching MeshRuntimeStore or the command router.
+ *
+ * `reason` also accepts a `task_id`/`taskId` justification in its place — a
+ * clone dispatched to satisfy a specific already-decided task is exactly the
+ * "mission's plan already calls for it" case the reminder text carves out, so
+ * requiring a SECOND freeform string on top of an existing task reference
+ * would be pure friction with no safety benefit.
+ */
+export function cloneRequiresIdleReminderReason(
+    last: { emittedAt: number } | null,
+    now: number,
+    request: { reason?: unknown; taskId?: unknown; task_id?: unknown },
+    guardMs: number = CLONE_AFTER_IDLE_REMINDER_GUARD_MS,
+): boolean {
+    if (!last) return false;
+    if (now - last.emittedAt > guardMs) return false;
+    const hasReason = typeof request.reason === 'string' && request.reason.trim().length > 0;
+    const hasTaskId = (typeof request.taskId === 'string' && request.taskId.trim().length > 0)
+        || (typeof request.task_id === 'string' && request.task_id.trim().length > 0);
+    return !hasReason && !hasTaskId;
+}
+
 /** Stable hash of the active-mission id set (sorted, joined) for debounce comparison. */
 export function missionSetHash(missions: MeshMissionRecord[]): string {
     return missions.map(m => m.id).sort().join(',');
@@ -205,10 +261,11 @@ export function buildIdleReminderMessage(missions: MeshMissionRecord[]): string 
     return (
         `[System] Coordinator idle with ${missions.length} active mission(s):\n`
         + `${lines.join('\n')}\n`
-        + `The mesh has no work in flight. For each mission, decide its outcome: continue it `
-        + `(enqueue/dispatch the remaining work) or close it with `
-        + `mesh_mission_upsert(mission_id, status: "completed" | "abandoned"). `
-        + `Do not leave a finished mission in 'active'. This is a one-time reminder.`
+        + `Check each mission's state and report. Do not leave a finished mission in 'active' — `
+        + `close it with mesh_mission_upsert(mission_id, status: "completed" | "abandoned"). `
+        + `Do NOT clone nodes, launch sessions, or enqueue tasks in response to this reminder `
+        + `unless the mission's own plan already calls for that specific next step. `
+        + `This is a one-time reminder.`
     );
 }
 

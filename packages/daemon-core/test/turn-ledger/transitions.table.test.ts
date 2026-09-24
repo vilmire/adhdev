@@ -234,3 +234,90 @@ describe('illegal (state, kind) pairs', () => {
         expect(count).toBe(Object.values(ILLEGAL).reduce((n, kinds) => n + kinds.length, 0));
     });
 });
+
+// Live rc.45 run 14 (2026-09-25, owner ledger, attempt mesh_direct:4d8972b3…):
+// a worker report was recorded (R17g, await_end opened) while generating; the
+// next turn_end's transcript-final read came back a content DECLINE
+// (native_marker_absent) rather than an admitted end. R16a's guard had no
+// `!reportedThisGeneration` exclusion (unlike every other idle-signal guard),
+// so it matched instead of R9t, recorded a no-op note, and — R16a has no
+// reevaluate, unlike R16's hold — the attempt then sat until the UNRELATED
+// await_end hold expired ~1 min later and R13t committed it. Fix: R9t's
+// `finished_after_report` now also claims a content decline once a report is
+// recorded for the current generation (the report is the completion proof the
+// scrape is missing); R16a's guard excludes `reportedThisGeneration` to match.
+describe('R9t precedence over R16a once a report is recorded (2026-09-25, rc.45 run 14)', () => {
+    const declineEvidence = ev('transcript_final', { selfAttributing: false, nativeRead: true, live: LIVE_IDLE, summary: REF });
+
+    it('without a recorded report, a content decline still records via R16a (unchanged)', () => {
+        const attempt = G();
+        const result = reduce({ attempt, holds: [], evidence: declineEvidence, policy: POLICY, nowMs: NOW });
+        expect(result.rule).toBe('R16a');
+        expect(result.verdict).toBe('recorded');
+        expect(result.attempt!.terminal).toBeNull();
+    });
+
+    it('with a report recorded for the CURRENT generation, the same decline commits via R9t, not R16a', () => {
+        const attempt = G(REPORTED);
+        const result = reduce({ attempt, holds: [makeHold('await_end')], evidence: declineEvidence, policy: POLICY, nowMs: NOW });
+        expect(result.rule).toBe('R9t');
+        expect(result.verdict).toBe('applied');
+        expect(result.attempt!.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report', reason: 'worker_reported' });
+        expect(result.effects.some((e) => e.kind === 'release_hold')).toBe(true);
+    });
+
+    it('a live-pending HOLD admission still yields to R16 (genuine ongoing activity is not idle corroboration)', () => {
+        const attempt = G(REPORTED);
+        const holdEvidence = ev('turn_end', { strength: 'genuine', reportExpected: true, live: { modal: false, adapterPending: true, trailingTool: false } });
+        const result = reduce({ attempt, holds: [makeHold('await_end')], evidence: holdEvidence, policy: POLICY, nowMs: NOW });
+        expect(result.rule).toBe('R16');
+        expect(result.verdict).toBe('applied');
+        expect(result.attempt!.terminal).toBeNull();
+    });
+
+    it('exactly one rule matches the decline+reported combination (no ambiguity)', () => {
+        const attempt = G(REPORTED);
+        const matches = matchingRules({ attempt, holds: [makeHold('await_end')], evidence: declineEvidence, policy: POLICY, nowMs: NOW });
+        expect(matches.map((r) => r.id)).toEqual(['R9t']);
+    });
+});
+
+describe('break-once replay: report before idle edge commits on the next turn_end, not on await_end expiry (rc.45 run 14)', () => {
+    it('R4 → R17g (report while generating) → turn_end ⇒ R9t commits tool_report immediately; a later scrape ⇒ R18', () => {
+        // T+0: turn starts.
+        const started = reduce({ attempt: makeAttempt('delivered'), holds: [], evidence: ev('turn_started', { retro: false }), policy: POLICY, nowMs: NOW - 20_000 });
+        expect(started.rule).toBe('R4');
+        expect(started.attempt!.state).toBe('generating');
+
+        // T+~12s: the worker's report is accepted mid-turn (R17g) — recorded on
+        // generation 1 (the fixture's current generation), await_end opens.
+        const reportEvidence = ev('worker_report', { outcome: 'completed', summary: REF, hasHandoffNotes: true }, { source: 'worker_tool' });
+        const reported = reduce({ attempt: started.attempt, holds: started.holds, evidence: reportEvidence, policy: POLICY, nowMs: NOW - 8_000 });
+        expect(reported.rule).toBe('R17g');
+        expect(reported.attempt!.state).toBe('generating');
+        expect(reported.attempt!.terminal).toBeNull();
+        expect(reported.attempt!.data.report).toMatchObject({ generation: 1, outcome: 'completed' });
+        expect(reported.holds.some((h) => h.reason === 'await_end')).toBe(true);
+
+        // T+~17s (well before the 60s await_end deadline): the corroborating
+        // idle edge arrives as a content-decline transcript read (this run's
+        // shape) — expect R9t to commit at once with strength tool_report, NOT
+        // a fall-through to R16a and NOT a wait for R13t/await_end expiry.
+        const idleEdge = ev('transcript_final', { selfAttributing: false, nativeRead: true, live: LIVE_IDLE, summary: REF });
+        const committed = reduce({ attempt: reported.attempt, holds: reported.holds, evidence: idleEdge, policy: POLICY, nowMs: NOW - 5_000 });
+        expect(committed.rule).toBe('R9t');
+        expect(committed.verdict).toBe('applied');
+        expect(committed.attempt!.state).toBe('completed');
+        expect(committed.attempt!.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report', reason: 'worker_reported' });
+        // await_end released — no dangling hold, no R13t ever needed.
+        expect(committed.holds.some((h) => h.reason === 'await_end')).toBe(false);
+        expect(committed.effects.some((e) => e.kind === 'commit')).toBe(true);
+
+        // A later scrape of the now-terminal attempt is recorded, not a second
+        // commit (R18) — the suppression rule the live trace's own log named.
+        const laterScrape = reduce({ attempt: committed.attempt, holds: committed.holds, evidence: idleEdge, policy: POLICY, nowMs: NOW + 5_000 });
+        expect(laterScrape.rule).toBe('R18');
+        expect(laterScrape.verdict).toBe('recorded');
+        expect(laterScrape.attempt).toEqual(committed.attempt);
+    });
+});

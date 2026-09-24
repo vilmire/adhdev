@@ -196,17 +196,22 @@ function reportedThisGeneration(ctx: GuardCtx): boolean {
 
 /**
  * An idle signal after a recorded report (R9t): any admitted turn_end (strong
- * or weak, hollow or not — the report is the verdict), an admitted
- * transcript_final, or a no-progress watchdog that sees the final message. A
- * live-pending/quiet hold admission is not an idle signal; it still goes to R16
- * and re-reduces (R9t) once the hold clears.
+ * or weak, hollow or not — the report is the verdict), a transcript_final that
+ * is either admitted OR declined on content grounds (native_marker_absent /
+ * no_final_assistant_summary — the scrape's own completion proof is exactly
+ * what the report already supplies, so its absence is not evidence the turn is
+ * still running), or a no-progress watchdog that sees the final message. A
+ * live-pending/quiet HOLD admission (modal parked, adapter still busy,
+ * trailing tool activity, or the transcript still growing) is a genuine sign
+ * of continued activity, not just a missing marker — that is not an idle
+ * signal; it still goes to R16 and re-reduces (R9t) once the hold clears.
  */
 function finishedAfterReport(ctx: GuardCtx): boolean {
     if (!reportedThisGeneration(ctx)) return false;
     const ev = ctx.evidence;
     if (ev.kind === 'turn_end' || ev.kind === 'transcript_final') {
         const admission = admissionOf(ctx);
-        return admission?.kind === 'strong' || admission?.kind === 'weak';
+        return admission?.kind === 'strong' || admission?.kind === 'weak' || admission?.kind === 'decline';
     }
     return ev.kind === 'no_progress' && ev.finalAssistantPresent;
 }
@@ -252,7 +257,12 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     genuine_end_or_strong_final: (ctx) => GUARDS.end_genuine(ctx) || (GUARDS.final_strong(ctx) && !awaitReportHeld(ctx)),
     weak_end_or_final: (ctx) => GUARDS.end_weak(ctx) || GUARDS.final_weak(ctx),
     admission_hold: (ctx) => admissionOf(ctx)?.kind === 'hold',
-    admission_decline: (ctx) => admissionOf(ctx)?.kind === 'decline',
+    // A content decline (no native marker / no final assistant summary) yields
+    // to R9t once a report is recorded for this generation: the report already
+    // supplies the completion proof the scrape is missing (2026-09-25 — R16a
+    // was a dead end here, no reevaluate, so the attempt sat on the scrape's
+    // decline until the unrelated await_end hold expired ~1 min later).
+    admission_decline: (ctx) => admissionOf(ctx)?.kind === 'decline' && !reportedThisGeneration(ctx),
     after_weak_since: (ctx) => afterWeakSince(ctx) && !awaitReportHeld(ctx),
     activity_keeps_state: (ctx) => {
         const ev = ctx.evidence;

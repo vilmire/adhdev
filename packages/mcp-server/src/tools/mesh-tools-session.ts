@@ -78,7 +78,7 @@ import type { MeshDeliveryMode } from '@adhdev/daemon-core';
 // §8 unit 6 ("mesh_read_chat remote display cutover") — the FIRST hop of the
 // fixed `replica → live P2P read_chat → cached summary` order.
 import { readTranscriptReplicaForDisplay } from './mesh-transcript-replica-read.js';
-import { normalizeNodeCapabilitySlots, isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES, appendWorkerProtocolFooter } from '@adhdev/mesh-shared';
+import { normalizeNodeCapabilitySlots, isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES, appendWorkerProtocolFooter, sanitizeRefusalCode } from '@adhdev/mesh-shared';
 // QUOTA GATE for the manual launch path. Same judgement module the auto-launch /
 // queue-drain path uses (daemon-core resolveUsableProvider) — deliberately shared
 // rather than reimplemented, so the two dispatch paths can never disagree about
@@ -192,6 +192,19 @@ async function openDirectDispatchAttempt(
 }
 
 /**
+ * P2pRelayFailureCode values (`p2p-relay-failure.ts`) that mean the worker was
+ * never reached at all — as opposed to a `mesh_logic_or_provider_failure`-class
+ * code, which (despite the transport-shaped name) covers an application-level
+ * refusal the worker DID answer with. Used to decide `dispatch_failed.workerAbsent`
+ * for a direct dispatch the same way the queue-claim path's message-text sniff
+ * does (mesh-queue-assignment.ts `handleDispatchFailure`), but on the STRUCTURED
+ * code `ipcDispatchToRemoteAgent` already classifies rather than re-parsing prose.
+ */
+const P2P_TRANSPORT_ABSENCE_CODES: ReadonlySet<string> = new Set([
+    'p2p_unavailable', 'p2p_timeout', 'p2p_not_connected', 'p2p_datachannel_closed', 'p2p_no_route', 'p2p_daemon_offline',
+]);
+
+/**
  * C-W6c: record a `delivered` or `dispatch_failed` evidence for a direct
  * dispatch's attempt (best-effort — see openDirectDispatchAttempt's note).
  * Called AFTER the transport actually confirmed/refused the send, exactly
@@ -202,7 +215,20 @@ async function observeDirectDispatchOutcome(
     ctx: MeshContext,
     attemptRef: { attemptId: string; generation: number } | null,
     opts: { taskId: string; sessionId: string }
-        & ({ outcome: 'delivered'; via: 'local' | 'p2p' } | { outcome: 'dispatch_failed'; workerAbsent: boolean }),
+        & ({ outcome: 'delivered'; via: 'local' | 'p2p' }
+            | {
+                outcome: 'dispatch_failed'; workerAbsent: boolean;
+                /**
+                 * Live-gap fix (2026-09-25): a worker refusal (`{success:false, code, error}`,
+                 * unwrapped via `unwrapMeshRelayResult` at the call site) previously collapsed
+                 * to `{workerAbsent:false, reason:'rejected_by_worker'}` with nothing else — the
+                 * coordinator could see THAT the worker refused but never WHY. `refusalCode` is
+                 * the worker's own short code (sanitized — see `sanitizeRefusalCode`); `nodeId`
+                 * + `refusalDetail` are for the LOCAL WARN line only (never sent as evidence —
+                 * evidence is content-free by construction, see turn-evidence.ts).
+                 */
+                refusalCode?: string; refusalDetail?: string; nodeId?: string;
+            }),
 ): Promise<void> {
     if (!attemptRef) return;
     try {
@@ -222,6 +248,7 @@ async function observeDirectDispatchOutcome(
                 },
             });
         } else {
+            const refusalCode = opts.workerAbsent ? undefined : sanitizeRefusalCode(opts.refusalCode);
             await turnObserve(ctx.transport, {
                 evidence: {
                     eventId: `${opts.taskId}:dispatch_failed`,
@@ -233,8 +260,22 @@ async function observeDirectDispatchOutcome(
                     kind: 'dispatch_failed',
                     workerAbsent: opts.workerAbsent,
                     reason: 'rejected_by_worker',
+                    ...(refusalCode ? { refusalCode } : {}),
                 },
             });
+            // (4) one WARN line on the owner, local-only — never in the replicated
+            // evidence above. Detail text is exactly what the transport/worker
+            // answer already carried into the JSON response returned to the
+            // coordinator (see the call site); logging it here just makes it
+            // visible in the owner daemon's own operator-facing log too.
+            if (!opts.workerAbsent) {
+                process.stderr.write(
+                    `[adhdev-mesh] dispatch to ${opts.nodeId ?? 'unknown-node'} refused by worker: `
+                    + `${refusalCode ?? opts.refusalCode ?? 'unknown'}`
+                    + (opts.refusalDetail ? ` — ${opts.refusalDetail}` : '')
+                    + '\n',
+                );
+            }
         }
     } catch (e) {
         LOG_DIRECT_DISPATCH_TURN_OBSERVE_FAILURE(e, opts.outcome);
@@ -1021,8 +1062,25 @@ export async function meshSendTask(
                 // C-W6c: the transport refused/failed the P2P relay — record
                 // dispatch_failed against the attempt opened before the send so the
                 // new ledger reclaims it (R24) instead of leaving an orphaned 'A' state.
+                //
+                // Live-gap fix (2026-09-25): `result` here is the SAME RemoteAgentDispatchResult
+                // returned to the coordinator below — ipcDispatchToRemoteAgent already spreads the
+                // worker's own `{success:false, code, error, ...}` answer onto it (after unwrapping
+                // through unwrapMeshRelayResult), so result.code carries the worker's actual refusal
+                // (e.g. session_busy_with_task, mesh_sender_not_on_roster, mesh_node_bootstrap_pending,
+                // provider_quota_exhausted) whenever the worker WAS reached and answered. Only the
+                // P2pRelayFailure transport-absence codes mean the worker was never reached at all.
+                const failureCode = readString((result as { code?: unknown }).code);
+                const workerAbsent = !!failureCode && P2P_TRANSPORT_ABSENCE_CODES.has(failureCode);
+                const failureDetail = readString((result as { error?: unknown }).error);
                 await observeDirectDispatchOutcome(ctx, p2pAttemptRef, {
-                    taskId, sessionId: args.session_id || taskId, outcome: 'dispatch_failed', workerAbsent: false,
+                    taskId, sessionId: args.session_id || taskId, outcome: 'dispatch_failed', workerAbsent,
+                    ...(!workerAbsent && failureCode ? { refusalCode: failureCode } : {}),
+                    // Local-only (never sent as ledger evidence — see observeDirectDispatchOutcome):
+                    // capped so a verbose transport/provider error message cannot grow the owner's
+                    // WARN log unboundedly.
+                    ...(failureDetail ? { refusalDetail: failureDetail.slice(0, 200) } : {}),
+                    nodeId: args.node_id,
                 });
             }
             const returnedSessionId = result.sessionId

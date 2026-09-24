@@ -53,7 +53,7 @@
 import * as crypto from 'crypto';
 import * as os from 'os';
 import * as path from 'path';
-import { existsSync, mkdirSync, writeFileSync, symlinkSync, copyFileSync, statSync, rmSync, realpathSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, symlinkSync, copyFileSync, statSync, rmSync, realpathSync, readFileSync } from 'fs';
 
 import { shortHash } from '../system/hash.js';
 import { LOG } from '../logging/logger.js';
@@ -61,6 +61,7 @@ import {
     buildMeshCoordinatorMcpServerEntry,
     getMcpServersKey,
     isSupportedMeshCoordinatorConfigFormat,
+    parseMeshCoordinatorMcpConfig,
     serializeMeshCoordinatorMcpConfig,
 } from './mesh-coordinator-config.js';
 import type { MeshCoordinatorConfigFormat } from './mesh-refine-gates.js';
@@ -1481,23 +1482,29 @@ export function resolveWorkerMcpConfigPath(
 }
 
 /**
- * SHARED-WORKSPACE CLOBBER (2026-09-22). A workspace-relative declared path
- * (`.mcp.json`) resolves to `<workspace>/.mcp.json`, and a worker on the BASE
- * node runs in the coordinator's own workspace. `writeWorkerMcpConfig` REPLACES
- * rather than merges, on the stated premise that the target is "a worker-private
- * HOME or a temp path the worker alone reads" — which a shared workspace file is
- * not. Measured on the preview coordinator machine: the repo-root `.mcp.json`
- * held the WORKER entry (`adhdev mcp --mode ipc --worker`) at 22:57 and the
- * coordinator entry at 23:06. Each writer erased the other, and the replace also
- * discards any servers the owner keeps in that file.
+ * SHARED-WORKSPACE CLOBBER (2026-09-22, fixed 2026-09-25). A workspace-relative
+ * declared path (`.mcp.json`) resolves to `<workspace>/.mcp.json`, and a worker
+ * on the BASE node runs in the coordinator's own workspace — so without this
+ * function's private-path detour, a forced-config-file launch would write into
+ * the SAME file the coordinator reads. Measured on the preview coordinator
+ * machine: the repo-root `.mcp.json` held the WORKER entry (`adhdev mcp --mode
+ * ipc --worker`) at 22:57 and the coordinator entry at 23:06 — each writer had
+ * replaced the other's entry outright.
  *
- * When the launch forces an explicit config file, the CLI reads ONLY that file
- * (strict mode), so nothing requires the worker config to live at the auto-import
- * path at all. It goes to a per-session private file instead and the workspace
- * file is never touched. Returns null when the declared path is home-rooted or
- * absolute (those are already private or deliberately pinned) or when the launch
- * does not force a file — an auto-importing CLI must still find its config where
- * it looks.
+ * Two independent mitigations now exist for the two provider shapes:
+ *  - A launch that FORCES an explicit config file (claude's `--mcp-config …
+ *    --strict-mcp-config`) uses THIS function to go to a per-session private
+ *    file instead — the CLI reads ONLY that file, so nothing requires the
+ *    worker config to live at the auto-import path at all, and the shared
+ *    workspace file is never touched. Returns null when the declared path is
+ *    home-rooted or absolute (already private or deliberately pinned) or when
+ *    the launch does not force a file — an auto-importing CLI must still find
+ *    its config where it looks.
+ *  - For an AUTO-IMPORTING provider with no forced-config-file flag (cursor-cli,
+ *    grok-cli, kimi, opencode — and claude-cli itself on a non-forced launch),
+ *    this function returns null and `writeWorkerMcpConfig` MERGES onto the
+ *    shared file instead of replacing it — see that function's `isPrivateWorkerTarget`
+ *    branch below, which is the actual fix for those providers' clobber.
  */
 export function resolvePrivateWorkerMcpConfigPath(input: {
     declaredPath: string;
@@ -1514,14 +1521,47 @@ export function resolvePrivateWorkerMcpConfigPath(input: {
 }
 
 /**
+ * True when `target` is a path ONLY this worker launch can possibly read —
+ * i.e. NOT the shared, auto-imported config file a CLI discovers on its own.
+ *
+ * - `privateConfigPath` set ⇒ a per-session temp file under
+ *   `resolvePrivateWorkerMcpConfigPath`'s root — nothing else reads it.
+ * - `workerHome` set ⇒ the target sits inside a worker-scoped HOME/config-root
+ *   this daemon materialized for this launch alone.
+ * Neither set ⇒ the target is `resolveWorkerMcpConfigPath`'s auto-import
+ * location resolved against the REAL workspace (and, for a home-rooted
+ * declared path with no worker HOME, `writeWorkerMcpConfig` already refuses
+ * before reaching here) — i.e. exactly the SHARED-WORKSPACE CLOBBER case.
+ */
+function isPrivateWorkerTarget(input: Pick<WriteWorkerMcpConfigInput, 'privateConfigPath' | 'workerHome'>): boolean {
+    return Boolean(input.privateConfigPath || input.workerHome);
+}
+
+/**
  * Write the worker's MCP config to the provider-declared path.
  *
- * ★This REPLACES rather than merges. The coordinator writer merges because it
- * must preserve a user's own servers in a file it shares with them. A worker
- * config is different: it is written either into a worker-private HOME or to a
- * temp path the worker alone reads, and the entire point is that nothing the
- * worker did not receive on purpose is reachable. Merging would re-admit the
- * coordinator entry this function exists to remove.
+ * ★MERGE vs REPLACE depends on who else can read the target (SHARED-WORKSPACE
+ * CLOBBER, measured 2026-09-22 on the preview coordinator machine: the
+ * repo-root `.mcp.json` held the WORKER entry at 22:57 and the coordinator's
+ * own entry at 23:06 — each writer erased the other, and a plain replace also
+ * discarded any servers the owner kept in that file).
+ *
+ * - PRIVATE target (`isPrivateWorkerTarget` — a per-session temp file or a
+ *   worker-scoped HOME/config-root nobody else reads): REPLACE, as before.
+ *   The whole point of that path is that nothing the worker did not receive
+ *   on purpose is reachable, so merging would re-admit whatever isolation
+ *   this function exists to remove.
+ * - SHARED target (the provider's plain auto-import path, resolved against
+ *   the REAL workspace — a worker on the BASE node runs in the coordinator's
+ *   own workspace and reads the SAME file the coordinator or the owner does):
+ *   MERGE. Parse whatever is already on disk, keep every top-level key and
+ *   every sibling server entry untouched, and add/replace ONLY
+ *   `servers[serverName]` — mirrors the coordinator's own writer
+ *   (`commands/high-family/mesh-coordinator-launch.ts`, which merges for the
+ *   identical reason: it shares this file with the user). A parse failure on
+ *   an existing shared file is NOT swallowed into a silent overwrite — the
+ *   owner's file could hold servers this function has never seen; failing
+ *   loudly here is safer than guessing it away.
  *
  * Refuses to write to a path inside the REAL home — that would be the
  * coordinator's own config, and clobbering it is the failure mode the design
@@ -1545,8 +1585,10 @@ export function writeWorkerMcpConfig(input: WriteWorkerMcpConfigInput): string {
         );
     }
 
-    const servers: Record<string, any> = {};
-    if (input.server) {
+    const entryEnv: Record<string, string> = {};
+    if (input.token) entryEnv.ADHDEV_WORKER_TASK_TOKEN = input.token;
+    if (input.bind) entryEnv.ADHDEV_WORKER_SESSION_BIND = input.bind;
+    const workerEntry = input.server
         // The bind/token ride INSIDE the config, not in the worker's process
         // env. Both are readable by the worker either way (§3 "남는 리스크"),
         // but keeping them here means the value travels only to the process
@@ -1557,20 +1599,118 @@ export function writeWorkerMcpConfig(input: WriteWorkerMcpConfigInput): string {
         // where a caller already holds a live token (and for tests). Both may be
         // present — the server prefers the token and falls back to exchanging
         // the bind, so a config written either way boots.
-        const entryEnv: Record<string, string> = {};
-        if (input.token) entryEnv.ADHDEV_WORKER_TASK_TOKEN = input.token;
-        if (input.bind) entryEnv.ADHDEV_WORKER_SESSION_BIND = input.bind;
-        servers[input.serverName] = buildMeshCoordinatorMcpServerEntry(input.format, {
+        ? buildMeshCoordinatorMcpServerEntry(input.format, {
             command: input.server.command,
             args: input.server.args,
             ...(Object.keys(entryEnv).length ? { env: entryEnv } : {}),
-        });
+        })
+        : null;
+
+    const serversKey = getMcpServersKey(input.format);
+    let config: Record<string, any>;
+
+    if (isPrivateWorkerTarget(input)) {
+        const servers: Record<string, any> = {};
+        if (workerEntry) servers[input.serverName] = workerEntry;
+        config = { [serversKey]: servers };
+    } else {
+        // SHARED target — merge onto whatever is already there. A missing file
+        // is the common case (first launch ever) and starts from `{}`, exactly
+        // like the coordinator's own writer.
+        let existing: Record<string, any> = {};
+        if (existsSync(target)) {
+            let raw: string;
+            try {
+                raw = readFileSync(target, 'utf-8');
+            } catch (err: any) {
+                throw new Error(`worker_mcp_shared_config_read_failed: ${target}: ${err?.message || err}`);
+            }
+            try {
+                existing = parseMeshCoordinatorMcpConfig(raw, input.format);
+            } catch (err: any) {
+                // Never guess this away: the owner's file may hold servers we
+                // cannot see the shape of. Refuse rather than silently replace.
+                throw new Error(`worker_mcp_shared_config_parse_failed: ${target}: ${err?.message || err}`);
+            }
+        }
+        const existingServersRaw = existing[serversKey];
+        const existingServers = (existingServersRaw && typeof existingServersRaw === 'object' && !Array.isArray(existingServersRaw))
+            ? existingServersRaw
+            : {};
+        config = {
+            ...existing,
+            [serversKey]: workerEntry
+                ? { ...existingServers, [input.serverName]: workerEntry }
+                : existingServers,
+        };
+        LOG.warn(
+            'WorkerMcp',
+            `merging worker MCP entry "${input.serverName}" into shared config ${target}`
+            + ' (this file is not worker-private — see SHARED-WORKSPACE CLOBBER)',
+        );
     }
 
-    const config: Record<string, any> = { [getMcpServersKey(input.format)]: servers };
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, serializeMeshCoordinatorMcpConfig(config, input.format), 'utf-8');
     return target;
+}
+
+/**
+ * Cleanup counterpart to the SHARED-target branch of `writeWorkerMcpConfig`:
+ * remove ONLY the worker's own server entry from a shared auto-import config,
+ * leaving every other top-level key and every sibling server entry untouched.
+ *
+ * Call this when a delegated worker session on a SHARED target ends, so the
+ * coordinator's (or owner's) config does not keep carrying a dead worker
+ * entry with a revoked bind/token after the process exits. A no-op (returns
+ * false) when the file is missing, unparsable, or does not currently carry
+ * `serverName` — safe to call speculatively without checking those first.
+ *
+ * Deliberately NOT called for a PRIVATE target (`isPrivateWorkerTarget`):
+ * those live under a per-session temp dir or a worker-scoped HOME that gets
+ * torn down as a whole directory, so per-entry surgery is unnecessary there.
+ */
+export function removeWorkerMcpConfigEntry(input: {
+    declaredPath: string;
+    format: MeshCoordinatorConfigFormat;
+    serverName: string;
+    workspace: string;
+    workerHome?: string;
+    configRootPrefix?: string;
+    privateConfigPath?: string;
+}): boolean {
+    if (isPrivateWorkerTarget(input)) return false;
+    if (!isSupportedMeshCoordinatorConfigFormat(input.format)) return false;
+    const target = resolveWorkerMcpConfigPath(
+        input.declaredPath,
+        input.workspace,
+        input.workerHome,
+        input.configRootPrefix,
+    );
+    if (!existsSync(target)) return false;
+    let existing: Record<string, any>;
+    try {
+        existing = parseMeshCoordinatorMcpConfig(readFileSync(target, 'utf-8'), input.format);
+    } catch (err: any) {
+        LOG.warn('WorkerMcp', `worker MCP cleanup: failed to parse ${target}: ${err?.message || err}`);
+        return false;
+    }
+    const serversKey = getMcpServersKey(input.format);
+    const serversRaw = existing[serversKey];
+    const servers = (serversRaw && typeof serversRaw === 'object' && !Array.isArray(serversRaw)) ? serversRaw : null;
+    if (!servers || !(input.serverName in servers)) return false;
+
+    const nextServers = { ...servers };
+    delete nextServers[input.serverName];
+    const next = { ...existing, [serversKey]: nextServers };
+    try {
+        writeFileSync(target, serializeMeshCoordinatorMcpConfig(next, input.format), 'utf-8');
+    } catch (err: any) {
+        LOG.warn('WorkerMcp', `worker MCP cleanup: failed to write ${target}: ${err?.message || err}`);
+        return false;
+    }
+    LOG.info('WorkerMcp', `removed worker MCP entry "${input.serverName}" from shared config ${target}`);
+    return true;
 }
 
 // ─── Placeholder expansion ──────────────────────────────────────────────

@@ -187,3 +187,101 @@ describe('applyPreLaunchTrust — grok_toml_file', () => {
         expect(toml).toContain(`\n[folders."${fs.realpathSync(workspace)}"]`);
     });
 });
+
+/**
+ * claude_json_projects — the OBJECT-OF-OBJECTS named scheme.
+ *
+ * Unlike every other scheme, `~/.claude.json`'s `projects[realpath]` value is
+ * an object Claude Code itself populates with dozens of session-history
+ * fields (mcpServers, lastSessionId, allowedTools, …). The writer must be
+ * SPARSE: touch only `hasTrustDialogAccepted` on the one key for this
+ * workspace, never inventing or erasing any sibling field.
+ */
+describe('applyPreLaunchTrust — claude_json_projects', () => {
+    let tmp: string;
+    let storePath: string;
+    let workspace: string;
+
+    beforeEach(() => {
+        tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-claude-'));
+        storePath = path.join(tmp, '.claude.json');
+        workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-claude-'));
+    });
+
+    afterEach(() => {
+        fs.rmSync(tmp, { recursive: true, force: true });
+        fs.rmSync(workspace, { recursive: true, force: true });
+    });
+
+    function claudePlan(): ResolvedTrustPlan {
+        return {
+            provider: 'claude-cli',
+            workspaceRealpath: fs.realpathSync(workspace),
+            storePath,
+            scope: 'user',
+            origin: 'user_confirmed',
+            sessionKey: 'session-claude',
+            lifecycle: { kind: 'persistent', expiresAt: null },
+        };
+    }
+
+    it('creates the store and a sparse new project entry', () => {
+        const added = applyPreLaunchTrust({ scheme: 'claude_json_projects' }, claudePlan());
+        const real = fs.realpathSync(workspace);
+        expect(added).toBe(real);
+        const json = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+        expect(json.projects[real]).toEqual({ hasTrustDialogAccepted: true });
+    });
+
+    it('preserves every other top-level key and every sibling project entry', () => {
+        fs.writeFileSync(storePath, JSON.stringify({
+            theme: 'dark',
+            oauthAccount: { emailAddress: 'kjs0116@dstrict.com' },
+            projects: {
+                '/already/trusted': { hasTrustDialogAccepted: true, lastSessionId: 'abc-123' },
+            },
+        }), 'utf8');
+        applyPreLaunchTrust({ scheme: 'claude_json_projects' }, claudePlan());
+        const json = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+        expect(json.theme).toBe('dark');
+        expect(json.oauthAccount).toEqual({ emailAddress: 'kjs0116@dstrict.com' });
+        expect(json.projects['/already/trusted']).toEqual({ hasTrustDialogAccepted: true, lastSessionId: 'abc-123' });
+        expect(json.projects[fs.realpathSync(workspace)]).toEqual({ hasTrustDialogAccepted: true });
+    });
+
+    it('flips only hasTrustDialogAccepted on an EXISTING entry, keeping every other field', () => {
+        const real = fs.realpathSync(workspace);
+        fs.writeFileSync(storePath, JSON.stringify({
+            projects: {
+                [real]: {
+                    hasTrustDialogAccepted: false,
+                    mcpServers: { foo: { command: 'bar' } },
+                    lastCost: 1.23,
+                    allowedTools: ['Read', 'Edit'],
+                },
+            },
+        }), 'utf8');
+        applyPreLaunchTrust({ scheme: 'claude_json_projects' }, claudePlan());
+        const json = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+        expect(json.projects[real].hasTrustDialogAccepted).toBe(true);
+        expect(json.projects[real].mcpServers).toEqual({ foo: { command: 'bar' } });
+        expect(json.projects[real].lastCost).toBe(1.23);
+        expect(json.projects[real].allowedTools).toEqual(['Read', 'Edit']);
+    });
+
+    it('is idempotent — a second call is a true no-op once already trusted', () => {
+        applyPreLaunchTrust({ scheme: 'claude_json_projects' }, claudePlan());
+        const second = applyPreLaunchTrust({ scheme: 'claude_json_projects' }, claudePlan());
+        expect(second).toBeNull();
+    });
+
+    it('does not throw on malformed existing JSON — fails safe and leaves the file untouched', () => {
+        // Never rewrite a file we cannot parse — same fail-safe contract as
+        // every other scheme in this suite (grok/codex above never repair a
+        // malformed store either).
+        fs.writeFileSync(storePath, '{ not valid json', 'utf8');
+        expect(() => applyPreLaunchTrust({ scheme: 'claude_json_projects' }, claudePlan())).not.toThrow();
+        expect(applyPreLaunchTrust({ scheme: 'claude_json_projects' }, claudePlan())).toBeNull();
+        expect(fs.readFileSync(storePath, 'utf8')).toBe('{ not valid json');
+    });
+});

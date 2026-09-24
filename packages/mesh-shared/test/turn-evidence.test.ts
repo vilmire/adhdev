@@ -7,6 +7,7 @@ import {
     isSummaryRef,
     isTurnEvidence,
     projectTurnEvidenceEntry,
+    sanitizeRefusalCode,
     type EvidenceFieldSpec,
     type TurnEvidence,
 } from '../src/turn-evidence'
@@ -83,6 +84,62 @@ describe('isTurnEvidence', () => {
         expect(isTurnEvidence({ ...envelope, kind: 'cancel', reason: 'because I said so' })).toBe(false)
         expect(isTurnEvidence({ ...envelope, kind: 'turn_started' })).toBe(false)
         expect(isTurnEvidence({ ...envelope, kind: 'nope' })).toBe(false)
+    })
+})
+
+// Live-gap fix (2026-09-25): dispatch_failed.refusalCode carries the worker's own
+// refusal code (e.g. session_busy_with_task) so a coordinator can see WHY a direct
+// dispatch was refused, not just that it was. Optional and `id`-typed (never a
+// free-text class) — see the field's doc comment in turn-evidence.ts.
+describe('dispatch_failed.refusalCode', () => {
+    const base = { ...envelope, source: 'dispatch', kind: 'dispatch_failed', workerAbsent: false, reason: 'rejected_by_worker' } as const
+
+    it('accepts the shape without refusalCode (backward compatible — the pre-fix shape)', () => {
+        expect(isTurnEvidence(base)).toBe(true)
+    })
+
+    it('accepts a well-formed refusalCode', () => {
+        expect(isTurnEvidence({ ...base, refusalCode: 'session_busy_with_task' })).toBe(true)
+    })
+
+    it('rejects a refusalCode value that is not a string identifier', () => {
+        expect(isTurnEvidence({ ...base, refusalCode: 123 })).toBe(false)
+        expect(isTurnEvidence({ ...base, refusalCode: null })).toBe(false)
+    })
+
+    it('rejects prose in refusalCode the same as any other identifier slot', () => {
+        expect(isTurnEvidence({ ...base, refusalCode: 'the session was busy running another task, sorry' })).toBe(false)
+    })
+})
+
+describe('sanitizeRefusalCode', () => {
+    it('passes through an already-clean lowercase code', () => {
+        expect(sanitizeRefusalCode('session_busy_with_task')).toBe('session_busy_with_task')
+    })
+
+    it('lowercases and replaces non [a-z_] characters with underscores', () => {
+        expect(sanitizeRefusalCode('Mesh-Sender.NotOnRoster!')).toBe('mesh_sender_notonroster')
+    })
+
+    it('collapses repeated separators and trims leading/trailing underscores', () => {
+        expect(sanitizeRefusalCode('  provider__quota---exhausted  ')).toBe('provider_quota_exhausted')
+    })
+
+    it('caps length at 64 characters', () => {
+        const long = 'a'.repeat(100)
+        expect(sanitizeRefusalCode(long)).toBe('a'.repeat(64))
+    })
+
+    it('returns undefined for non-string input', () => {
+        expect(sanitizeRefusalCode(undefined)).toBeUndefined()
+        expect(sanitizeRefusalCode(null)).toBeUndefined()
+        expect(sanitizeRefusalCode(42)).toBeUndefined()
+        expect(sanitizeRefusalCode({})).toBeUndefined()
+    })
+
+    it('returns undefined for a string that sanitizes to nothing', () => {
+        expect(sanitizeRefusalCode('   ')).toBeUndefined()
+        expect(sanitizeRefusalCode('!!!---...')).toBeUndefined()
     })
 })
 

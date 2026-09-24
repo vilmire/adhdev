@@ -1,0 +1,31 @@
+
+  ┃
+  ┃  Run the shell command: echo second > probe3.txt
+  ┃
+
+     $ echo second > probe3.txt
+
+     ▣  Build · Big Pickle
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃  △ Always allow
+  ┃
+  ┃  This will allow the following patterns until OpenCode is restarted
+  ┃
+  ┃  - echo *
+  ┃
+  ┃
+  ┃   Confirm   Cancel                              ⇆ select  enter confirm
+  ┃
+

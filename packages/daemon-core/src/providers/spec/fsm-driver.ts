@@ -52,6 +52,7 @@ import { applyPreLaunchTrust } from './pre-launch-trust.js';
 import { applyKimiWorkspaceTrust } from '../kimi-workspace-trust.js';
 import { applyGrokWorkspaceTrust } from '../grok-workspace-trust.js';
 import { applyCodexWorkspaceTrust } from '../codex-workspace-trust.js';
+import { applyPreLaunchTrustForClaude } from '../claude-workspace-trust.js';
 import type { ResolvedTrustPlan } from '../trust-provenance-ledger.js';
 import {
     createStartupDismissState, decideStartupDismiss, normalizeStartupDismissConfig, recordStartupDismiss,
@@ -722,6 +723,10 @@ export class FsmDriver implements ISpecDriver {
                     ...process.env,
                     ...(this.opts.extraEnv || {}),
                 });
+            } else if ('scheme' in this.spec.pre_launch_trust
+                && this.spec.pre_launch_trust.scheme === 'claude_json_projects') {
+                // See applyPreLaunchTrustForClaude's doc comment (claude-workspace-trust.ts).
+                applyPreLaunchTrustForClaude(this.opts.workingDir, this.opts.extraEnv);
             } else {
                 // Fail closed for array stores: resolving `~` here would use the
                 // daemon's real HOME and recreate the worker trust leak.

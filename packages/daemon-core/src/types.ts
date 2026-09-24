@@ -90,6 +90,10 @@ export interface ChatMessage {
   meta?: { label?: string; isRunning?: boolean } | Record<string, any>;
   /** Sender name for shared sessions */
   senderName?: string;
+  /** The specific tool invoked (e.g. 'read_file'), when the source resolves
+   *  one — distinct from the generic senderName:'Tool'. Currently only
+   *  antigravity's native-history reader stamps this. */
+  toolName?: string;
 }
 
 // Re-export from contracts for convenience

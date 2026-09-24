@@ -1,0 +1,1016 @@
+{
+ "_comment": [
+  "Anonymised antigravity-cli conversations/<uuid>.db steps, re-encoded by the test.",
+  "Field layout copied from real stores (~/.gemini/antigravity-cli/conversations, 2026-09-25 survey:",
+  "385 dbs, 4,666 tool executions); every string/uuid/path/signature is synthetic.",
+  "Node forms: {f,v}=varint, {f,s}=utf-8 string, {f,m}=sub-message, {f,hex}=opaque bytes.",
+  "Turn 1: tool-only model step (run_command, generic field-140 result). Turn 2: prose+2 parallel calls,",
+  "legacy per-tool result (view_file field 14), denied call (status 7 + error_details). Then an ephemeral",
+  "system step (90, ignored), a task notification (101), and a still-running call (status 2, partial output in 140 that must NOT surface until it settles)."
+ ],
+ "schema": "CREATE TABLE `steps` (`idx` integer,`step_type` integer NOT NULL DEFAULT 0,`status` integer NOT NULL DEFAULT 0,`has_subtrajectory` numeric NOT NULL DEFAULT false,`metadata` blob,`error_details` blob,`permissions` blob,`task_details` blob,`render_info` blob,`step_payload` blob,`step_format` integer NOT NULL DEFAULT 0,PRIMARY KEY (`idx`));",
+ "baseCreatedAtMs": 1789410336000,
+ "steps": [
+  {
+   "idx": 0,
+   "step_type": 14,
+   "status": 3,
+   "payload": [
+    {
+     "f": 1,
+     "v": 14
+    },
+    {
+     "f": 4,
+     "v": 3
+    },
+    {
+     "f": 19,
+     "m": [
+      {
+       "f": 2,
+       "s": "list the files here"
+      },
+      {
+       "f": 3,
+       "s": "\nlist the files here"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "idx": 1,
+   "step_type": 15,
+   "status": 3,
+   "payload": [
+    {
+     "f": 1,
+     "v": 15
+    },
+    {
+     "f": 4,
+     "v": 3
+    },
+    {
+     "f": 5,
+     "m": [
+      {
+       "f": 1,
+       "m": [
+        {
+         "f": 1,
+         "v": 1789410336
+        },
+        {
+         "f": 2,
+         "v": 0
+        }
+       ]
+      },
+      {
+       "f": 3,
+       "v": 2
+      }
+     ]
+    },
+    {
+     "f": 20,
+     "m": [
+      {
+       "f": 3,
+       "s": "**Listing the directory**\n\nI will run ls in the workspace."
+      },
+      {
+       "f": 6,
+       "s": "bot-00000000-0000-0000-0000-000000000000"
+      },
+      {
+       "f": 7,
+       "m": [
+        {
+         "f": 1,
+         "s": "call_0000001"
+        },
+        {
+         "f": 2,
+         "s": "run_command"
+        },
+        {
+         "f": 3,
+         "s": "{\"CommandLine\":\"ls\",\"Cwd\":\"/workspace/demo\",\"WaitMsBeforeAsync\":1000,\"toolAction\":\"Listing files\",\"toolSummary\":\"List files\"}"
+        },
+        {
+         "f": 7,
+         "m": [
+          {
+           "f": 2,
+           "m": [
+            {
+             "f": 1,
+             "hex": "4d32f878a9c30ae1b5e3a19c5ff03d2f"
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "f": 12,
+       "v": 2
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "idx": 2,
+   "step_type": 132,
+   "status": 3,
+   "payload": [
+    {
+     "f": 1,
+     "v": 132
+    },
+    {
+     "f": 4,
+     "v": 3
+    },
+    {
+     "f": 5,
+     "m": [
+      {
+       "f": 1,
+       "m": [
+        {
+         "f": 1,
+         "v": 1789410340
+        },
+        {
+         "f": 2,
+         "v": 0
+        }
+       ]
+      },
+      {
+       "f": 3,
+       "v": 2
+      },
+      {
+       "f": 4,
+       "m": [
+        {
+         "f": 1,
+         "s": "call_0000001"
+        },
+        {
+         "f": 2,
+         "s": "run_command"
+        },
+        {
+         "f": 3,
+         "s": "{\"CommandLine\":\"ls\",\"Cwd\":\"/workspace/demo\",\"WaitMsBeforeAsync\":1000,\"toolAction\":\"Listing files\",\"toolSummary\":\"List files\"}"
+        },
+        {
+         "f": 7,
+         "m": [
+          {
+           "f": 2,
+           "m": [
+            {
+             "f": 1,
+             "hex": "4d32f878a9c30ae1b5e3a19c5ff03d2f"
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "f": 34,
+       "m": [
+        {
+         "f": 4,
+         "s": "allow"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "f": 140,
+     "m": [
+      {
+       "f": 1,
+       "m": [
+        {
+         "f": 1,
+         "s": "toolAction"
+        },
+        {
+         "f": 2,
+         "s": "Listing files"
+        }
+       ]
+      },
+      {
+       "f": 1,
+       "m": [
+        {
+         "f": 1,
+         "s": "toolSummary"
+        },
+        {
+         "f": 2,
+         "s": "List files"
+        }
+       ]
+      },
+      {
+       "f": 2,
+       "m": [
+        {
+         "f": 1,
+         "s": "\nThe command exited with code 0.\nOutput:\nREADME.md\nsrc\n"
+        },
+        {
+         "f": 6,
+         "m": [
+          {
+           "f": 1,
+           "s": "type.googleapis.com/gemini_coder.Step"
+          },
+          {
+           "f": 2,
+           "m": [
+            {
+             "f": 1,
+             "v": 21
+            },
+            {
+             "f": 4,
+             "v": 3
+            },
+            {
+             "f": 5,
+             "m": [
+              {
+               "f": 4,
+               "m": [
+                {
+                 "f": 1,
+                 "s": "call_0000001"
+                },
+                {
+                 "f": 2,
+                 "s": "run_command"
+                },
+                {
+                 "f": 3,
+                 "s": "{\"CommandLine\":\"ls\",\"Cwd\":\"/workspace/demo\",\"WaitMsBeforeAsync\":1000,\"toolAction\":\"Listing files\",\"toolSummary\":\"List files\"}"
+                },
+                {
+                 "f": 7,
+                 "m": [
+                  {
+                   "f": 2,
+                   "m": [
+                    {
+                     "f": 1,
+                     "hex": "4d32f878a9c30ae1b5e3a19c5ff03d2f"
+                    }
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "idx": 3,
+   "step_type": 15,
+   "status": 3,
+   "payload": [
+    {
+     "f": 1,
+     "v": 15
+    },
+    {
+     "f": 4,
+     "v": 3
+    },
+    {
+     "f": 5,
+     "m": [
+      {
+       "f": 1,
+       "m": [
+        {
+         "f": 1,
+         "v": 1789410336
+        },
+        {
+         "f": 2,
+         "v": 0
+        }
+       ]
+      },
+      {
+       "f": 3,
+       "v": 2
+      }
+     ]
+    },
+    {
+     "f": 20,
+     "m": [
+      {
+       "f": 1,
+       "s": "There are two entries: README.md and src."
+      },
+      {
+       "f": 8,
+       "s": "There are two entries: README.md and src."
+      },
+      {
+       "f": 6,
+       "s": "bot-00000000-0000-0000-0000-000000000000"
+      },
+      {
+       "f": 12,
+       "v": 2
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "idx": 4,
+   "step_type": 14,
+   "status": 3,
+   "payload": [
+    {
+     "f": 1,
+     "v": 14
+    },
+    {
+     "f": 4,
+     "v": 3
+    },
+    {
+     "f": 19,
+     "m": [
+      {
+       "f": 2,
+       "s": "show me the README, then list /etc"
+      },
+      {
+       "f": 3,
+       "s": "\nshow me the README, then list /etc"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "idx": 5,
+   "step_type": 15,
+   "status": 3,
+   "payload": [
+    {
+     "f": 1,
+     "v": 15
+    },
+    {
+     "f": 4,
+     "v": 3
+    },
+    {
+     "f": 5,
+     "m": [
+      {
+       "f": 1,
+       "m": [
+        {
+         "f": 1,
+         "v": 1789410336
+        },
+        {
+         "f": 2,
+         "v": 0
+        }
+       ]
+      },
+      {
+       "f": 3,
+       "v": 2
+      }
+     ]
+    },
+    {
+     "f": 20,
+     "m": [
+      {
+       "f": 1,
+       "s": "I'll read the README first."
+      },
+      {
+       "f": 8,
+       "s": "I'll read the README first."
+      },
+      {
+       "f": 6,
+       "s": "bot-00000000-0000-0000-0000-000000000000"
+      },
+      {
+       "f": 7,
+       "m": [
+        {
+         "f": 1,
+         "s": "call_0000002"
+        },
+        {
+         "f": 2,
+         "s": "view_file"
+        },
+        {
+         "f": 3,
+         "s": "{\"AbsolutePath\":\"/workspace/demo/README.md\",\"toolAction\":\"Viewing README\",\"toolSummary\":\"View README\"}"
+        },
+        {
+         "f": 7,
+         "m": [
+          {
+           "f": 2,
+           "m": [
+            {
+             "f": 1,
+             "hex": "4d32f878a9c30ae1b5e3a19c5ff03d2f"
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "f": 7,
+       "m": [
+        {
+         "f": 1,
+         "s": "call_0000003"
+        },
+        {
+         "f": 2,
+         "s": "list_dir"
+        },
+        {
+         "f": 3,
+         "s": "{\"DirectoryPath\":\"/etc\",\"toolAction\":\"Listing /etc\",\"toolSummary\":\"List /etc\"}"
+        },
+        {
+         "f": 7,
+         "m": [
+          {
+           "f": 2,
+           "m": [
+            {
+             "f": 1,
+             "hex": "4d32f878a9c30ae1b5e3a19c5ff03d2f"
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "f": 12,
+       "v": 2
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "idx": 6,
+   "step_type": 8,
+   "status": 3,
+   "payload": [
+    {
+     "f": 1,
+     "v": 8
+    },
+    {
+     "f": 4,
+     "v": 3
+    },
+    {
+     "f": 5,
+     "m": [
+      {
+       "f": 1,
+       "m": [
+        {
+         "f": 1,
+         "v": 1789410340
+        },
+        {
+         "f": 2,
+         "v": 0
+        }
+       ]
+      },
+      {
+       "f": 3,
+       "v": 2
+      },
+      {
+       "f": 4,
+       "m": [
+        {
+         "f": 1,
+         "s": "call_0000002"
+        },
+        {
+         "f": 2,
+         "s": "view_file"
+        },
+        {
+         "f": 3,
+         "s": "{\"AbsolutePath\":\"/workspace/demo/README.md\",\"toolAction\":\"Viewing README\",\"toolSummary\":\"View README\"}"
+        },
+        {
+         "f": 7,
+         "m": [
+          {
+           "f": 2,
+           "m": [
+            {
+             "f": 1,
+             "hex": "4d32f878a9c30ae1b5e3a19c5ff03d2f"
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "f": 34,
+       "m": [
+        {
+         "f": 4,
+         "s": "allow"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "f": 14,
+     "m": [
+      {
+       "f": 1,
+       "s": "file:///workspace/demo/README.md"
+      },
+      {
+       "f": 4,
+       "s": "# Demo\n\nA demo project.\n"
+      },
+      {
+       "f": 11,
+       "v": 1
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "idx": 7,
+   "step_type": 9,
+   "status": 7,
+   "payload": [
+    {
+     "f": 1,
+     "v": 9
+    },
+    {
+     "f": 4,
+     "v": 7
+    },
+    {
+     "f": 5,
+     "m": [
+      {
+       "f": 1,
+       "m": [
+        {
+         "f": 1,
+         "v": 1789410340
+        },
+        {
+         "f": 2,
+         "v": 0
+        }
+       ]
+      },
+      {
+       "f": 3,
+       "v": 2
+      },
+      {
+       "f": 4,
+       "m": [
+        {
+         "f": 1,
+         "s": "call_0000003"
+        },
+        {
+         "f": 2,
+         "s": "list_dir"
+        },
+        {
+         "f": 3,
+         "s": "{\"DirectoryPath\":\"/etc\",\"toolAction\":\"Listing /etc\",\"toolSummary\":\"List /etc\"}"
+        },
+        {
+         "f": 7,
+         "m": [
+          {
+           "f": 2,
+           "m": [
+            {
+             "f": 1,
+             "hex": "4d32f878a9c30ae1b5e3a19c5ff03d2f"
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "f": 34,
+       "m": [
+        {
+         "f": 4,
+         "s": "allow"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "f": 31,
+     "m": [
+      {
+       "f": 1,
+       "s": "Permission denied for list_dir(/etc)."
+      }
+     ]
+    },
+    {
+     "f": 15,
+     "m": [
+      {
+       "f": 1,
+       "s": "file:///etc"
+      }
+     ]
+    }
+   ],
+   "error_details": [
+    {
+     "f": 1,
+     "s": "Permission denied for list_dir(/etc)."
+    },
+    {
+     "f": 2,
+     "s": "Permission denied for list_dir(/etc)."
+    },
+    {
+     "f": 4,
+     "v": 1
+    }
+   ]
+  },
+  {
+   "idx": 8,
+   "step_type": 15,
+   "status": 3,
+   "payload": [
+    {
+     "f": 1,
+     "v": 15
+    },
+    {
+     "f": 4,
+     "v": 3
+    },
+    {
+     "f": 5,
+     "m": [
+      {
+       "f": 1,
+       "m": [
+        {
+         "f": 1,
+         "v": 1789410336
+        },
+        {
+         "f": 2,
+         "v": 0
+        }
+       ]
+      },
+      {
+       "f": 3,
+       "v": 2
+      }
+     ]
+    },
+    {
+     "f": 20,
+     "m": [
+      {
+       "f": 1,
+       "s": "The README says: A demo project. /etc is not accessible."
+      },
+      {
+       "f": 8,
+       "s": "The README says: A demo project. /etc is not accessible."
+      },
+      {
+       "f": 6,
+       "s": "bot-00000000-0000-0000-0000-000000000000"
+      },
+      {
+       "f": 12,
+       "v": 2
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "idx": 9,
+   "step_type": 90,
+   "status": 3,
+   "payload": [
+    {
+     "f": 1,
+     "v": 90
+    },
+    {
+     "f": 4,
+     "v": 3
+    },
+    {
+     "f": 103,
+     "m": [
+      {
+       "f": 1,
+       "s": "The following is an <EPHEMERAL_MESSAGE> not actually sent by the user."
+      },
+      {
+       "f": 3,
+       "s": "bash_command_reminder"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "idx": 10,
+   "step_type": 101,
+   "status": 3,
+   "payload": [
+    {
+     "f": 1,
+     "v": 101
+    },
+    {
+     "f": 4,
+     "v": 3
+    },
+    {
+     "f": 114,
+     "m": [
+      {
+       "f": 1,
+       "s": "[Message] timestamp=2026-09-14T18:27:34Z sender=00000000-0000-0000-0000-000000000000/task-1 priority=MESSAGE_PRIORITY_HIGH content=wait"
+      },
+      {
+       "f": 2,
+       "m": [
+        {
+         "f": 1,
+         "s": "Wait for task: Timer has expired"
+        },
+        {
+         "f": 10,
+         "m": [
+          {
+           "f": 1,
+           "s": "> wait\n\n**Status**: Fired"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "f": 3,
+       "s": "task_notification"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "idx": 11,
+   "step_type": 15,
+   "status": 3,
+   "payload": [
+    {
+     "f": 1,
+     "v": 15
+    },
+    {
+     "f": 4,
+     "v": 3
+    },
+    {
+     "f": 5,
+     "m": [
+      {
+       "f": 1,
+       "m": [
+        {
+         "f": 1,
+         "v": 1789410336
+        },
+        {
+         "f": 2,
+         "v": 0
+        }
+       ]
+      },
+      {
+       "f": 3,
+       "v": 2
+      }
+     ]
+    },
+    {
+     "f": 20,
+     "m": [
+      {
+       "f": 6,
+       "s": "bot-00000000-0000-0000-0000-000000000000"
+      },
+      {
+       "f": 7,
+       "m": [
+        {
+         "f": 1,
+         "s": "call_0000004"
+        },
+        {
+         "f": 2,
+         "s": "run_command"
+        },
+        {
+         "f": 3,
+         "s": "{\"CommandLine\":\"sleep 5\",\"Cwd\":\"/workspace/demo\",\"WaitMsBeforeAsync\":1000,\"toolAction\":\"Waiting\",\"toolSummary\":\"Wait\"}"
+        },
+        {
+         "f": 7,
+         "m": [
+          {
+           "f": 2,
+           "m": [
+            {
+             "f": 1,
+             "hex": "4d32f878a9c30ae1b5e3a19c5ff03d2f"
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "f": 12,
+       "v": 2
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "idx": 12,
+   "step_type": 132,
+   "status": 2,
+   "payload": [
+    {
+     "f": 1,
+     "v": 132
+    },
+    {
+     "f": 4,
+     "v": 2
+    },
+    {
+     "f": 5,
+     "m": [
+      {
+       "f": 1,
+       "m": [
+        {
+         "f": 1,
+         "v": 1789410340
+        },
+        {
+         "f": 2,
+         "v": 0
+        }
+       ]
+      },
+      {
+       "f": 3,
+       "v": 2
+      },
+      {
+       "f": 4,
+       "m": [
+        {
+         "f": 1,
+         "s": "call_0000004"
+        },
+        {
+         "f": 2,
+         "s": "run_command"
+        },
+        {
+         "f": 3,
+         "s": "{\"CommandLine\":\"sleep 5\",\"Cwd\":\"/workspace/demo\",\"WaitMsBeforeAsync\":1000,\"toolAction\":\"Waiting\",\"toolSummary\":\"Wait\"}"
+        },
+        {
+         "f": 7,
+         "m": [
+          {
+           "f": 2,
+           "m": [
+            {
+             "f": 1,
+             "hex": "4d32f878a9c30ae1b5e3a19c5ff03d2f"
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "f": 34,
+       "m": [
+        {
+         "f": 4,
+         "s": "allow"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "f": 140,
+     "m": [
+      {
+       "f": 2,
+       "m": [
+        {
+         "f": 1,
+         "s": "\nOutput so far:\n(partial, still running)\n"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

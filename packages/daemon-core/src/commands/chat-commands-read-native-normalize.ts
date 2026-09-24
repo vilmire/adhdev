@@ -184,7 +184,11 @@ export function normalizeNativeHistoryMessages(providerType: string, messages: C
                 source: message.source || 'runtime_status',
             } : isActivity ? {
                 source: message.source || (kind === 'terminal' ? 'terminal_command' : 'tool_call'),
-                meta: { ...meta, label: message.senderName || meta?.label || (kind === 'terminal' ? 'Terminal' : 'Tool') },
+                // toolName (e.g. 'read_file') is the specific tool being invoked;
+                // senderName is only ever the generic 'Tool' marker for these
+                // messages (see dispatcher.ts toNativeHistoryMessage), so prefer
+                // toolName when the reader resolved one.
+                meta: { ...meta, label: message.toolName || message.senderName || meta?.label || (kind === 'terminal' ? 'Terminal' : 'Tool') },
             } : {
                 source: message.source || (role === 'assistant' ? 'assistant_text' : undefined),
             }),

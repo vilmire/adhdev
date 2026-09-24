@@ -86,6 +86,10 @@ function normalizeProviderNativeHistoryRecords(agentType: string, historySession
                 content: String(record?.content || ''),
                 kind: record?.kind || (record?.role === 'system' ? 'session_start' : 'standard'),
                 senderName: record?.senderName,
+                // The specific tool being invoked (e.g. 'read_file'), when the
+                // reader resolves one — distinct from the generic
+                // senderName:'Tool'. See dispatcher.ts toNativeHistoryMessage.
+                toolName: typeof record?.toolName === 'string' && record.toolName ? record.toolName : undefined,
                 agent: agentType,
                 instanceId: record?.instanceId,
                 historySessionId: normalizeSavedHistorySessionId(record?.historySessionId || normalizedSessionId),

@@ -16,7 +16,7 @@ import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmu
 import { delegatedWorkerAutoApproveSettings, resolveProviderMaxParallel, resolveSlotMaxParallel, resolveNodeSchedulingPriority, resolveCoordinatorIdlePushPolicy } from '../repo-mesh-types.js';
 import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
 import type { RepoMeshDeclarativeConfig } from '../config/mesh-json-config.js';
-import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
+import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, sanitizeRefusalCode, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveDaemonSiblingNodeIds } from './mesh-daemon-slot-axis.js';
 import { recordLastQuotaRanking, recordLastQuotaRankingOutcome } from './mesh-quota-routing.js';
@@ -853,8 +853,15 @@ function handleDispatchFailure(rawFailure: any, ctx: DeliverTaskContext, deliver
         // failure. Marking the task terminal here would permanently kill tasks a later
         // tick delivers fine. Return it to 'pending' and record a retryable dispatch_failed
         // ledger entry so the reconcile loop re-dispatches it. Identical for both transports.
+        // Live-gap fix (2026-09-25): name the worker's own refusal code + detail, not just
+        // "refused" — this is the one WARN line an operator/coordinator actually sees for
+        // WHY (session_busy_with_task, mesh_sender_not_on_roster, mesh_node_bootstrap_pending,
+        // provider_quota_exhausted, …), matching the equivalent line the direct-dispatch path
+        // (mesh-tools-session.ts observeDirectDispatchOutcome) now emits.
+        const applicationRefusalCode = isApplicationRefusal ? sanitizeRefusalCode(rawFailure?.code) : undefined;
         if (isApplicationRefusal) {
-            LOG.warn('MeshQueue', `agent_command refused dispatch of task ${ctx.task.id} to session ${ctx.sessionId} on node ${ctx.nodeId} (${ctx.transport}): code=${rawFailure?.code ?? 'unknown'}`);
+            LOG.warn('MeshQueue', `dispatch to ${ctx.nodeId} refused by worker: ${applicationRefusalCode ?? rawFailure?.code ?? 'unknown'}`
+                + (typeof rawFailure?.error === 'string' && rawFailure.error ? ` — ${rawFailure.error.slice(0, 200)}` : ''));
         }
         LOG.error('MeshQueue', `Failed to dispatch task via ${ctx.transport} to node ${ctx.nodeId}: ${e?.message}`);
         // The dispatch failed — the task is no longer in-flight (it returns to pending
@@ -885,6 +892,11 @@ function handleDispatchFailure(rawFailure: any, ctx: DeliverTaskContext, deliver
                 // which only classifies genuine thrown transport/timeout errors).
                 workerAbsent: isApplicationRefusal ? false : /timeout|not.?found|no adapter|unreachable|offline/i.test(String(e?.message ?? '')),
                 reason: isApplicationRefusal ? 'rejected_by_worker' : (/timeout/i.test(String(e?.message ?? '')) ? 'timeout' : 'transport_error'),
+                // Live-gap fix (2026-09-25): the worker's own refusal code, sanitized to the
+                // closed id-like shape the content-free evidence contract requires (see
+                // turn-evidence.ts `dispatch_failed.refusalCode` doc comment) — never the free-text
+                // `error`/`reason` message, which stays local to the WARN line above only.
+                ...(applicationRefusalCode ? { refusalCode: applicationRefusalCode } : {}),
             } as TurnEvidence);
             if (!retryable) {
                 LOG.error('MeshQueue', `Task ${ctx.task.id} (mesh ${ctx.meshId}) is undeliverable to node ${ctx.nodeId} (session ${ctx.sessionId ?? '?'}) and will NOT be retried: dispatch_unrecoverable: ${e?.message || 'transport reported the failure as non-recoverable'}`);

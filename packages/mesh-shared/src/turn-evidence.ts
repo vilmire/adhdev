@@ -59,6 +59,22 @@ export type DeliveryVia = typeof DELIVERY_VIAS[number]
 export const DISPATCH_FAILURE_REASONS = ['worker_absent', 'transport_error', 'spawn_failed', 'rejected_by_worker', 'timeout'] as const
 export type DispatchFailureReason = typeof DISPATCH_FAILURE_REASONS[number]
 
+/**
+ * Normalize a worker's own refusal code (e.g. `session_busy_with_task`,
+ * `mesh_sender_not_on_roster`, `provider_quota_exhausted`) into the shape
+ * `dispatch_failed.refusalCode` accepts: lowercase ascii + underscore, capped
+ * at 64 chars. Returns undefined for anything that yields no usable token, so
+ * a malformed/foreign code degrades to "no refusalCode" rather than smuggling
+ * arbitrary text through what must stay a closed-enum-like identifier slot
+ * (see the field's doc comment — this evidence replicates cross-machine).
+ */
+export function sanitizeRefusalCode(value: unknown): string | undefined {
+    if (typeof value !== 'string') return undefined
+    const normalized = value.trim().toLowerCase().replace(/[^a-z_]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '')
+    if (!normalized) return undefined
+    return normalized.slice(0, 64)
+}
+
 export const CONSUME_PROFILES = ['default', 'native_source'] as const
 export type ConsumeProfile = typeof CONSUME_PROFILES[number]
 
@@ -214,7 +230,20 @@ export type TurnEvidenceBody =
         coordinator?: EvidenceCoordinatorIdentity }
     | { kind: 'delivered'; messageId: string; outcome: DeliveryOutcome; via: DeliveryVia }
     | { kind: 'delivery_refused'; messageId: string; reason: SendRefusal }
-    | { kind: 'dispatch_failed'; workerAbsent: boolean; reason: DispatchFailureReason }
+    /**
+     * `refusalCode` (wiring-unification live-gap fix, 2026-09-25): the worker's own
+     * refusal code for an application-level `{success:false}` answer (e.g.
+     * `session_busy_with_task`, `mesh_sender_not_on_roster`,
+     * `mesh_node_bootstrap_pending`, `provider_quota_exhausted`) — optional and
+     * ONLY ever populated for `reason: 'rejected_by_worker'`. Deliberately an `id`
+     * (short enum-like token), never free text: this evidence replicates across
+     * machines over `mesh.<id>.events` (CONTENT-FREE BY CONSTRUCTION above), so a
+     * human-readable detail string must NOT travel here — it stays local (owner
+     * WARN log, MCP tool JSON response). Producers sanitize to `[a-z_]{1,64}`
+     * before emitting so a stray free-text code can never smuggle prose through
+     * this slot.
+     */
+    | { kind: 'dispatch_failed'; workerAbsent: boolean; reason: DispatchFailureReason; refusalCode?: string }
     | { kind: 'duplicate_dispatch_refusal'; holderSessionId: string; holderAttemptId?: string }
     | { kind: 'session_rebound'; toSessionId: string; reason: SessionReboundReason }
     // ── worker turn lifecycle ──
@@ -309,7 +338,7 @@ export const TURN_EVIDENCE_FIELD_SPECS: TurnEvidenceFieldSpecs = {
     },
     delivered: { messageId: id, outcome: en(DELIVERY_OUTCOMES), via: en(DELIVERY_VIAS) },
     delivery_refused: { messageId: id, reason: en(SEND_REFUSAL_REASONS) },
-    dispatch_failed: { workerAbsent: bool, reason: en(DISPATCH_FAILURE_REASONS) },
+    dispatch_failed: { workerAbsent: bool, reason: en(DISPATCH_FAILURE_REASONS), refusalCode: idOpt },
     duplicate_dispatch_refusal: { holderSessionId: id, holderAttemptId: idOpt },
     session_rebound: { toSessionId: id, reason: en(SESSION_REBOUND_REASONS) },
     turn_started: { retro: bool },
