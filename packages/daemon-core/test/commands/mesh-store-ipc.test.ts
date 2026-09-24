@@ -215,3 +215,72 @@ describe('router-internal args (live regression 2026-09-25: mesh_send_task → q
         expect(String(raw.error)).toContain('bad shape');
     });
 });
+
+describe('queue mutations carry THIS daemon\'s mesh role (requireMeshHostQueueOwner is live)', () => {
+    // The router injects getMeshForCommand into every LOW context; the mesh
+    // record's `meshHost.role` is this daemon's own membership (pairing writes 'member').
+    function ctxAs(role: 'host' | 'member' | null) {
+        return {
+            deps: { statusInstanceId: 'daemon-test' },
+            getMeshForCommand: async (id: string) => ({
+                mesh: { id, nodes: [], ...(role ? { meshHost: { role, pairing: { status: role === 'member' ? 'paired' : 'not_configured' } } } : {}) },
+                inline: false,
+                source: 'local_config',
+            }),
+        };
+    }
+    async function callAs(role: 'host' | 'member' | null, command: string, args: Record<string, unknown>): Promise<any> {
+        const handler = (turnLedgerIpcHandlers as Record<string, (ctx: unknown, a: unknown) => Promise<unknown>>)[command];
+        return handler(ctxAs(role), args);
+    }
+    const HOST_GUARD = /Mesh Host daemon required to mutate mesh queue/;
+
+    it('★a member daemon\'s enqueue is refused; the host\'s (and a defaulted mesh\'s) is accepted', async () => {
+        const member = await callAs('member', 'queue_enqueue', { v, meshId, message: 'on a member', options: { difficulty: 'easy' } });
+        expect(member.success).toBe(false);
+        expect(member.error).toMatch(HOST_GUARD);
+        expect(getQueue(meshId)).toEqual([]);
+
+        const host = await callAs('host', 'queue_enqueue', { v, meshId, message: 'on the host', options: { difficulty: 'easy' } });
+        expect(host.success).toBe(true);
+        const defaulted = await callAs(null, 'queue_enqueue', { v, meshId, message: 'no meshHost block', options: { difficulty: 'easy' } });
+        expect(defaulted.success).toBe(true);
+        expect(getQueue(meshId)).toHaveLength(2);
+    });
+
+    it('the role is never the caller\'s claim: options.ownerRole is replaced (resolved mesh) or dropped (unresolvable mesh)', async () => {
+        const claimHost = await callAs('member', 'queue_enqueue', { v, meshId, message: 'x', options: { difficulty: 'easy', ownerRole: 'host' } });
+        expect(claimHost.success).toBe(false);
+        expect(claimHost.error).toMatch(HOST_GUARD);
+        const handler = (turnLedgerIpcHandlers as Record<string, (ctx: unknown, a: unknown) => Promise<any>>).queue_enqueue;
+        const unresolved = await handler(
+            { deps: { statusInstanceId: 'daemon-test' }, getMeshForCommand: async () => null },
+            { v, meshId, message: 'y', options: { difficulty: 'easy', ownerRole: 'member' } },
+        );
+        expect(unresolved.success).toBe(true);
+        expect(unresolved.entry).not.toHaveProperty('ownerRole');
+    });
+
+    it('cancel / requeue / batch enqueue (compat + graph) are refused on a member daemon', async () => {
+        const { entry } = await callAs('host', 'queue_enqueue', { v, meshId, message: 'hosted row', options: { difficulty: 'easy' } });
+        const cancel = await callAs('member', 'queue_cancel', { v, meshId, taskId: entry.id, reason: 'x' });
+        expect(cancel.success).toBe(false);
+        expect(cancel.error).toMatch(HOST_GUARD);
+        const requeue = await callAs('member', 'queue_requeue', { v, meshId, taskId: entry.id, options: { force: true } });
+        expect(requeue.success).toBe(false);
+        expect(requeue.error).toMatch(HOST_GUARD);
+        expect(getQueue(meshId).map((t) => t.status)).toEqual(['pending']);
+
+        const compat = await callAs('member', 'queue_enqueue_graph', { v, meshId, mode: 'compat', specs: [{ ref: 'a', message: 'first', difficulty: 'easy' }] });
+        expect(compat).toMatchObject({ success: true, ok: false });
+        expect(compat.message).toMatch(HOST_GUARD);
+        const graph = await callAs('member', 'queue_enqueue_graph', { v, meshId, mode: 'graph', plan: { tasks: [{ ref: 'a', message: 'first', difficulty: 'easy' }] } });
+        expect(graph).toMatchObject({ success: true, ok: false });
+        expect(graph.message).toMatch(HOST_GUARD);
+        expect(getQueue(meshId)).toHaveLength(1);
+
+        // The host's cancel still works.
+        const hostCancel = await callAs('host', 'queue_cancel', { v, meshId, taskId: entry.id, reason: 'x' });
+        expect(hostCancel.task).toMatchObject({ status: 'cancelled' });
+    });
+});

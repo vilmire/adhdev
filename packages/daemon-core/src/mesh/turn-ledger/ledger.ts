@@ -386,6 +386,9 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
                     counters.postCommitFailed++;
                     log.error(`turn-ledger: post-commit ${kind} failed for ${step.evidence.eventId}: ${error instanceof Error ? error.message : String(error)}`);
                 },
+                onSkip: (kind, detail) => {
+                    log.info(`turn-ledger: post-commit ${kind} skipped for ${step.evidence.eventId}: ${detail}`);
+                },
             });
             counters.missingPorts += post.missingPort;
             if (isPublishableAttempt(step.result.attempt)) publish = true;

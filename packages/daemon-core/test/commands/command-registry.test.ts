@@ -193,7 +193,11 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     // NOT a legacy-table migration: F7 (2026-09-25) — a remote worker daemon
     // relays a worker report to the attempt's owner daemon (mesh source only).
     'worker_report_forwarded',
-    'worker_progress_update', 'deposit_worker_mailbox',
+    'worker_progress_update',
+    // NOT a legacy-table migration: F7 progress axis (2026-09-25) — the same
+    // relay for a remote worker's progress note (mesh source only).
+    'worker_progress_forwarded',
+    'deposit_worker_mailbox',
     'worker_drain_mailbox', 'worker_peer_context_pull', 'ensure_transcript_subscription',
     'read_transcript_replica',
     // NOT a legacy-table migration: G2 transcript-transport selection

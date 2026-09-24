@@ -57,3 +57,23 @@ describe('mesh attempt ref on the worker session', () => {
         expect(currentMeshAttemptRef(h.settings)).toBeNull()
     })
 })
+
+describe('mesh attempt ref — a stamp for a different task never inherits the previous task\'s attempt', () => {
+    it('attempt-less dispatch of a NEW task clears the prior task\'s attempt + nonce', () => {
+        const h = host()
+        attachMeshAssignment(h, { meshId: 'm1', taskId: 't1', attemptId: 'att-1', attemptGeneration: 2, dispatchNonce: 3 })
+        attachMeshAssignment(h, { meshId: 'm1', taskId: 't2' })
+        expect(h.settings.meshActiveTaskId).toBe('t2')
+        expect(currentMeshAttemptRef(h.settings)).toBeNull()
+        expect(h.settings.meshActiveAttemptGeneration).toBeUndefined()
+        expect(h.settings.meshActiveDispatchNonce).toBeUndefined()
+    })
+
+    it('a re-stamp of the SAME task without an attempt keeps the live attempt (redelivery)', () => {
+        const h = host()
+        attachMeshAssignment(h, { meshId: 'm1', taskId: 't1', attemptId: 'att-1', attemptGeneration: 2, dispatchNonce: 3 })
+        attachMeshAssignment(h, { meshId: 'm1', taskId: 't1' })
+        expect(currentMeshAttemptRef(h.settings)).toEqual({ attemptId: 'att-1', generation: 2 })
+        expect(h.settings.meshActiveDispatchNonce).toBe(3)
+    })
+})

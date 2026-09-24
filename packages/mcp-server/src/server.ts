@@ -45,7 +45,7 @@ import {
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
 import { resolveMeshToolHandler } from './tools/mesh-tool-dispatch.js';
-import { validateMeshToolArgs, unknownToolArgsError } from './tools/validate-tool-args.js';
+import { validateMeshToolArgs, unknownToolArgsError, enumValueError } from './tools/validate-tool-args.js';
 import { annotateAll } from './tools/tool-annotations.js';
 import {
   resolveWorkerModeTools, readWorkerCredentials, reportCompletion, progressUpdate, peerContextPull, drainMailbox,
@@ -199,7 +199,8 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
 
       const workerTool = workerToolByName.get(name);
       if (workerTool) {
-        const unknownArgsError = unknownToolArgsError(name, workerTool.inputSchema?.properties, a);
+        const unknownArgsError = unknownToolArgsError(name, workerTool.inputSchema?.properties, a)
+          ?? enumValueError(name, workerTool.inputSchema?.properties, a);
         if (unknownArgsError) return withMailboxPiggyback({ content: [{ type: 'text', text: unknownArgsError }], isError: true });
       }
 
@@ -424,10 +425,11 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     const { name, arguments: args } = req.params;
     const a = (args ?? {}) as Record<string, any>;
 
-    // Same unknown-parameter gate as mesh mode (see validate-tool-args.ts).
+    // Same unknown-parameter + enum-value gate as mesh mode (see validate-tool-args.ts).
     const standardTool = standardToolByName.get(name);
     if (standardTool) {
-      const unknownArgsError = unknownToolArgsError(name, standardTool.inputSchema?.properties, a);
+      const unknownArgsError = unknownToolArgsError(name, standardTool.inputSchema?.properties, a)
+        ?? enumValueError(name, standardTool.inputSchema?.properties, a);
       if (unknownArgsError) return { content: [{ type: 'text', text: unknownArgsError }], isError: true };
     }
 

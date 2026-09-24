@@ -355,7 +355,10 @@ export async function meshGraphGateRelease(
         outcome?: string;
         result?: unknown;
         evidence?: unknown;
-        patches?: Array<{ node?: string; base_spec_patch?: Record<string, unknown>; baseSpecPatch?: Record<string, unknown> }>;
+        patches?: Array<{
+            node?: string; node_id?: string; nodeId?: string; ref?: string;
+            base_spec_patch?: Record<string, unknown>; baseSpecPatch?: Record<string, unknown>;
+        }>;
     },
 ): Promise<string> {
     await recordMeshCoordinatorToolCall(ctx, 'mesh_graph_gate_release');
@@ -383,12 +386,32 @@ export async function meshGraphGateRelease(
         });
     }
 
-    const patches = (args.patches ?? [])
-        .map(p => ({
-            node: readString(p?.node) || '',
-            baseSpecPatch: (p?.base_spec_patch ?? p?.baseSpecPatch ?? {}) as Record<string, unknown>,
-        }))
-        .filter(p => p.node.length > 0);
+    // rc.37 audit item 2: this used to read ONLY p.node and silently DROP any patch
+    // item given as node_id/nodeId/ref via `.filter(p => p.node.length > 0)` — the
+    // sibling mesh_graph_node_patch has always accepted all four spellings
+    // (`readString(args.node) || readString(args.node_id) || readString(args.nodeId)
+    // || readString(args.ref)`), so a caller following that convention here had its
+    // patch silently discarded and the release still committed the UNPATCHED spec —
+    // irreversible, since a released gate can never be re-released. Now: accept the
+    // same aliases, and REJECT the whole release (rather than silently dropping the
+    // item) when a patch entry names no resolvable node.
+    const rawPatches = args.patches ?? [];
+    const unresolvedPatchIndices: number[] = [];
+    const patches = rawPatches.map((p, i) => {
+        const node = readString(p?.node) || readString(p?.node_id) || readString(p?.nodeId) || readString(p?.ref) || '';
+        if (!node) unresolvedPatchIndices.push(i);
+        return { node, baseSpecPatch: (p?.base_spec_patch ?? p?.baseSpecPatch ?? {}) as Record<string, unknown> };
+    });
+    if (unresolvedPatchIndices.length > 0) {
+        return JSON.stringify({
+            success: false,
+            code: 'unresolvable_patch_node',
+            error: `mesh_graph_gate_release patches[${unresolvedPatchIndices.join(', ')}] name no resolvable node — `
+                + 'each entry needs one of node, node_id, nodeId or ref. Refusing the release rather than silently dropping '
+                + 'the patch and committing the unpatched spec, since a released gate can never be re-released.',
+            unresolvedPatchIndices,
+        });
+    }
 
     try {
         // C-W9c: release, its provenance audit record, and the post-materialization
@@ -759,7 +782,7 @@ export async function meshGraphView(
             ...(graphId ? { graphId } : {}),
             ...(batchId ? { batchId } : {}),
             activeOnly: !includeTerminal,
-            ...(readNumber(args.limit) !== undefined ? { limit: readNumber(args.limit) } : {}),
+            ...(readNonNegativeInt(args.limit) !== undefined ? { limit: readNonNegativeInt(args.limit) } : {}),
             ...(probeGateEvidence ? { probeGateEvidence: true } : {}),
         });
         const pendingActions = graphs.flatMap((g: any) =>
@@ -784,6 +807,21 @@ export async function meshGraphView(
     } catch (e: any) {
         return JSON.stringify({ success: false, error: e?.message || String(e) });
     }
+}
+
+/**
+ * rc.37 audit item 4: `mesh_graph_view`'s `limit` schema declares `number`, but the
+ * wire decoder (mesh-shared turn-ipc `isGraphViewQueryRequest` → `isNonNegativeInt`)
+ * demands a non-negative INTEGER — `readNumber` passed 2.5 / -1 / "5" straight
+ * through, so any of those failed the wire's shape check with an opaque "request
+ * failed decode (bad shape)" instead of either working or naming the problem.
+ * Coerce here (floor + clamp to 0) rather than reject, since limit is advisory
+ * paging, not a value whose exactness matters.
+ */
+function readNonNegativeInt(value: unknown): number | undefined {
+    const n = readNumber(value);
+    if (n === undefined) return undefined;
+    return Math.max(0, Math.floor(n));
 }
 
 function readNumber(value: unknown): number | undefined {

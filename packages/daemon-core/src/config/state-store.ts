@@ -26,6 +26,17 @@ export interface DeferredRestartScheduleRecord {
     nodeId: string;
     mode: 'upgrade' | 'restart';
     killSessionHost: boolean;
+    /**
+     * `daemon_upgrade` options the caller passed with `whenIdle`, replayed
+     * verbatim when the schedule fires. Absent = not passed. Without these a
+     * deliberately scheduled rollback (`allowDowngrade`) later ran without it
+     * and was refused as a downgrade (only logged).
+     */
+    allowDowngrade?: boolean;
+    /** Deprecated channel hint — ignored by the upgrade, but its override notice is replayed faithfully. */
+    channel?: string;
+    /** Deprecated npm-tag hint — same treatment as `channel`. */
+    npmTag?: string;
     /** Epoch ms when the restart was scheduled. */
     scheduledAt: number;
     /** Epoch ms after which the schedule is dropped without executing. */
@@ -131,6 +142,9 @@ function normalizeState(raw: unknown): DaemonState {
                 if (typeof value.meshId !== 'string' || typeof value.nodeId !== 'string') return false;
                 if (value.mode !== 'upgrade' && value.mode !== 'restart') return false;
                 if (typeof value.killSessionHost !== 'boolean') return false;
+                if (value.allowDowngrade !== undefined && typeof value.allowDowngrade !== 'boolean') return false;
+                if (value.channel !== undefined && typeof value.channel !== 'string') return false;
+                if (value.npmTag !== undefined && typeof value.npmTag !== 'string') return false;
                 if (typeof value.scheduledAt !== 'number' || !Number.isFinite(value.scheduledAt)) return false;
                 return typeof value.expiresAt === 'number' && Number.isFinite(value.expiresAt);
             })
@@ -241,6 +255,9 @@ export function recordDeferredRestartSchedule(record: DeferredRestartScheduleRec
     if (existing
         && existing.mode === record.mode
         && existing.killSessionHost === record.killSessionHost
+        && existing.allowDowngrade === record.allowDowngrade
+        && existing.channel === record.channel
+        && existing.npmTag === record.npmTag
         && existing.scheduledAt === record.scheduledAt
         && existing.expiresAt === record.expiresAt) return;
     saveState({

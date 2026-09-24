@@ -170,7 +170,7 @@ interface EnqueueTaskArgsShape {
     missionId?: string; mission_id?: string;
     priority?: string;
     model?: string;
-    thinkingLevel?: string;
+    thinkingLevel?: string; thinking_level?: string;
     difficulty?: string;
     notBefore?: string | number; not_before?: string | number;
     maxRetries?: number; max_retries?: number;
@@ -196,8 +196,14 @@ interface NormalizedEnqueueTaskArgs {
     explicitTargetRaw: string | undefined;
     preferWorktree: boolean;
     targetNodeId: string | undefined;
-    /** H1: raw declaration, normalized/validated by the daemon's enqueueTask. */
-    ownedPaths: unknown[] | undefined;
+    /**
+     * H1: raw declaration, normalized/validated by the daemon's enqueueTask.
+     * Typed as `string[]` to match `MeshEnqueueTaskOptions.ownedPaths` (what both
+     * `queueEnqueue`'s options and `MeshTaskGraphEntrySpec` declare) — this layer
+     * does not itself validate element types, it only forwards the raw array
+     * unchanged for the daemon to normalize/reject.
+     */
+    ownedPaths: string[] | undefined;
 }
 
 type NormalizeEnqueueTaskResult =
@@ -272,7 +278,9 @@ async function normalizeEnqueueTaskArgs(
     // Brain-routing thinking axis + difficulty preset. thinkingLevel is best-effort
     // at launch; difficulty resolves the mesh preset in daemon-core enqueueTask
     // (fills model/thinkingLevel left blank). Both trimmed; blank → undefined.
-    const thinkingLevel = readString(args.thinkingLevel) || undefined;
+    // rc.37#2: the schema published thinking_level (snake_case) but this only ever
+    // read the camelCase form — same unreachable-alias class as not_before below.
+    const thinkingLevel = readString(args.thinkingLevel) || readString(args.thinking_level) || undefined;
     const difficulty = readString(args.difficulty) || undefined;
     // G7: delayed execution. Accept a camelCase or snake_case not_before; resolveNotBefore
     // (in daemon-core, at enqueue) does the ISO/epoch-ms/relative-ms normalization — echoing it
@@ -328,7 +336,7 @@ async function normalizeEnqueueTaskArgs(
     // fire for it. Same raw-array passthrough mesh_send_task uses; the daemon's
     // enqueueTask normalizes and rejects bad paths.
     const rawOwnedPaths = args.ownedPaths ?? args.owned_paths;
-    const ownedPaths = Array.isArray(rawOwnedPaths) ? rawOwnedPaths : undefined;
+    const ownedPaths = Array.isArray(rawOwnedPaths) ? (rawOwnedPaths as string[]) : undefined;
     return {
         ok: true,
         value: {
@@ -697,6 +705,13 @@ export async function meshEnqueueBatch(
             ...(v.difficulty ? { difficulty: v.difficulty } : {}),
             ...(v.notBefore ? { notBefore: v.notBefore } : {}),
             ...(v.maxRetries !== undefined ? { maxRetries: v.maxRetries } : {}),
+            // H1 (path ownership) — mesh_enqueue_batch parity fix: this normalized value was
+            // computed by the SAME normalizeEnqueueTaskArgs the single-task tool uses (which
+            // already reads owned_paths/ownedPaths), but this specs.push was never updated to
+            // copy it onto either the compat-path spec object OR the graph-path plan (both
+            // read off this one `specs` array — see buildGraphPlanShape below), so a batch
+            // entry's declaration silently never reached the daemon on either path.
+            ...(v.ownedPaths ? { ownedPaths: v.ownedPaths } : {}),
             ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
         });
     }

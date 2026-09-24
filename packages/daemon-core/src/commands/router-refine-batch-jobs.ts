@@ -20,6 +20,7 @@ import { handleMeshForwardEvent, notifyMeshCoordinator } from '../mesh/mesh-even
 import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../mesh/mesh-refine-batch.js';
 import { buildMeshRefineBatchDryRunResult } from '../mesh/mesh-refine-submodule-preflight.js';
 import { gitChildEnv } from '../git/git-locale.js';
+import { resolveDryRunVeto } from './command-args.js';
 import {
     MeshRefineBatchJobHandle,
     MeshRefineBatchJobStatus,
@@ -262,8 +263,24 @@ export async function batchRefineMeshNodes(self: DaemonCommandRouter, meshId: st
             .map(nodeId => targetNodes.find(n => meshNodeIdMatches(n, nodeId)))
             .filter((n): n is any => !!n);
 
-        const dryRun = args?.dryRun !== false && args?.execute !== true;
-        if (dryRun) {
+        // DRY-RUN-VETO-PRECEDENCE (safety): dryRun:true always wins (even with
+        // execute:true); bare dryRun:false without execute:true is refused rather
+        // than silently executing. See resolveDryRunVeto's doc comment.
+        const dryRunVeto = resolveDryRunVeto(args);
+        if (dryRunVeto.refused) {
+            return {
+                success: false,
+                code: dryRunVeto.code,
+                meshId,
+                allowed: false,
+                willRun: false,
+                executed: false,
+                blockingReasons: [dryRunVeto.code],
+                error: dryRunVeto.error,
+                nextAction: `Re-run batch_refine_mesh_nodes(meshId: "${meshId}", execute: true) to apply, or omit dry_run to preview.`,
+            };
+        }
+        if (dryRunVeto.isDryRun) {
             // Dry-run result assembly + the submodule reachability preflight live in
             // mesh-refine-submodule-preflight.ts (this file is at its frozen size baseline).
             return buildMeshRefineBatchDryRunResult({ mesh, orderedNodes, ordering });
@@ -927,8 +944,25 @@ export async function startMeshRefineBatchJob(self: DaemonCommandRouter, meshId:
         // Dry-run: the plan IS the deliverable, so resolve it synchronously as before.
         // The med-family handler already routes dry-run to batchRefineMeshNodes directly,
         // so this is defence-in-depth for any other caller — the condition is kept
-        // character-identical to that handler's so the two can never disagree.
-        if (args?.dryRun !== false && args?.execute !== true) {
+        // in sync with that handler's via the shared resolveDryRunVeto helper so the
+        // two can never disagree.
+        //
+        // DRY-RUN-VETO-PRECEDENCE (safety): see resolveDryRunVeto's doc comment.
+        const dryRunVeto = resolveDryRunVeto(args);
+        if (dryRunVeto.refused) {
+            return {
+                success: false,
+                code: dryRunVeto.code,
+                meshId,
+                allowed: false,
+                willRun: false,
+                executed: false,
+                blockingReasons: [dryRunVeto.code],
+                error: dryRunVeto.error,
+                nextAction: `Re-run batch_refine_mesh_nodes(meshId: "${meshId}", execute: true) to apply, or omit dry_run to preview.`,
+            };
+        }
+        if (dryRunVeto.isDryRun) {
             const plan = await batchRefineMeshNodes(self, meshId, requestedNodeIds, { ...args, dryRun: true, execute: false });
             // ★Warn-only on the dry-run: the plan is still valid, but execute would be
             // refused, and the coordinator should learn that here rather than one call later.

@@ -122,6 +122,40 @@ test('report_completion translates the snake_case wire shape to the daemon repor
   });
 });
 
+test('report_completion accepts camelCase handoff_notes keys too', async () => {
+  const capture: { last?: any } = {};
+  await reportCompletion(fakeTransport({ success: true, taskId: 't1', outcome: 'completed' }, capture), { bind: 'wsb_x' }, {
+    outcome: 'completed',
+    summary: 'done',
+    // Worker followed the daemon's OWN validation-error wording
+    // (`handoffNotes.touchedFiles`) and "fixed" its payload to camelCase.
+    // Pre-fix, toDaemonReport only recognized snake_case and silently dropped
+    // every one of these — the worker's fix would have made things worse.
+    handoff_notes: { intent: 'why', touchedFiles: ['a.ts'], conflictGuidance: 'keep mine', followUps: ['later'] },
+  });
+
+  assert.deepEqual(capture.last.report.handoffNotes, {
+    intent: 'why',
+    conflictGuidance: 'keep mine',
+    touchedFiles: ['a.ts'],
+    followUps: ['later'],
+  });
+});
+
+test('an unrecognized handoff_notes key is warned about instead of silently dropped', async () => {
+  const result = await reportCompletion(
+    fakeTransport({ success: true, taskId: 't1', outcome: 'completed' }),
+    { bind: 'wsb_x' },
+    {
+      outcome: 'completed',
+      summary: 'done',
+      handoff_notes: { intent: 'why', touched_files: ['a.ts'], typoedField: 'oops' },
+    },
+  );
+  assert.match(result.text, /WARNING/);
+  assert.match(result.text, /typoedField/);
+});
+
 test('validation errors come back field-by-field so the worker can fix and re-call', async () => {
   const result = await reportCompletion(
     fakeTransport({

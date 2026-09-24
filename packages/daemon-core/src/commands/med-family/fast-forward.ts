@@ -16,7 +16,7 @@ import { planMeshRefineNodeSubmodulePreflight } from '../../mesh/mesh-refine-sub
 import type { CommandRouterResult } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
-import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from '../command-args.js';
+import { readMeshDirectDispatchFlag, withMeshDirectDispatch, resolveDryRunVeto } from '../command-args.js';
 
 export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
     mesh_init: async (ctx: MedFamilyContext, args: any) => {
@@ -194,8 +194,27 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
         // (and not dry_run) goes through the async refine job that actually
         // validates → merges → pushes → cleans up. Mirrors the
         // batch_refine_mesh_nodes / fast_forward_mesh_node dry_run/execute contract.
-        const isDryRun = args?.dryRun !== false && args?.execute !== true;
-        if (isDryRun) {
+        //
+        // DRY-RUN-VETO-PRECEDENCE (safety): dryRun:true must win even alongside
+        // execute:true, and a bare dryRun:false without execute:true must be
+        // refused rather than silently executing. See resolveDryRunVeto's doc
+        // comment for the {execute:true,dryRun:true} bug this replaced.
+        const dryRunVeto = resolveDryRunVeto(args);
+        if (dryRunVeto.refused) {
+            return {
+                success: false,
+                code: dryRunVeto.code,
+                nodeId,
+                meshId,
+                allowed: false,
+                willRun: false,
+                executed: false,
+                blockingReasons: [dryRunVeto.code],
+                error: dryRunVeto.error,
+                nextAction: `Re-run refine_mesh_node(meshId: "${meshId}", nodeId: "${nodeId}", execute: true) to apply, or omit dry_run to preview.`,
+            };
+        }
+        if (dryRunVeto.isDryRun) {
             // preferInline: plan is the dry-run sibling of refine — clone nodes must resolve.
             const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
             const mesh = meshRecord?.mesh;
@@ -229,8 +248,23 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
         // {async:true, status:'accepted'} + background convergence + terminal event,
         // matching the single-node refine_mesh_node contract so long validation
         // suites can't time out the IPC and strand the coordinator.
-        const isDryRun = args?.dryRun !== false && args?.execute !== true;
-        if (isDryRun) return ctx.batchRefineMeshNodes(meshId, requestedNodeIds, args);
+        //
+        // DRY-RUN-VETO-PRECEDENCE (safety): same contract as refine_mesh_node above.
+        const dryRunVeto = resolveDryRunVeto(args);
+        if (dryRunVeto.refused) {
+            return {
+                success: false,
+                code: dryRunVeto.code,
+                meshId,
+                allowed: false,
+                willRun: false,
+                executed: false,
+                blockingReasons: [dryRunVeto.code],
+                error: dryRunVeto.error,
+                nextAction: `Re-run batch_refine_mesh_nodes(meshId: "${meshId}", execute: true) to apply, or omit dry_run to preview.`,
+            };
+        }
+        if (dryRunVeto.isDryRun) return ctx.batchRefineMeshNodes(meshId, requestedNodeIds, args);
         return ctx.startMeshRefineBatchJob(meshId, requestedNodeIds, args);
     },
 };

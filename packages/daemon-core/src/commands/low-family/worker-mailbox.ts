@@ -17,6 +17,8 @@
  */
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
+import { findLocalWorkerOfRemoteTask, resolveRemoteWorker } from './worker-report.js';
+import { LOG } from '../../logging/logger.js';
 
 export const workerMailboxHandlers: Record<string, LowFamilyHandler> = {
     /**
@@ -50,16 +52,32 @@ export const workerMailboxHandlers: Record<string, LowFamilyHandler> = {
             }
 
             const { MeshRuntimeStore } = await import('../../mesh/mesh-runtime-store.js');
-            const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
+            const store = MeshRuntimeStore.getInstance();
+            const entry = store.findQueueEntryById(meshId, taskId);
+            const { depositWorkerMailboxMessage, pruneWorkerMailboxes } = await import('../../mesh/worker-mailbox.js');
             if (!entry) {
-                return {
-                    success: false,
-                    error: 'task_not_found_locally',
-                    detail: `no local queue row for task ${taskId} on mesh ${meshId} — this daemon may not own or have reconciled it`,
-                };
+                // F7 (mailbox axis): `mesh_notify_worker` routes the deposit to the
+                // daemon that owns the target NODE — for a cross-machine worker that
+                // is the worker's daemon, while the queue row lives on the task's
+                // owner. This daemon still knows the task authoritatively when one of
+                // its own live sessions carries the assignment stamp for it. The memo
+                // is kept HERE because this is the daemon the worker's MCP drains
+                // from on every tool response (no per-tool-call relay to the owner).
+                const worker = findLocalWorkerOfRemoteTask(_ctx, meshId, taskId);
+                if (!worker) {
+                    return {
+                        success: false,
+                        error: 'task_not_found_locally',
+                        detail: `no local queue row for task ${taskId} on mesh ${meshId}, and no live worker session on this daemon is assigned it — this daemon may not own or have reconciled it`,
+                    };
+                }
+                // The owner's terminal chokepoint cannot discard a memo held here:
+                // sweep memos for remote-owned tasks no local session carries any more.
+                const dropped = pruneWorkerMailboxes((m, t) => !!store.findQueueEntryById(m, t) || !!findLocalWorkerOfRemoteTask(_ctx, m, t));
+                if (dropped > 0) LOG.info('WorkerMailbox', `Dropped ${dropped} undelivered memo(s) for remote-owned task(s) no local worker holds any more`);
+                LOG.info('WorkerMailbox', `Memo for remote-owned task ${taskId} (owner ${worker.ownerDaemonId.slice(0, 16)}) held for its local worker session ${worker.sessionId}`);
             }
 
-            const { depositWorkerMailboxMessage } = await import('../../mesh/worker-mailbox.js');
             const result = depositWorkerMailboxMessage({ meshId, taskId, text });
             if (!result.ok) {
                 return { success: false, error: result.error, detail: result.detail };
@@ -81,13 +99,20 @@ export const workerMailboxHandlers: Record<string, LowFamilyHandler> = {
         try {
             const { resolveWorkerIdentity } = await import('../../mesh/worker-report.js');
             const identity = resolveWorkerIdentity({ token: args?.token, bind: args?.bind });
-            if (!identity) {
+            // F7 (mailbox axis): a worker whose task another daemon owns has no
+            // local identity; its memos are deposited HERE (see the deposit
+            // handler), keyed by the task its assignment stamp names.
+            const remote = identity ? null : await resolveRemoteWorker(_ctx, args);
+            const target = identity
+                ? { meshId: identity.meshId, taskId: identity.taskId }
+                : remote?.taskId ? { meshId: remote.meshId, taskId: remote.taskId } : null;
+            if (!target) {
                 return { success: false, error: 'unauthenticated' };
             }
             const { drainWorkerMailboxForTask } = await import('../../mesh/worker-mailbox.js');
-            const messages = drainWorkerMailboxForTask(identity.meshId, identity.taskId)
+            const messages = drainWorkerMailboxForTask(target.meshId, target.taskId)
                 .map((m) => ({ id: m.id, text: m.text }));
-            return { success: true, taskId: identity.taskId, messages };
+            return { success: true, taskId: target.taskId, messages };
         } catch (e: any) {
             return { success: false, error: e?.message || String(e) };
         }

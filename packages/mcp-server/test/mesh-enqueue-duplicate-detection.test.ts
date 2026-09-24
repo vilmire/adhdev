@@ -5,6 +5,7 @@ import { existsSync, unlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
 import { meshEnqueueTask } from '../src/tools/mesh-tools.js';
+import { validateMeshToolArgs } from '../src/tools/validate-tool-args.js';
 import { getQueue, getLedgerDir } from '@adhdev/daemon-core';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
@@ -130,13 +131,21 @@ test('G4 target-scoped: same message to the SAME node IS a duplicate', async () 
 test('G4/G6/G7/P3 echo: priority, notBefore, and maxRetries round-trip in the response', async () => {
   const meshId = nextMeshId();
   const ctx = makeCtx(meshId);
-  const res = JSON.parse(await meshEnqueueTask(ctx, {
+  const callArgs = {
     message: 'scheduled urgent capped task',
     priority: 'high',
     not_before: 60_000, // relative ms → held in the future
     max_retries: 3,
     difficulty: 'medium',
-  } as any));
+  };
+  // rc.37#2: this test used to call meshEnqueueTask directly with `not_before` and
+  // `as any`, bypassing the pre-dispatch unknown-key gate entirely — so it never
+  // would have caught not_before being unreachable through the real dispatch path
+  // (the schema only declared `notBefore` until this fix). Assert the gate now
+  // accepts the exact args this test sends, so a future regression that re-drops
+  // the snake_case alias from the schema fails HERE, not just in production.
+  assert.equal(validateMeshToolArgs('mesh_enqueue_task', callArgs), null, 'the real dispatch gate must accept this call shape');
+  const res = JSON.parse(await meshEnqueueTask(ctx, callArgs as any));
   assert.equal(res.success, true);
   assert.equal(res.priority, 'high');
   assert.equal(res.maxRetries, 3);

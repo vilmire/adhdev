@@ -42,6 +42,7 @@ import type {
     RemoteWorkerIdentity,
     WorkerAssignmentStamp,
     WorkerCompletionReport,
+    WorkerProgressUpdateResult,
     WorkerReportResult,
 } from '../../mesh/worker-report.js';
 
@@ -50,6 +51,15 @@ import type {
  * (`dispatchMeshCommand` → the owner's `handleMeshCommand`, source `mesh`).
  */
 export const WORKER_REPORT_FORWARD_COMMAND = 'worker_report_forwarded';
+
+/**
+ * F7 (progress axis): the owner-side command a REMOTE worker daemon relays a
+ * `worker_progress_update` note through — same relay, same sender
+ * authorisation as {@link WORKER_REPORT_FORWARD_COMMAND}. Without it a remote
+ * worker's every progress note was refused `unauthenticated` on its own daemon
+ * (which holds no attempt) and lost.
+ */
+export const WORKER_PROGRESS_FORWARD_COMMAND = 'worker_progress_forwarded';
 
 /**
  * rc.37 Finding A: the router-internal arg the OWNER's mesh transport stamps
@@ -98,6 +108,28 @@ function assignmentStampReader(ctx: LowFamilyContext): (sessionId: string) => Wo
             ...(nodeId ? { nodeId } : {}),
         };
     };
+}
+
+/**
+ * F7 (mailbox axis): the live session on THIS daemon whose assignment stamp
+ * names (meshId, taskId) with ANOTHER daemon as owner — i.e. this daemon hosts
+ * the worker of a remote-owned task. Read off this daemon's own instances (the
+ * stamp `attachMeshAssignment` wrote on receipt of the dispatch), never off the
+ * caller's args. Unknown self id ⇒ null (fail closed, as `resolveRemoteWorker`).
+ */
+export function findLocalWorkerOfRemoteTask(ctx: LowFamilyContext, meshId: string, taskId: string): { sessionId: string; ownerDaemonId: string } | null {
+    const isSelf = selfDaemonPredicate(ctx);
+    if (!isSelf || !meshId || !taskId) return null;
+    let ids: string[] = [];
+    try { ids = ctx?.deps?.instanceManager?.listInstanceIds?.() ?? []; } catch { ids = []; }
+    const read = assignmentStampReader(ctx);
+    for (const sessionId of ids) {
+        const stamp = read(sessionId);
+        if (stamp && stamp.meshId === meshId && stamp.taskId === taskId && !isSelf(stamp.ownerDaemonId)) {
+            return { sessionId, ownerDaemonId: stamp.ownerDaemonId };
+        }
+    }
+    return null;
 }
 
 /** This daemon's own-id predicate, or undefined when the host never told us our id. */
@@ -176,6 +208,25 @@ function toReportResponse(result: WorkerReportResult): Record<string, unknown> &
     };
 }
 
+/** The command-layer answer for a progress update — identical for local and forwarded notes. */
+function toProgressResponse(result: WorkerProgressUpdateResult): Record<string, unknown> & { success: boolean } {
+    if (!result.accepted) {
+        return {
+            success: false,
+            error: result.refusal || 'unauthenticated',
+            ...(result.detail ? { detail: result.detail } : {}),
+        };
+    }
+    return {
+        success: true,
+        ...(result.taskId ? { taskId: result.taskId } : {}),
+        // ★F3: whether the note reached the coordinator, or was recorded
+        // only. The filter is at the producer, so this is the one place
+        // the worker can learn which of the two happened.
+        surfacedToCoordinator: result.surfacedToCoordinator === true,
+    };
+}
+
 /** A relay answer may arrive wrapped (`{ result }` / `{ payload }`); find the handler's own object. */
 function unwrapRelayResult(raw: unknown): (Record<string, unknown> & { success: boolean }) | null {
     let cursor: unknown = raw;
@@ -201,6 +252,21 @@ async function forwardReportToOwner(
     remote: RemoteWorkerIdentity,
     report: WorkerCompletionReport,
 ): Promise<Record<string, unknown> & { success: boolean }> {
+    return forwardToOwner(ctx, remote, WORKER_REPORT_FORWARD_COMMAND, { report }, `${report.outcome} report`);
+}
+
+/**
+ * The relay itself, shared by the completion report and the progress note:
+ * the claim (never trusted by the owner) + the command's own payload, one
+ * worker-side log line carrying the owner's verdict and refusal reason.
+ */
+async function forwardToOwner(
+    ctx: LowFamilyContext,
+    remote: RemoteWorkerIdentity,
+    command: string,
+    payload: Record<string, unknown>,
+    what: string,
+): Promise<Record<string, unknown> & { success: boolean }> {
     const dispatch = ctx?.deps?.dispatchMeshCommand;
     if (!dispatch) {
         return {
@@ -218,13 +284,13 @@ async function forwardReportToOwner(
     };
     let raw: unknown;
     try {
-        raw = await dispatch(remote.ownerDaemonId, WORKER_REPORT_FORWARD_COMMAND, {
+        raw = await dispatch(remote.ownerDaemonId, command, {
             ...claim,
             ...(remote.nodeId ? { nodeId: remote.nodeId } : {}),
-            report,
+            ...payload,
         });
     } catch (e: any) {
-        LOG.warn('WorkerReport', `Forwarding report for session ${remote.sessionId} (task ${remote.taskId ?? '?'}) to owner ${remote.ownerDaemonId.slice(0, 16)} failed: ${e?.message || e}`);
+        LOG.warn('WorkerReport', `Forwarding ${what} for session ${remote.sessionId} (task ${remote.taskId ?? '?'}) to owner ${remote.ownerDaemonId.slice(0, 16)} failed: ${e?.message || e}`);
         return {
             success: false,
             error: 'forward_failed',
@@ -234,24 +300,31 @@ async function forwardReportToOwner(
     }
     const answer = unwrapRelayResult(raw);
     if (!answer) {
-        return { success: false, error: 'forward_failed', detail: 'the owner daemon returned no report result', hint: 'Nothing was recorded — call again.' };
+        return { success: false, error: 'forward_failed', detail: `the owner daemon returned no ${command} result`, hint: 'Nothing was recorded — call again.' };
     }
-    LOG.info('WorkerReport', `Forwarded ${report.outcome} report for session ${remote.sessionId} (task ${remote.taskId ?? '?'} attempt ${remote.attemptId ?? '?'}) to owner ${remote.ownerDaemonId.slice(0, 16)} → ${answer.success === true ? 'accepted' : `refused (${String(answer.error)}${typeof answer.detail === 'string' && answer.detail ? ` — ${answer.detail}` : ''})`}`);
+    const line = `Forwarded ${what} for session ${remote.sessionId} (task ${remote.taskId ?? '?'} attempt ${remote.attemptId ?? '?'}) to owner ${remote.ownerDaemonId.slice(0, 16)} → ${answer.success === true ? 'accepted' : `refused (${String(answer.error)}${typeof answer.detail === 'string' && answer.detail ? ` — ${answer.detail}` : ''})`}`;
+    if (answer.success === true) LOG.info('WorkerReport', line);
+    else LOG.warn('WorkerReport', line);
     return answer;
 }
 
-const FORWARD_KEYS = new Set(['meshId', 'taskId', 'attemptId', 'sessionId', 'nodeId', 'report']);
+const CLAIM_KEYS = ['meshId', 'taskId', 'attemptId', 'sessionId', 'nodeId'] as const;
+const FORWARD_KEYS = new Set<string>([...CLAIM_KEYS, 'report']);
+const PROGRESS_FORWARD_KEYS = new Set<string>([...CLAIM_KEYS, 'note']);
 
 /**
- * Strict decoder for the forwarded-report request: exactly the claim fields,
- * an optional nodeId, and the report object (validated separately by the same
- * validator a local report goes through). Router-internal `_` keys stripped.
+ * The claim half of a forwarded request, strict: only `allowedKeys` present
+ * (router-internal `_` keys stripped first), meshId + sessionId required, and a
+ * present optional id must be a non-empty string.
  */
-export function decodeForwardedWorkerReport(args: unknown): { claim: ForwardedWorkerReportClaim; report: unknown } | null {
+function decodeForwardedClaim(
+    args: unknown,
+    allowedKeys: ReadonlySet<string>,
+): { claim: ForwardedWorkerReportClaim; record: Record<string, unknown> } | null {
     const input = stripRouterInternalArgs(args);
     if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
     const record = input as Record<string, unknown>;
-    for (const key of Object.keys(record)) if (!FORWARD_KEYS.has(key)) return null;
+    for (const key of Object.keys(record)) if (!allowedKeys.has(key)) return null;
     const meshId = readNonEmpty(record.meshId);
     const sessionId = readNonEmpty(record.sessionId);
     if (!meshId || !sessionId) return null;
@@ -259,13 +332,38 @@ export function decodeForwardedWorkerReport(args: unknown): { claim: ForwardedWo
     for (const key of ['taskId', 'attemptId', 'nodeId'] as const) {
         if (record[key] !== undefined && !readNonEmpty(record[key])) return null;
     }
-    if (!record.report || typeof record.report !== 'object' || Array.isArray(record.report)) return null;
     const taskId = readNonEmpty(record.taskId);
     const attemptId = readNonEmpty(record.attemptId);
     return {
         claim: { meshId, sessionId, ...(taskId ? { taskId } : {}), ...(attemptId ? { attemptId } : {}) },
-        report: record.report,
+        record,
     };
+}
+
+/**
+ * Strict decoder for the forwarded-report request: exactly the claim fields,
+ * an optional nodeId, and the report object (validated separately by the same
+ * validator a local report goes through). Router-internal `_` keys stripped.
+ */
+export function decodeForwardedWorkerReport(args: unknown): { claim: ForwardedWorkerReportClaim; report: unknown } | null {
+    const decoded = decodeForwardedClaim(args, FORWARD_KEYS);
+    if (!decoded) return null;
+    const { report } = decoded.record;
+    if (!report || typeof report !== 'object' || Array.isArray(report)) return null;
+    return { claim: decoded.claim, report };
+}
+
+/**
+ * Strict decoder for the forwarded progress request: exactly the claim fields,
+ * an optional nodeId, and a non-empty `note` string (trimmed, as the local
+ * update trims it). Router-internal `_` keys stripped.
+ */
+export function decodeForwardedWorkerProgress(args: unknown): { claim: ForwardedWorkerReportClaim; note: string } | null {
+    const decoded = decodeForwardedClaim(args, PROGRESS_FORWARD_KEYS);
+    if (!decoded) return null;
+    const note = readNonEmpty(decoded.record.note);
+    if (!note) return null;
+    return { claim: decoded.claim, note };
 }
 
 export const workerReportHandlers: Record<string, LowFamilyHandler> = {
@@ -392,31 +490,57 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
         const note = typeof args?.note === 'string' ? args.note.trim() : '';
         if (!note) return { success: false, error: 'note required' };
         try {
-            const { acceptWorkerProgressUpdate } = await import('../../mesh/worker-report.js');
-            const result = acceptWorkerProgressUpdate({ token: args?.token, bind: args?.bind }, note);
-            if (!result.accepted) {
-                return {
-                    success: false,
-                    error: result.refusal || 'unauthenticated',
-                    ...(result.detail ? { detail: result.detail } : {}),
-                };
+            const { acceptWorkerProgressUpdate, hasLocalWorkerIdentity } = await import('../../mesh/worker-report.js');
+            const credential = { token: args?.token, bind: args?.bind };
+            // F7 (progress axis): same routing as the completion report — no
+            // local task + an assignment stamp naming another owner ⇒ relay the
+            // note to that owner (it holds the attempt the row hangs off).
+            if (!hasLocalWorkerIdentity(credential, { isSelfDaemon: selfDaemonPredicate(_ctx) })) {
+                const remote = await resolveRemoteWorker(_ctx, args);
+                if (remote) return await forwardToOwner(_ctx, remote, WORKER_PROGRESS_FORWARD_COMMAND, { note }, 'progress note');
             }
-            return {
-                success: true,
-                ...(result.taskId ? { taskId: result.taskId } : {}),
-                // ★F3: whether the note reached the coordinator, or was recorded
-                // only. The filter is at the producer, so this is the one place
-                // the worker can learn which of the two happened.
-                surfacedToCoordinator: result.surfacedToCoordinator === true,
-            };
+            return toProgressResponse(acceptWorkerProgressUpdate(credential, note));
         } catch (e: any) {
+            return { success: false, error: e?.message || String(e) };
+        }
+    },
+
+    /**
+     * F7 (progress axis), OWNER side: a progress note a remote worker daemon
+     * relayed here. Authorised exactly like a forwarded completion report
+     * (`resolveForwardedWorkerIdentity` with the transport-stamped sender), then
+     * recorded by the local progress body.
+     */
+    [WORKER_PROGRESS_FORWARD_COMMAND]: async (_ctx: LowFamilyContext, args: any) => {
+        const decoded = decodeForwardedWorkerProgress(args);
+        if (!decoded) return { success: false, error: `${WORKER_PROGRESS_FORWARD_COMMAND}: request failed decode (bad shape)` };
+        const { claim, note } = decoded;
+        const senderDaemonId = readNonEmpty(args?.[MESH_SENDER_DAEMON_ID_ARG]);
+        const claimLabel = `session ${claim.sessionId} (claimed task ${claim.taskId ?? '?'} attempt ${claim.attemptId ?? '?'}) from ${senderDaemonId ? senderDaemonId.slice(0, 20) : 'an unidentified daemon'}`;
+        try {
+            const { acceptForwardedWorkerProgressUpdate } = await import('../../mesh/worker-report.js');
+            const sender: ForwardedReportSender = {
+                senderDaemonId,
+                nodeDaemonId: await ownerRosterNodeDaemonLookup(_ctx, claim.meshId),
+            };
+            const result = acceptForwardedWorkerProgressUpdate(claim, note, { sender, isSelfDaemon: selfDaemonPredicate(_ctx) });
+            // ONE owner-side line per forwarded progress note.
+            if (result.accepted) {
+                LOG.info('WorkerReport', `Forwarded progress note for ${claimLabel} → accepted for task ${result.taskId ?? '?'}${result.surfacedToCoordinator ? ' (surfaced to coordinator)' : ''}`);
+            } else {
+                LOG.warn('WorkerReport', `Forwarded progress note for ${claimLabel} → refused ${result.refusal ?? 'unauthenticated'}${result.detail ? ` — ${result.detail}` : ''}`);
+            }
+            return toProgressResponse(result);
+        } catch (e: any) {
+            LOG.warn('WorkerReport', `Forwarded progress note for ${claimLabel} failed: ${e?.message || e}`);
             return { success: false, error: e?.message || String(e) };
         }
     },
 };
 
 export const workerReportSpecs = defineCommandSpecs('low', workerReportHandlers, {
-    // Only another daemon's relay may present a forwarded report (never a
-    // dashboard, the API, or a local worker MCP over IPC).
+    // Only another daemon's relay may present a forwarded report or progress
+    // note (never a dashboard, the API, or a local worker MCP over IPC).
     [WORKER_REPORT_FORWARD_COMMAND]: { sources: ['mesh'] },
+    [WORKER_PROGRESS_FORWARD_COMMAND]: { sources: ['mesh'] },
 });

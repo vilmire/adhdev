@@ -39,6 +39,11 @@ export async function gitPush(
     workspace: args.workspace,
     remote: args.remote ?? 'origin',
     ...(args.branch ? { branch: args.branch } : {}),
+    // The tool description promises upstream is "set automatically". Without
+    // this, the daemon (git-commands.ts) only added --set-upstream on a RETRY
+    // after the plain push failed for lack of upstream — so a first push naming
+    // an explicit remote+branch succeeded without ever gaining tracking.
+    setUpstream: true,
   });
   raw = raw?.push ?? raw;
 

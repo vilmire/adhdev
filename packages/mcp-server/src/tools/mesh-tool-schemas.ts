@@ -93,6 +93,7 @@ export const MESH_STATUS_TOOL = {
             refresh: { type: 'boolean', description: 'Bypass the shared get_status_metadata probe cache (one probe per daemon, 5 s TTL — mesh-tools-internal.ts probeStatusMetadataForNode) and force a fresh probe. Default false.' },
             _gemini_compat: { type: 'string', description: 'Dummy property for Gemini compatibility. Ignore this.' },
             includeStaleDirectWorkDetails: { type: 'boolean', description: 'Opt in to the full staleDirectWork array. Defaults false; normal status returns compact staleDirectWorkSummary only.' },
+            includeTerminalDirectWork: { type: 'boolean', description: 'Include historical completed/failed direct dispatches (terminalDirectWork) in the response. Defaults false.' },
             includeSessions: { type: 'boolean', description: 'Opt in to per-node live session arrays. Default false: compact mode returns a per-node sessionSummary (counts) and de-duplicated full session lists under top-level daemonSessions keyed by daemonId (sessions are not repeated for every node that shares a daemon). Set true to also include the full session array on each node.' },
             includeUsage: { type: 'boolean', description: 'Opt in to the token/cost usage rollup for this mesh (usage.total, usage.retained, usage.byNode, usage.costCoverage). Default false — usage is not read on ordinary status polls. Token counts come from each provider native transcript; costUsd is only present for providers that compute one themselves (hermes), so costCoverage reports how many sessions contributed a cost.' },
             compact: { type: 'boolean', description: 'Slim payload for LLM callers. Default true. Folds per-node session arrays to sessionSummary and de-duplicates daemon-shared sessions into daemonSessions. Set false (or verbose=true) for the full dashboard-grade payload.' },
@@ -117,6 +118,7 @@ export const MESH_ROUTE_PREVIEW_TOOL = {
                 items: { type: 'string' as const },
                 description: 'Optional capability tags the hypothetical task requires.',
             },
+            requiredTags: { type: 'array' as const, items: { type: 'string' as const }, description: 'CamelCase alias for required_tags.' },
             readonly: {
                 type: 'boolean' as const,
                 description: 'Whether to preview read-only scheduling semantics, including the reserved-last-slot capacity rule.',
@@ -125,6 +127,7 @@ export const MESH_ROUTE_PREVIEW_TOOL = {
                 type: 'string' as const,
                 description: 'Optional node pin. When omitted, preview all eligible nodes in scheduling order.',
             },
+            targetNodeId: { type: 'string' as const, description: 'CamelCase alias for target_node_id.' },
         },
     },
 };
@@ -222,9 +225,11 @@ export const MESH_ENQUEUE_TASK_TOOL = {
             model: { type: 'string', description: 'Optional model override for the agent that runs this task, e.g. opus, sonnet, haiku. Best-effort: applied at launch for providers that support a model flag (claude-cli --model, ACP setConfigOption); ignored by providers that cannot honor it. Use a cheaper model for simple tasks to save tokens, a stronger one for hard work. Blank = the provider default.' },
             thinkingLevel: { ...enumOf(MESH_THINKING_LEVELS), description: 'Optional reasoning-effort level for this task. Best-effort: applied at launch for providers that support it (claude-cli --effort, codex-cli reasoning effort, ACP thought_level); ignored otherwise. Use low for simple tasks (fewer tokens), high for hard reasoning.' },
             difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: 'REQUIRED task execution difficulty — a ROUTING HINT, not a model selector. It is matched against each node\'s capability slots so the task lands on a slot configured for that difficulty, and THAT SLOT\'s own model + thinkingLevel are what launch. It does not by itself mean a cheaper or stronger model: to change what a difficulty runs on, edit the node\'s slots (mesh_node_slots_set) rather than picking a different difficulty. Classify each task by how hard the work actually is. An explicit model/thinkingLevel above always wins.' },
-            notBefore: { type: 'number', description: 'CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string.' },
+            not_before: { type: ['number', 'string'], description: 'G7 (delayed execution). Hold the task pending until this time — an absolute epoch-ms number, a small relative-ms offset from now, or an ISO-8601 timestamp string.' },
+            notBefore: { type: ['number', 'string'], description: 'CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string.' },
             max_retries: { type: 'number', description: 'P3 (retry cap). Max automatic requeue attempts before the task auto-fails instead of returning to pending. When requeueCount reaches this, mesh_queue_requeue auto-fails the task unless force=true. Omit to use the mesh policy default (maxTaskRetries, typically 1).' },
             maxRetries: { type: 'number', description: 'CamelCase alias for max_retries.' },
+            thinking_level: { ...enumOf(MESH_THINKING_LEVELS), description: 'Snake_case alias for thinkingLevel. Optional reasoning-effort level for this task. Best-effort: applied at launch for providers that support it (claude-cli --effort, codex-cli reasoning effort, ACP thought_level); ignored otherwise. Use low for simple tasks (fewer tokens), high for hard reasoning.' },
             block_duplicate: { type: 'boolean', description: 'G4 (duplicate detection, block mode). Default false = warn-only: if an in-flight (pending/assigned) task with the same message (+ target node when pinned) already exists, the task is still enqueued but the response carries duplicateSuspect. Set true to REFUSE the enqueue with code duplicate_suspect instead (structural TASKBUBBLE-DUP defense — use when re-sending a task that a slow prior turn may have already enqueued).' },
             blockDuplicate: { type: 'boolean', description: 'CamelCase alias for block_duplicate.' },
             allow_duplicate: { type: 'boolean', description: 'G4. Set true to skip duplicate detection entirely (no warning, no block) for an intentional re-enqueue of the same instruction.' },
@@ -278,6 +283,8 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
                         ownedPaths: { type: 'array', items: { type: 'string' }, description: 'CamelCase alias for owned_paths.' },
                         target_node_id: { type: 'string', description: 'Optional HARD pin: only this node may claim the task. An unresolvable id rejects the WHOLE batch (atomic).' },
                         targetNodeId: { type: 'string', description: 'CamelCase alias for target_node_id.' },
+                        target_node: { type: 'string', description: 'Alias for target_node_id.' },
+                        targetNode: { type: 'string', description: 'CamelCase alias for target_node_id.' },
                         prefer_worktree: { type: 'boolean', description: 'Route to the most recently cloned idle worktree node (no-op when none exists).' },
                         preferWorktree: { type: 'boolean', description: 'CamelCase alias for prefer_worktree.' },
                         depends_on: { type: 'array', items: { type: 'string' }, description: 'Refs of sibling entries in THIS batch (forward references allowed) and/or EXISTING queue task ids that must complete before this task becomes claimable. Cycles and unknown values reject the whole batch.' },
@@ -286,10 +293,11 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
                         missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
                         priority: { ...enumOf(MESH_TASK_PRIORITIES), description: 'G6 task-level scheduling priority (same semantics as mesh_enqueue_task).' },
                         model: { type: 'string', description: 'Optional model override for the agent that runs this task (best-effort at launch).' },
+                        thinking_level: { ...enumOf(MESH_THINKING_LEVELS), description: 'Snake_case alias for thinkingLevel. Optional reasoning-effort level (best-effort at launch).' },
                         thinkingLevel: { ...enumOf(MESH_THINKING_LEVELS), description: 'Optional reasoning-effort level (best-effort at launch).' },
                         difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: 'REQUIRED per task — routing hint matched against node capability slots (same semantics as mesh_enqueue_task).' },
-                        not_before: { type: 'number', description: 'G7 delayed execution: hold the task pending until this time (epoch-ms, relative-ms, or ISO string).' },
-                        notBefore: { type: 'number', description: 'CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string.' },
+                        not_before: { type: ['number', 'string'], description: 'G7 delayed execution: hold the task pending until this time (epoch-ms, relative-ms, or ISO string).' },
+                        notBefore: { type: ['number', 'string'], description: 'CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string.' },
                         max_retries: { type: 'number', description: 'P3 retry cap (same semantics as mesh_enqueue_task).' },
                         maxRetries: { type: 'number', description: 'CamelCase alias for max_retries.' },
                         // ── batch v2 graph fields (design :568-570). All optional; a batch
@@ -340,10 +348,14 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
                     properties: {
                         ref: { type: 'string', description: 'Label tasks use in workspace_ref. Shares one namespace with task and gate refs.' },
                         source_node_id: { type: 'string', description: 'Node whose workspace the worktree is cloned from.' },
+                        sourceNodeId: { type: 'string', description: 'CamelCase alias for source_node_id.' },
                         purpose: { type: 'string', description: 'Short label folded into the derived branch name.' },
                         base_revision: { type: 'string', description: 'Base revision to prepare from.' },
+                        baseRevision: { type: 'string', description: 'CamelCase alias for base_revision.' },
                         desired_path: { type: 'string', description: 'Optional explicit worktree path.' },
+                        desiredPath: { type: 'string', description: 'CamelCase alias for desired_path.' },
                         cleanup_on_graph_failure: { type: 'boolean', description: 'Remove the worktree this graph created if the graph fails. Only ever removes a worktree the saga itself owns.' },
+                        cleanupOnGraphFailure: { type: 'boolean', description: 'CamelCase alias for cleanup_on_graph_failure.' },
                     },
                     required: ['ref'],
                 },
@@ -432,7 +444,10 @@ export const MESH_GRAPH_GATE_RELEASE_TOOL = {
                 items: {
                     type: 'object',
                     properties: {
-                        node: { type: 'string', description: 'Ref or node id of a DIRECT downstream node of this gate.' },
+                        node: { type: 'string', description: 'Ref or node id of a DIRECT downstream node of this gate. node_id/nodeId/ref are equivalent aliases — any one resolves the target; an entry naming none of them is REJECTED (the whole release refuses) rather than silently dropped.' },
+                        node_id: { type: 'string', description: 'Alias for node.' },
+                        nodeId: { type: 'string', description: 'CamelCase alias for node.' },
+                        ref: { type: 'string', description: 'Alias for node — the batch-local ref of the downstream node.' },
                         base_spec_patch: { type: 'object', description: 'Keys to merge into that node\'s spec. Allowed keys: run_if, on_false, inputs_from, workspace_ref.' },
                         baseSpecPatch: { type: 'object', description: 'CamelCase alias for base_spec_patch.' },
                     },
@@ -483,6 +498,7 @@ export const MESH_GRAPH_NODE_PATCH_TOOL = {
             node: { type: 'string', description: 'Node id or `ref` of the node to patch (from mesh_graph_view). A ref that matches several live graphs is refused — pass graph_id too, or the exact node id.' },
             node_id: { type: 'string', description: 'Alias for node.' },
             nodeId: { type: 'string', description: 'CamelCase alias for node_id.' },
+            ref: { type: 'string', description: 'Alias for node, spelled `ref` to match mesh_graph_view\'s own field name for a node\'s human-readable ref. A ref that matches several live graphs is refused — pass graph_id too, or the exact node id.' },
             graph_id: { type: 'string', description: 'Disambiguate which graph the ref belongs to. Optional when `node` is a node id.' },
             graphId: { type: 'string', description: 'CamelCase alias for graph_id.' },
             base_spec_patch: {
@@ -519,7 +535,7 @@ export const MESH_GRAPH_VIEW_TOOL = {
             includeTerminal: { type: 'boolean', description: 'CamelCase alias for include_terminal.' },
             probe_gate_evidence: { type: 'boolean', description: 'Attach convergence evidence to waiting gates: whether each upstream commit is already reachable from the mesh base workspace\'s local origin/main. Answers "did the guarded work already land?" without claiming. Runs bounded local git probes (first 5 waiting gates, no fetch) — default false keeps the view git-free. Evidence never releases a gate.' },
             probeGateEvidence: { type: 'boolean', description: 'CamelCase alias for probe_gate_evidence.' },
-            limit: { type: 'number', description: 'Max graphs to return (default 20).' },
+            limit: { type: 'integer', minimum: 0, description: 'Max graphs to return (default 20).' },
         },
     },
 };
@@ -852,13 +868,16 @@ export const MESH_MISSION_UPSERT_TOOL = {
             status: { type: 'string', enum: ['active', 'paused', 'completed', 'abandoned'], description: 'Mission lifecycle status. Defaults to active on create. Required in bulk (mission_ids) mode.' },
             brief: {
                 type: 'object',
-                description: 'H2 (mission brief). Optional structured brief, rendered into every task dispatched under this mission\'s worker-protocol footer so a freshly launched worker sees it without a separate lookup. {goal (required — a brief with no goal is dropped, not stored empty), constraints?, doneCriteria?, handoffNotes?, ownedPaths?} — each of the four optional fields is a string array. Ignored in bulk (mission_ids) mode. This is DISTINCT from the top-level `goal` field: `goal` is the mission record\'s short free-text summary shown in mesh_mission_list; `brief` is the longer structured packet a worker actually reads.',
+                description: 'H2 (mission brief). Optional structured brief, rendered into every task dispatched under this mission\'s worker-protocol footer so a freshly launched worker sees it without a separate lookup. {goal (required — a brief with no goal is dropped, not stored empty), constraints?, doneCriteria?, handoffNotes?, ownedPaths?} — each of the four optional fields is a string array; done_criteria/handoff_notes/owned_paths snake_case aliases are also accepted. Ignored in bulk (mission_ids) mode. When a non-empty brief is dropped (no goal, or a field of the wrong type), the response carries `briefIgnored: {reason, field?}` instead of silently discarding it. This is DISTINCT from the top-level `goal` field: `goal` is the mission record\'s short free-text summary shown in mesh_mission_list; `brief` is the longer structured packet a worker actually reads.',
                 properties: {
                     goal: { type: 'string', description: 'What this mission is trying to accomplish. Required for the brief to be stored — an object with no goal is treated as no brief.' },
                     constraints: { type: 'array', items: { type: 'string' }, description: 'Hard constraints a worker must respect, e.g. "do not touch daemon-core", "no npm install".' },
                     doneCriteria: { type: 'array', items: { type: 'string' }, description: 'How to know the mission is actually done.' },
+                    done_criteria: { type: 'array', items: { type: 'string' }, description: 'Snake_case alias for doneCriteria.' },
                     handoffNotes: { type: 'array', items: { type: 'string' }, description: 'Standing notes for whoever picks up mission work next.' },
+                    handoff_notes: { type: 'array', items: { type: 'string' }, description: 'Snake_case alias for handoffNotes.' },
                     ownedPaths: { type: 'array', items: { type: 'string' }, description: 'Paths this mission\'s tasks collectively own — surfaced to workers, not itself enforced (per-task owned_paths on mesh_enqueue_task/mesh_enqueue_batch/mesh_send_task is what claim-time enforcement reads).' },
+                    owned_paths: { type: 'array', items: { type: 'string' }, description: 'Snake_case alias for ownedPaths.' },
                 },
             },
         },
@@ -1166,6 +1185,11 @@ export const MESH_RECORD_NOTE_TOOL = {
                 type: 'number',
                 description: 'Optional explicit read-side lifespan in days. Resolved to an absolute expiry at record time; after it passes an UNPINNED note is hidden from the injected prompt (but retained in the ledger for audit). Overrides the category default TTL. Ignored when pinned is true.',
             },
+            expiresAt: {
+                type: 'string',
+                description: 'Optional explicit ISO-8601 expiry timestamp, as an alternative to ttl_days when you know the exact cutoff rather than a day count. Takes precedence over ttl_days when both are given. Ignored when pinned is true.',
+            },
+            expires_at: { type: 'string', description: 'Snake_case alias for expiresAt.' },
             supersedes: {
                 type: 'string',
                 description: 'Optional version-supersede: the note_id of an earlier note this one replaces, OR a subject_key shared with earlier notes. At injection any earlier LIVE note matching this id/subject is hidden from the prompt (its ledger entry is retained for audit). Use when you record an updated lesson that makes a prior one obsolete. Pinned notes are never hidden by supersede.',
@@ -1198,7 +1222,7 @@ export const MESH_FORGET_NOTE_TOOL = {
 
 export const MESH_RECONCILE_LEDGER_TOOL = {
     name: 'mesh_reconcile_ledger',
-    description: 'Reconcile daemon-local mesh ledgers by querying bounded ledger slices over P2P/DataChannel and importing missing entries into the coordinator local JSONL ledger. Cloud/D1 is not used as a ledger source of truth.',
+    description: 'Report reconciliation evidence across daemon-local mesh ledgers by querying bounded ledger slices over P2P/DataChannel — read-only, it does NOT import entries (see import_entries). Each daemon\'s records stay on that daemon; the fleet view is the replicated mesh.<id>.events topic, and a peer\'s nested payload is read from the peer. Cloud/D1 is not used as a ledger source of truth.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -1206,7 +1230,7 @@ export const MESH_RECONCILE_LEDGER_TOOL = {
             limit: { type: 'number', description: 'Bounded slice size per node. Defaults to 100 and is clamped by daemon-core.' },
             after_id: { type: 'string', description: 'Optional cursor entry ID; remote slices return entries strictly after this ID when present.' },
             since: { type: 'string', description: 'Optional ISO timestamp lower bound for queried entries.' },
-            import_entries: { type: 'boolean', description: 'When false, query and report evidence without importing remote entries. Defaults true.' },
+            import_entries: { type: 'boolean', description: 'RETIRED (C-W9a) — accepted for backward compatibility but a no-op regardless of value. This tool never imports entries into a local ledger; it only reads and reports evidence. The response always carries an importRetired/note explanation, whether or not this flag is passed.' },
         },
     },
 };

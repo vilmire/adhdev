@@ -162,6 +162,95 @@ test('E-1: full gate lifecycle through the MCP tools — declared → awaiting �
     assert.equal(deployAfter.blockedReason, undefined, 'a released gate must clear its own hold');
 });
 
+/**
+ * rc.37 audit item 2 — mesh_graph_gate_release patches[].node aliases.
+ *
+ * Before the fix, a patches[] entry given as {ref: 'deploy', ...} (rather than
+ * {node: 'deploy', ...}) was silently DROPPED (`.filter(p => p.node.length > 0)`),
+ * and the release still committed with the deploy task's spec UNPATCHED — no error,
+ * no warning, and irreversible (a released gate can never be re-released). The fix
+ * accepts node_id/nodeId/ref as equivalent to node, and refuses the whole release
+ * outright when a patch entry resolves to no node at all.
+ */
+test('rc.37#2: patches[] resolves node via ref (previously silently dropped) — proven by the daemon actually SEEING it', async () => {
+    const meshId = nextMeshId();
+    const ctx = makeCtx(meshId, recordingLocalTransport());
+    const batch = await enqueueGatedBatch(ctx);
+    const gateId = batch.gates[0].gateId;
+    const deployTaskId = batch.tasks.find((t: any) => t.ref === 'deploy').taskId;
+    __writeTaskStatusForTests(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    const claim = JSON.parse(await meshGraphGateClaim(ctx, { gate_id: gateId }));
+
+    // A distinguishing signal between "resolved and forwarded" and "silently
+    // dropped": a `ref` that names NO real downstream node. Under the pre-fix code
+    // this patch item was filtered out (empty `node`) BEFORE it ever reached the
+    // daemon, so the release would have succeeded as if no patch were given at all.
+    // Under the fix, `ref` resolves to the literal string 'not-a-real-node', the
+    // daemon receives a non-empty `patch.node`, and mesh-graph-gates.ts's own
+    // direct-downstream lookup (`nodes.find(n => n.nodeId === patch.node || n.ref
+    // === patch.node)`) fails to find it — proving the alias reached the daemon at
+    // all, which is exactly what the pre-fix `.filter(p => p.node.length > 0)` made
+    // impossible for a ref-only entry.
+    const badRef = JSON.parse(await meshGraphGateRelease(ctx, {
+        gate_id: gateId,
+        fencing_token: claim.fencingToken,
+        lease_generation: claim.leaseGeneration,
+        idempotency_key: 'release-ref-bogus',
+        outcome: 'passed',
+        patches: [{ ref: 'not-a-real-node', base_spec_patch: { workspace_ref: 'w1' } }],
+    }));
+    assert.equal(badRef.success, false, JSON.stringify(badRef));
+    assert.match(badRef.error ?? '', /gate_patch_not_downstream/, 'the ref must have reached the daemon\'s downstream-node lookup, not been silently dropped');
+
+    // The gate must still be intact (the failed patch resolution must not have
+    // consumed the lease), and a real ref DOES resolve and release successfully.
+    const good = JSON.parse(await meshGraphGateRelease(ctx, {
+        gate_id: gateId,
+        fencing_token: claim.fencingToken,
+        lease_generation: claim.leaseGeneration,
+        idempotency_key: 'release-ref-good',
+        outcome: 'passed',
+        patches: [{ ref: 'deploy', base_spec_patch: { workspace_ref: 'w1' } }],
+    }));
+    assert.equal(good.success, true, JSON.stringify(good));
+    assert.equal(good.released, true);
+
+    const deployAfter = getQueue(meshId).find(t => t.id === deployTaskId)!;
+    assert.equal(deployAfter.status, 'pending');
+});
+
+test('rc.37#2: patches[] with no resolvable node REFUSES the whole release (not a silent drop)', async () => {
+    const meshId = nextMeshId();
+    const ctx = makeCtx(meshId, recordingLocalTransport());
+    const batch = await enqueueGatedBatch(ctx);
+    const gateId = batch.gates[0].gateId;
+    __writeTaskStatusForTests(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    const claim = JSON.parse(await meshGraphGateClaim(ctx, { gate_id: gateId }));
+
+    const release = JSON.parse(await meshGraphGateRelease(ctx, {
+        gate_id: gateId,
+        fencing_token: claim.fencingToken,
+        lease_generation: claim.leaseGeneration,
+        idempotency_key: 'release-bad-patch',
+        outcome: 'passed',
+        patches: [{ base_spec_patch: { run_if: { always: true } } }],
+    } as any));
+    assert.equal(release.success, false, JSON.stringify(release));
+    assert.equal(release.code, 'unresolvable_patch_node');
+    assert.deepEqual(release.unresolvedPatchIndices, [0]);
+
+    // The gate must still be releasable afterward — the refusal must not have
+    // consumed the lease or half-committed anything.
+    const retry = JSON.parse(await meshGraphGateRelease(ctx, {
+        gate_id: gateId,
+        fencing_token: claim.fencingToken,
+        lease_generation: claim.leaseGeneration,
+        idempotency_key: 'release-retry',
+        outcome: 'passed',
+    }));
+    assert.equal(retry.success, true, JSON.stringify(retry));
+});
+
 test('E-1: a stale fence can never release (design :417)', async () => {
     const meshId = nextMeshId();
     const ctx = makeCtx(meshId, recordingLocalTransport());
@@ -477,6 +566,28 @@ test('E-3: the view reports node states, the waiting gate, and the next coordina
     const after = JSON.parse(await meshGraphView(ctx, { graph_id: graph.graphId }));
     assert.equal(after.graphs[0].gates[0].state, 'released');
     assert.equal(after.pendingCoordinatorActions, undefined, 'a released gate must stop requesting action');
+});
+
+/**
+ * rc.37 audit item 4 — mesh_graph_view `limit` coercion.
+ *
+ * The schema declared `limit: {type: 'number'}`, but the wire decoder
+ * (mesh-shared turn-ipc `isGraphViewQueryRequest` → `isNonNegativeInt`) demands a
+ * non-negative INTEGER. Before the fix, `readNumber` passed 2.5 / -1 / "5" straight
+ * through to the wire, which rejected the whole request with an opaque "request
+ * failed decode (bad shape)" — the caller got no explanation and no result. The fix
+ * floors and clamps to 0 in the handler before it ever reaches the wire.
+ */
+test('rc.37#4: mesh_graph_view limit coerces a float/negative/numeric-string instead of failing decode', async () => {
+    const meshId = nextMeshId();
+    const ctx = makeCtx(meshId, recordingLocalTransport());
+    await enqueueGatedBatch(ctx);
+
+    for (const rawLimit of [2.5, -1, '5' as unknown as number]) {
+        const res = JSON.parse(await meshGraphView(ctx, { limit: rawLimit } as any));
+        assert.equal(res.success, true, `limit=${JSON.stringify(rawLimit)} must not fail decode: ${JSON.stringify(res)}`);
+        assert.doesNotMatch(res.error ?? '', /failed decode/, `limit=${JSON.stringify(rawLimit)} must not surface the opaque decode-failure message`);
+    }
 });
 
 test('E-3: an old-path batch produces no graph, and the view says so instead of inventing one', async () => {

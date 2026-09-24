@@ -70,7 +70,8 @@ import {
 } from './mesh-graph-derived-failure.js';
 import { graphMaterializationBlockReason, maybeOpenCoordinatorGate } from './mesh-graph-transition-runner.js';
 import { declareWorkspaceIntents, type GraphWorkspaceDeclaration } from './mesh-graph-workspace-saga.js';
-import { enqueueTaskGraph, type MeshTaskGraphEntrySpec, type MeshWorkQueueEntry } from './mesh-work-queue.js';
+import { enqueueTaskGraph, type MeshQueueMutationOptions, type MeshTaskGraphEntrySpec, type MeshWorkQueueEntry } from './mesh-work-queue.js';
+import { requireMeshHostQueueOwner } from './mesh-host-ownership.js';
 
 /** Structured validation failure — the caller surfaces `code` verbatim to the LLM. */
 export class MeshGraphPlanError extends Error {
@@ -238,7 +239,10 @@ export function computeMeshGraphPlanDigest(req: MeshGraphPlanRequest): string {
  * Workspace intents are declared after the commit: they own git side effects and
  * are a compensated saga, never part of DB atomicity (design :585-588).
  */
-export function commitMeshGraphPlan(req: MeshGraphPlanRequest): MeshGraphPlanResult {
+export function commitMeshGraphPlan(req: MeshGraphPlanRequest, queueOpts?: MeshQueueMutationOptions): MeshGraphPlanResult {
+    // Up front, before the idempotent-replay path can answer: a member daemon
+    // does not own this mesh's queue, not even to replay a plan into it.
+    requireMeshHostQueueOwner(queueOpts);
     const store = MeshRuntimeStore.getInstance();
     const tasks = Array.isArray(req.tasks) ? req.tasks : [];
     if (tasks.length === 0) {
@@ -449,7 +453,9 @@ export function commitMeshGraphPlan(req: MeshGraphPlanRequest): MeshGraphPlanRes
                 ...(req.sourceCoordinatorSessionId ? { sourceCoordinatorSessionId: req.sourceCoordinatorSessionId } : {}),
             };
         });
-        const inserted = enqueueTaskGraph(req.meshId, queueSpecs);
+        // queueOpts carries the responder's own mesh role (member ⇒ refused by
+        // requireMeshHostQueueOwner before anything is written).
+        const inserted = enqueueTaskGraph(req.meshId, queueSpecs, queueOpts);
 
         // ── 3. Graph + node rows ─────────────────────────────────────────────
         const graphId = newMeshGraphId();

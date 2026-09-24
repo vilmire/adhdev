@@ -198,6 +198,49 @@ export function readOutboundOrigin(args: unknown, fallback: OutboundMessageOrigi
     return isOutboundMessageOrigin(raw) ? raw : fallback
 }
 
+// ─── Refine dry-run/execute precedence ──────────────────────────────────────
+
+/**
+ * The single dry-run/execute precedence rule for every refine-family command
+ * (`refine_mesh_node`, `batch_refine_mesh_nodes`, and their daemon-side batch
+ * job starters). Mirrors `mesh_fast_forward_node`'s contract
+ * (`mesh-tools-git.ts` `dry_run_false_requires_execute`):
+ *
+ *   - `dryRun === true` is a VETO that ALWAYS wins, even alongside
+ *     `execute: true`. Before this helper existed, `isDryRun = dryRun !== false
+ *     && execute !== true` computed `false` for `{execute:true, dryRun:true}`
+ *     (`true !== false` is `true`, but `&&` with `execute !== true` being
+ *     `false` flips the whole expression) — so a caller asking for a dry run
+ *     alongside `execute:true` silently got the REAL validate→merge→push job.
+ *     That is a safety bug, not a preference: dry_run must be able to abort
+ *     execution unconditionally.
+ *   - `dryRun === false` with no `execute: true` is refused outright — a bare
+ *     `dry_run:false` is not itself a request to execute, and honoring it as
+ *     one is the DRY-RUN-SILENTLY-IGNORED failure mode from the other
+ *     direction (silently running when the caller only declined to preview).
+ *   - Otherwise (dryRun undefined, or `false` alongside `execute:true`):
+ *     `isDryRun = execute !== true`, i.e. execute must be explicitly `true`
+ *     to run anything.
+ */
+export type DryRunVeto =
+    | { refused: false; isDryRun: boolean }
+    | { refused: true; code: 'dry_run_false_requires_execute'; error: string }
+
+export function resolveDryRunVeto(args: unknown): DryRunVeto {
+    const a = args as { dryRun?: unknown; execute?: unknown } | null | undefined
+    const dryRun = a?.dryRun
+    const execute = a?.execute
+    if (dryRun === true) return { refused: false, isDryRun: true }
+    if (dryRun === false && execute !== true) {
+        return {
+            refused: true,
+            code: 'dry_run_false_requires_execute',
+            error: 'dry_run:false alone does not execute — it only declines to veto. Pass execute:true to actually apply the refine.',
+        }
+    }
+    return { refused: false, isDryRun: execute !== true }
+}
+
 /**
  * A daemon-minted messageId for a send whose origin sent none (pre-D clients,
  * the shortcuts API, `adhdev send`). Unique per call, so such sends are never

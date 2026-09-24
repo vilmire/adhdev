@@ -47,33 +47,73 @@ import { buildMeshRecordReconciliationEvidence, buildMeshRecordReplicaEvidence }
 import type { MeshMissionStatusValue, MissionBriefWire } from '@adhdev/mesh-shared';
 
 /**
+ * Result of {@link coerceBriefArg}: the coerced wire brief (or `undefined`/`null`
+ * to forward unchanged), plus a typed reason when a non-empty `brief` argument
+ * was dropped instead of forwarded — so the caller can surface WHY their brief
+ * did not land instead of it silently vanishing (parity audit gap: a brief with
+ * no `goal`, or whose optional fields aren't string arrays, used to be dropped
+ * with no signal at all).
+ */
+interface CoercedBrief {
+    brief: MissionBriefWire | null | undefined;
+    /** Present only when a non-empty `brief` object was supplied but dropped. */
+    briefIgnored?: { reason: 'missing_goal' | 'invalid_field_type'; field?: string };
+}
+
+/**
  * H2 (mission brief): shape a raw tool `brief` argument into the wire type, without
  * re-implementing `normalizeMissionBrief`'s validation — that runs authoritatively on
  * the daemon side (mesh-missions.ts). This only avoids forwarding an obviously
  * malformed value (non-object, non-string arrays) so the wire guard's `hasOnlyKeys`
  * does not reject the whole request for a stray extra key or wrong-typed field;
  * genuine shape problems (e.g. a missing goal) still surface as "no brief attached"
- * on the daemon, per that module's own non-rejecting philosophy.
+ * on the daemon, per that module's own non-rejecting philosophy — but now ALSO as
+ * an explicit `briefIgnored` warning in this tool's own response, rather than
+ * silently.
+ *
+ * Accepts both camelCase (`doneCriteria`, `handoffNotes`, `ownedPaths`) and
+ * snake_case (`done_criteria`, `handoff_notes`, `owned_paths`) spellings for the
+ * three optional array fields — every other mesh tool schema publishes both
+ * casings as aliases, and this brief object was the one place that silently
+ * dropped the snake_case caller's data instead of accepting or refusing it.
  */
-function coerceBriefArg(value: unknown): MissionBriefWire | null | undefined {
-    if (value === undefined) return undefined;
-    if (value === null) return null;
-    if (typeof value !== 'object' || Array.isArray(value)) return undefined;
+function coerceBriefArg(value: unknown): CoercedBrief {
+    if (value === undefined) return { brief: undefined };
+    if (value === null) return { brief: null };
+    if (typeof value !== 'object' || Array.isArray(value)) {
+        return { brief: undefined, briefIgnored: { reason: 'invalid_field_type' } };
+    }
     const raw = value as Record<string, unknown>;
     const goal = typeof raw.goal === 'string' ? raw.goal : '';
-    if (!goal.trim()) return undefined;
+    if (!goal.trim()) return { brief: undefined, briefIgnored: { reason: 'missing_goal' } };
     const asStringArray = (v: unknown): string[] | undefined =>
         Array.isArray(v) && v.every((x) => typeof x === 'string') ? v : undefined;
+    // snake_case alias wins only when the camelCase field is absent — mirrors
+    // every other dual-cased read in this file (mission_id ?? missionId order).
+    const readAliasArray = (camel: unknown, snake: unknown, field: string): { value?: string[]; invalid?: string } => {
+        if (camel !== undefined) {
+            const arr = asStringArray(camel);
+            return arr ? { value: arr } : { invalid: field };
+        }
+        if (snake !== undefined) {
+            const arr = asStringArray(snake);
+            return arr ? { value: arr } : { invalid: `${field} (snake_case)` };
+        }
+        return {};
+    };
     const brief: MissionBriefWire = { goal };
-    const constraints = asStringArray(raw.constraints);
-    const doneCriteria = asStringArray(raw.doneCriteria);
-    const handoffNotes = asStringArray(raw.handoffNotes);
-    const ownedPaths = asStringArray(raw.ownedPaths);
-    if (constraints) brief.constraints = constraints;
-    if (doneCriteria) brief.doneCriteria = doneCriteria;
-    if (handoffNotes) brief.handoffNotes = handoffNotes;
-    if (ownedPaths) brief.ownedPaths = ownedPaths;
-    return brief;
+    const fields: Array<[keyof MissionBriefWire, unknown, unknown, string]> = [
+        ['constraints', raw.constraints, undefined, 'constraints'],
+        ['doneCriteria', raw.doneCriteria, raw.done_criteria, 'doneCriteria'],
+        ['handoffNotes', raw.handoffNotes, raw.handoff_notes, 'handoffNotes'],
+        ['ownedPaths', raw.ownedPaths, raw.owned_paths, 'ownedPaths'],
+    ];
+    for (const [key, camel, snake, field] of fields) {
+        const { value: arr, invalid } = readAliasArray(camel, snake, field);
+        if (invalid) return { brief: undefined, briefIgnored: { reason: 'invalid_field_type', field: invalid } };
+        if (arr) (brief as any)[key] = arr;
+    }
+    return { brief };
 }
 
 export async function meshTaskHistory(
@@ -190,6 +230,7 @@ export async function meshRecordNote(
         pinned?: boolean;
         ttl_days?: number;
         expiresAt?: string;
+        expires_at?: string;
         supersedes?: string;
         subject_key?: string;
     },
@@ -208,9 +249,10 @@ export async function meshRecordNote(
     // expiry; ttl_days is resolved to an absolute expiresAt at record time so the
     // note ages deterministically regardless of when it is later injected.
     const pinned = args.pinned === true ? true : undefined;
+    const expiresAtArg = typeof args.expiresAt === 'string' ? args.expiresAt : args.expires_at;
     let expiresAt: string | undefined;
-    if (typeof args.expiresAt === 'string' && !Number.isNaN(new Date(args.expiresAt).getTime())) {
-        expiresAt = new Date(args.expiresAt).toISOString();
+    if (typeof expiresAtArg === 'string' && !Number.isNaN(new Date(expiresAtArg).getTime())) {
+        expiresAt = new Date(expiresAtArg).toISOString();
     } else if (typeof args.ttl_days === 'number' && Number.isFinite(args.ttl_days) && args.ttl_days > 0) {
         expiresAt = new Date(new Date(createdAt).getTime() + args.ttl_days * 24 * 60 * 60 * 1000).toISOString();
     }
@@ -404,9 +446,16 @@ export async function meshReconcileLedger(
     return JSON.stringify({
         success: true,
         evidence,
-        ...(args.import_entries === true
-            ? { importRetired: true, note: 'import_entries is retired (C-W9a): records stay on the daemon that wrote them; read a peer\'s slice from that peer.' }
-            : {}),
+        // Retirement note (C-W9a) always surfaces, regardless of whether the caller
+        // passed import_entries at all — the schema still (necessarily) documents the
+        // parameter for backward-compat callers, describes it as retired/no-op, but a
+        // caller who never passed it deserves the same "why did nothing import" signal
+        // as one who explicitly asked for import_entries:true. Previously this note
+        // only appeared when import_entries===true was passed explicitly, so a caller
+        // relying on the schema's old "Defaults true" description got no signal at all
+        // that import silently never happened.
+        importRetired: true,
+        note: 'import_entries is retired (C-W9a): records stay on the daemon that wrote them; read a peer\'s slice from that peer. This tool is read-only — it never imports, regardless of import_entries.',
     }, null, 2);
 }
 
@@ -459,7 +508,7 @@ export async function meshMissionUpsert(
                 error: `invalid_mission_status: '${statusArg}' (valid: ${MESH_MISSION_STATUSES.join(', ')})`,
             });
         }
-        const brief = coerceBriefArg(args.brief);
+        const { brief, briefIgnored } = coerceBriefArg(args.brief);
         const { mission } = await missionUpsert(ctx.transport, {
             meshId: ctx.mesh.id,
             id: readString(args.mission_id) || readString(args.missionId) || undefined,
@@ -471,6 +520,7 @@ export async function meshMissionUpsert(
         return JSON.stringify({
             success: true,
             mission,
+            ...(briefIgnored ? { briefIgnored } : {}),
             nextAction: 'Attach tasks with mesh_enqueue_task mission_id and depends_on. mesh_status shows live task aggregates for this mission.',
         });
     } catch (e: any) {
@@ -645,6 +695,23 @@ export async function meshReviewInbox(
 ): Promise<string> {
     await refreshMeshFromDaemon(ctx);
     const meshId = (args.mesh_id ?? ctx.mesh.id).trim();
+    // FOREIGN-MESH-INLINE-LEAK: inlineMesh is a cache-priming hint for the CURRENT
+    // mesh (ctx.mesh) — the daemon merges it into its own record for that mesh id.
+    // When the caller names a DIFFERENT mesh via mesh_id, forwarding ctx.mesh as
+    // inlineMesh would hand the daemon this mesh's inline node statuses to mix into
+    // the FOREIGN mesh_id's ledger read, contaminating a report about one mesh with
+    // another mesh's data. Only attach inlineMesh when the requested meshId actually
+    // IS ctx.mesh.id (the common case — no mesh_id override, or an override that
+    // just names the caller's own mesh).
+    // FOREIGN-MESH-INLINE-LEAK: inlineMesh is a cache-priming hint for the CURRENT
+    // mesh (ctx.mesh) — the daemon merges it into its own record for that mesh id.
+    // When the caller names a DIFFERENT mesh via mesh_id, forwarding ctx.mesh as
+    // inlineMesh would hand the daemon this mesh's inline node statuses to mix into
+    // the FOREIGN mesh_id's ledger read, contaminating a report about one mesh with
+    // another mesh's data. Only attach inlineMesh when the requested meshId actually
+    // IS ctx.mesh.id (the common case — no mesh_id override, or an override that
+    // just names the caller's own mesh).
+    const isOwnMesh = meshId === ctx.mesh.id;
     // OFFLINE-NODE-BLOCKING: the review inbox is read from a single hardcoded node
     // (nodes[0]). If that node is offline (powered off) the read-only `get_mesh_review_inbox`
     // relay would otherwise sink into the 90s connect deadline. Stamp the status-origin
@@ -652,7 +719,7 @@ export async function meshReviewInbox(
     // budget and an offline nodes[0] fails fast (~2s) instead of hanging the inbox read.
     const result = await commandForNode(ctx, ctx.mesh.nodes[0], 'get_mesh_review_inbox', {
         meshId,
-        inlineMesh: ctx.mesh,
+        ...(isOwnMesh ? { inlineMesh: ctx.mesh } : {}),
     }, { statusProbe: true });
     return JSON.stringify(result, null, 2);
 }

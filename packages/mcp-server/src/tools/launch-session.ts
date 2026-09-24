@@ -95,8 +95,22 @@ export async function launchSession(
   const commandType = resolved.route === 'cli' ? 'launch_cli' : 'launch_ide';
   const payload: Record<string, unknown> =
     resolved.route === 'cli'
-      ? { cliType: resolved.canonicalType, dir: args.workspace ?? '~', ...(args.model ? { model: args.model } : {}) }
-      : { ideType: resolved.canonicalType, enableCdp: true };
+      ? {
+        cliType: resolved.canonicalType,
+        dir: args.workspace ?? '~',
+        // The daemon's CLI/ACP launch (cli-manager.ts startSession) reads
+        // `args.initialModel`, not `args.model` — a plain `model` key was
+        // silently ignored. `model` is kept alongside it for now since it is
+        // harmless and this is the wire shape workers/tools may already know.
+        ...(args.model ? { initialModel: args.model, model: args.model } : {}),
+      }
+      : {
+        ideType: resolved.canonicalType,
+        enableCdp: true,
+        // launch_ide (med-family/ide.ts) reads `args.workspace` via
+        // resolveIdeLaunchWorkspace — it was previously dropped on this route.
+        ...(args.workspace ? { workspace: args.workspace } : {}),
+      };
   const result = await transport.command(commandType, payload);
   if (result?.success === false) return `Error: ${result.error ?? 'launch failed'}`;
   const id = result?.id ?? result?.sessionId;

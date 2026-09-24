@@ -149,11 +149,31 @@ function collectBlockingSessions(deps: CommandRouterDeps, meshId: string): Block
 
 type RestartMode = 'upgrade' | 'restart';
 
+/**
+ * The `daemon_upgrade` options a restart call can carry besides mode /
+ * killSessionHost. A `whenIdle` schedule must persist and replay ALL of them:
+ * dropping `allowDowngrade` turned a deliberately scheduled rollback into a
+ * `downgrade_refused` that nobody saw (the deferred tick only logs).
+ */
+type UpgradeOptions = { allowDowngrade?: boolean; channel?: string; npmTag?: string };
+
+function readUpgradeOptions(args: any): UpgradeOptions {
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+    const channel = str(args?.channel) ?? str(args?.updatePolicy?.channel);
+    const npmTag = str(args?.npmTag);
+    return {
+        ...(args?.allowDowngrade === true ? { allowDowngrade: true } : {}),
+        ...(channel ? { channel } : {}),
+        ...(npmTag ? { npmTag } : {}),
+    };
+}
+
 type PendingDeferredRestart = {
     meshId: string;
     nodeId: string;
     mode: RestartMode;
     killSessionHost: boolean;
+    upgradeOptions: UpgradeOptions;
     scheduledAt: number;
     expiresAt: number;
     timer: NodeJS.Timeout;
@@ -175,6 +195,7 @@ function deferredRestartInfo(key: string): Record<string, unknown> | null {
         nodeId: record.nodeId,
         mode: record.mode,
         killSessionHost: record.killSessionHost,
+        ...record.upgradeOptions,
         scheduledAt: new Date(record.scheduledAt).toISOString(),
         expiresAt: new Date(record.expiresAt).toISOString(),
         runCondition: 'executes automatically once no session is generating / waiting_approval / starting and no outbound coordinator message is queued',
@@ -292,6 +313,7 @@ function scheduleDeferredRestart(deps: CommandRouterDeps, args: any, meshId: str
         nodeId,
         mode: normalizeRestartMode(args?.mode),
         killSessionHost: args?.killSessionHost === true,
+        upgradeOptions: readUpgradeOptions(args),
         scheduledAt: Date.now(),
         expiresAt: Date.now() + timeoutMs,
         timer: setInterval(() => { void deferredRestartTick(deps, key); }, DEFERRED_RESTART_POLL_MS),
@@ -304,13 +326,14 @@ function scheduleDeferredRestart(deps: CommandRouterDeps, args: any, meshId: str
             nodeId: record.nodeId,
             mode: record.mode,
             killSessionHost: record.killSessionHost,
+            ...record.upgradeOptions,
             scheduledAt: record.scheduledAt,
             expiresAt: record.expiresAt,
         });
     } catch (e: any) {
         LOG.warn('MeshRestart', `Failed to persist deferred restart for node ${nodeId} — it will NOT survive a daemon restart: ${e?.message || String(e)}`);
     }
-    LOG.info('MeshRestart', `Deferred restart scheduled for node ${nodeId} (mode=${record.mode}, expires in ${Math.round(timeoutMs / 60000)}min)`);
+    LOG.info('MeshRestart', `Deferred restart scheduled for node ${nodeId} (mode=${record.mode}${record.upgradeOptions.allowDowngrade ? ', allowDowngrade' : ''}, expires in ${Math.round(timeoutMs / 60000)}min)`);
     return {
         success: true,
         restarted: false,
@@ -334,12 +357,16 @@ async function deferredRestartTick(deps: CommandRouterDeps, key: string): Promis
     LOG.info('MeshRestart', `Deferred restart for node ${record.nodeId} executing — daemon is idle`);
     clearPendingDeferredRestart(key);
     try {
-        await executeRestart(deps, {
+        const result: any = await executeRestart(deps, {
             meshId: record.meshId,
             nodeId: record.nodeId,
             mode: record.mode,
             killSessionHost: record.killSessionHost,
+            ...record.upgradeOptions,
         }, { forced: false });
+        if (result?.success === false) {
+            LOG.warn('MeshRestart', `Deferred restart for node ${record.nodeId} was refused when it fired: ${result.code || result.error || 'unknown'}${result.reason ? ` — ${result.reason}` : ''}`);
+        }
     } catch (e: any) {
         LOG.error('MeshRestart', `Deferred restart execution failed: ${e?.message || String(e)}`);
     }
@@ -374,6 +401,7 @@ export function rearmPersistedDeferredRestarts(deps: CommandRouterDeps): void {
             nodeId: record.nodeId,
             mode: record.mode === 'restart' ? 'restart' : 'upgrade',
             killSessionHost: record.killSessionHost === true,
+            upgradeOptions: readUpgradeOptions(record),
             scheduledAt: record.scheduledAt,
             expiresAt: record.expiresAt,
             timer: setInterval(() => { void deferredRestartTick(deps, key); }, DEFERRED_RESTART_POLL_MS),

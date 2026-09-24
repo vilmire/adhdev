@@ -1435,16 +1435,61 @@ export function acceptWorkerProgressUpdate(
     credential: { token?: unknown; bind?: unknown },
     note: string,
     opts: { nowMs?: number } = {},
-): {
+): WorkerProgressUpdateResult {
+    const identity = resolveWorkerIdentity(credential);
+    if (!identity) return { accepted: false, refusal: 'unauthenticated' };
+    return acceptWorkerProgressUpdateForIdentity(identity, note, opts);
+}
+
+/** What a progress update answers — local and forwarded alike. */
+export interface WorkerProgressUpdateResult {
     accepted: boolean;
     taskId?: string;
     refusal?: WorkerReportRefusal;
     detail?: string;
     /** Whether this note was judged worth paging the coordinator about (F3). */
     surfacedToCoordinator?: boolean;
-} {
-    const identity = resolveWorkerIdentity(credential);
-    if (!identity) return { accepted: false, refusal: 'unauthenticated' };
+}
+
+/**
+ * F7 (progress axis), OWNER side: a progress note a REMOTE worker daemon
+ * relayed here. Authorised by the SAME resolution a forwarded completion report
+ * takes (`resolveForwardedWorkerIdentity`: the owner's own `assigned` row for
+ * the session + the relaying daemon owning the row's node + agreeing
+ * task/attempt), then recorded by the same body a local update runs.
+ *
+ * A recently-terminal attempt (the completion report's F7b grace) is refused
+ * `no_live_task`: a progress note carries no terminal information and has
+ * nothing to add once the ledger closed the attempt — the local path refuses it
+ * the same way (`resolveWorkerIdentity` finds no assigned row). A refusal's
+ * `detail` starts with its typed reason (`<reason>: <what the owner holds>`).
+ */
+export function acceptForwardedWorkerProgressUpdate(
+    claim: ForwardedWorkerReportClaim,
+    note: string,
+    opts: { sender: ForwardedReportSender; nowMs?: number; isSelfDaemon?: (daemonId: string) => boolean },
+): WorkerProgressUpdateResult {
+    const nowMs = opts.nowMs ?? Date.now();
+    const resolved = resolveForwardedWorkerIdentity(claim, opts.sender, nowMs, opts.isSelfDaemon);
+    if ('refused' in resolved) return { accepted: false, refusal: 'unauthenticated', detail: `${resolved.refused}: ${resolved.detail}` };
+    if ('late' in resolved) {
+        const reason: ForwardedReportRefusalReason = 'no_live_task';
+        return {
+            accepted: false,
+            taskId: resolved.late.taskId,
+            refusal: 'unauthenticated',
+            detail: `${reason}: task ${resolved.late.taskId}'s attempt ${resolved.late.attemptId} already ended (${resolved.late.terminalOutcome}) on the owner — progress is only recorded against a live attempt`,
+        };
+    }
+    return acceptWorkerProgressUpdateForIdentity(resolved.live, note, { nowMs });
+}
+
+/** The progress body, once identity is PROVEN (local bind/token, or a forwarded claim the owner re-resolved). */
+function acceptWorkerProgressUpdateForIdentity(
+    identity: WorkerTokenExchangeResult,
+    note: string,
+    opts: { nowMs?: number } = {},
+): WorkerProgressUpdateResult {
     // ★F4: previously `return { accepted: true }` without writing a single row.
     // The worker was told "Progress noted for task …" and nothing existed to
     // note it. No attempt means there is no row to hang a turn event off, so the

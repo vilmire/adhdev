@@ -321,6 +321,28 @@ export interface PostCommitContext {
     nowMs: number;
     terminalTasks: TxnHostResult['terminalTasks'];
     onError(effect: TurnEffect['kind'], error: unknown): void;
+    /** An executor deliberately not run (with why) — one line per skip. */
+    onSkip?(effect: TurnEffect['kind'], detail: string): void;
+}
+
+/**
+ * Does this cancel name a session that was never bound — the sessionless direct
+ * dispatch's placeholder?
+ *
+ * `mesh_send_task` without a `session_id` opens the direct attempt with
+ * `sessionId = taskId` as a placeholder; only a `delivered` fact re-keys it to
+ * the real session (`mark_delivered`). A refused dispatch (R24 `dispatch_failed`
+ * → reclaim) therefore cuts "session <taskId>" — there is no such session
+ * anywhere, and the stop executor used to fail on it (live:
+ * `Remote stop of stale worker <taskId>… failed: cliType required`). The
+ * attempt row carries no separate "session bound" fact that survives the
+ * reclaim (`deliveredAt` is reset by it, and is also null for a real session
+ * whose prompt is still queued), so the placeholder identity is the signal:
+ * session ids and task ids are disjoint namespaces, so a cancel naming the
+ * attempt's own task id can only be the placeholder.
+ */
+export function isUnboundPlaceholderCancel(request: CancelDispatchRequest): boolean {
+    return !!request.taskId && request.sessionId === request.taskId;
 }
 
 function cancelRequest(effect: CancelDispatchEffect, attempt: TurnAttempt | null): CancelDispatchRequest {
@@ -366,8 +388,15 @@ export function runPostCommitEffects(ports: TurnLedgerPorts, effects: readonly T
             case 'cancel_dispatch': {
                 const request = cancelRequest(effect, attempt);
                 // Revoke first: the cut worker must not report through the MCP in the
-                // window before its cancel lands.
+                // window before its cancel lands. Kept for an unbound placeholder too:
+                // the direct arm mints the task token keyed to the placeholder
+                // session at attempt creation, and this revoke is what expires it.
                 if (request.revokeBind) run('cancel_dispatch', ports.revokeWorkerBind ? () => ports.revokeWorkerBind!(request) : undefined);
+                if (isUnboundPlaceholderCancel(request)) {
+                    // No session ever took this generation — nothing to withdraw or stop.
+                    ctx.onSkip?.('cancel_dispatch', `attempt ${request.attemptId} g${request.generation} was never delivered to a session (placeholder session = task ${request.taskId}); no worker to stop`);
+                    break;
+                }
                 run('cancel_dispatch', ports.cancelDispatch ? () => ports.cancelDispatch!(request) : undefined);
                 break;
             }
