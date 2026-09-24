@@ -230,7 +230,7 @@ export function effectEventRows(input: EffectRowsInput): TurnEventInsert[] {
                     kind: 'notify',
                     // One terminal notice per generation; repeatable notices are keyed by their cause.
                     dedupeKey: TERMINAL_NOTIFY.has(effect.notify) ? effect.notify : `${effect.notify}:${evidence.eventId}`,
-                    payload: { meshId, notify: effect.notify, entry, ...refOf(effect.summary) },
+                    payload: { meshId, notify: effect.notify, entry, ...refOf(effect.summary), ...(effect.textEventId ? { textEventId: effect.textEventId } : {}) },
                     publishState: 'pending',
                 });
                 break;

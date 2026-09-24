@@ -359,3 +359,41 @@ describe('startTurnScheduler — nextHoldDeadline shortens the sleep', () => {
         }
     });
 });
+
+// Live rc.40 run 5 (2026-09-24, task 9315fa4d): idle 16 s into a `sleep 240` turn,
+// busy again 4 min later, report at 08:18:42, idle again. The owner used to commit
+// genuine at the first idle; with the report gate the attempt stays open through
+// the false idle and commits ONCE, on the report.
+describe('report gate — the rc.40 false-idle sequence commits once, on the report', () => {
+    it('idle (report expected) → tick → busy → report → idle: one tool_report commit, one completion notice', async () => {
+        const r = rig();
+        toGenerating(r, 'mesh_direct');
+        expect(r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }, { source: 'completion_flush_genuine' })).rule).toBe('R9r');
+        r.advance(P.awaitReportMs - 1);
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'finalizing', terminal: null });
+        expect(r.ledger.observe(evd('turn_started', { retro: false }, { at: T0 + 231_000 })).rule).toBe('R12r');
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'generating', data: { falseIdleCount: 1 } });
+        r.advance(P.awaitReportMs + 1); // the released hold can no longer expire the attempt
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')!.terminal).toBeNull();
+        const report = r.ledger.observe(evd('worker_report', { outcome: 'completed', summary: { topic: 'mesh.m1.handoff', writer: 'w-dw', seq: 11 }, hasHandoffNotes: false }, { source: 'worker_tool', at: T0 + 256_000 }));
+        expect(report.rule).toBe('R17');
+        expect(r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }, { source: 'completion_flush_genuine', at: T0 + 268_000 })).rule).toBe('R18');
+        expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report', reason: 'worker_reported' });
+        expect(rowsOf(r.db, 'committed', 'a1')).toHaveLength(1);
+        const notices = rowsOf(r.db, 'notify', 'a1').map((row) => JSON.parse(String(row.payload_json)) as { notify?: string });
+        expect(notices.filter((n) => n.notify === 'completed')).toHaveLength(1);
+        expect(notices.filter((n) => n.notify === 'candidate')).toHaveLength(0);
+    });
+
+    it('a report-capable worker that never reports is committed weak once the await_report window passes', async () => {
+        const r = rig();
+        toGenerating(r);
+        r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }));
+        r.advance(P.awaitReportMs + 1);
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' });
+        expect(r.host.calls).toContain('graph:t1:completed');
+    });
+});

@@ -77,6 +77,10 @@ export async function meshReadNodeLogs(
         const result = await commandForNode(ctx, node, 'get_mesh_node_logs', {
             meshId: ctx.mesh.id,
             nodeId: args.node_id,
+            // Roster evidence for the node daemon's mesh sender gate (daemon-core
+            // commands/mesh-sender.ts): a worker daemon usually holds no roster
+            // of its own, and this relay reaches it directly.
+            inlineMesh: ctx.mesh,
             ...(typeof args.grep === 'string' && args.grep.trim() ? { grep: args.grep.trim() } : {}),
             ...(Number.isFinite(args.since_ms) ? { sinceMs: args.since_ms } : {}),
             ...(Number.isFinite(args.tail_bytes) ? { tailBytes: args.tail_bytes } : {}),
@@ -142,6 +146,8 @@ export async function meshFastForwardNode(
             meshId: ctx.mesh.id,
             nodeId: node.id,
             workspace: node.workspace,
+            // Roster evidence for the node daemon's mesh sender gate (see get_mesh_node_logs).
+            inlineMesh: ctx.mesh,
             mode: args.mode === 'push' ? 'push' : 'merge',
             branch: typeof args.branch === 'string' ? args.branch : undefined,
             execute: args.execute === true && args.dry_run !== true,

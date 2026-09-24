@@ -420,20 +420,24 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
 
 export const cliAgentSpecs = defineCommandSpecs('med', cliAgentHandlers, {
     launch_cli: { invalidates: ['daemon.metadata'], fastFlush: true, blockedDuringMandatoryUpdate: true },
-    stop_cli: { invalidates: ['daemon.metadata'], session: { scope: 'optional', aliasSessionId: true } },
+    // Mesh: only the session's coordinator (the turn ledger's stale-worker stop, the
+    // queue's cancel) may stop a worker session; never a local user's session.
+    stop_cli: { invalidates: ['daemon.metadata'], session: { scope: 'optional', aliasSessionId: true }, meshSender: 'session_coordinator' },
     set_cli_view_mode: { session: { scope: 'optional', aliasSessionId: true } },
     // Per-session user Hide/Mute lives on the OWNING session's live instance, so a remote
     // worker session must be forwarded to its daemon (mission 6938892f: otherwise
     // 'Session not found', the dashboard rolls back and the stale surfaceHidden flickers).
     // HIDDEN-MUTE-STICK: without an immediate metadata flush the toggle visually reverts
     // after the web-core 8s optimistic overlay expires.
-    set_conversation_prefs: { invalidates: ['daemon.metadata'], forwardToOwner: true },
+    set_conversation_prefs: { invalidates: ['daemon.metadata'], forwardToOwner: true, meshSender: 'session_coordinator' },
     // A command naming a targetSessionId MUST reach that session wherever it lives, never a
     // different local session (TASKECHO coordinator self-echo).
-    agent_command: { forwardToOwner: true, session: { scope: 'optional', aliasSessionId: true } },
+    // Mesh: the sender must coordinate the target session (its stamped anchor, or the
+    // mesh host), and a meshContext.coordinatorDaemonId it stamps must be the sender.
+    agent_command: { forwardToOwner: true, session: { scope: 'optional', aliasSessionId: true }, meshSender: 'session_coordinator' },
     restart_session: {
         invalidates: ['daemon.metadata'],
         blockedDuringMandatoryUpdate: true,
         session: { scope: 'optional', aliasSessionId: true },
     },
-});
+}, { meshSender: 'authenticated_peer' });

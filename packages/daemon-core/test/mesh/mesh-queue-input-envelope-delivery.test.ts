@@ -136,7 +136,8 @@ describe('MESH-IMAGE-DISPATCH: an input envelope queued for a busy target surviv
       // B4: the local claim dispatch goes through router.execute(…, 'mesh') (the
       // stub router rejects any other source) and pins local execution so the
       // router never forwards a session that vanished between claim and dispatch.
-      expect(components.router.execute).toHaveBeenCalledWith('agent_command', expect.any(Object), 'mesh')
+      // In-process: the mesh sender gate is for relayed commands only.
+      expect(components.router.execute).toHaveBeenCalledWith('agent_command', expect.any(Object), 'mesh', { inProcess: true })
       expect(payload._meshDirectDispatch).toBe(true)
       expect(command).toBe('agent_command')
       expect(payload.action).toBe('send_chat')

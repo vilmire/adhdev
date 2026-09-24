@@ -172,6 +172,23 @@ function notHeld(ctx: GuardCtx): boolean {
     return admissionOf(ctx)?.kind !== 'hold';
 }
 
+/**
+ * A genuine end stamped `reportExpected` by the worker's daemon (live
+ * worker-MCP bind) on a mesh attempt: the structured report, not the idle
+ * edge, commits it (R9r). Plain attempts never await a report.
+ */
+function reportAwaitedEnd(ctx: GuardCtx): boolean {
+    const e = turnEnd(ctx);
+    return !!e && e.strength === 'genuine' && !e.hollow && e.reportExpected === true
+        && !!ctx.attempt && isMeshScope(ctx.attempt);
+}
+
+/** The attempt is inside an R9r window (an active `await_report` hold). */
+function awaitReportHeld(ctx: GuardCtx): boolean {
+    const attempt = ctx.attempt;
+    return !!attempt && ctx.holds.some((h) => h.reason === 'await_report' && h.attemptId === attempt.attemptId);
+}
+
 const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> = {
     unbound: (ctx) => !ctx.evidence.attemptRef && !ctx.evidence.taskId,
     bound: (ctx) => !!ctx.evidence.attemptRef || !!ctx.evidence.taskId,
@@ -189,18 +206,23 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     reclaiming_refusal: (ctx) => ctx.evidence.kind === 'delivery_refused'
         && (RECLAIMING_SEND_REFUSALS as readonly string[]).includes(ctx.evidence.reason),
     suspension_changed: (ctx) => ctx.evidence.kind === 'suspension' && ctx.attempt?.suspension !== ctx.evidence.modal,
-    end_genuine: (ctx) => { const e = turnEnd(ctx); return !!e && e.strength === 'genuine' && !e.hollow && notHeld(ctx); },
+    end_genuine: (ctx) => { const e = turnEnd(ctx); return !!e && e.strength === 'genuine' && !e.hollow && notHeld(ctx) && !reportAwaitedEnd(ctx); },
+    end_report_awaited: (ctx) => reportAwaitedEnd(ctx) && notHeld(ctx) && !awaitReportHeld(ctx),
+    end_report_awaited_held: (ctx) => reportAwaitedEnd(ctx) && notHeld(ctx) && awaitReportHeld(ctx),
+    final_strong_report_awaited: (ctx) => ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'strong' && awaitReportHeld(ctx),
+    false_idle_resumed: (ctx) => (ctx.evidence.kind === 'turn_started' || ctx.evidence.kind === 'transcript_activity')
+        && afterWeakSince(ctx) && awaitReportHeld(ctx),
     end_weak: (ctx) => { const e = turnEnd(ctx); return !!e && e.strength === 'weak' && !e.afterFinalizationTimeout && !e.hollow && notHeld(ctx); },
     end_weak_after_timeout: (ctx) => { const e = turnEnd(ctx); return !!e && e.strength === 'weak' && !!e.afterFinalizationTimeout && !e.hollow && notHeld(ctx); },
     hollow_retry: (ctx) => { const e = turnEnd(ctx); return !!e && !!e.hollow && notHeld(ctx) && ctx.attempt!.hollowCount < ctx.attempt!.maxTaskRetries; },
     hollow_exhausted: (ctx) => { const e = turnEnd(ctx); return !!e && !!e.hollow && notHeld(ctx) && ctx.attempt!.hollowCount >= ctx.attempt!.maxTaskRetries; },
     final_strong: (ctx) => ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'strong',
     final_weak: (ctx) => ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'weak',
-    genuine_end_or_strong_final: (ctx) => GUARDS.end_genuine(ctx) || GUARDS.final_strong(ctx),
+    genuine_end_or_strong_final: (ctx) => GUARDS.end_genuine(ctx) || (GUARDS.final_strong(ctx) && !awaitReportHeld(ctx)),
     weak_end_or_final: (ctx) => GUARDS.end_weak(ctx) || GUARDS.final_weak(ctx),
     admission_hold: (ctx) => admissionOf(ctx)?.kind === 'hold',
     admission_decline: (ctx) => admissionOf(ctx)?.kind === 'decline',
-    after_weak_since: afterWeakSince,
+    after_weak_since: (ctx) => afterWeakSince(ctx) && !awaitReportHeld(ctx),
     activity_keeps_state: (ctx) => {
         const ev = ctx.evidence;
         const state = ctx.attempt?.state;
@@ -228,6 +250,7 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     hold_suspension_before_consumed: (ctx) => holdIs(ctx, 'suspension_before_consumed'),
     hold_weak_candidate: (ctx) => holdIs(ctx, 'weak_candidate'),
     hold_admission: (ctx) => holdIs(ctx, 'live_pending', 'transcript_quiet'),
+    hold_await_report: (ctx) => holdIs(ctx, 'await_report'),
 };
 
 function laneCandidates(lane: RuleLane, state: TurnAttempt['state'] | null, kind: TurnEvidenceKind): TransitionRule[] {
@@ -289,6 +312,7 @@ function resolveUntil(expr: UntilExpr, draft: Draft): number | null {
         case 'liveness': return nowMs + policy.livenessDeadlineMs;
         case 'hard_ceiling': return nowMs + policy.hardCeilingMs;
         case 'weak_confirm': return nowMs + weakConfirmMs(policy);
+        case 'await_report': return nowMs + policy.awaitReportMs;
         case 'unknown_grace': return nowMs + unknownLivenessGraceMs(policy);
         case 'admission': {
             const admission = admissionOf(draft.ctx);
@@ -319,7 +343,7 @@ function releaseHolds(draft: Draft, reasons: readonly HoldReason[] | '*', keep: 
     }
 }
 
-function notify(draft: Draft, kind: NotifyKind, opts: { generation?: number; summary?: SummaryRef } = {}): void {
+function notify(draft: Draft, kind: NotifyKind, opts: { generation?: number; summary?: SummaryRef; textEventId?: string } = {}): void {
     const attempt = draft.attempt!;
     if (!isMeshScope(attempt)) return;
     draft.effects.push({
@@ -331,7 +355,28 @@ function notify(draft: Draft, kind: NotifyKind, opts: { generation?: number; sum
         coordinatorDaemonId: attempt.coordinator.daemonId,
         coordinatorSessionId: attempt.coordinator.sessionId,
         ...(opts.summary ? { summary: opts.summary } : {}),
+        ...(opts.textEventId ? { textEventId: opts.textEventId } : {}),
     });
+}
+
+/** Holds that commit on expiry keep the text pointer of the evidence that opened them. */
+const TEXT_CARRYING_HOLDS: readonly HoldReason[] = ['weak_candidate', 'await_report'];
+
+/**
+ * The text of a commit on hold expiry (R13a/R13r) is the text of the end that
+ * opened the hold, not of the scheduler's `hold_expired` (which has none): the
+ * hold stores the opener's summary pointer (remote owner) and event id (local
+ * envelope, re-read by deliver.ts at render time).
+ */
+function heldText(draft: Draft): { summary?: SummaryRef; textEventId?: string } {
+    const hold = expiredHold(draft.ctx);
+    if (!hold || !TEXT_CARRYING_HOLDS.includes(hold.reason)) return {};
+    const d = hold.data;
+    const summary = typeof d.summaryTopic === 'string' && typeof d.summaryWriter === 'string' && typeof d.summarySeq === 'number'
+        ? { topic: d.summaryTopic, writer: d.summaryWriter, seq: d.summarySeq }
+        : undefined;
+    const textEventId = typeof d.textEventId === 'string' && d.textEventId ? d.textEventId : undefined;
+    return { ...(summary ? { summary } : {}), ...(textEventId ? { textEventId } : {}) };
 }
 
 function summaryOf(ev: TurnEvidence): SummaryRef | undefined {
@@ -347,7 +392,8 @@ function commit(
 ): void {
     const attempt = draft.attempt!;
     const ev = draft.ctx.evidence;
-    const summary = summaryOf(ev);
+    const held = heldText(draft);
+    const summary = summaryOf(ev) ?? held.summary;
     attempt.state = outcome;
     attempt.suspension = null;
     attempt.terminal = { outcome, reason, source: ev.source, strength, at: ev.at, ...(summary ? { summary } : {}) };
@@ -367,15 +413,59 @@ function commit(
         draft.effects.push({ kind: 'graph_advance', meshId: attempt.meshId, taskId: attempt.taskId, outcome });
     }
     draft.effects.push({ kind: 'bus', event: { kind: 'turn', phase: 'committed', sessionId: attempt.sessionId, attemptId: attempt.attemptId, generation: attempt.generation, outcome, strength } });
-    notify(draft, outcome, summary ? { summary } : {});
+    notify(draft, outcome, { ...(summary ? { summary } : {}), ...(held.textEventId ? { textEventId: held.textEventId } : {}) });
     draft.effects.push({ kind: 'release_attempt_ref', attemptId: attempt.attemptId, sessionId: attempt.sessionId });
     draft.committed = true;
+}
+
+/**
+ * Every reason a reclaim is emitted with (the "reclaims" block of
+ * TURN_REASONS). A `mesh_direct` attempt commits `failed` with one of these as
+ * its terminal reason — that is how a consumer (the coordinator notice) tells
+ * "the direct dispatch never got a turn and nothing will redeliver it" apart
+ * from a turn that ran and failed.
+ */
+export const RECLAIM_TURN_REASONS = [
+    'dispatch_refused_session_exited', 'dispatch_refused_no_target', 'dispatch_refused_unsupported_input', 'dispatch_failed',
+    'session_exit', 'session_exit_before_turn', 'session_dead', 'hollow_completion',
+    'assigned_stranded_dispatch_unconfirmed', 'delivered_not_consumed_redrive', 'delivered_no_turn_deadline',
+] as const satisfies readonly TurnReason[];
+
+export function isReclaimTurnReason(reason: TurnReason | null | undefined): boolean {
+    return !!reason && (RECLAIM_TURN_REASONS as readonly string[]).includes(reason);
+}
+
+/**
+ * A committed `mesh_direct` attempt whose terminal reason is a reclaim cause:
+ * the direct dispatch was not redelivered (see `reclaim`).
+ */
+export function isUnredeliveredDirectFailure(attempt: Pick<TurnAttempt, 'scope' | 'terminal'> | null | undefined): boolean {
+    return !!attempt && attempt.scope === 'mesh_direct' && attempt.terminal?.outcome === 'failed'
+        && isReclaimTurnReason(attempt.terminal.reason);
 }
 
 /**
  * generation + 1 and back to `accepted` — or `failed` when the reclaim budget
  * is spent. A plain attempt has no dispatcher to re-claim it, so its
  * "reclaim" is a failure too.
+ *
+ * A `mesh_direct` attempt has no re-claimer either (owner decision
+ * 2026-09-24): a `mesh_queue` reclaim puts the row back to `pending` and the
+ * scheduler re-claims + redelivers it, but a direct dispatch is only ever sent
+ * by the coordinator calling mesh_send_task. Re-arming it left the attempt
+ * `accepted` g+1 spinning await_delivery expiries (or until hard_ceiling, 90
+ * min) with its materialised queue row `assigned`, blocking the node's
+ * one-active gate (live: two refused direct dispatches sat `accepted` g2 for
+ * hours). So every reclaim trigger commits a direct attempt `failed` right
+ * away, the reclaim cause as its terminal reason: commit releases every hold,
+ * flips the row terminal (queue_status + graph_advance), sends the ONE
+ * coordinator notice and releases the attempt ref. The session is cut exactly
+ * as a reclaim cuts g (cancel_dispatch + revokeBind, same already-cut skip), so
+ * a prompt still queued in the worker cannot start late and the task token
+ * dies; a never-delivered placeholder session is skipped by the executor. The
+ * row is deliberately NOT made `pending`: the scheduler would then auto-
+ * redispatch a coordinator-chosen dispatch (double attempts). R2's redrive
+ * (same session, same generation) is not a reclaim and is untouched.
  *
  * Reclaim CUTS the old generation first (owner revision 2026-09-23): the
  * `cancel_dispatch` for g−1's session is emitted unconditionally — an
@@ -396,15 +486,22 @@ function reclaim(draft: Draft, reason: TurnReason): void {
         commit(draft, 'failed', 'genuine', reason);
         return;
     }
-    if (attempt.reclaimCount >= RECLAIM_BUDGET) {
-        commit(draft, 'failed', 'genuine', 'reclaim_budget_exhausted');
-        return;
-    }
     const prevSession = attempt.sessionId;
     const prevMessageId = attempt.messageId;
     const fromGeneration = attempt.generation;
     const alreadyCut = attempt.state === 'accepted' && attempt.prevGeneration !== null
         && sessionIdsEquivalent(attempt.sessionId, attempt.prevGeneration.sessionId);
+    if (attempt.scope === 'mesh_direct') {
+        if (!alreadyCut) {
+            draft.effects.push({ kind: 'cancel_dispatch', attemptId: attempt.attemptId, generation: fromGeneration, sessionId: prevSession, messageId: prevMessageId, revokeBind: true });
+        }
+        commit(draft, 'failed', 'genuine', reason);
+        return;
+    }
+    if (attempt.reclaimCount >= RECLAIM_BUDGET) {
+        commit(draft, 'failed', 'genuine', 'reclaim_budget_exhausted');
+        return;
+    }
     attempt.prevGeneration = { sessionId: prevSession, consumed: attempt.consumedAt !== null };
     attempt.generation = fromGeneration + 1;
     attempt.reclaimCount += 1;
@@ -522,6 +619,16 @@ const ACTIONS: Record<ActionId, (draft: Draft) => void> = {
     clear_weak: (draft) => {
         draft.attempt!.weakSince = null;
     },
+    await_report: (draft) => {
+        draft.attempt!.weakSince = draft.ctx.evidence.at;
+    },
+    false_idle: (draft) => {
+        const attempt = draft.attempt!;
+        attempt.weakSince = null;
+        attempt.lastActivityAt = Math.max(attempt.lastActivityAt ?? 0, activityAt(draft.ctx.evidence));
+        attempt.livenessFailStreak = 0;
+        attempt.data = { ...attempt.data, falseIdleCount: (attempt.data.falseIdleCount ?? 0) + 1 };
+    },
     activity: (draft) => {
         const attempt = draft.attempt!;
         const ev = draft.ctx.evidence;
@@ -621,6 +728,11 @@ function applyTemplate(template: EffectTemplate, draft: Draft): void {
                 reason = template.reason;
             }
             if (reason === 'suspension_before_consumed' && ev.kind === 'suspension') data.modal = ev.modal;
+            if (TEXT_CARRYING_HOLDS.includes(reason)) {
+                data.textEventId = ev.eventId;
+                const opener = summaryOf(ev);
+                if (opener) { data.summaryTopic = opener.topic; data.summaryWriter = opener.writer; data.summarySeq = opener.seq; }
+            }
             addHold(draft, {
                 holdId: holdId(attempt.attemptId, reason),
                 attemptId: attempt.attemptId,

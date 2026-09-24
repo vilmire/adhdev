@@ -51,6 +51,8 @@ export interface TurnTerminal {
 /** Content-free annotations stored on the attempt (`data_json`). */
 export interface TurnAttemptData {
     gitSideEffect?: { dirty: boolean; commitsSinceDispatch: number; attributable: boolean; at: number };
+    /** R12r: how many report-awaiting idle ends the worker resumed from (false idles). Diagnostics only. */
+    falseIdleCount?: number;
 }
 
 export interface TurnAttempt {
@@ -131,7 +133,13 @@ export type TurnEffect =
     /** Publish a `turn.notify` for the attempt's coordinator (mesh scopes only). */
     | { kind: 'notify_coordinator'; attemptId: string; generation: number; notify: NotifyKind; taskId: string | null; coordinatorDaemonId: string | null; coordinatorSessionId: string | null
         /** Text pointer (published as the entry's append `ref`, never inline). */
-        summary?: SummaryRef }
+        summary?: SummaryRef
+        /**
+         * Local evidence row whose envelope carries this notice's text, when it is
+         * not the evidence that produced the notice (a hold-expiry commit renders
+         * the text of the end that opened the hold). Local id, never published.
+         */
+        textEventId?: string }
     | { kind: 'hold'; hold: TurnHold }
     | { kind: 'release_hold'; attemptId: string; reasons: readonly HoldReason[] | '*' }
     /** Generation + 1, state accepted, reclaimCount + 1 (the attempt returned already reflects it). */

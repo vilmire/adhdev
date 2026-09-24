@@ -175,4 +175,4 @@ export const workerPeerContextHandlers: Record<string, LowFamilyHandler> = {
     },
 };
 
-export const workerPeerContextSpecs = defineCommandSpecs('low', workerPeerContextHandlers);
+export const workerPeerContextSpecs = defineCommandSpecs('low', workerPeerContextHandlers, {}, { meshSender: 'authenticated_peer' });

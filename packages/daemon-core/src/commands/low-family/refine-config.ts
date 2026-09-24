@@ -106,4 +106,4 @@ export const refineConfigHandlers: Record<string, LowFamilyHandler> = {
     },
 };
 
-export const refineConfigSpecs = defineCommandSpecs('low', refineConfigHandlers);
+export const refineConfigSpecs = defineCommandSpecs('low', refineConfigHandlers, {}, { meshSender: 'authenticated_peer' });

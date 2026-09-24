@@ -15,6 +15,8 @@ import type { CommandRouterResult } from '../router.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
 import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from '../command-args.js';
+import { rosterEvidenceExtra } from '../mesh-sender.js';
+import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
 
 export const meshNodeLogsHandlers: Record<string, LowFamilyHandler> = {
     get_mesh_node_logs: async (ctx: LowFamilyContext, args: any) => {
@@ -27,8 +29,10 @@ export const meshNodeLogsHandlers: Record<string, LowFamilyHandler> = {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
         let nodeDaemonId: string | undefined;
+        let resolvedMesh: unknown;
         if (meshId && nodeId && ctx.getMeshForCommand) {
             const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+            resolvedMesh = meshRecord?.mesh;
             const node = meshRecord?.mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
             nodeDaemonId = typeof node?.daemonId === 'string' ? node.daemonId.trim() : undefined;
         }
@@ -40,8 +44,8 @@ export const meshNodeLogsHandlers: Record<string, LowFamilyHandler> = {
         // local — read locally instead of forwarding. Equivalent → local.
         const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent(nodeDaemonId, selfDaemonId);
         if (isRemote && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
-            const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'get_mesh_node_logs', withMeshDirectDispatch(args));
-            return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
+            const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'get_mesh_node_logs', withMeshDirectDispatch(args, rosterEvidenceExtra(args, resolvedMesh)));
+            return unwrapMeshRelayResult(forwarded, { command: 'get_mesh_node_logs', peerDaemonId: nodeDaemonId }) as CommandRouterResult;
         }
 
         // Local read on the owning daemon.
@@ -104,4 +108,6 @@ export const meshNodeLogsHandlers: Record<string, LowFamilyHandler> = {
     },
 };
 
-export const meshNodeLogsSpecs = defineCommandSpecs('low', meshNodeLogsHandlers);
+export const meshNodeLogsSpecs = defineCommandSpecs('low', meshNodeLogsHandlers, {
+    get_mesh_node_logs: { meshSender: 'any_member_mesh' },
+}, { meshSender: 'authenticated_peer' });

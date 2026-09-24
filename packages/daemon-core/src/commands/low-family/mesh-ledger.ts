@@ -139,4 +139,4 @@ export const meshLedgerHandlers: Record<string, LowFamilyHandler> = {
     },
 };
 
-export const meshLedgerSpecs = defineCommandSpecs('low', meshLedgerHandlers);
+export const meshLedgerSpecs = defineCommandSpecs('low', meshLedgerHandlers, {}, { meshSender: 'authenticated_peer' });

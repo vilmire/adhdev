@@ -12,6 +12,7 @@ import { resolveMeshHostStatus } from '../../mesh/mesh-host-ownership.js';
 import { buildMemberJoinNode, normalizeStandaloneHostCommandUrl } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
+import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
 
 export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
     get_mesh_host_pairing: async (ctx: MedFamilyContext, args: any) => {
@@ -179,12 +180,12 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
             let transport: string;
             if (hostDaemonId && ctx.deps.dispatchMeshCommand) {
                 transport = 'mesh_command_dispatch';
-                hostResult = await ctx.deps.dispatchMeshCommand(hostDaemonId, 'apply_mesh_host_join', {
+                hostResult = unwrapMeshRelayResult(await ctx.deps.dispatchMeshCommand(hostDaemonId, 'apply_mesh_host_join', {
                     meshId: hostMeshId,
                     token,
                     memberMeshId: meshId,
                     memberNode,
-                });
+                }), { command: 'apply_mesh_host_join', peerDaemonId: hostDaemonId });
             } else if (meshHost.hostAddress) {
                 transport = 'standalone_http_command';
                 const commandUrl = normalizeStandaloneHostCommandUrl(meshHost.hostAddress);
@@ -242,4 +243,8 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
     },
 };
 
-export const meshHostPairingSpecs = defineCommandSpecs('med', meshHostPairingHandlers);
+export const meshHostPairingSpecs = defineCommandSpecs('med', meshHostPairingHandlers, {
+    // The joining member is not on the host's roster yet (the pairing token
+    // authorises it): the sender must be the daemon its memberNode names.
+    apply_mesh_host_join: { meshSender: 'pairing_member' },
+}, { meshSender: 'authenticated_peer' });

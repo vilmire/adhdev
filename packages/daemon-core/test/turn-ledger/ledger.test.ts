@@ -84,11 +84,13 @@ describe('commit path', () => {
 });
 
 describe('reclaim cuts g−1 first; late completions (R27a / R27)', () => {
+    // Reclaim (generation + 1) exists only for mesh_queue: a mesh_direct
+    // attempt commits `failed` instead (see the direct describe below).
     it('reclaim records the cut in-txn and revokes the worker bind BEFORE cancelling (post-commit)', () => {
         const db = memDb();
         const ports = recordingPorts();
         const ledger = ledgerOn(db, { ports, publisher: fakePublisher() });
-        driveToGenerating(ledger);
+        driveToGenerating(ledger, { scope: 'mesh_queue' });
         const exit = ledger.observe(evd('process_exit', { exitCode: 137 }, { source: 'pty_exit' }));
         expect(exit.rule).toBe('R20');
         expect(exit.attempt).toMatchObject({ state: 'accepted', generation: 1, prevGeneration: { sessionId: 's1', consumed: true } });
@@ -104,7 +106,7 @@ describe('reclaim cuts g−1 first; late completions (R27a / R27)', () => {
         const publisher = fakePublisher();
         const ports = recordingPorts();
         const ledger = ledgerOn(db, { ports, publisher });
-        driveToGenerating(ledger);
+        driveToGenerating(ledger, { scope: 'mesh_queue' });
         ledger.observe(evd('process_exit', { exitCode: 1 }, { source: 'pty_exit' }));
         ports.calls.length = 0;
         const late = ledger.observe(evd('turn_end', { strength: 'genuine', summary: SUMMARY }, { attemptRef: { attemptId: 'a1', generation: 0 } }));
@@ -120,7 +122,7 @@ describe('reclaim cuts g−1 first; late completions (R27a / R27)', () => {
         const db = memDb();
         const ports = recordingPorts();
         const ledger = ledgerOn(db, { ports, publisher: fakePublisher() });
-        driveToGenerating(ledger);
+        driveToGenerating(ledger, { scope: 'mesh_queue' });
         ledger.observe(evd('process_exit', { exitCode: 1 }, { source: 'pty_exit' }));
         ledger.observe(evd('delivered', { messageId: 'msg-2', outcome: 'delivered', via: 'local' }, { source: 'input_service', sessionId: 's2', attemptRef: { attemptId: 'a1', generation: 1 } }));
         ports.calls.length = 0;
@@ -134,7 +136,7 @@ describe('reclaim cuts g−1 first; late completions (R27a / R27)', () => {
         const db = memDb();
         const publisher = fakePublisher();
         const ledger = ledgerOn(db, { publisher });
-        driveToGenerating(ledger);
+        driveToGenerating(ledger, { scope: 'mesh_queue' });
         ledger.observe(evd('process_exit', { exitCode: 1 }, { source: 'pty_exit' }));
         const g1 = { attemptRef: { attemptId: 'a1', generation: 1 } };
         ledger.observe(evd('delivered', { messageId: 'msg-2', outcome: 'delivered', via: 'local' }, { ...g1, source: 'input_service', sessionId: 's2' }));
@@ -274,7 +276,7 @@ describe('sessions, holds, notices', () => {
         const db = memDb();
         let now = T0;
         const ledger = ledgerOn(db, { now: () => now, publisher: fakePublisher() });
-        ledger.observe(dispatch());
+        ledger.observe(dispatch({ scope: 'mesh_queue' }));
         expect(ledger.nextHoldDeadline()).toBe(T0 + awaitDeliveryMs(DEFAULT_TURN_POLICY));
         now = T0 + awaitDeliveryMs(DEFAULT_TURN_POLICY);
         const [expiry] = ledger.expiredHoldEvidence();
@@ -331,7 +333,7 @@ describe('sessionless direct dispatch — the placeholder session is never a sto
     // `mesh_send_task` without `session_id` opens the attempt with sessionId = taskId
     // (a placeholder); only `delivered` re-keys it. Live: a refused dispatch's
     // reclaim sent `stop_cli` for "session <taskId>" → `cliType required`.
-    it('a refused sessionless dispatch (R24 → reclaim) runs no cancel executor for the task-id placeholder; the in-txn cut row and the token revoke remain', () => {
+    it('a refused sessionless dispatch (R24 → direct failure) runs no cancel executor for the task-id placeholder; the in-txn cut row and the token revoke remain', () => {
         const db = memDb();
         const ports = recordingPorts();
         const infos: string[] = [];
@@ -339,8 +341,9 @@ describe('sessionless direct dispatch — the placeholder session is never a sto
         expect(ledger.observe(dispatch({ taskId: 'task_sessionless', session: 'task_sessionless' })).rule).toBe('R1');
         const refused = ledger.observe(evd('dispatch_failed', { workerAbsent: true, reason: 'worker_absent' }, { source: 'dispatch', sessionId: 'task_sessionless' }));
         expect(refused.rule).toBe('R24');
-        // Reducer state transitions are unchanged: generation bumped, cut recorded in-txn.
-        expect(refused.attempt).toMatchObject({ state: 'accepted', generation: 1 });
+        // A direct attempt is not re-armed: it commits failed with the reclaim cause; the cut is still recorded in-txn.
+        expect(refused.attempt).toMatchObject({ state: 'failed', generation: 0, terminal: { outcome: 'failed', reason: 'dispatch_failed' } });
+        expect(rowsOf(db, 'reclaim', 'a1')).toHaveLength(0);
         expect(rowsOf(db, 'cancel_dispatch', 'a1')).toHaveLength(1);
         expect(ports.cancels).toEqual([]);
         expect(ports.calls.filter((c) => c.startsWith('cancel'))).toEqual([]);
@@ -351,7 +354,7 @@ describe('sessionless direct dispatch — the placeholder session is never a sto
         expect(skips[0]).toMatch(/never delivered to a session \(placeholder session = task task_sessionless\)/);
     });
 
-    it('a sessionless dispatch that WAS delivered (re-keyed to the real session) still gets its cancel on reclaim', () => {
+    it('a sessionless dispatch that WAS delivered (re-keyed to the real session) still gets its cancel on the direct failure', () => {
         const db = memDb();
         const ports = recordingPorts();
         const ledger = ledgerOn(db, { ports, publisher: fakePublisher() });
@@ -360,5 +363,41 @@ describe('sessionless direct dispatch — the placeholder session is never a sto
         const refused = ledger.observe(evd('dispatch_failed', { workerAbsent: true, reason: 'worker_absent' }, { source: 'dispatch', sessionId: 's_real' }));
         expect(refused.rule).toBe('R24');
         expect(ports.calls.filter((c) => c.startsWith('revoke') || c.startsWith('cancel'))).toEqual(['revoke:s_real', 'cancel:s_real:g0']);
+    });
+});
+
+describe('mesh_direct reclaim commits failed — nothing redelivers a direct dispatch', () => {
+    it('a due await_delivery hold (H1) fails the direct attempt at once: row terminal via graph advance, one notice, no holds, no re-arm', async () => {
+        const db = memDb();
+        let now = T0;
+        const host = recordingHost();
+        const ports = recordingPorts();
+        const publisher = fakePublisher();
+        const ledger = ledgerOn(db, { now: () => now, host, ports, publisher });
+        ledger.observe(dispatch({ scope: 'mesh_direct' }));
+        now = T0 + awaitDeliveryMs(DEFAULT_TURN_POLICY);
+        const [result] = ledger.sweepExpiredHolds();
+        expect(result).toMatchObject({ rule: 'H1', attempt: { state: 'failed', generation: 0, terminal: { reason: 'assigned_stranded_dispatch_unconfirmed' } } });
+        expect(host.calls).toEqual(['graph:t1:failed']);
+        expect(ledger.store.activeHolds('a1')).toEqual([]);
+        expect(ledger.nextHoldDeadline()).toBeNull();
+        expect(rowsOf(db, 'reclaim', 'a1')).toHaveLength(0);
+        expect(rowsOf(db, 'committed', 'a1')).toHaveLength(1);
+        expect(ports.calls).toEqual(expect.arrayContaining(['revoke:s1', 'cancel:s1:g0', 'release:a1', 'after:m1/t1']));
+        await ledger.flushPublish();
+        const notices = publisher.entries.filter((e) => e.entry.k === 'turn.notify');
+        expect(notices).toHaveLength(1);
+        expect(notices[0]!.entry).toMatchObject({ notify: 'failed', taskId: 't1' });
+        expect(ledger.isTerminal('a1')).toBe(true);
+    });
+
+    it('a mid-turn process exit (R20) fails the direct attempt with session_exit — no requeue', () => {
+        const db = memDb();
+        const host = recordingHost();
+        const ledger = ledgerOn(db, { host, publisher: fakePublisher() });
+        driveToGenerating(ledger, { scope: 'mesh_direct' });
+        const exit = ledger.observe(evd('process_exit', { exitCode: 137 }, { source: 'pty_exit' }));
+        expect(exit).toMatchObject({ rule: 'R20', attempt: { state: 'failed', terminal: { reason: 'session_exit' } } });
+        expect(host.calls).toEqual(['graph:t1:failed']);
     });
 });

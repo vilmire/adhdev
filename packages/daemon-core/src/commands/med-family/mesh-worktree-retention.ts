@@ -76,4 +76,4 @@ export const meshWorktreeRetentionHandlers: Record<string, MedFamilyHandler> = {
     },
 };
 
-export const meshWorktreeRetentionSpecs = defineCommandSpecs('med', meshWorktreeRetentionHandlers);
+export const meshWorktreeRetentionSpecs = defineCommandSpecs('med', meshWorktreeRetentionHandlers, {}, { meshSender: 'authenticated_peer' });

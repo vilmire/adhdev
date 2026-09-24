@@ -14,6 +14,7 @@ import {
   WORKER_TOKEN_CANARY_PREFIX,
 } from '../../src/mesh/worker-mcp-isolation'
 import {
+  acceptWorkerCompletionReport,
   validateWorkerCompletionReport,
   WORKER_SUMMARY_MAX_CHARS,
   WORKER_BRANCH_STATES,
@@ -22,6 +23,8 @@ import {
   FINAL_SUMMARY_PROVENANCE_RANK,
   isStrongerSummaryProvenance,
 } from '../../src/providers/completion/evidence'
+import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
+import { seedMeshAttempt } from '../helpers/turn-attempt-seed'
 
 beforeEach(() => {
   __resetWorkerTaskTokensForTest()
@@ -274,5 +277,176 @@ describe('summary provenance grading', () => {
     expect(isStrongerSummaryProvenance('native_transcript', 'parsed_screen')).toBe(true)
     expect(isStrongerSummaryProvenance('parsed_screen', 'parsed_screen_fallback')).toBe(true)
     expect(isStrongerSummaryProvenance('parsed_screen_fallback', 'none')).toBe(true)
+  })
+})
+
+// ─── invalid_for_task_mode fix (preview rc.40, task 441a2f87) ─────────────
+//
+// Live defect: a task that was NOT declared read-only (so the daemon treats it
+// as code-changing) but was in fact a pure inspection task. The worker called
+// report_completion(completed, handoff_notes.touched_files: []) → refused
+// invalid_for_task_mode. It then tried to EXPLAIN the refusal with
+// report_completion(blocked, ...) → refused AGAIN with the same reason, because
+// the old checkReportAgainstTaskMode never looked at `outcome` and never told
+// missing apart from an explicit empty list.
+//
+// These tests exercise the real acceptance path (acceptWorkerCompletionReport)
+// against a real queue row and a real turn-ledger attempt, so they characterize
+// the fix the way the live defect actually manifested — not just the pure
+// predicate in isolation.
+
+describe('invalid_for_task_mode — outcome-aware, missing vs explicit-empty (task 441a2f87)', () => {
+  // Each test needs its own (mesh, task, attempt, session) namespace — see the
+  // identical note in worker-report-notify-shadow.test.ts: the turn-ledger rows
+  // are process-wide SQLite tables keyed by ids that are NOT scoped by mesh_id
+  // (turn_attempts.session_id is UNIQUE across the whole ledger), so reusing a
+  // literal like 'worker-session' across cases silently collides.
+  let seq = 0
+  function freshIds(): { meshId: string; taskId: string; sessionId: string } {
+    seq += 1
+    return {
+      meshId: `mesh_taskmode_${seq}`,
+      taskId: `task_taskmode_${seq}`,
+      sessionId: `session_taskmode_${seq}`,
+    }
+  }
+
+  /** A live task (readonly or code-changing), assigned + a generating attempt, ready for a report. */
+  function seedTask(
+    ids: ReturnType<typeof freshIds>,
+    opts?: { readonly?: boolean; ownedPaths?: { paths: { path: string; subtree: boolean }[] } },
+  ) {
+    const now = new Date().toISOString()
+    MeshRuntimeStore.getInstance().insertQueueEntry({
+      id: ids.taskId,
+      meshId: ids.meshId,
+      message: 'inspect the thing and report back',
+      status: 'assigned',
+      assignedSessionId: ids.sessionId,
+      readonly: !!opts?.readonly,
+      ...(opts?.readonly ? { taskMode: 'live_debug_readonly' as const } : {}),
+      ...(opts?.ownedPaths ? { ownedPaths: opts.ownedPaths } : {}),
+      createdAt: now,
+      updatedAt: now,
+    } as any)
+    const attempt = seedMeshAttempt({ meshId: ids.meshId, taskId: ids.taskId, sessionId: ids.sessionId, stage: 'generating' })
+    const token = mintWorkerTaskToken({ meshId: ids.meshId, taskId: ids.taskId, attemptId: attempt.attemptId, sessionId: ids.sessionId })
+    return { attempt, token }
+  }
+
+  it('BREAK-ONCE table: completed+[] accepted, blocked-without-files accepted, completed-without-files refused-with-field-name, non-empty-on-readonly refused', () => {
+    // This single test enumerates the four cells the task asked to pin. Each
+    // uses its own (mesh, task, session) so one case cannot leak into another.
+    const results: Record<string, unknown> = {}
+
+    // (1) completed + explicit [] on a code-changing task → accepted.
+    {
+      const { token } = seedTask(freshIds())
+      results.completedEmptyTopLevel = acceptWorkerCompletionReport(
+        { token: token.token },
+        { outcome: 'completed', summary: 'Looked at it; nothing needed changing.', touchedFiles: [] },
+      )
+    }
+
+    // (2) blocked, no touchedFiles at all, on a code-changing task → accepted.
+    {
+      const { token } = seedTask(freshIds())
+      results.blockedNoFiles = acceptWorkerCompletionReport(
+        { token: token.token },
+        { outcome: 'blocked', summary: 'Cannot proceed without credentials.', blockers: ['missing API key'] },
+      )
+    }
+
+    // (3) completed, touchedFiles never mentioned at all, on a code-changing
+    // task → still refused, but the message must name the exact wire field.
+    {
+      const { token } = seedTask(freshIds())
+      results.completedMissingFiles = acceptWorkerCompletionReport(
+        { token: token.token },
+        { outcome: 'completed', summary: 'Did the thing.' },
+      )
+    }
+
+    // (4) non-empty touchedFiles on a read-only task → still refused, any outcome.
+    {
+      const { token } = seedTask(freshIds(), { readonly: true })
+      results.nonEmptyOnReadonly = acceptWorkerCompletionReport(
+        { token: token.token },
+        { outcome: 'completed', summary: 'Investigated and also patched a typo.', touchedFiles: ['README.md'] },
+      )
+    }
+
+    expect.soft(results.completedEmptyTopLevel).toMatchObject({ accepted: true, outcome: 'completed' })
+    expect.soft(results.blockedNoFiles).toMatchObject({ accepted: true, outcome: 'blocked' })
+    expect.soft(results.completedMissingFiles).toMatchObject({ accepted: false, refusal: 'invalid_for_task_mode' })
+    expect.soft((results.completedMissingFiles as any).detail).toMatch(/touched_files/)
+    expect.soft(results.nonEmptyOnReadonly).toMatchObject({ accepted: false, refusal: 'invalid_for_task_mode' })
+  })
+
+  it('accepts completed + explicit [] via handoffNotes.touchedFiles alone (top-level touchedFiles absent)', () => {
+    const { token } = seedTask(freshIds())
+    const result = acceptWorkerCompletionReport(
+      { token: token.token },
+      {
+        outcome: 'completed',
+        summary: 'Reviewed the module; no change was necessary.',
+        handoffNotes: { intent: 'confirms current behavior is correct', touchedFiles: [] },
+      },
+    )
+    expect(result).toMatchObject({ accepted: true, outcome: 'completed' })
+  })
+
+  it('refuses a completed report with touchedFiles missing at BOTH the top level and in handoffNotes', () => {
+    const { token } = seedTask(freshIds())
+    const result: any = acceptWorkerCompletionReport(
+      { token: token.token },
+      { outcome: 'completed', summary: 'Did the thing but said nothing about files.' },
+    )
+    expect(result.accepted).toBe(false)
+    expect(result.refusal).toBe('invalid_for_task_mode')
+    // The worker's next attempt must succeed by sending this exact field —
+    // the refusal is useless if it does not name it.
+    expect(result.detail).toContain('touched_files')
+    expect(result.detail).toMatch(/\[\]/)
+  })
+
+  it('failed outcome on a code-changing task never requires touchedFiles either', () => {
+    const { token } = seedTask(freshIds())
+    const result = acceptWorkerCompletionReport(
+      { token: token.token },
+      { outcome: 'failed', summary: 'Attempted the change; the build broke and I could not fix it in time.' },
+    )
+    expect(result).toMatchObject({ accepted: true, outcome: 'failed' })
+  })
+
+  it('still refuses non-empty touchedFiles on a read-only task for blocked/failed outcomes too', () => {
+    for (const outcome of ['blocked', 'failed'] as const) {
+      const { token } = seedTask(freshIds(), { readonly: true })
+      const result: any = acceptWorkerCompletionReport(
+        { token: token.token },
+        { outcome, summary: `outcome=${outcome} but I also changed a file`, touchedFiles: ['oops.ts'] },
+      )
+      expect.soft(result.accepted).toBe(false)
+      expect.soft(result.refusal).toBe('invalid_for_task_mode')
+    }
+  })
+
+  it('accepts an explicit empty touchedFiles on a read-only task (the unchanged, correct case)', () => {
+    const { token } = seedTask(freshIds(), { readonly: true })
+    const result = acceptWorkerCompletionReport(
+      { token: token.token },
+      { outcome: 'completed', summary: 'Inspected only, as instructed.', touchedFiles: [] },
+    )
+    expect(result).toMatchObject({ accepted: true, outcome: 'completed' })
+  })
+
+  it('H1: an explicit empty touchedFiles never trips the owned-paths mismatch evidence', () => {
+    const { token } = seedTask(freshIds(), { ownedPaths: { paths: [{ path: 'src/mesh/worker-report.ts', subtree: false }] } })
+    const result: any = acceptWorkerCompletionReport(
+      { token: token.token },
+      { outcome: 'completed', summary: 'Nothing needed changing in my owned lane.', touchedFiles: [] },
+    )
+    expect(result.accepted).toBe(true)
+    expect(result.ownedPathsMismatch).toBeUndefined()
   })
 })

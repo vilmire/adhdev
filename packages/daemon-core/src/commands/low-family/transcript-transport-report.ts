@@ -48,4 +48,4 @@ export const transcriptTransportReportHandlers: Record<string, LowFamilyHandler>
 // IPC commands (`turn-ledger-ipc.ts`, `sources: ['ipc']`), which are
 // deliberately MCP-server-only. There is no legitimate caller this command
 // should refuse.
-export const transcriptTransportReportSpecs = defineCommandSpecs('low', transcriptTransportReportHandlers);
+export const transcriptTransportReportSpecs = defineCommandSpecs('low', transcriptTransportReportHandlers, {}, { meshSender: 'authenticated_peer' });

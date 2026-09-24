@@ -29,6 +29,7 @@ import { type PersistableCliHistoryMessage } from './cli-provider-history-dedup.
 import { TERMINAL_MESH_EVENTS } from './cli-provider-instance-types.js';
 import type { CompletedDebouncePending } from './cli-provider-instance-types.js';
 import { forwardProviderEvent, type SessionEventPort } from './provider-event-port.js';
+import { hasLiveWorkerSessionBind } from '../runtime-defaults.js';
 
 /** The narrow surface of CliProviderInstance the event path reads/writes. */
 export interface ProviderEventsHost {
@@ -157,12 +158,47 @@ export function pushEvent(host: ProviderEventsHost, event: ProviderEvent): void 
     // pending; generating_completed / agent:stopped stay unconditional —
     // they ARE the terminal evidence. A genuine agent:ready with no active
     // task is unaffected (meshActiveTaskId falsy → no detach either way).
+    //
+    // WORKER-BIND-IDLE-DETACH (2026-09-24, same false-idle class as
+    // RESTART-REBOUND above): a session with a LIVE worker-MCP bind
+    // (`hasLiveWorkerSessionBind`) can still call `report_completion` for the
+    // task it is stamped with — the owner-side ledger (turn-ledger R9r,
+    // `reportExpectedFor`) is holding the attempt open awaiting exactly that
+    // report. Detaching HERE, on this session's own idle edge, would strip
+    // meshActiveTaskId/meshActiveAttemptId (and — for an ad-hoc, non-launched
+    // session — the mesh membership itself) before the report can be routed,
+    // so a later forwarded report reads `attempt ?`
+    // (`assignmentStampReader` in commands/low-family/worker-report.ts) and,
+    // for an ad-hoc session, cannot be routed to the owner at all. A FALSE
+    // idle (e.g. the agent still mid-tool-call) is exactly when this matters
+    // most: the worker's own generating_completed must not be the thing that
+    // erases the evidence the eventual real completion needs to report
+    // against.
+    //
+    // So a bound session's own generating_completed/agent:stopped is treated
+    // like the readyWithTurnInFlight case above: it withholds the detach.
+    // Nothing else changes the stamp's lifecycle for a bound session — it is
+    // cleared by (a) the owner revoking the bind for this task
+    // (`revokeCutSessionWorkerBind` in mesh/turn-ledger/runtime-ledger.ts,
+    // reached through the ledger's `cancel_dispatch` effect — see that
+    // module for the actual local-instance detach call, since this module
+    // has no access to the mesh-side cancel path), (b) a new stamp for a
+    // DIFFERENT task attaching (attachMeshAssignment's existing taskChanged
+    // handling), or (c) the session terminating (SessionRegistry emits
+    // `terminated`, which also revokes the bind itself —
+    // `subscribeWorkerBindRevocation`). A session WITHOUT a live bind (no
+    // worker MCP — e.g. a provider that never declared isolation) keeps
+    // today's unconditional detach-on-idle: nothing changes for it, and
+    // `hasLiveWorkerSessionBind` is false for it by construction (no bind was
+    // ever minted).
     if (TERMINAL_MESH_EVENTS.has(event.event) && host.settings.meshActiveTaskId) {
         const readyWithTurnInFlight = event.event === 'agent:ready'
             && (host.generatingStartedAt !== 0
                 || host.completedDebouncePending !== null
                 || host.generatingDebouncePending !== null);
-        if (!readyWithTurnInFlight) {
+        const idleDetachWithheldForReport = event.event !== 'agent:ready'
+            && hasLiveWorkerSessionBind(host.instanceId);
+        if (!readyWithTurnInFlight && !idleDetachWithheldForReport) {
             try { host.detachMeshAssignment(); } catch { /* best-effort */ }
         }
     }

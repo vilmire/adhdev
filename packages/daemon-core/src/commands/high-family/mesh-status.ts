@@ -1025,4 +1025,4 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
     },
 };
 
-export const meshStatusSpecs = defineCommandSpecs('high', meshStatusHandlers);
+export const meshStatusSpecs = defineCommandSpecs('high', meshStatusHandlers, {}, { meshSender: 'authenticated_peer' });

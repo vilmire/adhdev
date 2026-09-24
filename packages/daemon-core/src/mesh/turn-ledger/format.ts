@@ -47,7 +47,7 @@ export type FormatDispatchFailureReason = 'worker_absent' | 'transport_error' | 
 /** `agent:stopped` / `session_error` sub-reasons the legacy templates branch on. */
 export type FormatStopReason =
     | 'auth_failed' | 'billing_failed' | 'quota_exceeded'
-    | 'recovery_context' | 'plain';
+    | 'recovery_context' | 'direct_not_redelivered' | 'plain';
 
 /** Worktree bootstrap outcome. */
 export type FormatWorktreeOutcome = 'complete' | 'failed';
@@ -117,6 +117,8 @@ export interface TurnNotifyScalars {
     strength?: 'genuine' | 'weak';
     /** Reason enum driving `agent:stopped` branching. */
     stopReason?: FormatStopReason;
+    /** `direct_not_redelivered`: the reclaim cause (a closed TurnReason enum value) the direct dispatch failed with. */
+    directFailureCause?: string;
     /** Why evidence is weak (mirrors `evidenceLevel`/`reviewRecommended`/`completionDiagnostic` collapse already performed upstream by the reducer). */
     reviewRecommended?: boolean;
     /** `completionDiagnostic.finalAssistantMayBeTruncated` equivalent. */
@@ -397,6 +399,10 @@ function renderStopped(input: RenderTurnNotifyInput, missing: SummaryRef[]): str
     if (s.stopReason === 'quota_exceeded') {
         const detail = resolve(input.refs.error, input.resolveRef, missing) ?? resolve(input.refs.summary, input.resolveRef, missing);
         return `[System] ${nodeLabel} stopped because the provider's usage quota is exhausted${metadata}. This is not a billing or auth problem — it resets automatically at the next window boundary, and ADHDev will resume work on it once quota is available.${detail ? ` ${detail}` : ''}`;
+    }
+    if (s.stopReason === 'direct_not_redelivered') {
+        const cause = s.directFailureCause ? ` (${s.directFailureCause})` : '';
+        return `[System] ${nodeLabel}: direct dispatch${s.taskId ? ` of task ${s.taskId}` : ''} failed${cause}${metadata} — the attempt ended without a completion, and a mesh_send_task dispatch is never redelivered automatically. If the work is still needed, send it again with mesh_send_task (or enqueue it); use mesh_read_chat once if you need to inspect the worker first.`;
     }
     if (s.stopReason === 'recovery_context' && s.recoveryContext && s.recoveryContext.consecutiveNodeFailures > 0) {
         const rc = s.recoveryContext;

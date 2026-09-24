@@ -24,7 +24,7 @@
 import { subscribeMeshTermination } from '../../mesh/mesh-termination-bridge.js';
 import { subscribeMeshProviderSignals } from '../../mesh/mesh-signal-bridge.js';
 import { subscribeCoordinatorRegistryRemoval } from '../../mesh/coordinator-registry.js';
-import { subscribeWorkerBindRevocation } from '../../mesh/worker-mcp-isolation.js';
+import { hasLiveWorkerSessionBind, subscribeWorkerBindRevocation } from '../../mesh/worker-mcp-isolation.js';
 import {
     listLocalCoordinatorSessions,
     resolveCoordinatorDrainDaemonIds,
@@ -37,7 +37,7 @@ import { getLedgerDir } from '../../mesh/mesh-ledger-paths.js';
 import { formatTurnLedgerMigrationLine, importLegacyPendingEventsJsonl } from '../../mesh/turn-ledger/migrate-v1.js';
 import { formatTurnLedgerMigrationV2Line } from '../../mesh/turn-ledger/migrate-v2.js';
 import { formatTurnLedgerMigrationV3Line } from '../../mesh/turn-ledger/migrate-v3.js';
-import { createMeshRuntimeTurnLedger } from '../../mesh/turn-ledger/runtime-ledger.js';
+import { createMeshRuntimeTurnLedger, revokeCutSessionWorkerBind } from '../../mesh/turn-ledger/runtime-ledger.js';
 import { createLateBoundProbePort } from '../../mesh/turn-ledger/scheduler.js';
 import { reconcileOrphanedPlainAttempts, type ReconcileOrphanedPlainAttemptsReport } from '../../mesh/turn-ledger/reconcile.js';
 import { setActiveTurnLedgerForIpc } from '../../commands/low-family/turn-ledger-ipc.js';
@@ -202,6 +202,13 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
             });
         },
         releaseAttemptRef: ({ attemptId }) => releaseLocalAttemptRef(components, attemptId),
+        // WORKER-BIND-IDLE-DETACH: the default (bind/token revoke) plus the
+        // local stamp detach withheld from the session's own idle edge — see
+        // detachLocalMeshTaskStamp for why this composes rather than replaces.
+        revokeWorkerBind: (request) => {
+            revokeCutSessionWorkerBind(request);
+            detachLocalMeshTaskStamp(components, request);
+        },
         probe: (e) => lateProbe.port(e),
     };
     const ledger = createMeshRuntimeTurnLedger({ selfDaemonId, ports });
@@ -381,6 +388,9 @@ export function wireTurnEvidencePort(components: DaemonComponents, ledger: TurnL
         ownerFor: (sessionId) => resolveEvidenceOwner(components, sessionId),
         selfDaemonId: ledger.selfDaemonId,
         ...(deps.appendHandoff ? { appendHandoff: deps.appendHandoff } : {}),
+        // R9r: a live worker-MCP bind ⇒ the worker can report, so its idle end
+        // awaits the report instead of committing (stamped on THIS daemon).
+        reportExpectedFor: (sessionId) => hasLiveWorkerSessionBind(sessionId),
         attemptRefFor: (sessionId) => {
             const attempt = ledger.openAttemptForSession(sessionId);
             return attempt ? { attemptId: attempt.attemptId, generation: attempt.generation } : null;
@@ -406,6 +416,42 @@ function releaseLocalAttemptRef(components: DaemonComponents, attemptId: string)
             try { instance.releaseAttemptRef(attemptId); } catch { /* best-effort */ }
         }
     }
+}
+
+/**
+ * `revoke_worker_bind` executor's LOCAL half (WORKER-BIND-IDLE-DETACH,
+ * 2026-09-24): the ledger's `cancel_dispatch` effect (a cut generation —
+ * reclaim/redrive) is the one place a bound worker's mesh task stamp is
+ * supposed to clear even though its own idle edge is deliberately withheld
+ * from doing so (see `providers/cli-provider-events.ts` pushEvent). Runs
+ * AFTER `revokeCutSessionWorkerBind` so the bind/token revoke that stops the
+ * cut worker from calling `report_completion` lands first, then the local
+ * instance (if this daemon is where that session lives) drops
+ * `meshActiveTaskId`/attempt/nonce for the named task exactly the way its own
+ * `generating_completed` would have, had it not been withheld.
+ *
+ * Scoped to the CUT (attemptId, sessionId): a session with no matching
+ * instance (the cut session lives on another daemon, or already exited) is a
+ * silent no-op — the bind/token revoke above is what actually mattered for a
+ * remote session, and `terminated` already handles a locally-exited one via
+ * `subscribeWorkerBindRevocation`.
+ */
+export function detachLocalMeshTaskStamp(components: DaemonComponents, request: { sessionId: string; taskId: string | null }): void {
+    if (!request.taskId) return;
+    const instance = components.instanceManager.getInstance(request.sessionId) as unknown as {
+        getState?: () => { settings?: Record<string, unknown> };
+        detachMeshAssignment?: () => void;
+    } | undefined;
+    if (!instance || typeof instance.detachMeshAssignment !== 'function') return;
+    // Only detach the task this cancel actually names — a session that has
+    // since moved on to a DIFFERENT task (attachMeshAssignment's taskChanged
+    // handling already cleared the cut task's markers) must not have its
+    // CURRENT, unrelated task torn down by a stale cancel arriving late.
+    try {
+        const settings = (instance.getState?.().settings as Record<string, unknown> | undefined) || {};
+        if (settings.meshActiveTaskId !== request.taskId) return;
+    } catch { /* best-effort: no readable state ⇒ fall through and detach anyway */ }
+    try { instance.detachMeshAssignment(); } catch { /* best-effort */ }
 }
 
 export function bootMeshRuntime(s6: ProjectionsStage): MeshRuntimeStage {

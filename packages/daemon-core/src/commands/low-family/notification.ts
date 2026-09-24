@@ -116,4 +116,4 @@ export const notificationHandlers: Record<string, LowFamilyHandler> = {
     },
 };
 
-export const notificationSpecs = defineCommandSpecs('low', notificationHandlers);
+export const notificationSpecs = defineCommandSpecs('low', notificationHandlers, {}, { meshSender: 'authenticated_peer' });

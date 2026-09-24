@@ -127,4 +127,4 @@ export const coordinatorPromptHandlers: Record<string, LowFamilyHandler> = {
     },
 };
 
-export const coordinatorPromptSpecs = defineCommandSpecs('low', coordinatorPromptHandlers);
+export const coordinatorPromptSpecs = defineCommandSpecs('low', coordinatorPromptHandlers, {}, { meshSender: 'authenticated_peer' });

@@ -41,4 +41,4 @@ export const meshOnboardingHandlers: Record<string, MedFamilyHandler> = {
     },
 };
 
-export const meshOnboardingSpecs = defineCommandSpecs('med', meshOnboardingHandlers);
+export const meshOnboardingSpecs = defineCommandSpecs('med', meshOnboardingHandlers, {}, { meshSender: 'authenticated_peer' });

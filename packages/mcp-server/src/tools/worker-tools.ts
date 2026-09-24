@@ -105,8 +105,9 @@ export const REPORT_COMPLETION_TOOL = {
             items: { type: 'string' },
             description:
               'Files you changed. Required — this is how your note is matched to future work on the same code. '
-              + 'On a READ-ONLY task pass an empty array: it is the correct answer, and inventing a placeholder '
-              + 'path to satisfy this field corrupts the matching key for everyone else.',
+              + 'On a READ-ONLY task, or on a code-changing task where you genuinely changed nothing, pass an '
+              + 'empty array: it is the correct answer. Do not invent a placeholder path to satisfy this field — '
+              + 'that corrupts the matching key for everyone else.',
           },
           follow_ups: {
             type: 'array',
@@ -119,7 +120,10 @@ export const REPORT_COMPLETION_TOOL = {
       touched_files: {
         type: 'array',
         items: { type: 'string' },
-        description: 'Files this task changed.',
+        description:
+          'Files this task changed. On a code-changing task, required when outcome is \'completed\' — send `[]` '
+          + 'if you completed the task but changed no files; omitting the field entirely is what gets refused, not '
+          + 'an empty list. Not required when outcome is \'blocked\' or \'failed\' — there is nothing to list.',
       },
       branch_state: enumOf(
         WORKER_BRANCH_STATES,

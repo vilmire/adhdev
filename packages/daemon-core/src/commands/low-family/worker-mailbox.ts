@@ -119,4 +119,8 @@ export const workerMailboxHandlers: Record<string, LowFamilyHandler> = {
     },
 };
 
-export const workerMailboxSpecs = defineCommandSpecs('low', workerMailboxHandlers);
+export const workerMailboxSpecs = defineCommandSpecs('low', workerMailboxHandlers, {
+    // A coordinator's memo for its worker: the sender must coordinate the local
+    // worker session assigned (meshId, taskId), else be on that mesh's roster.
+    deposit_worker_mailbox: { meshSender: 'session_coordinator' },
+}, { meshSender: 'authenticated_peer' });

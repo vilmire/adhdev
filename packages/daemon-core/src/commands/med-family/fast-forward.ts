@@ -17,6 +17,8 @@ import type { CommandRouterResult } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
 import { readMeshDirectDispatchFlag, withMeshDirectDispatch, resolveDryRunVeto } from '../command-args.js';
+import { rosterEvidenceExtra } from '../mesh-sender.js';
+import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
 
 export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
     mesh_init: async (ctx: MedFamilyContext, args: any) => {
@@ -81,10 +83,12 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
                 : undefined;
             let nodeDaemonId: string | undefined;
             let allowAutoPublishSubmoduleMainCommits = false;
+            let resolvedMesh: unknown;
             if (meshId && nodeId) {
                 // preferInline so fast-forward can resolve inline-cache-only clone worktree nodes.
                 const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                 const mesh = meshRecord?.mesh;
+                resolvedMesh = mesh;
                 const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
                 if (!workspace) {
                     workspace = typeof node?.workspace === 'string' ? node.workspace.trim() : '';
@@ -104,8 +108,8 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
             // P2P self-dialed. Equivalent → local.
             const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent(nodeDaemonId, selfDaemonId);
             if (isRemote && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
-                const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'fast_forward_mesh_node', withMeshDirectDispatch(args, { workspace }));
-                return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
+                const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'fast_forward_mesh_node', withMeshDirectDispatch(args, { workspace, ...rosterEvidenceExtra(args, resolvedMesh) }));
+                return unwrapMeshRelayResult(forwarded, { command: 'fast_forward_mesh_node', peerDaemonId: nodeDaemonId }) as CommandRouterResult;
             }
             const result = await (fastForwardMeshNode({
                 meshId: meshId || undefined,
@@ -184,8 +188,9 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
                     : undefined;
                 const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'refine_mesh_node', withMeshDirectDispatch(args, {
                     coordinatorDaemonId: callerCoordinatorDaemonId || selfDaemonId,
+                    ...rosterEvidenceExtra(args, meshRecordForForward?.mesh),
                 }));
-                return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
+                return unwrapMeshRelayResult(forwarded, { command: 'refine_mesh_node', peerDaemonId: nodeDaemonId }) as CommandRouterResult;
             }
         }
 
@@ -269,4 +274,7 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
     },
 };
 
-export const fastForwardSpecs = defineCommandSpecs('med', fastForwardHandlers);
+export const fastForwardSpecs = defineCommandSpecs('med', fastForwardHandlers, {
+    fast_forward_mesh_node: { meshSender: 'any_member_mesh' },
+    refine_mesh_node: { meshSender: 'any_member_mesh' },
+}, { meshSender: 'authenticated_peer' });

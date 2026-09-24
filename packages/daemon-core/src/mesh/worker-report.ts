@@ -253,7 +253,14 @@ export function validateWorkerCompletionReport(raw: unknown): {
             outcome: outcome as WorkerReportOutcome,
             summary,
             ...(handoffNotes ? { handoffNotes } : {}),
-            ...(touchedFiles?.length ? { touchedFiles } : {}),
+            // ★Preserve an EXPLICIT empty array rather than collapsing it to
+            // "absent" on `.length`. `touchedFiles: []` is the worker's statement
+            // "I changed nothing", and checkReportAgainstTaskMode (below) must be
+            // able to tell that apart from the key never being sent at all — that
+            // distinction is what requirement (2) of the invalid_for_task_mode fix
+            // depends on. `undefined` in, `undefined` out; `[]` or non-empty in,
+            // that array out.
+            ...(touchedFiles !== undefined ? { touchedFiles } : {}),
             ...(input.branchState ? { branchState: input.branchState as WorkerBranchState } : {}),
             ...(blockers?.length ? { blockers } : {}),
         },
@@ -570,13 +577,34 @@ function currentHandoffSink(): HandoffNoteSink | null {
 /**
  * The `touchedFiles` rule that depends on the TASK, not on the payload shape.
  *
- * Two halves of one axis, and enforcing only one of them is what produced the
- * measured damage:
- *   - read-only task + non-empty touchedFiles ⇒ REFUSE. The task mode says the
- *     worker was not supposed to change anything; a file list contradicts its
- *     own report, and letting it through records a change nobody authorized.
- *   - code-changing task + empty/absent touchedFiles ⇒ REFUSE. This is the
- *     original requirement, unchanged, now applied where it is actually true.
+ * Three axes, and conflating any two of them is what produced the measured
+ * damage (preview rc.40, task 441a2f87 — a pure inspection task that was not
+ * declared read-only got refused on BOTH its completion and its attempt to
+ * explain the refusal):
+ *
+ *   - read-only task + non-empty touchedFiles ⇒ REFUSE, regardless of outcome.
+ *     The task mode says the worker was not supposed to change anything; a
+ *     file list contradicts its own report, and letting it through records a
+ *     change nobody authorized. This is unconditional — a `blocked` or
+ *     `failed` report making the same false claim is just as wrong.
+ *
+ *   - `blocked` / `failed` on a code-changing task ⇒ NEVER require
+ *     touchedFiles. A worker that could not do the work has nothing to list;
+ *     refusing its report — which is precisely what happened to task
+ *     441a2f87's `blocked` follow-up — hides the blocker from the coordinator
+ *     instead of recording it. The original requirement below applies to
+ *     `completed` only: that is the outcome for which "what did you touch"
+ *     is actually answerable.
+ *
+ *   - `completed` on a code-changing task:
+ *       - touchedFiles MISSING entirely (no top-level key, no handoffNotes)
+ *         ⇒ REFUSE, naming the exact wire field so the worker's next call
+ *         succeeds instead of guessing.
+ *       - touchedFiles an EXPLICIT `[]` (top-level and/or
+ *         handoffNotes.touchedFiles) ⇒ ACCEPT. That is the worker's
+ *         statement "I changed nothing", which is a real and useful answer —
+ *         refusing it is what drove a read-only-shaped worker to invent a
+ *         placeholder path just to get an empty list past this gate.
  *
  * Returns a human-readable reason, or null when the report is consistent.
  *
@@ -603,6 +631,8 @@ function checkReportAgainstTaskMode(
         ...(report.handoffNotes?.touchedFiles || []),
     ];
 
+    // Unconditional: a file list on a read-only task is a contradiction no
+    // matter what outcome the worker reports.
     if (readonly) {
         if (declaredFiles.length) {
             return `task ${identity.taskId} is read-only (taskMode=${task.taskMode || 'readonly'}) but the report declares `
@@ -612,11 +642,24 @@ function checkReportAgainstTaskMode(
         return null;
     }
 
-    // Code-changing task: the file list is what matches this work to future
-    // tasks, so an empty one is the same defect the validator used to catch.
-    if (report.handoffNotes && !report.handoffNotes.touchedFiles.length) {
-        return `task ${identity.taskId} changes code, so handoffNotes.touchedFiles must be non-empty — `
-            + 'it is the key that delivers your note to whoever touches this code next.';
+    // Code-changing task, outcome 'blocked'/'failed': nothing to list. A
+    // worker reporting it could not finish has no touched-file obligation —
+    // requiring one here is what turned a refusal explanation into a second
+    // refusal.
+    if (report.outcome !== 'completed') return null;
+
+    // Code-changing task, outcome 'completed': the file list is what matches
+    // this work to future tasks (and to H1 path-ownership), so SOME statement
+    // about it must be PRESENT — but present-and-empty is an answer, not a
+    // violation. "Present" means either the top-level `touchedFiles` key or a
+    // `handoffNotes` object was sent at all (handoffNotes, when sent, always
+    // carries a touchedFiles array — `[]` included — because the schema
+    // validator requires that key whenever handoffNotes is present).
+    const topLevelProvided = report.touchedFiles !== undefined;
+    const noteFilesProvided = report.handoffNotes !== undefined;
+    if (!topLevelProvided && !noteFilesProvided) {
+        return `task ${identity.taskId} changes code, so it must report touchedFiles — send the wire field `
+            + '`touched_files` (top-level array; `[]` is acceptable if you changed nothing) and call again.';
     }
     return null;
 }

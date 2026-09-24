@@ -687,6 +687,8 @@ export { CommandRegistry, COMMAND_PREFIX_DEFAULTS, defineCommandSpecs, isCommand
 export type { CommandInvalidationTopic, CommandSource, CommandSpec, CommandFamily, CommandSessionAttributes, PrefixDefault } from './commands/command-registry.js';
 export { getDaemonCommandRegistry } from './commands/router.js';
 export { InteractionContextMap } from './commands/interaction-context.js';
+export { MESH_SENDER_DAEMON_ID_ARG, isMeshSenderRefusalResult, readMeshSender } from './commands/mesh-sender.js';
+export type { MeshSenderClass, MeshSenderRefusal } from './commands/mesh-sender.js';
 
 // ── Dashboard subscription topic engine (shared cloud/standalone) ──
 export { TopicSubscriptionRegistry, DEFAULT_GIT_REFRESH_CONCURRENCY, DEFAULT_CHAT_TAIL_FLUSH_DEBOUNCE_MS } from './subscriptions/topic-registry.js';

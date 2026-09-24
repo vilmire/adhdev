@@ -360,3 +360,37 @@ describe('sole producer (C-W5c) — ownerFor / appendHandoff / envelope', () => 
         expect(observed[0].opts?.owner).toEqual({ daemonId: 'daemon_explicit', meshId: 'mesh_explicit' });
     });
 });
+
+// Report gate (live rc.40, 2026-09-24): the WORKER's daemon is the only one that
+// knows whether a session holds a live worker-MCP bind, so the port stamps
+// `reportExpected` on turn_end there; the owner's reducer then awaits the report (R9r).
+describe('createTurnEvidencePort — reportExpected stamp', () => {
+    function portWith(reportExpectedFor?: (sessionId: string) => boolean) {
+        const observed: TurnEvidence[] = [];
+        const port = createTurnEvidencePort({ observe: (e) => { observed.push(e); }, ...(reportExpectedFor ? { reportExpectedFor } : {}) });
+        return { port, observed };
+    }
+
+    it('stamps turn_end of a bound session, and only turn_end', () => {
+        const { port, observed } = portWith((sid) => sid === 'bound');
+        emitTurnEnd(port, { sessionId: 'bound', observedBy: 'cli_fsm', source: 'completion_flush_genuine', strength: 'genuine' });
+        emitTurnStarted(port, { sessionId: 'bound', observedBy: 'cli_fsm', source: 'fsm_edge', retro: false });
+        emitTurnEnd(port, { sessionId: 'unbound', observedBy: 'cli_fsm', source: 'completion_flush_genuine', strength: 'genuine' });
+        expect(observed.map((e) => [e.kind, e.sessionId, (e as { reportExpected?: boolean }).reportExpected])).toEqual([
+            ['turn_end', 'bound', true],
+            ['turn_started', 'bound', undefined],
+            ['turn_end', 'unbound', undefined],
+        ]);
+        for (const e of observed) expect(isTurnEvidence(e)).toBe(true);
+    });
+
+    it('no resolver, or a throwing one, leaves turn_end unstamped (today\'s genuine-end behaviour)', () => {
+        const plain = portWith();
+        emitTurnEnd(plain.port, { sessionId: 's', observedBy: 'cli_fsm', source: 'fsm_edge', strength: 'genuine' });
+        expect((plain.observed[0] as { reportExpected?: boolean }).reportExpected).toBeUndefined();
+        const broken = portWith(() => { throw new Error('registry down'); });
+        emitTurnEnd(broken.port, { sessionId: 's', observedBy: 'cli_fsm', source: 'fsm_edge', strength: 'genuine' });
+        expect(broken.observed).toHaveLength(1);
+        expect((broken.observed[0] as { reportExpected?: boolean }).reportExpected).toBeUndefined();
+    });
+});

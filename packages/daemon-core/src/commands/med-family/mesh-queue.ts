@@ -257,4 +257,4 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
 export const meshQueueSpecs = defineCommandSpecs('med', meshQueueHandlers, {
     get_mesh_queue: { invalidates: ['daemon.metadata'] },
     trigger_mesh_queue: { invalidates: ['daemon.metadata'] },
-});
+}, { meshSender: 'authenticated_peer' });

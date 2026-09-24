@@ -76,4 +76,4 @@ export const diagnosticsHandlers: Record<string, LowFamilyHandler> = {
 
 export const diagnosticsSpecs = defineCommandSpecs('low', diagnosticsHandlers, {
     get_command_history: { sources: ['p2p'] },
-});
+}, { meshSender: 'authenticated_peer' });

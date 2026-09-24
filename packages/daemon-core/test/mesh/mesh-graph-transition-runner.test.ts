@@ -273,7 +273,7 @@ describe('worker report ledger fence (C-W8: turn_attempts, not the retired Stage
                 const gs = store.graphStore();
                 const queueBefore = store.getQueueEntries(id);
                 const attemptBefore = store.turnStore().getAttempt(old.attemptId);
-                const result = acceptWorkerCompletionReport({ token: token.token }, { outcome: 'completed', summary: 'Late completion' });
+                const result = acceptWorkerCompletionReport({ token: token.token }, { outcome: 'completed', summary: 'Late completion', touchedFiles: [] });
                 vi.restoreAllMocks();
 
                 expect.soft(result).toEqual({ accepted: false, refusal: 'rejected_by_reducer', detail: reason === 'reducer_error' ? 'reducer unavailable' : reason });
@@ -305,7 +305,7 @@ describe('worker report ledger fence (C-W8: turn_attempts, not the retired Stage
             // or terminal correction can be accepted (design §4, §9.2.2).
             const token = mintWorkerTaskToken({ meshId: id, taskId: task.id, attemptId: old.attemptId, sessionId: 'worker' });
             const outputBefore = store.graphStore().getLatestOutput(task.id);
-            expect(acceptWorkerCompletionReport({ token: token.token }, { outcome: 'completed', summary: 'Obsolete' })).toEqual({ accepted: false, refusal: 'rejected_by_reducer', detail: 'stale_attempt' });
+            expect(acceptWorkerCompletionReport({ token: token.token }, { outcome: 'completed', summary: 'Obsolete', touchedFiles: [] })).toEqual({ accepted: false, refusal: 'rejected_by_reducer', detail: 'stale_attempt' });
             expect(store.findQueueEntryById(id, task.id)?.status).toBe(status);
             expect(store.graphStore().getLatestOutput(task.id)).toEqual(outputBefore);
             expect(verifyWorkerTaskToken(token.token)).not.toBeNull();
@@ -319,7 +319,7 @@ describe('worker report ledger fence (C-W8: turn_attempts, not the retired Stage
             const store = MeshRuntimeStore.getInstance();
             const attempt = seedMeshAttempt({ meshId: id, taskId: taskA.id, sessionId: 'worker', stage: 'generating' });
             const token = mintWorkerTaskToken({ meshId: id, taskId: taskA.id, attemptId: attempt.attemptId, sessionId: 'worker' });
-            const report = { outcome: 'completed' as const, summary: 'Current completion' };
+            const report = { outcome: 'completed' as const, summary: 'Current completion', touchedFiles: [] as string[] };
             expect(acceptWorkerCompletionReport({ token: token.token }, report)).toMatchObject({ accepted: true, duplicate: false });
             expect(store.findQueueEntryById(id, taskA.id)?.status).toBe('completed');
             expect(store.graphStore().getNode(graphId, nodeA)?.state).toBe('completed');
