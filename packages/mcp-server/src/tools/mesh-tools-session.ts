@@ -70,6 +70,7 @@ import {
 import type {
     MeshContext,
 } from './mesh-tools-internal.js';
+import type { MeshDeliveryMode } from '@adhdev/daemon-core';
 // §8 unit 6 ("mesh_read_chat remote display cutover") — the FIRST hop of the
 // fixed `replica → live P2P read_chat → cached summary` order.
 import { readTranscriptReplicaForDisplay } from './mesh-transcript-replica-read.js';
@@ -304,6 +305,239 @@ export async function meshPruneStaleDirect(
     }, null, 2);
 }
 
+/**
+ * The ONE admission gate for a `mesh_send_task` that names an explicit session
+ * (`session_id`) — shared by the LOCAL and the REMOTE (P2P) branch so the two cannot
+ * drift (preview rc.37: the remote branch had no gate at all and sent
+ * `agent_command send_chat policy:queue` into a generating worker, where the body ran as
+ * an unaccounted turn 2 and the worker's mesh stamp was overwritten).
+ *
+ * Only runs when the session is live and NOT idle and NOT terminal. Returns the JSON
+ * response for a refused / queued / interrupted-and-queued delivery, or null when the
+ * caller should go on to dispatch directly (the decision was `immediate`, or the
+ * status is unrecognised — the historical local fall-through, kept identical here).
+ * Nothing is sent to the session's input on any non-null outcome: a busy session only
+ * ever receives the task through the pinned queue row's claim, which opens the
+ * turn-ledger attempt before the body is written.
+ */
+async function admitExplicitSessionDelivery(
+    ctx: MeshContext,
+    node: Parameters<typeof commandForNode>[1],
+    args: { node_id: string; session_id?: string },
+    p: {
+        session: any;
+        providerType: string;
+        delivery: { mode: MeshDeliveryMode; unrecognized?: string };
+        message: string;
+        taskMode: string | undefined;
+        difficulty: string;
+        taskInput: MeshTaskInput | undefined;
+        readonly: boolean;
+        missionId: string | undefined;
+        ownedPaths: unknown[] | undefined;
+        queueDecision: Record<string, unknown>;
+        orchestrationWarning: Record<string, unknown>;
+    },
+): Promise<string | null> {
+    if (!p.session || isIdleSessionRecord(p.session) || isTerminalSessionRecord(p.session)) return null;
+    const { providerType, message, taskMode, difficulty, taskInput, readonly, missionId, ownedPaths } = p;
+    const sessionStatus = typeof p.session?.status === 'string' ? p.session.status : 'unknown';
+    const { resolveDeliveryDecision } = await import('@adhdev/daemon-core');
+    const { mode: deliveryMode, unrecognized: unrecognizedDeliveryMode } = p.delivery;
+    // Probe the target provider's interrupt capability from its live spec.
+    // Only needed when the caller actually asked to interrupt.
+    let interruptSupported = false;
+    let interruptUnsupportedMessage: string | undefined;
+    let interruptConfidence: string | undefined;
+    if (deliveryMode === 'interrupt') {
+        try {
+            const probe = unwrapCommandPayload(await commandForNode(ctx, node, 'agent_command', {
+                targetSessionId: args.session_id,
+                agentType: providerType,
+                cliType: providerType,
+                providerType: providerType,
+                action: 'interrupt_capability',
+            }));
+            interruptSupported = probe?.supported === true;
+            interruptUnsupportedMessage = typeof probe?.message === 'string' ? probe.message : undefined;
+            interruptConfidence = typeof probe?.confidence === 'string' ? probe.confidence : undefined;
+        } catch (e: any) {
+            // Probe failure is NOT treated as "supported" — fail closed, and say why.
+            interruptSupported = false;
+            interruptUnsupportedMessage = `Could not determine interrupt capability for provider '${providerType}' on node '${args.node_id}': ${e?.message || e}. `
+                + 'Refusing to interrupt on an unverified capability.';
+        }
+    }
+    const policyResult = resolveDeliveryDecision(sessionStatus, {
+        kind: 'task',
+        deliveryMode,
+        interruptSupported,
+        ...(interruptUnsupportedMessage ? { interruptUnsupportedMessage } : {}),
+    });
+    // ── interrupt requested but the provider cannot ──────────────────
+    // Reported as an explicit failure. We do NOT fall through to the queued
+    // branch: the caller asked to change a running session's trajectory, and
+    // silently delivering after the current turn completes is a materially
+    // different outcome that must not be reported as success.
+    if (policyResult.decision === 'rejected' && policyResult.reason === 'interrupt_unsupported_for_provider') {
+        return JSON.stringify({
+            success: false,
+            dispatched: false,
+            decision: 'interrupt_unsupported',
+            reason: policyResult.reason,
+            nodeId: args.node_id,
+            sessionId: args.session_id,
+            sessionStatus,
+            providerType: providerType,
+            requestedDeliveryMode: deliveryMode,
+            message: policyResult.message,
+            nextAction: `Re-send this task with delivery_mode 'when_idle' to have it delivered when session '${args.session_id}' finishes on its own, `
+                + 'or stop the session and launch a fresh one if the in-flight work must not complete.',
+        });
+    }
+    // ── interrupt: abort the running turn, then let the queued-delivery
+    //    funnel deliver the task on the session's idle transition ──────
+    if (policyResult.decision === 'interrupt') {
+        const interruptResult = unwrapCommandPayload(await commandForNode(ctx, node, 'agent_command', {
+            targetSessionId: args.session_id,
+            agentType: providerType,
+            cliType: providerType,
+            providerType: providerType,
+            action: 'interrupt_turn',
+            dispatchSource: 'mesh-tools-session:mesh_send_task:interrupt',
+        }));
+        if (interruptResult?.success !== true || interruptResult?.interrupted !== true) {
+            // The stop key did not go out. Report the failure — do NOT queue
+            // behind a turn the caller explicitly wanted cancelled.
+            return JSON.stringify({
+                success: false,
+                dispatched: false,
+                decision: 'interrupt_failed',
+                reason: interruptResult?.reason || 'interrupt_rejected',
+                nodeId: args.node_id,
+                sessionId: args.session_id,
+                sessionStatus,
+                providerType: providerType,
+                error: interruptResult?.error || 'The provider did not accept the interrupt.',
+                nextAction: `Nothing was cancelled and nothing was delivered. Re-send with delivery_mode 'when_idle', `
+                    + 'or inspect the session with mesh_read_terminal before retrying.',
+            });
+        }
+        // The turn is cancelled. Deliver via the SAME pinned-queue funnel the
+        // when_idle path uses (enqueueTask + the existing idle-transition
+        // claim), rather than writing the prompt now: the TUI needs a moment
+        // to unwind the aborted turn and repaint an idle prompt, and only the
+        // FSM knows when that has actually happened. Reusing the funnel means
+        // no new injection path and no bypass of the PTY send gate.
+        const interruptedTask = ((await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message: message, options: {
+            targetNodeId: args.node_id,
+            targetSessionId: args.session_id,
+            taskMode,
+            difficulty,
+            // MESH-IMAGE-DISPATCH: the queued task carries the same envelope the
+            // direct dispatch below forwards — the claim dispatch delivers it.
+            ...(taskInput ? { input: taskInput } : {}),
+            ...(readonly ? { readonly: true } : {}),
+            ...(missionId ? { missionId } : {}),
+            ...(ownedPaths ? { ownedPaths } : {}),
+            ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
+        }, decision: p.queueDecision })).entry as unknown as MeshWorkQueueEntry);
+        return JSON.stringify({
+            success: true,
+            dispatched: false,
+            decision: 'interrupted_and_queued',
+            taskId: interruptedTask.id,
+            reason: policyResult.reason,
+            nodeId: args.node_id,
+            sessionId: args.session_id,
+            sessionStatus,
+            providerType: providerType,
+            taskMode: taskMode || undefined,
+            interrupt: {
+                sent: true,
+                key: interruptResult?.keyName,
+                // 'declared' means the stop key is declared by the spec but the
+                // busy->idle effect was not measured live for this provider.
+                confidence: interruptResult?.confidence || interruptConfidence || 'declared',
+            },
+            turnDiscarded: true,
+            message: `Interrupted the in-flight turn on session '${args.session_id}' via ${interruptResult?.keyName || 'the stop control'}. `
+                + 'That turn was cancelled and its unfinished work is lost. '
+                + `Task '${interruptedTask.id}' is pinned to this session and delivers as soon as it reports idle.`,
+            nextAction: interruptResult?.confidence === 'proven'
+                ? `Track with mesh_status; no manual resend needed.`
+                : `Interrupt support for '${providerType}' is DECLARED by its spec but not live-verified. `
+                    + 'Confirm with mesh_status that the session returned to idle and picked up the task; if it did not, use mesh_read_terminal to inspect.',
+            ...(unrecognizedDeliveryMode ? { deliveryModeWarning: `Unrecognized delivery_mode '${unrecognizedDeliveryMode}' ignored.` } : {}),
+            ...((await buildMissionInactiveWarning(ctx, missionId)) ?? {}),
+            // Orchestration-decision advisories ride every mesh_send_task outcome (the
+            // decision itself is recorded on the enqueue above).
+            ...p.orchestrationWarning,
+        });
+    }
+    if (policyResult.decision === 'queued') {
+        // RC17-QUEUED-DELIVERY-STRANDED: this branch used to create a standalone
+        // SessionDelivery row (status:'queued') and hand the caller a deliveryId to
+        // poll. Nothing in the codebase ever reads getActiveSessionDeliveries() to
+        // re-drive that row — the queue-claim funnel (tryAssignQueueTask, wired to
+        // fire automatically on the session's idle transition in
+        // mesh-event-forwarding.ts) only claims rows created via enqueueTask/
+        // claimNextTask. The record was a dead end: a busy session that went idle
+        // left the delivery permanently stuck at 'queued' with no consumer ever
+        // flushing it (live repro: a Codex session that went generating→idle ~10s
+        // after launch never saw its queued delivery deliver).
+        //
+        // Fix: route through enqueueTask with targetNodeId/targetSessionId pinned to
+        // this exact node+session, the same call the untargeted branch below already
+        // uses. claimNextTask's candidate query (mesh-runtime-store.ts) filters
+        // strictly on targetSessionId equivalence, so only this session can claim it,
+        // and the existing agent:generating_completed / agent:ready handlers already
+        // call tryAssignQueueTask the moment this session goes idle — no new dispatch
+        // path, no new idle-transition wiring, just reusing the funnel that already
+        // auto-flushes reliably.
+        const queuedTask = ((await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message: message, options: {
+            targetNodeId: args.node_id,
+            targetSessionId: args.session_id,
+            taskMode,
+            difficulty,
+            // MESH-IMAGE-DISPATCH: the queued task carries the same envelope the
+            // direct dispatch below forwards — the claim dispatch delivers it.
+            ...(taskInput ? { input: taskInput } : {}),
+            ...(readonly ? { readonly: true } : {}),
+            ...(missionId ? { missionId } : {}),
+            ...(ownedPaths ? { ownedPaths } : {}),
+            ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
+        }, decision: p.queueDecision })).entry as unknown as MeshWorkQueueEntry);
+        return JSON.stringify({
+            success: true,
+            dispatched: false,
+            decision: 'queued_delivery',
+            taskId: queuedTask.id,
+            reason: policyResult.reason,
+            nodeId: args.node_id,
+            sessionId: args.session_id,
+            sessionStatus,
+            taskMode: taskMode || undefined,
+            message: policyResult.message,
+            nextAction: `Task '${queuedTask.id}' is queued and pinned to session '${args.session_id}' — it auto-delivers the moment the session goes idle. Use mesh_status or mesh_task_history to track it; no manual resend needed.`,
+            // A misspelled delivery_mode silently became when_idle. Say so — a
+            // caller who meant to interrupt must not read this queued result as
+            // "my steering landed".
+            ...(unrecognizedDeliveryMode
+                ? {
+                    deliveryModeWarning: `Unrecognized delivery_mode '${unrecognizedDeliveryMode}' was ignored; this task was queued (when_idle) and the running turn was NOT interrupted. `
+                        + "Valid values are 'when_idle' and 'interrupt'.",
+                }
+                : {}),
+            ...((await buildMissionInactiveWarning(ctx, missionId)) ?? {}),
+            // Orchestration-decision advisories ride every mesh_send_task outcome (the
+            // decision itself is recorded on the enqueue above).
+            ...p.orchestrationWarning,
+        });
+    }
+    return null;
+}
+
 export async function meshSendTask(
     ctx: MeshContext,
     args: {
@@ -414,6 +648,25 @@ export async function meshSendTask(
             }
             : {}),
         ...(decisionMissing ? { orchestrationDecisionMissing: true } : {}),
+    };
+    // DELIVERY-MODE (both branches): normalized ONCE here so the local and the remote
+    // (P2P) dispatch read the same mode, and a typo is reported on every outcome instead
+    // of only on the local busy path. An unrecognized value falls back to when_idle.
+    const { normalizeDeliveryMode } = await import('@adhdev/daemon-core');
+    const delivery = normalizeDeliveryMode(args.delivery_mode ?? args.deliveryMode) as { mode: MeshDeliveryMode; unrecognized?: string };
+    const deliveryModeWarning = delivery.unrecognized
+        ? { deliveryModeWarning: `Unrecognized delivery_mode '${delivery.unrecognized}' was ignored (treated as when_idle). Valid values are 'when_idle' and 'interrupt'.` }
+        : {};
+    // ORCHESTRATION-DECISION on the queue exits: a mesh_send_task that ends up as a queue
+    // row (busy session → queued / interrupted-and-queued, or the untargeted pull) records
+    // the caller's decision on that enqueue exactly like mesh_enqueue_task does, instead of
+    // dropping it. (Recorded as the single-enqueue record, not the direct one — a queue row
+    // is not a direct dispatch; see recordDirectDispatchDecision's note.)
+    const queueDecision: Record<string, unknown> = {
+        ...(missionId ? { missionId } : {}),
+        ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
+        decision: orchestration.decision,
+        ...(decisionMissing ? { decisionMissing: true } : {}),
     };
     const modeValidation = validateMeshTaskModeRequest(requestedTaskMode, message, readonly);
     if (!modeValidation.valid) {
@@ -539,6 +792,22 @@ export async function meshSendTask(
         const isLocalNode = isLocalControlPlaneNode(ctx, node);
         if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
             const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id || ''));
+            // BUSY-SESSION GATE (remote parity, preview rc.37): an explicit target session that
+            // is live and busy gets the SAME admission decision the local branch applies —
+            // queued_delivery / interrupted_and_queued / interrupt_unsupported / interrupt_failed —
+            // BEFORE any direct-dispatch attempt is opened and before anything is sent. Without it
+            // this branch sent `agent_command send_chat` into a generating worker.
+            if (args.session_id && explicitTargetSession) {
+                const remoteAdmission = await admitExplicitSessionDelivery(ctx, node, args, {
+                    session: explicitTargetSession,
+                    providerType: cached?.providerType || resolveSessionProviderType(explicitTargetSession) || '',
+                    delivery,
+                    message, taskMode, difficulty, taskInput, readonly, missionId, ownedPaths,
+                    queueDecision,
+                    orchestrationWarning,
+                });
+                if (remoteAdmission !== null) return remoteAdmission;
+            }
             const taskId = randomUUID();
             const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
             // F1: materialize the worker-protocol footer (and any relevant handoff
@@ -596,7 +865,10 @@ export async function meshSendTask(
                 verifiedSession: explicitTargetSession,
                 // D2: the task id IS this dispatch's message identity (the mesh_direct
                 // attempt records the same), so a retried send is ONE message to the
-                // worker's funnel; an idle-target direct dispatch is plain `queue`.
+                // worker's funnel; an idle-target direct dispatch is plain `queue`. The admission
+                // gate above already routed every busy-session outcome (interrupt included)
+                // through the pinned queue, so what reaches here is an idle target or a
+                // sessionless auto-pick (idle sessions only).
                 messageId: taskId,
                 policy: { mode: 'queue' },
                 origin: 'mcp',
@@ -720,6 +992,7 @@ export async function meshSendTask(
                 // GRAPH-MEASUREMENT-DIRECT: advisory only, and only on a dispatch that
                 // actually happened — a failed dispatch made no routing decision to report on.
                 ...(result.success ? orchestrationWarning : {}),
+                ...deliveryModeWarning,
             });
         }
 
@@ -806,202 +1079,17 @@ export async function meshSendTask(
                 });
             }
             // Apply delivery policy: check session status and decide immediate vs queued vs rejected.
-            // Busy/generating sessions must not receive immediate send_chat injection.
-            if (explicitTargetSession && !isIdleSessionRecord(explicitTargetSession) && !isTerminalSessionRecord(explicitTargetSession)) {
-                const sessionStatus = typeof explicitTargetSession?.status === 'string' ? explicitTargetSession.status : 'unknown';
-                const { resolveDeliveryDecision, normalizeDeliveryMode } = await import('@adhdev/daemon-core');
-                // Delivery mode: 'when_idle' (default, never disturbs a running turn) or
-                // 'interrupt' (abort the in-flight turn, then deliver). An unrecognized
-                // value normalizes to when_idle AND is reported back, so a typo can never
-                // be silently read as consent to destroy a turn.
-                const modeInput = args.delivery_mode ?? args.deliveryMode;
-                const { mode: deliveryMode, unrecognized: unrecognizedDeliveryMode } = normalizeDeliveryMode(modeInput);
-                // Probe the target provider's interrupt capability from its live spec.
-                // Only needed when the caller actually asked to interrupt.
-                let interruptSupported = false;
-                let interruptUnsupportedMessage: string | undefined;
-                let interruptConfidence: string | undefined;
-                if (deliveryMode === 'interrupt') {
-                    try {
-                        const probe = unwrapCommandPayload(await commandForNode(ctx, node, 'agent_command', {
-                            targetSessionId: args.session_id,
-                            agentType: resolvedProviderType,
-                            cliType: resolvedProviderType,
-                            providerType: resolvedProviderType,
-                            action: 'interrupt_capability',
-                        }));
-                        interruptSupported = probe?.supported === true;
-                        interruptUnsupportedMessage = typeof probe?.message === 'string' ? probe.message : undefined;
-                        interruptConfidence = typeof probe?.confidence === 'string' ? probe.confidence : undefined;
-                    } catch (e: any) {
-                        // Probe failure is NOT treated as "supported" — fail closed, and say why.
-                        interruptSupported = false;
-                        interruptUnsupportedMessage = `Could not determine interrupt capability for provider '${resolvedProviderType}' on node '${args.node_id}': ${e?.message || e}. `
-                            + 'Refusing to interrupt on an unverified capability.';
-                    }
-                }
-                const policyResult = resolveDeliveryDecision(sessionStatus, {
-                    kind: 'task',
-                    deliveryMode,
-                    interruptSupported,
-                    ...(interruptUnsupportedMessage ? { interruptUnsupportedMessage } : {}),
-                });
-                // ── interrupt requested but the provider cannot ──────────────────
-                // Reported as an explicit failure. We do NOT fall through to the queued
-                // branch: the caller asked to change a running session's trajectory, and
-                // silently delivering after the current turn completes is a materially
-                // different outcome that must not be reported as success.
-                if (policyResult.decision === 'rejected' && policyResult.reason === 'interrupt_unsupported_for_provider') {
-                    return JSON.stringify({
-                        success: false,
-                        dispatched: false,
-                        decision: 'interrupt_unsupported',
-                        reason: policyResult.reason,
-                        nodeId: args.node_id,
-                        sessionId: args.session_id,
-                        sessionStatus,
-                        providerType: resolvedProviderType,
-                        requestedDeliveryMode: deliveryMode,
-                        message: policyResult.message,
-                        nextAction: `Re-send this task with delivery_mode 'when_idle' to have it delivered when session '${args.session_id}' finishes on its own, `
-                            + 'or stop the session and launch a fresh one if the in-flight work must not complete.',
-                    });
-                }
-                // ── interrupt: abort the running turn, then let the queued-delivery
-                //    funnel deliver the task on the session's idle transition ──────
-                if (policyResult.decision === 'interrupt') {
-                    const interruptResult = unwrapCommandPayload(await commandForNode(ctx, node, 'agent_command', {
-                        targetSessionId: args.session_id,
-                        agentType: resolvedProviderType,
-                        cliType: resolvedProviderType,
-                        providerType: resolvedProviderType,
-                        action: 'interrupt_turn',
-                        dispatchSource: 'mesh-tools-session:mesh_send_task:interrupt',
-                    }));
-                    if (interruptResult?.success !== true || interruptResult?.interrupted !== true) {
-                        // The stop key did not go out. Report the failure — do NOT queue
-                        // behind a turn the caller explicitly wanted cancelled.
-                        return JSON.stringify({
-                            success: false,
-                            dispatched: false,
-                            decision: 'interrupt_failed',
-                            reason: interruptResult?.reason || 'interrupt_rejected',
-                            nodeId: args.node_id,
-                            sessionId: args.session_id,
-                            sessionStatus,
-                            providerType: resolvedProviderType,
-                            error: interruptResult?.error || 'The provider did not accept the interrupt.',
-                            nextAction: `Nothing was cancelled and nothing was delivered. Re-send with delivery_mode 'when_idle', `
-                                + 'or inspect the session with mesh_read_terminal before retrying.',
-                        });
-                    }
-                    // The turn is cancelled. Deliver via the SAME pinned-queue funnel the
-                    // when_idle path uses (enqueueTask + the existing idle-transition
-                    // claim), rather than writing the prompt now: the TUI needs a moment
-                    // to unwind the aborted turn and repaint an idle prompt, and only the
-                    // FSM knows when that has actually happened. Reusing the funnel means
-                    // no new injection path and no bypass of the PTY send gate.
-                    const interruptedTask = ((await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message: message, options: {
-                        targetNodeId: args.node_id,
-                        targetSessionId: args.session_id,
-                        taskMode,
-                        difficulty,
-                        // MESH-IMAGE-DISPATCH: the queued task carries the same envelope the
-                        // direct dispatch below forwards — the claim dispatch delivers it.
-                        ...(taskInput ? { input: taskInput } : {}),
-                        ...(readonly ? { readonly: true } : {}),
-                        ...(missionId ? { missionId } : {}),
-                        ...(ownedPaths ? { ownedPaths } : {}),
-                        ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
-                    } })).entry as unknown as MeshWorkQueueEntry);
-                    return JSON.stringify({
-                        success: true,
-                        dispatched: false,
-                        decision: 'interrupted_and_queued',
-                        taskId: interruptedTask.id,
-                        reason: policyResult.reason,
-                        nodeId: args.node_id,
-                        sessionId: args.session_id,
-                        sessionStatus,
-                        providerType: resolvedProviderType,
-                        taskMode: taskMode || undefined,
-                        interrupt: {
-                            sent: true,
-                            key: interruptResult?.keyName,
-                            // 'declared' means the stop key is declared by the spec but the
-                            // busy->idle effect was not measured live for this provider.
-                            confidence: interruptResult?.confidence || interruptConfidence || 'declared',
-                        },
-                        turnDiscarded: true,
-                        message: `Interrupted the in-flight turn on session '${args.session_id}' via ${interruptResult?.keyName || 'the stop control'}. `
-                            + 'That turn was cancelled and its unfinished work is lost. '
-                            + `Task '${interruptedTask.id}' is pinned to this session and delivers as soon as it reports idle.`,
-                        nextAction: interruptResult?.confidence === 'proven'
-                            ? `Track with mesh_status; no manual resend needed.`
-                            : `Interrupt support for '${resolvedProviderType}' is DECLARED by its spec but not live-verified. `
-                                + 'Confirm with mesh_status that the session returned to idle and picked up the task; if it did not, use mesh_read_terminal to inspect.',
-                        ...(unrecognizedDeliveryMode ? { deliveryModeWarning: `Unrecognized delivery_mode '${unrecognizedDeliveryMode}' ignored.` } : {}),
-                        ...((await buildMissionInactiveWarning(ctx, missionId)) ?? {}),
-                    });
-                }
-                if (policyResult.decision === 'queued') {
-                    // RC17-QUEUED-DELIVERY-STRANDED: this branch used to create a standalone
-                    // SessionDelivery row (status:'queued') and hand the caller a deliveryId to
-                    // poll. Nothing in the codebase ever reads getActiveSessionDeliveries() to
-                    // re-drive that row — the queue-claim funnel (tryAssignQueueTask, wired to
-                    // fire automatically on the session's idle transition in
-                    // mesh-event-forwarding.ts) only claims rows created via enqueueTask/
-                    // claimNextTask. The record was a dead end: a busy session that went idle
-                    // left the delivery permanently stuck at 'queued' with no consumer ever
-                    // flushing it (live repro: a Codex session that went generating→idle ~10s
-                    // after launch never saw its queued delivery deliver).
-                    //
-                    // Fix: route through enqueueTask with targetNodeId/targetSessionId pinned to
-                    // this exact node+session, the same call the untargeted branch below already
-                    // uses. claimNextTask's candidate query (mesh-runtime-store.ts) filters
-                    // strictly on targetSessionId equivalence, so only this session can claim it,
-                    // and the existing agent:generating_completed / agent:ready handlers already
-                    // call tryAssignQueueTask the moment this session goes idle — no new dispatch
-                    // path, no new idle-transition wiring, just reusing the funnel that already
-                    // auto-flushes reliably.
-                    const queuedTask = ((await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message: message, options: {
-                        targetNodeId: args.node_id,
-                        targetSessionId: args.session_id,
-                        taskMode,
-                        difficulty,
-                        // MESH-IMAGE-DISPATCH: the queued task carries the same envelope the
-                        // direct dispatch below forwards — the claim dispatch delivers it.
-                        ...(taskInput ? { input: taskInput } : {}),
-                        ...(readonly ? { readonly: true } : {}),
-                        ...(missionId ? { missionId } : {}),
-                        ...(ownedPaths ? { ownedPaths } : {}),
-                        ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
-                    } })).entry as unknown as MeshWorkQueueEntry);
-                    return JSON.stringify({
-                        success: true,
-                        dispatched: false,
-                        decision: 'queued_delivery',
-                        taskId: queuedTask.id,
-                        reason: policyResult.reason,
-                        nodeId: args.node_id,
-                        sessionId: args.session_id,
-                        sessionStatus,
-                        taskMode: taskMode || undefined,
-                        message: policyResult.message,
-                        nextAction: `Task '${queuedTask.id}' is queued and pinned to session '${args.session_id}' — it auto-delivers the moment the session goes idle. Use mesh_status or mesh_task_history to track it; no manual resend needed.`,
-                        // A misspelled delivery_mode silently became when_idle. Say so — a
-                        // caller who meant to interrupt must not read this queued result as
-                        // "my steering landed".
-                        ...(unrecognizedDeliveryMode
-                            ? {
-                                deliveryModeWarning: `Unrecognized delivery_mode '${unrecognizedDeliveryMode}' was ignored; this task was queued (when_idle) and the running turn was NOT interrupted. `
-                                    + "Valid values are 'when_idle' and 'interrupt'.",
-                            }
-                            : {}),
-                        ...((await buildMissionInactiveWarning(ctx, missionId)) ?? {}),
-                    });
-                }
-            }
+            // Busy/generating sessions must not receive immediate send_chat injection. The gate
+            // is shared with the remote branch above (admitExplicitSessionDelivery).
+            const localAdmission = await admitExplicitSessionDelivery(ctx, node, args, {
+                session: explicitTargetSession,
+                providerType: resolvedProviderType,
+                delivery,
+                message, taskMode, difficulty, taskInput, readonly, missionId, ownedPaths,
+                queueDecision,
+                orchestrationWarning,
+            });
+            if (localAdmission !== null) return localAdmission;
 
             // Detect whether the session was idle at dispatch time. An idle session that
             // receives agent_command/send_chat should transition to generating. If it stays
@@ -1213,6 +1301,7 @@ export async function meshSendTask(
                 ...((await buildMissionInactiveWarning(ctx, missionId)) ?? {}),
                 // GRAPH-MEASUREMENT-DIRECT: advisory only — never blocks, never re-routes.
                 ...orchestrationWarning,
+                ...deliveryModeWarning,
             });
         }
 
@@ -1234,7 +1323,7 @@ export async function meshSendTask(
             ...(missionId ? { missionId } : {}),
             ...(ownedPaths ? { ownedPaths } : {}),
             ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
-        } })).entry as unknown as MeshWorkQueueEntry);
+        }, decision: queueDecision })).entry as unknown as MeshWorkQueueEntry);
 
         const queueTrigger = await triggerMeshQueueAndReport(ctx);
 
@@ -1251,6 +1340,8 @@ export async function meshSendTask(
             queueTrigger,
             ...buildQueueTriggerGuidance(queueTrigger),
             ...((await buildMissionInactiveWarning(ctx, missionId)) ?? {}),
+            ...orchestrationWarning,
+            ...deliveryModeWarning,
         };
         if (pendingEvents.length > 0) {
             result.pendingCoordinatorEvents = pendingEvents;
@@ -1350,15 +1441,31 @@ export async function meshReadChat(
     // ForDisplay` never throws and returns null for every non-answer, so the
     // two hops below are reached unchanged.
     let replicaFallbackReason: string | null = null;
+    let providerSessionWarning: Record<string, unknown> = {};
+    // An EXPLICIT provider_session_id asks for one provider conversation. The replica is
+    // keyed by (owner daemon, runtime session) and always holds that session's CURRENT
+    // conversation, so it can only answer when its snapshot names the same provider
+    // session; otherwise the read falls through to the live read_chat (which honours
+    // providerSessionId) and says so — never a silent answer for a different conversation.
+    const requestedProviderSessionId = typeof args.provider_session_id === 'string' && args.provider_session_id.trim()
+        ? args.provider_session_id.trim()
+        : undefined;
     if (!isLocalNode && ctx.transport instanceof IpcTransport && node.daemonId) {
         const replica = await readTranscriptReplicaForDisplay(ctx.transport, {
             ownerDaemonId: node.daemonId,
             rawSessionId: args.session_id,
         });
-        if (replica.payload) {
+        const replicaProviderSessionId = typeof replica.payload?.providerSessionId === 'string' ? replica.payload.providerSessionId : '';
+        if (replica.payload && requestedProviderSessionId && replicaProviderSessionId !== requestedProviderSessionId) {
+            replicaFallbackReason = 'provider_session_mismatch';
+            providerSessionWarning = {
+                providerSessionWarning: `The transcript replica holds provider session '${replicaProviderSessionId || 'unknown'}', not the requested '${requestedProviderSessionId}'; read the live session instead.`,
+            };
+        } else if (replica.payload) {
             return withPending(renderMeshReadChatPayload(replica.payload, args));
+        } else {
+            replicaFallbackReason = replica.fallbackReason;
         }
-        replicaFallbackReason = replica.fallbackReason;
     }
 
     let result: any;
@@ -1381,7 +1488,7 @@ export async function meshReadChat(
         if (isLocalNode || !isP2pRelayTransportFailure(e)) throw e;
         return withPending(await buildMeshReadChatCacheFallback(ctx, args, node, e));
     }
-    return withPending(renderMeshReadChatPayload(unwrapCommandPayload(result) as Record<string, any>, args, {
+    return withPending(renderMeshReadChatPayload({ ...(unwrapCommandPayload(result) as Record<string, any>), ...providerSessionWarning }, args, {
         fallbackReason: replicaFallbackReason,
     }));
 }
@@ -1446,13 +1553,22 @@ function renderMeshReadChatPayload(
                     ? { omittedBefore: payload.omittedBefore === true, stale: payload.stale === true }
                     : {}),
                 ...sourceTelemetry,
+                ...(payload.providerSessionWarning ? { providerSessionWarning: payload.providerSessionWarning } : {}),
                 ...(payload.pollingAdvisory ? { pollingAdvisory: payload.pollingAdvisory } : {}),
             },
             null,
             2,
         );
     }
-    return JSON.stringify({ ...payload, ...sourceTelemetry }, null, 2);
+    // compact:false still honours `tail`: keep only the last N messages (a replica payload
+    // is the whole retained transcript; a live read already asked for tailLimit=N, so this
+    // is a no-op there) and say how many were left out.
+    const tail = typeof args.tail === 'number' && Number.isInteger(args.tail) && args.tail > 0 ? args.tail : undefined;
+    const messages = Array.isArray(payload.messages) ? payload.messages : undefined;
+    const tailed = tail !== undefined && messages && messages.length > tail
+        ? { messages: messages.slice(-tail), tailOmittedMessageCount: messages.length - tail }
+        : {};
+    return JSON.stringify({ ...payload, ...tailed, ...sourceTelemetry }, null, 2);
 }
 
 export async function meshReadDebug(

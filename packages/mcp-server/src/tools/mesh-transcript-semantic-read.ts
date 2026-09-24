@@ -64,6 +64,7 @@ import {
     type TranscriptConsumerFallbackReason,
     type TranscriptConsumerId,
 } from '@adhdev/daemon-core/mesh/transcript-read-model-consumers';
+import { unwrapOneLevel } from './mesh-session-helpers.js';
 
 /** Narrow local-command capability — same rationale as unit 6's transport type. */
 export interface TranscriptReplicaTransport {
@@ -128,15 +129,15 @@ export interface SemanticTranscriptReadRequest {
     readonly roster?: Readonly<Record<TranscriptConsumerId, { readonly enabled: boolean }>>;
 }
 
+/**
+ * Delegates to the shared `unwrapOneLevel` (mesh-session-helpers.ts) — mirrors
+ * unit 6's `unwrap` and `unwrapCommandPayload`'s "prefer an object
+ * payload/result" rule from one place instead of three subtly-different
+ * copies. mesh-session-helpers.js is a leaf module, not the mesh-tools
+ * barrel, so this adds no import-cycle risk.
+ */
 function unwrap(result: any): any {
-    // Mirrors unit 6's local `unwrap` (and `unwrapCommandPayload`): the IPC layer
-    // sometimes nests the handler's object one level down. Kept local so this
-    // module has no dependency on the mesh-tools barrel.
-    if (result && typeof result === 'object') {
-        if (result.payload && typeof result.payload === 'object') return result.payload;
-        if (result.result && typeof result.result === 'object') return result.result;
-    }
-    return result;
+    return unwrapOneLevel(result);
 }
 
 const FALLBACK_REASONS = new Set<string>([

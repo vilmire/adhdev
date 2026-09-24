@@ -17,7 +17,10 @@ import {
     buildMeshNodeCapabilityTags,
     commandForNode,
     compactChatPayload,
+    extractStatusMetadataSessions,
     findOptionalNodeWithRefresh,
+    isIdleSessionRecord,
+    readSessionRecordId,
     isWeakCompletionEvidence,
     isMeshNodeHealthLaunchable,
     resolveEffectiveMeshNodeHealth,
@@ -994,6 +997,7 @@ export async function meshMagiReview(
 
     const mode = readString(args.mode) as MagiMode | '';
     const requireIndependentEvidence = (args.require_independent_evidence ?? args.requireIndependentEvidence) !== false;
+    const autoCleanupArg = typeof (args.auto_cleanup ?? args.autoCleanup) === 'boolean' ? (args.auto_cleanup ?? args.autoCleanup) as boolean : undefined;
     const wait = args.wait !== false;
     const waitTimeoutMs = resolveMagiWaitTimeoutMs(args.wait_timeout_ms ?? args.waitTimeoutMs);
 
@@ -1068,6 +1072,12 @@ export async function meshMagiReview(
         question,
         replicaCount: replicaRecords.length,
         taskKind,
+        // wait:false → mesh_magi_collect runs the synthesis + cleanup later, in another
+        // call that only has the group id: persist the caller's choices so collect honours
+        // them (an auto_cleanup:false review must never have its sessions deleted by a
+        // collect that fell back to the policy default).
+        ...(typeof autoCleanupArg === 'boolean' ? { autoCleanup: autoCleanupArg } : {}),
+        requireIndependentEvidence,
     });
 
     // 5. Trigger queue pickup. This is the SOLE dispatch path for every replica,
@@ -1128,7 +1138,16 @@ export async function meshMagiReview(
         return JSON.stringify({
             ...baseResult,
             waited: false,
-            pollWith: { tool: 'mesh_magi_collect', args: { consensus_group_id: consensusGroupId } },
+            // The dispatch record carries auto_cleanup / require_independent_evidence, so
+            // collect honours them without being told again; echoed here for visibility.
+            pollWith: {
+                tool: 'mesh_magi_collect',
+                args: {
+                    consensus_group_id: consensusGroupId,
+                    ...(autoCleanupArg !== undefined ? { auto_cleanup: autoCleanupArg } : {}),
+                    ...(requireIndependentEvidence === false ? { require_independent_evidence: false } : {}),
+                },
+            },
             nextAction: `Replicas are running. Drive off mission completion / pendingCoordinatorEvents rather than polling chat, then collect + synthesize once with mesh_magi_collect({ consensus_group_id: '${consensusGroupId}' }).`,
         }, null, 2);
     }
@@ -1167,7 +1186,7 @@ export async function meshMagiReview(
     // Post-review auto-cleanup (default ON): stop+delete ONLY the worker sessions this
     // fan-out auto-launched, gated terminal. Re-read the replica tasks from the live queue
     // so we see their final assignedSessionId / autoLaunch.sessionId. Best-effort.
-    const cleanupMode = resolveMagiAutoCleanupMode(ctx, args.auto_cleanup ?? args.autoCleanup);
+    const cleanupMode = resolveMagiAutoCleanupMode(ctx, autoCleanupArg);
     const cleanupReplicaTasks = findMagiReplicaTasks(await readQueueFromDaemon(ctx), consensusGroupId);
     const cleanup = await cleanupMagiAutoLaunchedSessions(ctx, {
         replicaTasks: cleanupReplicaTasks,
@@ -1228,9 +1247,10 @@ export async function meshMagiCollect(
     // right schema parser is used (collect rediscovers replicas from the queue, not the call).
     // An explicit task_kind arg overrides (escape hatch if the dispatched ledger was pruned).
     const explicitKind = args.task_kind ?? args.taskKind;
+    const dispatchSettings = await recoverMagiDispatchSettings(ctx, consensusGroupId);
     const taskKind = explicitKind !== undefined
         ? normalizeMagiTaskKind(explicitKind)
-        : await recoverMagiTaskKind(ctx, consensusGroupId);
+        : dispatchSettings.taskKind;
 
     const replicaTasks = findMagiReplicaTasks(await readQueueFromDaemon(ctx), consensusGroupId);
     if (replicaTasks.length === 0) {
@@ -1242,7 +1262,11 @@ export async function meshMagiCollect(
         });
     }
 
-    const requireIndependentEvidence = (args.require_independent_evidence ?? args.requireIndependentEvidence) !== false;
+    const requireIndependentEvidenceArg = args.require_independent_evidence ?? args.requireIndependentEvidence;
+    // Explicit collect args override; otherwise the settings the review was dispatched with.
+    const requireIndependentEvidence = typeof requireIndependentEvidenceArg === 'boolean'
+        ? requireIndependentEvidenceArg
+        : dispatchSettings.requireIndependentEvidence ?? true;
     // Default to a SNAPSHOT (wait=false): poll-by-group is the async path, so the
     // common case is "collect whatever finished so far". Pass wait=true to block for
     // the remaining replicas up to wait_timeout_ms.
@@ -1281,7 +1305,8 @@ export async function meshMagiCollect(
 
     // Post-collect auto-cleanup (default ON), gated terminal so a partial snapshot never
     // kills still-generating replicas. Reuse the rediscovered replicaTasks. Best-effort.
-    const cleanupMode = resolveMagiAutoCleanupMode(ctx, args.auto_cleanup ?? args.autoCleanup);
+    const autoCleanupArg = args.auto_cleanup ?? args.autoCleanup;
+    const cleanupMode = resolveMagiAutoCleanupMode(ctx, typeof autoCleanupArg === 'boolean' ? autoCleanupArg : dispatchSettings.autoCleanup);
     const cleanup = await cleanupMagiAutoLaunchedSessions(ctx, {
         replicaTasks,
         terminal: collected.terminal,
@@ -1564,7 +1589,7 @@ export function classifyStaleReplicas(
  */
 async function persistMagiDispatched(
     ctx: MeshContext,
-    args: { consensusGroupId: string; missionId?: string; panel?: string; question?: string; replicaCount: number; taskKind?: MagiTaskKind },
+    args: { consensusGroupId: string; missionId?: string; panel?: string; question?: string; replicaCount: number; taskKind?: MagiTaskKind; autoCleanup?: boolean; requireIndependentEvidence?: boolean },
 ): Promise<void> {
     try {
         await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
@@ -1580,28 +1605,39 @@ async function persistMagiDispatched(
                 // (which rediscovers replicas from the queue, not the original call)
                 // re-derives the right schema parser for this group.
                 ...(args.taskKind ? { taskKind: args.taskKind } : {}),
+                // The per-call choices mesh_magi_collect must honour for a wait:false review.
+                ...(typeof args.autoCleanup === 'boolean' ? { autoCleanup: args.autoCleanup } : {}),
+                ...(typeof args.requireIndependentEvidence === 'boolean' ? { requireIndependentEvidence: args.requireIndependentEvidence } : {}),
             },
         });
     } catch { /* ledger write is best-effort */ }
 }
 
 /**
- * Recover the task_kind a MAGI fan-out was dispatched with from its `magi_dispatched`
+ * Recover the settings a MAGI fan-out was dispatched with (task_kind, and the per-call
+ * auto_cleanup / require_independent_evidence choices) from its `magi_dispatched`
  * ledger entry (mesh_magi_collect rediscovers replicas from the queue and has no kind in
  * hand). Defaults to claim_audit (the backward-compatible kind) when no entry / no kind
  * is recorded. Best-effort: an unreadable ledger returns the default.
  */
-async function recoverMagiTaskKind(ctx: MeshContext, consensusGroupId: string): Promise<MagiTaskKind> {
+async function recoverMagiDispatchSettings(
+    ctx: MeshContext,
+    consensusGroupId: string,
+): Promise<{ taskKind: MagiTaskKind; autoCleanup?: boolean; requireIndependentEvidence?: boolean }> {
     try {
         const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, kind: ['magi_dispatched'], tail: 200 });
         for (let i = entries.length - 1; i >= 0; i -= 1) {
             const payload = (entries[i] as any)?.payload;
             if (!payload || typeof payload !== 'object') continue;
             if (readString(payload.consensusGroupId) !== consensusGroupId) continue;
-            return normalizeMagiTaskKind(payload.taskKind);
+            return {
+                taskKind: normalizeMagiTaskKind(payload.taskKind),
+                ...(typeof payload.autoCleanup === 'boolean' ? { autoCleanup: payload.autoCleanup } : {}),
+                ...(typeof payload.requireIndependentEvidence === 'boolean' ? { requireIndependentEvidence: payload.requireIndependentEvidence } : {}),
+            };
         }
-    } catch { /* unreadable ledger → default kind */ }
-    return DEFAULT_TASK_KIND;
+    } catch { /* unreadable ledger → defaults */ }
+    return { taskKind: DEFAULT_TASK_KIND };
 }
 
 /**
@@ -1770,9 +1806,20 @@ async function collectMagiResponses(
     // a send failure leaves the replica to be finalized as unparseable at the deadline. The
     // replica stays `completed`; the new turn flips it back to generating, so the poll loop
     // re-reads it naturally. Returns true when the delta was dispatched.
-    const sendKindRetry = async (task: any, failReason: MagiKindParseResult['failReason']): Promise<boolean> => {
+    const sendKindRetry = async (task: any, failReason: MagiKindParseResult['failReason']): Promise<boolean | 'busy'> => {
         const node = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, task.assignedNodeId));
         if (!node || !task.assignedSessionId) return false;
+        // Settled check (same axis as the rc.37 busy-session injection): the replica's
+        // session may have moved on (another task claimed it, or it is still finishing a
+        // turn). Only a live IDLE session may take the delta re-request; anything else is
+        // 'busy' — the caller re-waits and retries on a later pass instead of queueing a
+        // retry prompt behind someone else's turn. An unreadable status fails closed.
+        try {
+            const sessions = extractStatusMetadataSessions(await commandForNode(ctx, node, 'get_status_metadata', {}));
+            const live = sessions.find(session => readSessionRecordId(session) === task.assignedSessionId);
+            if (!live) return false;
+            if (!isIdleSessionRecord(live)) return 'busy';
+        } catch { return 'busy'; }
         const why = failReason === 'empty_evidence'
             ? 'your previous answer had an empty evidence array'
             : failReason === 'missing_required_fields'
@@ -2026,6 +2073,11 @@ async function collectMagiResponses(
         if (isSchemaFailure && !retried.has(taskId) && !force) {
             retried.add(taskId);
             const sent = await sendKindRetry(task, kindResult.failReason);
+            if (sent === 'busy') {
+                // Session not settled yet — keep the one retry for a later pass and re-wait.
+                retried.delete(taskId);
+                return false;
+            }
             if (sent) return false; // re-wait for the corrected turn
             // Could not dispatch the retry → fall through to the unparseable handling.
         }

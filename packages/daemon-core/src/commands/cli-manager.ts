@@ -22,6 +22,7 @@ import { getWorkspaceState, resolveLaunchDirectory } from '../config/workspaces.
 import { appendRecentActivity } from '../config/recent-activity.js';
 import { getCoordinatorForSession, listCoordinatorsForWorkspace, pruneDeadMeshCoordinators } from '../mesh/coordinator-registry.js';
 import { DuplicateMeshDispatchError } from '../mesh/mesh-duplicate-dispatch.js';
+import { SessionBusyWithTaskError } from '../mesh/mesh-session-busy-dispatch.js';
 import { meshRecord } from '../mesh/mesh-record.js';
 import { resolveDelegatedWorkerAutoApproveModeForLaunch, logDelegatedWorkerModeDelivery } from '../mesh/delegated-worker-mode-delivery.js';
 import { upsertSavedProviderSession } from '../config/saved-sessions.js';
@@ -1912,7 +1913,7 @@ export class DaemonCliManager {
             const meshContext = readMeshContext(args);
             if (meshContext && typeof meshContext === 'object' && typeof meshContext.meshId === 'string' && meshContext.meshId) {
                 const targetInstanceId = key;
-                let stampResult: { stamped: boolean; reason?: string; holderSessionId?: string } | undefined;
+                let stampResult: { stamped: boolean; reason?: string; holderSessionId?: string; currentTaskId?: string; currentAttemptId?: string } | undefined;
                 try {
                     stampResult = this.deps.getInstanceManager()?.attachMeshAssignmentToInstance(targetInstanceId, {
                         meshId: meshContext.meshId,
@@ -1952,6 +1953,21 @@ export class DaemonCliManager {
                         `Refusing duplicate mesh dispatch: task ${meshContext.taskId} is already being worked by a live session on this daemon`,
                         { holderSessionId: stampResult.holderSessionId },
                     );
+                }
+                // SESSION-BUSY stamp guard (preview rc.37): the target session is still
+                // working a DIFFERENT task. Submitting now would park this body behind the
+                // running turn (executed later as an unaccounted turn 2) and the stamp would
+                // have re-pointed the running task's reports at this one — so neither
+                // happens: nothing was stamped, nothing is submitted, and the typed refusal
+                // makes the dispatcher book a dispatch FAILURE (queue claim → requeue;
+                // direct dispatch → dispatch_failed), never a delivery.
+                if (stampResult && stampResult.stamped === false && stampResult.reason === 'session_busy_with_task' && stampResult.currentTaskId) {
+                    throw new SessionBusyWithTaskError({
+                        currentTaskId: stampResult.currentTaskId,
+                        ...(stampResult.currentAttemptId ? { currentAttemptId: stampResult.currentAttemptId } : {}),
+                        ...(typeof meshContext.taskId === 'string' && meshContext.taskId ? { incomingTaskId: meshContext.taskId } : {}),
+                        sessionId: targetInstanceId,
+                    });
                 }
                 // COORDINATOR-SILENT-IDLE (opt-in): the coordinator's mesh policy is
                 // 'auto_silent_on_dispatch', so arm a ONE-SHOT transient mute on THIS

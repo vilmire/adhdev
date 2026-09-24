@@ -326,3 +326,39 @@ describe('sessions, holds, notices', () => {
         expect(rowsOf(db, 'committed')).toHaveLength(1);
     });
 });
+
+describe('sessionless direct dispatch — the placeholder session is never a stop target', () => {
+    // `mesh_send_task` without `session_id` opens the attempt with sessionId = taskId
+    // (a placeholder); only `delivered` re-keys it. Live: a refused dispatch's
+    // reclaim sent `stop_cli` for "session <taskId>" → `cliType required`.
+    it('a refused sessionless dispatch (R24 → reclaim) runs no cancel executor for the task-id placeholder; the in-txn cut row and the token revoke remain', () => {
+        const db = memDb();
+        const ports = recordingPorts();
+        const infos: string[] = [];
+        const ledger = ledgerOn(db, { ports, publisher: fakePublisher(), log: { info: (m: string) => infos.push(m), warn: () => {}, error: () => {} } });
+        expect(ledger.observe(dispatch({ taskId: 'task_sessionless', session: 'task_sessionless' })).rule).toBe('R1');
+        const refused = ledger.observe(evd('dispatch_failed', { workerAbsent: true, reason: 'worker_absent' }, { source: 'dispatch', sessionId: 'task_sessionless' }));
+        expect(refused.rule).toBe('R24');
+        // Reducer state transitions are unchanged: generation bumped, cut recorded in-txn.
+        expect(refused.attempt).toMatchObject({ state: 'accepted', generation: 1 });
+        expect(rowsOf(db, 'cancel_dispatch', 'a1')).toHaveLength(1);
+        expect(ports.cancels).toEqual([]);
+        expect(ports.calls.filter((c) => c.startsWith('cancel'))).toEqual([]);
+        // The revoke still runs — it expires the task token the direct arm minted for the placeholder.
+        expect(ports.calls.filter((c) => c.startsWith('revoke'))).toEqual(['revoke:task_sessionless']);
+        const skips = infos.filter((m) => m.includes('post-commit cancel_dispatch skipped'));
+        expect(skips).toHaveLength(1);
+        expect(skips[0]).toMatch(/never delivered to a session \(placeholder session = task task_sessionless\)/);
+    });
+
+    it('a sessionless dispatch that WAS delivered (re-keyed to the real session) still gets its cancel on reclaim', () => {
+        const db = memDb();
+        const ports = recordingPorts();
+        const ledger = ledgerOn(db, { ports, publisher: fakePublisher() });
+        ledger.observe(dispatch({ taskId: 'task_sessionless', session: 'task_sessionless' }));
+        ledger.observe(evd('delivered', { messageId: 'msg-1', outcome: 'delivered', via: 'local' }, { source: 'input_service', sessionId: 's_real' }));
+        const refused = ledger.observe(evd('dispatch_failed', { workerAbsent: true, reason: 'worker_absent' }, { source: 'dispatch', sessionId: 's_real' }));
+        expect(refused.rule).toBe('R24');
+        expect(ports.calls.filter((c) => c.startsWith('revoke') || c.startsWith('cancel'))).toEqual(['revoke:s_real', 'cancel:s_real:g0']);
+    });
+});

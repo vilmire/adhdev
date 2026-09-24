@@ -755,7 +755,12 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
                 }
                 foldedNodesSummary = {
                     count: fullyFolded.length,
-                    note: 'Node-array byte budget reached: these nodes are listed by id only. Query a specific node_id or use verbose=true for their detail.',
+                    // mesh_status itself has no node_id / node-filter parameter (the old
+                    // wording pointed at a param that does not exist on this tool). The
+                    // actual ways to narrow: mesh_list_nodes for a lightweight roster, or
+                    // mesh_git_status(node_id) for one node's git/branch detail; verbose=true
+                    // widens THIS call's byte budget for full per-node status instead.
+                    note: 'Node-array byte budget reached: these nodes are listed by id only. Use mesh_list_nodes for a lightweight roster, mesh_git_status(node_id) for one node\'s git/branch detail, or call mesh_status again with verbose=true for full detail.',
                     byHealth,
                     byBranchConvergence,
                     nodeIds,

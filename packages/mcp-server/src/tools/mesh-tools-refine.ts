@@ -224,6 +224,25 @@ export async function meshRefineNode(
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
+    // DRY-RUN-VETO-PRECEDENCE (safety): mirrors mesh_fast_forward_node's
+    // dry_run_false_requires_execute contract (mesh-tools-git.ts). A bare
+    // dry_run:false with no execute:true is refused here, at the MCP boundary,
+    // rather than forwarded to the daemon — the daemon-side handlers apply the
+    // same veto independently (fail-closed on both sides of the IPC hop).
+    if (args.dry_run === false && args.execute !== true) {
+        return JSON.stringify({
+            success: false,
+            code: 'dry_run_false_requires_execute',
+            nodeId: args.node_id,
+            allowed: false,
+            willRun: false,
+            executed: false,
+            blockingReasons: ['dry_run_false_requires_execute'],
+            error: 'dry_run:false alone does not execute — it only declines to veto. Pass execute:true to actually apply the refine.',
+            nextAction: `Re-run mesh_refine_node(node_id: "${args.node_id}", execute: true) to apply, or omit dry_run to preview.`,
+        }, null, 2);
+    }
+
     // Return-address stamp (RC32): refine is ASYNC — the accepted/completed/failed
     // events are emitted on the EXECUTING daemon (this node's daemon, remote for a
     // remote worktree) and recovered by THIS coordinator's drain. commandForNode
@@ -272,6 +291,22 @@ export async function meshRefineBatch(
     const nodeIds = Array.isArray(args.node_ids)
         ? args.node_ids.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map(v => v.trim())
         : undefined;
+
+    // DRY-RUN-VETO-PRECEDENCE (safety): same contract as meshRefineNode above —
+    // refused at the MCP boundary; the daemon-side handlers apply the same veto
+    // independently.
+    if (args.dry_run === false && args.execute !== true) {
+        return JSON.stringify({
+            success: false,
+            code: 'dry_run_false_requires_execute',
+            allowed: false,
+            willRun: false,
+            executed: false,
+            blockingReasons: ['dry_run_false_requires_execute'],
+            error: 'dry_run:false alone does not execute — it only declines to veto. Pass execute:true to actually apply the refine.',
+            nextAction: 'Re-run mesh_refine_batch(execute: true) to apply, or omit dry_run to preview.',
+        }, null, 2);
+    }
 
     // The batch orchestrator runs on the coordinator daemon that owns the source repo
     // and worktrees. Drive it through the local control-plane transport (the same

@@ -257,3 +257,46 @@ describe('E. pendingOutbound restart-blocking', () => {
     expect(daemonUpgrade).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('F. whenIdle carries the full upgrade option set (allowDowngrade / channel)', () => {
+  it('persists allowDowngrade + channel and replays them when the schedule fires', async () => {
+    vi.useFakeTimers()
+    const states: any[] = [foreignWorkerSession]
+    const ctx = makeCtx(states)
+
+    const scheduled = await call(ctx, baseArgs({ whenIdle: true, allowDowngrade: true, channel: 'stable' }))
+    expect(scheduled).toMatchObject({ success: true, scheduled: true })
+    expect(scheduled.deferredRestart).toMatchObject({ mode: 'upgrade', allowDowngrade: true, channel: 'stable' })
+    const key = deferredRestartScheduleKey(MESH_ID, 'node-1')
+    expect(loadDeferredRestartSchedules()[key]).toMatchObject({ mode: 'upgrade', allowDowngrade: true, channel: 'stable' })
+
+    states.length = 0
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(daemonUpgrade).toHaveBeenCalledTimes(1)
+    expect((daemonUpgrade.mock.calls[0] as any[])[1]).toMatchObject({ allowDowngrade: true, channel: 'stable' })
+  })
+
+  it('a re-armed (post-boot) schedule replays allowDowngrade too', async () => {
+    vi.useFakeTimers()
+    const states: any[] = [foreignWorkerSession]
+    const ctx = makeCtx(states)
+    await call(ctx, baseArgs({ whenIdle: true, allowDowngrade: true }))
+    __clearDeferredRestartsForTests()
+    states.length = 0
+    rearmPersistedDeferredRestarts(ctx.deps)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(daemonUpgrade).toHaveBeenCalledTimes(1)
+    expect((daemonUpgrade.mock.calls[0] as any[])[1]).toMatchObject({ allowDowngrade: true })
+  })
+
+  it('a schedule without allowDowngrade does not invent one', async () => {
+    vi.useFakeTimers()
+    const states: any[] = [foreignWorkerSession]
+    const ctx = makeCtx(states)
+    await call(ctx, baseArgs({ whenIdle: true }))
+    expect(loadDeferredRestartSchedules()[deferredRestartScheduleKey(MESH_ID, 'node-1')]).not.toHaveProperty('allowDowngrade')
+    states.length = 0
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect((daemonUpgrade.mock.calls[0] as any[])[1]).not.toHaveProperty('allowDowngrade')
+  })
+})

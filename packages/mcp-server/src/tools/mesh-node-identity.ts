@@ -13,9 +13,13 @@ import { readString } from './mesh-tool-shared.js';
 import type { MeshContext } from './mesh-tools.js';
 
 export function resolveCoordinatorNode(ctx: MeshContext): LocalMeshNodeEntry | undefined {
-    const preferredNodeId = typeof ctx.mesh.coordinator?.preferredNodeId === 'string'
-        ? ctx.mesh.coordinator.preferredNodeId.trim()
-        : '';
+    // Accept both spellings: mesh.coordinator is written by more than one path
+    // and isConfiguredCoordinatorNode (below) already treats `preferred_node_id`
+    // as an equally valid alias for `preferredNodeId` — this resolver reading
+    // only the camelCase form meant a mesh.coordinator populated with the snake
+    // alias silently failed to resolve here while still resolving there.
+    const preferredNodeId = readString(ctx.mesh.coordinator?.preferredNodeId)
+        || readString((ctx.mesh.coordinator as any)?.preferred_node_id);
     if (preferredNodeId) {
         const preferred = ctx.mesh.nodes.find(n => n.id === preferredNodeId && typeof n.daemonId === 'string' && n.daemonId.trim());
         if (preferred) return preferred;

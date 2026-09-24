@@ -67,6 +67,7 @@ import {
     type ReplicatedTranscriptSnapshotV1,
     type TranscriptReadChatPayload,
 } from '@adhdev/daemon-core';
+import { unwrapOneLevel } from './mesh-session-helpers.js';
 
 /**
  * Why `unknown`-typed rather than importing `MeshContext`: this module needs
@@ -88,15 +89,15 @@ export interface TranscriptReplicaReadOutcome {
     readonly fallbackReason: string | null;
 }
 
+/**
+ * Delegates to the shared `unwrapOneLevel` (mesh-session-helpers.ts), which
+ * mirrors `unwrapCommandPayload`'s "prefer an object payload/result, whichever
+ * is an object" rule. Kept as a thin local alias (not re-exported) so callers
+ * in this file read the same as before; mesh-session-helpers.js is a leaf
+ * module, not the mesh-tools barrel, so this adds no import-cycle risk.
+ */
 function unwrap(result: any): any {
-    // The IPC layer sometimes nests the handler's object under `payload`/`result`
-    // (mesh-tools-internal's `unwrapCommandPayload` does the same lift). Kept
-    // local so this module has no dependency on the mesh-tools barrel.
-    if (result && typeof result === 'object') {
-        if (result.payload && typeof result.payload === 'object') return result.payload;
-        if (result.result && typeof result.result === 'object') return result.result;
-    }
-    return result;
+    return unwrapOneLevel(result);
 }
 
 function readReason(value: any, fallback: string): string {

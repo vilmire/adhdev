@@ -34,6 +34,21 @@ function projectHotChatSessionStatesFromProviderState(state: ProviderState): Hot
     return [project(state)];
 }
 
+/**
+ * Mid-turn / booting statuses (top-level or activeChat). Anything else — idle, stopped,
+ * error — is not a live worker actively holding a task. Shared by both mesh stamp guards
+ * (DOUBLE-DISPATCH cross-instance, SESSION-BUSY same-instance).
+ */
+const LIVE_WORKING_STATUSES: ReadonlySet<string> = new Set(['generating', 'waiting_approval', 'waiting_choice', 'starting', 'streaming', 'working', 'no_progress', 'long_generating']);
+
+/** The working status an instance state reports (top-level or activeChat), or '' when it is not working. */
+function liveWorkingStatus(state: ProviderState): string {
+    const status = (typeof state.status === 'string' ? state.status : '').toLowerCase();
+    if (LIVE_WORKING_STATUSES.has(status)) return status;
+    const chatStatus = (typeof state.activeChat?.status === 'string' ? state.activeChat.status : '').toLowerCase();
+    return LIVE_WORKING_STATUSES.has(chatStatus) ? chatStatus : '';
+}
+
 export class ProviderInstanceManager {
     private instances = new Map<string, ProviderInstance>();
     private tickTimer: NodeJS.Timeout | null = null;
@@ -358,7 +373,7 @@ export class ProviderInstanceManager {
      *  REBIND its turn-ledger attempt onto the real worker instead of cancelling the
      *  attempt — the guard already resolved that instance, so surfacing it here keeps
      *  the caller from having to parse it back out of an error string. */
-    attachMeshAssignmentToInstance(instanceId: string, assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; attemptId?: string; attemptGeneration?: number; coordinatorDaemonId?: string; coordinatorSessionId?: string }): { stamped: boolean; reason?: string; holderSessionId?: string } {
+    attachMeshAssignmentToInstance(instanceId: string, assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; attemptId?: string; attemptGeneration?: number; coordinatorDaemonId?: string; coordinatorSessionId?: string }): { stamped: boolean; reason?: string; holderSessionId?: string; currentTaskId?: string; currentAttemptId?: string } {
         const inst = this.instances.get(instanceId);
         if (!inst || typeof inst.attachMeshAssignment !== 'function') {
             LOG.warn('MeshDispatch', `attachMeshAssignment skipped: instance ${instanceId} ${inst ? 'has no attach method' : 'not found'}`);
@@ -378,8 +393,28 @@ export class ProviderInstanceManager {
                 return { stamped: false, reason: 'task_already_stamped_on_live_instance', holderSessionId: conflict };
             }
         }
+        // SESSION-BUSY stamp guard (preview rc.37): refuse to stamp a DIFFERENT task onto
+        // THIS instance while it is still working the task it is stamped with. The stamp is
+        // the worker's only record of which task/attempt its turn evidence and reports
+        // belong to; overwriting it mid-turn made the running task's reports name the new
+        // task (and the new body queued behind the running turn, executing as turn 2). The
+        // same task (redelivery / nonce bump) and an idle / stopped instance keep today's
+        // behaviour — only "busy AND a different task" is refused, before anything is
+        // written, so the caller can fail the dispatch instead of delivering it.
+        if (assignment.taskId) {
+            const busy = this.readBusyWithOtherTask(inst, assignment.taskId);
+            if (busy) {
+                LOG.warn('MeshDispatch', `attachMeshAssignment refused on ${instanceId}: session is busy (${busy.status}) with task ${busy.currentTaskId} attempt ${busy.currentAttemptId || '?'} — not stamping incoming task ${assignment.taskId} attempt ${assignment.attemptId || '?'}`);
+                return {
+                    stamped: false,
+                    reason: 'session_busy_with_task',
+                    currentTaskId: busy.currentTaskId,
+                    ...(busy.currentAttemptId ? { currentAttemptId: busy.currentAttemptId } : {}),
+                };
+            }
+        }
         inst.attachMeshAssignment(assignment);
-        LOG.info('MeshDispatch', `stamped mesh assignment on ${instanceId}: mesh=${assignment.meshId} node=${assignment.nodeId || ''} task=${assignment.taskId || ''} coordinator=${assignment.coordinatorDaemonId || ''}`);
+        LOG.info('MeshDispatch', `stamped mesh assignment on ${instanceId}: mesh=${assignment.meshId} node=${assignment.nodeId || ''} task=${assignment.taskId || ''} attempt=${assignment.attemptId || '?'}${typeof assignment.attemptGeneration === 'number' ? `/g${assignment.attemptGeneration}` : ''} coordinator=${assignment.coordinatorDaemonId || ''}`);
         return { stamped: true };
     }
 
@@ -393,9 +428,6 @@ export class ProviderInstanceManager {
      * session stays idempotent. O(n) over instances — the count is small.
      */
     private findLiveWorkingTaskHolder(meshId: string, taskId: string, excludeInstanceId: string): string | null {
-        // Mid-turn / booting statuses (top-level or activeChat). Anything else — idle, stopped,
-        // error — is not a live worker actively holding the task.
-        const working = new Set(['generating', 'waiting_approval', 'waiting_choice', 'starting', 'streaming', 'working', 'no_progress', 'long_generating']);
         for (const [id, inst] of this.instances) {
             if (id === excludeInstanceId) continue;
             let state: ProviderState;
@@ -407,11 +439,35 @@ export class ProviderInstanceManager {
             const settings = (state.settings as Record<string, unknown>) || {};
             if (settings.meshNodeFor !== meshId) continue;
             if (settings.meshActiveTaskId !== taskId) continue;
-            const status = (typeof state.status === 'string' ? state.status : '').toLowerCase();
-            const chatStatus = (typeof state.activeChat?.status === 'string' ? state.activeChat.status : '').toLowerCase();
-            if (working.has(status) || working.has(chatStatus)) return id;
+            if (liveWorkingStatus(state)) return id;
         }
         return null;
+    }
+
+    /**
+     * SESSION-BUSY support: when `inst` is stamped with a task OTHER than `incomingTaskId`
+     * and is still working it (the same mid-turn / booting status set the DOUBLE-DISPATCH
+     * guard uses — one busy definition for both stamp guards), the task + attempt it is
+     * working. Null when the instance is free to take the new stamp: no current task, the
+     * same task, or not working (idle / stopped / error — a stale stamp left by a missed
+     * detach must not wedge the session forever).
+     */
+    private readBusyWithOtherTask(inst: ProviderInstance, incomingTaskId: string): { currentTaskId: string; currentAttemptId?: string; status: string } | null {
+        let state: ProviderState;
+        try {
+            state = inst.getState();
+        } catch {
+            return null;
+        }
+        const settings = (state.settings as Record<string, unknown>) || {};
+        const currentTaskId = typeof settings.meshActiveTaskId === 'string' ? settings.meshActiveTaskId.trim() : '';
+        if (!currentTaskId || currentTaskId === incomingTaskId.trim()) return null;
+        const status = liveWorkingStatus(state);
+        if (!status) return null;
+        const currentAttemptId = typeof settings.meshActiveAttemptId === 'string' && settings.meshActiveAttemptId.trim()
+            ? settings.meshActiveAttemptId.trim()
+            : undefined;
+        return { currentTaskId, ...(currentAttemptId ? { currentAttemptId } : {}), status };
     }
 
     /** Clear a mesh assignment after the dispatched task reaches a terminal

@@ -40,7 +40,23 @@ function cleanupMesh(meshId: string): void {
   }
 }
 
-function createRemoteCtx(meshId: string) {
+function createRemoteCtx(meshId: string, opts: { initialStatus?: 'idle' | 'generating' } = {}) {
+  // Tests that DISPATCH pass initialStatus:'idle': the worker is idle until a task body
+  // reaches it (agent_command send_chat below flips it to generating) — the real sequence.
+  // They used to start 'generating', which only passed because the remote mesh_send_task
+  // branch had no busy-session gate and injected into a generating worker (the preview
+  // rc.37 defect); a busy target is now queued, not dispatched. Tests that only READ
+  // seeded direct work keep the live, generating session they were written against.
+  const liveSession = {
+    id: 'sess-direct',
+    providerType: 'hermes-cli',
+    status: opts.initialStatus ?? 'generating',
+    settings: {
+      meshNodeFor: meshId,
+      meshNodeId: 'node-remote',
+      meshCoordinatorDaemonId: 'daemon-coordinator',
+    },
+  };
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -61,16 +77,7 @@ function createRemoteCtx(meshId: string) {
       machineId: 'machine-remote',
       userOverrides: {},
       policy: { providerPriority: ['hermes-cli'] },
-      sessions: [{
-        id: 'sess-direct',
-        providerType: 'hermes-cli',
-        status: 'generating',
-        settings: {
-          meshNodeFor: meshId,
-          meshNodeId: 'node-remote',
-          meshCoordinatorDaemonId: 'daemon-coordinator',
-        },
-      }],
+      sessions: [liveSession],
     }],
   };
   const calls: Array<{ daemonId?: string; command: string; args: Record<string, unknown> }> = [];
@@ -88,16 +95,7 @@ function createRemoteCtx(meshId: string) {
       return {
         success: true,
         status: {
-          sessions: [{
-            id: 'sess-direct',
-            providerType: 'hermes-cli',
-            status: 'generating',
-            settings: {
-              meshNodeFor: meshId,
-              meshNodeId: 'node-remote',
-              meshCoordinatorDaemonId: 'daemon-coordinator',
-            },
-          }],
+          sessions: [liveSession],
         },
       };
     }
@@ -112,20 +110,14 @@ function createRemoteCtx(meshId: string) {
       return {
         success: true,
         status: {
-          sessions: [{
-            id: 'sess-direct',
-            providerType: 'hermes-cli',
-            status: 'generating',
-            settings: {
-              meshNodeFor: meshId,
-              meshNodeId: 'node-remote',
-              meshCoordinatorDaemonId: 'daemon-coordinator',
-            },
-          }],
+          sessions: [liveSession],
         },
       };
     }
-    if (command === 'agent_command') return { success: true };
+    if (command === 'agent_command') {
+      if (args.action === 'send_chat') liveSession.status = 'generating';
+      return { success: true };
+    }
     if (command === 'git_status') return { success: true, status: { isGitRepo: true, isDirty: false, branch: 'feat/direct-active' } };
     if (command === 'get_pending_mesh_events') return { events: [] };
     throw new Error(`unexpected mesh command: ${command}`);
@@ -255,7 +247,7 @@ async function seedDirectTranscriptDispatch(meshId: string, taskId: string): Pro
 test('direct mesh_send_task projects exactly one active work row in status and active queue view', async () => {
   const meshId = 'mesh-active-direct-test';
   cleanupMesh(meshId);
-  const { ctx, calls } = createRemoteCtx(meshId);
+  const { ctx, calls } = createRemoteCtx(meshId, { initialStatus: 'idle' });
 
   try {
     const send = JSON.parse(await meshSendTask(ctx as any, {
@@ -361,7 +353,7 @@ test('direct mesh_send_task projects exactly one active work row in status and a
 test('leak #2: compact activeWork drops the triple-echoed task prompt; verbose keeps it', async () => {
   const meshId = 'mesh-active-work-slim-test';
   cleanupMesh(meshId);
-  const { ctx } = createRemoteCtx(meshId);
+  const { ctx } = createRemoteCtx(meshId, { initialStatus: 'idle' });
   const longPrompt = 'DELEGATED TASK: ' + 'do the thing carefully and report back. '.repeat(120); // ~5KB
 
   try {

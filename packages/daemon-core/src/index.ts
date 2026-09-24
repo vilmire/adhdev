@@ -644,6 +644,15 @@ export {
 } from './mesh/mesh-duplicate-dispatch.js';
 export type { DuplicateMeshDispatchInfo } from './mesh/mesh-duplicate-dispatch.js';
 
+// ── Mesh Session-Busy Refusal (preview rc.37 stamp overwrite) ──
+export {
+  SessionBusyWithTaskError,
+  SESSION_BUSY_WITH_TASK_CODE,
+  formatSessionBusyWithTaskToken,
+  classifySessionBusyWithTask,
+} from './mesh/mesh-session-busy-dispatch.js';
+export type { SessionBusyWithTaskInfo } from './mesh/mesh-session-busy-dispatch.js';
+
 // ── State Store ──
 export { loadState, saveState, resetState } from './config/state-store.js';
 export type { DaemonState } from './config/state-store.js';

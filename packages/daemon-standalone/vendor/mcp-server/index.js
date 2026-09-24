@@ -55634,6 +55634,7 @@ ${blocks.join("\n\n")}`;
       discardWorkerMailboxForTask: () => discardWorkerMailboxForTask,
       drainWorkerMailboxForTask: () => drainWorkerMailboxForTask,
       peekWorkerMailboxCount: () => peekWorkerMailboxCount,
+      pruneWorkerMailboxes: () => pruneWorkerMailboxes,
       renderMailboxBlock: () => renderMailboxBlock
     });
     function mailboxKey(meshId, taskId) {
@@ -55683,6 +55684,27 @@ ${blocks.join("\n\n")}`;
       if (!list) return 0;
       PENDING.delete(key2);
       return list.length;
+    }
+    function pruneWorkerMailboxes(keep) {
+      let dropped = 0;
+      for (const [key2, list] of [...PENDING.entries()]) {
+        const first = list[0];
+        if (!first) {
+          PENDING.delete(key2);
+          continue;
+        }
+        let kept = true;
+        try {
+          kept = keep(first.meshId, first.taskId);
+        } catch {
+          kept = true;
+        }
+        if (!kept) {
+          PENDING.delete(key2);
+          dropped += list.length;
+        }
+      }
+      return dropped;
     }
     function __resetWorkerMailboxForTest() {
       PENDING.clear();
@@ -79393,6 +79415,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       __setWorkerLateReportNoticeSinkForTests: () => __setWorkerLateReportNoticeSinkForTests,
       __setWorkerProgressNoticeSinkForTests: () => __setWorkerProgressNoticeSinkForTests,
       acceptForwardedWorkerCompletionReport: () => acceptForwardedWorkerCompletionReport,
+      acceptForwardedWorkerProgressUpdate: () => acceptForwardedWorkerProgressUpdate,
       acceptWorkerCompletionReport: () => acceptWorkerCompletionReport,
       acceptWorkerProgressUpdate: () => acceptWorkerProgressUpdate,
       buildWorkerLateReportNotice: () => buildWorkerLateReportNotice,
@@ -80057,6 +80080,24 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
     function acceptWorkerProgressUpdate(credential, note, opts = {}) {
       const identity = resolveWorkerIdentity(credential);
       if (!identity) return { accepted: false, refusal: "unauthenticated" };
+      return acceptWorkerProgressUpdateForIdentity(identity, note, opts);
+    }
+    function acceptForwardedWorkerProgressUpdate(claim, note, opts) {
+      const nowMs2 = opts.nowMs ?? Date.now();
+      const resolved = resolveForwardedWorkerIdentity(claim, opts.sender, nowMs2, opts.isSelfDaemon);
+      if ("refused" in resolved) return { accepted: false, refusal: "unauthenticated", detail: `${resolved.refused}: ${resolved.detail}` };
+      if ("late" in resolved) {
+        const reason = "no_live_task";
+        return {
+          accepted: false,
+          taskId: resolved.late.taskId,
+          refusal: "unauthenticated",
+          detail: `${reason}: task ${resolved.late.taskId}'s attempt ${resolved.late.attemptId} already ended (${resolved.late.terminalOutcome}) on the owner \u2014 progress is only recorded against a live attempt`
+        };
+      }
+      return acceptWorkerProgressUpdateForIdentity(resolved.live, note, { nowMs: nowMs2 });
+    }
+    function acceptWorkerProgressUpdateForIdentity(identity, note, opts = {}) {
       if (!identity.attemptId) {
         return {
           accepted: false,
@@ -85555,6 +85596,20 @@ ${block2.text}`,
       const raw = args?.origin;
       return isOutboundMessageOrigin(raw) ? raw : fallback;
     }
+    function resolveDryRunVeto(args) {
+      const a = args;
+      const dryRun = a?.dryRun;
+      const execute = a?.execute;
+      if (dryRun === true) return { refused: false, isDryRun: true };
+      if (dryRun === false && execute !== true) {
+        return {
+          refused: true,
+          code: "dry_run_false_requires_execute",
+          error: "dry_run:false alone does not execute \u2014 it only declines to veto. Pass execute:true to actually apply the refine."
+        };
+      }
+      return { refused: false, isDryRun: execute !== true };
+    }
     function mintLegacyMessageId() {
       return `legacy:${mintMessageId2()}`;
     }
@@ -88784,6 +88839,9 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           if (typeof value.meshId !== "string" || typeof value.nodeId !== "string") return false;
           if (value.mode !== "upgrade" && value.mode !== "restart") return false;
           if (typeof value.killSessionHost !== "boolean") return false;
+          if (value.allowDowngrade !== void 0 && typeof value.allowDowngrade !== "boolean") return false;
+          if (value.channel !== void 0 && typeof value.channel !== "string") return false;
+          if (value.npmTag !== void 0 && typeof value.npmTag !== "string") return false;
           if (typeof value.scheduledAt !== "number" || !Number.isFinite(value.scheduledAt)) return false;
           return typeof value.expiresAt === "number" && Number.isFinite(value.expiresAt);
         })
@@ -88840,7 +88898,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const key2 = deferredRestartScheduleKey(record2.meshId, record2.nodeId);
       const state = loadState();
       const existing = state.deferredRestartSchedules[key2];
-      if (existing && existing.mode === record2.mode && existing.killSessionHost === record2.killSessionHost && existing.scheduledAt === record2.scheduledAt && existing.expiresAt === record2.expiresAt) return;
+      if (existing && existing.mode === record2.mode && existing.killSessionHost === record2.killSessionHost && existing.allowDowngrade === record2.allowDowngrade && existing.channel === record2.channel && existing.npmTag === record2.npmTag && existing.scheduledAt === record2.scheduledAt && existing.expiresAt === record2.expiresAt) return;
       saveState({
         ...state,
         deferredRestartSchedules: { ...state.deferredRestartSchedules, [key2]: record2 }
@@ -108409,6 +108467,16 @@ ${marker}`,
       }
       return blocking;
     }
+    function readUpgradeOptions(args) {
+      const str6 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+      const channel = str6(args?.channel) ?? str6(args?.updatePolicy?.channel);
+      const npmTag = str6(args?.npmTag);
+      return {
+        ...args?.allowDowngrade === true ? { allowDowngrade: true } : {},
+        ...channel ? { channel } : {},
+        ...npmTag ? { npmTag } : {}
+      };
+    }
     function deferredRestartInfo(key2) {
       const record2 = pendingDeferredRestarts.get(key2);
       if (!record2) return null;
@@ -108417,6 +108485,7 @@ ${marker}`,
         nodeId: record2.nodeId,
         mode: record2.mode,
         killSessionHost: record2.killSessionHost,
+        ...record2.upgradeOptions,
         scheduledAt: new Date(record2.scheduledAt).toISOString(),
         expiresAt: new Date(record2.expiresAt).toISOString(),
         runCondition: "executes automatically once no session is generating / waiting_approval / starting and no outbound coordinator message is queued"
@@ -108492,6 +108561,7 @@ ${marker}`,
         nodeId,
         mode: normalizeRestartMode(args?.mode),
         killSessionHost: args?.killSessionHost === true,
+        upgradeOptions: readUpgradeOptions(args),
         scheduledAt: Date.now(),
         expiresAt: Date.now() + timeoutMs,
         timer: setInterval(() => {
@@ -108506,13 +108576,14 @@ ${marker}`,
           nodeId: record2.nodeId,
           mode: record2.mode,
           killSessionHost: record2.killSessionHost,
+          ...record2.upgradeOptions,
           scheduledAt: record2.scheduledAt,
           expiresAt: record2.expiresAt
         });
       } catch (e) {
         LOG.warn("MeshRestart", `Failed to persist deferred restart for node ${nodeId} \u2014 it will NOT survive a daemon restart: ${e?.message || String(e)}`);
       }
-      LOG.info("MeshRestart", `Deferred restart scheduled for node ${nodeId} (mode=${record2.mode}, expires in ${Math.round(timeoutMs / 6e4)}min)`);
+      LOG.info("MeshRestart", `Deferred restart scheduled for node ${nodeId} (mode=${record2.mode}${record2.upgradeOptions.allowDowngrade ? ", allowDowngrade" : ""}, expires in ${Math.round(timeoutMs / 6e4)}min)`);
       return {
         success: true,
         restarted: false,
@@ -108535,12 +108606,16 @@ ${marker}`,
       LOG.info("MeshRestart", `Deferred restart for node ${record2.nodeId} executing \u2014 daemon is idle`);
       clearPendingDeferredRestart(key2);
       try {
-        await executeRestart(deps, {
+        const result = await executeRestart(deps, {
           meshId: record2.meshId,
           nodeId: record2.nodeId,
           mode: record2.mode,
-          killSessionHost: record2.killSessionHost
+          killSessionHost: record2.killSessionHost,
+          ...record2.upgradeOptions
         }, { forced: false });
+        if (result?.success === false) {
+          LOG.warn("MeshRestart", `Deferred restart for node ${record2.nodeId} was refused when it fired: ${result.code || result.error || "unknown"}${result.reason ? ` \u2014 ${result.reason}` : ""}`);
+        }
       } catch (e) {
         LOG.error("MeshRestart", `Deferred restart execution failed: ${e?.message || String(e)}`);
       }
@@ -108569,6 +108644,7 @@ ${marker}`,
           nodeId: record2.nodeId,
           mode: record2.mode === "restart" ? "restart" : "upgrade",
           killSessionHost: record2.killSessionHost === true,
+          upgradeOptions: readUpgradeOptions(record2),
           scheduledAt: record2.scheduledAt,
           expiresAt: record2.expiresAt,
           timer: setInterval(() => {
@@ -118540,7 +118616,8 @@ ${marker}`,
       };
       return (0, import_crypto16.createHash)("sha256").update(canonicalJson(normalized)).digest("hex");
     }
-    function commitMeshGraphPlan(req) {
+    function commitMeshGraphPlan(req, queueOpts) {
+      requireMeshHostQueueOwner(queueOpts);
       const store2 = MeshRuntimeStore.getInstance();
       const tasks = Array.isArray(req.tasks) ? req.tasks : [];
       if (tasks.length === 0) {
@@ -118700,7 +118777,7 @@ ${marker}`,
             ...req.sourceCoordinatorSessionId ? { sourceCoordinatorSessionId: req.sourceCoordinatorSessionId } : {}
           };
         });
-        const inserted = enqueueTaskGraph(req.meshId, queueSpecs);
+        const inserted = enqueueTaskGraph(req.meshId, queueSpecs, queueOpts);
         const graphId = newMeshGraphId();
         const nodeIdByIndex = tasks.map(() => newMeshGraphNodeId());
         const gateNodeIdByRef = /* @__PURE__ */ new Map();
@@ -118954,6 +119031,7 @@ ${marker}`,
         init_mesh_graph_transition_runner();
         init_mesh_graph_workspace_saga();
         init_mesh_work_queue();
+        init_mesh_host_ownership();
         MeshGraphPlanError = class extends Error {
           constructor(code, message, extra) {
             super(`${code}: ${message}`);
@@ -119111,6 +119189,18 @@ ${marker}`,
       };
       return typeof summary.goal === "string" ? { ...base, goal: summary.goal } : { ...base, goalPreview: summary.goalPreview ?? "", goalTruncated: summary.goalTruncated === true };
     }
+    async function ownQueueRole(ctx, meshId) {
+      try {
+        const record2 = await ctx?.getMeshForCommand?.(meshId, void 0, { preferInline: true });
+        return record2?.mesh ? resolveMeshHostStatus(record2.mesh).role : void 0;
+      } catch {
+        return void 0;
+      }
+    }
+    function withOwnRole(opts, role) {
+      const { ownerRole: _callerClaim, ...rest } = opts ?? {};
+      return role ? { ...rest, ownerRole: role } : rest;
+    }
     function readAudit(audit) {
       const a = audit ?? {};
       const str6 = (v) => typeof v === "string" && v ? v : void 0;
@@ -119153,6 +119243,7 @@ ${marker}`,
         init_mesh_missions();
         init_mesh_active_work();
         init_mesh_scheduling_runtime();
+        init_mesh_host_ownership();
         init_logger();
         toolCallRecord2 = async (_ctx, args) => {
           const req = decodeToolCallRecordRequest(args);
@@ -119243,7 +119334,8 @@ ${marker}`,
           const req = decodeQueueEnqueueRequest(args);
           if (!req) return badRequest("queue_enqueue");
           try {
-            const entry = enqueueTask(req.meshId, req.message, req.options ?? {});
+            const role = await ownQueueRole(_ctx, req.meshId);
+            const entry = enqueueTask(req.meshId, req.message, withOwnRole(req.options, role));
             if (req.decision) {
               recordSingleEnqueueDecision(req.meshId, { ...req.decision, taskId: entry.id });
             }
@@ -119259,12 +119351,13 @@ ${marker}`,
           const audit = readAudit(req.audit);
           const taskCount = audit.taskCount ?? (req.mode === "compat" ? req.specs.length : Array.isArray(req.plan?.tasks) ? req.plan.tasks.length : 0);
           try {
+            const queueOpts = withOwnRole(void 0, await ownQueueRole(_ctx, req.meshId));
             if (req.mode === "compat") {
-              const tasks2 = enqueueTaskGraph(req.meshId, [...req.specs]);
+              const tasks2 = enqueueTaskGraph(req.meshId, [...req.specs], queueOpts);
               const response2 = { ok: true, tasks: tasks2 };
               return { success: true, ...response2 };
             }
-            const plan = commitMeshGraphPlan({ ...req.plan, meshId: req.meshId });
+            const plan = commitMeshGraphPlan({ ...req.plan, meshId: req.meshId }, queueOpts);
             recordGraphEnqueueCommitted(req.meshId, {
               graphId: plan.graphId,
               batchId: plan.batchId,
@@ -119315,7 +119408,7 @@ ${marker}`,
           if (!req) return badRequest("queue_cancel");
           try {
             const before = getQueue(req.meshId).find((t) => t.id === req.taskId) ?? null;
-            const task = cancelTask(req.meshId, req.taskId, { ...req.reason !== void 0 ? { reason: req.reason } : {} });
+            const task = cancelTask(req.meshId, req.taskId, withOwnRole({ ...req.reason !== void 0 ? { reason: req.reason } : {} }, await ownQueueRole(_ctx, req.meshId)));
             const response = { task: queueWire(task), before: queueWire(before) };
             return { success: true, ...response };
           } catch (e) {
@@ -119326,7 +119419,7 @@ ${marker}`,
           const req = decodeQueueRequeueRequest(args);
           if (!req) return badRequest("queue_requeue");
           try {
-            const task = requeueTask(req.meshId, req.taskId, req.options ?? {});
+            const task = requeueTask(req.meshId, req.taskId, withOwnRole(req.options, await ownQueueRole(_ctx, req.meshId)));
             const response = { task: queueWire(task) };
             return { success: true, ...response };
           } catch (e) {
@@ -121702,6 +121795,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     });
     function attachMeshAssignment(host, assignment) {
       if (!assignment?.meshId) return;
+      const previousTaskId = typeof host.settings?.meshActiveTaskId === "string" ? host.settings.meshActiveTaskId : "";
+      const taskChanged = !!(assignment.taskId && assignment.taskId.trim() && previousTaskId && previousTaskId !== assignment.taskId);
       if (assignment.taskId && assignment.taskId.trim()) {
         host.meshTaskInjectedAt = Date.now();
         if (isWorkerMcpEnabled()) {
@@ -121739,6 +121834,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         ...assignment.coordinatorSessionId ? { meshCoordinatorSessionId: assignment.coordinatorSessionId } : {}
       };
       if (assignment.attemptId && typeof assignment.attemptGeneration !== "number") delete host.settings.meshActiveAttemptGeneration;
+      if (taskChanged && !assignment.attemptId) {
+        delete host.settings.meshActiveAttemptId;
+        delete host.settings.meshActiveAttemptGeneration;
+      }
+      if (taskChanged && typeof assignment.dispatchNonce !== "number") delete host.settings.meshActiveDispatchNonce;
       host.adapter.updateRuntimeSettings?.(host.settings);
     }
     function currentMeshAttemptRef(settings) {
@@ -121817,6 +121917,24 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         };
       };
     }
+    function findLocalWorkerOfRemoteTask(ctx, meshId, taskId) {
+      const isSelf2 = selfDaemonPredicate(ctx);
+      if (!isSelf2 || !meshId || !taskId) return null;
+      let ids = [];
+      try {
+        ids = ctx?.deps?.instanceManager?.listInstanceIds?.() ?? [];
+      } catch {
+        ids = [];
+      }
+      const read = assignmentStampReader(ctx);
+      for (const sessionId of ids) {
+        const stamp2 = read(sessionId);
+        if (stamp2 && stamp2.meshId === meshId && stamp2.taskId === taskId && !isSelf2(stamp2.ownerDaemonId)) {
+          return { sessionId, ownerDaemonId: stamp2.ownerDaemonId };
+        }
+      }
+      return null;
+    }
     function selfDaemonPredicate(ctx) {
       const selfDaemonId = readNonEmpty3(ctx?.deps?.statusInstanceId);
       return selfDaemonId ? (daemonId) => daemonIdsEquivalent4(daemonId, selfDaemonId) : void 0;
@@ -121869,6 +121987,23 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         ...result.late ? { late: true, terminalOutcome: result.late.terminalOutcome } : {}
       };
     }
+    function toProgressResponse(result) {
+      if (!result.accepted) {
+        return {
+          success: false,
+          error: result.refusal || "unauthenticated",
+          ...result.detail ? { detail: result.detail } : {}
+        };
+      }
+      return {
+        success: true,
+        ...result.taskId ? { taskId: result.taskId } : {},
+        // ★F3: whether the note reached the coordinator, or was recorded
+        // only. The filter is at the producer, so this is the one place
+        // the worker can learn which of the two happened.
+        surfacedToCoordinator: result.surfacedToCoordinator === true
+      };
+    }
     function unwrapRelayResult(raw) {
       let cursor = raw;
       for (let depth = 0; depth < 4 && cursor && typeof cursor === "object"; depth++) {
@@ -121887,6 +122022,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return null;
     }
     async function forwardReportToOwner(ctx, remote, report) {
+      return forwardToOwner(ctx, remote, WORKER_REPORT_FORWARD_COMMAND, { report }, `${report.outcome} report`);
+    }
+    async function forwardToOwner(ctx, remote, command, payload, what) {
       const dispatch2 = ctx?.deps?.dispatchMeshCommand;
       if (!dispatch2) {
         return {
@@ -121904,13 +122042,13 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       };
       let raw;
       try {
-        raw = await dispatch2(remote.ownerDaemonId, WORKER_REPORT_FORWARD_COMMAND, {
+        raw = await dispatch2(remote.ownerDaemonId, command, {
           ...claim,
           ...remote.nodeId ? { nodeId: remote.nodeId } : {},
-          report
+          ...payload
         });
       } catch (e) {
-        LOG.warn("WorkerReport", `Forwarding report for session ${remote.sessionId} (task ${remote.taskId ?? "?"}) to owner ${remote.ownerDaemonId.slice(0, 16)} failed: ${e?.message || e}`);
+        LOG.warn("WorkerReport", `Forwarding ${what} for session ${remote.sessionId} (task ${remote.taskId ?? "?"}) to owner ${remote.ownerDaemonId.slice(0, 16)} failed: ${e?.message || e}`);
         return {
           success: false,
           error: "forward_failed",
@@ -121920,33 +122058,51 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       }
       const answer = unwrapRelayResult(raw);
       if (!answer) {
-        return { success: false, error: "forward_failed", detail: "the owner daemon returned no report result", hint: "Nothing was recorded \u2014 call again." };
+        return { success: false, error: "forward_failed", detail: `the owner daemon returned no ${command} result`, hint: "Nothing was recorded \u2014 call again." };
       }
-      LOG.info("WorkerReport", `Forwarded ${report.outcome} report for session ${remote.sessionId} (task ${remote.taskId ?? "?"} attempt ${remote.attemptId ?? "?"}) to owner ${remote.ownerDaemonId.slice(0, 16)} \u2192 ${answer.success === true ? "accepted" : `refused (${String(answer.error)}${typeof answer.detail === "string" && answer.detail ? ` \u2014 ${answer.detail}` : ""})`}`);
+      const line = `Forwarded ${what} for session ${remote.sessionId} (task ${remote.taskId ?? "?"} attempt ${remote.attemptId ?? "?"}) to owner ${remote.ownerDaemonId.slice(0, 16)} \u2192 ${answer.success === true ? "accepted" : `refused (${String(answer.error)}${typeof answer.detail === "string" && answer.detail ? ` \u2014 ${answer.detail}` : ""})`}`;
+      if (answer.success === true) LOG.info("WorkerReport", line);
+      else LOG.warn("WorkerReport", line);
       return answer;
     }
-    function decodeForwardedWorkerReport(args) {
+    function decodeForwardedClaim(args, allowedKeys) {
       const input = stripRouterInternalArgs(args);
       if (!input || typeof input !== "object" || Array.isArray(input)) return null;
       const record2 = input;
-      for (const key2 of Object.keys(record2)) if (!FORWARD_KEYS.has(key2)) return null;
+      for (const key2 of Object.keys(record2)) if (!allowedKeys.has(key2)) return null;
       const meshId = readNonEmpty3(record2.meshId);
       const sessionId = readNonEmpty3(record2.sessionId);
       if (!meshId || !sessionId) return null;
       for (const key2 of ["taskId", "attemptId", "nodeId"]) {
         if (record2[key2] !== void 0 && !readNonEmpty3(record2[key2])) return null;
       }
-      if (!record2.report || typeof record2.report !== "object" || Array.isArray(record2.report)) return null;
       const taskId = readNonEmpty3(record2.taskId);
       const attemptId = readNonEmpty3(record2.attemptId);
       return {
         claim: { meshId, sessionId, ...taskId ? { taskId } : {}, ...attemptId ? { attemptId } : {} },
-        report: record2.report
+        record: record2
       };
     }
+    function decodeForwardedWorkerReport(args) {
+      const decoded = decodeForwardedClaim(args, FORWARD_KEYS);
+      if (!decoded) return null;
+      const { report } = decoded.record;
+      if (!report || typeof report !== "object" || Array.isArray(report)) return null;
+      return { claim: decoded.claim, report };
+    }
+    function decodeForwardedWorkerProgress(args) {
+      const decoded = decodeForwardedClaim(args, PROGRESS_FORWARD_KEYS);
+      if (!decoded) return null;
+      const note = readNonEmpty3(decoded.record.note);
+      if (!note) return null;
+      return { claim: decoded.claim, note };
+    }
     var WORKER_REPORT_FORWARD_COMMAND;
+    var WORKER_PROGRESS_FORWARD_COMMAND;
     var MESH_SENDER_DAEMON_ID_ARG;
+    var CLAIM_KEYS;
     var FORWARD_KEYS;
+    var PROGRESS_FORWARD_KEYS;
     var workerReportHandlers;
     var workerReportSpecs;
     var init_worker_report2 = __esm2({
@@ -121959,8 +122115,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         init_cli_provider_mesh_assignment();
         init_logger();
         WORKER_REPORT_FORWARD_COMMAND = "worker_report_forwarded";
+        WORKER_PROGRESS_FORWARD_COMMAND = "worker_progress_forwarded";
         MESH_SENDER_DAEMON_ID_ARG = "_meshSenderDaemonId";
-        FORWARD_KEYS = /* @__PURE__ */ new Set(["meshId", "taskId", "attemptId", "sessionId", "nodeId", "report"]);
+        CLAIM_KEYS = ["meshId", "taskId", "attemptId", "sessionId", "nodeId"];
+        FORWARD_KEYS = /* @__PURE__ */ new Set([...CLAIM_KEYS, "report"]);
+        PROGRESS_FORWARD_KEYS = /* @__PURE__ */ new Set([...CLAIM_KEYS, "note"]);
         workerReportHandlers = {
           /**
            * Exchange a session bind for the caller's current task identity.
@@ -122074,32 +122233,53 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             const note = typeof args?.note === "string" ? args.note.trim() : "";
             if (!note) return { success: false, error: "note required" };
             try {
-              const { acceptWorkerProgressUpdate: acceptWorkerProgressUpdate2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
-              const result = acceptWorkerProgressUpdate2({ token: args?.token, bind: args?.bind }, note);
-              if (!result.accepted) {
-                return {
-                  success: false,
-                  error: result.refusal || "unauthenticated",
-                  ...result.detail ? { detail: result.detail } : {}
-                };
+              const { acceptWorkerProgressUpdate: acceptWorkerProgressUpdate2, hasLocalWorkerIdentity: hasLocalWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
+              const credential = { token: args?.token, bind: args?.bind };
+              if (!hasLocalWorkerIdentity2(credential, { isSelfDaemon: selfDaemonPredicate(_ctx) })) {
+                const remote = await resolveRemoteWorker(_ctx, args);
+                if (remote) return await forwardToOwner(_ctx, remote, WORKER_PROGRESS_FORWARD_COMMAND, { note }, "progress note");
               }
-              return {
-                success: true,
-                ...result.taskId ? { taskId: result.taskId } : {},
-                // ★F3: whether the note reached the coordinator, or was recorded
-                // only. The filter is at the producer, so this is the one place
-                // the worker can learn which of the two happened.
-                surfacedToCoordinator: result.surfacedToCoordinator === true
-              };
+              return toProgressResponse(acceptWorkerProgressUpdate2(credential, note));
             } catch (e) {
+              return { success: false, error: e?.message || String(e) };
+            }
+          },
+          /**
+           * F7 (progress axis), OWNER side: a progress note a remote worker daemon
+           * relayed here. Authorised exactly like a forwarded completion report
+           * (`resolveForwardedWorkerIdentity` with the transport-stamped sender), then
+           * recorded by the local progress body.
+           */
+          [WORKER_PROGRESS_FORWARD_COMMAND]: async (_ctx, args) => {
+            const decoded = decodeForwardedWorkerProgress(args);
+            if (!decoded) return { success: false, error: `${WORKER_PROGRESS_FORWARD_COMMAND}: request failed decode (bad shape)` };
+            const { claim, note } = decoded;
+            const senderDaemonId = readNonEmpty3(args?.[MESH_SENDER_DAEMON_ID_ARG]);
+            const claimLabel = `session ${claim.sessionId} (claimed task ${claim.taskId ?? "?"} attempt ${claim.attemptId ?? "?"}) from ${senderDaemonId ? senderDaemonId.slice(0, 20) : "an unidentified daemon"}`;
+            try {
+              const { acceptForwardedWorkerProgressUpdate: acceptForwardedWorkerProgressUpdate2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
+              const sender = {
+                senderDaemonId,
+                nodeDaemonId: await ownerRosterNodeDaemonLookup(_ctx, claim.meshId)
+              };
+              const result = acceptForwardedWorkerProgressUpdate2(claim, note, { sender, isSelfDaemon: selfDaemonPredicate(_ctx) });
+              if (result.accepted) {
+                LOG.info("WorkerReport", `Forwarded progress note for ${claimLabel} \u2192 accepted for task ${result.taskId ?? "?"}${result.surfacedToCoordinator ? " (surfaced to coordinator)" : ""}`);
+              } else {
+                LOG.warn("WorkerReport", `Forwarded progress note for ${claimLabel} \u2192 refused ${result.refusal ?? "unauthenticated"}${result.detail ? ` \u2014 ${result.detail}` : ""}`);
+              }
+              return toProgressResponse(result);
+            } catch (e) {
+              LOG.warn("WorkerReport", `Forwarded progress note for ${claimLabel} failed: ${e?.message || e}`);
               return { success: false, error: e?.message || String(e) };
             }
           }
         };
         workerReportSpecs = defineCommandSpecs("low", workerReportHandlers, {
-          // Only another daemon's relay may present a forwarded report (never a
-          // dashboard, the API, or a local worker MCP over IPC).
-          [WORKER_REPORT_FORWARD_COMMAND]: { sources: ["mesh"] }
+          // Only another daemon's relay may present a forwarded report or progress
+          // note (never a dashboard, the API, or a local worker MCP over IPC).
+          [WORKER_REPORT_FORWARD_COMMAND]: { sources: ["mesh"] },
+          [WORKER_PROGRESS_FORWARD_COMMAND]: { sources: ["mesh"] }
         });
       }
     });
@@ -122109,6 +122289,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       "src/commands/low-family/worker-mailbox.ts"() {
         "use strict";
         init_command_registry();
+        init_worker_report2();
+        init_logger();
         workerMailboxHandlers = {
           /**
            * Coordinator writes an urgent memo into a worker's mailbox.
@@ -122139,15 +122321,22 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
                 return { success: false, error: "invalid_input", detail: "meshId, taskId and text are all required" };
               }
               const { MeshRuntimeStore: MeshRuntimeStore2 } = await Promise.resolve().then(() => (init_mesh_runtime_store(), mesh_runtime_store_exports));
-              const entry = MeshRuntimeStore2.getInstance().findQueueEntryById(meshId, taskId);
+              const store2 = MeshRuntimeStore2.getInstance();
+              const entry = store2.findQueueEntryById(meshId, taskId);
+              const { depositWorkerMailboxMessage: depositWorkerMailboxMessage2, pruneWorkerMailboxes: pruneWorkerMailboxes2 } = await Promise.resolve().then(() => (init_worker_mailbox(), worker_mailbox_exports));
               if (!entry) {
-                return {
-                  success: false,
-                  error: "task_not_found_locally",
-                  detail: `no local queue row for task ${taskId} on mesh ${meshId} \u2014 this daemon may not own or have reconciled it`
-                };
+                const worker = findLocalWorkerOfRemoteTask(_ctx, meshId, taskId);
+                if (!worker) {
+                  return {
+                    success: false,
+                    error: "task_not_found_locally",
+                    detail: `no local queue row for task ${taskId} on mesh ${meshId}, and no live worker session on this daemon is assigned it \u2014 this daemon may not own or have reconciled it`
+                  };
+                }
+                const dropped = pruneWorkerMailboxes2((m, t) => !!store2.findQueueEntryById(m, t) || !!findLocalWorkerOfRemoteTask(_ctx, m, t));
+                if (dropped > 0) LOG.info("WorkerMailbox", `Dropped ${dropped} undelivered memo(s) for remote-owned task(s) no local worker holds any more`);
+                LOG.info("WorkerMailbox", `Memo for remote-owned task ${taskId} (owner ${worker.ownerDaemonId.slice(0, 16)}) held for its local worker session ${worker.sessionId}`);
               }
-              const { depositWorkerMailboxMessage: depositWorkerMailboxMessage2 } = await Promise.resolve().then(() => (init_worker_mailbox(), worker_mailbox_exports));
               const result = depositWorkerMailboxMessage2({ meshId, taskId, text });
               if (!result.ok) {
                 return { success: false, error: result.error, detail: result.detail };
@@ -122168,12 +122357,14 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             try {
               const { resolveWorkerIdentity: resolveWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
               const identity = resolveWorkerIdentity2({ token: args?.token, bind: args?.bind });
-              if (!identity) {
+              const remote = identity ? null : await resolveRemoteWorker(_ctx, args);
+              const target = identity ? { meshId: identity.meshId, taskId: identity.taskId } : remote?.taskId ? { meshId: remote.meshId, taskId: remote.taskId } : null;
+              if (!target) {
                 return { success: false, error: "unauthenticated" };
               }
               const { drainWorkerMailboxForTask: drainWorkerMailboxForTask2 } = await Promise.resolve().then(() => (init_worker_mailbox(), worker_mailbox_exports));
-              const messages = drainWorkerMailboxForTask2(identity.meshId, identity.taskId).map((m) => ({ id: m.id, text: m.text }));
-              return { success: true, taskId: identity.taskId, messages };
+              const messages = drainWorkerMailboxForTask2(target.meshId, target.taskId).map((m) => ({ id: m.id, text: m.text }));
+              return { success: true, taskId: target.taskId, messages };
             } catch (e) {
               return { success: false, error: e?.message || String(e) };
             }
@@ -128717,6 +128908,57 @@ ${text}` : text;
         init_cli_adapter();
         init_logger();
         init_track_identity();
+      }
+    });
+    function formatSessionBusyWithTaskToken(info) {
+      const attempt = typeof info.currentAttemptId === "string" && info.currentAttemptId.trim() ? info.currentAttemptId.trim() : "-";
+      return `${SESSION_BUSY_WITH_TASK_CODE2}[task=${info.currentTaskId} attempt=${attempt}]`;
+    }
+    function classifySessionBusyWithTask2(err) {
+      if (!err) return null;
+      if (typeof err === "object") {
+        const e = err;
+        if (e.code === SESSION_BUSY_WITH_TASK_CODE2 && typeof e.currentTaskId === "string" && e.currentTaskId) {
+          return {
+            currentTaskId: e.currentTaskId,
+            ...typeof e.currentAttemptId === "string" && e.currentAttemptId ? { currentAttemptId: e.currentAttemptId } : {}
+          };
+        }
+      }
+      const text = typeof err === "string" ? err : typeof err.message === "string" ? err.message : typeof err.error === "string" ? err.error : "";
+      const match = TOKEN_RE.exec(text);
+      if (!match) return null;
+      return {
+        currentTaskId: match[1],
+        ...match[2] !== "-" ? { currentAttemptId: match[2] } : {}
+      };
+    }
+    var SESSION_BUSY_WITH_TASK_CODE2;
+    var TOKEN_RE;
+    var SessionBusyWithTaskError;
+    var init_mesh_session_busy_dispatch = __esm2({
+      "src/mesh/mesh-session-busy-dispatch.ts"() {
+        "use strict";
+        SESSION_BUSY_WITH_TASK_CODE2 = "session_busy_with_task";
+        TOKEN_RE = /session_busy_with_task\[task=([^\s\]]+) attempt=([^\s\]]+)\]/;
+        SessionBusyWithTaskError = class extends Error {
+          code = SESSION_BUSY_WITH_TASK_CODE2;
+          reason = SESSION_BUSY_WITH_TASK_CODE2;
+          currentTaskId;
+          currentAttemptId;
+          incomingTaskId;
+          sessionId;
+          constructor(info) {
+            super(
+              `Refusing mesh dispatch${info.incomingTaskId ? ` of task ${info.incomingTaskId}` : ""}: session ${info.sessionId || "?"} is busy running task ${info.currentTaskId} (${formatSessionBusyWithTaskToken(info)}). Nothing was stamped or submitted; retry once the session is idle or target another session.`
+            );
+            this.name = "SessionBusyWithTaskError";
+            this.currentTaskId = info.currentTaskId;
+            if (info.currentAttemptId) this.currentAttemptId = info.currentAttemptId;
+            if (info.incomingTaskId) this.incomingTaskId = info.incomingTaskId;
+            if (info.sessionId) this.sessionId = info.sessionId;
+          }
+        };
       }
     });
     function resolveDelegatedWorkerAutoApproveModeForLaunch(input) {
@@ -136339,6 +136581,7 @@ ${rawInput}` : rawInput;
         init_recent_activity();
         init_coordinator_registry();
         init_mesh_duplicate_dispatch();
+        init_mesh_session_busy_dispatch();
         init_mesh_record();
         init_delegated_worker_mode_delivery();
         init_saved_sessions();
@@ -137535,6 +137778,14 @@ Run 'adhdev doctor' for detailed diagnostics.`
                     `Refusing duplicate mesh dispatch: task ${meshContext.taskId} is already being worked by a live session on this daemon`,
                     { holderSessionId: stampResult.holderSessionId }
                   );
+                }
+                if (stampResult && stampResult.stamped === false && stampResult.reason === "session_busy_with_task" && stampResult.currentTaskId) {
+                  throw new SessionBusyWithTaskError({
+                    currentTaskId: stampResult.currentTaskId,
+                    ...stampResult.currentAttemptId ? { currentAttemptId: stampResult.currentAttemptId } : {},
+                    ...typeof meshContext.taskId === "string" && meshContext.taskId ? { incomingTaskId: meshContext.taskId } : {},
+                    sessionId: targetInstanceId
+                  });
                 }
                 if (meshContext.silentIdlePush === true) {
                   try {
@@ -140803,8 +141054,22 @@ ${mergeTreeErr?.stderr || ""}`;
                 return forwarded ?? { success: false, error: "no response from remote node" };
               }
             }
-            const isDryRun = args?.dryRun !== false && args?.execute !== true;
-            if (isDryRun) {
+            const dryRunVeto = resolveDryRunVeto(args);
+            if (dryRunVeto.refused) {
+              return {
+                success: false,
+                code: dryRunVeto.code,
+                nodeId,
+                meshId,
+                allowed: false,
+                willRun: false,
+                executed: false,
+                blockingReasons: [dryRunVeto.code],
+                error: dryRunVeto.error,
+                nextAction: `Re-run refine_mesh_node(meshId: "${meshId}", nodeId: "${nodeId}", execute: true) to apply, or omit dry_run to preview.`
+              };
+            }
+            if (dryRunVeto.isDryRun) {
               const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
               const mesh = meshRecord2?.mesh;
               const node = mesh?.nodes?.find((n) => meshNodeIdMatches5(n, nodeId));
@@ -140828,8 +141093,21 @@ ${mergeTreeErr?.stderr || ""}`;
             const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
             if (!meshId) return { success: false, error: "meshId required" };
             const requestedNodeIds = Array.isArray(args?.nodeIds) ? args.nodeIds.filter((v) => typeof v === "string" && v.trim().length > 0).map((v) => v.trim()) : void 0;
-            const isDryRun = args?.dryRun !== false && args?.execute !== true;
-            if (isDryRun) return ctx.batchRefineMeshNodes(meshId, requestedNodeIds, args);
+            const dryRunVeto = resolveDryRunVeto(args);
+            if (dryRunVeto.refused) {
+              return {
+                success: false,
+                code: dryRunVeto.code,
+                meshId,
+                allowed: false,
+                willRun: false,
+                executed: false,
+                blockingReasons: [dryRunVeto.code],
+                error: dryRunVeto.error,
+                nextAction: `Re-run batch_refine_mesh_nodes(meshId: "${meshId}", execute: true) to apply, or omit dry_run to preview.`
+              };
+            }
+            if (dryRunVeto.isDryRun) return ctx.batchRefineMeshNodes(meshId, requestedNodeIds, args);
             return ctx.startMeshRefineBatchJob(meshId, requestedNodeIds, args);
           }
         };
@@ -145679,8 +145957,21 @@ ${hintLines.join("\n")}` : "",
       );
       const ordering = orderMeshRefineBatchNodes(changeAreas);
       const orderedNodes = ordering.order.map((nodeId) => targetNodes.find((n) => meshNodeIdMatches5(n, nodeId))).filter((n) => !!n);
-      const dryRun = args?.dryRun !== false && args?.execute !== true;
-      if (dryRun) {
+      const dryRunVeto = resolveDryRunVeto(args);
+      if (dryRunVeto.refused) {
+        return {
+          success: false,
+          code: dryRunVeto.code,
+          meshId,
+          allowed: false,
+          willRun: false,
+          executed: false,
+          blockingReasons: [dryRunVeto.code],
+          error: dryRunVeto.error,
+          nextAction: `Re-run batch_refine_mesh_nodes(meshId: "${meshId}", execute: true) to apply, or omit dry_run to preview.`
+        };
+      }
+      if (dryRunVeto.isDryRun) {
         return buildMeshRefineBatchDryRunResult({ mesh, orderedNodes, ordering });
       }
       return runMeshRefineBatchConvergence(self, meshId, orderedNodes, ordering, args);
@@ -146119,7 +146410,21 @@ ${hintLines.join("\n")}` : "",
       }
     }
     async function startMeshRefineBatchJob(self, meshId, requestedNodeIds, args) {
-      if (args?.dryRun !== false && args?.execute !== true) {
+      const dryRunVeto = resolveDryRunVeto(args);
+      if (dryRunVeto.refused) {
+        return {
+          success: false,
+          code: dryRunVeto.code,
+          meshId,
+          allowed: false,
+          willRun: false,
+          executed: false,
+          blockingReasons: [dryRunVeto.code],
+          error: dryRunVeto.error,
+          nextAction: `Re-run batch_refine_mesh_nodes(meshId: "${meshId}", execute: true) to apply, or omit dry_run to preview.`
+        };
+      }
+      if (dryRunVeto.isDryRun) {
         const plan = await batchRefineMeshNodes(self, meshId, requestedNodeIds, { ...args, dryRun: true, execute: false });
         return attachBatchBasePreflightWarning(self, meshId, requestedNodeIds, args, plan);
       }
@@ -146153,6 +146458,7 @@ ${hintLines.join("\n")}` : "",
         init_mesh_refine_batch();
         init_mesh_refine_submodule_preflight();
         init_git_locale();
+        init_command_args();
         init_mesh_refine_concurrency();
         init_mesh_refine_batch_chain_abort();
         init_mesh_refine_progress();
@@ -152008,6 +152314,7 @@ ${e?.stderr || ""}`;
       RawTerminalAttachment: () => RawTerminalAttachment,
       SEQSCRIBE_DB_NAME: () => SEQSCRIBE_DB_NAME,
       SEQSCRIBE_DB_SUFFIX_ENV_VAR: () => SEQSCRIBE_DB_SUFFIX_ENV_VAR,
+      SESSION_BUSY_WITH_TASK_CODE: () => SESSION_BUSY_WITH_TASK_CODE2,
       SESSION_LAUNCHED_BY: () => SESSION_LAUNCHED_BY,
       SESSION_TRANSCRIPT_RING: () => SESSION_TRANSCRIPT_RING,
       STALE_MAGI_WINDOW_MS: () => STALE_MAGI_WINDOW_MS,
@@ -152017,6 +152324,7 @@ ${e?.stderr || ""}`;
       STANDALONE_SEQSCRIBE_WS_PATH: () => STANDALONE_SEQSCRIBE_WS_PATH,
       STOP_CONTROL_ID: () => STOP_CONTROL_ID,
       SYM: () => SYM,
+      SessionBusyWithTaskError: () => SessionBusyWithTaskError,
       SessionHostController: () => SessionHostController,
       SessionHostPtyTransportFactory: () => SessionHostPtyTransportFactory,
       SessionOutputFanout: () => SessionOutputFanout,
@@ -152131,6 +152439,7 @@ ${e?.stderr || ""}`;
       classifyHotChatSessionsForSubscriptionFlush: () => classifyHotChatSessionsForSubscriptionFlush,
       classifyMeshLaunchAxisSource: () => classifyMeshLaunchAxisSource,
       classifyP2pRelayFailure: () => classifyP2pRelayFailure4,
+      classifySessionBusyWithTask: () => classifySessionBusyWithTask2,
       classifyShadowDivergence: () => classifyShadowDivergence,
       classifyStaleDirectForPrune: () => classifyStaleDirectForPrune,
       classifyVolatilePath: () => classifyVolatilePath,
@@ -152258,6 +152567,7 @@ ${e?.stderr || ""}`;
       formatLifecycleTraceLine: () => formatLifecycleTraceLine,
       formatManifestValidationIssues: () => formatManifestValidationIssues,
       formatMeshTaskModeViolations: () => formatMeshTaskModeViolations,
+      formatSessionBusyWithTaskToken: () => formatSessionBusyWithTaskToken,
       formatTurnLedgerMigrationLine: () => formatTurnLedgerMigrationLine,
       formatTurnLedgerMigrationV2Line: () => formatTurnLedgerMigrationV2Line,
       formatTurnLedgerMigrationV3Line: () => formatTurnLedgerMigrationV3Line,
@@ -153464,6 +153774,7 @@ ${e?.stderr || ""}`;
       }
     };
     init_mesh_duplicate_dispatch();
+    init_mesh_session_busy_dispatch();
     init_state_store();
     init_ide_detector();
     init_cli_detector();
@@ -157565,6 +157876,13 @@ ${e?.stderr || ""}`;
       }
       return [project(state)];
     }
+    var LIVE_WORKING_STATUSES = /* @__PURE__ */ new Set(["generating", "waiting_approval", "waiting_choice", "starting", "streaming", "working", "no_progress", "long_generating"]);
+    function liveWorkingStatus(state) {
+      const status = (typeof state.status === "string" ? state.status : "").toLowerCase();
+      if (LIVE_WORKING_STATUSES.has(status)) return status;
+      const chatStatus = (typeof state.activeChat?.status === "string" ? state.activeChat.status : "").toLowerCase();
+      return LIVE_WORKING_STATUSES.has(chatStatus) ? chatStatus : "";
+    }
     var ProviderInstanceManager = class {
       instances = /* @__PURE__ */ new Map();
       tickTimer = null;
@@ -157854,8 +158172,20 @@ ${e?.stderr || ""}`;
             return { stamped: false, reason: "task_already_stamped_on_live_instance", holderSessionId: conflict };
           }
         }
+        if (assignment.taskId) {
+          const busy = this.readBusyWithOtherTask(inst, assignment.taskId);
+          if (busy) {
+            LOG.warn("MeshDispatch", `attachMeshAssignment refused on ${instanceId}: session is busy (${busy.status}) with task ${busy.currentTaskId} attempt ${busy.currentAttemptId || "?"} \u2014 not stamping incoming task ${assignment.taskId} attempt ${assignment.attemptId || "?"}`);
+            return {
+              stamped: false,
+              reason: "session_busy_with_task",
+              currentTaskId: busy.currentTaskId,
+              ...busy.currentAttemptId ? { currentAttemptId: busy.currentAttemptId } : {}
+            };
+          }
+        }
         inst.attachMeshAssignment(assignment);
-        LOG.info("MeshDispatch", `stamped mesh assignment on ${instanceId}: mesh=${assignment.meshId} node=${assignment.nodeId || ""} task=${assignment.taskId || ""} coordinator=${assignment.coordinatorDaemonId || ""}`);
+        LOG.info("MeshDispatch", `stamped mesh assignment on ${instanceId}: mesh=${assignment.meshId} node=${assignment.nodeId || ""} task=${assignment.taskId || ""} attempt=${assignment.attemptId || "?"}${typeof assignment.attemptGeneration === "number" ? `/g${assignment.attemptGeneration}` : ""} coordinator=${assignment.coordinatorDaemonId || ""}`);
         return { stamped: true };
       }
       /**
@@ -157868,7 +158198,6 @@ ${e?.stderr || ""}`;
        * session stays idempotent. O(n) over instances — the count is small.
        */
       findLiveWorkingTaskHolder(meshId, taskId, excludeInstanceId) {
-        const working = /* @__PURE__ */ new Set(["generating", "waiting_approval", "waiting_choice", "starting", "streaming", "working", "no_progress", "long_generating"]);
         for (const [id22, inst] of this.instances) {
           if (id22 === excludeInstanceId) continue;
           let state;
@@ -157880,11 +158209,32 @@ ${e?.stderr || ""}`;
           const settings = state.settings || {};
           if (settings.meshNodeFor !== meshId) continue;
           if (settings.meshActiveTaskId !== taskId) continue;
-          const status = (typeof state.status === "string" ? state.status : "").toLowerCase();
-          const chatStatus = (typeof state.activeChat?.status === "string" ? state.activeChat.status : "").toLowerCase();
-          if (working.has(status) || working.has(chatStatus)) return id22;
+          if (liveWorkingStatus(state)) return id22;
         }
         return null;
+      }
+      /**
+       * SESSION-BUSY support: when `inst` is stamped with a task OTHER than `incomingTaskId`
+       * and is still working it (the same mid-turn / booting status set the DOUBLE-DISPATCH
+       * guard uses — one busy definition for both stamp guards), the task + attempt it is
+       * working. Null when the instance is free to take the new stamp: no current task, the
+       * same task, or not working (idle / stopped / error — a stale stamp left by a missed
+       * detach must not wedge the session forever).
+       */
+      readBusyWithOtherTask(inst, incomingTaskId) {
+        let state;
+        try {
+          state = inst.getState();
+        } catch {
+          return null;
+        }
+        const settings = state.settings || {};
+        const currentTaskId = typeof settings.meshActiveTaskId === "string" ? settings.meshActiveTaskId.trim() : "";
+        if (!currentTaskId || currentTaskId === incomingTaskId.trim()) return null;
+        const status = liveWorkingStatus(state);
+        if (!status) return null;
+        const currentAttemptId = typeof settings.meshActiveAttemptId === "string" && settings.meshActiveAttemptId.trim() ? settings.meshActiveAttemptId.trim() : void 0;
+        return { currentTaskId, ...currentAttemptId ? { currentAttemptId } : {}, status };
       }
       /** Clear a mesh assignment after the dispatched task reaches a terminal
        *  state (generating_completed / stopped / failed). */
@@ -167438,6 +167788,9 @@ data: ${JSON.stringify(msg.data)}
       }
       return { terminalTasks };
     }
+    function isUnboundPlaceholderCancel(request) {
+      return !!request.taskId && request.sessionId === request.taskId;
+    }
     function cancelRequest(effect, attempt) {
       return {
         attemptId: effect.attemptId,
@@ -167480,6 +167833,10 @@ data: ${JSON.stringify(msg.data)}
           case "cancel_dispatch": {
             const request = cancelRequest(effect, attempt);
             if (request.revokeBind) run2("cancel_dispatch", ports.revokeWorkerBind ? () => ports.revokeWorkerBind(request) : void 0);
+            if (isUnboundPlaceholderCancel(request)) {
+              ctx.onSkip?.("cancel_dispatch", `attempt ${request.attemptId} g${request.generation} was never delivered to a session (placeholder session = task ${request.taskId}); no worker to stop`);
+              break;
+            }
             run2("cancel_dispatch", ports.cancelDispatch ? () => ports.cancelDispatch(request) : void 0);
             break;
           }
@@ -167691,6 +168048,9 @@ data: ${JSON.stringify(msg.data)}
             onError: (kind, error48) => {
               counters8.postCommitFailed++;
               log.error(`turn-ledger: post-commit ${kind} failed for ${step.evidence.eventId}: ${error48 instanceof Error ? error48.message : String(error48)}`);
+            },
+            onSkip: (kind, detail) => {
+              log.info(`turn-ledger: post-commit ${kind} skipped for ${step.evidence.eventId}: ${detail}`);
             }
           });
           counters8.missingPorts += post.missingPort;
@@ -175638,14 +175998,20 @@ function collectNodeSessionIds(node) {
   sessionRecords.forEach((session) => addSessionRecord(sessions, session));
   return sessions;
 }
+function unwrapOneLevel(value) {
+  if (!value || typeof value !== "object") return value;
+  if (value.payload && typeof value.payload === "object") return value.payload;
+  if (value.result && typeof value.result === "object") return value.result;
+  return value;
+}
 function unwrapCommandPayload(value) {
   let current = value;
   const seen = /* @__PURE__ */ new Set();
   for (let depth = 0; depth < 8; depth += 1) {
     if (!current || typeof current !== "object" || seen.has(current)) break;
     seen.add(current);
-    const nested = current.result ?? current.payload;
-    if (!nested || typeof nested !== "object") break;
+    const nested = unwrapOneLevel(current);
+    if (nested === current) break;
     current = nested;
   }
   return current;
@@ -175843,7 +176209,7 @@ async function orphanedPinNotify(transport, args) {
 // src/tools/mesh-node-identity.ts
 var import_daemon_core4 = __toESM(require_dist3());
 function resolveCoordinatorNode(ctx) {
-  const preferredNodeId = typeof ctx.mesh.coordinator?.preferredNodeId === "string" ? ctx.mesh.coordinator.preferredNodeId.trim() : "";
+  const preferredNodeId = readString(ctx.mesh.coordinator?.preferredNodeId) || readString(ctx.mesh.coordinator?.preferred_node_id);
   if (preferredNodeId) {
     const preferred = ctx.mesh.nodes.find((n) => n.id === preferredNodeId && typeof n.daemonId === "string" && n.daemonId.trim());
     if (preferred) return preferred;
@@ -176265,6 +176631,7 @@ var MESH_STATUS_TOOL = {
       refresh: { type: "boolean", description: "Bypass the shared get_status_metadata probe cache (one probe per daemon, 5 s TTL \u2014 mesh-tools-internal.ts probeStatusMetadataForNode) and force a fresh probe. Default false." },
       _gemini_compat: { type: "string", description: "Dummy property for Gemini compatibility. Ignore this." },
       includeStaleDirectWorkDetails: { type: "boolean", description: "Opt in to the full staleDirectWork array. Defaults false; normal status returns compact staleDirectWorkSummary only." },
+      includeTerminalDirectWork: { type: "boolean", description: "Include historical completed/failed direct dispatches (terminalDirectWork) in the response. Defaults false." },
       includeSessions: { type: "boolean", description: "Opt in to per-node live session arrays. Default false: compact mode returns a per-node sessionSummary (counts) and de-duplicated full session lists under top-level daemonSessions keyed by daemonId (sessions are not repeated for every node that shares a daemon). Set true to also include the full session array on each node." },
       includeUsage: { type: "boolean", description: "Opt in to the token/cost usage rollup for this mesh (usage.total, usage.retained, usage.byNode, usage.costCoverage). Default false \u2014 usage is not read on ordinary status polls. Token counts come from each provider native transcript; costUsd is only present for providers that compute one themselves (hermes), so costCoverage reports how many sessions contributed a cost." },
       compact: { type: "boolean", description: "Slim payload for LLM callers. Default true. Folds per-node session arrays to sessionSummary and de-duplicates daemon-shared sessions into daemonSessions. Set false (or verbose=true) for the full dashboard-grade payload." },
@@ -176288,6 +176655,7 @@ var MESH_ROUTE_PREVIEW_TOOL = {
         items: { type: "string" },
         description: "Optional capability tags the hypothetical task requires."
       },
+      requiredTags: { type: "array", items: { type: "string" }, description: "CamelCase alias for required_tags." },
       readonly: {
         type: "boolean",
         description: "Whether to preview read-only scheduling semantics, including the reserved-last-slot capacity rule."
@@ -176295,7 +176663,8 @@ var MESH_ROUTE_PREVIEW_TOOL = {
       target_node_id: {
         type: "string",
         description: "Optional node pin. When omitted, preview all eligible nodes in scheduling order."
-      }
+      },
+      targetNodeId: { type: "string", description: "CamelCase alias for target_node_id." }
     }
   }
 };
@@ -176360,9 +176729,11 @@ var MESH_ENQUEUE_TASK_TOOL = {
       model: { type: "string", description: "Optional model override for the agent that runs this task, e.g. opus, sonnet, haiku. Best-effort: applied at launch for providers that support a model flag (claude-cli --model, ACP setConfigOption); ignored by providers that cannot honor it. Use a cheaper model for simple tasks to save tokens, a stronger one for hard work. Blank = the provider default." },
       thinkingLevel: { ...enumOf(MESH_THINKING_LEVELS), description: "Optional reasoning-effort level for this task. Best-effort: applied at launch for providers that support it (claude-cli --effort, codex-cli reasoning effort, ACP thought_level); ignored otherwise. Use low for simple tasks (fewer tokens), high for hard reasoning." },
       difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "REQUIRED task execution difficulty \u2014 a ROUTING HINT, not a model selector. It is matched against each node's capability slots so the task lands on a slot configured for that difficulty, and THAT SLOT's own model + thinkingLevel are what launch. It does not by itself mean a cheaper or stronger model: to change what a difficulty runs on, edit the node's slots (mesh_node_slots_set) rather than picking a different difficulty. Classify each task by how hard the work actually is. An explicit model/thinkingLevel above always wins." },
-      notBefore: { type: "number", description: "CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string." },
+      not_before: { type: ["number", "string"], description: "G7 (delayed execution). Hold the task pending until this time \u2014 an absolute epoch-ms number, a small relative-ms offset from now, or an ISO-8601 timestamp string." },
+      notBefore: { type: ["number", "string"], description: "CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string." },
       max_retries: { type: "number", description: "P3 (retry cap). Max automatic requeue attempts before the task auto-fails instead of returning to pending. When requeueCount reaches this, mesh_queue_requeue auto-fails the task unless force=true. Omit to use the mesh policy default (maxTaskRetries, typically 1)." },
       maxRetries: { type: "number", description: "CamelCase alias for max_retries." },
+      thinking_level: { ...enumOf(MESH_THINKING_LEVELS), description: "Snake_case alias for thinkingLevel. Optional reasoning-effort level for this task. Best-effort: applied at launch for providers that support it (claude-cli --effort, codex-cli reasoning effort, ACP thought_level); ignored otherwise. Use low for simple tasks (fewer tokens), high for hard reasoning." },
       block_duplicate: { type: "boolean", description: "G4 (duplicate detection, block mode). Default false = warn-only: if an in-flight (pending/assigned) task with the same message (+ target node when pinned) already exists, the task is still enqueued but the response carries duplicateSuspect. Set true to REFUSE the enqueue with code duplicate_suspect instead (structural TASKBUBBLE-DUP defense \u2014 use when re-sending a task that a slow prior turn may have already enqueued)." },
       blockDuplicate: { type: "boolean", description: "CamelCase alias for block_duplicate." },
       allow_duplicate: { type: "boolean", description: "G4. Set true to skip duplicate detection entirely (no warning, no block) for an intentional re-enqueue of the same instruction." },
@@ -176407,6 +176778,8 @@ var MESH_ENQUEUE_BATCH_TOOL = {
             ownedPaths: { type: "array", items: { type: "string" }, description: "CamelCase alias for owned_paths." },
             target_node_id: { type: "string", description: "Optional HARD pin: only this node may claim the task. An unresolvable id rejects the WHOLE batch (atomic)." },
             targetNodeId: { type: "string", description: "CamelCase alias for target_node_id." },
+            target_node: { type: "string", description: "Alias for target_node_id." },
+            targetNode: { type: "string", description: "CamelCase alias for target_node_id." },
             prefer_worktree: { type: "boolean", description: "Route to the most recently cloned idle worktree node (no-op when none exists)." },
             preferWorktree: { type: "boolean", description: "CamelCase alias for prefer_worktree." },
             depends_on: { type: "array", items: { type: "string" }, description: "Refs of sibling entries in THIS batch (forward references allowed) and/or EXISTING queue task ids that must complete before this task becomes claimable. Cycles and unknown values reject the whole batch." },
@@ -176415,10 +176788,11 @@ var MESH_ENQUEUE_BATCH_TOOL = {
             missionId: { type: "string", description: "CamelCase alias for mission_id." },
             priority: { ...enumOf(MESH_TASK_PRIORITIES), description: "G6 task-level scheduling priority (same semantics as mesh_enqueue_task)." },
             model: { type: "string", description: "Optional model override for the agent that runs this task (best-effort at launch)." },
+            thinking_level: { ...enumOf(MESH_THINKING_LEVELS), description: "Snake_case alias for thinkingLevel. Optional reasoning-effort level (best-effort at launch)." },
             thinkingLevel: { ...enumOf(MESH_THINKING_LEVELS), description: "Optional reasoning-effort level (best-effort at launch)." },
             difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "REQUIRED per task \u2014 routing hint matched against node capability slots (same semantics as mesh_enqueue_task)." },
-            not_before: { type: "number", description: "G7 delayed execution: hold the task pending until this time (epoch-ms, relative-ms, or ISO string)." },
-            notBefore: { type: "number", description: "CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string." },
+            not_before: { type: ["number", "string"], description: "G7 delayed execution: hold the task pending until this time (epoch-ms, relative-ms, or ISO string)." },
+            notBefore: { type: ["number", "string"], description: "CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string." },
             max_retries: { type: "number", description: "P3 retry cap (same semantics as mesh_enqueue_task)." },
             maxRetries: { type: "number", description: "CamelCase alias for max_retries." },
             // ── batch v2 graph fields (design :568-570). All optional; a batch
@@ -176469,10 +176843,14 @@ var MESH_ENQUEUE_BATCH_TOOL = {
           properties: {
             ref: { type: "string", description: "Label tasks use in workspace_ref. Shares one namespace with task and gate refs." },
             source_node_id: { type: "string", description: "Node whose workspace the worktree is cloned from." },
+            sourceNodeId: { type: "string", description: "CamelCase alias for source_node_id." },
             purpose: { type: "string", description: "Short label folded into the derived branch name." },
             base_revision: { type: "string", description: "Base revision to prepare from." },
+            baseRevision: { type: "string", description: "CamelCase alias for base_revision." },
             desired_path: { type: "string", description: "Optional explicit worktree path." },
-            cleanup_on_graph_failure: { type: "boolean", description: "Remove the worktree this graph created if the graph fails. Only ever removes a worktree the saga itself owns." }
+            desiredPath: { type: "string", description: "CamelCase alias for desired_path." },
+            cleanup_on_graph_failure: { type: "boolean", description: "Remove the worktree this graph created if the graph fails. Only ever removes a worktree the saga itself owns." },
+            cleanupOnGraphFailure: { type: "boolean", description: "CamelCase alias for cleanup_on_graph_failure." }
           },
           required: ["ref"]
         }
@@ -176545,7 +176923,10 @@ var MESH_GRAPH_GATE_RELEASE_TOOL = {
         items: {
           type: "object",
           properties: {
-            node: { type: "string", description: "Ref or node id of a DIRECT downstream node of this gate." },
+            node: { type: "string", description: "Ref or node id of a DIRECT downstream node of this gate. node_id/nodeId/ref are equivalent aliases \u2014 any one resolves the target; an entry naming none of them is REJECTED (the whole release refuses) rather than silently dropped." },
+            node_id: { type: "string", description: "Alias for node." },
+            nodeId: { type: "string", description: "CamelCase alias for node." },
+            ref: { type: "string", description: "Alias for node \u2014 the batch-local ref of the downstream node." },
             base_spec_patch: { type: "object", description: "Keys to merge into that node's spec. Allowed keys: run_if, on_false, inputs_from, workspace_ref." },
             baseSpecPatch: { type: "object", description: "CamelCase alias for base_spec_patch." }
           },
@@ -176581,6 +176962,7 @@ var MESH_GRAPH_NODE_PATCH_TOOL = {
       node: { type: "string", description: "Node id or `ref` of the node to patch (from mesh_graph_view). A ref that matches several live graphs is refused \u2014 pass graph_id too, or the exact node id." },
       node_id: { type: "string", description: "Alias for node." },
       nodeId: { type: "string", description: "CamelCase alias for node_id." },
+      ref: { type: "string", description: "Alias for node, spelled `ref` to match mesh_graph_view's own field name for a node's human-readable ref. A ref that matches several live graphs is refused \u2014 pass graph_id too, or the exact node id." },
       graph_id: { type: "string", description: "Disambiguate which graph the ref belongs to. Optional when `node` is a node id." },
       graphId: { type: "string", description: "CamelCase alias for graph_id." },
       base_spec_patch: {
@@ -176612,7 +176994,7 @@ var MESH_GRAPH_VIEW_TOOL = {
       includeTerminal: { type: "boolean", description: "CamelCase alias for include_terminal." },
       probe_gate_evidence: { type: "boolean", description: `Attach convergence evidence to waiting gates: whether each upstream commit is already reachable from the mesh base workspace's local origin/main. Answers "did the guarded work already land?" without claiming. Runs bounded local git probes (first 5 waiting gates, no fetch) \u2014 default false keeps the view git-free. Evidence never releases a gate.` },
       probeGateEvidence: { type: "boolean", description: "CamelCase alias for probe_gate_evidence." },
-      limit: { type: "number", description: "Max graphs to return (default 20)." }
+      limit: { type: "integer", minimum: 0, description: "Max graphs to return (default 20)." }
     }
   }
 };
@@ -176895,13 +177277,16 @@ var MESH_MISSION_UPSERT_TOOL = {
       status: { type: "string", enum: ["active", "paused", "completed", "abandoned"], description: "Mission lifecycle status. Defaults to active on create. Required in bulk (mission_ids) mode." },
       brief: {
         type: "object",
-        description: "H2 (mission brief). Optional structured brief, rendered into every task dispatched under this mission's worker-protocol footer so a freshly launched worker sees it without a separate lookup. {goal (required \u2014 a brief with no goal is dropped, not stored empty), constraints?, doneCriteria?, handoffNotes?, ownedPaths?} \u2014 each of the four optional fields is a string array. Ignored in bulk (mission_ids) mode. This is DISTINCT from the top-level `goal` field: `goal` is the mission record's short free-text summary shown in mesh_mission_list; `brief` is the longer structured packet a worker actually reads.",
+        description: "H2 (mission brief). Optional structured brief, rendered into every task dispatched under this mission's worker-protocol footer so a freshly launched worker sees it without a separate lookup. {goal (required \u2014 a brief with no goal is dropped, not stored empty), constraints?, doneCriteria?, handoffNotes?, ownedPaths?} \u2014 each of the four optional fields is a string array; done_criteria/handoff_notes/owned_paths snake_case aliases are also accepted. Ignored in bulk (mission_ids) mode. When a non-empty brief is dropped (no goal, or a field of the wrong type), the response carries `briefIgnored: {reason, field?}` instead of silently discarding it. This is DISTINCT from the top-level `goal` field: `goal` is the mission record's short free-text summary shown in mesh_mission_list; `brief` is the longer structured packet a worker actually reads.",
         properties: {
           goal: { type: "string", description: "What this mission is trying to accomplish. Required for the brief to be stored \u2014 an object with no goal is treated as no brief." },
           constraints: { type: "array", items: { type: "string" }, description: 'Hard constraints a worker must respect, e.g. "do not touch daemon-core", "no npm install".' },
           doneCriteria: { type: "array", items: { type: "string" }, description: "How to know the mission is actually done." },
+          done_criteria: { type: "array", items: { type: "string" }, description: "Snake_case alias for doneCriteria." },
           handoffNotes: { type: "array", items: { type: "string" }, description: "Standing notes for whoever picks up mission work next." },
-          ownedPaths: { type: "array", items: { type: "string" }, description: "Paths this mission's tasks collectively own \u2014 surfaced to workers, not itself enforced (per-task owned_paths on mesh_enqueue_task/mesh_enqueue_batch/mesh_send_task is what claim-time enforcement reads)." }
+          handoff_notes: { type: "array", items: { type: "string" }, description: "Snake_case alias for handoffNotes." },
+          ownedPaths: { type: "array", items: { type: "string" }, description: "Paths this mission's tasks collectively own \u2014 surfaced to workers, not itself enforced (per-task owned_paths on mesh_enqueue_task/mesh_enqueue_batch/mesh_send_task is what claim-time enforcement reads)." },
+          owned_paths: { type: "array", items: { type: "string" }, description: "Snake_case alias for ownedPaths." }
         }
       }
     },
@@ -177154,6 +177539,11 @@ var MESH_RECORD_NOTE_TOOL = {
         type: "number",
         description: "Optional explicit read-side lifespan in days. Resolved to an absolute expiry at record time; after it passes an UNPINNED note is hidden from the injected prompt (but retained in the ledger for audit). Overrides the category default TTL. Ignored when pinned is true."
       },
+      expiresAt: {
+        type: "string",
+        description: "Optional explicit ISO-8601 expiry timestamp, as an alternative to ttl_days when you know the exact cutoff rather than a day count. Takes precedence over ttl_days when both are given. Ignored when pinned is true."
+      },
+      expires_at: { type: "string", description: "Snake_case alias for expiresAt." },
       supersedes: {
         type: "string",
         description: "Optional version-supersede: the note_id of an earlier note this one replaces, OR a subject_key shared with earlier notes. At injection any earlier LIVE note matching this id/subject is hidden from the prompt (its ledger entry is retained for audit). Use when you record an updated lesson that makes a prior one obsolete. Pinned notes are never hidden by supersede."
@@ -177181,7 +177571,7 @@ var MESH_FORGET_NOTE_TOOL = {
 };
 var MESH_RECONCILE_LEDGER_TOOL = {
   name: "mesh_reconcile_ledger",
-  description: "Reconcile daemon-local mesh ledgers by querying bounded ledger slices over P2P/DataChannel and importing missing entries into the coordinator local JSONL ledger. Cloud/D1 is not used as a ledger source of truth.",
+  description: "Report reconciliation evidence across daemon-local mesh ledgers by querying bounded ledger slices over P2P/DataChannel \u2014 read-only, it does NOT import entries (see import_entries). Each daemon's records stay on that daemon; the fleet view is the replicated mesh.<id>.events topic, and a peer's nested payload is read from the peer. Cloud/D1 is not used as a ledger source of truth.",
   inputSchema: {
     type: "object",
     properties: {
@@ -177189,7 +177579,7 @@ var MESH_RECONCILE_LEDGER_TOOL = {
       limit: { type: "number", description: "Bounded slice size per node. Defaults to 100 and is clamped by daemon-core." },
       after_id: { type: "string", description: "Optional cursor entry ID; remote slices return entries strictly after this ID when present." },
       since: { type: "string", description: "Optional ISO timestamp lower bound for queried entries." },
-      import_entries: { type: "boolean", description: "When false, query and report evidence without importing remote entries. Defaults true." }
+      import_entries: { type: "boolean", description: "RETIRED (C-W9a) \u2014 accepted for backward compatibility but a no-op regardless of value. This tool never imports entries into a local ledger; it only reads and reports evidence. The response always carries an importRetired/note explanation, whether or not this flag is passed." }
     }
   }
 };
@@ -178726,11 +179116,7 @@ var import_daemon_core7 = __toESM(require_dist3());
 var import_transcript_read_model_consumers = __toESM(require_transcript_read_model_consumers());
 var SEMANTIC_TRANSCRIPT_FRESHNESS_BUDGET_MS = 3e4;
 function unwrap(result) {
-  if (result && typeof result === "object") {
-    if (result.payload && typeof result.payload === "object") return result.payload;
-    if (result.result && typeof result.result === "object") return result.result;
-  }
-  return result;
+  return unwrapOneLevel(result);
 }
 var FALLBACK_REASONS = /* @__PURE__ */ new Set([
   "mode_not_primary",
@@ -179520,6 +179906,8 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
     if (dispatchPayload?.success === false || dispatchResult?.success === false) {
       const source = dispatchPayload?.success === false ? dispatchPayload : dispatchResult;
       const errorMessage = dispatchPayload?.error || dispatchResult?.error || "agent_command rejected the task";
+      const busyRefusal = sessionBusyRefusalFields(errorMessage, sessionId);
+      if (busyRefusal) return { success: false, error: `P2P dispatch refused: ${errorMessage}`, nodeId: node.id, targetDaemonId: daemonId, ...busyRefusal };
       return {
         ...buildCoordinatorP2pRelayFailure(source?.error || errorMessage, {
           command: "agent_command",
@@ -179535,6 +179923,8 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
     return { success: true, dispatched: true, sessionId: sessionId || "", providerType: resolvedProviderType };
   } catch (e) {
     const errorMessage = e?.message || String(e);
+    const busyRefusal = sessionBusyRefusalFields(e, sessionId);
+    if (busyRefusal) return { success: false, error: `P2P dispatch refused: ${errorMessage}`, nodeId: node.id, targetDaemonId: daemonId, ...busyRefusal };
     return {
       ...buildCoordinatorP2pRelayFailure(e, {
         command: "agent_command",
@@ -179545,6 +179935,20 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
       error: `P2P dispatch failed: ${errorMessage}`
     };
   }
+}
+function sessionBusyRefusalFields(error48, sessionId) {
+  const busy = (0, import_daemon_core9.classifySessionBusyWithTask)(error48);
+  if (!busy) return null;
+  return {
+    code: import_daemon_core9.SESSION_BUSY_WITH_TASK_CODE,
+    reason: import_daemon_core9.SESSION_BUSY_WITH_TASK_CODE,
+    recoverable: true,
+    retryRecommended: false,
+    ...sessionId ? { sessionId } : {},
+    currentTaskId: busy.currentTaskId,
+    ...busy.currentAttemptId ? { currentAttemptId: busy.currentAttemptId } : {},
+    nextAction: `Session${sessionId ? ` '${sessionId}'` : ""} is still running task '${busy.currentTaskId}'. Nothing was delivered. Use mesh_enqueue_task (the queue delivers when the session goes idle), target another idle session, or retry after the current task completes.`
+  };
 }
 function meshSessionCacheKey(nodeId, runtimeSessionId) {
   return `${nodeId}:${runtimeSessionId}`;
@@ -180240,7 +180644,12 @@ async function meshStatus(ctx, args = {}) {
       }
       foldedNodesSummary = {
         count: fullyFolded.length,
-        note: "Node-array byte budget reached: these nodes are listed by id only. Query a specific node_id or use verbose=true for their detail.",
+        // mesh_status itself has no node_id / node-filter parameter (the old
+        // wording pointed at a param that does not exist on this tool). The
+        // actual ways to narrow: mesh_list_nodes for a lightweight roster, or
+        // mesh_git_status(node_id) for one node's git/branch detail; verbose=true
+        // widens THIS call's byte budget for full per-node status instead.
+        note: "Node-array byte budget reached: these nodes are listed by id only. Use mesh_list_nodes for a lightweight roster, mesh_git_status(node_id) for one node's git/branch detail, or call mesh_status again with verbose=true for full detail.",
         byHealth,
         byBranchConvergence,
         nodeIds
@@ -180633,10 +181042,21 @@ async function meshGraphGateRelease(ctx, args) {
       error: `mesh_graph_gate_release requires ${missing.join(", ")}. fencing_token and lease_generation come from the mesh_graph_gate_claim response; idempotency_key is yours to choose and makes a retried release a no-op instead of a double release.`
     });
   }
-  const patches = (args.patches ?? []).map((p) => ({
-    node: readString(p?.node) || "",
-    baseSpecPatch: p?.base_spec_patch ?? p?.baseSpecPatch ?? {}
-  })).filter((p) => p.node.length > 0);
+  const rawPatches = args.patches ?? [];
+  const unresolvedPatchIndices = [];
+  const patches = rawPatches.map((p, i) => {
+    const node = readString(p?.node) || readString(p?.node_id) || readString(p?.nodeId) || readString(p?.ref) || "";
+    if (!node) unresolvedPatchIndices.push(i);
+    return { node, baseSpecPatch: p?.base_spec_patch ?? p?.baseSpecPatch ?? {} };
+  });
+  if (unresolvedPatchIndices.length > 0) {
+    return JSON.stringify({
+      success: false,
+      code: "unresolvable_patch_node",
+      error: `mesh_graph_gate_release patches[${unresolvedPatchIndices.join(", ")}] name no resolvable node \u2014 each entry needs one of node, node_id, nodeId or ref. Refusing the release rather than silently dropping the patch and committing the unpatched spec, since a released gate can never be re-released.`,
+      unresolvedPatchIndices
+    });
+  }
   try {
     const result = await graphGateRelease(ctx.transport, {
       meshId: ctx.mesh.id,
@@ -180850,7 +181270,7 @@ async function meshGraphView(ctx, args) {
       ...graphId ? { graphId } : {},
       ...batchId ? { batchId } : {},
       activeOnly: !includeTerminal,
-      ...readNumber(args.limit) !== void 0 ? { limit: readNumber(args.limit) } : {},
+      ...readNonNegativeInt(args.limit) !== void 0 ? { limit: readNonNegativeInt(args.limit) } : {},
       ...probeGateEvidence ? { probeGateEvidence: true } : {}
     });
     const pendingActions = graphs.flatMap((g) => (g.nextCoordinatorAction ?? []).map((a) => ({ graphId: g.graphId, ...a })));
@@ -180868,6 +181288,11 @@ async function meshGraphView(ctx, args) {
   } catch (e) {
     return JSON.stringify({ success: false, error: e?.message || String(e) });
   }
+}
+function readNonNegativeInt(value) {
+  const n = readNumber(value);
+  if (n === void 0) return void 0;
+  return Math.max(0, Math.floor(n));
 }
 function readNumber(value) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -180938,7 +181363,7 @@ async function normalizeEnqueueTaskArgs(ctx, args, callerLabel) {
   }
   const priority = (0, import_daemon_core10.normalizeMeshTaskPriority)(readString(args.priority)) || void 0;
   const model = readString(args.model) || void 0;
-  const thinkingLevel = readString(args.thinkingLevel) || void 0;
+  const thinkingLevel = readString(args.thinkingLevel) || readString(args.thinking_level) || void 0;
   const difficulty = readString(args.difficulty) || void 0;
   const notBeforeRaw = args.notBefore !== void 0 ? args.notBefore : args.not_before;
   const notBefore = (0, import_daemon_core10.resolveNotBefore)(notBeforeRaw);
@@ -181222,6 +181647,13 @@ async function meshEnqueueBatch(ctx, args) {
       ...v.difficulty ? { difficulty: v.difficulty } : {},
       ...v.notBefore ? { notBefore: v.notBefore } : {},
       ...v.maxRetries !== void 0 ? { maxRetries: v.maxRetries } : {},
+      // H1 (path ownership) — mesh_enqueue_batch parity fix: this normalized value was
+      // computed by the SAME normalizeEnqueueTaskArgs the single-task tool uses (which
+      // already reads owned_paths/ownedPaths), but this specs.push was never updated to
+      // copy it onto either the compat-path spec object OR the graph-path plan (both
+      // read off this one `specs` array — see buildGraphPlanShape below), so a batch
+      // entry's declaration silently never reached the daemon on either path.
+      ...v.ownedPaths ? { ownedPaths: v.ownedPaths } : {},
       ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
     });
   }
@@ -181708,23 +182140,39 @@ function buildMeshRecordReconciliationEvidence(meshId, replicas) {
 
 // src/tools/mesh-tools-mission.ts
 function coerceBriefArg(value) {
-  if (value === void 0) return void 0;
-  if (value === null) return null;
-  if (typeof value !== "object" || Array.isArray(value)) return void 0;
+  if (value === void 0) return { brief: void 0 };
+  if (value === null) return { brief: null };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return { brief: void 0, briefIgnored: { reason: "invalid_field_type" } };
+  }
   const raw = value;
   const goal = typeof raw.goal === "string" ? raw.goal : "";
-  if (!goal.trim()) return void 0;
+  if (!goal.trim()) return { brief: void 0, briefIgnored: { reason: "missing_goal" } };
   const asStringArray2 = (v) => Array.isArray(v) && v.every((x) => typeof x === "string") ? v : void 0;
+  const readAliasArray = (camel, snake, field) => {
+    if (camel !== void 0) {
+      const arr = asStringArray2(camel);
+      return arr ? { value: arr } : { invalid: field };
+    }
+    if (snake !== void 0) {
+      const arr = asStringArray2(snake);
+      return arr ? { value: arr } : { invalid: `${field} (snake_case)` };
+    }
+    return {};
+  };
   const brief = { goal };
-  const constraints = asStringArray2(raw.constraints);
-  const doneCriteria = asStringArray2(raw.doneCriteria);
-  const handoffNotes = asStringArray2(raw.handoffNotes);
-  const ownedPaths = asStringArray2(raw.ownedPaths);
-  if (constraints) brief.constraints = constraints;
-  if (doneCriteria) brief.doneCriteria = doneCriteria;
-  if (handoffNotes) brief.handoffNotes = handoffNotes;
-  if (ownedPaths) brief.ownedPaths = ownedPaths;
-  return brief;
+  const fields = [
+    ["constraints", raw.constraints, void 0, "constraints"],
+    ["doneCriteria", raw.doneCriteria, raw.done_criteria, "doneCriteria"],
+    ["handoffNotes", raw.handoffNotes, raw.handoff_notes, "handoffNotes"],
+    ["ownedPaths", raw.ownedPaths, raw.owned_paths, "ownedPaths"]
+  ];
+  for (const [key, camel, snake, field] of fields) {
+    const { value: arr, invalid } = readAliasArray(camel, snake, field);
+    if (invalid) return { brief: void 0, briefIgnored: { reason: "invalid_field_type", field: invalid } };
+    if (arr) brief[key] = arr;
+  }
+  return { brief };
 }
 async function meshTaskHistory(ctx, args) {
   const { mesh } = ctx;
@@ -181802,9 +182250,10 @@ async function meshRecordNote(ctx, args) {
   const category = args.category === "provider_quirk" || args.category === "pattern_to_avoid" || args.category === "recovery_lesson" ? args.category : void 0;
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
   const pinned = args.pinned === true ? true : void 0;
+  const expiresAtArg = typeof args.expiresAt === "string" ? args.expiresAt : args.expires_at;
   let expiresAt;
-  if (typeof args.expiresAt === "string" && !Number.isNaN(new Date(args.expiresAt).getTime())) {
-    expiresAt = new Date(args.expiresAt).toISOString();
+  if (typeof expiresAtArg === "string" && !Number.isNaN(new Date(expiresAtArg).getTime())) {
+    expiresAt = new Date(expiresAtArg).toISOString();
   } else if (typeof args.ttl_days === "number" && Number.isFinite(args.ttl_days) && args.ttl_days > 0) {
     expiresAt = new Date(new Date(createdAt).getTime() + args.ttl_days * 24 * 60 * 60 * 1e3).toISOString();
   }
@@ -181953,7 +182402,16 @@ async function meshReconcileLedger(ctx, args) {
   return JSON.stringify({
     success: true,
     evidence,
-    ...args.import_entries === true ? { importRetired: true, note: "import_entries is retired (C-W9a): records stay on the daemon that wrote them; read a peer's slice from that peer." } : {}
+    // Retirement note (C-W9a) always surfaces, regardless of whether the caller
+    // passed import_entries at all — the schema still (necessarily) documents the
+    // parameter for backward-compat callers, describes it as retired/no-op, but a
+    // caller who never passed it deserves the same "why did nothing import" signal
+    // as one who explicitly asked for import_entries:true. Previously this note
+    // only appeared when import_entries===true was passed explicitly, so a caller
+    // relying on the schema's old "Defaults true" description got no signal at all
+    // that import silently never happened.
+    importRetired: true,
+    note: "import_entries is retired (C-W9a): records stay on the daemon that wrote them; read a peer's slice from that peer. This tool is read-only \u2014 it never imports, regardless of import_entries."
   }, null, 2);
 }
 function isMeshMissionStatusValue2(value) {
@@ -181988,7 +182446,7 @@ async function meshMissionUpsert(ctx, args) {
         error: `invalid_mission_status: '${statusArg}' (valid: ${import_daemon_core10.MESH_MISSION_STATUSES.join(", ")})`
       });
     }
-    const brief = coerceBriefArg(args.brief);
+    const { brief, briefIgnored } = coerceBriefArg(args.brief);
     const { mission } = await missionUpsert(ctx.transport, {
       meshId: ctx.mesh.id,
       id: readString(args.mission_id) || readString(args.missionId) || void 0,
@@ -182000,6 +182458,7 @@ async function meshMissionUpsert(ctx, args) {
     return JSON.stringify({
       success: true,
       mission,
+      ...briefIgnored ? { briefIgnored } : {},
       nextAction: "Attach tasks with mesh_enqueue_task mission_id and depends_on. mesh_status shows live task aggregates for this mission."
     });
   } catch (e) {
@@ -182112,9 +182571,10 @@ async function meshMissionList(ctx, args = {}) {
 async function meshReviewInbox(ctx, args = {}) {
   await refreshMeshFromDaemon(ctx);
   const meshId = (args.mesh_id ?? ctx.mesh.id).trim();
+  const isOwnMesh = meshId === ctx.mesh.id;
   const result = await commandForNode(ctx, ctx.mesh.nodes[0], "get_mesh_review_inbox", {
     meshId,
-    inlineMesh: ctx.mesh
+    ...isOwnMesh ? { inlineMesh: ctx.mesh } : {}
   }, { statusProbe: true });
   return JSON.stringify(result, null, 2);
 }
@@ -183054,6 +183514,7 @@ async function meshMagiReview(ctx, args) {
   }
   const mode = readString(args.mode);
   const requireIndependentEvidence = (args.require_independent_evidence ?? args.requireIndependentEvidence) !== false;
+  const autoCleanupArg = typeof (args.auto_cleanup ?? args.autoCleanup) === "boolean" ? args.auto_cleanup ?? args.autoCleanup : void 0;
   const wait = args.wait !== false;
   const waitTimeoutMs = resolveMagiWaitTimeoutMs(args.wait_timeout_ms ?? args.waitTimeoutMs);
   const consensusGroupId = `magi_${(0, import_node_crypto.randomUUID)().replace(/-/g, "")}`;
@@ -183119,7 +183580,13 @@ Target: ${args.target}` : ""}`,
     panel: panelName,
     question,
     replicaCount: replicaRecords.length,
-    taskKind
+    taskKind,
+    // wait:false → mesh_magi_collect runs the synthesis + cleanup later, in another
+    // call that only has the group id: persist the caller's choices so collect honours
+    // them (an auto_cleanup:false review must never have its sessions deleted by a
+    // collect that fell back to the policy default).
+    ...typeof autoCleanupArg === "boolean" ? { autoCleanup: autoCleanupArg } : {},
+    requireIndependentEvidence
   });
   const queueTrigger = await triggerMeshQueueAndReport(ctx);
   const baseResult = {
@@ -183167,7 +183634,16 @@ Target: ${args.target}` : ""}`,
     return JSON.stringify({
       ...baseResult,
       waited: false,
-      pollWith: { tool: "mesh_magi_collect", args: { consensus_group_id: consensusGroupId } },
+      // The dispatch record carries auto_cleanup / require_independent_evidence, so
+      // collect honours them without being told again; echoed here for visibility.
+      pollWith: {
+        tool: "mesh_magi_collect",
+        args: {
+          consensus_group_id: consensusGroupId,
+          ...autoCleanupArg !== void 0 ? { auto_cleanup: autoCleanupArg } : {},
+          ...requireIndependentEvidence === false ? { require_independent_evidence: false } : {}
+        }
+      },
       nextAction: `Replicas are running. Drive off mission completion / pendingCoordinatorEvents rather than polling chat, then collect + synthesize once with mesh_magi_collect({ consensus_group_id: '${consensusGroupId}' }).`
     }, null, 2);
   }
@@ -183191,7 +183667,7 @@ Target: ${args.target}` : ""}`,
     synthesis: synthesisNoRaw
   });
   await closeMagiMissionIfTerminal(ctx, mission.id, collected.terminal);
-  const cleanupMode = resolveMagiAutoCleanupMode(ctx, args.auto_cleanup ?? args.autoCleanup);
+  const cleanupMode = resolveMagiAutoCleanupMode(ctx, autoCleanupArg);
   const cleanupReplicaTasks = findMagiReplicaTasks(await readQueueFromDaemon(ctx), consensusGroupId);
   const cleanup = await cleanupMagiAutoLaunchedSessions(ctx, {
     replicaTasks: cleanupReplicaTasks,
@@ -183221,7 +183697,8 @@ async function meshMagiCollect(ctx, args) {
   if (!consensusGroupId) return JSON.stringify({ success: false, error: "consensus_group_id required" });
   await refreshMeshFromDaemon(ctx);
   const explicitKind = args.task_kind ?? args.taskKind;
-  const taskKind = explicitKind !== void 0 ? normalizeMagiTaskKind(explicitKind) : await recoverMagiTaskKind(ctx, consensusGroupId);
+  const dispatchSettings = await recoverMagiDispatchSettings(ctx, consensusGroupId);
+  const taskKind = explicitKind !== void 0 ? normalizeMagiTaskKind(explicitKind) : dispatchSettings.taskKind;
   const replicaTasks = findMagiReplicaTasks(await readQueueFromDaemon(ctx), consensusGroupId);
   if (replicaTasks.length === 0) {
     return JSON.stringify({
@@ -183231,7 +183708,8 @@ async function meshMagiCollect(ctx, args) {
       consensusGroupId
     });
   }
-  const requireIndependentEvidence = (args.require_independent_evidence ?? args.requireIndependentEvidence) !== false;
+  const requireIndependentEvidenceArg = args.require_independent_evidence ?? args.requireIndependentEvidence;
+  const requireIndependentEvidence = typeof requireIndependentEvidenceArg === "boolean" ? requireIndependentEvidenceArg : dispatchSettings.requireIndependentEvidence ?? true;
   const wait = args.wait === true;
   const timeoutMs = wait ? resolveMagiWaitTimeoutMs(args.wait_timeout_ms ?? args.waitTimeoutMs) : 0;
   const replicaTaskIds = replicaTasks.map((t) => readString(t.id)).filter(Boolean);
@@ -183252,7 +183730,8 @@ async function meshMagiCollect(ctx, args) {
     synthesis: synthesisNoRaw
   });
   await closeMagiMissionIfTerminal(ctx, replicaMissionId, collected.terminal);
-  const cleanupMode = resolveMagiAutoCleanupMode(ctx, args.auto_cleanup ?? args.autoCleanup);
+  const autoCleanupArg = args.auto_cleanup ?? args.autoCleanup;
+  const cleanupMode = resolveMagiAutoCleanupMode(ctx, typeof autoCleanupArg === "boolean" ? autoCleanupArg : dispatchSettings.autoCleanup);
   const cleanup = await cleanupMagiAutoLaunchedSessions(ctx, {
     replicaTasks,
     terminal: collected.terminal,
@@ -183418,24 +183897,31 @@ async function persistMagiDispatched(ctx, args) {
         // MAGI-REDESIGN: persist the task_kind so a later mesh_magi_collect
         // (which rediscovers replicas from the queue, not the original call)
         // re-derives the right schema parser for this group.
-        ...args.taskKind ? { taskKind: args.taskKind } : {}
+        ...args.taskKind ? { taskKind: args.taskKind } : {},
+        // The per-call choices mesh_magi_collect must honour for a wait:false review.
+        ...typeof args.autoCleanup === "boolean" ? { autoCleanup: args.autoCleanup } : {},
+        ...typeof args.requireIndependentEvidence === "boolean" ? { requireIndependentEvidence: args.requireIndependentEvidence } : {}
       }
     });
   } catch {
   }
 }
-async function recoverMagiTaskKind(ctx, consensusGroupId) {
+async function recoverMagiDispatchSettings(ctx, consensusGroupId) {
   try {
     const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, kind: ["magi_dispatched"], tail: 200 });
     for (let i = entries.length - 1; i >= 0; i -= 1) {
       const payload = entries[i]?.payload;
       if (!payload || typeof payload !== "object") continue;
       if (readString(payload.consensusGroupId) !== consensusGroupId) continue;
-      return normalizeMagiTaskKind(payload.taskKind);
+      return {
+        taskKind: normalizeMagiTaskKind(payload.taskKind),
+        ...typeof payload.autoCleanup === "boolean" ? { autoCleanup: payload.autoCleanup } : {},
+        ...typeof payload.requireIndependentEvidence === "boolean" ? { requireIndependentEvidence: payload.requireIndependentEvidence } : {}
+      };
     }
   } catch {
   }
-  return DEFAULT_TASK_KIND;
+  return { taskKind: DEFAULT_TASK_KIND };
 }
 function stripRawAnswers(synthesis) {
   if (!Array.isArray(synthesis.replicas) || synthesis.replicas.length === 0) return synthesis;
@@ -183534,6 +184020,14 @@ async function collectMagiResponses(ctx, args) {
   const sendKindRetry = async (task, failReason) => {
     const node = ctx.mesh.nodes.find((n) => (0, import_daemon_core10.meshNodeIdMatches)(n, task.assignedNodeId));
     if (!node || !task.assignedSessionId) return false;
+    try {
+      const sessions = extractStatusMetadataSessions(await commandForNode(ctx, node, "get_status_metadata", {}));
+      const live = sessions.find((session) => readSessionRecordId(session) === task.assignedSessionId);
+      if (!live) return false;
+      if (!isIdleSessionRecord(live)) return "busy";
+    } catch {
+      return "busy";
+    }
     const why = failReason === "empty_evidence" ? "your previous answer had an empty evidence array" : failReason === "missing_required_fields" ? "your previous answer was missing required fields" : "your previous answer did not parse as the required JSON";
     const message = `Your previous MAGI answer could not be accepted (${why}). Respond NOW with ONLY a single JSON object (no prose, no code fence) matching EXACTLY this schema, with non-empty evidence:
 
@@ -183704,6 +184198,10 @@ ${magiOutputContractFor(kind)}`;
     if (isSchemaFailure && !retried.has(taskId) && !force) {
       retried.add(taskId);
       const sent = await sendKindRetry(task, kindResult.failReason);
+      if (sent === "busy") {
+        retried.delete(taskId);
+        return false;
+      }
       if (sent) return false;
     }
     if (force) {
@@ -183930,11 +184428,7 @@ async function meshNodeSlotsPropose(ctx, args = {}) {
 // src/tools/mesh-transcript-replica-read.ts
 var import_daemon_core15 = __toESM(require_dist3());
 function unwrap2(result) {
-  if (result && typeof result === "object") {
-    if (result.payload && typeof result.payload === "object") return result.payload;
-    if (result.result && typeof result.result === "object") return result.result;
-  }
-  return result;
+  return unwrapOneLevel(result);
 }
 function readReason(value, fallback) {
   return typeof value?.reason === "string" && value.reason.trim() ? value.reason.trim() : fallback;
@@ -184113,6 +184607,157 @@ async function meshPruneStaleDirect(ctx, args = {}) {
     note: execute ? `Pruned ${prunedCount} orphaned direct dispatch record(s) from the active staleDirect surface. The append-only mesh ledger audit history is preserved; a direct_dispatch_pruned entry records this prune.` : "Dry run \u2014 nothing was deleted. Re-run with execute=true to prune the listed orphaned records. Fresh unacknowledged dispatch failures (node/session still live) and ledger-only audit entries are always preserved."
   }, null, 2);
 }
+async function admitExplicitSessionDelivery(ctx, node, args, p) {
+  if (!p.session || isIdleSessionRecord(p.session) || isTerminalSessionRecord(p.session)) return null;
+  const { providerType, message, taskMode, difficulty, taskInput, readonly: readonly2, missionId, ownedPaths } = p;
+  const sessionStatus = typeof p.session?.status === "string" ? p.session.status : "unknown";
+  const { resolveDeliveryDecision } = await Promise.resolve().then(() => __toESM(require_dist3()));
+  const { mode: deliveryMode, unrecognized: unrecognizedDeliveryMode } = p.delivery;
+  let interruptSupported = false;
+  let interruptUnsupportedMessage;
+  let interruptConfidence;
+  if (deliveryMode === "interrupt") {
+    try {
+      const probe = unwrapCommandPayload(await commandForNode(ctx, node, "agent_command", {
+        targetSessionId: args.session_id,
+        agentType: providerType,
+        cliType: providerType,
+        providerType,
+        action: "interrupt_capability"
+      }));
+      interruptSupported = probe?.supported === true;
+      interruptUnsupportedMessage = typeof probe?.message === "string" ? probe.message : void 0;
+      interruptConfidence = typeof probe?.confidence === "string" ? probe.confidence : void 0;
+    } catch (e) {
+      interruptSupported = false;
+      interruptUnsupportedMessage = `Could not determine interrupt capability for provider '${providerType}' on node '${args.node_id}': ${e?.message || e}. Refusing to interrupt on an unverified capability.`;
+    }
+  }
+  const policyResult = resolveDeliveryDecision(sessionStatus, {
+    kind: "task",
+    deliveryMode,
+    interruptSupported,
+    ...interruptUnsupportedMessage ? { interruptUnsupportedMessage } : {}
+  });
+  if (policyResult.decision === "rejected" && policyResult.reason === "interrupt_unsupported_for_provider") {
+    return JSON.stringify({
+      success: false,
+      dispatched: false,
+      decision: "interrupt_unsupported",
+      reason: policyResult.reason,
+      nodeId: args.node_id,
+      sessionId: args.session_id,
+      sessionStatus,
+      providerType,
+      requestedDeliveryMode: deliveryMode,
+      message: policyResult.message,
+      nextAction: `Re-send this task with delivery_mode 'when_idle' to have it delivered when session '${args.session_id}' finishes on its own, or stop the session and launch a fresh one if the in-flight work must not complete.`
+    });
+  }
+  if (policyResult.decision === "interrupt") {
+    const interruptResult = unwrapCommandPayload(await commandForNode(ctx, node, "agent_command", {
+      targetSessionId: args.session_id,
+      agentType: providerType,
+      cliType: providerType,
+      providerType,
+      action: "interrupt_turn",
+      dispatchSource: "mesh-tools-session:mesh_send_task:interrupt"
+    }));
+    if (interruptResult?.success !== true || interruptResult?.interrupted !== true) {
+      return JSON.stringify({
+        success: false,
+        dispatched: false,
+        decision: "interrupt_failed",
+        reason: interruptResult?.reason || "interrupt_rejected",
+        nodeId: args.node_id,
+        sessionId: args.session_id,
+        sessionStatus,
+        providerType,
+        error: interruptResult?.error || "The provider did not accept the interrupt.",
+        nextAction: `Nothing was cancelled and nothing was delivered. Re-send with delivery_mode 'when_idle', or inspect the session with mesh_read_terminal before retrying.`
+      });
+    }
+    const interruptedTask = (await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message, options: {
+      targetNodeId: args.node_id,
+      targetSessionId: args.session_id,
+      taskMode,
+      difficulty,
+      // MESH-IMAGE-DISPATCH: the queued task carries the same envelope the
+      // direct dispatch below forwards — the claim dispatch delivers it.
+      ...taskInput ? { input: taskInput } : {},
+      ...readonly2 ? { readonly: true } : {},
+      ...missionId ? { missionId } : {},
+      ...ownedPaths ? { ownedPaths } : {},
+      ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
+    }, decision: p.queueDecision })).entry;
+    return JSON.stringify({
+      success: true,
+      dispatched: false,
+      decision: "interrupted_and_queued",
+      taskId: interruptedTask.id,
+      reason: policyResult.reason,
+      nodeId: args.node_id,
+      sessionId: args.session_id,
+      sessionStatus,
+      providerType,
+      taskMode: taskMode || void 0,
+      interrupt: {
+        sent: true,
+        key: interruptResult?.keyName,
+        // 'declared' means the stop key is declared by the spec but the
+        // busy->idle effect was not measured live for this provider.
+        confidence: interruptResult?.confidence || interruptConfidence || "declared"
+      },
+      turnDiscarded: true,
+      message: `Interrupted the in-flight turn on session '${args.session_id}' via ${interruptResult?.keyName || "the stop control"}. That turn was cancelled and its unfinished work is lost. Task '${interruptedTask.id}' is pinned to this session and delivers as soon as it reports idle.`,
+      nextAction: interruptResult?.confidence === "proven" ? `Track with mesh_status; no manual resend needed.` : `Interrupt support for '${providerType}' is DECLARED by its spec but not live-verified. Confirm with mesh_status that the session returned to idle and picked up the task; if it did not, use mesh_read_terminal to inspect.`,
+      ...unrecognizedDeliveryMode ? { deliveryModeWarning: `Unrecognized delivery_mode '${unrecognizedDeliveryMode}' ignored.` } : {},
+      ...await buildMissionInactiveWarning(ctx, missionId) ?? {},
+      // Orchestration-decision advisories ride every mesh_send_task outcome (the
+      // decision itself is recorded on the enqueue above).
+      ...p.orchestrationWarning
+    });
+  }
+  if (policyResult.decision === "queued") {
+    const queuedTask = (await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message, options: {
+      targetNodeId: args.node_id,
+      targetSessionId: args.session_id,
+      taskMode,
+      difficulty,
+      // MESH-IMAGE-DISPATCH: the queued task carries the same envelope the
+      // direct dispatch below forwards — the claim dispatch delivers it.
+      ...taskInput ? { input: taskInput } : {},
+      ...readonly2 ? { readonly: true } : {},
+      ...missionId ? { missionId } : {},
+      ...ownedPaths ? { ownedPaths } : {},
+      ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
+    }, decision: p.queueDecision })).entry;
+    return JSON.stringify({
+      success: true,
+      dispatched: false,
+      decision: "queued_delivery",
+      taskId: queuedTask.id,
+      reason: policyResult.reason,
+      nodeId: args.node_id,
+      sessionId: args.session_id,
+      sessionStatus,
+      taskMode: taskMode || void 0,
+      message: policyResult.message,
+      nextAction: `Task '${queuedTask.id}' is queued and pinned to session '${args.session_id}' \u2014 it auto-delivers the moment the session goes idle. Use mesh_status or mesh_task_history to track it; no manual resend needed.`,
+      // A misspelled delivery_mode silently became when_idle. Say so — a
+      // caller who meant to interrupt must not read this queued result as
+      // "my steering landed".
+      ...unrecognizedDeliveryMode ? {
+        deliveryModeWarning: `Unrecognized delivery_mode '${unrecognizedDeliveryMode}' was ignored; this task was queued (when_idle) and the running turn was NOT interrupted. Valid values are 'when_idle' and 'interrupt'.`
+      } : {},
+      ...await buildMissionInactiveWarning(ctx, missionId) ?? {},
+      // Orchestration-decision advisories ride every mesh_send_task outcome (the
+      // decision itself is recorded on the enqueue above).
+      ...p.orchestrationWarning
+    });
+  }
+  return null;
+}
 async function meshSendTask(ctx, args) {
   const message = readString(args.message);
   if (!message) {
@@ -184164,6 +184809,15 @@ async function meshSendTask(ctx, args) {
       unsanctionedDirectHint: import_daemon_core10.MESH_UNSANCTIONED_DIRECT_HINT
     } : {},
     ...decisionMissing ? { orchestrationDecisionMissing: true } : {}
+  };
+  const { normalizeDeliveryMode } = await Promise.resolve().then(() => __toESM(require_dist3()));
+  const delivery = normalizeDeliveryMode(args.delivery_mode ?? args.deliveryMode);
+  const deliveryModeWarning = delivery.unrecognized ? { deliveryModeWarning: `Unrecognized delivery_mode '${delivery.unrecognized}' was ignored (treated as when_idle). Valid values are 'when_idle' and 'interrupt'.` } : {};
+  const queueDecision = {
+    ...missionId ? { missionId } : {},
+    ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {},
+    decision: orchestration.decision,
+    ...decisionMissing ? { decisionMissing: true } : {}
   };
   const modeValidation = (0, import_daemon_core10.validateMeshTaskModeRequest)(requestedTaskMode, message, readonly2);
   if (!modeValidation.valid) {
@@ -184256,6 +184910,23 @@ async function meshSendTask(ctx, args) {
     const isLocalNode = isLocalControlPlaneNode(ctx, node);
     if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
       const cached2 = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id || ""));
+      if (args.session_id && explicitTargetSession) {
+        const remoteAdmission = await admitExplicitSessionDelivery(ctx, node, args, {
+          session: explicitTargetSession,
+          providerType: cached2?.providerType || resolveSessionProviderType(explicitTargetSession) || "",
+          delivery,
+          message,
+          taskMode,
+          difficulty,
+          taskInput,
+          readonly: readonly2,
+          missionId,
+          ownedPaths,
+          queueDecision,
+          orchestrationWarning
+        });
+        if (remoteAdmission !== null) return remoteAdmission;
+      }
       const taskId = (0, import_node_crypto.randomUUID)();
       const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
       const dispatchBody = (0, import_daemon_core17.resolveDispatchMessage)(
@@ -184292,7 +184963,10 @@ async function meshSendTask(ctx, args) {
         verifiedSession: explicitTargetSession,
         // D2: the task id IS this dispatch's message identity (the mesh_direct
         // attempt records the same), so a retried send is ONE message to the
-        // worker's funnel; an idle-target direct dispatch is plain `queue`.
+        // worker's funnel; an idle-target direct dispatch is plain `queue`. The admission
+        // gate above already routed every busy-session outcome (interrupt included)
+        // through the pinned queue, so what reaches here is an idle target or a
+        // sessionless auto-pick (idle sessions only).
         messageId: taskId,
         policy: { mode: "queue" },
         origin: "mcp",
@@ -184390,7 +185064,8 @@ async function meshSendTask(ctx, args) {
         ...result2.success ? await buildMissionInactiveWarning(ctx, missionId) ?? {} : {},
         // GRAPH-MEASUREMENT-DIRECT: advisory only, and only on a dispatch that
         // actually happened — a failed dispatch made no routing decision to report on.
-        ...result2.success ? orchestrationWarning : {}
+        ...result2.success ? orchestrationWarning : {},
+        ...deliveryModeWarning
       });
     }
     if (args.session_id) {
@@ -184468,149 +185143,21 @@ async function meshSendTask(ctx, args) {
           nextAction: `Relaunch the target session on node '${args.node_id}' or retry without session_id so Repo Mesh can pick a session with provider metadata.`
         });
       }
-      if (explicitTargetSession && !isIdleSessionRecord(explicitTargetSession) && !isTerminalSessionRecord(explicitTargetSession)) {
-        const sessionStatus = typeof explicitTargetSession?.status === "string" ? explicitTargetSession.status : "unknown";
-        const { resolveDeliveryDecision, normalizeDeliveryMode } = await Promise.resolve().then(() => __toESM(require_dist3()));
-        const modeInput = args.delivery_mode ?? args.deliveryMode;
-        const { mode: deliveryMode, unrecognized: unrecognizedDeliveryMode } = normalizeDeliveryMode(modeInput);
-        let interruptSupported = false;
-        let interruptUnsupportedMessage;
-        let interruptConfidence;
-        if (deliveryMode === "interrupt") {
-          try {
-            const probe = unwrapCommandPayload(await commandForNode(ctx, node, "agent_command", {
-              targetSessionId: args.session_id,
-              agentType: resolvedProviderType,
-              cliType: resolvedProviderType,
-              providerType: resolvedProviderType,
-              action: "interrupt_capability"
-            }));
-            interruptSupported = probe?.supported === true;
-            interruptUnsupportedMessage = typeof probe?.message === "string" ? probe.message : void 0;
-            interruptConfidence = typeof probe?.confidence === "string" ? probe.confidence : void 0;
-          } catch (e) {
-            interruptSupported = false;
-            interruptUnsupportedMessage = `Could not determine interrupt capability for provider '${resolvedProviderType}' on node '${args.node_id}': ${e?.message || e}. Refusing to interrupt on an unverified capability.`;
-          }
-        }
-        const policyResult = resolveDeliveryDecision(sessionStatus, {
-          kind: "task",
-          deliveryMode,
-          interruptSupported,
-          ...interruptUnsupportedMessage ? { interruptUnsupportedMessage } : {}
-        });
-        if (policyResult.decision === "rejected" && policyResult.reason === "interrupt_unsupported_for_provider") {
-          return JSON.stringify({
-            success: false,
-            dispatched: false,
-            decision: "interrupt_unsupported",
-            reason: policyResult.reason,
-            nodeId: args.node_id,
-            sessionId: args.session_id,
-            sessionStatus,
-            providerType: resolvedProviderType,
-            requestedDeliveryMode: deliveryMode,
-            message: policyResult.message,
-            nextAction: `Re-send this task with delivery_mode 'when_idle' to have it delivered when session '${args.session_id}' finishes on its own, or stop the session and launch a fresh one if the in-flight work must not complete.`
-          });
-        }
-        if (policyResult.decision === "interrupt") {
-          const interruptResult = unwrapCommandPayload(await commandForNode(ctx, node, "agent_command", {
-            targetSessionId: args.session_id,
-            agentType: resolvedProviderType,
-            cliType: resolvedProviderType,
-            providerType: resolvedProviderType,
-            action: "interrupt_turn",
-            dispatchSource: "mesh-tools-session:mesh_send_task:interrupt"
-          }));
-          if (interruptResult?.success !== true || interruptResult?.interrupted !== true) {
-            return JSON.stringify({
-              success: false,
-              dispatched: false,
-              decision: "interrupt_failed",
-              reason: interruptResult?.reason || "interrupt_rejected",
-              nodeId: args.node_id,
-              sessionId: args.session_id,
-              sessionStatus,
-              providerType: resolvedProviderType,
-              error: interruptResult?.error || "The provider did not accept the interrupt.",
-              nextAction: `Nothing was cancelled and nothing was delivered. Re-send with delivery_mode 'when_idle', or inspect the session with mesh_read_terminal before retrying.`
-            });
-          }
-          const interruptedTask = (await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message, options: {
-            targetNodeId: args.node_id,
-            targetSessionId: args.session_id,
-            taskMode,
-            difficulty,
-            // MESH-IMAGE-DISPATCH: the queued task carries the same envelope the
-            // direct dispatch below forwards — the claim dispatch delivers it.
-            ...taskInput ? { input: taskInput } : {},
-            ...readonly2 ? { readonly: true } : {},
-            ...missionId ? { missionId } : {},
-            ...ownedPaths ? { ownedPaths } : {},
-            ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
-          } })).entry;
-          return JSON.stringify({
-            success: true,
-            dispatched: false,
-            decision: "interrupted_and_queued",
-            taskId: interruptedTask.id,
-            reason: policyResult.reason,
-            nodeId: args.node_id,
-            sessionId: args.session_id,
-            sessionStatus,
-            providerType: resolvedProviderType,
-            taskMode: taskMode || void 0,
-            interrupt: {
-              sent: true,
-              key: interruptResult?.keyName,
-              // 'declared' means the stop key is declared by the spec but the
-              // busy->idle effect was not measured live for this provider.
-              confidence: interruptResult?.confidence || interruptConfidence || "declared"
-            },
-            turnDiscarded: true,
-            message: `Interrupted the in-flight turn on session '${args.session_id}' via ${interruptResult?.keyName || "the stop control"}. That turn was cancelled and its unfinished work is lost. Task '${interruptedTask.id}' is pinned to this session and delivers as soon as it reports idle.`,
-            nextAction: interruptResult?.confidence === "proven" ? `Track with mesh_status; no manual resend needed.` : `Interrupt support for '${resolvedProviderType}' is DECLARED by its spec but not live-verified. Confirm with mesh_status that the session returned to idle and picked up the task; if it did not, use mesh_read_terminal to inspect.`,
-            ...unrecognizedDeliveryMode ? { deliveryModeWarning: `Unrecognized delivery_mode '${unrecognizedDeliveryMode}' ignored.` } : {},
-            ...await buildMissionInactiveWarning(ctx, missionId) ?? {}
-          });
-        }
-        if (policyResult.decision === "queued") {
-          const queuedTask = (await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message, options: {
-            targetNodeId: args.node_id,
-            targetSessionId: args.session_id,
-            taskMode,
-            difficulty,
-            // MESH-IMAGE-DISPATCH: the queued task carries the same envelope the
-            // direct dispatch below forwards — the claim dispatch delivers it.
-            ...taskInput ? { input: taskInput } : {},
-            ...readonly2 ? { readonly: true } : {},
-            ...missionId ? { missionId } : {},
-            ...ownedPaths ? { ownedPaths } : {},
-            ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
-          } })).entry;
-          return JSON.stringify({
-            success: true,
-            dispatched: false,
-            decision: "queued_delivery",
-            taskId: queuedTask.id,
-            reason: policyResult.reason,
-            nodeId: args.node_id,
-            sessionId: args.session_id,
-            sessionStatus,
-            taskMode: taskMode || void 0,
-            message: policyResult.message,
-            nextAction: `Task '${queuedTask.id}' is queued and pinned to session '${args.session_id}' \u2014 it auto-delivers the moment the session goes idle. Use mesh_status or mesh_task_history to track it; no manual resend needed.`,
-            // A misspelled delivery_mode silently became when_idle. Say so — a
-            // caller who meant to interrupt must not read this queued result as
-            // "my steering landed".
-            ...unrecognizedDeliveryMode ? {
-              deliveryModeWarning: `Unrecognized delivery_mode '${unrecognizedDeliveryMode}' was ignored; this task was queued (when_idle) and the running turn was NOT interrupted. Valid values are 'when_idle' and 'interrupt'.`
-            } : {},
-            ...await buildMissionInactiveWarning(ctx, missionId) ?? {}
-          });
-        }
-      }
+      const localAdmission = await admitExplicitSessionDelivery(ctx, node, args, {
+        session: explicitTargetSession,
+        providerType: resolvedProviderType,
+        delivery,
+        message,
+        taskMode,
+        difficulty,
+        taskInput,
+        readonly: readonly2,
+        missionId,
+        ownedPaths,
+        queueDecision,
+        orchestrationWarning
+      });
+      if (localAdmission !== null) return localAdmission;
       const sessionWasIdle = explicitTargetSession ? isIdleSessionRecord(explicitTargetSession) : false;
       const taskId = (0, import_node_crypto.randomUUID)();
       const dispatchedAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -184770,7 +185317,8 @@ async function meshSendTask(ctx, args) {
         ...computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, args.session_id),
         ...await buildMissionInactiveWarning(ctx, missionId) ?? {},
         // GRAPH-MEASUREMENT-DIRECT: advisory only — never blocks, never re-routes.
-        ...orchestrationWarning
+        ...orchestrationWarning,
+        ...deliveryModeWarning
       });
     }
     const task = (await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message, options: {
@@ -184784,7 +185332,7 @@ async function meshSendTask(ctx, args) {
       ...missionId ? { missionId } : {},
       ...ownedPaths ? { ownedPaths } : {},
       ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
-    } })).entry;
+    }, decision: queueDecision })).entry;
     const queueTrigger = await triggerMeshQueueAndReport(ctx);
     const pendingEvents = await drainCoordinatorPendingEvents(ctx);
     const result = {
@@ -184796,7 +185344,9 @@ async function meshSendTask(ctx, args) {
       taskMode: task.taskMode,
       queueTrigger,
       ...buildQueueTriggerGuidance(queueTrigger),
-      ...await buildMissionInactiveWarning(ctx, missionId) ?? {}
+      ...await buildMissionInactiveWarning(ctx, missionId) ?? {},
+      ...orchestrationWarning,
+      ...deliveryModeWarning
     };
     if (pendingEvents.length > 0) {
       result.pendingCoordinatorEvents = pendingEvents;
@@ -184859,15 +185409,24 @@ async function meshReadChat(ctx, args) {
   const providerSessionId = typeof args.provider_session_id === "string" && args.provider_session_id.trim() ? args.provider_session_id.trim() : cached2?.providerSessionId;
   const isLocalNode = isLocalControlPlaneNode(ctx, node);
   let replicaFallbackReason = null;
+  let providerSessionWarning = {};
+  const requestedProviderSessionId = typeof args.provider_session_id === "string" && args.provider_session_id.trim() ? args.provider_session_id.trim() : void 0;
   if (!isLocalNode && ctx.transport instanceof IpcTransport && node.daemonId) {
     const replica = await readTranscriptReplicaForDisplay(ctx.transport, {
       ownerDaemonId: node.daemonId,
       rawSessionId: args.session_id
     });
-    if (replica.payload) {
+    const replicaProviderSessionId = typeof replica.payload?.providerSessionId === "string" ? replica.payload.providerSessionId : "";
+    if (replica.payload && requestedProviderSessionId && replicaProviderSessionId !== requestedProviderSessionId) {
+      replicaFallbackReason = "provider_session_mismatch";
+      providerSessionWarning = {
+        providerSessionWarning: `The transcript replica holds provider session '${replicaProviderSessionId || "unknown"}', not the requested '${requestedProviderSessionId}'; read the live session instead.`
+      };
+    } else if (replica.payload) {
       return withPending(renderMeshReadChatPayload(replica.payload, args));
+    } else {
+      replicaFallbackReason = replica.fallbackReason;
     }
-    replicaFallbackReason = replica.fallbackReason;
   }
   let result;
   try {
@@ -184883,7 +185442,7 @@ async function meshReadChat(ctx, args) {
     if (isLocalNode || !(0, import_daemon_core10.isP2pRelayTransportFailure)(e)) throw e;
     return withPending(await buildMeshReadChatCacheFallback(ctx, args, node, e));
   }
-  return withPending(renderMeshReadChatPayload(unwrapCommandPayload(result), args, {
+  return withPending(renderMeshReadChatPayload({ ...unwrapCommandPayload(result), ...providerSessionWarning }, args, {
     fallbackReason: replicaFallbackReason
   }));
 }
@@ -184921,13 +185480,17 @@ function renderMeshReadChatPayload(source, args, opts = {}) {
         ...payload.transcriptReadSource ? { transcriptReadSource: payload.transcriptReadSource } : {},
         ...payload.transcriptReadSource === "replica" ? { omittedBefore: payload.omittedBefore === true, stale: payload.stale === true } : {},
         ...sourceTelemetry,
+        ...payload.providerSessionWarning ? { providerSessionWarning: payload.providerSessionWarning } : {},
         ...payload.pollingAdvisory ? { pollingAdvisory: payload.pollingAdvisory } : {}
       },
       null,
       2
     );
   }
-  return JSON.stringify({ ...payload, ...sourceTelemetry }, null, 2);
+  const tail = typeof args.tail === "number" && Number.isInteger(args.tail) && args.tail > 0 ? args.tail : void 0;
+  const messages = Array.isArray(payload.messages) ? payload.messages : void 0;
+  const tailed = tail !== void 0 && messages && messages.length > tail ? { messages: messages.slice(-tail), tailOmittedMessageCount: messages.length - tail } : {};
+  return JSON.stringify({ ...payload, ...tailed, ...sourceTelemetry }, null, 2);
 }
 async function meshReadDebug(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
@@ -186044,6 +186607,19 @@ async function meshRefinePlan(ctx, args) {
 }
 async function meshRefineNode(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
+  if (args.dry_run === false && args.execute !== true) {
+    return JSON.stringify({
+      success: false,
+      code: "dry_run_false_requires_execute",
+      nodeId: args.node_id,
+      allowed: false,
+      willRun: false,
+      executed: false,
+      blockingReasons: ["dry_run_false_requires_execute"],
+      error: "dry_run:false alone does not execute \u2014 it only declines to veto. Pass execute:true to actually apply the refine.",
+      nextAction: `Re-run mesh_refine_node(node_id: "${args.node_id}", execute: true) to apply, or omit dry_run to preview.`
+    }, null, 2);
+  }
   const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
   const result = await commandForNode(ctx, node, "refine_mesh_node", {
     meshId: ctx.mesh.id,
@@ -186066,6 +186642,18 @@ async function meshRefineNode(ctx, args) {
 async function meshRefineBatch(ctx, args = {}) {
   await refreshMeshFromDaemon(ctx);
   const nodeIds = Array.isArray(args.node_ids) ? args.node_ids.filter((v) => typeof v === "string" && v.trim().length > 0).map((v) => v.trim()) : void 0;
+  if (args.dry_run === false && args.execute !== true) {
+    return JSON.stringify({
+      success: false,
+      code: "dry_run_false_requires_execute",
+      allowed: false,
+      willRun: false,
+      executed: false,
+      blockingReasons: ["dry_run_false_requires_execute"],
+      error: "dry_run:false alone does not execute \u2014 it only declines to veto. Pass execute:true to actually apply the refine.",
+      nextAction: "Re-run mesh_refine_batch(execute: true) to apply, or omit dry_run to preview."
+    }, null, 2);
+  }
   const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
   const result = await ctx.transport.command("batch_refine_mesh_nodes", {
     meshId: ctx.mesh.id,
@@ -187109,7 +187697,12 @@ async function gitPush(transport, args) {
   let raw = await transport.command("git_push", {
     workspace: args.workspace,
     remote: args.remote ?? "origin",
-    ...args.branch ? { branch: args.branch } : {}
+    ...args.branch ? { branch: args.branch } : {},
+    // The tool description promises upstream is "set automatically". Without
+    // this, the daemon (git-commands.ts) only added --set-upstream on a RETRY
+    // after the plain push failed for lack of upstream — so a first push naming
+    // an explicit remote+branch succeeded without ever gaining tracking.
+    setUpstream: true
   });
   raw = raw?.push ?? raw;
   if (raw?.success === false || raw?.reason) {
@@ -187184,7 +187777,21 @@ async function launchSession(transport, args) {
   const resolved = await resolveProviderRoute(transport, args.type);
   if ("error" in resolved) return `Error: ${resolved.error}`;
   const commandType = resolved.route === "cli" ? "launch_cli" : "launch_ide";
-  const payload = resolved.route === "cli" ? { cliType: resolved.canonicalType, dir: args.workspace ?? "~", ...args.model ? { model: args.model } : {} } : { ideType: resolved.canonicalType, enableCdp: true };
+  const payload = resolved.route === "cli" ? {
+    cliType: resolved.canonicalType,
+    dir: args.workspace ?? "~",
+    // The daemon's CLI/ACP launch (cli-manager.ts startSession) reads
+    // `args.initialModel`, not `args.model` — a plain `model` key was
+    // silently ignored. `model` is kept alongside it for now since it is
+    // harmless and this is the wire shape workers/tools may already know.
+    ...args.model ? { initialModel: args.model, model: args.model } : {}
+  } : {
+    ideType: resolved.canonicalType,
+    enableCdp: true,
+    // launch_ide (med-family/ide.ts) reads `args.workspace` via
+    // resolveIdeLaunchWorkspace — it was previously dropped on this route.
+    ...args.workspace ? { workspace: args.workspace } : {}
+  };
   const result = await transport.command(commandType, payload);
   if (result?.success === false) return `Error: ${result.error ?? "launch failed"}`;
   const id2 = result?.id ?? result?.sessionId;
@@ -187348,6 +187955,14 @@ function resolveMeshToolHandler(name) {
 }
 
 // src/tools/validate-tool-args.ts
+function isEnumProperty(value) {
+  return !!value && typeof value === "object" && Array.isArray(value.enum);
+}
+function isArrayOfObjectsProperty(value) {
+  if (!value || typeof value !== "object") return false;
+  const prop = value;
+  return prop.type === "array" && !!prop.items && typeof prop.items === "object" && prop.items.type === "object" && !!prop.items.properties;
+}
 var META_KEYS = /* @__PURE__ */ new Set(["_meta"]);
 function normalizeKey(key) {
   return key.toLowerCase().replace(/_/g, "");
@@ -187386,6 +188001,53 @@ function unknownToolArgsError(toolName, properties, args) {
   });
   const allowedList = allowed.length > 0 ? ` Allowed parameters: ${allowed.join(", ")}.` : " This tool takes no parameters.";
   return `Unknown parameter(s) for ${toolName}: ${parts.join("; ")}.${allowedList}`;
+}
+function enumValueError(toolName, properties, args) {
+  if (!properties) return null;
+  for (const [key, value] of Object.entries(args)) {
+    if (value === void 0) continue;
+    const propSchema = properties[key];
+    if (!isEnumProperty(propSchema)) continue;
+    const allowedValues = propSchema.enum;
+    if (allowedValues.includes(value)) continue;
+    const allowedList = allowedValues.map((v) => JSON.stringify(v)).join(", ");
+    return `Invalid value for "${key}" in ${toolName}: ${JSON.stringify(value)}. Allowed values: ${allowedList}.`;
+  }
+  return null;
+}
+function nestedArrayItemEnumValueError(toolName, properties, args) {
+  if (!properties) return null;
+  for (const [propName, propSchema] of Object.entries(properties)) {
+    if (!isArrayOfObjectsProperty(propSchema)) continue;
+    const rawItems = args[propName];
+    if (!Array.isArray(rawItems)) continue;
+    const itemProperties = propSchema.items.properties;
+    for (let i = 0; i < rawItems.length; i++) {
+      const item = rawItems[i];
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const label = typeof item.ref === "string" && item.ref ? `${propName}[${i}] (ref '${item.ref}')` : `${propName}[${i}]`;
+      const itemError = enumValueError(`${toolName} ${label}`, itemProperties, item);
+      if (itemError) return itemError;
+    }
+  }
+  return null;
+}
+function nestedArrayItemArgsError(toolName, properties, args) {
+  if (!properties) return null;
+  for (const [propName, propSchema] of Object.entries(properties)) {
+    if (!isArrayOfObjectsProperty(propSchema)) continue;
+    const rawItems = args[propName];
+    if (!Array.isArray(rawItems)) continue;
+    const itemProperties = propSchema.items.properties;
+    for (let i = 0; i < rawItems.length; i++) {
+      const item = rawItems[i];
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const label = typeof item.ref === "string" && item.ref ? `${propName}[${i}] (ref '${item.ref}')` : `${propName}[${i}]`;
+      const itemError = unknownToolArgsError(`${toolName} ${label}`, itemProperties, item);
+      if (itemError) return itemError;
+    }
+  }
+  return null;
 }
 var MESH_TOOL_BY_NAME = new Map(
   ALL_MESH_TOOLS.map((tool) => [tool.name, tool])
@@ -187432,7 +188094,8 @@ function missingRequiredToolArgsError(toolName, schema2, args, injected = []) {
 function validateMeshToolArgs(name, args) {
   const tool = resolveMeshTool(name);
   if (!tool) return null;
-  return unknownToolArgsError(name, tool.schema.inputSchema?.properties, args) ?? missingRequiredToolArgsError(name, tool.schema.inputSchema, args, tool.injected);
+  const properties = tool.schema.inputSchema?.properties;
+  return unknownToolArgsError(name, properties, args) ?? nestedArrayItemArgsError(name, properties, args) ?? enumValueError(name, properties, args) ?? nestedArrayItemEnumValueError(name, properties, args) ?? missingRequiredToolArgsError(name, tool.schema.inputSchema, args, tool.injected);
 }
 
 // src/tools/worker-tools.ts
@@ -187550,33 +188213,52 @@ function resolveWorkerModeTools(candidates = [...ALL_WORKER_TOOLS, ...WORKER_GIT
   }
   return WORKER_TOOLS.map((name) => byName.get(name));
 }
+var HANDOFF_NOTE_KEY_ALIASES = {
+  intent: ["intent"],
+  conflictGuidance: ["conflict_guidance", "conflictGuidance"],
+  touchedFiles: ["touched_files", "touchedFiles"],
+  followUps: ["follow_ups", "followUps"]
+};
 function toDaemonReport(a) {
-  const notes = a.handoff_notes;
-  return {
+  const notes = a.handoff_notes ?? a.handoffNotes;
+  const ignoredHandoffKeys = [];
+  let handoffNotes;
+  if (notes && typeof notes === "object" && !Array.isArray(notes)) {
+    handoffNotes = {};
+    for (const [canonical, aliases] of Object.entries(HANDOFF_NOTE_KEY_ALIASES)) {
+      const hit = aliases.find((alias) => notes[alias] !== void 0);
+      if (hit !== void 0) handoffNotes[canonical] = notes[hit];
+    }
+    const known = new Set(Object.values(HANDOFF_NOTE_KEY_ALIASES).flat());
+    for (const key of Object.keys(notes)) {
+      if (!known.has(key)) ignoredHandoffKeys.push(key);
+    }
+  }
+  const report = {
     outcome: a.outcome,
     summary: a.summary,
     ...a.touched_files !== void 0 ? { touchedFiles: a.touched_files } : {},
     ...a.branch_state !== void 0 ? { branchState: a.branch_state } : {},
     ...a.blockers !== void 0 ? { blockers: a.blockers } : {},
-    ...notes && typeof notes === "object" && !Array.isArray(notes) ? {
-      handoffNotes: {
-        ...notes.intent !== void 0 ? { intent: notes.intent } : {},
-        ...notes.conflict_guidance !== void 0 ? { conflictGuidance: notes.conflict_guidance } : {},
-        ...notes.touched_files !== void 0 ? { touchedFiles: notes.touched_files } : {},
-        ...notes.follow_ups !== void 0 ? { followUps: notes.follow_ups } : {}
-      }
-    } : {}
+    ...handoffNotes ? { handoffNotes } : {}
   };
+  return { report, ignoredHandoffKeys };
 }
 async function reportCompletion(transport, credentials, args) {
+  const { report, ignoredHandoffKeys } = toDaemonReport(args);
   const result = await transport.command("worker_report_completion", {
     ...credentials,
-    report: toDaemonReport(args)
+    report
   });
   if (result?.success === true) {
     const lines = [
       result.duplicate ? `Completion already recorded for task ${result.taskId} \u2014 this repeat was accepted as a duplicate.` : `Completion recorded for task ${result.taskId} (${result.outcome}).`
     ];
+    if (ignoredHandoffKeys.length) {
+      lines.push(
+        `WARNING: handoff_notes had unrecognized key(s) that were ignored: ${ignoredHandoffKeys.join(", ")}. Recognized keys: intent, conflict_guidance, touched_files, follow_ups (camelCase also accepted).`
+      );
+    }
     if (result.ownedPathsMismatch) {
       const { undeclaredTouched } = result.ownedPathsMismatch;
       lines.push(
@@ -187731,7 +188413,7 @@ async function startMcpServer(opts) {
       const a = args ?? {};
       const workerTool = workerToolByName.get(name);
       if (workerTool) {
-        const unknownArgsError = unknownToolArgsError(name, workerTool.inputSchema?.properties, a);
+        const unknownArgsError = unknownToolArgsError(name, workerTool.inputSchema?.properties, a) ?? enumValueError(name, workerTool.inputSchema?.properties, a);
         if (unknownArgsError) return withMailboxPiggyback({ content: [{ type: "text", text: unknownArgsError }], isError: true });
       }
       try {
@@ -187898,7 +188580,7 @@ async function startMcpServer(opts) {
     const a = args ?? {};
     const standardTool = standardToolByName.get(name);
     if (standardTool) {
-      const unknownArgsError = unknownToolArgsError(name, standardTool.inputSchema?.properties, a);
+      const unknownArgsError = unknownToolArgsError(name, standardTool.inputSchema?.properties, a) ?? enumValueError(name, standardTool.inputSchema?.properties, a);
       if (unknownArgsError) return { content: [{ type: "text", text: unknownArgsError }], isError: true };
     }
     try {

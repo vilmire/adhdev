@@ -154,6 +154,28 @@ export function discardWorkerMailboxForTask(meshId: string, taskId: string): num
     return list.length;
 }
 
+/**
+ * Drop every mailbox whose task `keep` no longer vouches for. The terminal
+ * chokepoint discards on the daemon that OWNS the task; a memo deposited on the
+ * daemon hosting a REMOTE-owned task's worker (F7 mailbox axis) has no local
+ * terminal to discard it, so the low-family deposit sweeps those here instead.
+ * Returns the number of messages dropped.
+ */
+export function pruneWorkerMailboxes(keep: (meshId: string, taskId: string) => boolean): number {
+    let dropped = 0;
+    for (const [key, list] of [...PENDING.entries()]) {
+        const first = list[0];
+        if (!first) { PENDING.delete(key); continue; }
+        let kept = true;
+        try { kept = keep(first.meshId, first.taskId); } catch { kept = true; }
+        if (!kept) {
+            PENDING.delete(key);
+            dropped += list.length;
+        }
+    }
+    return dropped;
+}
+
 /** Test-only reset so mailbox state cannot leak between cases. */
 export function __resetWorkerMailboxForTest(): void {
     PENDING.clear();

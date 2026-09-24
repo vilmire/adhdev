@@ -265,3 +265,89 @@ describe('mailbox lifecycle at the terminal chokepoint', () => {
     expect(peekWorkerMailboxCount(meshId, taskId)).toBe(0)
   })
 })
+
+// ─── F7 mailbox axis: a worker whose task ANOTHER daemon owns ─────────────
+
+describe('mailbox for a remote-owned task (cross-machine worker)', () => {
+  const WORKER_DAEMON = 'daemon_mach_mailbox_worker'
+  const OWNER_DAEMON = 'daemon_mach_mailbox_owner'
+  let originalEnv: string | undefined
+  beforeEach(() => {
+    originalEnv = process.env.ADHDEV_WORKER_MCP
+    process.env.ADHDEV_WORKER_MCP = '1'
+  })
+  afterEach(() => {
+    if (originalEnv === undefined) delete process.env.ADHDEV_WORKER_MCP
+    else process.env.ADHDEV_WORKER_MCP = originalEnv
+  })
+
+  /** The worker daemon: one live session carrying the assignment stamp `attachMeshAssignment` writes. No queue row here. */
+  function workerDaemonCtx(sessions: Record<string, Record<string, unknown>>): any {
+    return {
+      deps: {
+        statusInstanceId: WORKER_DAEMON,
+        instanceManager: {
+          listInstanceIds: () => Object.keys(sessions),
+          getInstance: (id: string) => (sessions[id] ? { getState: () => ({ settings: sessions[id] }) } : undefined),
+        },
+      },
+    }
+  }
+  function stamp(meshId: string, taskId: string, owner = OWNER_DAEMON) {
+    return {
+      meshNodeFor: meshId, meshNodeId: 'node-w', meshActiveTaskId: taskId,
+      meshActiveAttemptId: `mesh_direct:${taskId}`, meshActiveAttemptGeneration: 0, meshCoordinatorDaemonId: owner,
+    }
+  }
+
+  it('★deposit is held on the worker daemon and the remote worker drains it through its bind', async () => {
+    const taskId = uniqueTaskId()
+    const sessionId = `sess-${taskId}`
+    const ctx = workerDaemonCtx({ [sessionId]: stamp('m', taskId) })
+    const deposited: any = await workerMailboxHandlers.deposit_worker_mailbox(ctx, { meshId: 'm', taskId, text: 'owner says: stop, spec changed' })
+    expect(deposited).toMatchObject({ success: true, pending: 1 })
+
+    const bind = mintWorkerSessionBind({ meshId: 'm', sessionId }).bind
+    const drained: any = await workerMailboxHandlers.worker_drain_mailbox(ctx, { bind })
+    expect(drained).toMatchObject({ success: true, taskId })
+    expect(drained.messages).toEqual([expect.objectContaining({ text: 'owner says: stop, spec changed' })])
+    const again: any = await workerMailboxHandlers.worker_drain_mailbox(ctx, { bind })
+    expect(again.messages).toEqual([])
+  })
+
+  it('still refuses a task no local session is stamped with, or one whose stamp names THIS daemon as owner', async () => {
+    const taskId = uniqueTaskId()
+    const other: any = await workerMailboxHandlers.deposit_worker_mailbox(
+      workerDaemonCtx({ s1: stamp('m', `${taskId}-other`) }), { meshId: 'm', taskId, text: 'x' })
+    expect(other).toMatchObject({ success: false, error: 'task_not_found_locally' })
+    const selfOwned: any = await workerMailboxHandlers.deposit_worker_mailbox(
+      workerDaemonCtx({ s1: stamp('m', taskId, WORKER_DAEMON) }), { meshId: 'm', taskId, text: 'x' })
+    expect(selfOwned).toMatchObject({ success: false, error: 'task_not_found_locally' })
+    const otherMesh: any = await workerMailboxHandlers.deposit_worker_mailbox(
+      workerDaemonCtx({ s1: stamp('m2', taskId) }), { meshId: 'm', taskId, text: 'x' })
+    expect(otherMesh).toMatchObject({ success: false, error: 'task_not_found_locally' })
+    expect(peekWorkerMailboxCount('m', taskId)).toBe(0)
+  })
+
+  it('a drain with a bind whose session carries no task stamp stays unauthenticated', async () => {
+    const sessionId = 'sess-unstamped'
+    const bind = mintWorkerSessionBind({ meshId: 'm', sessionId }).bind
+    const res: any = await workerMailboxHandlers.worker_drain_mailbox(
+      workerDaemonCtx({ [sessionId]: { meshNodeFor: 'm', meshCoordinatorDaemonId: OWNER_DAEMON } }), { bind })
+    expect(res).toMatchObject({ success: false, error: 'unauthenticated' })
+  })
+
+  it('memos for a remote-owned task no local worker holds any more are swept on the next deposit (no owner-side discard reaches them)', async () => {
+    const done = uniqueTaskId()
+    const live = uniqueTaskId()
+    const sessions: Record<string, Record<string, unknown>> = { s_done: stamp('m', done), s_live: stamp('m', live) }
+    const ctx = workerDaemonCtx(sessions)
+    await workerMailboxHandlers.deposit_worker_mailbox(ctx, { meshId: 'm', taskId: done, text: 'never read' })
+    expect(peekWorkerMailboxCount('m', done)).toBe(1)
+    // The owner terminalized `done`; this daemon released the stamp.
+    sessions.s_done = { meshNodeFor: 'm', meshCoordinatorDaemonId: OWNER_DAEMON }
+    await workerMailboxHandlers.deposit_worker_mailbox(ctx, { meshId: 'm', taskId: live, text: 'read me' })
+    expect(peekWorkerMailboxCount('m', done)).toBe(0)
+    expect(peekWorkerMailboxCount('m', live)).toBe(1)
+  })
+})

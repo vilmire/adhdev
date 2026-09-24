@@ -34,6 +34,27 @@ export interface ToolSchemaLike {
     inputSchema?: { properties?: Record<string, unknown>; required?: readonly string[] };
 }
 
+/** Narrow shape of a JSON-Schema `array` property whose `items` is an object schema. */
+interface ArrayOfObjectsPropertyLike {
+    type?: string;
+    items?: { type?: string; properties?: Record<string, unknown> };
+}
+
+/** Narrow shape of a JSON-Schema scalar property declaring an `enum`. */
+interface EnumPropertyLike {
+    enum?: readonly unknown[];
+}
+
+function isEnumProperty(value: unknown): value is EnumPropertyLike {
+    return !!value && typeof value === 'object' && Array.isArray((value as EnumPropertyLike).enum);
+}
+
+function isArrayOfObjectsProperty(value: unknown): value is ArrayOfObjectsPropertyLike {
+    if (!value || typeof value !== 'object') return false;
+    const prop = value as ArrayOfObjectsPropertyLike;
+    return prop.type === 'array' && !!prop.items && typeof prop.items === 'object' && prop.items.type === 'object' && !!prop.items.properties;
+}
+
 // Protocol-level meta keys a client may legitimately attach; not tool
 // parameters. MCP carries _meta/progressToken at the params level (outside
 // `arguments`), but a client that inlines it must not be rejected.
@@ -100,6 +121,93 @@ export function unknownToolArgsError(toolName: string, properties: Record<string
     return `Unknown parameter(s) for ${toolName}: ${parts.join('; ')}.${allowedList}`;
 }
 
+/**
+ * Returns an error message when `args` supplies a value for a property the
+ * schema declares an `enum` for, but the value is not one of the declared
+ * options — else null.
+ *
+ * Incident class: `approve`/`mesh_approve`'s `action` field failed OPEN — any
+ * value other than exactly `'reject'` (e.g. `'deny'`, `'rejected'`, a typo)
+ * was silently treated as `'approve'` by the handler
+ * (`a.action === 'reject' ? 'reject' : 'approve'`), so a caller that meant to
+ * decline an action could have it approved instead with no error at all. This
+ * mirrors {@link unknownToolArgsError}'s incident shape — a mistyped/wrong
+ * value silently accepted rather than rejected — but for VALUES instead of
+ * KEYS, and runs before the handler for the same fail-closed reason.
+ */
+export function enumValueError(toolName: string, properties: Record<string, unknown> | undefined, args: Record<string, unknown>): string | null {
+    if (!properties) return null;
+    for (const [key, value] of Object.entries(args)) {
+        if (value === undefined) continue;
+        const propSchema = properties[key];
+        if (!isEnumProperty(propSchema)) continue;
+        const allowedValues = propSchema.enum!;
+        if (allowedValues.includes(value)) continue;
+        const allowedList = allowedValues.map(v => JSON.stringify(v)).join(', ');
+        return `Invalid value for "${key}" in ${toolName}: ${JSON.stringify(value)}. Allowed values: ${allowedList}.`;
+    }
+    return null;
+}
+
+/**
+ * Nested counterpart to {@link enumValueError}, mirroring
+ * {@link nestedArrayItemArgsError}: walks every declared array-of-objects
+ * property and re-runs the enum check against each item's own properties.
+ */
+export function nestedArrayItemEnumValueError(toolName: string, properties: Record<string, unknown> | undefined, args: Record<string, unknown>): string | null {
+    if (!properties) return null;
+    for (const [propName, propSchema] of Object.entries(properties)) {
+        if (!isArrayOfObjectsProperty(propSchema)) continue;
+        const rawItems = args[propName];
+        if (!Array.isArray(rawItems)) continue;
+        const itemProperties = propSchema.items!.properties as Record<string, unknown>;
+        for (let i = 0; i < rawItems.length; i++) {
+            const item = rawItems[i];
+            if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+            const label = typeof (item as Record<string, unknown>).ref === 'string' && (item as Record<string, unknown>).ref
+                ? `${propName}[${i}] (ref '${(item as Record<string, unknown>).ref}')`
+                : `${propName}[${i}]`;
+            const itemError = enumValueError(`${toolName} ${label}`, itemProperties, item as Record<string, unknown>);
+            if (itemError) return itemError;
+        }
+    }
+    return null;
+}
+
+/**
+ * Nested counterpart to {@link unknownToolArgsError}. The top-level gate only ever
+ * looked at `Object.keys(args)`, so a typo INSIDE an array-of-objects field (e.g.
+ * `mesh_enqueue_batch`'s `tasks[]`) was invisible to it — the item was forwarded to
+ * the handler with the bad key silently ignored, exactly the class of bug the
+ * top-level gate exists to catch. This walks every top-level property the schema
+ * declares as `{type:'array', items:{type:'object', properties:{...}}}` and
+ * re-runs the same unknown-key check against each array entry, using the item
+ * schema's own properties as the allow-list.
+ *
+ * Scoped generically (not hardcoded to `tasks`/`workspaces`/`gates`) so it applies
+ * to any tool whose schema declares an array-of-objects property — today that is
+ * `mesh_enqueue_batch`'s three, but a future one gets the same coverage for free.
+ */
+export function nestedArrayItemArgsError(toolName: string, properties: Record<string, unknown> | undefined, args: Record<string, unknown>): string | null {
+    if (!properties) return null;
+    for (const [propName, propSchema] of Object.entries(properties)) {
+        if (!isArrayOfObjectsProperty(propSchema)) continue;
+        const rawItems = args[propName];
+        if (!Array.isArray(rawItems)) continue;
+        const itemProperties = propSchema.items!.properties as Record<string, unknown>;
+        for (let i = 0; i < rawItems.length; i++) {
+            const item = rawItems[i];
+            if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+            const label = typeof (item as Record<string, unknown>).ref === 'string' && (item as Record<string, unknown>).ref
+                ? `${propName}[${i}] (ref '${(item as Record<string, unknown>).ref}')`
+                : `${propName}[${i}]`;
+            const itemError = unknownToolArgsError(`${toolName} ${label}`, itemProperties, item as Record<string, unknown>);
+            if (itemError) return itemError;
+        }
+    }
+    return null;
+}
+
 const MESH_TOOL_BY_NAME = new Map<string, ToolSchemaLike>(
     (ALL_MESH_TOOLS as ToolSchemaLike[]).map(tool => [tool.name, tool]),
 );
@@ -137,14 +245,19 @@ function resolveMeshTool(name: string): { schema: ToolSchemaLike; injected: read
 }
 
 /**
- * Mesh-mode gate: error text when the call carries unknown arguments, else
- * null. Unknown tool names return null and fall through to the dispatcher's
- * existing "Unknown tool" response.
+ * Mesh-mode gate: error text when the call carries unknown arguments — at the
+ * top level OR inside a declared array-of-objects field (`tasks[]`,
+ * `workspaces[]`, `gates[]`) — else null. Unknown tool names return null and
+ * fall through to the dispatcher's existing "Unknown tool" response.
  */
 export function rejectUnknownMeshToolArgs(name: string, args: Record<string, unknown>): string | null {
     const tool = resolveMeshTool(name);
     if (!tool) return null;
-    return unknownToolArgsError(name, tool.schema.inputSchema?.properties, args);
+    const properties = tool.schema.inputSchema?.properties;
+    return unknownToolArgsError(name, properties, args)
+        ?? nestedArrayItemArgsError(name, properties, args)
+        ?? enumValueError(name, properties, args)
+        ?? nestedArrayItemEnumValueError(name, properties, args);
 }
 
 function isPresent(value: unknown): boolean {
@@ -180,13 +293,18 @@ export function missingRequiredToolArgsError(
 }
 
 /**
- * Mesh-mode gate: unknown-key rejection followed by required-key rejection.
- * Unknown keys are reported first so a typo'd required key ("nod_id") gets the
- * did-you-mean suggestion rather than a bare "missing node_id".
+ * Mesh-mode gate: unknown-key rejection (top-level, then nested array items)
+ * followed by required-key rejection. Unknown keys are reported first so a
+ * typo'd required key ("nod_id") gets the did-you-mean suggestion rather than
+ * a bare "missing node_id".
  */
 export function validateMeshToolArgs(name: string, args: Record<string, unknown>): string | null {
     const tool = resolveMeshTool(name);
     if (!tool) return null;
-    return unknownToolArgsError(name, tool.schema.inputSchema?.properties, args)
+    const properties = tool.schema.inputSchema?.properties;
+    return unknownToolArgsError(name, properties, args)
+        ?? nestedArrayItemArgsError(name, properties, args)
+        ?? enumValueError(name, properties, args)
+        ?? nestedArrayItemEnumValueError(name, properties, args)
         ?? missingRequiredToolArgsError(name, tool.schema.inputSchema, args, tool.injected);
 }

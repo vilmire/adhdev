@@ -14,7 +14,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  WORKER_PROGRESS_FORWARD_COMMAND,
   WORKER_REPORT_FORWARD_COMMAND,
+  decodeForwardedWorkerProgress,
   decodeForwardedWorkerReport,
   workerReportHandlers,
   workerReportSpecs,
@@ -26,7 +28,10 @@ import {
   acceptWorkerCompletionReport,
   WORKER_LATE_REPORT_GRACE_MS,
   WORKER_HANDOFF_EVENT_KIND,
+  WORKER_PROGRESS_EVENT_KIND,
   WORKER_REPORT_EVENT_KIND,
+  __resetProgressSurfaceForTest,
+  __setWorkerProgressNoticeSinkForTests,
 } from '../../src/mesh/worker-report'
 import { __resetHandoffNotesForTest } from '../../src/mesh/worker-handoff-notes'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
@@ -577,5 +582,122 @@ describe('F7b — late-report notice routing', () => {
     const { defaultScopeForEvent } = await import('../../src/mesh/contracts')
     const { WORKER_LATE_REPORT_EVENT_NAME } = await import('../../src/mesh/worker-report')
     expect(defaultScopeForEvent(WORKER_LATE_REPORT_EVENT_NAME)).toBe('unicast')
+  })
+})
+
+describe('F7 progress axis — a remote worker\'s progress note is forwarded to the owner', () => {
+  const NOTE = 'Finished the schema migration; now rewriting the three consumers of the old table.'
+  let progressNotices: Array<{ taskId: string; note: string }> = []
+  beforeEach(() => {
+    __resetProgressSurfaceForTest()
+    progressNotices = []
+    __setWorkerProgressNoticeSinkForTests((n) => { progressNotices.push({ taskId: n.taskId, note: n.note }) })
+  })
+  afterEach(() => { __setWorkerProgressNoticeSinkForTests(undefined) })
+
+  function progressRows(meshId: string, taskId: string) {
+    return MeshRuntimeStore.getInstance().turnStore().listWorkerEventsForTask(meshId, taskId, WORKER_PROGRESS_EVENT_KIND)
+  }
+
+  it('★worker daemon relays the note; the owner records it on its attempt and surfaces it', async () => {
+    const ids = freshIds()
+    const attemptId = seedOwnerLiveTask(ids)
+    __resetWorkerTaskTokensForTest() // the owner authorises without the token (Finding A)
+    const bind = mintWorkerSessionBind({ meshId: ids.meshId, sessionId: ids.sessionId, nodeId: ids.nodeId }).bind
+    const relay = ownerRelay()
+    const res: any = await workerReportHandlers.worker_progress_update(
+      workerCtx(ids.sessionId, stampSettings(ids, attemptId), relay),
+      { bind, note: NOTE },
+    )
+    expect(relay).toHaveBeenCalledTimes(1)
+    const [daemonId, cmd, args] = relay.mock.calls[0] as unknown as [string, string, Record<string, any>]
+    expect(daemonId).toBe(OWNER_DAEMON)
+    expect(cmd).toBe(WORKER_PROGRESS_FORWARD_COMMAND)
+    expect(args).toEqual({ meshId: ids.meshId, taskId: ids.taskId, attemptId, sessionId: ids.sessionId, nodeId: ids.nodeId, note: NOTE })
+    expect(res).toMatchObject({ success: true, taskId: ids.taskId, surfacedToCoordinator: true })
+    const rows = progressRows(ids.meshId, ids.taskId)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].attemptId).toBe(attemptId)
+    expect(progressNotices).toEqual([{ taskId: ids.taskId, note: NOTE }])
+  })
+
+  it('owner refuses a sender that does not own the node (one WARN line), records nothing', async () => {
+    const ids = freshIds()
+    const attemptId = seedOwnerLiveTask(ids)
+    const warn = vi.spyOn(LOG, 'warn')
+    const res: any = await workerReportHandlers[WORKER_PROGRESS_FORWARD_COMMAND](ownerCtx, {
+      meshId: ids.meshId, taskId: ids.taskId, attemptId, sessionId: ids.sessionId, note: NOTE,
+      _meshSenderDaemonId: 'daemon_mach_someone_else',
+    })
+    expect(res.success).toBe(false)
+    expect(res.error).toBe('unauthenticated')
+    expect(res.detail).toMatch(/^sender_not_node_owner: /)
+    expect(progressRows(ids.meshId, ids.taskId)).toEqual([])
+    const lines = warn.mock.calls.filter(([cat, msg]) => cat === 'WorkerReport' && String(msg).startsWith('Forwarded progress note'))
+    expect(lines).toHaveLength(1)
+    expect(String(lines[0][1])).toMatch(/refused unauthenticated — sender_not_node_owner/)
+    warn.mockRestore()
+  })
+
+  it('owner refuses when it holds no row for the session (no_live_task), and after the attempt went terminal', async () => {
+    const none = freshIds()
+    registerNode(none.meshId, none.nodeId)
+    const noRow: any = await workerReportHandlers[WORKER_PROGRESS_FORWARD_COMMAND](ownerCtx, {
+      meshId: none.meshId, sessionId: none.sessionId, note: NOTE, _meshSenderDaemonId: WORKER_DAEMON,
+    })
+    expect(noRow.success).toBe(false)
+    expect(noRow.detail).toMatch(/^no_live_task: /)
+
+    // Within the completion report's late grace — still no progress on a closed attempt.
+    const late = freshIds()
+    seedOwnerTerminalTask(late, 4_000)
+    const lateRes: any = await workerReportHandlers[WORKER_PROGRESS_FORWARD_COMMAND](ownerCtx, {
+      meshId: late.meshId, sessionId: late.sessionId, note: NOTE, _meshSenderDaemonId: WORKER_DAEMON,
+    })
+    expect(lateRes.success).toBe(false)
+    expect(lateRes.detail).toMatch(/^no_live_task: .*already ended \(completed\)/)
+    expect(progressRows(late.meshId, late.taskId)).toEqual([])
+    expect(progressNotices).toEqual([])
+  })
+
+  it('worker daemon surfaces the owner\'s refusal reason', async () => {
+    const ids = freshIds()
+    registerNode(ids.meshId, ids.nodeId)
+    const bind = mintWorkerSessionBind({ meshId: ids.meshId, sessionId: ids.sessionId, nodeId: ids.nodeId }).bind
+    const res: any = await workerReportHandlers.worker_progress_update(
+      workerCtx(ids.sessionId, stampSettings(ids, 'a1'), ownerRelay()), { bind, note: NOTE })
+    expect(res.success).toBe(false)
+    expect(res.error).toBe('unauthenticated')
+    expect(res.detail).toMatch(/^no_live_task: /)
+  })
+
+  it('decodes strictly and is accepted only from the mesh relay source', async () => {
+    const good = { meshId: 'm', taskId: 't', attemptId: 'a', sessionId: 's', nodeId: 'n', note: 'hello' }
+    expect(decodeForwardedWorkerProgress(good)).toEqual({ claim: { meshId: 'm', taskId: 't', attemptId: 'a', sessionId: 's' }, note: 'hello' })
+    expect(decodeForwardedWorkerProgress({ ...good, _meshSenderDaemonId: 'x' })).not.toBeNull()
+    expect(decodeForwardedWorkerProgress({ ...good, token: 'wtk_x' })).toBeNull()
+    expect(decodeForwardedWorkerProgress({ ...good, report: {} })).toBeNull()
+    expect(decodeForwardedWorkerProgress({ ...good, note: '   ' })).toBeNull()
+    expect(decodeForwardedWorkerProgress({ ...good, note: 42 })).toBeNull()
+    expect(decodeForwardedWorkerProgress({ ...good, sessionId: '' })).toBeNull()
+    // The report decoder does not accept a note either (the two shapes stay disjoint).
+    expect(decodeForwardedWorkerReport({ ...good, report: REPORT })).toBeNull()
+    const res: any = await workerReportHandlers[WORKER_PROGRESS_FORWARD_COMMAND](ownerCtx, { ...good, extra: 1 })
+    expect(res.success).toBe(false)
+    expect(res.error).toMatch(/request failed decode/)
+    const spec = workerReportSpecs.find((s) => s.name === WORKER_PROGRESS_FORWARD_COMMAND)
+    expect(spec?.sources).toEqual(['mesh'])
+  })
+
+  it('a local worker\'s progress note is still recorded locally (no relay)', async () => {
+    const ids = freshIds()
+    const attemptId = seedOwnerLiveTask(ids)
+    const bind = mintWorkerSessionBind({ meshId: ids.meshId, sessionId: ids.sessionId, nodeId: ids.nodeId }).bind
+    const relay = vi.fn(async () => ({ success: true }))
+    const ctx = { ...ownerCtx, deps: { ...ownerCtx.deps, dispatchMeshCommand: relay } }
+    const res: any = await workerReportHandlers.worker_progress_update(ctx, { bind, note: NOTE })
+    expect(res).toMatchObject({ success: true, taskId: ids.taskId })
+    expect(relay).not.toHaveBeenCalled()
+    expect(progressRows(ids.meshId, ids.taskId).map((r) => r.attemptId)).toEqual([attemptId])
   })
 })

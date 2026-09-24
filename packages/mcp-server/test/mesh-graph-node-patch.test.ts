@@ -11,6 +11,8 @@ import {
 import { getQueue, updateTaskStatus, __writeTaskStatusForTests, readLocalRecords } from '@adhdev/daemon-core';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { validateMeshToolArgs } from '../src/tools/validate-tool-args.js';
+import { MESH_GRAPH_NODE_PATCH_TOOL } from '../src/tools/mesh-tool-schemas.js';
 // GRAPH-ORCHESTRATION — M-GRAPH-INPUTS-LATE-REJECT, part (b): the RECOVERY path.
 //
 //   Design SoT: docs/design/2026-08-18-graph-orchestration-full.md
@@ -145,6 +147,41 @@ test('★ node-patch: a node blocked on required_input_missing RECOVERS through 
     assert.equal(consume.status, 'pending');
     assert.equal(consume.blockedReason, undefined, 'the recovered node must not stay blocked');
     assert.match(consume.message, /the real field/, 'the repaired binding must be materialized into the message');
+});
+
+// Parity audit gap: the handler read `args.ref` as a 4th node-identifier
+// fallback (`node ?? node_id ?? nodeId ?? ref`) and the tool's own description
+// says "Node id or `ref` of the node to patch", but the schema declared no
+// `ref` property at all — so a caller using the exact alias the description
+// documents was rejected by the unknown-arg gate. Pins the schema fix and
+// proves `ref` alone resolves the node end-to-end (not just node/node_id/nodeId).
+test('node-patch: schema declares the `ref` alias its own description documents', () => {
+    assert.ok('ref' in MESH_GRAPH_NODE_PATCH_TOOL.inputSchema.properties, 'ref missing from schema');
+    // The unknown-ARG gate (as opposed to the missing-required-key gate, which has
+    // a pre-existing quirk that node_id/nodeId/ref alone don't satisfy `required:
+    // ['node']` either — unrelated to this fix) must not reject a `ref`-only call.
+    const err = validateMeshToolArgs('mesh_graph_node_patch', { node: 'consume', ref: 'consume', base_spec_patch: { run_if: 'always' } });
+    assert.equal(err, null);
+});
+
+test('★ node-patch: `ref` alone (no node/node_id/nodeId) resolves and recovers the blocked node', async () => {
+    const meshId = nextMeshId();
+    const ctx = makeCtx(meshId);
+    const { batch, consumeTaskId } = await blockedFixture(ctx, meshId);
+
+    const patch = JSON.parse(await meshGraphNodePatch(ctx, {
+        ref: 'consume',
+        base_spec_patch: {
+            inputs_from: [{ from: 'produce', select: '/worker_result/rootCause', as: 'report', required: true }],
+        },
+    } as any));
+    assert.equal(patch.success, true, JSON.stringify(patch));
+    assert.equal(patch.recovered, true, JSON.stringify(patch));
+    assert.equal(patch.graphId, batch.graphId);
+
+    const consume = getQueue(meshId).find(t => t.id === consumeTaskId)!;
+    assert.equal(consume.status, 'pending');
+    assert.equal(consume.blockedReason, undefined, 'the recovered node must not stay blocked');
 });
 
 test('node-patch: the generation bumps, so a pre-patch digest can never win a later CAS', async () => {

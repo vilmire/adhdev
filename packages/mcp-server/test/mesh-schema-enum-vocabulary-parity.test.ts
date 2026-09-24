@@ -47,8 +47,16 @@ const EVERY_VOCABULARY = [
     MESH_TASK_DIFFICULTIES, MESH_DELIVERY_MODES, MESH_SESSION_CLEANUP_MODES,
 ].map(values => JSON.stringify([...values]));
 
-/** Number of schema properties that carry a vocabulary enum. Moves only with a deliberate schema change. */
-const EXPECTED_VOCABULARY_PROPERTY_COUNT = 18;
+/**
+ * Number of schema properties that carry a vocabulary enum. Moves only with a
+ * deliberate schema change. rc.37#2 bumped 18→20: `mesh_enqueue_task.thinking_level`
+ * and `mesh_enqueue_batch.tasks.items.thinking_level` were added as the previously-
+ * missing snake_case alias of `thinkingLevel` (the schema declared only the
+ * camelCase form, so the pre-dispatch unknown-key gate rejected the documented
+ * snake_case spelling). Both use `enumOf(MESH_THINKING_LEVELS)` and are already
+ * covered by the `thinking_level` entry in VOCABULARY_BY_PROPERTY above.
+ */
+const EXPECTED_VOCABULARY_PROPERTY_COUNT = 20;
 
 interface EnumSite { tool: string; path: string; leaf: string; values: unknown }
 

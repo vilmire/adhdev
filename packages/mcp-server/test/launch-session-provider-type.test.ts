@@ -82,6 +82,11 @@ test('ACP provider claude-acp routes to launch_cli', async () => {
   const launch = calls.find((c) => c.command === 'launch_cli');
   assert.ok(launch, 'launch_cli was issued');
   assert.equal(launch!.args.cliType, 'claude-acp');
+  // The daemon's CLI/ACP launch reads `initialModel`, not `model` — this is the
+  // key that actually reaches cli-manager.ts startSession(). `model` is also
+  // still sent for now (harmless), but asserting only that one lets the real
+  // bug (model silently ignored) slip back in undetected.
+  assert.equal(launch!.args.initialModel, 'claude-opus-4-7');
   assert.equal(launch!.args.model, 'claude-opus-4-7');
 });
 
@@ -92,6 +97,14 @@ test('IDE type cursor routes to launch_ide', async () => {
   assert.ok(launch, 'launch_ide was issued');
   assert.equal(launch!.args.ideType, 'cursor');
   assert.equal(calls.some((c) => c.command === 'launch_cli'), false);
+});
+
+test('IDE route forwards workspace to launch_ide', async () => {
+  const { transport, calls } = makeTransport();
+  await launchSession(transport, { type: 'cursor', workspace: '/tmp/repo' });
+  const launch = calls.find((c) => c.command === 'launch_ide');
+  assert.ok(launch, 'launch_ide was issued');
+  assert.equal(launch!.args.workspace, '/tmp/repo');
 });
 
 test('unknown provider type fails closed — no launch verb issued', async () => {

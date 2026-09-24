@@ -83,6 +83,8 @@ import { commitMeshGraphPlan, MeshGraphPlanError, type MeshGraphPlanRequest } fr
 import { listMeshMissionsForTool, type MeshMissionStatus } from '../../mesh/mesh-missions.js';
 import { buildMeshActiveWork } from '../../mesh/mesh-active-work.js';
 import { buildMeshSchedulingRuntime } from '../../mesh/mesh-scheduling-runtime.js';
+import { resolveMeshHostStatus } from '../../mesh/mesh-host-ownership.js';
+import type { RepoMeshDaemonRole } from '../../repo-mesh-types.js';
 import { LOG } from '../../logging/logger.js';
 
 function badRequest(command: string): { success: false; error: string } {
@@ -231,6 +233,36 @@ const recordLocal: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) 
 
 // ─── queue_* ────────────────────────────────────────────────────────────────
 
+/**
+ * THIS daemon's role in the mesh (`meshHost.role` on its own mesh record —
+ * `host` unless pairing made it a `member`), resolved through the router's mesh
+ * view (inline cache, then local config). Unresolvable mesh ⇒ undefined (no
+ * stamp — the mutation then behaves exactly as before).
+ *
+ * Why it is stamped here: `requireMeshHostQueueOwner` guards the queue
+ * mutations but only fires on `ownerRole === 'member'`, and until this seam no
+ * production caller set it — the guard was dead. The mcp-server reaches the
+ * queue ONLY through these responders, over local IPC, from whatever MCP client
+ * runs on this machine (a manually attached agent works on a member machine
+ * too — coordinator launch is host-gated, the MCP server is not). Without the
+ * stamp, such a client enqueued into a member's local queue that no host ever
+ * schedules.
+ */
+async function ownQueueRole(ctx: LowFamilyContext, meshId: string): Promise<RepoMeshDaemonRole | undefined> {
+    try {
+        const record = await ctx?.getMeshForCommand?.(meshId, undefined, { preferInline: true });
+        return record?.mesh ? resolveMeshHostStatus(record.mesh).role : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+/** The caller's options with `ownerRole` replaced by this daemon's own (never the caller's). */
+function withOwnRole<T extends Record<string, unknown>>(opts: T | undefined, role: RepoMeshDaemonRole | undefined): T & { ownerRole?: RepoMeshDaemonRole } {
+    const { ownerRole: _callerClaim, ...rest } = (opts ?? {}) as T & { ownerRole?: unknown };
+    return (role ? { ...rest, ownerRole: role } : rest) as T & { ownerRole?: RepoMeshDaemonRole };
+}
+
 const queueQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) => {
     const req = decodeQueueQueryRequest(args);
     if (!req) return badRequest('queue_query');
@@ -249,7 +281,8 @@ const queueEnqueue: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any)
     const req = decodeQueueEnqueueRequest(args);
     if (!req) return badRequest('queue_enqueue');
     try {
-        const entry = enqueueTask(req.meshId, req.message, (req.options ?? {}) as Parameters<typeof enqueueTask>[2]);
+        const role = await ownQueueRole(_ctx, req.meshId);
+        const entry = enqueueTask(req.meshId, req.message, withOwnRole(req.options as Record<string, unknown> | undefined, role) as Parameters<typeof enqueueTask>[2]);
         // design :697-731 — written AFTER the insert so a failed enqueue leaves no decision row.
         if (req.decision) {
             recordSingleEnqueueDecision(req.meshId, { ...(req.decision as any), taskId: entry.id });
@@ -284,12 +317,13 @@ const queueEnqueueGraph: LowFamilyHandler = async (_ctx: LowFamilyContext, args:
     const audit = readAudit(req.audit);
     const taskCount = audit.taskCount ?? (req.mode === 'compat' ? req.specs!.length : (Array.isArray((req.plan as any)?.tasks) ? (req.plan as any).tasks.length : 0));
     try {
+        const queueOpts = withOwnRole(undefined, await ownQueueRole(_ctx, req.meshId));
         if (req.mode === 'compat') {
-            const tasks = enqueueTaskGraph(req.meshId, [...req.specs!] as unknown as MeshTaskGraphEntrySpec[]);
+            const tasks = enqueueTaskGraph(req.meshId, [...req.specs!] as unknown as MeshTaskGraphEntrySpec[], queueOpts);
             const response: QueueEnqueueGraphResponse = { ok: true, tasks: tasks as unknown as QueueEntryWire[] };
             return { success: true, ...response };
         }
-        const plan = commitMeshGraphPlan({ ...(req.plan as unknown as Omit<MeshGraphPlanRequest, 'meshId'>), meshId: req.meshId });
+        const plan = commitMeshGraphPlan({ ...(req.plan as unknown as Omit<MeshGraphPlanRequest, 'meshId'>), meshId: req.meshId }, queueOpts);
         recordGraphEnqueueCommitted(req.meshId, {
             graphId: plan.graphId,
             batchId: plan.batchId,
@@ -344,7 +378,7 @@ const queueCancel: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) 
     try {
         // MESH-DISPATCH-MISROUTE: the PRE-cancel row carries the assignment a caller must stop.
         const before = getQueue(req.meshId).find((t) => t.id === req.taskId) ?? null;
-        const task = cancelTask(req.meshId, req.taskId, { ...(req.reason !== undefined ? { reason: req.reason } : {}) });
+        const task = cancelTask(req.meshId, req.taskId, withOwnRole({ ...(req.reason !== undefined ? { reason: req.reason } : {}) }, await ownQueueRole(_ctx, req.meshId)));
         const response: QueueCancelResponse = { task: queueWire(task), before: queueWire(before) };
         return { success: true, ...response };
     } catch (e) {
@@ -356,7 +390,7 @@ const queueRequeue: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any)
     const req = decodeQueueRequeueRequest(args);
     if (!req) return badRequest('queue_requeue');
     try {
-        const task = requeueTask(req.meshId, req.taskId, (req.options ?? {}) as Parameters<typeof requeueTask>[2]);
+        const task = requeueTask(req.meshId, req.taskId, withOwnRole(req.options as Record<string, unknown> | undefined, await ownQueueRole(_ctx, req.meshId)) as Parameters<typeof requeueTask>[2]);
         const response: QueueRequeueResponse = { task: queueWire(task) };
         return { success: true, ...response };
     } catch (e) {

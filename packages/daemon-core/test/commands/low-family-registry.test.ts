@@ -82,7 +82,8 @@ const MESH_LEDGER_CMDS = ['get_mesh_ledger', 'get_mesh_ledger_slice', 'list_mesh
 const MESH_NODE_LOGS_CMDS = ['get_mesh_node_logs']
 // WORKER-MCP Phase B: the worker's own reporting surface (design §4/§5).
 // + worker_report_forwarded (F7, 2026-09-25): a remote worker daemon relays its report to the attempt owner.
-const WORKER_REPORT_CMDS = ['worker_resolve_task', 'worker_report_completion', 'worker_report_forwarded', 'worker_progress_update']
+// + worker_progress_forwarded (F7 progress axis, 2026-09-25): same relay for progress notes.
+const WORKER_REPORT_CMDS = ['worker_resolve_task', 'worker_report_completion', 'worker_report_forwarded', 'worker_progress_update', 'worker_progress_forwarded']
 // WORKER-MCP E-T0: the mailbox piggyback (design §7.1) — coordinator-side deposit
 // (routed cross-daemon via mesh_notify_worker) and the worker-side drain.
 const WORKER_MAILBOX_CMDS = ['deposit_worker_mailbox', 'worker_drain_mailbox']
@@ -113,7 +114,7 @@ const TURN_LEDGER_IPC_CMDS = [
 ]
 
 describe('low-family registry', () => {
-  it('registers all 91 LOW family commands once, no overlap', () => {
+  it('registers all 92 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
@@ -123,8 +124,9 @@ describe('low-family registry', () => {
     ]
     // 69 − import_mesh_ledger_slice (C-W9a) + 13 store IPC commands + 1
     // report_transcript_transport (G2b, 2026-09-24) + 8 C-W9c graph/stats/prune/
-    // orphaned-pin commands + 1 worker_report_forwarded (F7, 2026-09-25) = 91.
-    expect(all).toHaveLength(91)
+    // orphaned-pin commands + 1 worker_report_forwarded (F7, 2026-09-25) + 1
+    // worker_progress_forwarded (F7 progress axis) = 92.
+    expect(all).toHaveLength(92)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)

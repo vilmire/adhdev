@@ -77,6 +77,8 @@ import {
     resolveAllowSendKeysDestructive,
     validateMeshTaskModeRequest,
     buildMeshTaskModeViolationError,
+    classifySessionBusyWithTask,
+    SESSION_BUSY_WITH_TASK_CODE,
 } from '@adhdev/daemon-core';
 import { readString } from './mesh-tool-shared.js';
 import type { MeshTaskInput } from './mesh-tool-shared.js';
@@ -1338,7 +1340,12 @@ export async function ipcDispatchToRemoteAgent(
          * behavior for every unpinned dispatch.
          */
         requiredTags?: string[];
-        meshContext?: { meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string };
+        meshContext?: {
+            meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string;
+            coordinatorSessionId?: string;
+            /** C-W6c: the turn-ledger attempt this dispatch opened — stamped onto the worker session. */
+            attemptId?: string; attemptGeneration?: number;
+        };
         /**
          * D2 (applied in C-W8): the message identity + admission policy the worker's
          * one send funnel (SessionInputService) dedupes on. Absent → the worker mints
@@ -1555,6 +1562,8 @@ export async function ipcDispatchToRemoteAgent(
         if (dispatchPayload?.success === false || dispatchResult?.success === false) {
             const source = dispatchPayload?.success === false ? dispatchPayload : dispatchResult;
             const errorMessage = dispatchPayload?.error || dispatchResult?.error || 'agent_command rejected the task';
+            const busyRefusal = sessionBusyRefusalFields(errorMessage, sessionId);
+            if (busyRefusal) return { success: false, error: `P2P dispatch refused: ${errorMessage}`, nodeId: node.id, targetDaemonId: daemonId, ...busyRefusal };
             return {
                 ...buildCoordinatorP2pRelayFailure(source?.error || errorMessage, {
                     command: 'agent_command',
@@ -1577,6 +1586,8 @@ export async function ipcDispatchToRemoteAgent(
         return { success: true, dispatched: true, sessionId: sessionId || '', providerType: resolvedProviderType };
     } catch (e: any) {
         const errorMessage = e?.message || String(e);
+        const busyRefusal = sessionBusyRefusalFields(e, sessionId);
+        if (busyRefusal) return { success: false, error: `P2P dispatch refused: ${errorMessage}`, nodeId: node.id, targetDaemonId: daemonId, ...busyRefusal };
         return {
             ...buildCoordinatorP2pRelayFailure(e, {
                 command: 'agent_command',
@@ -1587,6 +1598,30 @@ export async function ipcDispatchToRemoteAgent(
             error: `P2P dispatch failed: ${errorMessage}`,
         };
     }
+}
+
+/**
+ * SESSION-BUSY (preview rc.37): the worker refused the dispatch because the target session
+ * is still working a DIFFERENT task (provider-instance-manager's stamp guard). That is an
+ * application answer, not a P2P transport failure — report it as the typed
+ * `session_busy_with_task` refusal with the task the session is running, and never as a
+ * retryable relay outage. Only the error message crosses the P2P + IPC hops, so the
+ * worker's machine token is read back via daemon-core's classifier.
+ */
+function sessionBusyRefusalFields(error: unknown, sessionId: string): Record<string, unknown> | null {
+    const busy = classifySessionBusyWithTask(error);
+    if (!busy) return null;
+    return {
+        code: SESSION_BUSY_WITH_TASK_CODE,
+        reason: SESSION_BUSY_WITH_TASK_CODE,
+        recoverable: true,
+        retryRecommended: false,
+        ...(sessionId ? { sessionId } : {}),
+        currentTaskId: busy.currentTaskId,
+        ...(busy.currentAttemptId ? { currentAttemptId: busy.currentAttemptId } : {}),
+        nextAction: `Session${sessionId ? ` '${sessionId}'` : ''} is still running task '${busy.currentTaskId}'. Nothing was delivered. `
+            + 'Use mesh_enqueue_task (the queue delivers when the session goes idle), target another idle session, or retry after the current task completes.',
+    };
 }
 
 export function meshSessionCacheKey(nodeId: string, runtimeSessionId: string): string {

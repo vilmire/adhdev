@@ -127,6 +127,24 @@ export function collectNodeSessionIds(node: any): Set<string> {
     return sessions;
 }
 
+/**
+ * Unwrap one level of IPC/command-transport nesting: `{ payload }` or
+ * `{ result }`. Shared by unwrapCommandPayload (below, multi-level) and the
+ * transcript replica/semantic readers' local `unwrap` (single-level), which
+ * used to duplicate this with a subtly different rule.
+ *
+ * Defensive preference: an object `payload` wins over an object `result` —
+ * mirroring what the replica/semantic readers already relied on — rather than
+ * `result ?? payload`, which stops at a non-null non-object `result` (e.g.
+ * `true`) even when `payload` is a perfectly good object underneath it.
+ */
+export function unwrapOneLevel(value: any): any {
+    if (!value || typeof value !== 'object') return value;
+    if (value.payload && typeof value.payload === 'object') return value.payload;
+    if (value.result && typeof value.result === 'object') return value.result;
+    return value;
+}
+
 export function unwrapCommandPayload(value: any): any {
     let current = value;
     const seen = new Set<any>();
@@ -134,8 +152,8 @@ export function unwrapCommandPayload(value: any): any {
         if (!current || typeof current !== 'object' || seen.has(current)) break;
         seen.add(current);
 
-        const nested = current.result ?? current.payload;
-        if (!nested || typeof nested !== 'object') break;
+        const nested = unwrapOneLevel(current);
+        if (nested === current) break;
         current = nested;
     }
     return current;

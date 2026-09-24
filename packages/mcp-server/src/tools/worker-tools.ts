@@ -238,6 +238,21 @@ export function resolveWorkerModeTools(
 }
 
 /**
+ * Recognized spellings for each `handoff_notes` nested key: the tool schema's
+ * documented snake_case, plus the daemon's camelCase (which is also what the
+ * daemon's own validation error `field` paths use, e.g. `handoffNotes.touchedFiles`
+ * — a worker that reads that wording and "fixes" its payload to match was
+ * previously undone by this function silently dropping the camelCase key it
+ * had just been told to use).
+ */
+const HANDOFF_NOTE_KEY_ALIASES: Record<string, string[]> = {
+  intent: ['intent'],
+  conflictGuidance: ['conflict_guidance', 'conflictGuidance'],
+  touchedFiles: ['touched_files', 'touchedFiles'],
+  followUps: ['follow_ups', 'followUps'],
+};
+
+/**
  * Map the tool's snake_case wire shape onto the daemon's camelCase report.
  *
  * The two vocabularies are deliberate, not an oversight: MCP tool schemas in
@@ -245,26 +260,35 @@ export function resolveWorkerModeTools(
  * report type is camelCase like the rest of daemon-core. Translating here — at
  * the one boundary — keeps both conventions intact instead of leaking one into
  * the other.
+ *
+ * Returns `ignoredHandoffKeys` for any nested `handoff_notes` key that matched
+ * neither spelling, so the caller can warn the worker instead of the key
+ * silently vanishing before it ever reaches the daemon's own allow-list.
  */
-function toDaemonReport(a: Record<string, any>): Record<string, unknown> {
-  const notes = a.handoff_notes;
-  return {
+function toDaemonReport(a: Record<string, any>): { report: Record<string, unknown>; ignoredHandoffKeys: string[] } {
+  const notes = a.handoff_notes ?? a.handoffNotes;
+  const ignoredHandoffKeys: string[] = [];
+  let handoffNotes: Record<string, unknown> | undefined;
+  if (notes && typeof notes === 'object' && !Array.isArray(notes)) {
+    handoffNotes = {};
+    for (const [canonical, aliases] of Object.entries(HANDOFF_NOTE_KEY_ALIASES)) {
+      const hit = aliases.find((alias) => notes[alias] !== undefined);
+      if (hit !== undefined) handoffNotes[canonical] = notes[hit];
+    }
+    const known = new Set(Object.values(HANDOFF_NOTE_KEY_ALIASES).flat());
+    for (const key of Object.keys(notes)) {
+      if (!known.has(key)) ignoredHandoffKeys.push(key);
+    }
+  }
+  const report = {
     outcome: a.outcome,
     summary: a.summary,
     ...(a.touched_files !== undefined ? { touchedFiles: a.touched_files } : {}),
     ...(a.branch_state !== undefined ? { branchState: a.branch_state } : {}),
     ...(a.blockers !== undefined ? { blockers: a.blockers } : {}),
-    ...(notes && typeof notes === 'object' && !Array.isArray(notes)
-      ? {
-        handoffNotes: {
-          ...(notes.intent !== undefined ? { intent: notes.intent } : {}),
-          ...(notes.conflict_guidance !== undefined ? { conflictGuidance: notes.conflict_guidance } : {}),
-          ...(notes.touched_files !== undefined ? { touchedFiles: notes.touched_files } : {}),
-          ...(notes.follow_ups !== undefined ? { followUps: notes.follow_ups } : {}),
-        },
-      }
-      : {}),
+    ...(handoffNotes ? { handoffNotes } : {}),
   };
+  return { report, ignoredHandoffKeys };
 }
 
 export interface WorkerToolResult {
@@ -277,9 +301,10 @@ export async function reportCompletion(
   credentials: WorkerCredentials,
   args: Record<string, any>,
 ): Promise<WorkerToolResult> {
+  const { report, ignoredHandoffKeys } = toDaemonReport(args);
   const result: any = await transport.command('worker_report_completion', {
     ...credentials,
-    report: toDaemonReport(args),
+    report,
   });
 
   if (result?.success === true) {
@@ -288,6 +313,16 @@ export async function reportCompletion(
         ? `Completion already recorded for task ${result.taskId} — this repeat was accepted as a duplicate.`
         : `Completion recorded for task ${result.taskId} (${result.outcome}).`,
     ];
+    if (ignoredHandoffKeys.length) {
+      // Typed warning instead of a silent drop: a worker whose handoff_notes
+      // key was misspelled or unrecognized (neither the documented snake_case
+      // nor the daemon's camelCase) previously had it vanish before this point,
+      // with no signal that anything was lost.
+      lines.push(
+        `WARNING: handoff_notes had unrecognized key(s) that were ignored: ${ignoredHandoffKeys.join(', ')}. `
+        + `Recognized keys: intent, conflict_guidance, touched_files, follow_ups (camelCase also accepted).`,
+      );
+    }
     if (result.ownedPathsMismatch) {
       const { undeclaredTouched } = result.ownedPathsMismatch;
       lines.push(

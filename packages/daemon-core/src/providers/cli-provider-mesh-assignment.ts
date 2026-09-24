@@ -36,6 +36,12 @@ adapter: { updateRuntimeSettings?: (settings: Record<string, any>) => void };
 
 export function attachMeshAssignment(host: MeshAssignmentHost, assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; attemptId?: string; attemptGeneration?: number; coordinatorDaemonId?: string; coordinatorSessionId?: string }): void {
     if (!assignment?.meshId) return;
+    // A stamp for a DIFFERENT task must not inherit the previous task's attempt identity or
+    // dispatch nonce: the spreads below only overwrite them when the new assignment carries
+    // its own, so an attempt-less dispatch used to leave task=<new> paired with the prior
+    // task's attempt — evidence and reports then named a task/attempt pair that never existed.
+    const previousTaskId = typeof host.settings?.meshActiveTaskId === 'string' ? host.settings.meshActiveTaskId : '';
+    const taskChanged = !!(assignment.taskId && assignment.taskId.trim() && previousTaskId && previousTaskId !== assignment.taskId);
     // ANTIGRAVITY-PREMATURE-COMPLETION gate: stamp the injection moment for a task
     // attach so injectedTaskHasStartedGenerating() can require the producing turn to
     // START after this point (rejecting the prior turn's stale native-history tail
@@ -73,6 +79,8 @@ export function attachMeshAssignment(host: MeshAssignmentHost, assignment: { mes
         ...(assignment.coordinatorSessionId ? { meshCoordinatorSessionId: assignment.coordinatorSessionId } : {}),
     };
     if (assignment.attemptId && typeof assignment.attemptGeneration !== 'number') delete host.settings.meshActiveAttemptGeneration;
+    if (taskChanged && !assignment.attemptId) { delete host.settings.meshActiveAttemptId; delete host.settings.meshActiveAttemptGeneration; }
+    if (taskChanged && typeof assignment.dispatchNonce !== 'number') delete host.settings.meshActiveDispatchNonce;
     host.adapter.updateRuntimeSettings?.(host.settings);
 }
 
