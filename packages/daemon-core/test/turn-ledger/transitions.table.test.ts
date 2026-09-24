@@ -81,6 +81,11 @@ const FIRES: Record<string, Fixture> = {
     R10a: { attempt: makeAttempt('finalizing'), evidence: ev('turn_end', { strength: 'weak' }), state: 'finalizing', effects: ['record'] },
     R11: { attempt: makeAttempt('finalizing'), evidence: ev('turn_end', { strength: 'genuine' }), state: 'completed', effects: ['commit'] },
     R12: { attempt: makeAttempt('finalizing'), evidence: ev('turn_started', { retro: false }), state: 'generating', effects: ['hold'] },
+    R9r: { attempt: G(), evidence: ev('turn_end', { strength: 'genuine', summary: REF, reportExpected: true }), state: 'finalizing', effects: ['hold'] },
+    R9d: { attempt: makeAttempt('finalizing'), holds: [makeHold('await_report')], evidence: ev('turn_end', { strength: 'genuine', reportExpected: true }), state: 'finalizing', effects: ['record'] },
+    R11d: { attempt: makeAttempt('finalizing'), holds: [makeHold('await_report')], evidence: ev('transcript_final', { selfAttributing: false, nativeRead: true, nativeMarker: { outcome: 'completed' }, live: LIVE_IDLE }), state: 'finalizing', effects: ['record'] },
+    R12r: { attempt: makeAttempt('finalizing'), holds: [makeHold('await_report')], evidence: ev('turn_started', { retro: false }), state: 'generating', effects: ['release_hold', 'hold', 'bus', 'record'] },
+    R13r: { attempt: makeAttempt('finalizing'), holds: [makeHold('await_report')], evidence: expired('await_report'), state: 'completed', effects: ['commit', 'notify_coordinator'] },
     R13a: { attempt: makeAttempt('finalizing'), holds: [makeHold('weak_candidate')], evidence: expired('weak_candidate'), state: 'completed', effects: ['commit'] },
     R13b: { attempt: G(), evidence: ev('turn_end', { strength: 'weak', afterFinalizationTimeout: true }), state: 'failed', effects: ['commit'] },
     R14: { attempt: G(), evidence: ev('transcript_final', { selfAttributing: false, nativeRead: true, nativeMarker: { outcome: 'completed' }, live: LIVE_IDLE }), state: 'completed', effects: ['commit'] },
@@ -181,10 +186,10 @@ describe('rule matching is unambiguous', () => {
             }
         }
         expect(ambiguous).toEqual([]);
-        // 51 evidence variants (all 23 kinds) × (1 no-attempt + 28 attempt variants × 2 lanes).
+        // 57 evidence variants (all 23 kinds; +6 report-gate variants 2026-09-24) × (1 no-attempt + 28 attempt variants × 2 lanes).
         const variantCount = TURN_EVIDENCE_KINDS.reduce((n, kind) => n + variantsFor(kind).length, 0);
-        expect(variantCount).toBe(51);
-        expect(visited).toBe(51 * (1 + 28 * 2));
+        expect(variantCount).toBe(57);
+        expect(visited).toBe(57 * (1 + 28 * 2));
     });
 });
 

@@ -313,4 +313,4 @@ export const statusMetaSpecs = defineCommandSpecs('low', statusMetaHandlers, {
     set_user_name: { invalidates: ['daemon.metadata'] },
     // get_status_metadata is a READ: it invalidates nothing (ipc-load-audit row 8 —
     // every internal/mesh/IPC poll used to force a daemon.metadata flush).
-});
+}, { meshSender: 'authenticated_peer' });

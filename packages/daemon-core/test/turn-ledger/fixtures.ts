@@ -72,6 +72,7 @@ export function variantsFor(kind: TurnEvidenceKind): Array<{ label: string; evid
         case 'turn_started': return [
             v('now', ev(kind, { retro: false })),
             v('old', ev(kind, { retro: true }, { at: NOW - 10_000 })),
+            v('now-await-report', ev(kind, { retro: false }), [makeHold('await_report')]),
         ];
         case 'suspension': return [
             v('approval', ev(kind, { modal: 'approval' })),
@@ -84,12 +85,15 @@ export function variantsFor(kind: TurnEvidenceKind): Array<{ label: string; evid
             v('weak-timeout', ev(kind, { strength: 'weak', afterFinalizationTimeout: true })),
             v('hollow', ev(kind, { strength: 'genuine', hollow: true })),
             v('live', ev(kind, { strength: 'genuine', live: { ...LIVE_IDLE, adapterPending: true } })),
+            v('report-expected', ev(kind, { strength: 'genuine', summary: REF, reportExpected: true })),
+            v('report-expected-held', ev(kind, { strength: 'genuine', summary: REF, reportExpected: true }), [makeHold('await_report')]),
         ];
         case 'transcript_final': return [
             v('marker', ev(kind, { selfAttributing: false, nativeRead: true, nativeMarker: { outcome: 'completed' }, live: LIVE_IDLE })),
             v('shape', ev(kind, { selfAttributing: false, nativeRead: false, live: LIVE_IDLE, summary: REF })),
             v('growing', ev(kind, { selfAttributing: false, nativeRead: false, live: { ...LIVE_IDLE, newestActivityAt: NOW - 1000 }, summary: REF })),
             v('no-marker', ev(kind, { selfAttributing: false, nativeRead: true, live: LIVE_IDLE, summary: REF })),
+            v('marker-await-report', ev(kind, { selfAttributing: false, nativeRead: true, nativeMarker: { outcome: 'completed' }, live: LIVE_IDLE }), [makeHold('await_report')]),
         ];
         case 'worker_report': return [
             v('completed', ev(kind, { outcome: 'completed', summary: REF, hasHandoffNotes: false }, { source: 'worker_tool' })),
@@ -99,6 +103,7 @@ export function variantsFor(kind: TurnEvidenceKind): Array<{ label: string; evid
         case 'transcript_activity': return [
             v('new', ev(kind, { newestActivityAt: NOW })),
             v('old', ev(kind, { newestActivityAt: NOW - 10_000 })),
+            v('new-await-report', ev(kind, { newestActivityAt: NOW }), [makeHold('await_report')]),
         ];
         case 'no_progress': return [
             v('final', ev(kind, { stalledMs: 200_000, observedStatus: 'idle', finalAssistantPresent: true })),
@@ -119,7 +124,7 @@ export function variantsFor(kind: TurnEvidenceKind): Array<{ label: string; evid
         case 'coordinator_ack': return [v('ack', ev(kind, { notify: 'completed', outcome: 'delivered' }))];
         case 'hold_expired': return ([
             'await_delivery', 'await_consume', 'await_turn', 'liveness', 'hard_ceiling',
-            'live_pending', 'transcript_quiet', 'weak_candidate', 'suspension_before_consumed',
+            'live_pending', 'transcript_quiet', 'weak_candidate', 'suspension_before_consumed', 'await_report',
         ] as const).map((reason) => v(reason, expired(reason), [makeHold(reason)])).concat([v('missing', expired('liveness'), [])]);
     }
 }

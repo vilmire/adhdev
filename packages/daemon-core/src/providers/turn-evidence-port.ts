@@ -143,6 +143,15 @@ export interface TurnEvidencePortDeps {
      * `owner` set, same fail-open behavior `observeBuilt` had.
      */
     appendHandoff?: (meshId: string, kind: string, payload: Record<string, unknown>) => Promise<SummaryRef>;
+    /**
+     * Does this session hold a live worker-MCP session bind — can its worker
+     * call report_completion? Boot-injected (the bind registry lives in
+     * `mesh/`, which this file must never import). When true, `turn_end`
+     * evidence is stamped `reportExpected: true` here, on the WORKER's daemon
+     * (the only one that knows), so the owner's reducer waits for the report
+     * instead of committing on the idle edge (R9r, live rc.40 false idle).
+     */
+    reportExpectedFor?: (sessionId: string) => boolean;
     /** Clock used to backfill `at` for evidence passed to `observe()` directly
      *  without one (defensive only — every `emit*` helper below already
      *  stamps `at`, so this path is for a future direct-`observe()` caller). */
@@ -225,6 +234,11 @@ export function createTurnEvidencePort(deps: TurnEvidencePortDeps): TurnEvidence
             if (!evidence.attemptRef && evidence.sessionId && deps.attemptRefFor) {
                 const resolved = deps.attemptRefFor(evidence.sessionId);
                 if (resolved) withAttempt = { ...withAttempt, attemptRef: resolved };
+            }
+            if (withAttempt.kind === 'turn_end' && withAttempt.reportExpected === undefined && deps.reportExpectedFor) {
+                let expected = false;
+                try { expected = deps.reportExpectedFor(withAttempt.sessionId) === true; } catch { expected = false; }
+                if (expected) withAttempt = { ...withAttempt, reportExpected: true };
             }
             // Defensive backfill: every emit* helper already stamps `at`, but a
             // future direct-observe() caller might not.

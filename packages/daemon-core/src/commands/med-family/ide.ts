@@ -166,4 +166,4 @@ export const ideHandlers: Record<string, MedFamilyHandler> = {
 export const ideSpecs = defineCommandSpecs('med', ideHandlers, {
     restart_ide: { blockedDuringMandatoryUpdate: true },
     launch_ide: { fastFlush: true, blockedDuringMandatoryUpdate: true },
-});
+}, { meshSender: 'authenticated_peer' });

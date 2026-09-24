@@ -576,6 +576,25 @@ export function processMeshEvent(components: DaemonComponents, input: MeshEventI
 }
 
 /**
+ * The mesh a forwarded (`mesh_forward_event`) payload belongs to: its meshId,
+ * else the mesh owning its workspace, else recovered from its nodeId (and the
+ * coordinator id it names). Shared by the handler and the router's mesh
+ * sender gate (commands/mesh-sender.ts `node_owner`), so both judge the SAME
+ * mesh's roster.
+ */
+export function resolveForwardedEventMeshId(payload: Record<string, unknown>): string {
+    const nodeId = readNonEmptyString(payload.nodeId);
+    const workspace = readNonEmptyString(payload.workspace);
+    return readNonEmptyString(payload.meshId)
+        || (workspace ? readNonEmptyString(getCachedMeshByWorkspace(workspace)?.id) : '')
+        || recoverMeshIdByNodeId(nodeId)
+        || recoverMeshIdByCoordinatorAndNode(
+            readNonEmptyString(payload.meshCoordinatorDaemonId) || readNonEmptyString(payload.coordinatorDaemonId),
+            nodeId,
+        );
+}
+
+/**
  * A mesh event reported by ANOTHER process path rather than this daemon's own
  * provider bus: the in-process refine jobs, the `mesh_forward_event` command
  * (a worker daemon's direct report, cli-agent's forward). Resolves the mesh,
@@ -589,13 +608,7 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
     }
     const nodeId = readNonEmptyString(payload.nodeId);
     const workspace = readNonEmptyString(payload.workspace);
-    const meshId = readNonEmptyString(payload.meshId)
-        || (workspace ? readNonEmptyString(getCachedMeshByWorkspace(workspace)?.id) : '')
-        || recoverMeshIdByNodeId(nodeId)
-        || recoverMeshIdByCoordinatorAndNode(
-            readNonEmptyString(payload.meshCoordinatorDaemonId) || readNonEmptyString(payload.coordinatorDaemonId),
-            nodeId,
-        );
+    const meshId = resolveForwardedEventMeshId(payload);
     if (!meshId) {
         traceMeshEventDrop('meshId_required', {
             taskId: payload.taskId,

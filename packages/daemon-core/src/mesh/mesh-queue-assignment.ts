@@ -29,6 +29,7 @@ import { isModelAllowedBySlot } from './slot-model-enforcement.js';
 import type { TurnLedger } from './turn-ledger/ledger.js';
 import { dispatchMessageId, openOrResumeQueueAttempt } from './mesh-queue-dispatch-evidence.js';
 import { withMeshDirectDispatch } from '../commands/command-args.js';
+import { unwrapMeshRelayResult } from '../commands/mesh-relay-result.js';
 import type { TurnAttemptRef, TurnEvidence } from '@adhdev/mesh-shared';
 import { classifyDuplicateMeshDispatch } from './mesh-duplicate-dispatch.js';
 import { isWorkspaceAutoFastForwardInFlight, maybeAutoFastForwardIdleNode } from './mesh-auto-fast-forward.js';
@@ -723,6 +724,28 @@ function deliverTaskToSession(
 
     guarded.then((res: any) => {
         if (timer) clearTimeout(timer);
+        // REFUSAL-BOOKED-AS-DELIVERED: a non-throwing answer is not automatically a
+        // successful delivery. Some `agent_command` refusals RESOLVE with
+        // `{ success: false, code, … }` instead of throwing — e.g. mesh_node_bootstrap_pending
+        // (commands/med-family/cli-agent.ts) and the mesh-sender gate's whole
+        // mesh_sender_not_session_coordinator family (commands/mesh-sender.ts
+        // meshSenderRefusalResult — DaemonCommandRouter.execute returns this as a normal
+        // result, never a throw, so it crosses the P2P RPC envelope as a genuine response).
+        // Unwrap through the shared boundary reader (handles that envelope / IPC wrapping
+        // too) and treat an explicit `success === false` (or an object answer that fails to
+        // carry a boolean `success` at all — relay_result_malformed) as a dispatch FAILURE,
+        // exactly like a thrown rejection: it goes through the same handleDispatchFailure
+        // path (duplicate-refusal rebind, retry/requeue, ledger) — so a refusal that throws
+        // on one transport and resolves on another (or changes tomorrow) is booked
+        // identically either way. A non-object / undefined answer (legacy transports) keeps
+        // the prior behavior — that is not an application-level answer to unwrap, just an ack.
+        if (res && typeof res === 'object' && !Array.isArray(res)) {
+            const unwrapped = unwrapMeshRelayResult(res, { command: 'agent_command', peerDaemonId: ctx.transport === 'remote' ? ctx.nodeId : undefined });
+            if (unwrapped.success === false) {
+                handleDispatchFailure(unwrapped, ctx, delivery);
+                return;
+            }
+        }
         const isQueued = res && typeof res === 'object' && res.status === 'queued';
         // TURN-LEDGER (C2): the transport confirm IS the delivered evidence (R2
         // binds the attempt to this session and arms await_consume / await_turn).
@@ -741,6 +764,33 @@ function deliverTaskToSession(
         }
     }).catch((e: any) => {
         if (timer) clearTimeout(timer);
+        handleDispatchFailure(e, ctx, delivery);
+    });
+}
+
+/**
+ * Shared dispatch-failure handling for `deliverTaskToSession` — reached from both the
+ * `.catch()` (a thrown/rejected send) and the `.then()` (a resolved `{success:false}`
+ * refusal answer, see REFUSAL-BOOKED-AS-DELIVERED above) so the two arms cannot drift:
+ * a refusal is booked exactly like a throw, never as `delivered`.
+ */
+function handleDispatchFailure(rawFailure: any, ctx: DeliverTaskContext, delivery: { id: string }): void {
+    // REFUSAL-BOOKED-AS-DELIVERED: a resolved `{success:false, code, error/reason}`
+    // answer (no `.message`, unlike a thrown Error) reaches this function too — see the
+    // `.then()` unwrap above. Normalize it to the `{message}` shape every branch below
+    // already reads, without touching what a genuine thrown Error carries (`e` stays
+    // that same object so `.code`/`.retryRecommended`/`.recoverable` reads below are
+    // unaffected either way).
+    const isApplicationRefusal = !!rawFailure && typeof rawFailure === 'object' && rawFailure.success === false;
+    const e: any = isApplicationRefusal && typeof rawFailure.message !== 'string'
+        ? {
+            ...rawFailure,
+            message: rawFailure.error || rawFailure.reason || rawFailure.code
+                ? `${rawFailure.code ? `${rawFailure.code}: ` : ''}${rawFailure.error || rawFailure.reason || 'agent_command refused the dispatch'}`
+                : 'agent_command refused the dispatch',
+        }
+        : rawFailure;
+    {
         // DUP-CLAIM-REBIND: not every rejection is a dispatch FAILURE. When the node
         // refuses because it is ALREADY working this exact task on another live session,
         // that is an application-level answer — the work is running, it is simply running
@@ -803,6 +853,9 @@ function deliverTaskToSession(
         // failure. Marking the task terminal here would permanently kill tasks a later
         // tick delivers fine. Return it to 'pending' and record a retryable dispatch_failed
         // ledger entry so the reconcile loop re-dispatches it. Identical for both transports.
+        if (isApplicationRefusal) {
+            LOG.warn('MeshQueue', `agent_command refused dispatch of task ${ctx.task.id} to session ${ctx.sessionId} on node ${ctx.nodeId} (${ctx.transport}): code=${rawFailure?.code ?? 'unknown'}`);
+        }
         LOG.error('MeshQueue', `Failed to dispatch task via ${ctx.transport} to node ${ctx.nodeId}: ${e?.message}`);
         // The dispatch failed — the task is no longer in-flight (it returns to pending
         // for a clean re-dispatch). Clear the single-flight mark so a legitimate
@@ -825,8 +878,13 @@ function deliverTaskToSession(
                 ...dispatchEvidenceBase(ctx, 'dispatch'),
                 eventId: `dispatch-failed:${gen}`,
                 kind: 'dispatch_failed',
-                workerAbsent: /timeout|not.?found|no adapter|unreachable|offline/i.test(String(e?.message ?? '')),
-                reason: /timeout/i.test(String(e?.message ?? '')) ? 'timeout' : 'transport_error',
+                // REFUSAL-BOOKED-AS-DELIVERED: an application-level `{success:false}` answer
+                // is the worker actively refusing the dispatch, not a transport failure — the
+                // worker unambiguously WAS reached, so it is never `workerAbsent`, and the
+                // typed reason is `rejected_by_worker` (never the message-text sniff below,
+                // which only classifies genuine thrown transport/timeout errors).
+                workerAbsent: isApplicationRefusal ? false : /timeout|not.?found|no adapter|unreachable|offline/i.test(String(e?.message ?? '')),
+                reason: isApplicationRefusal ? 'rejected_by_worker' : (/timeout/i.test(String(e?.message ?? '')) ? 'timeout' : 'transport_error'),
             } as TurnEvidence);
             if (!retryable) {
                 LOG.error('MeshQueue', `Task ${ctx.task.id} (mesh ${ctx.meshId}) is undeliverable to node ${ctx.nodeId} (session ${ctx.sessionId ?? '?'}) and will NOT be retried: dispatch_unrecoverable: ${e?.message || 'transport reported the failure as non-recoverable'}`);
@@ -891,7 +949,7 @@ function deliverTaskToSession(
                 payload: { taskId: ctx.task.id, deliveryId: delivery.id, error: e?.message, retryable, transport: ctx.transport },
             }, { local: true });
         } catch { /* ledger write is best-effort */ }
-    });
+    }
 }
 
 /**
@@ -1579,7 +1637,9 @@ export function tryAssignQueueTask(
                 ...(readNonEmptyString(task.sourceCoordinatorSessionId) ? { coordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) } : {}),
                 ...(silentIdlePushOnDispatch ? { silentIdlePush: true } : {}),
             },
-        }), 'mesh'),
+        // In-process: this daemon's own queue dispatching to its own session —
+        // no remote sender for the router's mesh sender gate to check.
+        }), 'mesh', { inProcess: true }),
         {
             meshId,
             nodeId,

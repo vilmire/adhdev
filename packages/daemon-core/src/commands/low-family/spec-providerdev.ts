@@ -219,4 +219,4 @@ export const specProviderDevHandlers: Record<string, LowFamilyHandler> = {
     },
 };
 
-export const specProviderDevSpecs = defineCommandSpecs('low', specProviderDevHandlers);
+export const specProviderDevSpecs = defineCommandSpecs('low', specProviderDevHandlers, {}, { meshSender: 'authenticated_peer' });

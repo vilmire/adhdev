@@ -23,6 +23,7 @@ import type { MedFamilyContext } from './med-family/types.js';
 import type { HighFamilyContext } from './high-family/types.js';
 import type { DaemonCommandHandler } from './handler.js';
 import type { GitCommandServices } from '../git/git-commands.js';
+import type { MeshSenderClass } from './mesh-sender.js';
 
 /** Where a command entered the daemon. Recorded verbatim in the command log. */
 export type CommandSource = 'ws' | 'p2p' | 'ext' | 'api' | 'standalone' | 'ipc' | 'mesh' | 'internal';
@@ -113,6 +114,20 @@ export interface CommandSpec<F extends CommandFamily = CommandFamily> {
     postChat?: boolean;
     /** Sources allowed to run this command. Default: all. */
     sources?: readonly CommandSource[];
+    /**
+     * Who may send this command over the daemon↔daemon mesh relay (source
+     * `mesh`), evaluated by the router against the transport-stamped sender
+     * (commands/mesh-sender.ts). REQUIRED for every command that accepts the
+     * `mesh` source — a command accepting `mesh` without it is refused at run
+     * time (`mesh_sender_policy_missing`) and fails
+     * test/commands/mesh-sender-registry.test.ts.
+     */
+    meshSender?: MeshSenderClass;
+}
+
+/** Whether a spec can be run with source `mesh` (no `sources` list = all sources). */
+export function specAcceptsMeshSource(spec: Pick<CommandSpec, 'sources'>): boolean {
+    return !spec.sources || spec.sources.includes('mesh');
 }
 
 /** Attributes a family file declares next to a handler. */
@@ -139,11 +154,16 @@ type FamilyHandler<F extends CommandFamily> = (ctx: CommandContextFor<F>, args: 
  * Turn a family file's `name → handler` table into specs, attaching the
  * attributes declared for some of its names. An attribute for a name the
  * table does not define is a programming error and throws at load.
+ *
+ * `defaults` are the file-wide attributes every spec of the table starts from
+ * (a per-name attribute overrides them) — used for the file's mesh-sender
+ * posture (`meshSender`), which every mesh-capable command must declare.
  */
 export function defineCommandSpecs<F extends CommandFamily>(
     family: F,
     handlers: Record<string, FamilyHandler<F>>,
     attributes: Record<string, CommandSpecAttributes> = {},
+    defaults: CommandSpecAttributes = {},
 ): CommandSpec<F>[] {
     for (const name of Object.keys(attributes)) {
         if (!Object.prototype.hasOwnProperty.call(handlers, name)) {
@@ -154,6 +174,7 @@ export function defineCommandSpecs<F extends CommandFamily>(
         name,
         family,
         run,
+        ...defaults,
         ...(attributes[name] ?? {}),
     }));
 }

@@ -241,6 +241,15 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
 
     interface Step { evidence: TurnEvidence; result: ReduceResult; host: TxnHostResult }
 
+    /** The report gate (R9r/R12r/R13r) is rare and load-bearing for diagnosis: always INFO. */
+    function logReportGate(rule: string | undefined, attempt: TurnAttempt | null): void {
+        if (!attempt || (rule !== 'R9r' && rule !== 'R12r' && rule !== 'R13r')) return;
+        const who = `attempt ${attempt.attemptId} g${attempt.generation} (task ${attempt.taskId ?? '?'}, session ${attempt.sessionId})`;
+        if (rule === 'R9r') log.info(`turn-ledger: idle end of ${who} awaits the worker report (await_report hold ${Math.round(policy.awaitReportMs / 1000)}s)`);
+        else if (rule === 'R12r') log.info(`turn-ledger: false idle: worker resumed — ${who} back to generating (falseIdleCount=${attempt.data.falseIdleCount ?? 0})`);
+        else log.info(`turn-ledger: no worker report within ${Math.round(policy.awaitReportMs / 1000)}s — ${who} committed weak`);
+    }
+
     /**
      * One reduce + persist step inside the caller's txn. Returns every step it
      * applied (a superseded plain attempt is a nested step) for the post-commit half.
@@ -378,6 +387,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
         let publish = false;
         for (const step of steps) {
             if (step.result.verdict === 'rejected') continue;
+            logReportGate(step.result.rule, step.result.attempt);
             const post = runPostCommitEffects(ports, step.result.effects, {
                 attempt: step.result.attempt,
                 nowMs,

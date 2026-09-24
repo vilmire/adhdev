@@ -34,6 +34,8 @@ import type { CommandRouterResult } from '../router.js';
 import type { GitRepoIdentity } from '../../git/git-types.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from '../command-args.js';
+import { rosterEvidenceExtra } from '../mesh-sender.js';
+import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
 import { defineCommandSpecs } from '../command-registry.js';
 
 /**
@@ -1235,8 +1237,8 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 if (isRemoteWorktree) {
                     // Worktree lives on a different machine — ask that daemon to clean it up.
                     // _meshDirectDispatch prevents re-forwarding when stored daemonId uses legacy format.
-                    const forwarded = await ctx.deps.dispatchMeshCommand!(nodeDaemonId!, 'remove_mesh_node', withMeshDirectDispatch(args));
-                    const forwardedResult = (forwarded ?? { success: false, error: 'no response from remote node' }) as Record<string, unknown>;
+                    const forwarded = await ctx.deps.dispatchMeshCommand!(nodeDaemonId!, 'remove_mesh_node', withMeshDirectDispatch(args, rosterEvidenceExtra(args, mesh)));
+                    const forwardedResult: Record<string, unknown> = unwrapMeshRelayResult(forwarded, { command: 'remove_mesh_node', peerDaemonId: nodeDaemonId });
                     // MESH-REMOTE-REMOVE-MEMBERSHIP-DESYNC: the owning daemon ran this
                     // same handler and has already fixed ITS meshes.json. What it cannot
                     // do is fix OUR copy — this coordinator holds an independent
@@ -1519,7 +1521,10 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             // clone locally, do not forward. Equivalent → local.
             if (sourceDaemonId && !daemonIdsEquivalent(sourceDaemonId, ctx.deps.statusInstanceId) && ctx.deps.dispatchMeshCommand
                 && !readMeshDirectDispatchFlag(args)) {
-                const forwarded = await ctx.deps.dispatchMeshCommand(sourceDaemonId, 'clone_mesh_node', withMeshDirectDispatch(args));
+                const forwarded = unwrapMeshRelayResult(
+                    await ctx.deps.dispatchMeshCommand(sourceDaemonId, 'clone_mesh_node', withMeshDirectDispatch(args, rosterEvidenceExtra(args, mesh))),
+                    { command: 'clone_mesh_node', peerDaemonId: sourceDaemonId },
+                );
                 // REMOTE-CLONE-CACHE-SEED: register the remotely-created node in THIS
                 // coordinator's inline cache immediately, mirroring what the local clone branch
                 // below already does via updateInlineMeshNode/addNode.
@@ -1539,7 +1544,7 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 // seedRemoteClonedWorktreeNode merges order-independently with that hydrate, so
                 // whichever of the two lands first, the node ends up both addressable and
                 // correctly gated (see its doc comment for the ordering argument).
-                const forwardedNode = (forwarded as { node?: unknown } | null | undefined)?.node;
+                const forwardedNode = forwarded.success ? (forwarded as { node?: unknown }).node : undefined;
                 const forwardedNodeId = normalizeMeshNodeId(forwardedNode as any);
                 if (forwardedNode && forwardedNodeId) ctx.seedRemoteClonedWorktreeNode(meshId, forwardedNode);
                 // FALSE-BLOCKER-CLONE-QUEUE: also open the transient grace window. The seed above
@@ -1547,7 +1552,7 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 // remote machine, so a task pinned to it can still transiently defer — that skip
                 // must stay classified as transient rather than a permanent actionable blocker.
                 if (forwardedNodeId) noteRecentlyClonedNode(forwardedNodeId);
-                return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
+                return forwarded as CommandRouterResult;
             }
 
             // REMOTE-CLONE-SELF-IDENTITY: this branch executes ON the source node's OWN
@@ -1953,8 +1958,8 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             // bootstrap locally, do not forward. Equivalent → local.
             if (nodeDaemonId && !daemonIdsEquivalent(nodeDaemonId, ctx.deps.statusInstanceId) && ctx.deps.dispatchMeshCommand
                 && !readMeshDirectDispatchFlag(args)) {
-                const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId, 'retry_mesh_node_bootstrap', withMeshDirectDispatch(args));
-                return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
+                const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId, 'retry_mesh_node_bootstrap', withMeshDirectDispatch(args, rosterEvidenceExtra(args, mesh)));
+                return unwrapMeshRelayResult(forwarded, { command: 'retry_mesh_node_bootstrap', peerDaemonId: nodeDaemonId }) as CommandRouterResult;
             }
 
             const currentBootstrap = node.worktreeBootstrap as WorktreeBootstrapState | undefined;
@@ -2004,6 +2009,7 @@ export const meshCrudSpecs = defineCommandSpecs('med', meshCrudHandlers, {
     // DASHBOARD-GHOST-LINGER: deleted sessions linger as ghost rows until the next
     // heartbeat without an immediate daemon.metadata flush.
     cleanup_mesh_sessions: { invalidates: ['daemon.metadata'] },
-    remove_mesh_node: { invalidates: ['daemon.metadata'] },
-    clone_mesh_node: { invalidates: ['daemon.metadata'] },
-});
+    remove_mesh_node: { invalidates: ['daemon.metadata'], meshSender: 'any_member_mesh' },
+    clone_mesh_node: { invalidates: ['daemon.metadata'], meshSender: 'any_member_mesh' },
+    retry_mesh_node_bootstrap: { meshSender: 'any_member_mesh' },
+}, { meshSender: 'authenticated_peer' });

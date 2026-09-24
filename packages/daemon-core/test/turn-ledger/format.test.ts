@@ -421,6 +421,15 @@ describe('renderTurnNotify — new shapes with no legacy precedent (C1 R27/R27a)
         expect(text).toBe(`[System] ${NODE_LABEL} task t9 was cancelled (operator_cancel)`);
     });
 
+    it('failed — a direct dispatch that was not redelivered names the cause and says to resend', () => {
+        const { text, kind } = render('failed', { nodeLabel: NODE_LABEL, taskId: 't9', stopReason: 'direct_not_redelivered', directFailureCause: 'dispatch_failed' }, {});
+        expect(kind).toBe('failed');
+        expect(text).toContain(`[System] ${NODE_LABEL}: direct dispatch of task t9 failed (dispatch_failed)`);
+        expect(text).toContain('never redelivered automatically');
+        expect(text).toContain('mesh_send_task');
+        expect(text).not.toContain('has stopped');
+    });
+
     it('late_completion — with resolved g-1 summary', () => {
         const { text, kind, contentRefsMissing } = render(
             'late_completion',

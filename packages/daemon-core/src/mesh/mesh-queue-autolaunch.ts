@@ -1123,7 +1123,7 @@ export async function maybeAutoLaunchOneQueueSession(components: DaemonComponent
                         ...(effectiveThinkingLevel ? { initialThinkingLevel: effectiveThinkingLevel } : {}),
                         // Phase E: launchedBy + modelSource / thinkingLevelSource.
                         ...launchProvenance,
-                    }, 'mesh');
+                    }, 'mesh', { inProcess: true });
                     if (!launchResult?.success) {
                         const reason = launchResult?.error || 'launch_cli_failed';
                         markAutoLaunch(meshId, task.id, { status: 'failed', reason, nodeId, providerType: effectiveProviderType });

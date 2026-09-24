@@ -56,6 +56,7 @@ import { DEFAULT_TURN_POLICY, type TurnPolicy } from './policy.js';
 import type { TurnLedger } from './ledger.js';
 import type { TurnEventRow } from './store.js';
 import type { TurnAttempt } from './types.js';
+import { isUnredeliveredDirectFailure } from './reducer.js';
 import { renderTurnNotify, type FormatStopReason, type TurnNotifyRefs, type TurnNotifyScalars } from './format.js';
 import { routeNotice, type CoordinatorSessionView } from './routing.js';
 import { evaluateNotifySuppression } from './suppression.js';
@@ -342,6 +343,7 @@ function textOf(payload: Record<string, unknown> | null): string | null {
 const STATUS_LINE_KINDS: ReadonlySet<NotifyKind> = new Set<NotifyKind>(['completed', 'failed', 'cancelled', 'stopped', 'approval', 'choice', 'late_completion']);
 
 function stopReasonOf(attempt: TurnAttempt | null): FormatStopReason {
+    if (isUnredeliveredDirectFailure(attempt)) return 'direct_not_redelivered';
     switch (attempt?.terminal?.reason) {
         case 'provider_auth_failed': return 'auth_failed';
         case 'provider_billing_failed': return 'billing_failed';
@@ -358,6 +360,13 @@ function nodeLabelFor(attempt: TurnAttempt | null, notice: Record<string, unknow
 
 function evidenceRowFor(ctx: RenderContext, notifyRow: TurnEventRow | null): TurnEventRow | null {
     if (!notifyRow) return null;
+    // A hold-expiry commit (R13a/R13r) names the end that opened the hold: its
+    // local envelope holds the text the scheduler's hold_expired row lacks.
+    const textEventId = str(notifyRow.payload?.textEventId);
+    if (textEventId) {
+        const opener = ctx.ledger.store.getEvent(textEventId);
+        if (opener) return opener;
+    }
     const at = notifyRow.eventId.lastIndexOf('#notify:');
     if (at <= 0) return null;
     return ctx.ledger.store.getEvent(notifyRow.eventId.slice(0, at));
@@ -435,6 +444,7 @@ export function renderNotice(ctx: RenderContext, meshId: string, entry: Record<s
         ...(str(notice?.providerSessionId) ? { providerSessionId: str(notice?.providerSessionId)! } : {}),
         strength: notify === 'candidate' || attempt?.terminal?.strength === 'weak' ? 'weak' : 'genuine',
         stopReason: stopReasonOf(attempt),
+        ...(isUnredeliveredDirectFailure(attempt) ? { directFailureCause: attempt!.terminal!.reason } : {}),
         ...(notice?.reviewRecommended === true ? { reviewRecommended: true } : {}),
         ...(reason === 'finalization_timeout_no_response' ? { forcedTimeoutNoResponse: true } : {}),
         ...(reason === 'hollow_max_retries' && attempt

@@ -220,5 +220,8 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
 export const meshEventsSpecs = defineCommandSpecs('high', meshEventsHandlers, {
     // mesh_answer_question (mission f1d25e11): the answer must reach the OWNING worker
     // session's live instance — its activeInteractivePrompt and adapter live only there.
-    interactive_prompt_response: { forwardToOwner: true, fastFlush: true },
-});
+    interactive_prompt_response: { forwardToOwner: true, fastFlush: true, meshSender: 'session_coordinator' },
+    // A worker daemon's event about its own node: the sender must own the node the
+    // payload names on this daemon's roster (nodeId / workspace are claims).
+    mesh_forward_event: { meshSender: 'node_owner' },
+}, { meshSender: 'authenticated_peer' });

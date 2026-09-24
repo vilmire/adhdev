@@ -64,8 +64,19 @@ import {
     serializeMeshCoordinatorMcpConfig,
 } from './mesh-coordinator-config.js';
 import type { MeshCoordinatorConfigFormat } from './mesh-refine-gates.js';
-import { isWorkerMcpEnabled } from '../runtime-defaults.js';
-import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus.js';
+import {
+    isWorkerMcpEnabled,
+    mintWorkerSessionBind,
+    verifyWorkerSessionBind,
+    revokeWorkerSessionBindsForSession,
+    subscribeWorkerBindRevocation,
+    revokeWorkerSessionBind,
+    hasLiveWorkerSessionBind,
+    __resetWorkerSessionBindsForTest,
+    liveWorkerSessionBindCount,
+    WORKER_BIND_CANARY_PREFIX,
+    type WorkerSessionBinding,
+} from '../runtime-defaults.js';
 
 // ─── Flag gate ──────────────────────────────────────────────────────────
 // Moved to ../runtime-defaults.ts (layer-neutral — import-boundary gate blocks
@@ -279,126 +290,30 @@ export const WORKER_TOKEN_CANARY_PREFIX = 'wtk_';
  * test, and is deliberately a DIFFERENT prefix from the token's so a boundary
  * scan cannot pass by only checking one of them.
  */
-export interface WorkerSessionBinding {
-    bind: string;
-    meshId: string;
-    /** Session this bind names. Attribution resolves through THIS, not the caller. */
-    sessionId: string;
-    nodeId?: string;
-    /**
-     * The task this worker was auto-launched for, when the spawn knew one.
-     * Advisory ONLY — a disambiguator for the session→task lookup, never an
-     * authority. A session that has moved on to another task resolves to the
-     * task its CURRENT attempt names, not to this one.
-     */
-    spawnedForTaskId?: string;
-    mintedAtMs: number;
-}
-
-const LIVE_BINDS = new Map<string, WorkerSessionBinding>();
-
-/** Secondary index: `${meshId}\0${sessionId}` -> bind secrets, for re-mint and revoke. */
-const BINDS_BY_SESSION = new Map<string, Set<string>>();
-
-function sessionKey(meshId: string, sessionId: string): string {
-    return `${meshId}${sessionId}`;
-}
-
-/** Canary prefix for the boundary regression test — see WORKER_TOKEN_CANARY_PREFIX. */
-export const WORKER_BIND_CANARY_PREFIX = 'wsb_';
-
-/**
- * Mint (or re-mint) the session bind handed to a worker at spawn.
- *
- * Re-minting for the same session REVOKES the prior bind. A second spawn for one
- * session means the first worker is gone; leaving its bind live would let a
- * zombie process keep exchanging for tokens against a session it no longer owns.
- */
-export function mintWorkerSessionBind(input: {
-    meshId: string;
-    sessionId: string;
-    nodeId?: string;
-    spawnedForTaskId?: string;
-}): WorkerSessionBinding {
-    const meshId = String(input.meshId || '').trim();
-    const sessionId = String(input.sessionId || '').trim();
-    if (!meshId || !sessionId) {
-        throw new Error('mintWorkerSessionBind requires both meshId and sessionId');
-    }
-
-    for (const existing of bindsForSession(meshId, sessionId)) revokeWorkerSessionBind(existing.bind);
-
-    const minted: WorkerSessionBinding = {
-        bind: `${WORKER_BIND_CANARY_PREFIX}${crypto.randomBytes(32).toString('base64url')}`,
-        meshId,
-        sessionId,
-        ...(input.nodeId ? { nodeId: String(input.nodeId).trim() } : {}),
-        ...(input.spawnedForTaskId ? { spawnedForTaskId: String(input.spawnedForTaskId).trim() } : {}),
-        mintedAtMs: Date.now(),
-    };
-
-    LIVE_BINDS.set(minted.bind, minted);
-    const key = sessionKey(meshId, sessionId);
-    let set = BINDS_BY_SESSION.get(key);
-    if (!set) {
-        set = new Set<string>();
-        BINDS_BY_SESSION.set(key, set);
-    }
-    set.add(minted.bind);
-    return minted;
-}
-
-function bindsForSession(meshId: string, sessionId: string): WorkerSessionBinding[] {
-    const set = BINDS_BY_SESSION.get(sessionKey(meshId, sessionId));
-    if (!set) return [];
-    const out: WorkerSessionBinding[] = [];
-    for (const secret of set) {
-        const found = LIVE_BINDS.get(secret);
-        if (found) out.push(found);
-    }
-    return out;
-}
-
-/** Resolve a bind secret. Null for unknown/revoked — callers MUST fail closed. */
-export function verifyWorkerSessionBind(bind: unknown): WorkerSessionBinding | null {
-    if (typeof bind !== 'string' || !bind.trim()) return null;
-    return LIVE_BINDS.get(bind.trim()) || null;
-}
-
-/**
- * Revoke every bind naming `sessionId`, in any mesh (wiring-unification B4).
- * A dead worker's bind otherwise stayed live until a re-mint — a zombie
- * process could keep exchanging it for tokens. Returns how many were revoked.
- */
-export function revokeWorkerSessionBindsForSession(sessionId: string): number {
-    const sid = String(sessionId || '').trim();
-    if (!sid) return 0;
-    let revoked = 0;
-    for (const binding of [...LIVE_BINDS.values()]) {
-        if (binding.sessionId === sid && revokeWorkerSessionBind(binding.bind)) revoked += 1;
-    }
-    return revoked;
-}
-
-/** Revoke a session's binds when it terminates, whatever the cause (binds are in-memory only). */
-export function subscribeWorkerBindRevocation(bus: SessionLifecycleBus): Unsubscribe {
-    return bus.on('terminated', (event) => {
-        revokeWorkerSessionBindsForSession(event.sessionId);
-    }, { name: 'mesh.worker-binds' });
-}
-
-export function revokeWorkerSessionBind(bind: string): boolean {
-    const found = LIVE_BINDS.get(bind);
-    if (!found) return false;
-    LIVE_BINDS.delete(bind);
-    const key = sessionKey(found.meshId, found.sessionId);
-    const set = BINDS_BY_SESSION.get(key);
-    if (set) {
-        set.delete(bind);
-        if (set.size === 0) BINDS_BY_SESSION.delete(key);
-    }
-    return true;
-}
+// ─── Registry moved to runtime-defaults.ts (2026-09-24) ──────────────────
+//
+// Same reason as `isWorkerMcpEnabled` above: `providers/**` (specifically
+// `cli-provider-events.ts`'s idle-edge detach gate) needs to read
+// `hasLiveWorkerSessionBind()`, and the import-boundary gate forbids a
+// providers/** -> mesh/** value import. Moving the registry to the
+// layer-neutral `runtime-defaults.ts` lets both sides read it with no
+// cross-layer import in either direction. Imported (not merely re-exported)
+// above so this file's OWN code (`exchangeWorkerSessionBind` below) keeps a
+// real local binding to call, and re-exported here for this file's and this
+// package's existing consumers (mesh/turn-ledger/runtime-ledger.ts,
+// boot/stages/mesh-runtime.ts, and this module's own test suite).
+export {
+    mintWorkerSessionBind,
+    verifyWorkerSessionBind,
+    revokeWorkerSessionBindsForSession,
+    subscribeWorkerBindRevocation,
+    revokeWorkerSessionBind,
+    hasLiveWorkerSessionBind,
+    __resetWorkerSessionBindsForTest,
+    liveWorkerSessionBindCount,
+    WORKER_BIND_CANARY_PREFIX,
+    type WorkerSessionBinding,
+};
 
 /**
  * Find the live token for a (meshId, sessionId, taskId) triple.
@@ -418,17 +333,6 @@ export function findWorkerTaskTokenForSession(
         if (!candidate.sessionId || candidate.sessionId === wanted) return candidate;
     }
     return null;
-}
-
-/** Test-only reset so bind state cannot leak between cases. */
-export function __resetWorkerSessionBindsForTest(): void {
-    LIVE_BINDS.clear();
-    BINDS_BY_SESSION.clear();
-}
-
-/** Diagnostic counter — never exposes the secrets themselves. */
-export function liveWorkerSessionBindCount(): number {
-    return LIVE_BINDS.size;
 }
 
 // ─── Worker-private HOME ────────────────────────────────────────────────

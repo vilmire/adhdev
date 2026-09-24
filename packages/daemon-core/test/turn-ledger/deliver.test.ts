@@ -142,6 +142,20 @@ describe('turn.deliver — local commit → one submit, exactly once', () => {
         for (const e of f.publisher.entries) expect(JSON.stringify(e.entry)).not.toContain(SENTINEL);
     });
 
+    it('a direct dispatch that failed instead of being reclaimed renders the resend notice with its cause (one submit)', async () => {
+        const f = fixture();
+        f.ledger.observe(dispatch());
+        const failed = f.ledger.observe(evd('dispatch_failed', { workerAbsent: true, reason: 'worker_absent' }, { source: 'dispatch' }));
+        expect(failed.attempt?.terminal?.reason).toBe('dispatch_failed');
+        await f.ledger.flushPublish();
+        expect(f.entries().filter((e) => e.kind === 'turn.notify')).toHaveLength(1);
+        await createTurnDeliverHandler(f.deps)(notifyEntry(f), new AbortController().signal);
+        expect(f.port.calls).toHaveLength(1);
+        const text = f.port.calls[0]!.input.textFallback;
+        expect(text).toContain('direct dispatch of task t1 failed (dispatch_failed)');
+        expect(text).toContain('never redelivered automatically');
+    });
+
     it('a redelivered entry (crash after claim / cursor retry) never submits twice', async () => {
         const f = fixture();
         await commitWithLocalSummary(f);
@@ -439,5 +453,32 @@ describe('backlog + MCP inbox', () => {
         expect(readCoordinatorNotices(f.deps, 'm1')).toEqual([]);
         // The cursor then passes without submitting.
         expect(await createTurnDeliverHandler(f.deps)(notifyEntry(f), new AbortController().signal)).toEqual({ outcome: 'skipped', why: 'already_delivered' });
+    });
+});
+
+describe('report gate — a hold-expiry commit renders the text of the end that opened the hold (R13r)', () => {
+    it('await_report expires with no report: the notice carries the idle end\'s local summary, committed weak', async () => {
+        const f = fixture();
+        f.ledger.observe(dispatch());
+        f.ledger.observe(evd('delivered', { messageId: 'msg-1', outcome: 'delivered', via: 'local' }, { source: 'input_service' }));
+        f.ledger.observe(evd('turn_started', { retro: false }));
+        const held = f.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }), { envelope: { finalSummary: SENTINEL, notice: { nodeLabel: "Node 'n1'" } } });
+        expect(held.rule).toBe('R9r');
+        await f.ledger.flushPublish();
+        expect(f.entries().some((e) => e.kind === 'turn.notify')).toBe(false);
+        const hold = f.ledger.store.activeHolds('a1').find((h) => h.reason === 'await_report')!;
+        f.clock.now = hold.until!;
+        const expired = f.ledger.observe({
+            eventId: `hold_expired:${hold.holdId}:${hold.until}`, at: hold.until!, source: 'scheduler', sessionId: 's1',
+            attemptRef: { attemptId: 'a1', generation: 0 }, observedBy: 'dc', kind: 'hold_expired', holdId: hold.holdId, reason: 'await_report',
+        });
+        expect(expired.rule).toBe('R13r');
+        expect(f.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' });
+        await f.ledger.flushPublish();
+        const deliver = createTurnDeliverHandler(f.deps);
+        const result = await deliver(notifyEntry(f), new AbortController().signal);
+        expect(result).toMatchObject({ outcome: 'delivered' });
+        expect(f.port.calls).toHaveLength(1);
+        expect(f.port.calls[0]!.input.textFallback).toContain(SENTINEL);
     });
 });

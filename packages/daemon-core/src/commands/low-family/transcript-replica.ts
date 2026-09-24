@@ -80,4 +80,4 @@ export const transcriptReplicaHandlers: Record<string, LowFamilyHandler> = {
     },
 };
 
-export const transcriptReplicaSpecs = defineCommandSpecs('low', transcriptReplicaHandlers);
+export const transcriptReplicaSpecs = defineCommandSpecs('low', transcriptReplicaHandlers, {}, { meshSender: 'authenticated_peer' });

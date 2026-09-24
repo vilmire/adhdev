@@ -250,3 +250,77 @@ describe('CliProviderInstance — WORKER-MCP T2 precursor: turn-aware task attac
     })
   })
 })
+
+// Live rc.40 (2026-09-24, MainPC session 515e64ae): after the session was re-stamped
+// to task 9315fa4d, every `[EvtTrace] [stage:fired]` line still named the previous
+// task 441a2f87 — the attachment history (read FIRST by completingTurnTaskId(), and
+// so by meshTraceCtx()) kept a stale head: a re-stamp of the same task queued a
+// duplicate, and one detach popped only one of them.
+describe('CliProviderInstance — the stamp writer keeps the per-session trace on the live task', () => {
+  const ORIGINAL_FLAG = process.env.ADHDEV_WORKER_MCP
+  beforeEach(() => { delete process.env.ADHDEV_WORKER_MCP })
+  afterEach(() => {
+    if (ORIGINAL_FLAG === undefined) delete process.env.ADHDEV_WORKER_MCP
+    else process.env.ADHDEV_WORKER_MCP = ORIGINAL_FLAG
+  })
+
+  function idleInstance() {
+    const instance = Object.create(CliProviderInstance.prototype) as any
+    instance.instanceId = 'sess-515e64ae'
+    instance.type = 'claude-cli'
+    instance.workingDir = '/work/repo'
+    instance.settings = { launchedByCoordinator: true }
+    instance.adapter = { updateRuntimeSettings() {} }
+    instance.meshTaskInjectedAt = 0
+    instance.meshTaskAttachmentHistory = []
+    // Turn-in-flight markers at rest (the real class-field initial values).
+    instance.generatingStartedAt = 0
+    instance.completedDebouncePending = null
+    instance.generatingDebouncePending = null
+    return instance
+  }
+
+  it('re-stamp of the same task + one detach + an idle stamp of the next task: the trace names the next task', () => {
+    const instance = idleInstance()
+    instance.attachMeshAssignment({ meshId: 'mesh-1', taskId: '441a2f87', attemptId: 'mesh_direct:441a2f87' })
+    instance.attachMeshAssignment({ meshId: 'mesh-1', taskId: '441a2f87', attemptId: 'mesh_direct:441a2f87' })
+    expect(instance.meshTaskAttachmentHistory).toHaveLength(1)
+    instance.detachMeshAssignment()
+    instance.attachMeshAssignment({ meshId: 'mesh-1', taskId: '9315fa4d', attemptId: 'mesh_direct:9315fa4d', attemptGeneration: 0 })
+    expect(instance.completingTurnTaskId()).toBe('9315fa4d')
+    expect(instance.meshTraceCtx().taskId).toBe('9315fa4d')
+    expect(instance.settings).toMatchObject({ meshActiveTaskId: '9315fa4d', meshActiveAttemptId: 'mesh_direct:9315fa4d' })
+  })
+
+  it('an idle stamp of a new task drops a stale head that no detach ever popped', () => {
+    const instance = idleInstance()
+    instance.attachMeshAssignment({ meshId: 'mesh-1', taskId: '441a2f87', attemptId: 'mesh_direct:441a2f87' })
+    // 441a2f87 ended without a local detach (e.g. committed on the owner by its report).
+    instance.attachMeshAssignment({ meshId: 'mesh-1', taskId: '9315fa4d', attemptId: 'mesh_direct:9315fa4d' })
+    expect(instance.meshTaskAttachmentHistory.map((e: any) => e.taskId)).toEqual(['9315fa4d'])
+    expect(instance.meshTraceCtx().taskId).toBe('9315fa4d')
+  })
+
+  it('a stamp while a turn is still in flight keeps FIFO attribution to the completing task', () => {
+    const instance = idleInstance()
+    instance.attachMeshAssignment({ meshId: 'mesh-1', taskId: 'task-A', attemptId: 'attempt-A' })
+    instance.generatingStartedAt = Date.now()
+    instance.attachMeshAssignment({ meshId: 'mesh-1', taskId: 'task-B', attemptId: 'attempt-B' })
+    expect(instance.completingTurnTaskId()).toBe('task-A')
+  })
+
+  it('a re-stamp of the same task with a new attempt moves the injection anchor; the same attempt keeps it', () => {
+    const instance = idleInstance()
+    const now = vi.spyOn(Date, 'now')
+    now.mockReturnValue(1_000)
+    instance.attachMeshAssignment({ meshId: 'mesh-1', taskId: 'task-A', attemptId: 'attempt-A' })
+    now.mockReturnValue(2_000)
+    instance.attachMeshAssignment({ meshId: 'mesh-1', taskId: 'task-A', attemptId: 'attempt-A' })
+    expect(instance.meshTaskAttachmentHistory[0]).toMatchObject({ attemptId: 'attempt-A', injectedAt: 1_000 })
+    now.mockReturnValue(3_000)
+    instance.attachMeshAssignment({ meshId: 'mesh-1', taskId: 'task-A', attemptId: 'attempt-A2' })
+    expect(instance.meshTaskAttachmentHistory).toHaveLength(1)
+    expect(instance.meshTaskAttachmentHistory[0]).toMatchObject({ attemptId: 'attempt-A2', injectedAt: 3_000 })
+    now.mockRestore()
+  })
+})

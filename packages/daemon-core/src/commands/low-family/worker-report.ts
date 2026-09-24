@@ -33,6 +33,8 @@ import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
 import { stripRouterInternalArgs } from '../router-internal-args.js';
+import { MESH_SENDER_DAEMON_ID_ARG, readMeshSender } from '../mesh-sender.js';
+import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
 import { readMeshNodeDaemonId } from '../../mesh/mesh-node-identity.js';
 import { currentMeshAttemptRef } from '../../providers/cli-provider-mesh-assignment.js';
 import { LOG } from '../../logging/logger.js';
@@ -62,15 +64,13 @@ export const WORKER_REPORT_FORWARD_COMMAND = 'worker_report_forwarded';
 export const WORKER_PROGRESS_FORWARD_COMMAND = 'worker_progress_forwarded';
 
 /**
- * rc.37 Finding A: the router-internal arg the OWNER's mesh transport stamps
- * with the daemon id of the authenticated P2P peer a command arrived from
- * (daemon-cloud `CloudCommandTransports.handleMeshCommand`, applied as a
- * `withMeshDirectDispatch` extra so it OVERRIDES anything the peer put in its
- * args). Leading underscore = router-internal: strict decoders strip it, and
- * no wire contract carries it. The forwarded-report handler authorises on it
- * (the sender must own the node the owner assigned the task to).
+ * rc.37 Finding A: the transport-stamped sender arg (now defined in the neutral
+ * commands/mesh-sender.ts, where the router's mesh sender gate reads it too).
+ * Re-exported for the forwarded worker commands' existing importers. The
+ * forwarded-report handler authorises on it (the sender must own the node the
+ * owner assigned the task to).
  */
-export const MESH_SENDER_DAEMON_ID_ARG = '_meshSenderDaemonId';
+export { MESH_SENDER_DAEMON_ID_ARG };
 
 function readNonEmpty(value: unknown): string {
     return typeof value === 'string' ? value.trim() : '';
@@ -227,19 +227,6 @@ function toProgressResponse(result: WorkerProgressUpdateResult): Record<string, 
     };
 }
 
-/** A relay answer may arrive wrapped (`{ result }` / `{ payload }`); find the handler's own object. */
-function unwrapRelayResult(raw: unknown): (Record<string, unknown> & { success: boolean }) | null {
-    let cursor: unknown = raw;
-    for (let depth = 0; depth < 4 && cursor && typeof cursor === 'object'; depth++) {
-        const record = cursor as Record<string, unknown>;
-        if (typeof record.success === 'boolean') return record as Record<string, unknown> & { success: boolean };
-        if (record.result && typeof record.result === 'object') { cursor = record.result; continue; }
-        if (record.payload && typeof record.payload === 'object') { cursor = record.payload; continue; }
-        break;
-    }
-    return null;
-}
-
 /**
  * F7: relay a validated report to the attempt's OWNER daemon over the mesh
  * command relay. Nothing is written on this (the worker's) daemon — the owner
@@ -298,9 +285,9 @@ async function forwardToOwner(
             hint: 'Nothing was recorded — call again.',
         };
     }
-    const answer = unwrapRelayResult(raw);
-    if (!answer) {
-        return { success: false, error: 'forward_failed', detail: `the owner daemon returned no ${command} result`, hint: 'Nothing was recorded — call again.' };
+    const answer = unwrapMeshRelayResult(raw, { command, peerDaemonId: remote.ownerDaemonId });
+    if (answer.error === 'relay_result_malformed') {
+        return { ...answer, hint: 'Nothing was recorded — call again.' };
     }
     const line = `Forwarded ${what} for session ${remote.sessionId} (task ${remote.taskId ?? '?'} attempt ${remote.attemptId ?? '?'}) to owner ${remote.ownerDaemonId.slice(0, 16)} → ${answer.success === true ? 'accepted' : `refused (${String(answer.error)}${typeof answer.detail === 'string' && answer.detail ? ` — ${answer.detail}` : ''})`}`;
     if (answer.success === true) LOG.info('WorkerReport', line);
@@ -457,7 +444,7 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
         const decoded = decodeForwardedWorkerReport(args);
         if (!decoded) return { success: false, error: `${WORKER_REPORT_FORWARD_COMMAND}: request failed decode (bad shape)` };
         const { claim } = decoded;
-        const senderDaemonId = readNonEmpty(args?.[MESH_SENDER_DAEMON_ID_ARG]);
+        const senderDaemonId = readMeshSender(args);
         const claimLabel = `session ${claim.sessionId} (claimed task ${claim.taskId ?? '?'} attempt ${claim.attemptId ?? '?'}) from ${senderDaemonId ? senderDaemonId.slice(0, 20) : 'an unidentified daemon'}`;
         try {
             const { validateWorkerCompletionReport, acceptForwardedWorkerCompletionReport } =
@@ -515,7 +502,7 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
         const decoded = decodeForwardedWorkerProgress(args);
         if (!decoded) return { success: false, error: `${WORKER_PROGRESS_FORWARD_COMMAND}: request failed decode (bad shape)` };
         const { claim, note } = decoded;
-        const senderDaemonId = readNonEmpty(args?.[MESH_SENDER_DAEMON_ID_ARG]);
+        const senderDaemonId = readMeshSender(args);
         const claimLabel = `session ${claim.sessionId} (claimed task ${claim.taskId ?? '?'} attempt ${claim.attemptId ?? '?'}) from ${senderDaemonId ? senderDaemonId.slice(0, 20) : 'an unidentified daemon'}`;
         try {
             const { acceptForwardedWorkerProgressUpdate } = await import('../../mesh/worker-report.js');
@@ -541,6 +528,8 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
 export const workerReportSpecs = defineCommandSpecs('low', workerReportHandlers, {
     // Only another daemon's relay may present a forwarded report or progress
     // note (never a dashboard, the API, or a local worker MCP over IPC).
-    [WORKER_REPORT_FORWARD_COMMAND]: { sources: ['mesh'] },
-    [WORKER_PROGRESS_FORWARD_COMMAND]: { sources: ['mesh'] },
-});
+    // The router additionally requires the sender on the claimed mesh's roster;
+    // the handler then requires it to own the node the task was assigned to.
+    [WORKER_REPORT_FORWARD_COMMAND]: { sources: ['mesh'], meshSender: 'roster' },
+    [WORKER_PROGRESS_FORWARD_COMMAND]: { sources: ['mesh'], meshSender: 'roster' },
+}, { meshSender: 'authenticated_peer' });

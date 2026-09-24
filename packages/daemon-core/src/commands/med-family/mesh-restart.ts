@@ -67,6 +67,8 @@
  */
 import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from '../command-args.js';
+import { rosterEvidenceExtra } from '../mesh-sender.js';
+import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
 import { daemonLifecycleHandlers } from '../low-family/daemon-lifecycle.js';
 import { LOG } from '../../logging/logger.js';
 import { IDENTITY, TRACK } from '../../track-identity.js';
@@ -421,8 +423,10 @@ export const meshRestartHandlers: Record<string, MedFamilyHandler> = {
         // non-owner daemon is forwarded rather than restarting the wrong daemon.
         // preferInline so inline-cache-only worktree nodes still resolve.
         let nodeDaemonId: string | undefined;
+        let resolvedMesh: unknown;
         if (meshId && nodeId) {
             const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+            resolvedMesh = meshRecord?.mesh;
             const node = meshRecord?.mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
             nodeDaemonId = typeof node?.daemonId === 'string' ? node.daemonId.trim() : undefined;
         }
@@ -437,8 +441,8 @@ export const meshRestartHandlers: Record<string, MedFamilyHandler> = {
         // call has landed on the owning daemon.
         const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent(nodeDaemonId, selfDaemonId);
         if (isRemote && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
-            const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'restart_daemon_node', withMeshDirectDispatch(args));
-            return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
+            const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'restart_daemon_node', withMeshDirectDispatch(args, rosterEvidenceExtra(args, resolvedMesh)));
+            return unwrapMeshRelayResult(forwarded, { command: 'restart_daemon_node', peerDaemonId: nodeDaemonId }) as CommandRouterResult;
         }
 
         // Deferred-schedule management on the owning daemon. Cancellation and
@@ -499,4 +503,7 @@ export const meshRestartHandlers: Record<string, MedFamilyHandler> = {
     },
 };
 
-export const meshRestartSpecs = defineCommandSpecs('med', meshRestartHandlers);
+export const meshRestartSpecs = defineCommandSpecs('med', meshRestartHandlers, {
+    // force bypasses the idle gate — only a member of the named mesh may ask.
+    restart_daemon_node: { meshSender: 'any_member_mesh' },
+}, { meshSender: 'authenticated_peer' });

@@ -52,6 +52,7 @@ export type GuardId =
     | 'reclaiming_refusal'
     | 'suspension_changed'
     | 'end_genuine' | 'end_weak' | 'end_weak_after_timeout' | 'hollow_retry' | 'hollow_exhausted'
+    | 'end_report_awaited' | 'end_report_awaited_held' | 'final_strong_report_awaited' | 'false_idle_resumed'
     | 'final_strong' | 'final_weak'
     | 'genuine_end_or_strong_final' | 'weak_end_or_final'
     | 'admission_hold' | 'admission_decline'
@@ -62,14 +63,15 @@ export type GuardId =
     | 'holder_is_this_attempt'
     | 'final_present'
     | 'hold_await_delivery' | 'hold_await_consume_redrive' | 'hold_await_consume_exhausted' | 'hold_await_turn'
-    | 'hold_liveness' | 'hold_hard_ceiling' | 'hold_suspension_before_consumed' | 'hold_weak_candidate' | 'hold_admission';
+    | 'hold_liveness' | 'hold_hard_ceiling' | 'hold_suspension_before_consumed' | 'hold_weak_candidate' | 'hold_admission'
+    | 'hold_await_report';
 
 /** Named attempt mutations (reducer.ts ACTIONS). */
 export type ActionId =
     | 'open_dispatch' | 'open_plain'
     | 'mark_delivered' | 'consume' | 'apply_held_suspension'
     | 'suspend' | 'resume' | 'resume_by_activity'
-    | 'weak_candidate' | 'clear_weak'
+    | 'weak_candidate' | 'clear_weak' | 'await_report' | 'false_idle'
     | 'activity' | 'liveness_unknown' | 'liveness_failure' | 'worker_absent'
     | 'rebind_to_holder' | 'rebind'
     | 'hollow' | 'mark_notified' | 'store_git' | 'redrive' | 'stamp_no_progress_notice';
@@ -77,7 +79,7 @@ export type ActionId =
 /** Hold deadline expressions, resolved against policy + ledger clock. */
 export type UntilExpr =
     | 'await_delivery' | 'await_consume' | 'await_turn' | 'liveness' | 'hard_ceiling'
-    | 'weak_confirm' | 'unknown_grace' | 'admission' | 'none';
+    | 'weak_confirm' | 'unknown_grace' | 'admission' | 'await_report' | 'none';
 
 export type EffectTemplate =
     | { e: 'act'; act: ActionId }
@@ -106,7 +108,8 @@ export interface TransitionRule {
     /**
      * Nominal target. `outcome` = the commit's outcome. Reclaim rules name
      * `accepted`; the reducer turns a reclaim into `failed` when the budget is
-     * spent or the attempt is plain. R4 names `generating`; a held suspension
+     * spent or the attempt is plain or `mesh_direct` (nothing redelivers a
+     * direct dispatch — reducer.ts `reclaim`). R4 names `generating`; a held suspension
      * turns it into `suspended`.
      */
     to: TurnState | 'same' | 'outcome';
@@ -213,7 +216,7 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     ] },
     { id: 'R6', lane: 'current', from: [C, G, F], on: ['suspension'], to: S, verdict: 'applied', effects: [
         { e: 'act', act: 'suspend' },
-        { e: 'release', reasons: ['weak_candidate', 'live_pending', 'transcript_quiet'] },
+        { e: 'release', reasons: ['weak_candidate', 'live_pending', 'transcript_quiet', 'await_report'] },
         { e: 'bus', phase: 'suspended' },
         { e: 'notify', notify: 'from_modal' },
     ] },
@@ -270,6 +273,34 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     { id: 'R33', lane: 'current', from: [C, G, S, F], on: ['turn_end'], guard: 'hollow_retry', to: A, verdict: 'applied', effects: [
         { e: 'act', act: 'hollow' },
         { e: 'reclaim', reason: 'hollow_completion' },
+    ] },
+    // ── report-awaiting end (live rc.40, 2026-09-24) ───────────────────
+    // The worker holds a live worker-MCP bind (the worker daemon stamps
+    // `reportExpected` on its turn_end), so its structured report is the
+    // primary completion evidence (design §F2) and a genuine FSM idle edge is
+    // only corroboration: a Bash tool call (`sleep 240`) showed an idle screen
+    // 37 s into a 4-minute turn and R9 committed it genuine. R9r opens an
+    // `await_report` hold instead of committing; R17 commits on the report,
+    // R12r cancels the candidate when the worker goes busy again (false idle),
+    // R13r commits weak when the hold expires with no report. Sessions with no
+    // bind never set `reportExpected` and keep R9 exactly.
+    { id: 'R9r', lane: 'current', from: [C, G, S, F], on: ['turn_end'], guard: 'end_report_awaited', to: F, verdict: 'applied', effects: [
+        { e: 'act', act: 'await_report' },
+        { e: 'release', reasons: ['weak_candidate'] },
+        { e: 'hold', reason: 'await_report', until: 'await_report', onExpire: 'commit', meshOnly: true },
+    ] },
+    { id: 'R9d', lane: 'current', from: [F], on: ['turn_end'], guard: 'end_report_awaited_held', to: 'same', verdict: 'recorded', effects: [
+        { e: 'record', note: 'await_report_duplicate_end' },
+    ] },
+    { id: 'R11d', lane: 'current', from: [F], on: ['transcript_final'], guard: 'final_strong_report_awaited', to: 'same', verdict: 'recorded', effects: [
+        { e: 'record', note: 'await_report_transcript_final' },
+    ] },
+    { id: 'R12r', lane: 'current', from: [F], on: ['turn_started', 'transcript_activity'], guard: 'false_idle_resumed', to: G, verdict: 'applied', effects: [
+        { e: 'act', act: 'false_idle' },
+        { e: 'release', reasons: ['await_report'] },
+        livenessExtend,
+        { e: 'bus', phase: 'resumed' },
+        { e: 'record', note: 'false_idle_worker_resumed' },
     ] },
     { id: 'R33f', lane: 'current', from: [C, G, S, F], on: ['turn_end'], guard: 'hollow_exhausted', to: 'failed', verdict: 'applied', effects: [
         { e: 'act', act: 'hollow' },
@@ -368,6 +399,9 @@ export const TRANSITIONS: readonly TransitionRule[] = [
         { e: 'reevaluate' },
     ] },
     { id: 'R13a', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_weak_candidate', to: 'completed', verdict: 'applied', effects: [
+        { e: 'commit', outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' },
+    ] },
+    { id: 'R13r', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_await_report', to: 'completed', verdict: 'applied', effects: [
         { e: 'commit', outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' },
     ] },
     { id: 'H0', lane: 'current', from: 'any', on: ['hold_expired'], guard: 'otherwise', to: 'same', verdict: 'recorded', effects: [

@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// turn-ledger/policy — the 8 turn timing constants (from 28) + env resolution
+// turn-ledger/policy — the 9 turn timing constants (from 28) + env resolution
 // ---------------------------------------------------------------------------
 // Wiring-unification Phase C1. Every turn/delivery deadline the reconcile,
 // live-gate, acked-hold and stranded-dispatch modules used to own is one of
@@ -31,6 +31,12 @@ export interface TurnPolicy {
     stallNoticeMs: number;
     /** Hard ceiling (was QUEUE_HOLD_HARD_DEADLINE / ACKED_HOLD_HARD_CEILING). */
     hardCeilingMs: number;
+    /**
+     * How long a genuine FSM end of a report-capable mesh worker waits for the
+     * structured report before committing weak (R9r → R13r; live rc.40: a Bash
+     * tool call showed an idle screen 37 s into a 4-minute turn). Added 2026-09-24.
+     */
+    awaitReportMs: number;
 }
 
 export const DEFAULT_TURN_POLICY: Readonly<TurnPolicy> = Object.freeze({
@@ -42,6 +48,7 @@ export const DEFAULT_TURN_POLICY: Readonly<TurnPolicy> = Object.freeze({
     noTurnDeadlineMs: 900_000,
     stallNoticeMs: 180_000,
     hardCeilingMs: 5_400_000,
+    awaitReportMs: 180_000,
 });
 
 /** Budgets (counts, not times) — deliberately not env-tunable. */
@@ -99,6 +106,7 @@ export const TURN_POLICY_ENV_BINDINGS: readonly EnvBinding[] = [
     { field: 'stallNoticeMs', canonical: 'ADHDEV_TURN_STALL_NOTICE_MS', min: 0, max: HOUR, aliases: [] },
     { field: 'hardCeilingMs', canonical: 'ADHDEV_TURN_HARD_CEILING_MS', min: 0, max: 24 * HOUR,
       aliases: [{ name: 'MESH_INFLIGHT_ACKED_HOLD_HARD_CEILING_MS', min: 0, max: 24 * HOUR }] },
+    { field: 'awaitReportMs', canonical: 'ADHDEV_TURN_AWAIT_REPORT_MS', min: 0, max: HOUR, aliases: [] },
 ];
 
 /**

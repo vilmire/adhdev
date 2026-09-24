@@ -148,6 +148,9 @@ import {
 // ─── Remote mesh-session owner resolution (bodies extracted from this file) ───
 import { resolveRemoteMeshSessionOwnerDaemonId } from './router-mesh-session-owner.js';
 import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from './command-args.js';
+import { evaluateMeshSender, meshSenderRefusalResult, MESH_SENDER_DAEMON_ID_ARG, type MeshSenderGateDeps } from './mesh-sender.js';
+import { unwrapMeshRelayResult } from './mesh-relay-result.js';
+import { resolveForwardedEventMeshId } from '../mesh/mesh-event-forwarding.js';
 
 // ─── Barrel re-exports: node-identity / git-freshness, refine gates, coordinator config ───
 // These modules were split out of router.ts. Re-export their public surface so the
@@ -1184,13 +1187,23 @@ export class DaemonCommandRouter {
      *   DataChannel connection id) — recorded in the command audit log so a P2P
      *   command is attributable to a specific connected peer, not just "p2p".
      *   Identifier only; never a username/email.
+     * @param opts.inProcess This daemon's own mesh machinery calling itself with
+     *   source `mesh` (local queue dispatch, local auto-launch, coordinator
+     *   launch). Skips the mesh sender gate — there is no remote sender. Only an
+     *   in-process caller of the router can set it: the host runtime's
+     *   transport entry (`DaemonHostRuntime.execute`) does not carry it.
      */
-    async execute(cmd: string, args: any, source: string = 'internal', opts?: { peerId?: string }): Promise<CommandRouterResult> {
+    async execute(cmd: string, args: any, source: string = 'internal', opts?: { peerId?: string; inProcess?: boolean }): Promise<CommandRouterResult> {
         const cmdStart = Date.now();
         const logSource = normalizeCommandSource(source);
         const peerId = typeof opts?.peerId === 'string' && opts.peerId.length > 0 ? opts.peerId : undefined;
         const spec = getDaemonCommandRegistry().get(cmd);
         const normalizedArgs = normalizeCommandArgsWithInteractionId(args);
+        // Only the mesh transport may present a sender identity: drop the
+        // router-internal sender arg from every other source (and from an
+        // in-process mesh call, which has no remote sender).
+        const meshRelayed = logSource === 'mesh' && opts?.inProcess !== true;
+        if (!meshRelayed && MESH_SENDER_DAEMON_ID_ARG in normalizedArgs) delete normalizedArgs[MESH_SENDER_DAEMON_ID_ARG];
         if (spec?.session?.aliasSessionId) applySessionIdAlias(normalizedArgs);
         const interactionId = this.interactionContext.record(normalizedArgs);
 
@@ -1221,6 +1234,9 @@ export class DaemonCommandRouter {
         try {
             let result: CommandRouterResult;
             let ranLocally = false;
+            const meshRefusal = spec && meshRelayed && (!spec.sources || spec.sources.includes(logSource as CommandSource))
+                ? await this.gateMeshSender(cmd, spec, normalizedArgs)
+                : null;
             if (!spec) {
                 result = await this.deps.commandHandler.rejectUnknown(cmd, normalizedArgs);
             } else if (spec.sources && !spec.sources.includes(logSource as CommandSource)) {
@@ -1229,6 +1245,8 @@ export class DaemonCommandRouter {
                     error: `Command '${cmd}' is not accepted from source '${logSource}'`,
                     code: 'COMMAND_SOURCE_REJECTED',
                 };
+            } else if (meshRefusal) {
+                result = meshRefusal;
             } else {
                 const forwarded = spec.forwardToOwner ? await this.forwardToOwningDaemon(cmd, normalizedArgs) : null;
                 if (forwarded) {
@@ -1287,6 +1305,58 @@ export class DaemonCommandRouter {
             });
             throw e;
         }
+    }
+
+    /**
+     * The mesh sender gate (commands/mesh-sender.ts): a command relayed from
+     * another daemon runs only when its transport-stamped sender satisfies the
+     * spec's `meshSender` class. Returns the refusal result (+ one WARN line),
+     * or null to proceed.
+     */
+    private async gateMeshSender(cmd: string, spec: CommandSpec, args: Record<string, unknown>): Promise<CommandRouterResult | null> {
+        const verdict = await evaluateMeshSender(spec.meshSender, args, this.meshSenderGateDeps());
+        return verdict.ok ? null : meshSenderRefusalResult(cmd, verdict);
+    }
+
+    private meshSenderGateDeps(): MeshSenderGateDeps {
+        const instanceManager = this.deps.instanceManager;
+        const settingsOf = (sessionId: string): Record<string, unknown> | null => {
+            try {
+                const instance: any = instanceManager?.getInstance?.(sessionId);
+                if (!instance) return null;
+                const settings = instance.getState?.()?.settings;
+                return settings && typeof settings === 'object' ? settings as Record<string, unknown> : {};
+            } catch {
+                return null;
+            }
+        };
+        return {
+            selfDaemonId: typeof this.deps.statusInstanceId === 'string' ? this.deps.statusInstanceId : undefined,
+            // The LOCAL view only — never warmed from the command's own inlineMesh.
+            getLocalMesh: async (meshId) => (await this.getMeshForCommand(meshId, undefined, { preferInline: true }))?.mesh ?? null,
+            listLocalMeshes: async () => {
+                this.syncInlineMeshPoliciesFromDisk();
+                const byId = new Map<string, any>();
+                for (const [meshId, mesh] of this.inlineMeshCache) byId.set(meshId, mesh);
+                try {
+                    const { listMeshesReadOnly } = await import('../config/mesh-config.js');
+                    for (const mesh of listMeshesReadOnly()) if (mesh?.id && !byId.has(mesh.id)) byId.set(mesh.id, mesh);
+                } catch { /* no local config */ }
+                return [...byId.values()];
+            },
+            getSessionSettings: settingsOf,
+            listSessionSettings: () => {
+                let ids: string[] = [];
+                try { ids = instanceManager?.listInstanceIds?.() ?? []; } catch { ids = []; }
+                const out: Array<{ sessionId: string; settings: Record<string, unknown> }> = [];
+                for (const sessionId of ids) {
+                    const settings = settingsOf(sessionId);
+                    if (settings) out.push({ sessionId, settings });
+                }
+                return out;
+            },
+            resolveForwardEventMeshId: (payload) => resolveForwardedEventMeshId(payload),
+        };
     }
 
     /** Run a spec in the context its family needs. */
@@ -1379,7 +1449,7 @@ export class DaemonCommandRouter {
         if (!ownerDaemonId) return null;
         LOG.info('Mesh', `[Mesh] Forwarding session-scoped '${cmd}' for remote worker session ${targetSessionId.split('_')[0]} → daemon ${ownerDaemonId.slice(0, 12)}`);
         const forwarded = await this.deps.dispatchMeshCommand(ownerDaemonId, cmd, withMeshDirectDispatch(args));
-        return (forwarded ?? { success: false, error: 'no response from remote worker daemon' }) as CommandRouterResult;
+        return unwrapMeshRelayResult(forwarded, { command: cmd, peerDaemonId: ownerDaemonId });
     }
 
     /**

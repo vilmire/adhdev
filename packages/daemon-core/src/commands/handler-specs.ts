@@ -133,6 +133,7 @@ export const handlerSpecs: CommandSpec<'handler'>[] = defineCommandSpecs('handle
         session: { ...REQUIRED_ROUTED, aliasSessionId: true },
         invalidates: ['session.modal'],
         postChat: true,
+        meshSender: 'session_coordinator',
     },
     // Cancelling a queued send addresses ONE session's driver FIFO, so it fails closed
     // exactly like send_chat when the session is gone. It must reach the OWNING worker:
@@ -141,35 +142,38 @@ export const handlerSpecs: CommandSpec<'handler'>[] = defineCommandSpecs('handle
     cancel_queued_chat: {
         session: { scope: 'required', aliasSessionId: true },
         forwardToOwner: true,
+        meshSender: 'session_coordinator',
     },
     list_chats: { session: REQUIRED_ROUTED },
     new_chat: { session: REQUIRED_ROUTED, postChat: true },
     switch_chat: { session: REQUIRED_ROUTED, postChat: true },
-    set_mode: { session: REQUIRED_ROUTED, postChat: true, forwardToOwner: true },
-    change_model: { session: REQUIRED_ROUTED, postChat: true, forwardToOwner: true },
-    set_thought_level: { session: REQUIRED_ROUTED, forwardToOwner: true },
+    set_mode: { session: REQUIRED_ROUTED, postChat: true, forwardToOwner: true, meshSender: 'session_coordinator' },
+    change_model: { session: REQUIRED_ROUTED, postChat: true, forwardToOwner: true, meshSender: 'session_coordinator' },
+    set_thought_level: { session: REQUIRED_ROUTED, forwardToOwner: true, meshSender: 'session_coordinator' },
     // Approve / reject a modal prompt.
     resolve_action: {
         session: { ...REQUIRED_ROUTED, aliasSessionId: true },
         invalidates: ['session.modal'],
         forwardToOwner: true,
+        meshSender: 'session_coordinator',
     },
     select_session: { session: { scope: 'required' } },
     open_panel: { session: { scope: 'required' } },
-    pty_input: { session: { scope: 'required' } },
-    pty_resize: { session: { scope: 'required' } },
+    pty_input: { session: { scope: 'required' }, meshSender: 'session_coordinator' },
+    pty_resize: { session: { scope: 'required' }, meshSender: 'session_coordinator' },
     // Controlbar Model/Mode selectors run a provider script against one session.
     invoke_provider_script: {
         session: { scope: 'required' },
         invalidates: ['daemon.metadata'],
         forwardToOwner: true,
+        meshSender: 'session_coordinator',
     },
     // mesh_read_terminal: the live viewport lives ONLY on the owning session's adapter.
-    read_terminal: { forwardToOwner: true },
+    read_terminal: { forwardToOwner: true, meshSender: 'session_coordinator' },
     // mesh_send_keys MUTATES the worker PTY, so reaching the real owner (not a wrong local
     // session) matters doubly. The owning daemon re-enforces the destructive-key confirm gate.
-    send_keys: { forwardToOwner: true },
-});
+    send_keys: { forwardToOwner: true, meshSender: 'session_coordinator' },
+}, { meshSender: 'authenticated_peer' });
 
 /**
  * Exactly the members of {@link GitCommandName} — the compiler rejects a
@@ -194,4 +198,8 @@ export const gitSpecs: CommandSpec<'git'>[] = (Object.keys(GIT_COMMAND_KEYS) as 
     name,
     family: 'git' as const,
     run: async (services, args) => handleGitCommand(name, args, services) as Promise<CommandRouterResult>,
+    // Mesh git probes (git_status / git_diff_summary / git_checkpoint) reach a node's
+    // daemon with a workspace and no mesh id; a worker daemon holds no roster to
+    // check them against, so any authenticated peer may send them.
+    meshSender: 'authenticated_peer' as const,
 }));

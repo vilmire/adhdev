@@ -220,4 +220,4 @@ export const meshGraphCommandHandlers: Record<string, MedFamilyHandler> = {
     },
 };
 
-export const meshGraphCommandSpecs = defineCommandSpecs('med', meshGraphCommandHandlers);
+export const meshGraphCommandSpecs = defineCommandSpecs('med', meshGraphCommandHandlers, {}, { meshSender: 'authenticated_peer' });

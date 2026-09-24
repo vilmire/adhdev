@@ -308,4 +308,4 @@ export const sessionHostHandlers: Record<string, LowFamilyHandler> = {
 export const sessionHostSpecs = defineCommandSpecs('low', sessionHostHandlers, {
     session_host_restart_session: { blockedDuringMandatoryUpdate: true },
     get_runtime_snapshot: { sources: ['p2p'] },
-});
+}, { meshSender: 'authenticated_peer' });

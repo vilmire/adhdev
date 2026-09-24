@@ -32,6 +32,54 @@ settings: Record<string, any>;
 meshTaskInjectedAt: number;
 meshTaskAttachmentHistory: MeshTaskAttachment[];
 adapter: { updateRuntimeSettings?: (settings: Record<string, any>) => void };
+/** Turn-in-flight markers (CliProviderInstance fields; absent on narrow test hosts ⇒ treated as in flight). */
+generatingStartedAt?: number;
+completedDebouncePending?: unknown;
+generatingDebouncePending?: unknown;
+}
+
+/**
+ * Is a turn still running or still completing on this session? Only then can
+ * an older attachment be the one a completion must be attributed to. A host
+ * that does not expose the markers is assumed busy (keep the FIFO as is).
+ */
+function turnInFlight(host: MeshAssignmentHost): boolean {
+    if (!('generatingStartedAt' in host) && !('completedDebouncePending' in host) && !('generatingDebouncePending' in host)) return true;
+    return (typeof host.generatingStartedAt === 'number' && host.generatingStartedAt !== 0)
+        || (host.completedDebouncePending !== null && host.completedDebouncePending !== undefined)
+        || (host.generatingDebouncePending !== null && host.generatingDebouncePending !== undefined);
+}
+
+/**
+ * Record a task stamp in the turn-aware attachment history (live rc.40,
+ * 2026-09-24): the history is what `completingTurnTaskId()` — and so every
+ * per-session `[EvtTrace]` line and completion-event taskId — reads FIRST. It
+ * used to grow on every stamp and shrink only on a detach, so a re-stamp of the
+ * same task left a duplicate and a task that ended without a local detach left
+ * its entry at the head: MainPC traced `task=441a2f87` for four minutes after
+ * the session had been re-stamped to 9315fa4d. Now: (1) a new task stamped
+ * while no turn is in flight drops every older entry — nothing is left to
+ * complete for them; (2) a re-stamp of a task already in the history updates
+ * that entry instead of queueing a duplicate (a new attempt also moves its
+ * injection anchor; the same attempt keeps the original one).
+ */
+function recordMeshTaskAttachment(host: MeshAssignmentHost, attachment: MeshTaskAttachment): void {
+    host.meshTaskAttachmentHistory = meshTaskAttachments(host.meshTaskAttachmentHistory);
+    const history = host.meshTaskAttachmentHistory;
+    const existing = history.find((entry) => entry.taskId === attachment.taskId);
+    if (existing) {
+        const sameAttempt = !attachment.attemptId || existing.attemptId === attachment.attemptId;
+        if (attachment.attemptId) existing.attemptId = attachment.attemptId;
+        if (typeof attachment.dispatchNonce === 'number') existing.dispatchNonce = attachment.dispatchNonce;
+        if (!sameAttempt) existing.injectedAt = attachment.injectedAt;
+        return;
+    }
+    if (history.length > 0 && !turnInFlight(host)) {
+        const dropped = history.splice(0, history.length).map((entry) => entry.taskId);
+        LOG.info('MeshTaskAttach', `[${host.instanceId}] idle re-stamp to task ${attachment.taskId} — dropped stale attachment(s) ${dropped.join(', ')}`);
+    }
+    const { droppedTaskId } = pushMeshTaskAttachment(history, attachment);
+    if (droppedTaskId) LOG.warn('MeshTaskAttach', `[${host.instanceId}] turn-aware attachment history exceeded cap — dropped task ${droppedTaskId}.`);
 }
 
 export function attachMeshAssignment(host: MeshAssignmentHost, assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; attemptId?: string; attemptGeneration?: number; coordinatorDaemonId?: string; coordinatorSessionId?: string }): void {
@@ -48,7 +96,7 @@ export function attachMeshAssignment(host: MeshAssignmentHost, assignment: { mes
     // that would otherwise fire generating_completed before generating_started).
     if (assignment.taskId && assignment.taskId.trim()) {
         host.meshTaskInjectedAt = Date.now();
-        if (isWorkerMcpEnabled()) { host.meshTaskAttachmentHistory = meshTaskAttachments(host.meshTaskAttachmentHistory); const { droppedTaskId } = pushMeshTaskAttachment(host.meshTaskAttachmentHistory, { taskId: assignment.taskId, attemptId: assignment.attemptId, dispatchNonce: assignment.dispatchNonce, injectedAt: host.meshTaskInjectedAt }); if (droppedTaskId) LOG.warn('MeshTaskAttach', `[${host.instanceId}] turn-aware attachment history exceeded cap — dropped task ${droppedTaskId}.`); } // WORKER-MCP T2 precursor — mesh-task-attachment.ts
+        if (isWorkerMcpEnabled()) recordMeshTaskAttachment(host, { taskId: assignment.taskId, attemptId: assignment.attemptId, dispatchNonce: assignment.dispatchNonce, injectedAt: host.meshTaskInjectedAt }); // WORKER-MCP T2 precursor — mesh-task-attachment.ts
     }
     host.settings = {
         ...host.settings,

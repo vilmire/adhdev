@@ -385,20 +385,50 @@ describe('F6 — touchedFiles is validated against the task mode', () => {
     expect(result.detail).toMatch(/read-only/)
   })
 
-  it('still refuses an empty list on a CODE-CHANGING task', () => {
+  // ★rc.40 task 441a2f87 fix: an EXPLICIT empty list on a code-changing task is
+  // now the worker's accepted statement "I changed nothing" — see
+  // worker-report.test.ts's "invalid_for_task_mode" describe block for the full
+  // break-once table. Only a touchedFiles key that is MISSING altogether (no
+  // top-level array, no handoffNotes at all) is still refused on 'completed'.
+  it('accepts an explicit empty list on a CODE-CHANGING task (the worker changed nothing)', () => {
+    const ids = freshIds()
+    __setHandoffNoteSinkForTests(() => {})
+    const attemptId = seedQueueRow(ids, { readonly: false })
+    const token = mintWorkerTaskToken({ meshId: ids.meshId, taskId: ids.taskId, attemptId })
+    const result: any = acceptWorkerCompletionReport({ token: token.token }, {
+      outcome: 'completed',
+      summary: 'Investigated; no change was needed.',
+      handoffNotes: { intent: 'why', touchedFiles: [] },
+    })
+    expect(result.accepted).toBe(true)
+  })
+
+  it('still refuses touchedFiles missing altogether on a completed CODE-CHANGING report', () => {
     const ids = freshIds()
     const attemptId = seedQueueRow(ids, { readonly: false })
     const token = mintWorkerTaskToken({ meshId: ids.meshId, taskId: ids.taskId, attemptId })
     const result: any = acceptWorkerCompletionReport({ token: token.token }, {
       outcome: 'completed',
       summary: 'Changed some code.',
-      handoffNotes: { intent: 'why', touchedFiles: [] },
     })
-    // The original requirement, preserved — it is now applied where it is
-    // actually true instead of to every task indiscriminately.
+    // The original requirement, preserved — it is now applied only to the
+    // case it was meant for (nothing said at all), not to an explicit '[]'.
     expect(result.accepted).toBe(false)
     expect(result.refusal).toBe('invalid_for_task_mode')
-    expect(result.detail).toMatch(/non-empty/)
+    expect(result.detail).toMatch(/touched_files/)
+  })
+
+  it('does not require touchedFiles on a blocked/failed CODE-CHANGING report', () => {
+    for (const outcome of ['blocked', 'failed'] as const) {
+      const ids = freshIds()
+      const attemptId = seedQueueRow(ids, { readonly: false })
+      const token = mintWorkerTaskToken({ meshId: ids.meshId, taskId: ids.taskId, attemptId })
+      const result: any = acceptWorkerCompletionReport({ token: token.token }, {
+        outcome,
+        summary: `outcome=${outcome}, nothing to report as touched`,
+      })
+      expect(result.accepted).toBe(true)
+    }
   })
 })
 

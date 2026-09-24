@@ -412,4 +412,4 @@ export const daemonLifecycleHandlers: Record<string, (ctx: DepsOnlyLowFamilyCont
 
 export const daemonLifecycleSpecs = defineCommandSpecs('low', daemonLifecycleHandlers, {
     set_machine_nickname: { invalidates: ['daemon.metadata'] },
-});
+}, { meshSender: 'authenticated_peer' });

@@ -78,7 +78,8 @@ describe('router post-execute invalidation', () => {
         useTempConfigDir();
         const { router, executed, cliManager } = createRouter();
 
-        const result = await router.execute('launch_cli', { cliType: 'claude-cli', dir: '/tmp/ws' }, 'mesh');
+        // In-process (the local auto-launch path): no remote sender for the mesh sender gate.
+        const result = await router.execute('launch_cli', { cliType: 'claude-cli', dir: '/tmp/ws' }, 'mesh', { inProcess: true });
 
         expect(result).toMatchObject({ success: true, sessionId: 'sess-new' });
         expect(cliManager.launchCli).toHaveBeenCalledTimes(1);

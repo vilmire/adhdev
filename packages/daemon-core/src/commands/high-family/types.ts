@@ -64,7 +64,7 @@ export interface HighFamilyContext {
      * router with a `mesh_status` refresh to obtain computed node fields; this is
      * the same self-call the inlined case made.
      */
-    execute: (cmd: string, args: any, source?: string) => Promise<CommandRouterResult>;
+    execute: (cmd: string, args: any, source?: string, opts?: { inProcess?: boolean }) => Promise<CommandRouterResult>;
 
     /**
      * Bound `DaemonCommandRouter.markWorktreeBootstrapTerminalState`. The

@@ -607,7 +607,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                             ...(initialModel ? { initialModel } : {}),
                             ...(initialThinkingLevel ? { initialThinkingLevel } : {}),
                             ...coordinatorLaunchProvenance,
-                        }, 'mesh');
+                        }, 'mesh', { inProcess: true });
 
                         // R48 inject-then-remove. Spawn was just kicked off above; agy and
                         // gemini-cli read AGENTS.md / GEMINI.md exactly once at startup and
@@ -881,7 +881,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         ...(initialModel ? { initialModel } : {}),
                         ...(initialThinkingLevel ? { initialThinkingLevel } : {}),
                         ...coordinatorLaunchProvenance,
-                    }, 'mesh');
+                    }, 'mesh', { inProcess: true });
 
                     // R48 inject-then-remove. See the cli_command branch for context;
                     // same idea: strip the wrapper from disk ~5s after launch so the
@@ -969,4 +969,4 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
     },
 };
 
-export const meshCoordinatorLaunchSpecs = defineCommandSpecs('high', meshCoordinatorLaunchHandlers);
+export const meshCoordinatorLaunchSpecs = defineCommandSpecs('high', meshCoordinatorLaunchHandlers, {}, { meshSender: 'authenticated_peer' });
