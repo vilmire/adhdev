@@ -70,8 +70,10 @@ function makeHandle(meshId: string, over: Partial<MeshRefineJobHandle> = {}): Me
     } as MeshRefineJobHandle;
 }
 
+// No attached components (the router's boot-window answer) → queueRefineJobEvent
+// takes its notice-queue fallback, the path these cases pin.
 function makeRouterStub(): any {
-    return { deps: {} };
+    return { deps: {}, attachedComponentsOrNull: () => null };
 }
 
 const idle = (sessionId: string) => ({ sessionId, idle: true, modalParked: false });

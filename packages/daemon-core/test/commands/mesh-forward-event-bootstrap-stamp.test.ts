@@ -33,16 +33,32 @@ import { meshEventsHandlers } from '../../src/commands/high-family/mesh-events.j
 import { handleMeshForwardEvent } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js'
 import { LOG } from '../../src/logging/logger.js'
+import { DaemonComponentsNotReadyError } from '../../src/commands/daemon-components-port.js'
+import { testTurnLedger } from '../mesh/helpers/mesh-turn-ledger-fixture.js'
 
 const NODE_ID = 'node_wt_remote'
 
-function createMinimalContext(stamp = vi.fn(), getCachedInlineMesh?: (...args: any[]) => any) {
+/**
+ * The handler now passes the REAL components (`ctx.components()`, attached by
+ * boot S7) to handleMeshForwardEvent instead of a hand-built
+ * `{ instanceManager, router: {...} }` shim. This fixture's components carry
+ * the router surface the stamp + re-fire read and a turn ledger, like
+ * production. `ready: false` models the boot window (accessor throws).
+ */
+function createMinimalContext(stamp = vi.fn(), getCachedInlineMesh: (...args: any[]) => any = vi.fn(() => undefined), opts: { ready?: boolean } = {}) {
+  const components = {
+    instanceManager: {
+      getInstance: vi.fn(() => undefined),
+      getByCategory: vi.fn(() => []),
+    },
+    router: { markWorktreeBootstrapTerminalState: stamp, getCachedInlineMesh },
+    turnLedger: testTurnLedger(),
+  } as any
   return {
-    deps: {
-      instanceManager: {
-        getInstance: vi.fn(() => undefined),
-        getByCategory: vi.fn(() => []),
-      } as any,
+    deps: { instanceManager: components.instanceManager },
+    components: () => {
+      if (opts.ready === false) throw new DaemonComponentsNotReadyError('high-family command')
+      return components
     },
     getMeshForCommand: vi.fn(async () => ({ mesh: null, inlineMesh: null })),
     getCachedAggregateMeshStatus: vi.fn(() => null),
@@ -163,25 +179,19 @@ describe('MESH-FORWARD-EVENT-REFIRE-SHIM — mesh_forward_event queue re-fire la
   })
   afterEach(() => { vi.clearAllMocks() })
 
-  it('red regression: without ctx.getCachedInlineMesh bound, the queue re-fire WARN-logs a failure', async () => {
-    const meshId = `mesh_forward_refire_red_${randomUUID().slice(0, 8)}`
-    const warnSpy = vi.spyOn(LOG, 'warn').mockImplementation(() => {})
+  // The shim class is structurally gone: the handler no longer builds a
+  // components look-alike. Inside the boot window it answers not-ready instead.
+  it('boot window: components not attached → daemon_components_not_ready, nothing stamped', async () => {
+    const meshId = `mesh_forward_not_ready_${randomUUID().slice(0, 8)}`
     try {
-      // getCachedInlineMesh omitted — mirrors HighFamilyContext before this fix.
-      const ctx = createMinimalContext(vi.fn(), undefined)
+      const stamp = vi.fn()
+      const ctx = createMinimalContext(stamp, vi.fn(() => undefined), { ready: false })
 
       const result = await meshEventsHandlers.mesh_forward_event(ctx, createStampArgs(meshId))
-      expect(result).toMatchObject({ success: true })
 
-      await flushSetImmediate()
-      await flushSetImmediate()
-
-      expect(warnSpy).toHaveBeenCalledWith(
-        'MeshQueue',
-        expect.stringMatching(/Queue re-fire after worktree_bootstrap_complete failed.*getCachedInlineMesh is not a function/),
-      )
+      expect(result).toMatchObject({ success: false, code: 'daemon_components_not_ready' })
+      expect(stamp).not.toHaveBeenCalled()
     } finally {
-      warnSpy.mockRestore()
       cleanup(meshId)
     }
   })

@@ -59,15 +59,18 @@ import {
 } from '../helpers/pending-notices.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 
-// Minimal router facade: queueRefine*JobEvent only reads deps.instanceManager.
-function makeSelf() {
+// Minimal router facade: queueRefine*JobEvent hands the router's ATTACHED
+// components (boot S7) to handleMeshForwardEvent — never a deps look-alike.
+// `attached: false` models the boot window (→ the notice-queue fallback).
+function makeSelf(opts: { attached?: boolean } = {}) {
+    const instanceManager = {
+        getByCategory: vi.fn(() => []),
+        getInstance: vi.fn(() => undefined),
+    };
+    const components = { instanceManager, router: { getCachedInlineMesh: () => undefined } };
     return {
-        deps: {
-            instanceManager: {
-                getByCategory: vi.fn(() => []),
-                getInstance: vi.fn(() => undefined),
-            },
-        },
+        deps: { instanceManager },
+        attachedComponentsOrNull: () => (opts.attached === false ? null : components),
     } as any;
 }
 
@@ -133,6 +136,18 @@ describe('RC32 Part B — refine terminal-event return path', () => {
         expect(pendingRefineEvents(meshId, WORKER_MACH)).toHaveLength(0);
     });
 
+    it('boot window (no attached components): the notice-queue fallback keeps the coordinator target', () => {
+        const meshId = `mesh-rc32-${randomUUID().slice(0, 8)}`;
+        __clearMeshPendingEventsForTests(meshId);
+
+        queueRefineJobEvent(makeSelf({ attached: false }), 'refine:completed', makeSingleHandle(meshId, `job_${randomUUID().slice(0, 8)}`, COORD_FULL), { success: true });
+
+        const visible = pendingRefineEvents(meshId, COORD_MACH);
+        expect(visible.map(e => e.event)).toContain('refine:completed');
+        expect(visible.find(e => e.event === 'refine:completed')?.targetCoordinatorDaemonId).toBe(COORD_FULL);
+        expect(pendingRefineEvents(meshId, WORKER_MACH)).toHaveLength(0);
+    });
+
     it('batch: queued refine:completed stays targeted at the originating coordinator', () => {
         const meshId = `mesh-rc32-${randomUUID().slice(0, 8)}`;
         __clearMeshPendingEventsForTests(meshId);
@@ -152,7 +167,7 @@ describe('RC32 Part B — refine terminal-event return path', () => {
 
         // No sourceInstanceId → no live worker session on this daemon; the ONLY
         // coordinator anchor is the relayed top-level targetCoordinatorDaemonId.
-        const result = handleMeshForwardEvent({ instanceManager: makeSelf().deps.instanceManager } as any, {
+        const result = handleMeshForwardEvent(makeSelf().attachedComponentsOrNull(), {
             event: 'refine:failed',
             meshId,
             nodeId: 'node_wt_remote',

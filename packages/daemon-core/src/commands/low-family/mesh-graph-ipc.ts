@@ -102,7 +102,7 @@ function classifyNodePatchError(e: unknown, message: string): string | undefined
 /** Best-effort queue nudge after a release/patch materializes downstream work — never fails the call. */
 async function triggerQueueBestEffort(ctx: LowFamilyContext, meshId: string): Promise<void> {
     try {
-        await triggerMeshQueue(ctx.deps as any, meshId);
+        await triggerMeshQueue(ctx.components(), meshId);
     } catch (e: any) {
         LOG.warn('MeshGraphIpc', `post-release/patch queue trigger failed for mesh ${meshId}: ${e?.message ?? String(e)}`);
     }

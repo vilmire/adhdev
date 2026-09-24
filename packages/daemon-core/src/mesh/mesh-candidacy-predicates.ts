@@ -176,7 +176,7 @@ export function isLocalAutoLaunchNode(node: any): boolean {
  * path; this is the restart-safety net for sessions hosted on this daemon. A genuinely
  * dead/stale session is not generating → returns false → the requeue proceeds as before.
  */
-export function isSessionActivelyGenerating(components: DaemonComponents, sessionId: string): boolean {
+export function isSessionActivelyGenerating(components: Pick<DaemonComponents, 'instanceManager'>, sessionId: string): boolean {
     if (!sessionId) return false;
     const state = components.instanceManager?.getInstance?.(sessionId)?.getState?.();
     if (!state) return false;

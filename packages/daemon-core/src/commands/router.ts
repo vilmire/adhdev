@@ -26,6 +26,8 @@ import {
     type CommandSpec,
 } from './command-registry.js';
 import { InteractionContextMap } from './interaction-context.js';
+import { DaemonComponentsNotReadyError } from './daemon-components-port.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import { handlerSpecs, gitSpecs } from './handler-specs.js';
 import { sessionHostSpecs } from './low-family/session-host.js';
 import { specProviderDevSpecs } from './low-family/spec-providerdev.js';
@@ -506,8 +508,38 @@ export class DaemonCommandRouter {
     /** Recent interaction ids per target session (bounded). */
     readonly interactionContext = new InteractionContextMap();
 
+    /**
+     * The daemon's finished `DaemonComponents`, late-bound by boot S7
+     * (`boot/stages/mesh-runtime.ts`). The router is built in S5, before the
+     * components (and their turn ledger) exist — see ./daemon-components-port.ts.
+     */
+    private attachedComponents: DaemonComponents | null = null;
+
     constructor(deps: CommandRouterDeps) {
         this.deps = deps;
+    }
+
+    /** S7 attaches the completed components once. They must be the ones this router belongs to. */
+    attachComponents(components: DaemonComponents): void {
+        if (components.router !== this) {
+            throw new Error('attachComponents: components.router is not this router');
+        }
+        this.attachedComponents = components;
+    }
+
+    /**
+     * The attached components, or null inside the boot window — ONLY for callers
+     * that have a complete non-components fallback (the refine jobs' notice queue).
+     * Everything else uses `requireComponents` / `ctx.components()`.
+     */
+    attachedComponentsOrNull(): DaemonComponents | null {
+        return this.attachedComponents;
+    }
+
+    /** The real `DaemonComponents`; throws `DaemonComponentsNotReadyError` inside the boot window. */
+    requireComponents(what = 'command'): DaemonComponents {
+        if (!this.attachedComponents) throw new DaemonComponentsNotReadyError(what);
+        return this.attachedComponents;
     }
 
     // ─── Aggregate mesh-status cache ────────────────────────────────────
@@ -724,6 +756,7 @@ export class DaemonCommandRouter {
     private buildMedFamilyContext(): MedFamilyContext {
         const ctx: MedFamilyContext = {
             deps: this.deps,
+            components: () => this.requireComponents('med-family command'),
             getMeshForCommand: this.getMeshForCommand.bind(this),
             getCachedInlineMesh: this.getCachedInlineMesh.bind(this),
             markWorktreeBootstrapTerminalState: this.markWorktreeBootstrapTerminalState.bind(this),
@@ -761,6 +794,7 @@ export class DaemonCommandRouter {
     private buildHighFamilyContext(): HighFamilyContext {
         return {
             deps: this.deps,
+            components: () => this.requireComponents('high-family command'),
             getMeshForCommand: this.getMeshForCommand.bind(this),
             getCachedAggregateMeshStatus: this.getCachedAggregateMeshStatus.bind(this),
             rememberAggregateMeshStatus: this.rememberAggregateMeshStatus.bind(this),
@@ -1261,6 +1295,7 @@ export class DaemonCommandRouter {
             case 'low': {
                 const ctx: LowFamilyContext = {
                     deps: this.deps,
+                    components: () => this.requireComponents('low-family command'),
                     getMeshForCommand: this.getMeshForCommand.bind(this),
                 };
                 return (spec as CommandSpec<'low'>).run(ctx, args);

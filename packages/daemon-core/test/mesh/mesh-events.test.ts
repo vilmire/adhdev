@@ -81,6 +81,7 @@ import { markRemoteSessionGenerating, __resetRemoteGeneratingMarksForTests } fro
 import { LOG } from '../../src/logging/logger.js'
 import { hasWorkerProtocolFooter } from '@adhdev/mesh-shared'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
+import { wipeTurnTablesForTests } from './helpers/mesh-turn-ledger-fixture.js'
 import { withMeshForwardingBus } from './helpers/mesh-forwarding-bus-fixture.js'
 
 function createComponents(meshId = 'mesh_inline_1', workerSettings?: Record<string, unknown>, opts?: { coordinatorStatus?: 'idle' | 'generating' | 'waiting_approval'; statusInstanceId?: string }) {
@@ -127,6 +128,7 @@ function cleanupMeshFiles(meshId: string) {
   const queuePath = path.join(getLedgerDir(), `${meshId}.queue.json`)
   const ledgerPath = path.join(getLedgerDir(), `${meshId}.jsonl`)
   __clearMeshQueueForTests(meshId)
+  wipeTurnTablesForTests()
   __resetMeshRuntimeStoreForTests()
   __resetIdleAutoFastForwardForTests()
   __resetMeshWorkspaceCacheForTests()

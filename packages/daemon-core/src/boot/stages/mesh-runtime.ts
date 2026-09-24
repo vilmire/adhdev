@@ -427,6 +427,12 @@ export function bootMeshRuntime(s6: ProjectionsStage): MeshRuntimeStage {
     components.turnLedger = turn.ledger;
     components.turnProbePort = turn.probePort;
     components.meshTurn = turn;
+    // The command plane (built in S5, before these components existed) gets the
+    // REAL components now — every command that calls a mesh function taking
+    // `DaemonComponents` reads them via `ctx.components()`. Before this line a
+    // command that needs them answers `daemon_components_not_ready` (never a
+    // partial look-alike: the rc.39 ledger-less claim).
+    components.router.attachComponents(components);
 
     // Provider events of mesh sessions → turn evidence / notices / queue edges.
     const offForwarding = setupMeshEventForwarding(components);

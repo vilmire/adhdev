@@ -259,8 +259,18 @@ export function delegatedWorkerAutoApproveSettingsForNode(
     return delegatedWorkerAutoApproveSettings(mesh?.policy, node?.policy, provider, repoConfig, providerType);
 }
 
+let warnedMissingRouterView = false;
+
 export function getMeshWithCache(components: DaemonComponents, meshId: string): any | undefined {
     const localMesh = getMesh(meshId);
+    // Real components always carry the router. A look-alike without one silently
+    // drops the inline-cache-only (cloned worktree) nodes from the claim view — the
+    // CLAIMSTALL class — so say so once instead of degrading quietly.
+    // (A router that exists but lacks the method still throws below, as before.)
+    if (!components.router && !warnedMissingRouterView) {
+        warnedMissingRouterView = true;
+        LOG.warn('MeshQueue', `mesh ${meshId}: components passed to the mesh view have no router (look-alike components?) — inline-only worktree nodes are invisible to this read`);
+    }
     const cachedMesh = components.router?.getCachedInlineMesh(meshId);
     if (!localMesh) return cachedMesh;
     if (!cachedMesh) return localMesh;
@@ -477,8 +487,9 @@ interface DeliverTaskContext {
 // and the ledger's reducer decides: R1 opens the attempt with its
 // await_delivery + hard_ceiling holds, R2 binds the delivering session, R24
 // reclaims (queue row → pending is a commit effect), R25 rebinds to the live
-// holder. Without a wired ledger (unit fixtures) the evidence is skipped and
-// only the queue bookkeeping below runs.
+// holder. Without a wired ledger the post-dispatch evidence helpers below are
+// no-ops, but `tryAssignQueueTask` itself REFUSES the claim (fail closed, WARN)
+// — a queue dispatch with no attempt can never be closed (rc.39).
 
 /** The daemon's turn ledger, as the boot stage puts it on `components` (C-W3). */
 export function turnLedgerOf(components: DaemonComponents | undefined): TurnLedger | null {
@@ -487,7 +498,12 @@ export function turnLedgerOf(components: DaemonComponents | undefined): TurnLedg
 
 function observeDispatchEvidence(components: DaemonComponents, evidence: TurnEvidence): void {
     const ledger = turnLedgerOf(components);
-    if (!ledger) return;
+    if (!ledger) {
+        // Unreachable through a claim (tryAssignQueueTask refuses without a ledger),
+        // so this is a caller handing a components look-alike — say so, loudly.
+        LOG.warn('TurnLedger', `dropping dispatch evidence ${evidence.kind} ${evidence.eventId}: no turn ledger on the components passed in (look-alike components?)`);
+        return;
+    }
     try {
         const result = ledger.observe(evidence);
         if (result.verdict === 'rejected') {
@@ -980,6 +996,24 @@ export function tryAssignQueueTask(
     quotaClaimTrace?: QuotaClaimDrainTrace,
     trigger: string = 'queue_claim',
 ): boolean {
+    // TURN-LEDGER FAIL-CLOSED (rc.39): a queue claim dispatches the task body
+    // into an attempt the ledger opens below. With no ledger there is no
+    // attempt — the worker's stamp reads `attempt=?`, nothing can ever close
+    // the row, and it stays `assigned` forever, blocking the node. That is
+    // exactly what an IPC-triggered claim did when the command layer passed
+    // its router deps (no `turnLedger`) as components. Refuse BEFORE the
+    // atomic claim so the row is untouched (still pending), loudly.
+    const turnLedger = turnLedgerOf(components);
+    if (!turnLedger) {
+        LOG.warn('TurnLedger', `refusing queue claim for node ${nodeId} (${sessionId}) in mesh ${meshId}: no turn ledger on this daemon (claim path ${trigger}) — task left pending`);
+        return false;
+    }
+    // Same class, other half: without the router's inline-mesh cache the claim view
+    // misses cloned worktree nodes (CLAIMSTALL) — real components always carry it.
+    if (typeof components.router?.getCachedInlineMesh !== 'function') {
+        LOG.warn('MeshQueue', `refusing queue claim for node ${nodeId} (${sessionId}) in mesh ${meshId}: components carry no router inline-mesh view (claim path ${trigger}) — task left pending`);
+        return false;
+    }
     const mesh = getMeshWithCache(components, meshId);
     // Match with the shared 3-form normalizer (id / nodeId / node_id), not raw
     // `n.id` — a stamp-form nodeId vs the mesh node's config-form id must still
@@ -1257,35 +1291,36 @@ export function tryAssignQueueTask(
     // attemptRef. The legacy "terminal ledger evidence already exists → flip the
     // row terminal" skip is gone: a ledger commit writes the row in the same txn,
     // so a pending row whose latest attempt is terminal is a legitimate retry.
-    let dispatchAttemptRef: TurnAttemptRef | undefined;
-    const turnLedger = turnLedgerOf(components);
-    if (turnLedger) {
-        try {
-            const opened = openOrResumeQueueAttempt(turnLedger, {
-                coordinatorDaemonId: localCoordinatorDaemonId(),
-                meshId,
-                task,
-                nodeId,
-                sessionId,
-                providerType,
-                consumeProfile: assignedTranscriptProfile?.class === 'native-source' ? 'native_source' : 'default',
-                maxTaskRetries: typeof mesh?.policy?.maxTaskRetries === 'number' ? mesh.policy.maxTaskRetries : 1,
-            });
-            if ('refused' in opened) {
-                // A prompt must never be injected into an attempt that already
-                // consumed one (crash/replay or a same-tick duplicate path).
-                LOG.warn('MeshQueue', `Refusing queue claim dispatch of task ${task.id} → session ${sessionId}: its open attempt ${opened.refused.attemptId} is already ${opened.refused.state}`);
-                updateTaskStatus(meshId, task.id, 'pending');
-                return false;
-            }
-            dispatchAttemptRef = opened.ref;
-            task.attemptId = opened.ref.attemptId;
-            MeshRuntimeStore.getInstance().updateQueueEntry(task);
-        } catch (e: any) {
-            LOG.warn('TurnLedger', `Failed to open turn attempt for task ${task.id} (dispatch proceeds without an attemptRef): ${e?.message || e}`);
+    let dispatchAttemptRef: TurnAttemptRef;
+    try {
+        const opened = openOrResumeQueueAttempt(turnLedger, {
+            coordinatorDaemonId: localCoordinatorDaemonId(),
+            meshId,
+            task,
+            nodeId,
+            sessionId,
+            providerType,
+            consumeProfile: assignedTranscriptProfile?.class === 'native-source' ? 'native_source' : 'default',
+            maxTaskRetries: typeof mesh?.policy?.maxTaskRetries === 'number' ? mesh.policy.maxTaskRetries : 1,
+        });
+        if ('refused' in opened) {
+            // A prompt must never be injected into an attempt that already
+            // consumed one (crash/replay or a same-tick duplicate path).
+            LOG.warn('MeshQueue', `Refusing queue claim dispatch of task ${task.id} → session ${sessionId}: its open attempt ${opened.refused.attemptId} is already ${opened.refused.state}`);
+            updateTaskStatus(meshId, task.id, 'pending');
+            return false;
         }
+        dispatchAttemptRef = opened.ref;
+        task.attemptId = opened.ref.attemptId;
+        MeshRuntimeStore.getInstance().updateQueueEntry(task);
+    } catch (e: any) {
+        // Fail closed: a dispatch without an attempt is the rc.39 defect
+        // (nothing can close the row). Return it to pending for a retry.
+        LOG.warn('TurnLedger', `refusing queue claim of task ${task.id} → session ${sessionId}: failed to open its turn attempt (claim path ${trigger}) — task left pending: ${e?.message || e}`);
+        updateTaskStatus(meshId, task.id, 'pending');
+        return false;
     }
-    const dispatchAttemptId = dispatchAttemptRef?.attemptId;
+    const dispatchAttemptId = dispatchAttemptRef.attemptId;
 
     // WORKER-MCP (design §9.2.1): mint the per-task worker token now that the
     // attempt exists. This is the queue-claim arm; the direct-dispatch arm

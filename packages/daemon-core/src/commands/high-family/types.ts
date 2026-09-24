@@ -22,6 +22,7 @@ import type {
     MeshRefineJobHandle,
 } from '../router.js';
 import type { ResolvedMeshForCommand } from '../med-family/types.js';
+import type { DaemonComponentsAccessor } from '../daemon-components-port.js';
 
 /**
  * Router-private collaborators injected at dispatch. Each is a bound method or
@@ -32,6 +33,14 @@ import type { ResolvedMeshForCommand } from '../med-family/types.js';
  */
 export interface HighFamilyContext {
     deps: CommandRouterDeps;
+    /**
+     * The daemon's REAL `DaemonComponents` (late-bound by boot S7). Use this —
+     * never `deps` cast to components — wherever a mesh function takes
+     * `DaemonComponents`: `deps` has no turn ledger, and a claim made through it
+     * dispatched without an attempt (rc.39). Throws
+     * `DaemonComponentsNotReadyError` inside the boot window.
+     */
+    components: DaemonComponentsAccessor;
 
     /** Bound `DaemonCommandRouter.getMeshForCommand`. */
     getMeshForCommand: (

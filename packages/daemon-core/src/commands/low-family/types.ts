@@ -9,6 +9,7 @@
  * with the context this family needs.
  */
 import type { CommandRouterDeps, CommandRouterResult } from '../router.js';
+import type { DaemonComponentsAccessor } from '../daemon-components-port.js';
 
 /** Mesh record resolved from the router's inline-mesh cache + local config. */
 export type ResolvedMeshForCommand = {
@@ -19,6 +20,14 @@ export type ResolvedMeshForCommand = {
 
 export interface LowFamilyContext {
     deps: CommandRouterDeps;
+    /**
+     * The daemon's REAL `DaemonComponents` (late-bound by boot S7). Use this —
+     * never `deps` cast to components — wherever a mesh function takes
+     * `DaemonComponents`: `deps` has no turn ledger, and a claim made through it
+     * dispatched without an attempt (rc.39). Throws
+     * `DaemonComponentsNotReadyError` inside the boot window.
+     */
+    components: DaemonComponentsAccessor;
     /**
      * Bound `DaemonCommandRouter.getMeshForCommand`. A handful of LOW handlers
      * (mesh-node-logs) must resolve a mesh node's owning daemonId from the
