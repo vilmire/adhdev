@@ -127,6 +127,12 @@ export const HOLD_REASONS = [
     // only opens this hold (R9r) — a report commits (R17), a new busy edge cancels
     // it as a false idle (R12r), expiry commits weak (R13r).
     'await_report',
+    // A worker report recorded while the session is still generating (R17g):
+    // the report is the verdict, the idle edge is only awaited as corroboration
+    // — a turn_end commits the report (R9t), expiry commits it anyway (R13t) so
+    // a session whose FSM never shows the idle edge again does not wait for
+    // liveness / hard_ceiling.
+    'await_end',
 ] as const
 export type HoldReason = typeof HOLD_REASONS[number]
 
@@ -232,7 +238,12 @@ export type TurnEvidenceBody =
     | { kind: 'process_exit'; exitCode: number | null; providerFailure?: ProviderFailure }
     | { kind: 'session_error'; reason: SessionErrorReason }
     // ── worker MCP (F2) ──
-    | { kind: 'worker_report'; outcome: WorkerReportOutcome; summary: SummaryRef; hasHandoffNotes: boolean
+    /**
+     * `summary` is the handoff-topic pointer when the report's text was published;
+     * a report the owner daemon accepted itself carries its text in the evidence
+     * row's local envelope instead (never published), so the pointer is optional.
+     */
+    | { kind: 'worker_report'; outcome: WorkerReportOutcome; summary?: SummaryRef; hasHandoffNotes: boolean
         branchState?: WorkerBranchState; touchedFileCount?: number }
     | { kind: 'worker_progress'; note?: SummaryRef }
     // ── coordinator / operator ──
@@ -320,7 +331,7 @@ export const TURN_EVIDENCE_FIELD_SPECS: TurnEvidenceFieldSpecs = {
     process_exit: { exitCode: { t: 'int', nullable: true }, providerFailure: enOpt(PROVIDER_FAILURES) },
     session_error: { reason: en(SESSION_ERROR_REASONS) },
     worker_report: {
-        outcome: en(WORKER_REPORT_OUTCOMES), summary: { t: 'summary_ref' }, hasHandoffNotes: bool,
+        outcome: en(WORKER_REPORT_OUTCOMES), summary: { t: 'summary_ref', optional: true }, hasHandoffNotes: bool,
         branchState: enOpt(WORKER_BRANCH_STATES), touchedFileCount: intOpt,
     },
     worker_progress: { note: { t: 'summary_ref', optional: true } },
