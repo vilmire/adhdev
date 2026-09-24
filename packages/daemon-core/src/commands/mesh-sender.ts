@@ -22,21 +22,32 @@
  * owner decision (2026-09-24 audit) is that it fails closed, including session
  * ownership: a mesh peer must not drive a local user's session.
  *
- * ─── Roster evidence ────────────────────────────────────────────────────
+ * ─── Roster / mesh-host evidence ───────────────────────────────────────
  *
  * `meshes.json` is machine-local and normally populated only on the
- * coordinator; a worker daemon learns a roster from its inline-mesh cache
- * (`inlineMesh` carried by earlier commands) or not at all. The roster answer
- * therefore takes, in order:
+ * coordinator (the mesh HOST); a worker daemon learns a mesh through pairing,
+ * its inline-mesh cache, or the commands its host sends. Session settings are
+ * in-memory: a hosted session restored after a daemon restart keeps
+ * `meshNodeFor` but NOT `meshCoordinatorDaemonId` (rc.42 live regression). The
+ * answer for "is the sender a legitimate peer of mesh M here" therefore takes,
+ * in order:
  *   1. the LOCAL mesh view (inline cache, then local config) — authoritative
- *      when it has nodes: sender on it ⇒ accept;
- *   2. local session stamps — a live session on this daemon stamped
- *      `meshNodeFor = <mesh>` with `meshCoordinatorDaemonId ≡ sender` is this
- *      daemon's own record that the sender coordinates that mesh here;
- *   3. only when (1) knows nothing: the payload's `inlineMesh`, accepted as
- *      evidence only when it is self-consistent — it names this mesh, lists
- *      the sender AND lists this daemon (a peer cannot assert membership of a
- *      mesh this daemon is not on).
+ *      when it has nodes: sender on it ⇒ accept; 1b. the host the local mesh
+ *      record DECLARES (a paired member's `meshHost.hostDaemonId`) ⇒ accept;
+ *   2. the persisted per-mesh host record (mesh/mesh-host-memory.ts —
+ *      pairing / learned; survives restarts) naming the sender ⇒ accept;
+ *   3. local session stamps — any live session stamped `meshNodeFor = M` with
+ *      `meshCoordinatorDaemonId ≡ sender` (also recorded as the mesh host);
+ *   → a known local roster, a declared host, or a host record that name
+ *     SOMEONE ELSE ⇒ refuse;
+ *   4. only when nothing above knows the mesh: the payload's `inlineMesh`,
+ *      accepted only when self-consistent — it names this mesh, lists the
+ *      sender AND lists this daemon;
+ *   5. trust on first use — only for a command that itself claims the sender
+ *      coordinates M (agent_command meshContext / a mesh launch anchor) and
+ *      only when no session here is anchored to M at all: accept, persist the
+ *      sender as M's host, log one WARN `mesh host learned by first dispatch`.
+ *      Every later sender must match (step 2).
  * No evidence at all ⇒ refuse (`roster_unknown`).
  */
 import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
@@ -73,6 +84,9 @@ export function readMeshSender(args: unknown): string {
  *  - `pairing_member`: the joining daemon itself — the sender must be the daemon
  *    the join request's `memberNode` names (it is not on the host's roster yet;
  *    the pairing token authorises the join, the handler checks it).
+ *  - `mesh_launch`: launch_cli — any authenticated peer, except that a
+ *    coordinator anchor the launch stamps must name the sender and, for a mesh
+ *    worker launch, the sender must hold this daemon's host evidence for it.
  *  - `authenticated_peer`: any authenticated same-account peer. For commands a
  *    receiving daemon cannot tie to a roster (read-only probes, launch) — a
  *    worker daemon usually holds no roster, so a roster requirement there would
@@ -84,10 +98,11 @@ export type MeshSenderClass =
     | 'session_coordinator'
     | 'any_member_mesh'
     | 'pairing_member'
+    | 'mesh_launch'
     | 'authenticated_peer';
 
 export const MESH_SENDER_CLASSES: readonly MeshSenderClass[] = [
-    'roster', 'node_owner', 'session_coordinator', 'any_member_mesh', 'pairing_member', 'authenticated_peer',
+    'roster', 'node_owner', 'session_coordinator', 'any_member_mesh', 'pairing_member', 'mesh_launch', 'authenticated_peer',
 ];
 
 export type MeshSenderRefusal =
@@ -118,6 +133,12 @@ export interface MeshSenderGateDeps {
     listSessionSettings(): Array<{ sessionId: string; settings: Record<string, unknown> }>;
     /** Resolve a `mesh_forward_event` payload's mesh the way its handler does. */
     resolveForwardEventMeshId?(payload: Record<string, unknown>): string;
+    /** The persisted mesh-host record for `meshId` (mesh/mesh-host-memory.ts), or null. */
+    getMeshHostRecord?(meshId: string): { hostDaemonId: string; source?: string } | null;
+    /** Every persisted mesh-host record. */
+    listMeshHostRecords?(): Array<{ meshId: string; hostDaemonId: string }>;
+    /** Persist a learned mesh host; a weaker source never replaces a record. Returns whether it wrote. */
+    recordMeshHost?(meshId: string, hostDaemonId: string, source: 'session_stamp' | 'first_dispatch'): boolean;
 }
 
 function str(value: unknown): string {
@@ -161,26 +182,93 @@ export function readCommandSessionId(args: Record<string, unknown>): string {
 }
 
 type RosterAnswer =
-    | { known: true; onRoster: boolean; source: string; mesh?: unknown }
+    | { known: true; onRoster: boolean; source: string; mesh?: unknown; detail?: string }
     | { known: false };
+
+interface RosterOptions {
+    /**
+     * The command itself claims the sender coordinates THIS mesh (an
+     * agent_command meshContext / a mesh launch's coordinator anchor naming the
+     * sender). Only such a command may teach a roster-less daemon its mesh host
+     * on first use (step 7 of the module header).
+     */
+    tofuClaim?: boolean;
+}
+
+/**
+ * A host daemon id the LOCAL mesh record declares (a paired member's
+ * `meshHost.hostDaemonId`, a host pin, a node declared `role: host`) — never
+ * the read-side self synthesis.
+ */
+function declaredMeshHost(mesh: unknown, selfDaemonId?: string): string | undefined {
+    if (!record(mesh)) return undefined;
+    try {
+        const status = resolveMeshHostStatus(mesh, selfDaemonId ? { localDaemonId: selfDaemonId } : undefined);
+        return status.hostSynthesized ? undefined : status.hostDaemonId;
+    } catch {
+        return undefined;
+    }
+}
+
+function hostRecordOf(deps: MeshSenderGateDeps, meshId: string): { hostDaemonId: string; source?: string } | null {
+    try { return deps.getMeshHostRecord?.(meshId) ?? null; } catch { return null; }
+}
+
+/**
+ * Persist the sender as the mesh host (a weaker source never replaces an
+ * existing record). Returns false only when a DIFFERENT host is now on record
+ * (a concurrent first-use race lost) — the caller must then refuse.
+ */
+function learnMeshHost(deps: MeshSenderGateDeps, meshId: string, sender: string, source: 'session_stamp' | 'first_dispatch'): boolean {
+    if (!deps.recordMeshHost) return true;
+    let written = false;
+    try { written = deps.recordMeshHost(meshId, sender, source) === true; } catch { written = false; }
+    const now = hostRecordOf(deps, meshId);
+    if (now && !sameDaemon(now.hostDaemonId, sender)) return false;
+    if (written && source === 'first_dispatch') {
+        LOG.warn('MeshSender', `mesh host learned by first dispatch: mesh=${meshId} host=${sender.slice(0, 24)} — this daemon held no roster, no pairing record and no coordinator-stamped session for the mesh; later senders must match`);
+    }
+    return true;
+}
 
 async function rosterAnswer(
     deps: MeshSenderGateDeps,
     meshId: string,
     sender: string,
     args: Record<string, unknown>,
+    opts: RosterOptions = {},
 ): Promise<RosterAnswer> {
     let local: unknown;
     try { local = await deps.getLocalMesh(meshId); } catch { local = undefined; }
     const localKnown = nodesOf(local).length > 0;
+    // (1) local roster / (1b) the host the local mesh record declares (pairing).
     if (localKnown && senderOnMesh(local, sender, deps.selfDaemonId)) {
         return { known: true, onRoster: true, source: 'local_roster', mesh: local };
     }
+    const declaredHost = declaredMeshHost(local, deps.selfDaemonId);
+    if (declaredHost && sameDaemon(declaredHost, sender)) {
+        return { known: true, onRoster: true, source: 'local_mesh_host', mesh: local };
+    }
+    // (2) the persisted mesh-host record (pairing / learned) — survives restarts.
+    const hostRecord = hostRecordOf(deps, meshId);
+    if (hostRecord && sameDaemon(hostRecord.hostDaemonId, sender)) {
+        return { known: true, onRoster: true, source: 'mesh_host_record', mesh: localKnown ? local : undefined };
+    }
+    // (3) any live session of that mesh stamped with the sender as coordinator.
     if (sessionStampNamesCoordinator(deps, meshId, sender)) {
+        if (!hostRecord && !localKnown && !declaredHost && !learnMeshHost(deps, meshId, sender, 'session_stamp')) {
+            return { known: true, onRoster: false, source: 'mesh_host_record', detail: `mesh ${meshId} host was recorded as another daemon concurrently` };
+        }
         return { known: true, onRoster: true, source: 'session_stamp', mesh: localKnown ? local : undefined };
     }
     if (localKnown) return { known: true, onRoster: false, source: 'local_roster', mesh: local };
-    // (3) payload inlineMesh — only when this daemon knows nothing of the mesh,
+    if (declaredHost) {
+        return { known: true, onRoster: false, source: 'local_mesh_host', mesh: local, detail: `mesh ${meshId} is hosted by ${declaredHost.slice(0, 24)} per this daemon's pairing record` };
+    }
+    if (hostRecord) {
+        return { known: true, onRoster: false, source: 'mesh_host_record', detail: `mesh ${meshId} host on record is ${hostRecord.hostDaemonId.slice(0, 24)} (${hostRecord.source || 'recorded'})` };
+    }
+    // (4) payload inlineMesh — only when this daemon knows nothing of the mesh,
     // and only when it is self-consistent (names this mesh, lists sender AND us).
     const inline = record(args.inlineMesh);
     if (inline && nodesOf(inline).length > 0) {
@@ -189,8 +277,20 @@ async function rosterAnswer(
         const self = str(deps.selfDaemonId);
         // No host synthesis here (it can name the evaluating daemon): the inline
         // roster must list both daemons as nodes or as its declared host.
-        if (!self || !senderOnMesh(inline, self)) return { known: false };
-        return { known: true, onRoster: senderOnMesh(inline, sender), source: 'payload_inline_self_consistent', mesh: inline };
+        if (self && senderOnMesh(inline, self)) {
+            return { known: true, onRoster: senderOnMesh(inline, sender), source: 'payload_inline_self_consistent', mesh: inline };
+        }
+    }
+    // (5) trust on first use: nothing on this daemon names any host for the
+    // mesh, and the command claims the sender coordinates it.
+    if (opts.tofuClaim) {
+        if (anySessionStampForMesh(deps, meshId)) {
+            return { known: true, onRoster: false, source: 'session_stamp', detail: `sessions of mesh ${meshId} here are coordinated by another daemon` };
+        }
+        if (!learnMeshHost(deps, meshId, sender, 'first_dispatch')) {
+            return { known: true, onRoster: false, source: 'mesh_host_record', detail: `mesh ${meshId} host was recorded as another daemon concurrently` };
+        }
+        return { known: true, onRoster: true, source: 'first_dispatch' };
     }
     return { known: false };
 }
@@ -205,15 +305,28 @@ function sessionStampNamesCoordinator(deps: MeshSenderGateDeps, meshId: string |
     });
 }
 
+/** Whether any live session of `meshId` carries a coordinator anchor at all. */
+function anySessionStampForMesh(deps: MeshSenderGateDeps, meshId: string): boolean {
+    let sessions: Array<{ sessionId: string; settings: Record<string, unknown> }> = [];
+    try { sessions = deps.listSessionSettings(); } catch { sessions = []; }
+    return sessions.some(({ settings }) => str(settings.meshNodeFor) === meshId && !!str(settings.meshCoordinatorDaemonId));
+}
+
+/** The command's meshContext names `meshId` and the sender as its coordinator. */
+function meshContextClaimsSender(args: Record<string, unknown>, meshId: string, sender: string): boolean {
+    const meshContext = record(args.meshContext);
+    return !!meshContext && str(meshContext.meshId) === meshId && sameDaemon(str(meshContext.coordinatorDaemonId), sender);
+}
+
 function refuse(sender: string, refusal: MeshSenderRefusal, detail: string): MeshSenderVerdict {
     return { ok: false, sender, refusal, detail };
 }
 
-async function checkRoster(deps: MeshSenderGateDeps, meshId: string, sender: string, args: Record<string, unknown>): Promise<MeshSenderVerdict> {
+async function checkRoster(deps: MeshSenderGateDeps, meshId: string, sender: string, args: Record<string, unknown>, opts: RosterOptions = {}): Promise<MeshSenderVerdict> {
     if (!meshId) return refuse(sender, 'mesh_sender_not_on_roster', 'command names no mesh');
-    const answer = await rosterAnswer(deps, meshId, sender, args);
+    const answer = await rosterAnswer(deps, meshId, sender, args, opts);
     if (!answer.known) return refuse(sender, 'mesh_sender_not_on_roster', `roster_unknown: this daemon holds no roster for mesh ${meshId}`);
-    if (!answer.onRoster) return refuse(sender, 'mesh_sender_not_on_roster', `sender is not on the roster of mesh ${meshId} (${answer.source})`);
+    if (!answer.onRoster) return refuse(sender, 'mesh_sender_not_on_roster', answer.detail || `sender is not on the roster of mesh ${meshId} (${answer.source})`);
     return { ok: true, sender, evidence: `${answer.source}:${meshId}` };
 }
 
@@ -225,10 +338,16 @@ async function checkAnyMemberMesh(deps: MeshSenderGateDeps, sender: string, args
     const known = meshes.filter((m) => nodesOf(m).length > 0);
     const hit = known.find((m) => senderOnMesh(m, sender, deps.selfDaemonId));
     if (hit) return { ok: true, sender, evidence: `local_roster:${str(record(hit)?.id) || '?'}` };
+    const declared = meshes.find((m) => sameDaemon(declaredMeshHost(m, deps.selfDaemonId), sender));
+    if (declared) return { ok: true, sender, evidence: `local_mesh_host:${str(record(declared)?.id) || '?'}` };
+    let hostRecords: Array<{ meshId: string; hostDaemonId: string }> = [];
+    try { hostRecords = deps.listMeshHostRecords?.() ?? []; } catch { hostRecords = []; }
+    const recorded = hostRecords.find((r) => sameDaemon(r.hostDaemonId, sender));
+    if (recorded) return { ok: true, sender, evidence: `mesh_host_record:${recorded.meshId}` };
     if (sessionStampNamesCoordinator(deps, undefined, sender)) return { ok: true, sender, evidence: 'session_stamp' };
-    return refuse(sender, 'mesh_sender_not_on_roster', known.length === 0
-        ? 'roster_unknown: this daemon holds no mesh roster'
-        : `sender is on none of the ${known.length} mesh roster(s) this daemon holds`);
+    return refuse(sender, 'mesh_sender_not_on_roster', known.length === 0 && hostRecords.length === 0
+        ? 'roster_unknown: this daemon holds no mesh roster and no mesh host record'
+        : `sender is on none of the ${known.length} mesh roster(s) and hosts none of the ${hostRecords.length} recorded mesh(es) here`);
 }
 
 async function checkNodeOwner(deps: MeshSenderGateDeps, sender: string, args: Record<string, unknown>): Promise<MeshSenderVerdict> {
@@ -268,20 +387,33 @@ async function checkSessionAnchor(
     const meshId = str(settings.meshNodeFor) || str(settings.meshCoordinatorFor);
     if (!meshId) return refuse(sender, 'mesh_session_not_mesh_owned', `session ${sessionId} carries no mesh stamp`);
     const anchor = str(settings.meshCoordinatorDaemonId);
-    if (sameDaemon(anchor, sender)) return { ok: true, sender, evidence: `session_anchor:${sessionId}` };
     let mesh: unknown;
     try { mesh = await deps.getLocalMesh(meshId); } catch { mesh = undefined; }
+    if (sameDaemon(anchor, sender)) {
+        // Carry the per-session anchor over to the per-mesh record (roster-less
+        // daemons only) so it survives the restart that drops session settings.
+        if (nodesOf(mesh).length === 0 && !declaredMeshHost(mesh, deps.selfDaemonId) && !hostRecordOf(deps, meshId)) {
+            learnMeshHost(deps, meshId, sender, 'session_stamp');
+        }
+        return { ok: true, sender, evidence: `session_anchor:${sessionId}` };
+    }
     if (mesh && sameDaemon(meshHostDaemonId(mesh, deps.selfDaemonId), sender)) {
         return { ok: true, sender, evidence: `mesh_host:${meshId}` };
     }
-    // First binding: a mesh session nobody has anchored yet may be bound by the
-    // dispatch that stamps the anchor — provided it anchors the SENDER (checked
-    // separately as mesh_coordinator_stamp_mismatch) on the session's own mesh.
-    if (!anchor) {
-        const meshContext = record(args.meshContext);
-        if (meshContext && str(meshContext.meshId) === meshId && sameDaemon(str(meshContext.coordinatorDaemonId), sender)) {
-            return { ok: true, sender, evidence: `first_binding:${sessionId}` };
-        }
+    const hostRecord = hostRecordOf(deps, meshId);
+    if (hostRecord && sameDaemon(hostRecord.hostDaemonId, sender)) {
+        return { ok: true, sender, evidence: `mesh_host_record:${meshId}` };
+    }
+    // First binding: a mesh session nobody has anchored (a fresh launch, or a
+    // hosted session restored after a restart — restore re-applies meshNodeFor
+    // only) may be bound by the dispatch that stamps the anchor, provided it
+    // anchors the SENDER on the session's own mesh AND this daemon's mesh-host
+    // evidence (roster / pairing / host record / other stamps / first use)
+    // accepts the sender for that mesh.
+    if (!anchor && meshContextClaimsSender(args, meshId, sender)) {
+        const answer = await rosterAnswer(deps, meshId, sender, args, { tofuClaim: true });
+        if (answer.known && answer.onRoster) return { ok: true, sender, evidence: `first_binding:${sessionId}` };
+        return refuse(sender, 'mesh_sender_not_session_coordinator', `session ${sessionId} has no coordinator anchor, and ${answer.known ? (answer.detail || `the sender is not on mesh ${meshId} (${answer.source})`) : `this daemon holds no host evidence for mesh ${meshId}`}`);
     }
     return refuse(sender, 'mesh_sender_not_session_coordinator', anchor
         ? `session ${sessionId} is coordinated by ${anchor.slice(0, 20)}, and the sender is not the host of mesh ${meshId}`
@@ -312,9 +444,32 @@ async function checkSessionCoordinator(deps: MeshSenderGateDeps, sender: string,
         if (worker) return checkSessionAnchor(deps, worker.sessionId, worker.settings, sender, args);
     }
     // Sessionless (node-scoped) dispatch: the handler resolves the node's
-    // session itself; the sender must at least be on that mesh's roster.
-    if (meshId) return checkRoster(deps, meshId, sender, args);
+    // session itself (or it was just launched); the sender must hold this
+    // daemon's host evidence for that mesh. A meshContext naming the sender as
+    // coordinator may teach a roster-less daemon its host on first use.
+    if (meshId) return checkRoster(deps, meshId, sender, args, { tofuClaim: meshContextClaimsSender(args, meshId, sender) });
     return refuse(sender, 'mesh_session_not_mesh_owned', 'the command names no session and no mesh');
+}
+
+/**
+ * launch_cli: launching is open to any authenticated peer (a worker daemon
+ * holds no roster), but a launch that stamps a coordinator anchor
+ * (`settings.meshCoordinatorDaemonId`) creates the very evidence the
+ * session-scoped classes trust — so that anchor must name the sender, and for
+ * a mesh worker launch (`settings.meshNodeFor`) the sender must hold this
+ * daemon's host evidence for that mesh (first use may record it).
+ */
+async function checkMeshLaunch(deps: MeshSenderGateDeps, sender: string, args: Record<string, unknown>): Promise<MeshSenderVerdict> {
+    const settings = record(args.settings) ?? {};
+    const anchor = str(settings.meshCoordinatorDaemonId);
+    if (!anchor) return { ok: true, sender, evidence: 'authenticated_peer(no coordinator anchor)' };
+    if (!sameDaemon(anchor, sender)) {
+        return refuse(sender, 'mesh_coordinator_stamp_mismatch', `settings.meshCoordinatorDaemonId ${anchor.slice(0, 20)} is not the sender`);
+    }
+    const meshId = str(settings.meshNodeFor);
+    if (!meshId) return { ok: true, sender, evidence: 'authenticated_peer(anchor without mesh node)' };
+    const verdict = await checkRoster(deps, meshId, sender, args, { tofuClaim: true });
+    return verdict.ok ? { ok: true, sender, evidence: `launch_anchor:${verdict.evidence}` } : verdict;
 }
 
 function checkPairingMember(sender: string, args: Record<string, unknown>): MeshSenderVerdict {
@@ -353,6 +508,8 @@ export async function evaluateMeshSender(
             return checkSessionCoordinator(deps, sender, args);
         case 'pairing_member':
             return checkPairingMember(sender, args);
+        case 'mesh_launch':
+            return checkMeshLaunch(deps, sender, args);
     }
 }
 
