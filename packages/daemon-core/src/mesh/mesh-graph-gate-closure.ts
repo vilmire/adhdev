@@ -23,6 +23,7 @@ import { LOG } from '../logging/logger.js';
 import {
     newMeshGraphOutboxId,
     type MeshGraphGateRow,
+    type MeshGraphStatus,
     type MeshTaskGraphNodeRow,
 } from './mesh-graph-types.js';
 import { classifyGraphRollup } from './mesh-graph-derived-failure.js';
@@ -73,7 +74,11 @@ export function coordinatorGateAbandonedReason(gateId: string): string {
  */
 export function abandonGateInTxn(
     store: MeshRuntimeStore,
-    input: MeshGraphGateAbandonInput & { auto?: boolean },
+    input: MeshGraphGateAbandonInput & {
+        auto?: boolean;
+        /** Internal: the graph is ALREADY terminal (markGraphTerminalInTxn) — do not re-roll it. */
+        skipRollup?: boolean;
+    },
     nowIso: string,
 ): MeshGraphGateAbandonResult {
     const graphStore = store.graphStore();
@@ -124,11 +129,11 @@ export function abandonGateInTxn(
 
     // Rollup: with this gate settled, the graph may now be able to reach a
     // terminal state it could not reach before — that is the whole point.
-    const graph = graphStore.getGraph(gate.graphId);
+    const graph = input.skipRollup ? null : graphStore.getGraph(gate.graphId);
     let graphStatus: string | undefined;
-    const rolled = classifyGraphRollup(graphStore.listNodes(gate.graphId));
+    const rolled = input.skipRollup ? null : classifyGraphRollup(graphStore.listNodes(gate.graphId));
     if (graph && rolled && graph.status !== rolled) {
-        graphStore.updateGraphStatus(gate.graphId, rolled, nowIso, true);
+        markGraphTerminalInTxn(store, gate.graphId, rolled, nowIso);
         graphStatus = rolled;
         insertGateOutbox(graphStore, gate.meshId, gate.graphId,
             rolled === 'completed' ? 'graph_completed' : rolled === 'failed' ? 'graph_failed' : 'graph_cancelled',
@@ -162,6 +167,67 @@ export function abandonGateInTxn(
         cancelledTaskIds,
         ...(graphStatus ? { graphStatus } : {}),
     };
+}
+
+// ── Graph terminal ⇒ no open gate survives ────────────────────────────────────
+
+/** Reason a gate records when its graph went terminal around it. */
+export const MESH_GATE_GRAPH_TERMINAL_REASON = 'graph_terminal';
+
+/**
+ * Gate states that are still "open" — they page, sweep, or wait on the
+ * coordinator. An `expired` gate counts only under `hold` (it still waits for a
+ * decision); a cancel_downstream/fail_graph expiry already applied its policy
+ * and is settled — it keeps `expired` as the record of what happened.
+ */
+function isOpenGateOnTerminal(gate: MeshGraphGateRow): boolean {
+    if (gate.state === 'expired') return gate.onTimeout === 'hold';
+    return gate.state === 'declared' || gate.state === 'awaiting_coordinator' || gate.state === 'claimed';
+}
+
+/**
+ * THE way a graph goes terminal (completed / failed / cancelled): write the
+ * status, then abandon every still-open gate in it (reason `graph_terminal`),
+ * in the caller's transaction. Without this a `fail_graph` deadline expiry —
+ * or a rollup past an `expired`/hold gate — left gates open under a finished
+ * graph, still paging and still listed as awaiting the coordinator.
+ *
+ * - Forced: a live lease on a finished graph guards nothing (its release
+ *   could not advance a terminal graph anyway).
+ * - No rollup from the abandons (the status is already decided here).
+ * - No coordinator page: `graph_gate_abandoned` is not a paged outbox kind —
+ *   the notice that covers the terminal event (graph failure / expiry /
+ *   stopped-downstream) is the only one.
+ * Idempotent: a graph with no open gate writes nothing beyond the status.
+ * Returns the gate ids it closed.
+ */
+export function markGraphTerminalInTxn(
+    store: MeshRuntimeStore,
+    graphId: string,
+    /** A terminal status — classifyGraphRollup's result or an explicit policy. */
+    status: MeshGraphStatus,
+    nowIso: string,
+): string[] {
+    const graphStore = store.graphStore();
+    graphStore.updateGraphStatus(graphId, status, nowIso, true);
+    const closed: string[] = [];
+    for (const gate of graphStore.listGatesByGraph(graphId)) {
+        if (!isOpenGateOnTerminal(gate)) continue;
+        const res = abandonGateInTxn(store, {
+            meshId: gate.meshId,
+            gateId: gate.gateId,
+            reason: MESH_GATE_GRAPH_TERMINAL_REASON,
+            coordinatorSessionId: MESH_GATE_AUTO_ABANDON_ACTOR,
+            auto: true,
+            force: true,
+            skipRollup: true,
+        }, nowIso);
+        if (res.abandoned && res.reason !== 'gate_already_abandoned') closed.push(gate.gateId);
+    }
+    if (closed.length > 0) {
+        LOG.info('MeshGraph', `Graph ${graphId} is ${status}: closed ${closed.length} open gate(s) (${MESH_GATE_GRAPH_TERMINAL_REASON}): ${closed.join(',')}`);
+    }
+    return closed;
 }
 
 // ── D3(a) auto-close: a gate whose downstream is all terminal ────────────────
@@ -242,6 +308,81 @@ export function autoAbandonGatesWithTerminalDownstreamInTxn(
         LOG.info('MeshGraph', `Auto-closed ${closed.length} gate(s) on graph ${graphId} (${MESH_GATE_AUTO_ABANDON_REASON}): ${closed.join(',')}`);
     }
     return closed;
+}
+
+// ── F2: a gate whose upstream failed can never open ──────────────────────────
+
+/** Reason an F2-abandoned gate records (`coordinator_gate_abandoned:<gateId>:upstream_failed`). */
+export const MESH_GATE_UPSTREAM_FAILED_REASON = 'upstream_failed';
+
+export interface MeshDeadUpstreamGateClosure {
+    /** Gates abandoned because an upstream node failed/was cancelled. */
+    abandonedGates: Array<{ gateId: string; ref?: string }>;
+    /** Nodes the abandons cancelled (the gates' downstream subtrees). */
+    cancelledNodeIds: string[];
+}
+
+/**
+ * ★ `on_dependency_failure: cancel` only (the caller decides): close every
+ * still-open gate of `graphId` that can NEVER open because one of its incoming
+ * sources is `failed`/`cancelled` (or whose own node a subtree walk already
+ * cancelled), and cancel what it guards — recursively, to a fixed point, since
+ * each abandon's subtree walk can kill the upstream of another gate.
+ *
+ * The C3 cancel cascade deliberately stops at gates (it never walks a `gate`
+ * edge); without this a failed step in front of a gate left the gate
+ * `declared` forever — no deadline is stamped until a gate opens — and the
+ * tasks behind it pending forever. Closure goes through the one abandon path
+ * (never a release). A claimed gate under a LIVE lease is left to its holder.
+ *
+ * MUST run inside the caller's transaction; the caller drains after commit.
+ */
+export function abandonGatesWithDeadUpstreamInTxn(
+    store: MeshRuntimeStore,
+    graphId: string,
+    nowIso: string,
+): MeshDeadUpstreamGateClosure {
+    const graphStore = store.graphStore();
+    const out: MeshDeadUpstreamGateClosure = { abandonedGates: [], cancelledNodeIds: [] };
+    for (let pass = 0; pass < 64; pass += 1) {
+        const gates = graphStore.listGatesByGraph(graphId)
+            .filter(g => g.state !== 'released' && g.state !== 'cancelled');
+        if (gates.length === 0) break;
+        const nodes = graphStore.listNodes(graphId);
+        const edges = graphStore.listEdges(graphId);
+        const byId = new Map(nodes.map(n => [n.nodeId, n]));
+        let closedThisPass = 0;
+        for (const gate of gates) {
+            if (gate.state === 'expired' && gate.onTimeout !== 'hold') continue;
+            if (gate.state === 'claimed' && gate.leaseExpiresAt && gate.leaseExpiresAt > nowIso) continue;
+            const gateNode = byId.get(gate.nodeId);
+            // eslint-disable-next-line no-restricted-syntax -- GRAPH node UUIDs from the same graph store, single canonical form — not mesh machine/daemon ids
+            const incoming = edges.filter(e => e.toNodeId === gate.nodeId);
+            const dead = gateNode?.state === 'cancelled'
+                || incoming.some(e => {
+                    const s = byId.get(e.fromNodeId)?.state;
+                    return s === 'failed' || s === 'cancelled';
+                });
+            if (!dead) continue;
+            const res = abandonGateInTxn(store, {
+                meshId: gate.meshId,
+                gateId: gate.gateId,
+                reason: MESH_GATE_UPSTREAM_FAILED_REASON,
+                coordinatorSessionId: MESH_GATE_AUTO_ABANDON_ACTOR,
+                auto: true,
+            }, nowIso);
+            if (res.abandoned && res.reason !== 'gate_already_abandoned') {
+                out.abandonedGates.push({ gateId: gate.gateId, ...(gate.ref ? { ref: gate.ref } : {}) });
+                out.cancelledNodeIds.push(...res.cancelledNodeIds);
+                closedThisPass += 1;
+            }
+        }
+        if (closedThisPass === 0) break;
+    }
+    if (out.abandonedGates.length > 0) {
+        LOG.info('MeshGraph', `Abandoned ${out.abandonedGates.length} gate(s) on graph ${graphId} (${MESH_GATE_UPSTREAM_FAILED_REASON}): ${out.abandonedGates.map(g => g.gateId).join(',')}`);
+    }
+    return out;
 }
 
 /** Nodes the release/expire paths must never cancel — terminal or terminal-equivalent. */

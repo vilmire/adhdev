@@ -54,7 +54,8 @@ import { resolveMeshHostStatus } from './mesh-host-ownership.js';
 import { traceMeshEventStage, traceMeshEventDrop } from '../shared/mesh-event-trace.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { maybeInjectIdleActiveMissionReminder } from './mesh-idle-reminder.js';
-import { registerMeshGraphQueueWakeHandler, registerMeshGraphGateNotifyHandler } from './mesh-graph-transition-runner.js';
+import { registerMeshGraphQueueWakeHandler, registerMeshGraphGateNotifyHandler, registerMeshGraphStopNotifyHandler } from './mesh-graph-transition-runner.js';
+import { renderGraphStopNotice } from './mesh-graph-stop-notice.js';
 import { readMeshNodeDaemonId } from './mesh-node-identity.js';
 import {
     getMeshWithCache,
@@ -820,6 +821,23 @@ export function setupMeshEventForwarding(components: DaemonComponents): () => vo
                 ...(typeof notification.ageMs === 'number' ? { ageMs: notification.ageMs } : {}),
             },
             coordinatorMessage,
+        });
+    });
+
+    // N(a)/N(b): stopped downstream work (a failure that blocked or cancelled
+    // downstream steps) pages the coordinator once — the eventId is graph +
+    // root node + the root task's output version. notifyMeshCoordinator serves a
+    // PTY-hosted coordinator (injection) and an MCP-only one (pendingCoordinatorEvents)
+    // from the same notice row.
+    registerMeshGraphStopNotifyHandler((notice) => {
+        const rendered = renderGraphStopNotice(notice);
+        notifyMeshCoordinator({
+            event: rendered.event,
+            meshId: notice.meshId,
+            nodeLabel: rendered.nodeLabel,
+            eventId: rendered.eventId,
+            metadataEvent: rendered.metadataEvent,
+            coordinatorMessage: rendered.coordinatorMessage,
         });
     });
 

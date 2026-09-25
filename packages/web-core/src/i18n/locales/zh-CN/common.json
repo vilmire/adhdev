@@ -1071,6 +1071,7 @@
                 "blockedByGate": "阻塞原因：{{ref}}，{{age}}",
                 "waitingOn": "等待：",
                 "waitingOnMore": "另外 {{count}} 个",
+                "blockedByDeadDependency": "被失败/已取消的依赖阻塞：",
                 "chainGroup": "依赖链：{{title}}"
             }
         },

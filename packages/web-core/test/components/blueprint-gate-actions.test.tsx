@@ -288,4 +288,16 @@ describe('Blueprint task row — "blocked by" one-liner (D5)', () => {
         expect(container.textContent).toContain('blocked by: review_land')
         unmount()
     })
+
+    it('a queue task behind a failed/cancelled dependency reads "blocked by failed/cancelled dependency", not "waiting on"', () => {
+        const mk = (id: string, status: string, dependsOn?: string[]) => ({
+            id, meshId: 'mesh-1', message: `task ${id}`, status, ...(dependsOn ? { dependsOn } : {}),
+            createdAt: '2026-09-25T10:00:00Z', updatedAt: '2026-09-25T10:00:00Z',
+        }) as any
+        const { container, unmount } = mountList({ graphs: [], tasks: [mk('dead-root-0001', 'cancelled'), mk('waiter-00002', 'pending', ['dead-root-0001'])] })
+        const line = container.querySelector('[data-testid="blueprint-waiting-on"]')
+        expect(line?.textContent).toContain('blocked by failed/cancelled dependency:')
+        expect(line?.textContent).not.toContain('waiting on:')
+        unmount()
+    })
 })

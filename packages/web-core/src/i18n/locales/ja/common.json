@@ -1071,6 +1071,7 @@
                 "blockedByGate": "ブロック要因: {{ref}}、{{age}}",
                 "waitingOn": "待機中:",
                 "waitingOnMore": "他 {{count}} 件",
+                "blockedByDeadDependency": "失敗/キャンセルされた依存タスクでブロック:",
                 "chainGroup": "チェーン: {{title}}"
             }
         },

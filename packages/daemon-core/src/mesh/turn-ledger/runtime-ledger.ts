@@ -43,7 +43,7 @@ export const meshRuntimeTxnHost: TurnTxnHost = {
             ...(ctx.attempt.terminal ? { reason: ctx.attempt.terminal.reason } : {}),
             ...(ctx.envelope ? { envelope: ctx.envelope } : {}),
         });
-        if (result.transitioned) propagateLedgerDependencyFailure(effect.meshId, effect.taskId, effect.outcome);
+        if (result.transitioned) propagateLedgerDependencyFailure(effect.meshId, effect.taskId, effect.outcome, ctx.attempt.terminal?.reason);
         return { transitioned: result.transitioned };
     },
 };

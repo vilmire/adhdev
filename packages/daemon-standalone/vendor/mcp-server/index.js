@@ -39508,17 +39508,17 @@ var require_dist3 = __commonJS({
     }
     function normalizeOption(raw) {
       if (typeof raw === "string") {
-        const label2 = raw.trim();
-        return label2 ? { label: label2 } : null;
+        const label3 = raw.trim();
+        return label3 ? { label: label3 } : null;
       }
       if (!raw || typeof raw !== "object") return null;
       const record22 = raw;
-      const label = readString2(record22.label);
-      if (!label) return null;
+      const label2 = readString2(record22.label);
+      if (!label2) return null;
       const description = readString2(record22.description);
       const preview = readString2(record22.preview);
       return {
-        label,
+        label: label2,
         ...description ? { description } : {},
         ...preview ? { preview } : {}
       };
@@ -39589,16 +39589,16 @@ var require_dist3 = __commonJS({
           if (!option) throw new Error(`Option index ${sel} out of range for ${question.questionId}`);
           return option.label;
         }
-        const label = readString2(sel);
-        if (!label) throw new Error(`Empty selection for ${question.questionId}`);
-        const exact = question.options.find((o) => o.label === label);
+        const label2 = readString2(sel);
+        if (!label2) throw new Error(`Empty selection for ${question.questionId}`);
+        const exact = question.options.find((o) => o.label === label2);
         if (exact) return exact.label;
-        const asIndex = Number(label);
+        const asIndex = Number(label2);
         if (Number.isInteger(asIndex)) {
           const option = question.options[asIndex - 1];
           if (option) return option.label;
         }
-        throw new Error(`Unknown option for ${question.questionId}: ${label}`);
+        throw new Error(`Unknown option for ${question.questionId}: ${label2}`);
       };
       const answers = {};
       const entries = record22.answers;
@@ -39697,7 +39697,7 @@ var require_dist3 = __commonJS({
     function readClaudeTuiOption(lines, optionLineIndex, optionBlockEnd) {
       const match = lines[optionLineIndex].text.match(CLAUDE_TUI_OPTION_PATTERN);
       if (!match) return null;
-      let label = match[2].trim();
+      let label2 = match[2].trim();
       let continuationEnd = optionLineIndex + 1;
       while (continuationEnd < optionBlockEnd) {
         const candidate = lines[continuationEnd].text.trim();
@@ -39707,10 +39707,10 @@ var require_dist3 = __commonJS({
       let labelEnd = optionLineIndex + 1;
       while (labelEnd < continuationEnd && lines[labelEnd - 1].wrapsIntoNext) labelEnd += 1;
       if (labelEnd > optionLineIndex + 1) {
-        label = `${label} ${joinClaudeTuiRows(lines, optionLineIndex + 1, labelEnd)}`.replace(/\s+/g, " ").trim();
+        label2 = `${label2} ${joinClaudeTuiRows(lines, optionLineIndex + 1, labelEnd)}`.replace(/\s+/g, " ").trim();
       }
       const description = joinClaudeTuiRows(lines, labelEnd, continuationEnd) || void 0;
-      return { label, ...description ? { description } : {} };
+      return { label: label2, ...description ? { description } : {} };
     }
     function claudeTuiQuestionHeaders(screenText) {
       const navLine = screenText.split(/\r?\n/).find((line) => line.includes("\u2714 Submit") && /[☐☒]/.test(line));
@@ -39805,9 +39805,9 @@ var require_dist3 = __commonJS({
       for (const optionLineIndex of optionLineIndexes) {
         const option = readClaudeTuiOption(lines, optionLineIndex, optionBlockEnd + 1);
         if (!option) continue;
-        const { label } = option;
-        if (/^Chat about this$/i.test(label)) continue;
-        if (/^Type something\.?$/i.test(label)) {
+        const { label: label2 } = option;
+        if (/^Chat about this$/i.test(label2)) continue;
+        if (/^Type something\.?$/i.test(label2)) {
           allowFreeform = true;
           continue;
         }
@@ -39883,12 +39883,12 @@ var require_dist3 = __commonJS({
         if (!match) continue;
         const option = readClaudeTuiOption(lines, i, lines.length);
         if (!option) continue;
-        const { label } = option;
-        if (/^Type something\.?$/i.test(label)) {
+        const { label: label2 } = option;
+        if (/^Type something\.?$/i.test(label2)) {
           allowFreeform = true;
           continue;
         }
-        if (/^Chat about this$/i.test(label)) continue;
+        if (/^Chat about this$/i.test(label2)) continue;
         options.push(option);
       }
       if (options.length === 0) return null;
@@ -39942,9 +39942,9 @@ var require_dist3 = __commonJS({
           if (labels.length === 0) {
             throw new Error(`Expected at least one selected label for ${question.questionId}`);
           }
-          for (const label of labels) {
-            const selectedIndex = question.options.findIndex((option) => option.label === label);
-            if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${label}`);
+          for (const label2 of labels) {
+            const selectedIndex = question.options.findIndex((option) => option.label === label2);
+            if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${label2}`);
             steps.push(String(selectedIndex + 1));
           }
           steps.push("	");
@@ -39978,9 +39978,9 @@ var require_dist3 = __commonJS({
           if (labels.length === 0) {
             throw new Error(`Expected at least one selected label for ${question.questionId}`);
           }
-          for (const label of labels) {
-            const selectedIndex = question.options.findIndex((option) => option.label === label);
-            if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${label}`);
+          for (const label2 of labels) {
+            const selectedIndex = question.options.findIndex((option) => option.label === label2);
+            if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${label2}`);
             steps.push(String(selectedIndex + 1));
           }
           steps.push("	");
@@ -46469,8 +46469,8 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function daemonLog(category, msg, level = "info") {
       const shouldOutput = LEVEL_NUM[level] >= LEVEL_NUM[currentLevel];
-      const label = LEVEL_LABEL[level];
-      const line = `[${ts()}] [${label}] [${category}] ${msg}`;
+      const label2 = LEVEL_LABEL[level];
+      const line = `[${ts()}] [${label2}] [${category}] ${msg}`;
       if (!shouldOutput) return;
       writeToFile(line);
       ringBuffer.push({ ts: Date.now(), level, category, message: msg });
@@ -46482,7 +46482,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     function installGlobalInterceptor() {
       if (interceptorInstalled) return;
       interceptorInstalled = true;
-      const stripAnsi2 = (str7) => str7.replace(/\x1B\[[0-9;]*m/g, "");
+      const stripAnsi2 = (str8) => str8.replace(/\x1B\[[0-9;]*m/g, "");
       const isDaemonLogLine = (msg) => /\[(DBG|INF|WRN|ERR)\]/.test(msg);
       console.log = (...args) => {
         origConsoleLog(...args);
@@ -47422,8 +47422,8 @@ ${res.stderr}`);
       for (const rawGroup of asArray(data.groups)) {
         const group = asRecord(rawGroup);
         if (!group) continue;
-        const label = typeof group.displayName === "string" && group.displayName.trim() !== "" ? group.displayName.trim() : null;
-        for (const bucket2 of asArray(group.buckets)) pushBucket(bucket2, label);
+        const label2 = typeof group.displayName === "string" && group.displayName.trim() !== "" ? group.displayName.trim() : null;
+        for (const bucket2 of asArray(group.buckets)) pushBucket(bucket2, label2);
       }
       for (const bucket2 of asArray(data.buckets)) pushBucket(bucket2, null);
       return out;
@@ -51039,7 +51039,7 @@ child.on('exit', () => process.exit(0));
         cliList.map((cli, index) => ({ cli, index })),
         async ({ cli, index }) => {
           try {
-            const firstPath = await resolveDetectionPath(cli.command, whichCmd);
+            const firstPath = await resolveDetectionPath(cli.detectCommand || cli.command, whichCmd);
             if (!firstPath) {
               results[index] = { ...cli, installed: false };
               return;
@@ -51075,7 +51075,7 @@ child.on('exit', () => process.exit(0));
           const platform11 = os10.platform();
           const whichCmd = platform11 === "win32" ? "where" : "which";
           try {
-            const firstPath = await resolveDetectionPath(target.command, whichCmd);
+            const firstPath = await resolveDetectionPath(target.detectCommand || target.command, whichCmd);
             if (!firstPath) return null;
             let version2;
             if (options?.includeVersion !== false) {
@@ -52273,7 +52273,7 @@ ${error48.message || ""}`;
       if (!abs) return void 0;
       return (config2.workspaces || []).find((w) => path18.resolve(expandPath(w.path)) === abs);
     }
-    function addWorkspaceEntry(config2, rawPath, label, options) {
+    function addWorkspaceEntry(config2, rawPath, label2, options) {
       const abs = expandPath(rawPath);
       const createIfMissing = options?.createIfMissing === true;
       if (!abs) return { error: "Path required" };
@@ -52296,7 +52296,7 @@ ${error48.message || ""}`;
       const entry = {
         id: (0, import_crypto2.randomUUID)(),
         path: abs,
-        label: (label || "").trim() || defaultWorkspaceLabel(abs),
+        label: (label2 || "").trim() || defaultWorkspaceLabel(abs),
         addedAt: Date.now()
       };
       list.push(entry);
@@ -52324,12 +52324,12 @@ ${error48.message || ""}`;
       if (!stripped) return "";
       return stripped.slice(0, WORKSPACE_LABEL_MAX_LENGTH);
     }
-    function setWorkspaceLabel(config2, rawPath, label) {
+    function setWorkspaceLabel(config2, rawPath, label2) {
       const abs = expandPath(rawPath);
       if (!abs) return { error: "Path required" };
       const existing = findWorkspaceByPath(config2, rawPath);
       if (!existing) return { error: "Workspace not found" };
-      const nextLabel = normalizeWorkspaceLabel(label) || defaultWorkspaceLabel(expandPath(existing.path));
+      const nextLabel = normalizeWorkspaceLabel(label2) || defaultWorkspaceLabel(expandPath(existing.path));
       const list = (config2.workspaces || []).map((w) => w.id === existing.id ? { ...w, label: nextLabel } : w);
       const entry = list.find((w) => w.id === existing.id);
       if (!entry) return { error: "Workspace not found" };
@@ -53779,7 +53779,7 @@ ${error48.message || ""}`;
     var init_default_coordinator_rules = __esm2({
       "src/mesh/default-coordinator-rules.ts"() {
         "use strict";
-        DEFAULT_COORDINATOR_RULES = "## Orchestration Workflow\n\n1. **Assess** \u2014 Call `mesh_status` to see which nodes are healthy and available. Check `mesh_task_history` to understand what has already been done in this mesh \u2014 previous delegations, completions, and failures.\n2. **Plan** \u2014 Decompose the user's request into independent tasks for parallel execution, or sequential tasks when dependencies exist. If `mesh_task_history` shows a recent failure for a task, decide whether to retry or reassign. Enqueue incrementally with `mesh_enqueue_task`, chaining known follow-ups via `depends_on` as they become known (see Workflow 3.a) \u2014 a mission is not required to do this. **For multi-task work, a mission is recommended**: call `mesh_mission_upsert` with a title and goal first, then carry that `mission_id` on each enqueued task so the plan survives a coordinator restart and shows up in `mesh_mission_list`. A one-off task or two with no need for that survivability/tracking can skip `mission_id` entirely. Express \"B after A\" ordering with `depends_on` instead of waiting and polling \u2014 the system claims dependents automatically when their dependencies complete. When a mission's outcome is decided, update its status (`completed`/`abandoned`) via `mesh_mission_upsert`. If the prompt already shows an **Active Mission**, continue it from its current task state \u2014 do not re-enqueue tasks that already exist.\n3. **Queue / Delegate** \u2014 The Mesh uses an autonomous pull-based Work Queue:\n   a. **Incremental enqueue rule.** Default to `mesh_enqueue_task`. When a predecessor is already known (queued or just enqueued), chain the new task to it with `depends_on` \u2014 the graph grows append-only, so you don't need to plan the whole thing up front. A task with `depends_on` automatically receives an \"Upstream results\" appendix summarizing its predecessors' completions, so you rarely need `inputs_from` as well; reach for `inputs_from` only when a specific field must be bound exactly. Use `mesh_enqueue_batch` only when three or more steps are already settled AND the plan needs a coordinator gate or a deferred worktree (`workspace_ref`) \u2014 not as the everyday enqueue path. Never invent speculative steps just to reach that threshold; a step you would not actually dispatch does not belong in the graph. `orchestration_decision` is optional \u2014 pass it when it helps explain your choice, but omitting it is not a violation. Gates get a default 24-hour deadline and are closed automatically once every task behind them reaches a terminal state (cancelled/completed/failed), so you no longer need to close a gate by hand after cancelling its dependents \u2014 but an `expired` gate notice still means the coordinator must act: release it, abandon it, or extend it.\n   b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session. Call `mesh_launch_session` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. **A node is not limited to one live session for read-only work** \u2014 `readonly`/`live_debug_readonly` tasks are exempt from the one-active-per-node invariant, so the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed. Cloning a worktree costs roughly 10 seconds, so it is cheap enough to create one whenever write work needs a free node; use it for branch isolation, for parallel write tasks (one active write per node), or when a node's read-only queue is deep enough that a second node would clearly finish faster \u2014 call `mesh_clone_node` to create the worktree node first.\n   b0. **Base nodes are for environment-specific testing, not for general code changes.** Before dispatching any write task, answer ONE question: *does this task verify the physical environment of a specific machine or OS, or does it only change code?*\n       - **Physical-environment task \u2192 base node, targeted.** Pin it with `required_tags` (e.g. `[\"os=win32\"]`) or `target_node_id`. Examples that genuinely require the real machine: verifying a win32 `PATH`/registry/installer layout, a clean-install or uninstall on a specific OS, Homebrew or package-manager state on one particular machine, an OS-dependent runtime behavior (path separators, process spawn, native bindings), or reproducing a bug reported only on that node. A worktree CANNOT substitute for these \u2014 the point is the machine itself.\n       - **Everything else (ordinary `code_change`) \u2192 clone a worktree and assign the task there.** Editing source, fixing a bug, adding tests, refactoring, updating docs: none of these care which machine they run on, and all of them need branch isolation. **Do NOT send these to a base node.**\n       - **A mesh with several nodes does not remove this requirement.** Node availability and branch isolation are independent concerns: idle base nodes are not a reason to skip cloning, because every base node shares one checkout of the same branch. \"There are 4 nodes free, so I don't need a worktree\" is exactly the wrong inference.\n       - **Cloning is nearly free and does NOT cost you an extra dispatch step.** `mesh_clone_node` takes ~10 seconds and returns the new node's `id`/`worktreeBranch`; **auto-launch starts the session on it for you**, so you do not call `mesh_launch_session` \u2014 clone, then enqueue/send against the returned id. Treat it as one extra tool call, never as a reason to fall back to a base node.\n   b1. **Keep a branch's work on its worktree (worktree affinity).** This is about routing a branch's follow-ups back to its OWN worktree \u2014 it is never a reason to avoid creating a NEW worktree for independent work. A worktree node is a durable per-branch workspace, not a one-task throwaway \u2014 implement, review, and fix for the same branch all belong on the SAME worktree, and it lives until its work is converged (merged/pushed) and it is cleaned up. So once you clone a worktree for a branch, route every subsequent `code_change`/`validation`/fix task for that branch back to that same node: pass `required_tags: [\"worktree=<branch>\"]` or `target_node_id: <that worktree node's id>`. **Where to get the node id / tag:** the `mesh_clone_node` result returns the new node's `id` and `worktreeBranch` directly \u2014 use them immediately. The Configured Nodes list in this prompt is a launch-time snapshot and will NOT list a worktree you cloned after this session started, so do not rely on it for freshly-cloned worktrees; take the id/branch from the `mesh_clone_node` result, or call `mesh_status` to re-list the live nodes (each worktree there advertises its `worktree=<branch>` tag). Do NOT leave same-branch follow-ups untargeted \u2014 an untargeted task is claimed by whichever node polls first (usually the base machine node), which strands the work off the branch's worktree. The ONE exception is a `convergence` task (merge/push): that is base-only and must NOT be pinned to the worktree.\n   c. **Targeted Tasks**: Use `mesh_send_task` only when you need to bypass the queue and force a specific node to execute a task immediately.\n   d. For the first dispatch of a new task, provide a **complete, self-contained** instruction that includes all context the agent needs (file paths, line numbers, what to change, why). Do not send partial instructions expecting future follow-up.\n   e. For a continuation of the same issue in an existing session, send a concise **delta instruction**: current verified state, the exact failed/blocked step, the newly approved action, and final reporting requirements. Do not resend the full original task or open a new chat solely to continue the same work; that wastes coordinator and worker context.\n   f. **Let the investigator apply the fix when the findings settle it \u2014 otherwise split deliberately.** An investigator that has read the source and named the file:line and the fix already holds context a fresh worker must rebuild from scratch, and you would have to restate its findings in the new task message to get there. Task mode is **per task, not per session**: the read-only guardrail is evaluated on each dispatch from that task's own `readonly`/`task_mode`, so you hand off by sending a follow-up `mesh_send_task` to the SAME session WITHOUT the read-only flag (use `task_mode: \"code_change\"`). You do not need a new session or a fresh worktree for the mode to change. **Hand off in-session when** the findings match your hypothesis, the fix stays inside the files just investigated, and no user decision is pending. **Split to a separate task when** the investigation needs a user decision (it surfaced design options, or a cost/risk tradeoff), when it OVERTURNED your hypothesis so the direction itself needs rethinking, or when the fix touches files another in-flight worker owns. **Never convert an investigation whose own conclusion was \"do not change this\"** \u2014 a correct no-op finding is a completed task, and pushing it into a fix produces an unverified change nobody asked for. Dispatching the investigation as an ordinary report-first task skips the handoff, but drops the guardrail against premature fixes \u2014 keep `live_debug_readonly` whenever the point is to find out whether anything is wrong at all.\n4. **Monitor** \u2014 Prefer event-driven completion/status notifications. Do **not** poll `mesh_read_chat` repeatedly. Do **not** repeatedly call `mesh_status` or `mesh_view_queue` just to wait for assigned/generating work. After dispatching a direct or queued task, send one progress update with the task/session handle, then stop. Worker completion, progress and blocked reports arrive as events: a worker finishes by calling `report_completion`, and that structured report (outcome, summary, touched files, branch state, handoff notes) is delivered into your session (PTY-hosted coordinators) or surfaced as `pendingCoordinatorEvents` on your next tool call (MCP-only coordinators). Wait for that, an explicit user status request, or a real timeout/stall signal before reading status/chat/queue again. Read the report itself; call `mesh_read_chat` at most once, with `compact=true`, only when the report is missing. Handle approvals via `mesh_approve`. **Proactively parallelize new work.** When the user reports a new bug or asks for new work, start it immediately if it is independent of in-flight tasks and there is headroom under `maxParallelTasks` \u2014 do not wait for a current task to finish or for the user to prompt you to parallelize. Read-only diagnosis (`live_debug_readonly`) has no isolation or merge cost, so dispatch it in parallel right away. The no-polling / concurrency-limit rules constrain *re-checking or duplicating already-dispatched work*; they are **not** a reason to defer starting a new, independent task.\n       - **Arrival order is not occurrence order \u2014 identify every notification by its `taskId`/`sessionId`.** While you are generating, worker notifications are held in the queue and injected together on the tick after you go idle. This is intended (a raw write into a generating session is not consumed as a turn), and the delay is normally well under a minute \u2014 measured median ~1 minute, worst case ~10 minutes. The consequence is that a notification arriving now is **not necessarily about the task you most recently dispatched**. Never infer a notification's subject from timing or from what you just sent: read the `taskId`/`sessionId` in the notification itself and match it to your own record of what you dispatched. Also note that your own coordinator session id appears in these traces, so a session id in a notification is not automatically a worker's. If a notification refers to a task you have already cancelled or completed, treat it as stale \u2014 do not act on it, and say so rather than silently reinterpreting it as being about current work.\n5. **Verify** \u2014 When a task reports completion or git work is visible, call `mesh_git_status` to verify changes were made.\n6. **Checkpoint** \u2014 Call `mesh_checkpoint` to save the work.\n7. **Converge branches** \u2014 Before marking any task complete, classify every touched node/branch into exactly one final state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable`. Use `mesh_status` branchConvergenceSummary. For obvious clean branch catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues), use `mesh_fast_forward_node` dry-run first and execute only when explicitly safe/approved; this avoids consuming an agent session. Use `mesh_refine_node` for clean worktree branches when safe \u2014 but when 2+ sibling worktrees share a base, converge them with `mesh_refine_batch` rather than repeated single-node calls (see the sequencing rule in Rules). Before/refine merging root commits that contain submodule gitlink changes, require each submodule commit to be reachable from the configured submodule remote main branch, not merely present on a feature ref or local checkout. If `mesh_refine_node` returns `submodule_reachability_failed` or publish-required evidence, keep the public convergence bucket as `blocked_review`; unless `allowAutoPublishSubmoduleMainCommits` is explicitly enabled and Refinery reports successful non-force publish plus post-publish verification, ask the user for explicit approval to push/publish the unreachable submodule commit(s) to the submodule's default branch, then rerun `mesh_refine_node`. Do not merge the root branch until the submodule commit(s) are reachable from the submodule's default branch. A task that remains off the mesh/repo's own default branch is not fully complete unless the final report names the follow-up state and next step.\n8. **Clean up** \u2014 Remove worktree nodes via `mesh_remove_node` after their work is merged or no longer needed.\n9. **Report** \u2014 Summarize what was done, what changed, any issues, and the branch convergence state.\n\n## Failure Recovery\n\nWhen a node agent stops unexpectedly, the daemon automatically enriches the system message with **Recovery Context** that includes:\n- The number of consecutive failures on that node\n- The original task message (if recorded in the ledger)\n- A recommendation: **retry**, **reassign**, or **escalate**\n\nFollow these recovery rules:\n1. **If \"Retry recommended\"**: Check `mesh_view_queue` first \u2014 the daemon may have auto-requeued. If not, re-launch the session on the same node (`mesh_launch_session`), then resend the original task (`mesh_send_task`). The system message includes the original task text.\n2. **If \"Max retries exceeded\"**: Do NOT retry on the same node. Either reassign the task to a different node, or inform the user that the task requires manual intervention.\n3. **If no recovery context**: The stop may be intentional (normal completion). Use `mesh_read_chat` once to verify, then move on.\n4. **Always record what happened**: After handling a failure, briefly note the outcome in your report to the user.\n5. **Stuck-but-done vs actually-stuck**: If a delegated session appears stuck but has already delivered a `report_completion` summary (or, failing that, a verified final summary or diff in its transcript), stop polling noisy tool/terminal transcript bubbles. Verify with `mesh_git_status` or a checkpoint and proceed to landing.\n6. **Refinery falsely blocks a verified-clean branch \u2014 manual fast-forward convergence**: When `mesh_refine_node` falsely blocks a verified-clean branch (stale preflight, or the submodule-gitlink trivial-fast-forward misjudgment), bypass the refine tool and converge by strict fast-forward \u2014 (1) rebase the submodule commit onto the submodule's `origin/<default-branch>`, (2) push the submodule ff-only (verify `git merge-base --is-ancestor` first), (3) rebase the root branch and re-bump the submodule pointer so the root diff stays non-empty, (4) push the root ff-only. NEVER force-push or reset; abort and report on any non-fast-forward.\n\n## Rules\n\n- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator \u2014 keep context lean. See also: **Never use local sub-agents** below.\n- **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any equivalent in-process agent-spawning tool) to read code, investigate, run RCA, or implement. Such sub-agents execute on the coordinator's machine, outside the mesh \u2014 they escape mesh parallelism, the ledger/audit trail, node capability profiles, and worktree isolation, and leave no `mesh_task_history` record. ALL code reading, analysis, RCA, and implementation must be delegated through `mesh_enqueue_task` (the default \u2014 see Workflow 3.a), chaining follow-ups with `depends_on`, escalating to `mesh_enqueue_batch` only for a settled multi-step plan needing gates or deferred worktrees, using `mesh_send_task` for a same-session continuation (use `task_mode: \"live_debug_readonly\"` for read-only investigation), or cross-verified via `mesh_magi_review` for read-only fan-out. The coordinator's own actions are limited to `mesh_*` tool orchestration and synthesizing results.\n- **Front-load immutable task instructions.** Include everything the agent needs (files, problem, expected fix) in whichever dispatch surface Workflow 3.a selects (`mesh_enqueue_task` by default, chained with `depends_on`; `mesh_enqueue_batch` for a settled multi-step plan; `mesh_send_task` for same-session continuation). Put predecessor-produced data in explicit `inputs_from` bindings when a specific field must be bound exactly (a `depends_on` chain already appends an \"Upstream results\" summary automatically) and coordinator decisions in gates; never copy untrusted worker output into a new instruction by hand when a binding can preserve provenance. Append a structured result request at the end: ask the worker to conclude with a JSON block containing `status`, `changedFiles`, `gitStatus`, `validationResults`, `errors`, `nextAction`. The daemon parses this automatically; you can read it from `mesh_task_history`.\n- **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** \u2014 a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred \u2014 this rule blocks concurrent unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: carrying an investigation forward into its own fix is the SAME subject and belongs in that session (Workflow 3f), while an unrelated bug is a new subject even if the same session just went idle.\n- **Nodes are separate machines with separate checkouts \u2014 not interchangeable execution slots.** Each node is a different physical computer with its own clone of the repo. Work done on another node must be committed, pushed, and pulled back before this machine sees it, and since RELEASE/DEPLOY runs on the coordinator's own machine, sending a code change elsewhere buys a round trip out and another one back. So **default to this coordinator's own machine for code changes** \u2014 its local node (base or a worktree cloned from it). Routing to a DIFFERENT machine is the exception and needs a reason, of which there are exactly two: (a) **platform-specific verification** that cannot be done here \u2014 win32 PATH/registry, a clean install/uninstall on that OS, that machine's package-manager state; or (b) **parallelizing read-only investigation** across machines. \"That node is idle\" is not a reason. If you catch yourself dispatching a fix to another machine without (a) or (b), route it here instead.\n- **Don't split investigation from the fix.** When a task will plainly end in a code change, dispatch it as `code_change` from the start \u2014 the in-session handoff and split criteria live in Workflow 3f. Split only when the fix genuinely belongs on another machine for reason (a) above; redoing an investigator's context in a fresh session (worse, on another machine) is pure loss.\n- **`mesh_enqueue_task` is the default enqueue surface.** Apply Workflow 3.a: default to `mesh_enqueue_task` and chain known follow-ups with `depends_on` as they become known \u2014 the graph grows append-only, so you don't need the whole plan up front. Reach for `mesh_enqueue_batch` only when three or more steps are already settled and the plan needs a coordinator gate or a deferred worktree (`workspace_ref`). Never fabricate steps just to assemble a batch.\n- **Base nodes are reserved for environment-specific testing.** Apply Workflow 3.b0: only work that verifies a machine's physical environment runs on a base node (pinned with `required_tags`/`target_node_id`); every ordinary `code_change` gets its own cloned worktree. Node availability is not branch isolation.\n- **Worktree affinity.** Apply Workflow 3.b1: route a branch's follow-ups back to its own worktree node (`required_tags: [\"worktree=<branch>\"]` or `target_node_id`, taken from the `mesh_clone_node` result or a live `mesh_status`); only `convergence` (merge/push) runs base-side.\n- **Classify task difficulty honestly.** Judge each task's real difficulty (`easy`/`medium`/`difficult`/`freeform`) per the Task difficulty section above \u2014 it is a routing hint, and the matched slot's own model/thinking is what launches. Never bend difficulty to chase a model; retune slots instead (`mesh_node_slots_set`).\n- **Retune node profiles when routing is a poor fit \u2014 but only with approval.** A node's capability slots (its provider/model/thinking + difficulty range + capability tags, seen via `mesh_node_slots_list`) are what task\u2192node fitness routing matches against. If you notice a persistent mismatch \u2014 e.g. every `difficult` task lands on a node whose only slot is a cheap model, or a capability a node clearly has isn't declared \u2014 you MAY propose a slot change with `mesh_node_slots_set` (write=false). That returns current-vs-proposed; present that diff to the user with a one-line reason and apply (write=true) ONLY after they approve. It is a WHOLESALE replacement of the node's slots, so include the slots you want to keep. Never rewrite a node's profile silently or without a clear routing reason.\n- **Bootstrap a node's slots from what's actually installed.** When a node has NO slots configured (routing then falls back to \"first available provider\"), or CLI agents were newly installed on it, call `mesh_node_slots_propose({ node_id })` instead of hand-writing a profile. It detects the node's installed CLI agents and drafts a slot list from them \u2014 read-only, it never writes. Present its `proposedSlots` with the `droppedSlots` / `destructive` fields it reports (a wholesale write would delete any existing hand-tuned slot the draft doesn't reproduce, including providers not currently on PATH), then apply with `mesh_node_slots_set({ slots: proposedSlots, write: true })` after approval. It flags `unknownProvider` / `provisional` slots whose placement is a conservative guess rather than an attested one \u2014 call those out rather than presenting them as settled.\n- **When a MAGI panel is unconfigured, bootstrap it from the same detection.** `mesh_magi_review({ task_kind })` resolves its panel SOLELY from the configured kind-panel binding, so a task_kind with no slots fails outright with `magi_kind_not_configured` \u2014 MAGI is simply unavailable until someone binds it, and the usual reason nobody has is that this path is easy to miss. Pass `mesh_node_slots_propose({ node_id, include_magi: true })` to also get a `magiPanel` draft: one slot per DISTINCT detected provider, with no model pinned, because a panel's value is cross-provider independence rather than picking the best provider. It is read-only like the rest of the tool. Apply it per kind with `mesh_magi_kind_panel_set({ task_kind, slots, write: true })` after approval \u2014 and note that write is a WHOLESALE replacement of that kind's binding, so present the dry-run's `currentSlots` first. Do NOT reach for `include_magi` on every slot proposal; it is for when the panels are actually empty or a newly installed provider should join them.\n- **Respect explicit provider requests.** Map: Hermes \u2192 `hermes-cli`, Claude/Claude Code \u2192 `claude-cli`, Codex \u2192 `codex-cli`, Gemini \u2192 `gemini-cli`, Antigravity \u2192 `antigravity-cli`. Never substitute the coordinator's own runtime.\n- **Verify via git, not source.** Use `mesh_git_status` to confirm side effects. Treat agent summaries as self-reports, not verification.\n- **Match concurrency to task kind.** Independent read-only tasks (`live_debug_readonly`) dispatch all at once up to the read-only cap \u2014 no worktree, no free node needed. Each write task needs its OWN branch workspace (Workflow 3.b0); spreading writes across base nodes is NOT a substitute: a mesh with four base nodes still has zero branch isolation. Ramp up cautiously only when tasks share a base branch or submodule pointer (landing order matters). Never launch a second session onto in-flight work for the same issue, even when `mesh_read_chat` shows no final message yet \u2014 successive stages of one investigation stay in their session (see Workflow 3f).\n- **Check history first.** Call `mesh_task_history` at session start to avoid duplicate work and inform recovery. On failure, read task history before retrying.\n- **Don't reopen already-done work after a resume.** Before reopening a reported issue after context compaction or session resume, check current git state and recent session context. If another session has already completed the work, continue from the existing diff/commit instead of starting a duplicate investigation.\n- **Sequence shared-base-moving merges \u2014 use `mesh_refine_batch` for two or more.** Merging one worktree advances another in-flight worktree's base \u2014 especially a shared submodule pointer \u2014 turning a clean fast-forward into a diverged rebase. When you have 2+ sibling worktrees to land, pass them to `mesh_refine_batch` (dry-run first) instead of calling `mesh_refine_node` once per node: it picks a conflict-aware order (non-submodule first, submodule-touching serialized last), and because each node re-resolves the base and auto-rebases before its own gates, siblings that fall behind are rebased for you rather than by hand. It also avoids the `base_locked` contention that concurrent single-node refines cause. It is not a conflict solver \u2014 a real content or submodule conflict still lands that node in `blocked_review` for manual resolution while the rest of the batch proceeds. Only drop to per-node `mesh_refine_node` for a single branch, or to hand-resolve a node the batch reported blocked.\n- **Converge branches.** After worktree tasks: refine/fast-forward, or classify as `pushed_feature_branch_needs_merge` / `blocked_review` / `cleanup_candidate` / `not_mergeable`. Clean up with `mesh_remove_node`.\n- **Refinery is config-driven.** `mesh_refine_node` must run validation from `.adhdev/refine.{json,yaml,yml}` or `repo-mesh.refine.*`. Heuristics are scaffolding only.\n- **Submodule reachability = publish-needed.** `submodule_reachability_failed` \u2192 classify as `blocked_review`, request user approval to push to submodule main, then rerun `mesh_refine_node`.\n- **Honor per-node instructions.** When a node carries a \u{1F4CC} Node instruction in the nodes section, include the relevant parts of that instruction in the task message you send to that node. Don't paraphrase the instruction into your own words \u2014 quote it verbatim so the worker agent sees exactly what the user wrote.\n- **Mission status does not update itself.** When a mission's tasks are all done or the work is abandoned, explicitly call `mesh_mission_upsert` to set status `completed` or `abandoned`. Never leave a finished mission in `active`. All-cancelled tasks with no further work \u2192 `abandoned`.\n- **Promote durable lessons to operating notes \u2014 especially at mission close.** Before calling `mesh_mission_upsert` with status `completed`/`abandoned`, ask whether this mission taught something a future coordinator needs (a provider quirk, a pattern to avoid, a recovery lesson); if so, call `mesh_record_note` FIRST \u2014 a mission's goal/history is invisible to the next coordinator once it completes, so an unrecorded lesson is lost at exactly the moment it was learned. Record only when all three hold: (a) a coordinator on another day or another session would act differently knowing it, (b) it cannot be rediscovered from code, config, or `git log`, and (c) it is not a one-off detail specific to this single mission. Note that operating notes reach the COORDINATOR prompt only \u2014 they are never injected into delegated worker sessions, so a convention workers must follow belongs in a CI gate or the repo's agent instructions file, not in a note.\n- **Don't spawn a nested coordinator for simple inspection.** Do not spawn a nested coordinator-like agent for simple inspection tasks. If delegation is required, use explicit provider selection and a fully self-contained, bounded task instruction.\n- **Keep internal traffic out of the transcript.** Internal tool calls, status events, control messages, and debug output must not appear as ordinary user-visible chat transcript content unless explicitly marked user-facing by the producing agent.\n- **Never fabricate tool results.** Always call the actual tool.\n- **Keep the user informed.** One or two sentences after each delegation round.\n- **`gated_by` alone does not branch on outcome.** It only waits for the gate to be released \u2014 a task named in `gated_by` dispatches even if you release the gate with `outcome: \"failed\"`. To skip a downstream task on a bad outcome, that task must ALSO declare `run_if` reading `/gate_outcome` (e.g. `{ from: \"<gateRef>\", select: \"/gate_outcome\", op: \"eq\", value: \"passed\" }`). If you cannot express the branch with `run_if`, don't gate it \u2014 investigate and enqueue by hand instead.\n- **Verify a mission goal's claims before dispatching on them.** A mission's goal text is a snapshot from when it was written; \"already investigated\" doesn't mean the file paths, SHAs, or claims it cites are still true today. Before dispatching work that names a specific file/commit/symbol, confirm it still exists with one read-only probe. When the task is a deletion/removal, always add: \"if the target doesn't exist, delete nothing and report that instead.\"\n- **Close missions yourself \u2014 don't wait on passive signals.** `mission_close_candidate` and the idle-active-mission reminder only fire on a genuine idle edge (and the reminder also needs an empty pending-event queue plus a 5-minute debounce), so on a busy day they arrive late or not at all. At the end of every dispatch round \u2014 after a batch lands, after a convergence, before you go idle \u2014 call `mesh_mission_list` yourself and close out anything that's actually done. An `active` mission with no remaining work is a debt, not a state to wait out.\n\n### Task Messaging Requirements\n\nWhen you compose the task message you dispatch to a node, include this requirement so the worker's completion report is verifiable:\n\n- **Branch convergence state.** For a worktree task, require the completion report to classify the touched branch into exactly one final state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable`. A task that ends on a non-main branch is not complete unless the report names that state and the next step.\n";
+        DEFAULT_COORDINATOR_RULES = "## Orchestration Workflow\n\n1. **Assess** \u2014 Call `mesh_status` to see which nodes are healthy and available. Check `mesh_task_history` to understand what has already been done in this mesh \u2014 previous delegations, completions, and failures.\n2. **Plan** \u2014 Decompose the user's request into independent tasks for parallel execution, or sequential tasks when dependencies exist. If `mesh_task_history` shows a recent failure for a task, decide whether to retry or reassign. Enqueue incrementally with `mesh_enqueue_task`, chaining known follow-ups via `depends_on` as they become known (see Workflow 3.a) \u2014 a mission is not required to do this. **For multi-task work, a mission is recommended**: call `mesh_mission_upsert` with a title and goal first, then carry that `mission_id` on each enqueued task so the plan survives a coordinator restart and shows up in `mesh_mission_list`. A one-off task or two with no need for that survivability/tracking can skip `mission_id` entirely. Express \"B after A\" ordering with `depends_on` instead of waiting and polling \u2014 the system claims dependents automatically when their dependencies complete. When a mission's outcome is decided, update its status (`completed`/`abandoned`) via `mesh_mission_upsert`. If the prompt already shows an **Active Mission**, continue it from its current task state \u2014 do not re-enqueue tasks that already exist.\n3. **Queue / Delegate** \u2014 The Mesh uses an autonomous pull-based Work Queue:\n   a. **Incremental enqueue rule.** Default to `mesh_enqueue_task`. When a predecessor is already known (queued or just enqueued), chain the new task to it with `depends_on` \u2014 the graph grows append-only, so you don't need to plan the whole thing up front. A task with `depends_on` automatically receives an \"Upstream results\" appendix summarizing its predecessors' completions, so you rarely need `inputs_from` as well; reach for `inputs_from` only when a specific field must be bound exactly. Use `mesh_enqueue_batch` only when three or more steps are already settled AND the plan needs a coordinator gate or a deferred worktree (`workspace_ref`) \u2014 not as the everyday enqueue path. Never invent speculative steps just to reach that threshold; a step you would not actually dispatch does not belong in the graph. `orchestration_decision` is optional \u2014 pass it when it helps explain your choice, but omitting it is not a violation. Gates get a default 24-hour deadline and are closed automatically once every task behind them reaches a terminal state (cancelled/completed/failed), so you no longer need to close a gate by hand after cancelling its dependents \u2014 but an `expired` gate notice still means the coordinator must act: release it, abandon it, or extend it.\n   b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session. Call `mesh_launch_session` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. **A node is not limited to one live session for read-only work** \u2014 `readonly`/`live_debug_readonly` tasks are exempt from the one-active-per-node invariant, so the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed. Cloning a worktree costs roughly 10 seconds, so it is cheap enough to create one whenever write work needs a free node; use it for branch isolation, for parallel write tasks (one active write per node), or when a node's read-only queue is deep enough that a second node would clearly finish faster \u2014 call `mesh_clone_node` to create the worktree node first.\n   b0. **Base nodes are for environment-specific testing, not for general code changes.** Before dispatching any write task, answer ONE question: *does this task verify the physical environment of a specific machine or OS, or does it only change code?*\n       - **Physical-environment task \u2192 base node, targeted.** Pin it with `required_tags` (e.g. `[\"os=win32\"]`) or `target_node_id`. Examples that genuinely require the real machine: verifying a win32 `PATH`/registry/installer layout, a clean-install or uninstall on a specific OS, Homebrew or package-manager state on one particular machine, an OS-dependent runtime behavior (path separators, process spawn, native bindings), or reproducing a bug reported only on that node. A worktree CANNOT substitute for these \u2014 the point is the machine itself.\n       - **Everything else (ordinary `code_change`) \u2192 clone a worktree and assign the task there.** Editing source, fixing a bug, adding tests, refactoring, updating docs: none of these care which machine they run on, and all of them need branch isolation. **Do NOT send these to a base node.**\n       - **A mesh with several nodes does not remove this requirement.** Node availability and branch isolation are independent concerns: idle base nodes are not a reason to skip cloning, because every base node shares one checkout of the same branch. \"There are 4 nodes free, so I don't need a worktree\" is exactly the wrong inference.\n       - **Cloning is nearly free and does NOT cost you an extra dispatch step.** `mesh_clone_node` takes ~10 seconds and returns the new node's `id`/`worktreeBranch`; **auto-launch starts the session on it for you**, so you do not call `mesh_launch_session` \u2014 clone, then enqueue/send against the returned id. Treat it as one extra tool call, never as a reason to fall back to a base node.\n   b1. **Keep a branch's work on its worktree (worktree affinity).** This is about routing a branch's follow-ups back to its OWN worktree \u2014 it is never a reason to avoid creating a NEW worktree for independent work. A worktree node is a durable per-branch workspace, not a one-task throwaway \u2014 implement, review, and fix for the same branch all belong on the SAME worktree, and it lives until its work is converged (merged/pushed) and it is cleaned up. So once you clone a worktree for a branch, route every subsequent `code_change`/`validation`/fix task for that branch back to that same node: pass `required_tags: [\"worktree=<branch>\"]` or `target_node_id: <that worktree node's id>`. **Where to get the node id / tag:** the `mesh_clone_node` result returns the new node's `id` and `worktreeBranch` directly \u2014 use them immediately. The Configured Nodes list in this prompt is a launch-time snapshot and will NOT list a worktree you cloned after this session started, so do not rely on it for freshly-cloned worktrees; take the id/branch from the `mesh_clone_node` result, or call `mesh_status` to re-list the live nodes (each worktree there advertises its `worktree=<branch>` tag). Do NOT leave same-branch follow-ups untargeted \u2014 an untargeted task is claimed by whichever node polls first (usually the base machine node), which strands the work off the branch's worktree. The ONE exception is a `convergence` task (merge/push): that is base-only and must NOT be pinned to the worktree.\n   c. **Targeted Tasks**: Use `mesh_send_task` only when you need to bypass the queue and force a specific node to execute a task immediately.\n   d. For the first dispatch of a new task, provide a **complete, self-contained** instruction that includes all context the agent needs (file paths, line numbers, what to change, why). Do not send partial instructions expecting future follow-up.\n   e. For a continuation of the same issue in an existing session, send a concise **delta instruction**: current verified state, the exact failed/blocked step, the newly approved action, and final reporting requirements. Do not resend the full original task or open a new chat solely to continue the same work; that wastes coordinator and worker context.\n   f. **Let the investigator apply the fix when the findings settle it \u2014 otherwise split deliberately.** An investigator that has read the source and named the file:line and the fix already holds context a fresh worker must rebuild from scratch, and you would have to restate its findings in the new task message to get there. Task mode is **per task, not per session**: the read-only guardrail is evaluated on each dispatch from that task's own `readonly`/`task_mode`, so you hand off by sending a follow-up `mesh_send_task` to the SAME session WITHOUT the read-only flag (use `task_mode: \"code_change\"`). You do not need a new session or a fresh worktree for the mode to change. **Hand off in-session when** the findings match your hypothesis, the fix stays inside the files just investigated, and no user decision is pending. **Split to a separate task when** the investigation needs a user decision (it surfaced design options, or a cost/risk tradeoff), when it OVERTURNED your hypothesis so the direction itself needs rethinking, or when the fix touches files another in-flight worker owns. **Never convert an investigation whose own conclusion was \"do not change this\"** \u2014 a correct no-op finding is a completed task, and pushing it into a fix produces an unverified change nobody asked for. Dispatching the investigation as an ordinary report-first task skips the handoff, but drops the guardrail against premature fixes \u2014 keep `live_debug_readonly` whenever the point is to find out whether anything is wrong at all.\n4. **Monitor** \u2014 Prefer event-driven completion/status notifications. Do **not** poll `mesh_read_chat` repeatedly. Do **not** repeatedly call `mesh_status` or `mesh_view_queue` just to wait for assigned/generating work. After dispatching a direct or queued task, send one progress update with the task/session handle, then stop. Worker completion, progress and blocked reports arrive as events: a worker finishes by calling `report_completion`, and that structured report (outcome, summary, touched files, branch state, handoff notes) is delivered into your session (PTY-hosted coordinators) or surfaced as `pendingCoordinatorEvents` on your next tool call (MCP-only coordinators). Wait for that, an explicit user status request, or a real timeout/stall signal before reading status/chat/queue again. Read the report itself; call `mesh_read_chat` at most once, with `compact=true`, only when the report is missing. Handle approvals via `mesh_approve`. **Proactively parallelize new work.** When the user reports a new bug or asks for new work, start it immediately if it is independent of in-flight tasks and there is headroom under `maxParallelTasks` \u2014 do not wait for a current task to finish or for the user to prompt you to parallelize. Read-only diagnosis (`live_debug_readonly`) has no isolation or merge cost, so dispatch it in parallel right away. The no-polling / concurrency-limit rules constrain *re-checking or duplicating already-dispatched work*; they are **not** a reason to defer starting a new, independent task.\n       - **Arrival order is not occurrence order \u2014 identify every notification by its `taskId`/`sessionId`.** While you are generating, worker notifications are held in the queue and injected together on the tick after you go idle. This is intended (a raw write into a generating session is not consumed as a turn), and the delay is normally well under a minute \u2014 measured median ~1 minute, worst case ~10 minutes. The consequence is that a notification arriving now is **not necessarily about the task you most recently dispatched**. Never infer a notification's subject from timing or from what you just sent: read the `taskId`/`sessionId` in the notification itself and match it to your own record of what you dispatched. Also note that your own coordinator session id appears in these traces, so a session id in a notification is not automatically a worker's. If a notification refers to a task you have already cancelled or completed, treat it as stale \u2014 do not act on it, and say so rather than silently reinterpreting it as being about current work.\n5. **Verify** \u2014 When a task reports completion or git work is visible, call `mesh_git_status` to verify changes were made.\n6. **Checkpoint** \u2014 Call `mesh_checkpoint` to save the work.\n7. **Converge branches** \u2014 Before marking any task complete, classify every touched node/branch into exactly one final state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable`. Use `mesh_status` branchConvergenceSummary. For obvious clean branch catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues), use `mesh_fast_forward_node` dry-run first and execute only when explicitly safe/approved; this avoids consuming an agent session. Use `mesh_refine_node` for clean worktree branches when safe \u2014 but when 2+ sibling worktrees share a base, converge them with `mesh_refine_batch` rather than repeated single-node calls (see the sequencing rule in Rules). Before/refine merging root commits that contain submodule gitlink changes, require each submodule commit to be reachable from the configured submodule remote main branch, not merely present on a feature ref or local checkout. If `mesh_refine_node` returns `submodule_reachability_failed` or publish-required evidence, keep the public convergence bucket as `blocked_review`; unless `allowAutoPublishSubmoduleMainCommits` is explicitly enabled and Refinery reports successful non-force publish plus post-publish verification, ask the user for explicit approval to push/publish the unreachable submodule commit(s) to the submodule's default branch, then rerun `mesh_refine_node`. Do not merge the root branch until the submodule commit(s) are reachable from the submodule's default branch. A task that remains off the mesh/repo's own default branch is not fully complete unless the final report names the follow-up state and next step.\n8. **Clean up** \u2014 Remove worktree nodes via `mesh_remove_node` after their work is merged or no longer needed.\n9. **Report** \u2014 Summarize what was done, what changed, any issues, and the branch convergence state.\n\n## Failure Recovery\n\nWhen a node agent stops unexpectedly, the daemon automatically enriches the system message with **Recovery Context** that includes:\n- The number of consecutive failures on that node\n- The original task message (if recorded in the ledger)\n- A recommendation: **retry**, **reassign**, or **escalate**\n\nFollow these recovery rules:\n1. **If \"Retry recommended\"**: Check `mesh_view_queue` first \u2014 the daemon may have auto-requeued. If not, re-launch the session on the same node (`mesh_launch_session`), then resend the original task (`mesh_send_task`). The system message includes the original task text.\n2. **If \"Max retries exceeded\"**: Do NOT retry on the same node. Either reassign the task to a different node, or inform the user that the task requires manual intervention.\n3. **If no recovery context**: The stop may be intentional (normal completion). Use `mesh_read_chat` once to verify, then move on.\n4. **Always record what happened**: After handling a failure, briefly note the outcome in your report to the user.\n5. **Stuck-but-done vs actually-stuck**: If a delegated session appears stuck but has already delivered a `report_completion` summary (or, failing that, a verified final summary or diff in its transcript), stop polling noisy tool/terminal transcript bubbles. Verify with `mesh_git_status` or a checkpoint and proceed to landing.\n6. **Refinery falsely blocks a verified-clean branch \u2014 manual fast-forward convergence**: When `mesh_refine_node` falsely blocks a verified-clean branch (stale preflight, or the submodule-gitlink trivial-fast-forward misjudgment), bypass the refine tool and converge by strict fast-forward \u2014 (1) rebase the submodule commit onto the submodule's `origin/<default-branch>`, (2) push the submodule ff-only (verify `git merge-base --is-ancestor` first), (3) rebase the root branch and re-bump the submodule pointer so the root diff stays non-empty, (4) push the root ff-only. NEVER force-push or reset; abort and report on any non-fast-forward.\n\n## Rules\n\n- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator \u2014 keep context lean. See also: **Never use local sub-agents** below.\n- **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any equivalent in-process agent-spawning tool) to read code, investigate, run RCA, or implement. Such sub-agents execute on the coordinator's machine, outside the mesh \u2014 they escape mesh parallelism, the ledger/audit trail, node capability profiles, and worktree isolation, and leave no `mesh_task_history` record. ALL code reading, analysis, RCA, and implementation must be delegated through `mesh_enqueue_task` (the default \u2014 see Workflow 3.a), chaining follow-ups with `depends_on`, escalating to `mesh_enqueue_batch` only for a settled multi-step plan needing gates or deferred worktrees, using `mesh_send_task` for a same-session continuation (use `task_mode: \"live_debug_readonly\"` for read-only investigation), or cross-verified via `mesh_magi_review` for read-only fan-out. The coordinator's own actions are limited to `mesh_*` tool orchestration and synthesizing results.\n- **Front-load immutable task instructions.** Include everything the agent needs (files, problem, expected fix) in whichever dispatch surface Workflow 3.a selects (`mesh_enqueue_task` by default, chained with `depends_on`; `mesh_enqueue_batch` for a settled multi-step plan; `mesh_send_task` for same-session continuation). Put predecessor-produced data in explicit `inputs_from` bindings when a specific field must be bound exactly (a `depends_on` chain already appends an \"Upstream results\" summary automatically) and coordinator decisions in gates; never copy untrusted worker output into a new instruction by hand when a binding can preserve provenance. Append a structured result request at the end: ask the worker to conclude with a JSON block containing `status`, `changedFiles`, `gitStatus`, `validationResults`, `errors`, `nextAction`. The daemon parses this automatically; you can read it from `mesh_task_history`.\n- **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** \u2014 a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred \u2014 this rule blocks concurrent unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: carrying an investigation forward into its own fix is the SAME subject and belongs in that session (Workflow 3f), while an unrelated bug is a new subject even if the same session just went idle.\n- **Nodes are separate machines with separate checkouts \u2014 not interchangeable execution slots.** Each node is a different physical computer with its own clone of the repo. Work done on another node must be committed, pushed, and pulled back before this machine sees it, and since RELEASE/DEPLOY runs on the coordinator's own machine, sending a code change elsewhere buys a round trip out and another one back. So **default to this coordinator's own machine for code changes** \u2014 its local node (base or a worktree cloned from it). Routing to a DIFFERENT machine is the exception and needs a reason, of which there are exactly two: (a) **platform-specific verification** that cannot be done here \u2014 win32 PATH/registry, a clean install/uninstall on that OS, that machine's package-manager state; or (b) **parallelizing read-only investigation** across machines. \"That node is idle\" is not a reason. If you catch yourself dispatching a fix to another machine without (a) or (b), route it here instead.\n- **Don't split investigation from the fix.** When a task will plainly end in a code change, dispatch it as `code_change` from the start \u2014 the in-session handoff and split criteria live in Workflow 3f. Split only when the fix genuinely belongs on another machine for reason (a) above; redoing an investigator's context in a fresh session (worse, on another machine) is pure loss.\n- **`mesh_enqueue_task` is the default enqueue surface.** Apply Workflow 3.a: default to `mesh_enqueue_task` and chain known follow-ups with `depends_on` as they become known \u2014 the graph grows append-only, so you don't need the whole plan up front. Reach for `mesh_enqueue_batch` only when three or more steps are already settled and the plan needs a coordinator gate or a deferred worktree (`workspace_ref`). Never fabricate steps just to assemble a batch.\n- **Base nodes are reserved for environment-specific testing.** Apply Workflow 3.b0: only work that verifies a machine's physical environment runs on a base node (pinned with `required_tags`/`target_node_id`); every ordinary `code_change` gets its own cloned worktree. Node availability is not branch isolation.\n- **Worktree affinity.** Apply Workflow 3.b1: route a branch's follow-ups back to its own worktree node (`required_tags: [\"worktree=<branch>\"]` or `target_node_id`, taken from the `mesh_clone_node` result or a live `mesh_status`); only `convergence` (merge/push) runs base-side.\n- **Classify task difficulty honestly.** Judge each task's real difficulty (`easy`/`medium`/`difficult`/`freeform`) per the Task difficulty section above \u2014 it is a routing hint, and the matched slot's own model/thinking is what launches. Never bend difficulty to chase a model; retune slots instead (`mesh_node_slots_set`).\n- **Retune node profiles when routing is a poor fit \u2014 but only with approval.** A node's capability slots (its provider/model/thinking + difficulty range + capability tags, seen via `mesh_node_slots_list`) are what task\u2192node fitness routing matches against. If you notice a persistent mismatch \u2014 e.g. every `difficult` task lands on a node whose only slot is a cheap model, or a capability a node clearly has isn't declared \u2014 you MAY propose a slot change with `mesh_node_slots_set` (write=false). That returns current-vs-proposed; present that diff to the user with a one-line reason and apply (write=true) ONLY after they approve. It is a WHOLESALE replacement of the node's slots, so include the slots you want to keep. Never rewrite a node's profile silently or without a clear routing reason.\n- **Bootstrap a node's slots from what's actually installed.** When a node has NO slots configured (routing then falls back to \"first available provider\"), or CLI agents were newly installed on it, call `mesh_node_slots_propose({ node_id })` instead of hand-writing a profile. It detects the node's installed CLI agents and drafts a slot list from them \u2014 read-only, it never writes. Present its `proposedSlots` with the `droppedSlots` / `destructive` fields it reports (a wholesale write would delete any existing hand-tuned slot the draft doesn't reproduce, including providers not currently on PATH), then apply with `mesh_node_slots_set({ slots: proposedSlots, write: true })` after approval. It flags `unknownProvider` / `provisional` slots whose placement is a conservative guess rather than an attested one \u2014 call those out rather than presenting them as settled.\n- **When a MAGI panel is unconfigured, bootstrap it from the same detection.** `mesh_magi_review({ task_kind })` resolves its panel SOLELY from the configured kind-panel binding, so a task_kind with no slots fails outright with `magi_kind_not_configured` \u2014 MAGI is simply unavailable until someone binds it, and the usual reason nobody has is that this path is easy to miss. Pass `mesh_node_slots_propose({ node_id, include_magi: true })` to also get a `magiPanel` draft: one slot per DISTINCT detected provider, with no model pinned, because a panel's value is cross-provider independence rather than picking the best provider. It is read-only like the rest of the tool. Apply it per kind with `mesh_magi_kind_panel_set({ task_kind, slots, write: true })` after approval \u2014 and note that write is a WHOLESALE replacement of that kind's binding, so present the dry-run's `currentSlots` first. Do NOT reach for `include_magi` on every slot proposal; it is for when the panels are actually empty or a newly installed provider should join them.\n- **Respect explicit provider requests.** Map: Hermes \u2192 `hermes-cli`, Claude/Claude Code \u2192 `claude-cli`, Codex \u2192 `codex-cli`, Gemini \u2192 `gemini-cli`, Antigravity \u2192 `antigravity-cli`. Never substitute the coordinator's own runtime.\n- **Verify via git, not source.** Use `mesh_git_status` to confirm side effects. Treat agent summaries as self-reports, not verification.\n- **Match concurrency to task kind.** Independent read-only tasks (`live_debug_readonly`) dispatch all at once up to the read-only cap \u2014 no worktree, no free node needed. Each write task needs its OWN branch workspace (Workflow 3.b0); spreading writes across base nodes is NOT a substitute: a mesh with four base nodes still has zero branch isolation. Ramp up cautiously only when tasks share a base branch or submodule pointer (landing order matters). Never launch a second session onto in-flight work for the same issue, even when `mesh_read_chat` shows no final message yet \u2014 successive stages of one investigation stay in their session (see Workflow 3f).\n- **Check history first.** Call `mesh_task_history` at session start to avoid duplicate work and inform recovery. On failure, read task history before retrying.\n- **Don't reopen already-done work after a resume.** Before reopening a reported issue after context compaction or session resume, check current git state and recent session context. If another session has already completed the work, continue from the existing diff/commit instead of starting a duplicate investigation.\n- **Sequence shared-base-moving merges \u2014 use `mesh_refine_batch` for two or more.** Merging one worktree advances another in-flight worktree's base \u2014 especially a shared submodule pointer \u2014 turning a clean fast-forward into a diverged rebase. When you have 2+ sibling worktrees to land, pass them to `mesh_refine_batch` (dry-run first) instead of calling `mesh_refine_node` once per node: it picks a conflict-aware order (non-submodule first, submodule-touching serialized last), and because each node re-resolves the base and auto-rebases before its own gates, siblings that fall behind are rebased for you rather than by hand. It also avoids the `base_locked` contention that concurrent single-node refines cause. It is not a conflict solver \u2014 a real content or submodule conflict still lands that node in `blocked_review` for manual resolution while the rest of the batch proceeds. Only drop to per-node `mesh_refine_node` for a single branch, or to hand-resolve a node the batch reported blocked.\n- **Converge branches.** After worktree tasks: refine/fast-forward, or classify as `pushed_feature_branch_needs_merge` / `blocked_review` / `cleanup_candidate` / `not_mergeable`. Clean up with `mesh_remove_node`.\n- **Refinery is config-driven.** `mesh_refine_node` must run validation from `.adhdev/refine.{json,yaml,yml}` or `repo-mesh.refine.*`. Heuristics are scaffolding only.\n- **Submodule reachability = publish-needed.** `submodule_reachability_failed` \u2192 classify as `blocked_review`, request user approval to push to submodule main, then rerun `mesh_refine_node`.\n- **Honor per-node instructions.** When a node carries a \u{1F4CC} Node instruction in the nodes section, include the relevant parts of that instruction in the task message you send to that node. Don't paraphrase the instruction into your own words \u2014 quote it verbatim so the worker agent sees exactly what the user wrote.\n- **Mission status does not update itself.** When a mission's tasks are all done or the work is abandoned, explicitly call `mesh_mission_upsert` to set status `completed` or `abandoned`. Never leave a finished mission in `active`. All-cancelled tasks with no further work \u2192 `abandoned`.\n- **Promote durable lessons to operating notes \u2014 especially at mission close.** Before calling `mesh_mission_upsert` with status `completed`/`abandoned`, ask whether this mission taught something a future coordinator needs (a provider quirk, a pattern to avoid, a recovery lesson); if so, call `mesh_record_note` FIRST \u2014 a mission's goal/history is invisible to the next coordinator once it completes, so an unrecorded lesson is lost at exactly the moment it was learned. Record only when all three hold: (a) a coordinator on another day or another session would act differently knowing it, (b) it cannot be rediscovered from code, config, or `git log`, and (c) it is not a one-off detail specific to this single mission. Note that operating notes reach the COORDINATOR prompt only \u2014 they are never injected into delegated worker sessions, so a convention workers must follow belongs in a CI gate or the repo's agent instructions file, not in a note.\n- **Don't spawn a nested coordinator for simple inspection.** Do not spawn a nested coordinator-like agent for simple inspection tasks. If delegation is required, use explicit provider selection and a fully self-contained, bounded task instruction.\n- **Keep internal traffic out of the transcript.** Internal tool calls, status events, control messages, and debug output must not appear as ordinary user-visible chat transcript content unless explicitly marked user-facing by the producing agent.\n- **Never fabricate tool results.** Always call the actual tool.\n- **Keep the user informed.** One or two sentences after each delegation round.\n- **`gated_by` alone does not branch on outcome.** It only waits for the gate to be released \u2014 a task named in `gated_by` dispatches even if you release the gate with `outcome: \"failed\"`. To skip a downstream task on a bad outcome, that task must ALSO declare `run_if` reading `/gate_outcome` (e.g. `{ from: \"<gateRef>\", select: \"/gate_outcome\", op: \"eq\", value: \"passed\" }`). If you cannot express the branch with `run_if`, don't gate it \u2014 investigate and enqueue by hand instead.\n- **Act on stopped-work notices.** `graph_dependency_blocked` (a step failed; downstream waits under `block`): retry it with `mesh_queue_requeue(task_id, force=true)` (add `message` if the approach must change), or drop the branch with `mesh_queue_cancel` / `mesh_graph_gate_abandon` on the ids the notice names. `graph_dependency_cancelled` (a failure cancelled downstream steps under `cancel`): cancelled work never revives \u2014 re-plan with new `mesh_enqueue_task` steps if the branch is still wanted. `graph_stalled` (an active graph where nothing can move): follow the notice's named tool, or cancel the stuck tasks so the graph settles. `queue_dependency_blocked` / `queue_dependency_cancelled` / `queue_chain_stalled` are the same three for plain `depends_on` chains (no graph): tasks waiting on a failed/cancelled task never start on their own \u2014 requeue the root with `force=true` or cancel the waiting ids, including after your own cancel. Each notice is sent once \u2014 do not poll `mesh_graph_view` waiting for another.\n- **Verify a mission goal's claims before dispatching on them.** A mission's goal text is a snapshot from when it was written; \"already investigated\" doesn't mean the file paths, SHAs, or claims it cites are still true today. Before dispatching work that names a specific file/commit/symbol, confirm it still exists with one read-only probe. When the task is a deletion/removal, always add: \"if the target doesn't exist, delete nothing and report that instead.\"\n- **Close missions yourself \u2014 don't wait on passive signals.** `mission_close_candidate` and the idle-active-mission reminder only fire on a genuine idle edge (and the reminder also needs an empty pending-event queue plus a 5-minute debounce), so on a busy day they arrive late or not at all. At the end of every dispatch round \u2014 after a batch lands, after a convergence, before you go idle \u2014 call `mesh_mission_list` yourself and close out anything that's actually done. An `active` mission with no remaining work is a debt, not a state to wait out.\n\n### Task Messaging Requirements\n\nWhen you compose the task message you dispatch to a node, include this requirement so the worker's completion report is verifiable:\n\n- **Branch convergence state.** For a worktree task, require the completion report to classify the touched branch into exactly one final state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable`. A task that ends on a non-main branch is not complete unless the report names that state and the next step.\n";
       }
     });
     function resolveCoordinatorRules(meshBaseWorkspace) {
@@ -56183,11 +56183,11 @@ ${lines.join("\n")}
         const target = graphStore.getNode(gate.graphId, nodeId);
         if (target?.queueTaskId) cancelledTaskIds.push(target.queueTaskId);
       }
-      const graph = graphStore.getGraph(gate.graphId);
+      const graph = input.skipRollup ? null : graphStore.getGraph(gate.graphId);
       let graphStatus;
-      const rolled = classifyGraphRollup(graphStore.listNodes(gate.graphId));
+      const rolled = input.skipRollup ? null : classifyGraphRollup(graphStore.listNodes(gate.graphId));
       if (graph && rolled && graph.status !== rolled) {
-        graphStore.updateGraphStatus(gate.graphId, rolled, nowIso, true);
+        markGraphTerminalInTxn(store2, gate.graphId, rolled, nowIso);
         graphStatus = rolled;
         insertGateOutbox(
           graphStore,
@@ -56225,6 +56225,32 @@ ${lines.join("\n")}
         ...graphStatus ? { graphStatus } : {}
       };
     }
+    function isOpenGateOnTerminal(gate) {
+      if (gate.state === "expired") return gate.onTimeout === "hold";
+      return gate.state === "declared" || gate.state === "awaiting_coordinator" || gate.state === "claimed";
+    }
+    function markGraphTerminalInTxn(store2, graphId, status, nowIso) {
+      const graphStore = store2.graphStore();
+      graphStore.updateGraphStatus(graphId, status, nowIso, true);
+      const closed = [];
+      for (const gate of graphStore.listGatesByGraph(graphId)) {
+        if (!isOpenGateOnTerminal(gate)) continue;
+        const res = abandonGateInTxn(store2, {
+          meshId: gate.meshId,
+          gateId: gate.gateId,
+          reason: MESH_GATE_GRAPH_TERMINAL_REASON,
+          coordinatorSessionId: MESH_GATE_AUTO_ABANDON_ACTOR,
+          auto: true,
+          force: true,
+          skipRollup: true
+        }, nowIso);
+        if (res.abandoned && res.reason !== "gate_already_abandoned") closed.push(gate.gateId);
+      }
+      if (closed.length > 0) {
+        LOG.info("MeshGraph", `Graph ${graphId} is ${status}: closed ${closed.length} open gate(s) (${MESH_GATE_GRAPH_TERMINAL_REASON}): ${closed.join(",")}`);
+      }
+      return closed;
+    }
     function autoAbandonGatesWithTerminalDownstreamInTxn(store2, graphId, nowIso) {
       const graphStore = store2.graphStore();
       const closed = [];
@@ -56259,6 +56285,46 @@ ${lines.join("\n")}
         LOG.info("MeshGraph", `Auto-closed ${closed.length} gate(s) on graph ${graphId} (${MESH_GATE_AUTO_ABANDON_REASON}): ${closed.join(",")}`);
       }
       return closed;
+    }
+    function abandonGatesWithDeadUpstreamInTxn(store2, graphId, nowIso) {
+      const graphStore = store2.graphStore();
+      const out = { abandonedGates: [], cancelledNodeIds: [] };
+      for (let pass = 0; pass < 64; pass += 1) {
+        const gates = graphStore.listGatesByGraph(graphId).filter((g3) => g3.state !== "released" && g3.state !== "cancelled");
+        if (gates.length === 0) break;
+        const nodes = graphStore.listNodes(graphId);
+        const edges = graphStore.listEdges(graphId);
+        const byId = new Map(nodes.map((n) => [n.nodeId, n]));
+        let closedThisPass = 0;
+        for (const gate of gates) {
+          if (gate.state === "expired" && gate.onTimeout !== "hold") continue;
+          if (gate.state === "claimed" && gate.leaseExpiresAt && gate.leaseExpiresAt > nowIso) continue;
+          const gateNode = byId.get(gate.nodeId);
+          const incoming = edges.filter((e) => e.toNodeId === gate.nodeId);
+          const dead = gateNode?.state === "cancelled" || incoming.some((e) => {
+            const s2 = byId.get(e.fromNodeId)?.state;
+            return s2 === "failed" || s2 === "cancelled";
+          });
+          if (!dead) continue;
+          const res = abandonGateInTxn(store2, {
+            meshId: gate.meshId,
+            gateId: gate.gateId,
+            reason: MESH_GATE_UPSTREAM_FAILED_REASON,
+            coordinatorSessionId: MESH_GATE_AUTO_ABANDON_ACTOR,
+            auto: true
+          }, nowIso);
+          if (res.abandoned && res.reason !== "gate_already_abandoned") {
+            out.abandonedGates.push({ gateId: gate.gateId, ...gate.ref ? { ref: gate.ref } : {} });
+            out.cancelledNodeIds.push(...res.cancelledNodeIds);
+            closedThisPass += 1;
+          }
+        }
+        if (closedThisPass === 0) break;
+      }
+      if (out.abandonedGates.length > 0) {
+        LOG.info("MeshGraph", `Abandoned ${out.abandonedGates.length} gate(s) on graph ${graphId} (${MESH_GATE_UPSTREAM_FAILED_REASON}): ${out.abandonedGates.map((g3) => g3.gateId).join(",")}`);
+      }
+      return out;
     }
     function isCancelExempt(state) {
       return state === "completed" || state === "released" || state === "skipped" || state === "cancelled" || state === "failed" || state === "expired";
@@ -56311,15 +56377,18 @@ ${lines.join("\n")}
         updatedAt: nowIso
       });
     }
+    var MESH_GATE_GRAPH_TERMINAL_REASON;
     var MESH_GATE_AUTO_ABANDON_REASON;
     var MESH_GATE_AUTO_ABANDON_ACTOR;
     var DOWNSTREAM_TERMINAL_STATES;
+    var MESH_GATE_UPSTREAM_FAILED_REASON;
     var init_mesh_graph_gate_closure = __esm2({
       "src/mesh/mesh-graph-gate-closure.ts"() {
         "use strict";
         init_logger();
         init_mesh_graph_types();
         init_mesh_graph_derived_failure();
+        MESH_GATE_GRAPH_TERMINAL_REASON = "graph_terminal";
         MESH_GATE_AUTO_ABANDON_REASON = "downstream_all_terminal";
         MESH_GATE_AUTO_ABANDON_ACTOR = "daemon_auto_close";
         DOWNSTREAM_TERMINAL_STATES = /* @__PURE__ */ new Set([
@@ -56329,6 +56398,275 @@ ${lines.join("\n")}
           "skipped",
           "released"
         ]);
+        MESH_GATE_UPSTREAM_FAILED_REASON = "upstream_failed";
+      }
+    });
+    function reasonCodeOf(reason) {
+      if (typeof reason !== "string") return "unspecified";
+      const m = /^[a-z][a-z0-9_]{0,63}/.exec(reason.trim());
+      if (!m) return "unspecified";
+      const next = reason.trim().charAt(m[0].length);
+      if (next !== "" && next !== ":") return "unspecified";
+      return m[0].toLowerCase();
+    }
+    function parseNodeRefs(raw) {
+      if (!Array.isArray(raw)) return [];
+      const out = [];
+      for (const item of raw) {
+        if (!item || typeof item !== "object") continue;
+        const r = item;
+        const nodeId = str2(r.nodeId);
+        if (!nodeId) continue;
+        out.push({
+          nodeId,
+          ...str2(r.ref) ? { ref: str2(r.ref) } : {},
+          ...r.kind === "worker_task" || r.kind === "coordinator_gate" ? { kind: r.kind } : {},
+          ...str2(r.taskId) ? { taskId: str2(r.taskId) } : {},
+          ...str2(r.gateId) ? { gateId: str2(r.gateId) } : {},
+          ...str2(r.state) ? { state: str2(r.state) } : {},
+          ...str2(r.reasonCode) ? { reasonCode: str2(r.reasonCode) } : {}
+        });
+      }
+      return out;
+    }
+    function parseRoot(raw) {
+      if (!raw || typeof raw !== "object") return null;
+      const r = raw;
+      const nodeId = str2(r.nodeId);
+      if (!nodeId) return null;
+      return {
+        nodeId,
+        ...str2(r.ref) ? { ref: str2(r.ref) } : {},
+        ...str2(r.taskId) ? { taskId: str2(r.taskId) } : {},
+        outcome: r.outcome === "cancelled" ? "cancelled" : "failed",
+        reasonCode: str2(r.reasonCode) ?? "unspecified"
+      };
+    }
+    function parseQueueRoot(raw) {
+      if (!raw || typeof raw !== "object") return null;
+      const r = raw;
+      const taskId = str2(r.taskId);
+      if (!taskId) return null;
+      return { taskId, outcome: r.outcome === "cancelled" ? "cancelled" : "failed", reasonCode: str2(r.reasonCode) ?? "unspecified" };
+    }
+    function parseQueueTaskRefs(raw) {
+      if (!Array.isArray(raw)) return [];
+      return raw.filter((t) => !!t && typeof t === "object" && !!str2(t.taskId)).map((t) => ({ taskId: str2(t.taskId), ...str2(t.via) ? { via: str2(t.via) } : {} }));
+    }
+    function parseGraphStopOutbox(kind, meshId, rawPayload) {
+      if (!GRAPH_STOP_OUTBOX_KINDS.includes(kind)) return null;
+      let payload = {};
+      try {
+        const parsed = rawPayload ? JSON.parse(rawPayload) : {};
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) payload = parsed;
+      } catch {
+        return null;
+      }
+      if (kind === "queue_dependency_blocked" || kind === "queue_dependency_cancelled") {
+        const root2 = parseQueueRoot(payload.root);
+        if (!root2) return null;
+        const generation2 = typeof payload.generation === "number" && Number.isFinite(payload.generation) ? payload.generation : 0;
+        return kind === "queue_dependency_blocked" ? { kind, meshId, generation: generation2, root: root2, waiting: parseQueueTaskRefs(payload.waiting) } : { kind, meshId, generation: generation2, root: root2, cancelled: parseQueueTaskRefs(payload.cancelled) };
+      }
+      const graphId = str2(payload.graphId);
+      const root = parseRoot(payload.root);
+      if (!graphId || !root) return null;
+      const generation = typeof payload.generation === "number" && Number.isFinite(payload.generation) ? payload.generation : 0;
+      if (kind === "graph_dependency_blocked") {
+        return { kind, meshId, graphId, generation, root, blocked: parseNodeRefs(payload.blocked) };
+      }
+      const gates = Array.isArray(payload.abandonedGates) ? payload.abandonedGates : [];
+      return {
+        kind: "graph_dependency_cancelled",
+        meshId,
+        graphId,
+        generation,
+        root,
+        cancelled: parseNodeRefs(payload.cancelled),
+        abandonedGates: gates.filter((g3) => !!g3 && typeof g3 === "object" && !!str2(g3.gateId)).map((g3) => ({ gateId: str2(g3.gateId), ...str2(g3.ref) ? { ref: str2(g3.ref) } : {}, reason: str2(g3.reason) ?? "unspecified" }))
+      };
+    }
+    function label(n) {
+      return n.ref ? `'${n.ref}'` : `node ${n.nodeId.slice(0, 8)}`;
+    }
+    function describeNode(n) {
+      if (n.kind === "coordinator_gate") return `gate ${label(n)}${n.gateId ? ` (gate_id ${n.gateId})` : ""}`;
+      return `${label(n)}${n.taskId ? ` (task ${n.taskId})` : ""}`;
+    }
+    function listCapped(items, render2) {
+      const shown = items.slice(0, GRAPH_STOP_NOTICE_LIST_CAP).map(render2);
+      const rest = items.length - shown.length;
+      return shown.join(", ") + (rest > 0 ? `, +${rest} more (mesh_graph_view)` : "");
+    }
+    function describeRoot(root) {
+      return `step ${label(root)}${root.taskId ? ` (task ${root.taskId})` : ""} ${root.outcome === "failed" ? "failed" : "was cancelled"} (reason: ${root.reasonCode})`;
+    }
+    function shortTask(taskId) {
+      return taskId.slice(0, 8);
+    }
+    function describeQueueTask(t) {
+      return `${shortTask(t.taskId)} (task_id ${t.taskId}${t.via ? `, via ${shortTask(t.via)}` : ""})`;
+    }
+    function queueIdList(tasks) {
+      return tasks.slice(0, GRAPH_STOP_NOTICE_LIST_CAP).map((t) => `'${t.taskId}'`).join(", ") + (tasks.length > GRAPH_STOP_NOTICE_LIST_CAP ? ` (+${tasks.length - GRAPH_STOP_NOTICE_LIST_CAP} more \u2014 mesh_view_queue)` : "");
+    }
+    function renderQueueStopNotice(n) {
+      const root = n.root;
+      const rootLabel = `${shortTask(root.taskId)} (task_id ${root.taskId})`;
+      const requeue = `mesh_queue_requeue(task_id='${root.taskId}', force=true)`;
+      if (n.kind === "queue_dependency_cancelled") {
+        const coordinatorMessage2 = `Queue task ${rootLabel} ${root.outcome === "failed" ? "failed" : "was cancelled"} (reason: ${root.reasonCode}). Under on_dependency_failure=cancel, ${n.cancelled.length} dependent task(s) were cancelled: ${listCapped(n.cancelled, describeQueueTask)}. Cancelled tasks do not revive \u2014 if the work is still wanted, fix the cause and enqueue replacements (mesh_enqueue_task with depends_on).`;
+        return {
+          event: "mesh:queue_dependency_cancelled",
+          eventId: `queue:queue_dependency_cancelled:${root.taskId}:${n.generation}`,
+          nodeLabel: shortTask(root.taskId),
+          coordinatorMessage: coordinatorMessage2,
+          metadataEvent: {
+            source: "mesh_queue_dependency",
+            taskId: root.taskId,
+            rootOutcome: root.outcome,
+            reasonCode: root.reasonCode,
+            generation: n.generation,
+            cancelledTaskIds: n.cancelled.map((t) => t.taskId),
+            policy: "cancel"
+          }
+        };
+      }
+      const operatorCancel = root.outcome === "cancelled" && root.reasonCode === "operator_cancel";
+      const waiting = n.waiting;
+      const head = n.kind === "queue_chain_stalled" ? `${waiting.length} pending queue task(s) can never start: they wait (depends_on) on ${rootLabel}, which ended ${root.outcome} (reason: ${root.reasonCode}): ` : operatorCancel ? `${waiting.length} task(s) still wait on the task you cancelled, ${rootLabel} (reason: operator_cancel): ` : `Queue task ${rootLabel} ${root.outcome === "failed" ? "failed" : "was cancelled"} (reason: ${root.reasonCode}) and ${waiting.length} task(s) still wait on it: `;
+      const next = operatorCancel ? `Next: cancel them too with mesh_queue_cancel(task_id=\u2026) for ${queueIdList(waiting)}; or, if the cancel was a mistake, ${requeue} and they run once it completes.` : `Next: retry it with ${requeue} (add message=<corrected instruction> to change the approach) \u2014 the waiting tasks then run automatically; or drop them with mesh_queue_cancel(task_id=\u2026) for ${queueIdList(waiting)}.`;
+      const coordinatorMessage = `${head}${listCapped(waiting, describeQueueTask)}. Policy is on_dependency_failure=block (the default), so nothing was cancelled and they will not run on their own. ` + next;
+      const event = n.kind === "queue_chain_stalled" ? "mesh:queue_chain_stalled" : "mesh:queue_dependency_blocked";
+      return {
+        event,
+        eventId: n.kind === "queue_chain_stalled" ? `queue:queue_chain_stalled:${root.taskId}:${n.fingerprint}` : `queue:queue_dependency_blocked:${root.taskId}:${n.generation}`,
+        nodeLabel: shortTask(root.taskId),
+        coordinatorMessage,
+        metadataEvent: {
+          source: n.kind === "queue_chain_stalled" ? "mesh_queue_stall_sweep" : "mesh_queue_dependency",
+          taskId: root.taskId,
+          rootOutcome: root.outcome,
+          reasonCode: root.reasonCode,
+          ...n.kind === "queue_chain_stalled" ? { fingerprint: n.fingerprint } : { generation: n.generation },
+          waitingTaskIds: waiting.map((t) => t.taskId),
+          policy: "block"
+        }
+      };
+    }
+    function renderGraphStopNotice(n) {
+      if (n.kind === "queue_dependency_blocked" || n.kind === "queue_dependency_cancelled" || n.kind === "queue_chain_stalled") {
+        return renderQueueStopNotice(n);
+      }
+      const graphShort = n.graphId.slice(0, 8);
+      if (n.kind === "graph_dependency_blocked") {
+        const tasks = n.blocked.filter((b) => b.kind !== "coordinator_gate" && b.taskId);
+        const gates = n.blocked.filter((b) => b.kind === "coordinator_gate" && b.gateId);
+        const patchTarget = tasks[0];
+        const actions2 = [];
+        if (n.root.taskId) {
+          actions2.push(`retry it with mesh_queue_requeue(task_id='${n.root.taskId}', force=true) \u2014 add message=<corrected instruction> if it needs a different approach; the blocked steps start automatically once it completes`);
+        }
+        if (patchTarget) {
+          actions2.push(`if a blocked step's inputs/condition must change, mesh_graph_node_patch(node='${patchTarget.ref ?? patchTarget.nodeId}', graph_id='${n.graphId}')`);
+        }
+        const giveUp = [];
+        if (tasks.length > 0) giveUp.push(`mesh_queue_cancel(task_id=\u2026) for ${tasks.map((t) => `'${t.taskId}'`).slice(0, GRAPH_STOP_NOTICE_LIST_CAP).join(", ")}`);
+        if (gates.length > 0) giveUp.push(`mesh_graph_gate_abandon(gate_id=\u2026) for ${gates.map((g3) => `'${g3.gateId}'`).slice(0, GRAPH_STOP_NOTICE_LIST_CAP).join(", ")}`);
+        if (giveUp.length > 0) actions2.push(`or drop this branch: ${giveUp.join(" and ")} (a gate left guarding only cancelled work closes itself)`);
+        const coordinatorMessage2 = `Graph ${n.graphId}: ${describeRoot(n.root)} and ${n.blocked.length} downstream step(s) are now blocked waiting on it: ${listCapped(n.blocked, describeNode)}. Policy is on_dependency_failure=block, so nothing was cancelled and nothing will move on its own. Next: ${actions2.join("; ")}.`;
+        return {
+          event: "mesh:graph_dependency_blocked",
+          eventId: `graph:graph_dependency_blocked:${n.graphId}:${n.root.nodeId}:${n.generation}`,
+          nodeLabel: n.root.ref ?? graphShort,
+          coordinatorMessage: coordinatorMessage2,
+          metadataEvent: {
+            source: "mesh_graph_outbox",
+            taskId: n.root.taskId ?? n.root.nodeId,
+            graphId: n.graphId,
+            rootNodeId: n.root.nodeId,
+            ...n.root.ref ? { rootRef: n.root.ref } : {},
+            reasonCode: n.root.reasonCode,
+            generation: n.generation,
+            blockedNodeIds: n.blocked.map((b) => b.nodeId),
+            blockedTaskIds: tasks.map((t) => t.taskId),
+            blockedGateIds: gates.map((g3) => g3.gateId),
+            policy: "block"
+          }
+        };
+      }
+      if (n.kind === "graph_dependency_cancelled") {
+        const gatePart = n.abandonedGates.length > 0 ? ` and ${n.abandonedGates.length} gate(s) abandoned: ${listCapped(n.abandonedGates, (g3) => `${g3.ref ? `'${g3.ref}'` : g3.gateId.slice(0, 8)} (${g3.reason})`)}` : "";
+        const coordinatorMessage2 = `Graph ${n.graphId}: ${describeRoot(n.root)}. Under on_dependency_failure=cancel, ${n.cancelled.length} downstream step(s) were cancelled${n.cancelled.length > 0 ? `: ${listCapped(n.cancelled, describeNode)}` : ""}${gatePart}. Nothing in this branch will run. If the branch is still wanted, fix the cause and re-plan it: enqueue replacement steps with mesh_enqueue_task / mesh_enqueue_batch (cancelled tasks do not revive). Inspect with mesh_graph_view(graph_id='${n.graphId}').`;
+        return {
+          event: "mesh:graph_dependency_cancelled",
+          eventId: `graph:graph_dependency_cancelled:${n.graphId}:${n.root.nodeId}:${n.generation}`,
+          nodeLabel: n.root.ref ?? graphShort,
+          coordinatorMessage: coordinatorMessage2,
+          metadataEvent: {
+            source: "mesh_graph_outbox",
+            taskId: n.root.taskId ?? n.root.nodeId,
+            graphId: n.graphId,
+            rootNodeId: n.root.nodeId,
+            ...n.root.ref ? { rootRef: n.root.ref } : {},
+            rootOutcome: n.root.outcome,
+            reasonCode: n.root.reasonCode,
+            generation: n.generation,
+            cancelledNodeIds: n.cancelled.map((c) => c.nodeId),
+            cancelledTaskIds: n.cancelled.map((c) => c.taskId).filter(Boolean),
+            abandonedGateIds: n.abandonedGates.map((g3) => g3.gateId),
+            policy: "cancel"
+          }
+        };
+      }
+      const actions = [];
+      const matErr = n.stuck.filter((s2) => s2.reasonCode === "materialization_error");
+      if (matErr.length > 0) {
+        actions.push(`fix ${matErr.map((s2) => label(s2)).join(", ")} with mesh_graph_node_patch(node=\u2026, graph_id='${n.graphId}')`);
+      }
+      const deadTasks = n.deadUpstream.filter((d) => d.taskId);
+      if (deadTasks.length > 0) {
+        actions.push(`retry what they wait on with mesh_queue_requeue(task_id=\u2026, force=true) for ${deadTasks.slice(0, GRAPH_STOP_NOTICE_LIST_CAP).map((d) => `'${d.taskId}' (${label(d)}, ${d.state})`).join(", ")}`);
+      }
+      const stuckTasks = n.stuck.filter((s2) => s2.kind !== "coordinator_gate" && s2.taskId);
+      const stuckGates = n.stuck.filter((s2) => s2.kind === "coordinator_gate" && s2.gateId);
+      const drop = [];
+      if (stuckTasks.length > 0) drop.push(`mesh_queue_cancel(task_id=\u2026) for ${stuckTasks.slice(0, GRAPH_STOP_NOTICE_LIST_CAP).map((s2) => `'${s2.taskId}'`).join(", ")}`);
+      if (stuckGates.length > 0) drop.push(`mesh_graph_gate_abandon(gate_id=\u2026) for ${stuckGates.slice(0, GRAPH_STOP_NOTICE_LIST_CAP).map((s2) => `'${s2.gateId}'`).join(", ")}`);
+      if (drop.length > 0) actions.push(`or settle the graph: ${drop.join(" and ")}`);
+      const deadPart = n.deadUpstream.length > 0 ? ` They wait on ${listCapped(n.deadUpstream, (d) => `${label(d)} (${d.state})`)}.` : "";
+      const coordinatorMessage = `Graph ${n.graphId} is still active but nothing can move: no step is running, runnable, or awaiting a gate. Stuck (${n.stuck.length}): ${listCapped(n.stuck, (s2) => `${label(s2)} [${s2.state}${s2.reasonCode ? `, ${s2.reasonCode}` : ""}]${s2.taskId ? ` task ${s2.taskId}` : s2.gateId ? ` gate_id ${s2.gateId}` : ""}`)}.${deadPart} Next: ${actions.length > 0 ? actions.join("; ") : `inspect with mesh_graph_view(graph_id='${n.graphId}')`}.`;
+      return {
+        event: "mesh:graph_stalled",
+        eventId: `graph:graph_stalled:${n.graphId}:${n.fingerprint}`,
+        nodeLabel: graphShort,
+        coordinatorMessage,
+        metadataEvent: {
+          source: "mesh_graph_stall_sweep",
+          taskId: `${n.graphId}:stalled:${n.fingerprint}`,
+          graphId: n.graphId,
+          fingerprint: n.fingerprint,
+          stuckNodeIds: n.stuck.map((s2) => s2.nodeId),
+          deadUpstreamNodeIds: n.deadUpstream.map((d) => d.nodeId)
+        }
+      };
+    }
+    var GRAPH_STOP_OUTBOX_KINDS;
+    var GRAPH_STOP_NOTICE_LIST_CAP;
+    var str2;
+    var init_mesh_graph_stop_notice = __esm2({
+      "src/mesh/mesh-graph-stop-notice.ts"() {
+        "use strict";
+        GRAPH_STOP_OUTBOX_KINDS = [
+          "graph_dependency_blocked",
+          "graph_dependency_cancelled",
+          // Queue-level `depends_on` chains (mesh_enqueue_task — the D1 default — and a
+          // static mesh_enqueue_batch) have no graph rows; same notices, queue-shaped.
+          "queue_dependency_blocked",
+          "queue_dependency_cancelled"
+        ];
+        GRAPH_STOP_NOTICE_LIST_CAP = 10;
+        str2 = (v) => typeof v === "string" && v.trim().length > 0 ? v : void 0;
       }
     });
     function graphMaterializationBlockReason(nodeId, materializationVersion) {
@@ -56360,6 +56698,9 @@ ${lines.join("\n")}
     function registerMeshGraphGateNotifyHandler(handler) {
       gateNotifyHandler = handler;
     }
+    function registerMeshGraphStopNotifyHandler(handler) {
+      stopNotifyHandler = handler;
+    }
     function toGateNotification(kind, meshId, rawPayload) {
       const noticeKind = GATE_NOTIFY_OUTBOX_KINDS.get(kind);
       if (!noticeKind) return null;
@@ -56369,9 +56710,9 @@ ${lines.join("\n")}
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) payload = parsed;
       } catch {
       }
-      const str7 = (v) => typeof v === "string" && v.trim().length > 0 ? v : void 0;
-      const gateId = str7(payload.gateId);
-      const graphId = str7(payload.graphId);
+      const str8 = (v) => typeof v === "string" && v.trim().length > 0 ? v : void 0;
+      const gateId = str8(payload.gateId);
+      const graphId = str8(payload.graphId);
       if (!gateId || !graphId) return null;
       const ageMs2 = typeof payload.ageMs === "number" && Number.isFinite(payload.ageMs) ? payload.ageMs : void 0;
       return {
@@ -56379,13 +56720,13 @@ ${lines.join("\n")}
         meshId,
         graphId,
         gateId,
-        ref: str7(payload.ref),
-        action: str7(payload.action),
-        instructions: str7(payload.instructions),
-        deadlineAt: str7(payload.deadlineAt),
+        ref: str8(payload.ref),
+        action: str8(payload.action),
+        instructions: str8(payload.instructions),
+        deadlineAt: str8(payload.deadlineAt),
         ...noticeKind === "graph_gate_deadline_expired" ? {
-          ...str7(payload.nodeId) ? { nodeId: str7(payload.nodeId) } : {},
-          ...str7(payload.policy) ? { policy: str7(payload.policy) } : {},
+          ...str8(payload.nodeId) ? { nodeId: str8(payload.nodeId) } : {},
+          ...str8(payload.policy) ? { policy: str8(payload.policy) } : {},
           ...ageMs2 !== void 0 ? { ageMs: ageMs2 } : {}
         } : {}
       };
@@ -56403,6 +56744,9 @@ ${lines.join("\n")}
           } else if (GATE_NOTIFY_OUTBOX_KINDS.has(event.kind)) {
             const notification = toGateNotification(event.kind, event.meshId, event.payload);
             if (notification && gateNotifyHandler) gateNotifyHandler(notification);
+          } else if (GRAPH_STOP_OUTBOX_KINDS.includes(event.kind)) {
+            const notice = parseGraphStopOutbox(event.kind, event.meshId, event.payload);
+            if (notice && stopNotifyHandler) stopNotifyHandler(notice);
           }
           graphStore.markOutboxEventStatus(event.id, "delivered", nowIso);
           drained += 1;
@@ -56555,7 +56899,11 @@ ${lines.join("\n")}
       const byId = new Map(nodes.map((n) => [n.nodeId, n]));
       const graph = graphStore.getGraph(node.graphId);
       const failurePolicy = projectGraphPublicPolicy(graph?.policyJson).on_dependency_failure;
-      if ((terminal.status === "failed" || terminal.status === "cancelled") && failurePolicy === "cancel") {
+      const isFailureTerminal = terminal.status === "failed" || terminal.status === "cancelled";
+      const stoppedNodeIds = [];
+      const abandonedGates = [];
+      let blockedDownstream = [];
+      if (isFailureTerminal && failurePolicy === "cancel") {
         const edges = graphStore.listEdges(node.graphId);
         const cascade = applyGraphCancelCascade(
           store2,
@@ -56591,7 +56939,15 @@ ${lines.join("\n")}
             }
           });
         }
-      } else if (terminal.status === "failed" || terminal.status === "cancelled") {
+        stoppedNodeIds.push(...cascade.cancelledNodeIds);
+        try {
+          const dead = store2.transaction(() => abandonGatesWithDeadUpstreamInTxn(store2, node.graphId, nowIso));
+          stoppedNodeIds.push(...dead.cancelledNodeIds);
+          abandonedGates.push(...dead.abandonedGates.map((g3) => ({ ...g3, reason: MESH_GATE_UPSTREAM_FAILED_REASON })));
+        } catch (e) {
+          LOG.warn("MeshGraph", `Dead-upstream gate closure after ${terminal.status} of ${terminal.taskId} failed (graph ${node.graphId}): ${e?.message || e}`);
+        }
+      } else if (isFailureTerminal) {
         const dependents = graphStore.listEdges(node.graphId).filter((e) => e.fromNodeId === node.nodeId && e.kind !== "gate").map((e) => byId.get(e.toNodeId)).filter((n) => !!n && n.kind === "worker_task");
         outbox.push({
           kind: "graph_derived_failure",
@@ -56606,6 +56962,9 @@ ${lines.join("\n")}
             dependentTaskIds: dependents.map((d) => d.queueTaskId).filter(Boolean)
           }
         });
+        if (terminal.status === "failed") {
+          blockedDownstream = graphStore.listEdges(node.graphId).filter((e) => e.fromNodeId === node.nodeId).map((e) => byId.get(e.toNodeId)).filter((n) => !!n && !isStoppedOrDoneNodeState(n.state));
+        }
       }
       const materialized = [];
       if (terminal.status === "completed") {
@@ -56669,8 +57028,9 @@ ${lines.join("\n")}
         }
       }
       const rolled = classifyGraphRollup(graphStore.listNodes(node.graphId));
-      if (rolled && graph?.status !== rolled) {
-        graphStore.updateGraphStatus(node.graphId, rolled, nowIso, true);
+      const graphNow = graphStore.getGraph(node.graphId);
+      if (rolled && graphNow?.status !== rolled) {
+        markGraphTerminalInTxn(store2, node.graphId, rolled, nowIso);
         const kind = rolled === "completed" ? "graph_completed" : rolled === "failed" ? "graph_failed" : "graph_cancelled";
         outbox.push({ kind, payload: { graphId: node.graphId, status: rolled } });
       }
@@ -56690,14 +57050,81 @@ ${lines.join("\n")}
           updatedAt: nowIso
         });
       }
-      if (terminal.status === "failed" || terminal.status === "cancelled") {
+      if (isFailureTerminal) {
         try {
-          store2.transaction(() => autoAbandonGatesWithTerminalDownstreamInTxn(store2, node.graphId, nowIso));
+          const closed = store2.transaction(() => autoAbandonGatesWithTerminalDownstreamInTxn(store2, node.graphId, nowIso));
+          for (const gateId of closed) {
+            abandonedGates.push({ gateId, ...graphStore.getGate(gateId)?.ref ? { ref: graphStore.getGate(gateId).ref } : {}, reason: MESH_GATE_AUTO_ABANDON_REASON });
+          }
         } catch (e) {
           LOG.warn("MeshGraph", `Gate auto-close after ${terminal.status} of ${terminal.taskId} failed (graph ${node.graphId}): ${e?.message || e}`);
         }
+        insertStoppedDownstreamNotice(store2, node, terminal, nowIso, failurePolicy, stoppedNodeIds, abandonedGates, blockedDownstream);
       }
       return materialized;
+    }
+    function isStoppedOrDoneNodeState(state) {
+      return state === "completed" || state === "failed" || state === "cancelled" || state === "skipped" || state === "released" || state === "expired";
+    }
+    function terminalReasonCode(terminal) {
+      const code = reasonCodeOf(terminal.reason ?? `task_${terminal.status}`);
+      if (terminal.source === "cancellation" && code !== "dependency_failed") return "operator_cancel";
+      return code;
+    }
+    function insertStoppedDownstreamNotice(store2, node, terminal, nowIso, failurePolicy, stoppedNodeIds, abandonedGates, blockedDownstream) {
+      const graphStore = store2.graphStore();
+      const kind = failurePolicy === "cancel" ? stoppedNodeIds.length > 0 || abandonedGates.some((g3) => g3.reason === MESH_GATE_UPSTREAM_FAILED_REASON) ? "graph_dependency_cancelled" : null : blockedDownstream.length > 0 ? "graph_dependency_blocked" : null;
+      if (!kind) return;
+      const root = {
+        nodeId: node.nodeId,
+        ...node.ref ? { ref: node.ref } : {},
+        taskId: terminal.taskId,
+        outcome: terminal.status === "cancelled" ? "cancelled" : "failed",
+        reasonCode: terminalReasonCode(terminal)
+      };
+      const describe32 = (n) => {
+        const gateId = n.kind === "coordinator_gate" ? graphStore.findGateByNodeId(n.graphId, n.nodeId)?.gateId : void 0;
+        return {
+          nodeId: n.nodeId,
+          ...n.ref ? { ref: n.ref } : {},
+          kind: n.kind === "coordinator_gate" ? "coordinator_gate" : "worker_task",
+          ...n.queueTaskId ? { taskId: n.queueTaskId } : {},
+          ...gateId ? { gateId } : {}
+        };
+      };
+      const generation = graphStore.getLatestOutput(terminal.taskId)?.version ?? 0;
+      let payload;
+      if (kind === "graph_dependency_cancelled") {
+        const seen = /* @__PURE__ */ new Set();
+        const cancelled = [];
+        for (const id22 of stoppedNodeIds) {
+          if (seen.has(id22)) continue;
+          seen.add(id22);
+          const n = graphStore.getNode(node.graphId, id22);
+          if (n && n.kind !== "coordinator_gate") cancelled.push(describe32(n));
+        }
+        const gateSeen = /* @__PURE__ */ new Set();
+        payload = {
+          graphId: node.graphId,
+          generation,
+          root,
+          cancelled,
+          abandonedGates: abandonedGates.filter((g3) => !gateSeen.has(g3.gateId) && gateSeen.add(g3.gateId))
+        };
+      } else {
+        payload = { graphId: node.graphId, generation, root, blocked: blockedDownstream.map(describe32) };
+      }
+      graphStore.insertOutboxEvent({
+        id: newMeshGraphOutboxId(),
+        meshId: node.meshId,
+        graphId: node.graphId,
+        kind,
+        payload: JSON.stringify(payload),
+        status: "pending",
+        attemptCount: 0,
+        createdAt: nowIso,
+        updatedAt: nowIso
+      });
     }
     function isTerminalEquivalent(n) {
       return n.state === "completed" || n.state === "released" || n.state === "skipped";
@@ -57195,6 +57622,7 @@ ${lines.join("\n")}
     var GATE_BLOCK_PREFIX;
     var queueWakeHandler;
     var gateNotifyHandler;
+    var stopNotifyHandler;
     var GATE_NOTIFY_OUTBOX_KINDS;
     var MESH_NODE_PATCH_KEYS3;
     var init_mesh_graph_transition_runner = __esm2({
@@ -57211,6 +57639,7 @@ ${lines.join("\n")}
         init_worker_mailbox();
         init_mesh_graph_derived_failure();
         init_mesh_graph_gate_closure();
+        init_mesh_graph_stop_notice();
         GRAPH_BLOCK_PREFIX = "graph_materialization_pending:";
         WORKSPACE_DEAD_PREFIX = "workspace_terminal:";
         GATE_BLOCK_PREFIX = "coordinator_gate:";
@@ -57236,10 +57665,10 @@ ${lines.join("\n")}
       const lastNl = before.lastIndexOf("\n");
       return { line, column: index - lastNl };
     }
-    function buildViolationDetail(label, text, start, end) {
+    function buildViolationDetail(label2, text, start, end) {
       const raw = text.slice(start, end);
       const match = raw.length > MAX_REPORTED_MATCH_LEN ? `${raw.slice(0, MAX_REPORTED_MATCH_LEN)}\u2026` : raw;
-      return { label, match, ...locateOffset(text, start) };
+      return { label: label2, match, ...locateOffset(text, start) };
     }
     function hasNegationBefore(text, matchIndex) {
       const before = text.slice(0, matchIndex);
@@ -57738,10 +58167,10 @@ ${surfaced}`;
             const options = Array.isArray(q.options) ? q.options : [];
             options.forEach((opt, i) => {
               const record22 = opt && typeof opt === "object" ? opt : {};
-              const label = readNonEmptyString(record22.label);
-              if (!label) return;
+              const label2 = readNonEmptyString(record22.label);
+              if (!label2) return;
               const description = readNonEmptyString(record22.description);
-              lines.push(`  ${i + 1}. ${label}${description ? ` \u2014 ${description}` : ""}`);
+              lines.push(`  ${i + 1}. ${label2}${description ? ` \u2014 ${description}` : ""}`);
             });
           }
         } else {
@@ -59284,9 +59713,9 @@ Next step: ${nextStep}`;
         };
       }
     });
-    function pointerLine(label, taskId) {
+    function pointerLine(label2, taskId) {
       const taskSuffix = taskId ? ` for task ${taskId}` : "";
-      return `[System] ${label} is not yet available${taskSuffix} \u2014 call mesh_task_report once it replicates; do not poll repeatedly.`;
+      return `[System] ${label2} is not yet available${taskSuffix} \u2014 call mesh_task_report once it replicates; do not poll repeatedly.`;
     }
     function resolve11(ref, resolveRef2, missing) {
       if (!ref) return null;
@@ -59735,7 +60164,7 @@ ${summary}`;
     function isRecord5(value) {
       return !!value && typeof value === "object" && !Array.isArray(value);
     }
-    function str2(value) {
+    function str22(value) {
       return typeof value === "string" && value.trim().length > 0 ? value.trim() : void 0;
     }
     function isSelf(selfIds, daemonId) {
@@ -59757,13 +60186,13 @@ ${summary}`;
       const basis = JSON.stringify([
         notice.meshId,
         notice.event,
-        str2(meta3.taskId) ?? "",
+        str22(meta3.taskId) ?? "",
         notice.nodeId ?? "",
         notice.targetCoordinatorSessionId ?? "",
         notice.coordinatorMessage ?? "",
-        str2(meta3.jobId) ?? "",
-        str2(meta3.gateId) ?? "",
-        str2(meta3.promptId) ?? ""
+        str22(meta3.jobId) ?? "",
+        str22(meta3.gateId) ?? "",
+        str22(meta3.promptId) ?? ""
       ]);
       const hash2 = (0, import_crypto6.createHash)("sha256").update(basis).digest("hex").slice(0, 24);
       return `notice:${hash2}:${Math.floor(nowMs2 / NOTICE_DEDUPE_BUCKET_MS)}`;
@@ -59784,7 +60213,7 @@ ${summary}`;
             ...notice.worktreeHasQueuedTask ? { worktreeHasQueuedTask: true } : {},
             queuedAt: at
           };
-          const taskId = str2(notice.metadataEvent?.taskId);
+          const taskId = str22(notice.metadataEvent?.taskId);
           const target = notice.targetCoordinatorDaemonId && !isSelf(deps.selfDaemonIds(), notice.targetCoordinatorDaemonId) ? notice.targetCoordinatorDaemonId : null;
           const base = {
             meshId: notice.meshId,
@@ -59822,7 +60251,7 @@ ${summary}`;
         const p = entry.payload;
         switch (entry.kind) {
           case "turn.evidence": {
-            if (!isSelf(deps.selfDaemonIds(), str2(p.ownerDaemonId))) return;
+            if (!isSelf(deps.selfDaemonIds(), str22(p.ownerDaemonId))) return;
             const evidence = p.evidence;
             if (!isTurnEvidence(evidence)) {
               log.warn(`turn.ingest: evidence entry ${entry.writer}:${entry.seq} (mesh ${entry.meshId}) carries no valid evidence \u2014 skipped`);
@@ -59833,15 +60262,15 @@ ${summary}`;
             return;
           }
           case "turn.committed": {
-            const attemptId = str2(p.attemptId);
+            const attemptId = str22(p.attemptId);
             if (!attemptId || typeof p.generation !== "number") return;
             deps.releaseAttemptRef?.({ attemptId, generation: p.generation });
             counters8.released++;
             return;
           }
           case "turn.notify": {
-            if (!isSelf(deps.selfDaemonIds(), str2(p.targetDaemonId))) return;
-            const eventId = str2(p.eventId);
+            if (!isSelf(deps.selfDaemonIds(), str22(p.targetDaemonId))) return;
+            const eventId = str22(p.eventId);
             if (!eventId || !isNotifyKind2(p.notify)) return;
             const { inserted } = deps.ledger.notifyMeshEvent({
               meshId: entry.meshId,
@@ -59850,9 +60279,9 @@ ${summary}`;
               at: typeof p.at === "number" ? p.at : void 0,
               notify: p.notify,
               targetDaemonId: deps.ledger.selfDaemonId,
-              ...str2(p.targetSessionId) ? { targetSessionId: str2(p.targetSessionId) } : {},
-              ...str2(p.taskId) ? { taskId: str2(p.taskId) } : {},
-              ...str2(p.attemptId) ? { attemptId: str2(p.attemptId) } : {},
+              ...str22(p.targetSessionId) ? { targetSessionId: str22(p.targetSessionId) } : {},
+              ...str22(p.taskId) ? { taskId: str22(p.taskId) } : {},
+              ...str22(p.attemptId) ? { attemptId: str22(p.attemptId) } : {},
               ...entry.ref && isSummaryRef(entry.ref) ? { ref: entry.ref } : {},
               payload: { relayedFrom: entry.writer, relayedSeq: entry.seq }
             });
@@ -59869,7 +60298,7 @@ ${summary}`;
     }
     function textOf(payload) {
       if (!payload) return null;
-      return str2(payload.text) ?? str2(payload.summary) ?? str2(payload.coordinatorMessage) ?? null;
+      return str22(payload.text) ?? str22(payload.summary) ?? str22(payload.coordinatorMessage) ?? null;
     }
     function stopReasonOf(attempt) {
       if (isUnredeliveredDirectFailure(attempt)) return "direct_not_redelivered";
@@ -59883,14 +60312,14 @@ ${summary}`;
       }
     }
     function nodeLabelFor(attempt, notice) {
-      const explicit = str2(notice?.nodeLabel);
+      const explicit = str22(notice?.nodeLabel);
       if (explicit) return explicit;
       if (attempt?.nodeId) return `Node '${attempt.nodeId}'`;
       return attempt?.providerType ? `Worker (${attempt.providerType})` : "Worker";
     }
     function evidenceRowFor(ctx, notifyRow) {
       if (!notifyRow) return null;
-      const textEventId = str2(notifyRow.payload?.textEventId);
+      const textEventId = str22(notifyRow.payload?.textEventId);
       if (textEventId) {
         const opener = ctx.ledger.store.getEvent(textEventId);
         if (opener) return opener;
@@ -59907,12 +60336,12 @@ ${summary}`;
       const ref = isSummaryRef(rowPayload.ref) ? rowPayload.ref : void 0;
       const handoff = ref && ctx.resolveHandoff ? ctx.resolveHandoff(ref) : null;
       const missing = ref && !handoff ? 1 : 0;
-      const event = str2(rowPayload.event) ?? null;
+      const event = str22(rowPayload.event) ?? null;
       if (notify2 === "mesh_event") {
-        const source = localPayload2 && !str2(localPayload2.relayedFrom) ? localPayload2 : handoff;
-        const eventName = str2(source?.event) ?? (event && event !== "relayed" ? event : null);
-        const nodeLabel = str2(source?.nodeLabel) ?? "Mesh";
-        let text = str2(source?.coordinatorMessage) ?? null;
+        const source = localPayload2 && !str22(localPayload2.relayedFrom) ? localPayload2 : handoff;
+        const eventName = str22(source?.event) ?? (event && event !== "relayed" ? event : null);
+        const nodeLabel = str22(source?.nodeLabel) ?? "Mesh";
+        let text = str22(source?.coordinatorMessage) ?? null;
         if (!text && source && eventName) {
           text = buildMeshSystemMessage({
             event: eventName,
@@ -59922,7 +60351,7 @@ ${summary}`;
           }) || null;
         }
         if (!text) {
-          text = missing ? `[System] A mesh notice${str2(entry.taskId) ? ` for task ${str2(entry.taskId)}` : ""} is not yet available on this daemon \u2014 call mesh_task_report once it replicates; do not poll repeatedly.` : `[System] ${nodeLabel} reported a mesh event${str2(entry.taskId) ? ` for task ${str2(entry.taskId)}` : ""}. Use mesh_status or mesh_read_chat once if you need details.`;
+          text = missing ? `[System] A mesh notice${str22(entry.taskId) ? ` for task ${str22(entry.taskId)}` : ""} is not yet available on this daemon \u2014 call mesh_task_report once it replicates; do not poll repeatedly.` : `[System] ${nodeLabel} reported a mesh event${str22(entry.taskId) ? ` for task ${str22(entry.taskId)}` : ""}. Use mesh_status or mesh_read_chat once if you need details.`;
         }
         if (eventName && shouldForceInjectMeshEvent(eventName)) {
           const line = ctx.statusLine?.(meshId);
@@ -59932,27 +60361,27 @@ ${line}`;
         }
         return { text, notify: notify2, event: eventName, missing };
       }
-      const attemptId = str2(entry.attemptId);
+      const attemptId = str22(entry.attemptId);
       const attempt = attemptId ? ctx.ledger.getAttempt(attemptId) : null;
       const evidenceRow = evidenceRowFor(ctx, row);
       const envelope = evidenceRow && isRecord5(evidenceRow.payload.local) && isRecord5(evidenceRow.payload.local.envelope) ? evidenceRow.payload.local.envelope : null;
       const notice = (isRecord5(envelope?.notice) ? envelope.notice : null) ?? (isRecord5(handoff?.notice) ? handoff.notice : null);
       const localTexts = /* @__PURE__ */ new Map();
-      const localSummary = str2(envelope?.finalSummary) ?? textOf(handoff);
+      const localSummary = str22(envelope?.finalSummary) ?? textOf(handoff);
       if (localSummary) localTexts.set("summary", localSummary);
-      const modalMessage = str2(notice?.modalMessage);
+      const modalMessage = str22(notice?.modalMessage);
       if (modalMessage) localTexts.set("modal", modalMessage);
-      const note = str2(notice?.note);
+      const note = str22(notice?.note);
       if (note) localTexts.set("note", note);
       const reason = attempt?.terminal?.reason;
       const renderKind = notify2 === "failed" && (reason === "finalization_timeout_no_response" || reason === "hollow_max_retries") ? "completed" : notify2;
       const scalars = {
         nodeLabel: nodeLabelFor(attempt, notice),
-        ...attempt?.taskId ? { taskId: attempt.taskId } : str2(entry.taskId) ? { taskId: str2(entry.taskId) } : {},
+        ...attempt?.taskId ? { taskId: attempt.taskId } : str22(entry.taskId) ? { taskId: str22(entry.taskId) } : {},
         ...attempt ? { attemptId: attempt.attemptId, generation: attempt.generation, sessionId: attempt.sessionId } : {},
         ...attempt?.nodeId ? { nodeId: attempt.nodeId } : {},
         ...attempt?.providerType ? { providerType: attempt.providerType } : {},
-        ...str2(notice?.providerSessionId) ? { providerSessionId: str2(notice?.providerSessionId) } : {},
+        ...str22(notice?.providerSessionId) ? { providerSessionId: str22(notice?.providerSessionId) } : {},
         strength: notify2 === "candidate" || attempt?.terminal?.strength === "weak" ? "weak" : "genuine",
         stopReason: stopReasonOf(attempt),
         ...isUnredeliveredDirectFailure(attempt) ? { directFailureCause: attempt.terminal.reason } : {},
@@ -59961,12 +60390,12 @@ ${line}`;
         ...reason === "hollow_max_retries" && attempt ? { hollow: { requeueCount: attempt.hollowCount, maxRetries: attempt.maxTaskRetries, maxRetriesExhausted: true } } : {},
         ...notify2 === "cancelled" && reason ? { cancelReason: reason } : {},
         ...notify2 === "late_completion" && typeof row?.generation === "number" ? { priorGeneration: row.generation } : {},
-        ...str2(notice?.promptId) ? { promptId: str2(notice?.promptId) } : {},
+        ...str22(notice?.promptId) ? { promptId: str22(notice?.promptId) } : {},
         ...Array.isArray(notice?.questions) ? { questions: notice.questions } : {},
         ...notify2 === "progress" && attempt?.taskId ? { progressTaskId: attempt.taskId } : {},
         ...isRecord5(notice?.completionMetadata) ? { completionMetadata: notice.completionMetadata } : {},
         ...typeof notice?.stalledMs === "number" ? { stalledMs: notice.stalledMs, meshWorkerStall: true } : {},
-        ...str2(notice?.observedStatus) ? { observedStatus: str2(notice?.observedStatus) } : {}
+        ...str22(notice?.observedStatus) ? { observedStatus: str22(notice?.observedStatus) } : {}
       };
       const refs = {};
       if (localTexts.has("summary")) refs.summary = localRef("summary");
@@ -60044,17 +60473,17 @@ ${line}`;
         if (entry.kind !== "turn.notify" || !isRecord5(entry.payload)) return { outcome: "skipped", why: "not_notify" };
         if (!entry.own) return { outcome: "skipped", why: "foreign" };
         const p = entry.payload;
-        if (!isSelf(deps.selfDaemonIds(), str2(p.targetDaemonId))) return { outcome: "skipped", why: "not_addressed" };
+        if (!isSelf(deps.selfDaemonIds(), str22(p.targetDaemonId))) return { outcome: "skipped", why: "not_addressed" };
         const key2 = claimKey(entry.writer, entry.seq);
         const store2 = deps.ledger.store;
         if (store2.hasEvent(key2)) return { outcome: "skipped", why: "already_delivered" };
-        const row = (str2(p.eventId) ? store2.getEvent(str2(p.eventId)) : null) ?? store2.findPublishedEvent(entry.writer, entry.seq);
-        const eventName = str2(row?.payload.event);
+        const row = (str22(p.eventId) ? store2.getEvent(str22(p.eventId)) : null) ?? store2.findPublishedEvent(entry.writer, entry.seq);
+        const eventName = str22(row?.payload.event);
         if (eventName && deps.isControlEvent?.(eventName)) return { outcome: "skipped", why: "control" };
         const notify2 = isNotifyKind2(p.notify) ? p.notify : "mesh_event";
         const at = typeof p.at === "number" ? p.at : row?.atMs ?? now();
-        const sessionForClaim = str2(p.targetSessionId) ?? "";
-        const attemptId = str2(p.attemptId);
+        const sessionForClaim = str22(p.targetSessionId) ?? "";
+        const attemptId = str22(p.attemptId);
         const attempt = attemptId ? deps.ledger.getAttempt(attemptId) : null;
         const suppression = evaluateNotifySuppression({ notify: notify2, attempt, generation: row?.generation ?? null });
         if (suppression) {
@@ -60085,7 +60514,7 @@ ${line}`;
             return { outcome: "acked_elsewhere" };
           }
           const coordinators = deps.coordinators(entry.meshId).filter((c) => !refusedSessions.has(c.sessionId));
-          const route = routeNotice({ targetSessionId: str2(p.targetSessionId) ?? null, coordinators, pastCeiling: !backlog && now() >= deadline });
+          const route = routeNotice({ targetSessionId: str22(p.targetSessionId) ?? null, coordinators, pastCeiling: !backlog && now() >= deadline });
           if (backlog && route.kind !== "deliver") return { outcome: "not_now" };
           if (route.kind === "none") {
             counters8.noCoordinator++;
@@ -60144,7 +60573,7 @@ ${line}`;
     function listRecentDeliveredNotices(ctx, sinceMs, limit = 200) {
       const out = [];
       for (const claim of ctx.ledger.store.listRecentDeliveryClaims(sinceMs, limit)) {
-        if (!TYPED_DELIVERY_OUTCOMES.has(str2(claim.payload.outcome) ?? "")) continue;
+        if (!TYPED_DELIVERY_OUTCOMES.has(str22(claim.payload.outcome) ?? "")) continue;
         const coords = claim.eventId.slice("delivered:".length);
         const cut = coords.lastIndexOf(":");
         const seq2 = cut > 0 ? Number(coords.slice(cut + 1)) : NaN;
@@ -60159,7 +60588,7 @@ ${line}`;
           claimEventId: claim.eventId,
           meshId,
           event: rendered.event ?? rendered.notify,
-          taskId: str2(entry.taskId) ?? null,
+          taskId: str22(entry.taskId) ?? null,
           deliveredAt: claim.recordedAt,
           text: rendered.text
         });
@@ -60171,8 +60600,8 @@ ${line}`;
       const selfIds = deps.selfDaemonIds();
       return deps.ledger.store.listUndeliveredNotifies(meshId, { sinceMs: now() - NOTICE_BACKLOG_WINDOW_MS, limit }).filter((row) => {
         const entry = isRecord5(row.payload.entry) ? row.payload.entry : null;
-        if (!entry || !isSelf(selfIds, str2(entry.targetDaemonId))) return false;
-        const event = str2(row.payload.event);
+        if (!entry || !isSelf(selfIds, str22(entry.targetDaemonId))) return false;
+        const event = str22(row.payload.event);
         return !(event && deps.isControlEvent?.(event));
       });
     }
@@ -60186,15 +60615,15 @@ ${line}`;
         if (!writer || seq2 === null) continue;
         const entry = row.payload.entry;
         const notify2 = isNotifyKind2(entry.notify) ? entry.notify : "mesh_event";
-        const attemptId = str2(entry.attemptId);
+        const attemptId = str22(entry.attemptId);
         const suppression = evaluateNotifySuppression({ notify: notify2, attempt: attemptId ? deps.ledger.getAttempt(attemptId) : null, generation: row.generation });
         if (suppression) {
-          if (ack) deps.ledger.claimDelivery({ writer, seq: seq2, meshId, sessionId: str2(entry.targetSessionId) ?? "", outcome: `suppressed:${suppression}` });
+          if (ack) deps.ledger.claimDelivery({ writer, seq: seq2, meshId, sessionId: str22(entry.targetSessionId) ?? "", outcome: `suppressed:${suppression}` });
           continue;
         }
         const rendered = renderNotice(deps, meshId, entry, row);
         if (ack) {
-          deps.ledger.claimDelivery({ writer, seq: seq2, meshId, sessionId: opts.surfacedSessionId ?? str2(entry.targetSessionId) ?? "", outcome: "mcp_read" });
+          deps.ledger.claimDelivery({ writer, seq: seq2, meshId, sessionId: opts.surfacedSessionId ?? str22(entry.targetSessionId) ?? "", outcome: "mcp_read" });
         }
         if (!rendered.text.trim()) continue;
         const local = isRecord5(row.payload.local) && isRecord5(row.payload.local.payload) ? row.payload.local.payload : {};
@@ -60205,13 +60634,13 @@ ${line}`;
           meshId,
           event: rendered.event ?? notify2,
           notify: notify2,
-          nodeLabel: str2(local.nodeLabel) ?? "",
+          nodeLabel: str22(local.nodeLabel) ?? "",
           coordinatorMessage: rendered.text,
           queuedAt: row.atMs,
-          ...str2(entry.taskId) ? { taskId: str2(entry.taskId) } : {},
-          ...str2(local.nodeId) ? { nodeId: str2(local.nodeId) } : {},
-          ...str2(local.workspace) ? { workspace: str2(local.workspace) } : {},
-          ...str2(entry.targetSessionId) ? { targetCoordinatorSessionId: str2(entry.targetSessionId) } : {},
+          ...str22(entry.taskId) ? { taskId: str22(entry.taskId) } : {},
+          ...str22(local.nodeId) ? { nodeId: str22(local.nodeId) } : {},
+          ...str22(local.workspace) ? { workspace: str22(local.workspace) } : {},
+          ...str22(entry.targetSessionId) ? { targetCoordinatorSessionId: str22(entry.targetSessionId) } : {},
           ...isRecord5(local.metadataEvent) ? { metadataEvent: local.metadataEvent } : {}
         });
         counters8.mcpRead++;
@@ -60239,18 +60668,18 @@ ${line}`;
       for (const row of deps.ledger.store.listUndeliveredNotifies(meshId, { sinceMs: now() - NOTICE_BACKLOG_WINDOW_MS, limit: 200 })) {
         if (!row.srcWriter || row.publishedSeq === null) continue;
         const entry = isRecord5(row.payload.entry) ? row.payload.entry : null;
-        if (!entry || !isSelf(selfIds, str2(entry.targetDaemonId))) continue;
+        if (!entry || !isSelf(selfIds, str22(entry.targetDaemonId))) continue;
         const local = isRecord5(row.payload.local) && isRecord5(row.payload.local.payload) ? row.payload.local.payload : null;
         const ref = isSummaryRef(row.payload.ref) ? row.payload.ref : void 0;
-        const source = local && !str2(local.relayedFrom) ? local : ref ? deps.resolveHandoff?.(ref) ?? null : null;
-        const name = str2(row.payload.event) === "relayed" ? str2(source?.event) : str2(row.payload.event);
+        const source = local && !str22(local.relayedFrom) ? local : ref ? deps.resolveHandoff?.(ref) ?? null : null;
+        const name = str22(row.payload.event) === "relayed" ? str22(source?.event) : str22(row.payload.event);
         if (name !== event || !source) continue;
         notices.push({
           writer: row.srcWriter,
           seq: row.publishedSeq,
           event: name,
-          ...str2(source.nodeId) ? { nodeId: str2(source.nodeId) } : {},
-          ...str2(source.workspace) ? { workspace: str2(source.workspace) } : {},
+          ...str22(source.nodeId) ? { nodeId: str22(source.nodeId) } : {},
+          ...str22(source.workspace) ? { workspace: str22(source.workspace) } : {},
           metadataEvent: isRecord5(source.metadataEvent) ? source.metadataEvent : {},
           queuedAt: row.atMs
         });
@@ -60266,7 +60695,7 @@ ${line}`;
       for (const row of deps.ledger.store.listUndeliveredNotifies(meshId, { sinceMs: now() - NOTICE_BACKLOG_WINDOW_MS, limit: 500 })) {
         if (!row.srcWriter || row.publishedSeq === null) continue;
         const local = isRecord5(row.payload.local) && isRecord5(row.payload.local.payload) ? row.payload.local.payload : null;
-        const event = str2(row.payload.event);
+        const event = str22(row.payload.event);
         if (!event || !local) continue;
         if (!match(event, isRecord5(local.metadataEvent) ? local.metadataEvent : {})) continue;
         if (deps.ledger.claimDelivery({ writer: row.srcWriter, seq: row.publishedSeq, meshId, sessionId: "", outcome: "retracted" })) retracted++;
@@ -60288,10 +60717,10 @@ ${line}`;
       }
       const queued = runtime.notify(notice).queued;
       const superseded = NOTICE_SUPERSEDES[notice.event];
-      const jobId = str2(notice.metadataEvent?.jobId);
+      const jobId = str22(notice.metadataEvent?.jobId);
       if (superseded && jobId) {
         try {
-          runtime.retract(notice.meshId, (event, meta3) => superseded.includes(event) && str2(meta3.jobId) === jobId);
+          runtime.retract(notice.meshId, (event, meta3) => superseded.includes(event) && str22(meta3.jobId) === jobId);
         } catch {
         }
       }
@@ -60301,7 +60730,7 @@ ${line}`;
       if (!meshId || !taskId) return 0;
       const runtime = boundNoticeRuntime;
       if (!runtime) return 0;
-      return runtime.retract(meshId, (event, meta3) => event === "mesh:dispatch_blocked" && str2(meta3.taskId) === taskId);
+      return runtime.retract(meshId, (event, meta3) => event === "mesh:dispatch_blocked" && str22(meta3.taskId) === taskId);
     }
     var import_crypto6;
     var NOOP_LOG;
@@ -61012,10 +61441,10 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
       return hex3;
     }
-    function utf8ToBytes(str7) {
-      if (typeof str7 !== "string")
+    function utf8ToBytes(str8) {
+      if (typeof str8 !== "string")
         throw new Error("string expected");
-      return new Uint8Array(new TextEncoder().encode(str7));
+      return new Uint8Array(new TextEncoder().encode(str8));
     }
     function toBytes(data) {
       if (typeof data === "string")
@@ -68915,6 +69344,89 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_record();
       }
     });
+    function isGraphBacked(store2, meshId, taskId) {
+      try {
+        return !!store2.graphStore().findNodeByQueueTaskId(meshId, taskId);
+      } catch {
+        return false;
+      }
+    }
+    function queueRootReasonCode(entry, machineReason) {
+      if (machineReason) {
+        const code = reasonCodeOf(machineReason);
+        if (code !== "unspecified") return code;
+      }
+      const fromRow = reasonCodeOf(entry.cancelReason);
+      if (entry.status === "cancelled") return fromRow === "dependency_failed" ? fromRow : "operator_cancel";
+      return fromRow === "unspecified" ? "task_failed" : fromRow;
+    }
+    function collectWaitingQueueDependents(store2, meshId, rootId) {
+      const pending = store2.getQueueEntries(meshId, ["pending"]);
+      const out = [];
+      const seen = /* @__PURE__ */ new Set([rootId]);
+      let frontier = [rootId];
+      while (frontier.length > 0) {
+        const next = [];
+        for (const current2 of frontier) {
+          for (const entry of pending) {
+            if (seen.has(entry.id) || !Array.isArray(entry.dependsOn) || !entry.dependsOn.includes(current2)) continue;
+            seen.add(entry.id);
+            next.push(entry.id);
+            if (isGraphBacked(store2, meshId, entry.id)) continue;
+            out.push({ taskId: entry.id, ...current2 !== rootId ? { via: current2 } : {} });
+          }
+        }
+        frontier = next;
+      }
+      return out;
+    }
+    function insertQueueDependencyNoticeInTxn(meshId, rootId, policy, cancelled, machineReason) {
+      const store2 = MeshRuntimeStore.getInstance();
+      const root = store2.findQueueEntryById(meshId, rootId);
+      if (!root || root.status !== "failed" && root.status !== "cancelled") return false;
+      const rootRef = {
+        taskId: root.id,
+        outcome: root.status,
+        reasonCode: queueRootReasonCode(root, machineReason)
+      };
+      let kind;
+      let body;
+      if (policy === "cancel") {
+        const listed = cancelled.filter((c) => !isGraphBacked(store2, meshId, c.id)).map((c) => {
+          const via = (c.cancelReason ?? "").startsWith("dependency_failed:") ? c.cancelReason.slice("dependency_failed:".length) : void 0;
+          return { taskId: c.id, ...via && via !== rootId ? { via } : {} };
+        });
+        if (listed.length === 0) return false;
+        kind = "queue_dependency_cancelled";
+        body = { cancelled: listed };
+      } else {
+        const waiting = collectWaitingQueueDependents(store2, meshId, rootId);
+        if (waiting.length === 0) return false;
+        kind = "queue_dependency_blocked";
+        body = { waiting };
+      }
+      const generation = store2.graphStore().getLatestOutput(rootId)?.version ?? 0;
+      const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+      store2.graphStore().insertOutboxEvent({
+        id: newMeshGraphOutboxId(),
+        meshId,
+        kind,
+        payload: JSON.stringify({ generation, root: rootRef, ...body }),
+        status: "pending",
+        attemptCount: 0,
+        createdAt: nowIso,
+        updatedAt: nowIso
+      });
+      return true;
+    }
+    var init_mesh_queue_dependency_notice = __esm2({
+      "src/mesh/mesh-queue-dependency-notice.ts"() {
+        "use strict";
+        init_mesh_runtime_store();
+        init_mesh_graph_types();
+        init_mesh_graph_stop_notice();
+      }
+    });
     function withEntryLock(fn) {
       return MeshRuntimeStore.getInstance().transaction(fn);
     }
@@ -68966,7 +69478,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       readFleetTaskActivity: () => readFleetTaskActivity,
       readOwnTaskLifecycle: () => readOwnTaskLifecycle
     });
-    function str22(value) {
+    function str3(value) {
       return typeof value === "string" && value.length > 0 ? value : void 0;
     }
     function scalarPayload(value) {
@@ -68982,29 +69494,29 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (!p || typeof p !== "object" || Array.isArray(p)) return null;
       const payload = p;
       if (input.kind === MESH_RECORD_APPEND_KIND) {
-        const id22 = str22(payload.eventId) ?? str22(payload.id);
-        const ledgerKind = str22(payload.ledgerKind);
+        const id22 = str3(payload.eventId) ?? str3(payload.id);
+        const ledgerKind = str3(payload.ledgerKind);
         if (!id22 || !ledgerKind) return null;
         const at = typeof payload.at === "number" && Number.isFinite(payload.at) && payload.at > 0 ? payload.at : Date.parse(typeof payload.timestamp === "string" ? payload.timestamp : "");
         return {
           eventId: id22,
           ledgerKind,
-          taskId: str22(payload.taskId) ?? null,
-          sessionId: str22(payload.sessionId) ?? null,
-          nodeId: str22(payload.nodeId) ?? null,
+          taskId: str3(payload.taskId) ?? null,
+          sessionId: str3(payload.sessionId) ?? null,
+          nodeId: str3(payload.nodeId) ?? null,
           atMs: Number.isFinite(at) ? at : 0,
           payload
         };
       }
       if (input.kind.startsWith("turn.")) {
-        const eventId = str22(payload.eventId);
+        const eventId = str3(payload.eventId);
         if (!eventId) return null;
         const at = typeof payload.at === "number" && Number.isFinite(payload.at) ? payload.at : 0;
         return {
           eventId,
           ledgerKind: input.kind,
-          taskId: str22(payload.taskId) ?? null,
-          sessionId: str22(payload.sessionId) ?? str22(payload.targetSessionId) ?? null,
+          taskId: str3(payload.taskId) ?? null,
+          sessionId: str3(payload.sessionId) ?? str3(payload.targetSessionId) ?? null,
           nodeId: null,
           atMs: at,
           payload
@@ -69030,7 +69542,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         kind: row.ledger_kind ?? row.kind,
         nodeId: row.node_id ?? void 0,
         sessionId: row.session_id ?? void 0,
-        providerType: record22 ? str22(parsed.providerType) : void 0,
+        providerType: record22 ? str3(parsed.providerType) : void 0,
         taskId: row.task_id ?? void 0,
         payload: scalars
       };
@@ -69894,13 +70406,13 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const inserted = [];
         specs.forEach((spec, i) => {
           const { ref, message, ...taskOpts } = spec;
-          const label = ref ? `'${ref}'` : `#${i}`;
+          const label2 = ref ? `'${ref}'` : `#${i}`;
           const dependsOn = normalizeDependsOn(spec.dependsOn).map((dep) => {
             const mapped = idByRef.get(dep);
             if (mapped) return mapped;
             if (store2.findQueueEntryById(meshId, dep)) return dep;
             throw new Error(
-              `unknown_dependency: task ${label} depends on '${dep}', which is neither a ref in this batch nor an existing task id` + (idByRef.size ? ` (batch refs: ${[...idByRef.keys()].join(", ")})` : "")
+              `unknown_dependency: task ${label2} depends on '${dep}', which is neither a ref in this batch nor an existing task id` + (idByRef.size ? ` (batch refs: ${[...idByRef.keys()].join(", ")})` : "")
             );
           });
           inserted.push(enqueueTask(meshId, message, {
@@ -69981,9 +70493,12 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         return "block";
       }
     }
-    function propagateDependencyFailure(meshId, failedTaskId) {
+    function propagateDependencyFailure(meshId, failedTaskId, machineReason) {
       const policy = resolveDependencyFailurePolicy(meshId);
-      if (policy !== "cancel") return [];
+      if (policy !== "cancel") {
+        tellCoordinatorQueueDependency(meshId, failedTaskId, "block", [], machineReason);
+        return [];
+      }
       const store2 = MeshRuntimeStore.getInstance();
       const cancelled = [];
       const frontier = [failedTaskId];
@@ -69994,15 +70509,29 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         for (const dependent of dependents) {
           if (seen.has(dependent.id)) continue;
           seen.add(dependent.id);
-          dependent.status = "cancelled";
           dependent.cancelledAt = (/* @__PURE__ */ new Date()).toISOString();
           dependent.cancelReason = `dependency_failed:${currentId}`;
           store2.updateQueueEntry(dependent);
-          cancelled.push(dependent);
+          const committed = commitQueueTerminalThroughRunner(meshId, dependent.id, "cancelled", "cancellation", dependent.cancelReason);
+          cancelled.push(committed ?? dependent);
           frontier.push(dependent.id);
         }
       }
+      tellCoordinatorQueueDependency(meshId, failedTaskId, "cancel", cancelled, machineReason);
       return cancelled;
+    }
+    function tellCoordinatorQueueDependency(meshId, rootId, policy, cancelled, machineReason) {
+      try {
+        if (insertQueueDependencyNoticeInTxn(meshId, rootId, policy, cancelled, machineReason)) {
+          drainMeshGraphOutbox(meshId);
+        }
+      } catch (e) {
+        LOG.warn("MeshQueue", `Queue dependency notice for ${rootId} failed (mesh ${meshId}): ${e?.message || e}`);
+      }
+    }
+    function commitQueueTerminalThroughRunner(meshId, taskId, status, source, reason) {
+      const commit2 = commitTaskTerminalAndAdvanceGraph({ meshId, taskId, status, source, reason });
+      return commit2.entry ?? MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
     }
     function scheduleMissionCloseCandidateCheck(meshId, entries) {
       const missionIds = /* @__PURE__ */ new Set();
@@ -70047,7 +70576,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             reason: `task_status_terminal:${status}`,
             envelope: opts?.envelope
           });
-          const cascaded2 = DEPENDENCY_FAILURE_TERMINALS.has(status) ? propagateDependencyFailure(meshId, taskId) : [];
+          const cascaded2 = DEPENDENCY_FAILURE_TERMINALS.has(status) ? propagateDependencyFailure(meshId, taskId, `task_status_terminal:${status}`) : [];
           return { entry: commit2.entry ?? entry, cascaded: cascaded2 };
         }
         entry.status = status;
@@ -70127,13 +70656,13 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (opts?.dispatchFailure && !opts?.force) {
           const dispatchFailures = (entry.dispatchFailureCount || 0) + 1;
           if (dispatchFailures > MAX_DISPATCH_FAILURES) {
-            entry.status = "failed";
             entry.cancelReason = `dispatch_never_started: ${dispatchFailures - 1} consecutive dispatch failure(s) before the worker started the task, limit is ${MAX_DISPATCH_FAILURES}`;
             entry.dispatchFailureCount = dispatchFailures;
             entry.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
             MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+            const failed = commitQueueTerminalThroughRunner(meshId, taskId, "failed", "queue_policy", entry.cancelReason);
             const cascaded = propagateDependencyFailure(meshId, taskId);
-            return { entry, cascaded, missionAffected: true };
+            return { entry: failed ?? entry, cascaded, missionAffected: true };
           }
           entry.status = "pending";
           delete entry.blockedReason;
@@ -70160,12 +70689,12 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const currentCount = entry.requeueCount || 0;
         const maxRetries = opts?.maxRetries ?? entry.maxRetries ?? 1;
         if (!opts?.force && currentCount >= maxRetries) {
-          entry.status = "failed";
           entry.cancelReason = `max_retries_exceeded: requeued ${currentCount} time(s), limit is ${maxRetries}`;
           entry.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
           MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+          const failed = commitQueueTerminalThroughRunner(meshId, taskId, "failed", "queue_policy", entry.cancelReason);
           const cascaded = propagateDependencyFailure(meshId, taskId);
-          return { entry, cascaded, missionAffected: true };
+          return { entry: failed ?? entry, cascaded, missionAffected: true };
         }
         entry.status = "pending";
         delete entry.blockedReason;
@@ -70219,13 +70748,13 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (entry.status !== "pending" || !taskIsParked(entry)) return null;
         if (!parkedTaskRetentionExpired(entry, Date.now(), opts?.retentionMs)) return null;
         const hours = Math.round((opts?.retentionMs ?? PARKED_TASK_RETENTION_MS) / 36e5);
-        entry.status = "failed";
         entry.cancelReason = `${PARK_RETENTION_EXPIRED_REASON}: parked for over ${hours}h (addressed to session ${entry.parked?.targetSessionId || "unknown"}) with no coordinator decision`;
         entry.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+        const failed = commitQueueTerminalThroughRunner(meshId, taskId, "failed", "queue_policy", entry.cancelReason);
         const cascaded = propagateDependencyFailure(meshId, taskId);
         LOG.warn("MeshQueue", `PIN-PARKING retention: task ${taskId} (mesh ${meshId}) stayed parked past ${hours}h with no coordinator decision; failed it (dependents unblocked). This is reported to the coordinator, never a silent drop.`);
-        return { entry, cascaded, missionAffected: true };
+        return { entry: failed ?? entry, cascaded, missionAffected: true };
       });
       if (result?.missionAffected) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
       return result ? result.entry : null;
@@ -70306,8 +70835,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function isTerminalQueueStatus(status) {
       return TERMINAL_TASK_STATUSES.has(status);
     }
-    function propagateLedgerDependencyFailure(meshId, taskId, status) {
-      return DEPENDENCY_FAILURE_TERMINALS.has(status) ? withQueueLock(meshId, () => propagateDependencyFailure(meshId, taskId)) : [];
+    function propagateLedgerDependencyFailure(meshId, taskId, status, reason) {
+      return DEPENDENCY_FAILURE_TERMINALS.has(status) ? withQueueLock(meshId, () => propagateDependencyFailure(meshId, taskId, reason)) : [];
     }
     function requeueTaskForLedgerReclaim(meshId, taskId, reason, nowIso) {
       return withQueueLock(meshId, () => {
@@ -70373,6 +70902,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_task_mode_guardrail();
         init_mesh_node_capability_tags();
         init_mesh_direct_dispatch();
+        init_mesh_queue_dependency_notice();
         init_mesh_autolaunch_spawn_budget();
         init_mesh_direct_dispatch();
         DEPENDENCY_FAILURE_TERMINALS = /* @__PURE__ */ new Set(["failed", "cancelled"]);
@@ -71079,6 +71609,15 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             ).all(meshId, graphId) : this.db.prepare(
               `SELECT * FROM mesh_graph_outbox WHERE mesh_id = ? ORDER BY created_at ASC`
             ).all(meshId);
+            return rows.map(mapOutboxRow);
+          }
+          /** Outbox rows of the given kinds for one mesh (any graph, incl. graph-less queue-chain rows). */
+          listOutboxEventsByKinds(meshId, kinds) {
+            if (kinds.length === 0) return [];
+            const placeholders = kinds.map(() => "?").join(",");
+            const rows = this.db.prepare(
+              `SELECT * FROM mesh_graph_outbox WHERE mesh_id = ? AND kind IN (${placeholders}) ORDER BY created_at ASC`
+            ).all(meshId, ...kinds);
             return rows.map(mapOutboxRow);
           }
           /** Phase-B drain bookkeeping: terminal delivery state for one outbox row. */
@@ -72568,7 +73107,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         return {};
       }
     }
-    function str3(v) {
+    function str4(v) {
       return typeof v === "string" && v.trim() ? v.trim() : void 0;
     }
     function exportRows(db, path74) {
@@ -72605,21 +73144,21 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const at = Date.parse(row.timestamp);
         const atMs = Number.isFinite(at) ? at : Date.now();
         if (row.kind === NOTE_KIND) {
-          const text = str3(payload.text);
+          const text = str4(payload.text);
           if (!text) continue;
           const meta3 = {
             ...payload.pinned === true ? { pinned: true } : {},
-            ...str3(payload.expiresAt) ? { expiresAt: str3(payload.expiresAt) } : {},
-            ...str3(payload.supersedes) ? { supersedes: str3(payload.supersedes) } : {},
-            ...str3(payload.subjectKey) ? { subjectKey: str3(payload.subjectKey) } : {},
-            ...str3(payload.sourceCoordinator) ? { sourceCoordinator: str3(payload.sourceCoordinator) } : {}
+            ...str4(payload.expiresAt) ? { expiresAt: str4(payload.expiresAt) } : {},
+            ...str4(payload.supersedes) ? { supersedes: str4(payload.supersedes) } : {},
+            ...str4(payload.subjectKey) ? { subjectKey: str4(payload.subjectKey) } : {},
+            ...str4(payload.sourceCoordinator) ? { sourceCoordinator: str4(payload.sourceCoordinator) } : {}
           };
           const created = Date.parse(typeof payload.createdAt === "string" ? payload.createdAt : "");
           if (store2.insertOperatingNote({
             noteId: row.id,
             meshId: row.mesh_id,
             text,
-            category: str3(payload.category) ?? null,
+            category: str4(payload.category) ?? null,
             callerSessionId: row.session_id,
             createdAt: Number.isFinite(created) ? created : atMs,
             meta: meta3
@@ -72629,8 +73168,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             idsByText.set(key2, [...idsByText.get(key2) ?? [], row.id]);
           }
         } else {
-          const targetId = str3(payload.targetNoteId);
-          const targetText = str3(payload.targetFingerprint);
+          const targetId = str4(payload.targetNoteId);
+          const targetText = str4(payload.targetFingerprint);
           if (targetId && store2.tombstoneOperatingNote(row.mesh_id, targetId, atMs)) report.noteTombstonesApplied++;
           for (const id22 of targetText ? idsByText.get(`${row.mesh_id}\0${targetText}`) ?? [] : []) {
             if (store2.tombstoneOperatingNote(row.mesh_id, id22, atMs)) report.noteTombstonesApplied++;
@@ -72643,7 +73182,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               category: null,
               callerSessionId: null,
               createdAt: atMs,
-              meta: { textTombstone: true, ...str3(payload.reason) ? { forgetReason: str3(payload.reason) } : {} }
+              meta: { textTombstone: true, ...str4(payload.reason) ? { forgetReason: str4(payload.reason) } : {} }
             });
           }
         }
@@ -72888,7 +73427,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         return {};
       }
     }
-    function str4(v) {
+    function str5(v) {
       return typeof v === "string" && v.trim() ? v.trim() : null;
     }
     function safeMeshId2(meshId) {
@@ -72921,9 +73460,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             continue;
           }
           if (!entry || typeof entry !== "object" || "_table" in entry) continue;
-          const id22 = str4(entry.id);
-          const meshId = str4(entry.meshId);
-          const kind = str4(entry.kind);
+          const id22 = str5(entry.id);
+          const meshId = str5(entry.meshId);
+          const kind = str5(entry.kind);
           const at = Date.parse(typeof entry.timestamp === "string" ? entry.timestamp : "");
           const payload = entry.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload) ? entry.payload : null;
           if (!id22 || !meshId || !kind || !payload || !Number.isFinite(at) || safeMeshId2(meshId) !== m[1]) continue;
@@ -72932,10 +73471,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             eventId: id22,
             meshId,
             kind,
-            nodeId: str4(entry.nodeId),
-            sessionId: str4(entry.sessionId),
-            providerType: str4(entry.providerType),
-            taskId: str4(entry.taskId) ?? str4(payload.taskId),
+            nodeId: str5(entry.nodeId),
+            sessionId: str5(entry.sessionId),
+            providerType: str5(entry.providerType),
+            taskId: str5(entry.taskId) ?? str5(payload.taskId),
             atMs: at,
             payload
           })) report.jsonlRowsImported++;
@@ -72975,7 +73514,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           nodeId: row.node_id,
           sessionId: row.session_id,
           providerType: row.provider_type,
-          taskId: (hasTaskId ? str4(row.task_id) : null) ?? str4(payload.taskId),
+          taskId: (hasTaskId ? str5(row.task_id) : null) ?? str5(payload.taskId),
           atMs: at,
           payload
         })) report.foldedRows++;
@@ -74911,9 +75450,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       );
       const sameMachine = opts.isSelfNode === true || machineIdMatches || daemonIdMatches || hostnameMatches;
       const evidence = [];
-      for (const [label, value] of [["machineName", machineName], ["hostname", hostname5], ["machineId", machineId], ["daemonId", daemonId]]) {
+      for (const [label2, value] of [["machineName", machineName], ["hostname", hostname5], ["machineId", machineId], ["daemonId", daemonId]]) {
         const compact = compactMeshIdentityEvidence(value);
-        if (compact) evidence.push(`${label}:${compact}`);
+        if (compact) evidence.push(`${label2}:${compact}`);
       }
       const locality = sameMachine ? "same_machine" : evidence.length > 0 ? "remote_known" : "remote_or_unknown";
       const localityReason = sameMachine ? machineIdMatches ? "matched coordinator machine id" : daemonIdMatches ? "matched coordinator daemon id" : hostnameMatches ? "matched coordinator hostname" : "selected coordinator node" : evidence.length > 0 ? `known remote/other machine identity; no local coordinator match (${evidence.join(", ")})` : "no useful machine identity evidence available";
@@ -78238,8 +78777,8 @@ Default branch: \`${mesh.defaultBranch}\`` : ""}`);
           const explicit = typeof n.machineLabel === "string" ? n.machineLabel.trim() : "";
           const wtBranch = typeof n.worktreeBranch === "string" ? n.worktreeBranch.trim() : "";
           const wsBase = typeof n.workspace === "string" ? n.workspace.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "" : "";
-          const label = explicit || wtBranch || wsBase;
-          if (label) nodeLabelById.set(n.id, label);
+          const label2 = explicit || wtBranch || wsBase;
+          if (label2) nodeLabelById.set(n.id, label2);
         }
         const recentActivity = buildRecentActivitySection(ctx.recentActivity, nodeLabelById);
         if (recentActivity) sections.push(recentActivity);
@@ -78426,8 +78965,8 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
         lines.push("", "Recent failures (newest first):");
         for (const f of recent) {
           const when = f.timestamp ? `${f.timestamp} ` : "";
-          const label = f.nodeId ? nodeLabelById?.get(f.nodeId) : void 0;
-          const node = f.nodeId ? `node \`${f.nodeId}\`${label ? ` (${label})` : ""}` : "unknown node";
+          const label2 = f.nodeId ? nodeLabelById?.get(f.nodeId) : void 0;
+          const node = f.nodeId ? `node \`${f.nodeId}\`${label2 ? ` (${label2})` : ""}` : "unknown node";
           const summary = (f.summary || "").trim();
           lines.push(`- ${when}${node}${summary ? ` \u2014 ${summary}` : ""}`);
         }
@@ -78596,9 +79135,9 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
       ];
       for (const [kind, slots2] of configured) {
         const replicaCount = slots2.reduce((sum, s2) => sum + (s2.n && s2.n > 0 ? s2.n : 1), 0);
-        const label = replicaCount === slots2.length ? `${slots2.length} ${slots2.length === 1 ? "slot" : "slots"}` : `${replicaCount} replicas`;
+        const label2 = replicaCount === slots2.length ? `${slots2.length} ${slots2.length === 1 ? "slot" : "slots"}` : `${replicaCount} replicas`;
         const rendered = slots2.map(renderMagiSlot).join(", ");
-        lines.push(`- **${kind}** (${label}): ${rendered}`);
+        lines.push(`- **${kind}** (${label2}): ${rendered}`);
       }
       lines.push("");
       lines.push("Use these via `mesh_magi_review` (the `task_kind` is REQUIRED \u2014 it selects BOTH the output schema and the panel). The live authoritative slot list is `mesh_magi_kind_panel_list`. MAGI worker replicas are read-only and typically do NOT have mesh MCP tools exposed, so for live timing / tool-behavior claims you MUST gather the primary evidence yourself and use MAGI only for independent source-level corroboration.");
@@ -86105,9 +86644,9 @@ ${upstream}`;
       LOG.info("MeshQuota", `QUOTA GATE: provider '${providerType}' on node ${nodeId} fails open \u2014 no quota entry (${reason}: ${reasonText})`);
     }
     function antigravityPoolFromLeadingLabel(value) {
-      const label = typeof value === "string" ? value.trim().toLowerCase() : "";
-      if (/^gemini(?:[\s/_-]|$)/.test(label)) return "gemini";
-      if (/^(?:claude|gpt)(?:[\s/_-]|$)/.test(label)) return "claude-gpt";
+      const label2 = typeof value === "string" ? value.trim().toLowerCase() : "";
+      if (/^gemini(?:[\s/_-]|$)/.test(label2)) return "gemini";
+      if (/^(?:claude|gpt)(?:[\s/_-]|$)/.test(label2)) return "claude-gpt";
       return void 0;
     }
     function worstBucketWindow(buckets, targetMinutes) {
@@ -91465,8 +92004,8 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const record22 = option;
       const value = typeof record22.value === "string" ? record22.value : typeof record22.id === "string" ? record22.id : typeof record22.name === "string" ? record22.name : null;
       if (!value) return null;
-      const label = typeof record22.label === "string" ? record22.label : typeof record22.name === "string" ? record22.name : value;
-      const normalized = { value, label };
+      const label2 = typeof record22.label === "string" ? record22.label : typeof record22.name === "string" ? record22.name : value;
+      const normalized = { value, label: label2 };
       if (typeof record22.description === "string") normalized.description = record22.description;
       if (typeof record22.group === "string") normalized.group = record22.group;
       return normalized;
@@ -91623,9 +92162,9 @@ ${cleanBody}`;
     function assertTextOnlyInput(provider, input) {
       const unsupported = getRequestedInputMediaTypes(input).filter((type2) => type2 !== "text");
       if (unsupported.length === 0) return;
-      const label = getProviderLabel(provider);
+      const label2 = getProviderLabel(provider);
       const suffix = unsupported.length === 1 ? "" : "s";
-      throw new Error(`${label} only supports text input; unsupported input type${suffix}: ${unsupported.join(", ")}`);
+      throw new Error(`${label2} only supports text input; unsupported input type${suffix}: ${unsupported.join(", ")}`);
     }
     function getDeclaredProviderInputSupport(provider) {
       const rawMediaTypes = Array.isArray(provider?.capabilities?.input?.mediaTypes) ? provider?.capabilities?.input?.mediaTypes.filter((type2) => VALID_INPUT_MEDIA_TYPES.has(type2)) : [];
@@ -91714,16 +92253,16 @@ ${cleanBody}`;
       };
     }
     function assertProviderSupportsDeclaredInput(provider, input) {
-      const label = getProviderLabel(provider);
+      const label2 = getProviderLabel(provider);
       const support = getDeclaredProviderInputSupport(provider);
       const requestedTypes = getRequestedInputMediaTypes(input);
       const unsupported = requestedTypes.filter((type2) => !support.mediaTypes.has(type2));
       if (unsupported.length > 0) {
         const suffix = unsupported.length === 1 ? "" : "s";
-        throw new Error(`${label} does not support input type${suffix}: ${unsupported.join(", ")}`);
+        throw new Error(`${label2} does not support input type${suffix}: ${unsupported.join(", ")}`);
       }
       if (getEffectiveSemanticPartCount(input) > 1 && !support.multipart) {
-        throw new Error(`${label} does not support multipart input`);
+        throw new Error(`${label2} does not support multipart input`);
       }
     }
     var VALID_INPUT_MEDIA_TYPES;
@@ -93775,6 +94314,17 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
           coordinatorMessage
         });
       });
+      registerMeshGraphStopNotifyHandler((notice) => {
+        const rendered = renderGraphStopNotice(notice);
+        notifyMeshCoordinator({
+          event: rendered.event,
+          meshId: notice.meshId,
+          nodeLabel: rendered.nodeLabel,
+          eventId: rendered.eventId,
+          metadataEvent: rendered.metadataEvent,
+          coordinatorMessage: rendered.coordinatorMessage
+        });
+      });
       const onProviderEvent = (event) => {
         const eventName = readNonEmptyString(event?.event);
         const instanceId = readNonEmptyString(event?.instanceId);
@@ -93851,6 +94401,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
         init_snapshot3();
         init_mesh_idle_reminder();
         init_mesh_graph_transition_runner();
+        init_mesh_graph_stop_notice();
         init_mesh_node_identity();
         init_mesh_queue_assignment();
         init_mesh_autolaunch_integrity();
@@ -95944,22 +96495,22 @@ ${effect.notification.body || ""}`.trim();
       return String(value || "").toLowerCase().replace(/^[\s\[(<{]*\d+(?:\s*[.)\]}>:-]|\s)+/, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
     }
     function isNegativeApprovalLabel(value) {
-      const label = normalizeApprovalLabel(value);
-      return /^(no|deny|reject|cancel|skip|exit|stop)\b/.test(label) || /\bwithout\b/.test(label) || /\bdo not\b/.test(label);
+      const label2 = normalizeApprovalLabel(value);
+      return /^(no|deny|reject|cancel|skip|exit|stop)\b/.test(label2) || /\bwithout\b/.test(label2) || /\bdo not\b/.test(label2);
     }
     function hasNegativeApprovalOption(buttons) {
       return (buttons || []).some((button) => isNegativeApprovalLabel(String(button || "")));
     }
     function hasReliableApprovalAffirmative(buttons) {
       return (buttons || []).some((button) => {
-        const label = normalizeApprovalLabel(String(button || ""));
-        if (!label) return false;
-        if (/^always allow\b/.test(label)) return true;
-        if (/^yes\b/.test(label)) {
-          if (/\ballow\b/.test(label)) return true;
-          if (/\bask again\b/.test(label)) return true;
-          if (/\bduring this session\b/.test(label)) return true;
-          if (/\bfrom this project\b/.test(label)) return true;
+        const label2 = normalizeApprovalLabel(String(button || ""));
+        if (!label2) return false;
+        if (/^always allow\b/.test(label2)) return true;
+        if (/^yes\b/.test(label2)) {
+          if (/\ballow\b/.test(label2)) return true;
+          if (/\bask again\b/.test(label2)) return true;
+          if (/\bduring this session\b/.test(label2)) return true;
+          if (/\bfrom this project\b/.test(label2)) return true;
         }
         return false;
       });
@@ -95973,23 +96524,23 @@ ${effect.notification.body || ""}`.trim();
       if (labels.length === 0) {
         return { index: -1, label: "" };
       }
-      const normalizedButtons = labels.map((label) => normalizeApprovalLabel(label));
+      const normalizedButtons = labels.map((label2) => normalizeApprovalLabel(label2));
       const hints = getApprovalPositiveHints(provider);
-      const includesWord = (label, hint) => {
-        if (!label.includes(hint)) return false;
+      const includesWord = (label2, hint) => {
+        if (!label2.includes(hint)) return false;
         const re = new RegExp(`(?:^|\\s)${hint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s|$)`);
-        return re.test(label);
+        return re.test(label2);
       };
       const findMatch = (predicate) => {
         for (const hint of hints) {
           const idx = normalizedButtons.findIndex(
-            (label, index) => predicate(label, hint) && !isNegativeApprovalLabel(labels[index])
+            (label2, index) => predicate(label2, hint) && !isNegativeApprovalLabel(labels[index])
           );
           if (idx >= 0) return { index: idx, label: labels[idx] };
         }
         return null;
       };
-      return findMatch((label, hint) => label === hint) ?? findMatch((label, hint) => label.startsWith(hint)) ?? findMatch((label, hint) => includesWord(label, hint)) ?? { index: -1, label: "" };
+      return findMatch((label2, hint) => label2 === hint) ?? findMatch((label2, hint) => label2.startsWith(hint)) ?? findMatch((label2, hint) => includesWord(label2, hint)) ?? { index: -1, label: "" };
     }
     function pickAutoApprovalButton(buttons) {
       const labels = (buttons || []).map((button) => String(button || "").trim());
@@ -96036,13 +96587,13 @@ ${effect.notification.body || ""}`.trim();
         ];
       }
     });
-    async function withTimeout(promise2, timeoutMs, label) {
+    async function withTimeout(promise2, timeoutMs, label2) {
       let timer = null;
       try {
         return await Promise.race([
           promise2,
           new Promise((_, reject) => {
-            timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+            timer = setTimeout(() => reject(new Error(`${label2} timed out after ${timeoutMs}ms`)), timeoutMs);
           })
         ]);
       } finally {
@@ -98408,13 +98959,13 @@ ${effect.notification.body || ""}`.trim();
         const id22 = typeof ctl?.id === "string" ? ctl.id.trim() : "";
         const actionType = ctl?.action?.type;
         if (!id22 || !actionType) return;
-        const label = typeof ctl?.label === "string" && ctl.label.trim() ? ctl.label : id22;
+        const label2 = typeof ctl?.label === "string" && ctl.label.trim() ? ctl.label : id22;
         const visibleWhenState = Array.isArray(ctl?.visible_when_state) ? ctl.visible_when_state.filter((s2) => typeof s2 === "string") : void 0;
         if (actionType === "open_picker") {
           out.push({
             id: id22,
             type: "select",
-            label,
+            label: label2,
             placement: "bar",
             dynamic: true,
             listScript: id22,
@@ -98427,7 +98978,7 @@ ${effect.notification.body || ""}`.trim();
           out.push({
             id: id22,
             type: "action",
-            label,
+            label: label2,
             placement: "bar",
             invokeScript: id22,
             resultDisplay: "none",
@@ -103808,15 +104359,15 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           current2.push(byte);
         } else {
           if (current2.length >= MIN_PRINTABLE_RUN) {
-            const str7 = Buffer.from(current2).toString("utf-8").trim();
-            if (str7) strings.push(str7);
+            const str8 = Buffer.from(current2).toString("utf-8").trim();
+            if (str8) strings.push(str8);
           }
           current2 = [];
         }
       }
       if (current2.length >= MIN_PRINTABLE_RUN) {
-        const str7 = Buffer.from(current2).toString("utf-8").trim();
-        if (str7) strings.push(str7);
+        const str8 = Buffer.from(current2).toString("utf-8").trim();
+        if (str8) strings.push(str8);
       }
       return strings;
     }
@@ -105082,11 +105633,11 @@ ${output}` : "";
         if (!text) {
           if (toolCalls.length === 0) return null;
           const names = toolCalls.map((call) => call && typeof call === "object" ? call.name : null).filter((name) => typeof name === "string" && name.length > 0);
-          const label = names.length > 0 ? names.join(", ") : "tool";
+          const label2 = names.length > 0 ? names.join(", ") : "tool";
           const args = grokToolCallArguments(toolCalls);
-          if (!args) return { role: "assistant", content: `[tool: ${label}]`, kind: "tool", toolName: label };
+          if (!args) return { role: "assistant", content: `[tool: ${label2}]`, kind: "tool", toolName: label2 };
           const { text: summary, truncated } = oneLine(args, TOOL_CALL_SUMMARY_MAX);
-          return { role: "assistant", content: `[tool: ${label}] ${summary}`, kind: "tool", truncated, toolName: label };
+          return { role: "assistant", content: `[tool: ${label2}] ${summary}`, kind: "tool", truncated, toolName: label2 };
         }
         return { role: "assistant", content: text, kind: "standard" };
       }
@@ -105903,10 +106454,10 @@ ${output}` : "";
         if (!passesFilter(record22, parse3.filter)) return;
         const slug = cleanToken(record22[slugField]);
         if (!slug) return;
-        const label = parse3.labelField ? cleanToken(record22[parse3.labelField]) : "";
+        const label2 = parse3.labelField ? cleanToken(record22[parse3.labelField]) : "";
         const rawPriority = parse3.priorityField ? record22[parse3.priorityField] : void 0;
         const priority = typeof rawPriority === "number" && Number.isFinite(rawPriority) ? rawPriority : Number.MAX_SAFE_INTEGER;
-        rows.push({ model: label ? { slug, label } : { slug }, priority, index });
+        rows.push({ model: label2 ? { slug, label: label2 } : { slug }, priority, index });
       });
       rows.sort((a, b) => a.priority - b.priority || a.index - b.index);
       return dedupe(rows.map((row) => row.model));
@@ -105935,8 +106486,8 @@ ${output}` : "";
         if (!match) continue;
         const slug = cleanToken(match.groups?.slug);
         if (!slug) continue;
-        const label = cleanToken(match.groups?.label);
-        const model = label ? { slug, label } : { slug };
+        const label2 = cleanToken(match.groups?.label);
+        const model = label2 ? { slug, label: label2 } : { slug };
         if (defaultMarker?.test(line)) ranked.push(model);
         else rest.push(model);
       }
@@ -106329,10 +106880,22 @@ ${result.stderr}`, result.code);
         "use strict";
       }
     });
+    function isShellWrapperCommand(path74) {
+      if (!path74) return false;
+      const base = path74.trim().split(/[\\/]/).pop()?.toLowerCase() ?? "";
+      return SHELL_WRAPPER_COMMANDS.has(base);
+    }
+    function resolveWrappedCliBinary(spawnCommand, binary2) {
+      if (typeof binary2 !== "string" || !binary2.trim() || !spawnCommand) return void 0;
+      if (!isShellWrapperCommand(spawnCommand)) return void 0;
+      if (binary2.trim() === spawnCommand.trim()) return void 0;
+      return binary2.trim();
+    }
     var fs36;
     var path43;
     var chokidar;
     var CHANNEL_ACTIVATION_RECHECK_MS;
+    var SHELL_WRAPPER_COMMANDS;
     var ProviderLoader;
     var init_provider_loader = __esm2({
       "src/providers/provider-loader.ts"() {
@@ -106357,6 +106920,7 @@ ${result.stderr}`, result.code);
         init_registry();
         init_provider_loader_config();
         CHANNEL_ACTIVATION_RECHECK_MS = 5e3;
+        SHELL_WRAPPER_COMMANDS = /* @__PURE__ */ new Set(["bash", "sh", "zsh", "dash", "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe"]);
         ProviderLoader = class _ProviderLoader {
           providers = /* @__PURE__ */ new Map();
           providerAvailability = /* @__PURE__ */ new Map();
@@ -107260,12 +107824,14 @@ ${result.stderr}`, result.code);
                 const versionCommand = this.getPlatformVersionCommand(p.versionCommand);
                 const command = this.getSpawnCommand(p.type, p.spawn.command);
                 const args = this.getSpawnArgs(p.type, p.spawn.args || []);
+                const wrappedBinary = command === p.spawn.command ? resolveWrappedCliBinary(p.spawn.command, p.binary) : void 0;
                 result.push({
                   id: p.type,
                   displayName: p.displayName || p.name,
                   icon: p.icon || "\u{1F527}",
                   command,
                   ...args.length > 0 ? { args } : {},
+                  ...wrappedBinary ? { detectCommand: wrappedBinary } : {},
                   category: p.category,
                   enabled,
                   ...typeof versionCommand === "string" && versionCommand.trim() ? { versionCommand: versionCommand.trim() } : {}
@@ -108859,7 +109425,7 @@ ${result.stderr}`, result.code);
       const value = args[MESH_SENDER_DAEMON_ID_ARG];
       return typeof value === "string" ? value.trim() : "";
     }
-    function str5(value) {
+    function str6(value) {
       return typeof value === "string" ? value.trim() : "";
     }
     function record2(value) {
@@ -108884,10 +109450,10 @@ ${result.stderr}`, result.code);
       return sameDaemon(meshHostDaemonId(mesh, selfDaemonId), sender);
     }
     function readCommandMeshId(args) {
-      return str5(args.meshId) || str5(record2(args.meshContext)?.meshId);
+      return str6(args.meshId) || str6(record2(args.meshContext)?.meshId);
     }
     function readCommandSessionId(args) {
-      return str5(args.targetSessionId) || str5(args.sessionId) || str5(args.instanceId);
+      return str6(args.targetSessionId) || str6(args.sessionId) || str6(args.instanceId);
     }
     function declaredMeshHost(mesh, selfDaemonId) {
       if (!record2(mesh)) return void 0;
@@ -108954,9 +109520,9 @@ ${result.stderr}`, result.code);
       }
       const inline = record2(args.inlineMesh);
       if (inline && nodesOf(inline).length > 0) {
-        const inlineId = str5(inline.id) || str5(inline.meshId);
+        const inlineId = str6(inline.id) || str6(inline.meshId);
         if (inlineId && inlineId !== meshId) return { known: false };
-        const self = str5(deps.selfDaemonId);
+        const self = str6(deps.selfDaemonId);
         if (self && senderOnMesh(inline, self)) {
           return { known: true, onRoster: senderOnMesh(inline, sender), source: "payload_inline_self_consistent", mesh: inline };
         }
@@ -108980,9 +109546,9 @@ ${result.stderr}`, result.code);
         sessions = [];
       }
       return sessions.some(({ settings }) => {
-        const stampedMesh = str5(settings.meshNodeFor);
+        const stampedMesh = str6(settings.meshNodeFor);
         if (!stampedMesh || meshId && stampedMesh !== meshId) return false;
-        return sameDaemon(str5(settings.meshCoordinatorDaemonId), sender);
+        return sameDaemon(str6(settings.meshCoordinatorDaemonId), sender);
       });
     }
     function anySessionStampForMesh(deps, meshId) {
@@ -108992,11 +109558,11 @@ ${result.stderr}`, result.code);
       } catch {
         sessions = [];
       }
-      return sessions.some(({ settings }) => str5(settings.meshNodeFor) === meshId && !!str5(settings.meshCoordinatorDaemonId));
+      return sessions.some(({ settings }) => str6(settings.meshNodeFor) === meshId && !!str6(settings.meshCoordinatorDaemonId));
     }
     function meshContextClaimsSender(args, meshId, sender) {
       const meshContext = record2(args.meshContext);
-      return !!meshContext && str5(meshContext.meshId) === meshId && sameDaemon(str5(meshContext.coordinatorDaemonId), sender);
+      return !!meshContext && str6(meshContext.meshId) === meshId && sameDaemon(str6(meshContext.coordinatorDaemonId), sender);
     }
     function refuse(sender, refusal2, detail) {
       return { ok: false, sender, refusal: refusal2, detail };
@@ -109019,9 +109585,9 @@ ${result.stderr}`, result.code);
       }
       const known = meshes.filter((m) => nodesOf(m).length > 0);
       const hit = known.find((m) => senderOnMesh(m, sender, deps.selfDaemonId));
-      if (hit) return { ok: true, sender, evidence: `local_roster:${str5(record2(hit)?.id) || "?"}` };
+      if (hit) return { ok: true, sender, evidence: `local_roster:${str6(record2(hit)?.id) || "?"}` };
       const declared = meshes.find((m) => sameDaemon(declaredMeshHost(m, deps.selfDaemonId), sender));
-      if (declared) return { ok: true, sender, evidence: `local_mesh_host:${str5(record2(declared)?.id) || "?"}` };
+      if (declared) return { ok: true, sender, evidence: `local_mesh_host:${str6(record2(declared)?.id) || "?"}` };
       let hostRecords = [];
       try {
         hostRecords = deps.listMeshHostRecords?.() ?? [];
@@ -109034,7 +109600,7 @@ ${result.stderr}`, result.code);
       return refuse(sender, "mesh_sender_not_on_roster", known.length === 0 && hostRecords.length === 0 ? "roster_unknown: this daemon holds no mesh roster and no mesh host record" : `sender is on none of the ${known.length} mesh roster(s) and hosts none of the ${hostRecords.length} recorded mesh(es) here`);
     }
     async function checkNodeOwner(deps, sender, args) {
-      const meshId = str5(args.meshId) || str5(deps.resolveForwardEventMeshId?.(args));
+      const meshId = str6(args.meshId) || str6(deps.resolveForwardEventMeshId?.(args));
       if (!meshId) return refuse(sender, "mesh_sender_not_on_roster", "the event names no resolvable mesh");
       let mesh;
       try {
@@ -109044,9 +109610,9 @@ ${result.stderr}`, result.code);
       }
       const nodes = nodesOf(mesh);
       if (nodes.length === 0) return refuse(sender, "mesh_sender_not_on_roster", `roster_unknown: this daemon holds no roster for mesh ${meshId}`);
-      const nodeId = str5(args.nodeId);
-      const workspace = str5(args.workspace);
-      const node = nodeId ? nodes.find((n) => meshNodeIdMatches5(n, nodeId)) : workspace ? nodes.find((n) => str5(n.workspace) === workspace) : void 0;
+      const nodeId = str6(args.nodeId);
+      const workspace = str6(args.workspace);
+      const node = nodeId ? nodes.find((n) => meshNodeIdMatches5(n, nodeId)) : workspace ? nodes.find((n) => str6(n.workspace) === workspace) : void 0;
       if (nodeId && !node) return refuse(sender, "mesh_sender_not_node_owner", `node ${nodeId} is not on the roster of mesh ${meshId}`);
       if (node) {
         const owner = readMeshNodeDaemonId(node);
@@ -109061,9 +109627,9 @@ ${result.stderr}`, result.code);
       return { ok: true, sender, evidence: `roster(no node named):${meshId}` };
     }
     async function checkSessionAnchor(deps, sessionId, settings, sender, args) {
-      const meshId = str5(settings.meshNodeFor) || str5(settings.meshCoordinatorFor);
+      const meshId = str6(settings.meshNodeFor) || str6(settings.meshCoordinatorFor);
       if (!meshId) return refuse(sender, "mesh_session_not_mesh_owned", `session ${sessionId} carries no mesh stamp`);
-      const anchor = str5(settings.meshCoordinatorDaemonId);
+      const anchor = str6(settings.meshCoordinatorDaemonId);
       let mesh;
       try {
         mesh = await deps.getLocalMesh(meshId);
@@ -109091,7 +109657,7 @@ ${result.stderr}`, result.code);
       return refuse(sender, "mesh_sender_not_session_coordinator", anchor ? `session ${sessionId} is coordinated by ${anchor.slice(0, 20)}, and the sender is not the host of mesh ${meshId}` : `session ${sessionId} has no coordinator anchor, and the sender is not the host of mesh ${meshId}`);
     }
     async function checkSessionCoordinator(deps, sender, args) {
-      const stampClaim = str5(record2(args.meshContext)?.coordinatorDaemonId);
+      const stampClaim = str6(record2(args.meshContext)?.coordinatorDaemonId);
       if (stampClaim && !sameDaemon(stampClaim, sender)) {
         return refuse(sender, "mesh_coordinator_stamp_mismatch", `meshContext.coordinatorDaemonId ${stampClaim.slice(0, 20)} is not the sender`);
       }
@@ -109102,7 +109668,7 @@ ${result.stderr}`, result.code);
         return checkSessionAnchor(deps, sessionId, settings, sender, args);
       }
       const meshId = readCommandMeshId(args);
-      const taskId = str5(args.taskId);
+      const taskId = str6(args.taskId);
       if (meshId && taskId) {
         let sessions = [];
         try {
@@ -109110,7 +109676,7 @@ ${result.stderr}`, result.code);
         } catch {
           sessions = [];
         }
-        const worker = sessions.find(({ settings }) => str5(settings.meshNodeFor) === meshId && str5(settings.meshActiveTaskId) === taskId);
+        const worker = sessions.find(({ settings }) => str6(settings.meshNodeFor) === meshId && str6(settings.meshActiveTaskId) === taskId);
         if (worker) return checkSessionAnchor(deps, worker.sessionId, worker.settings, sender, args);
       }
       if (meshId) return checkRoster(deps, meshId, sender, args, { tofuClaim: meshContextClaimsSender(args, meshId, sender) });
@@ -109118,12 +109684,12 @@ ${result.stderr}`, result.code);
     }
     async function checkMeshLaunch(deps, sender, args) {
       const settings = record2(args.settings) ?? {};
-      const anchor = str5(settings.meshCoordinatorDaemonId);
+      const anchor = str6(settings.meshCoordinatorDaemonId);
       if (!anchor) return { ok: true, sender, evidence: "authenticated_peer(no coordinator anchor)" };
       if (!sameDaemon(anchor, sender)) {
         return refuse(sender, "mesh_coordinator_stamp_mismatch", `settings.meshCoordinatorDaemonId ${anchor.slice(0, 20)} is not the sender`);
       }
-      const meshId = str5(settings.meshNodeFor);
+      const meshId = str6(settings.meshNodeFor);
       if (!meshId) return { ok: true, sender, evidence: "authenticated_peer(anchor without mesh node)" };
       const verdict = await checkRoster(deps, meshId, sender, args, { tofuClaim: true });
       return verdict.ok ? { ok: true, sender, evidence: `launch_anchor:${verdict.evidence}` } : verdict;
@@ -110462,10 +111028,10 @@ ${marker}`,
       } catch {
       }
     }
-    function safeRemoveStaleEntry(target, label) {
+    function safeRemoveStaleEntry(target, label2) {
       try {
         fs38.rmSync(target, { recursive: true, force: true });
-        appendUpgradeLog(`${label}: ${target}`);
+        appendUpgradeLog(`${label2}: ${target}`);
       } catch (error48) {
         appendUpgradeLog(`Skipped locked stale entry (${error48?.code || "error"}): ${target} \u2014 ${error48?.message || String(error48)}`);
       }
@@ -111256,9 +111822,9 @@ ${marker}`,
       return blocking;
     }
     function readUpgradeOptions(args) {
-      const str7 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
-      const channel = str7(args?.channel) ?? str7(args?.updatePolicy?.channel);
-      const npmTag = str7(args?.npmTag);
+      const str8 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+      const channel = str8(args?.channel) ?? str8(args?.updatePolicy?.channel);
+      const npmTag = str8(args?.npmTag);
       return {
         ...args?.allowDowngrade === true ? { allowDowngrade: true } : {},
         ...channel ? { channel } : {},
@@ -118537,12 +119103,12 @@ ${marker}`,
     }
     function handleWorkspaceAdd(args) {
       const rawPath = (args?.path || args?.dir || "").trim();
-      const label = (args?.label || "").trim() || void 0;
+      const label2 = (args?.label || "").trim() || void 0;
       const createIfMissing = args?.createIfMissing === true;
       if (!rawPath) return { success: false, error: "path required" };
       const config2 = loadWorkspaceConfig();
       if ("error" in config2) return { success: false, error: config2.error };
-      const result = addWorkspaceEntry(config2, rawPath, label, { createIfMissing });
+      const result = addWorkspaceEntry(config2, rawPath, label2, { createIfMissing });
       if ("error" in result) return { success: false, error: result.error };
       const saveResult = persistWorkspaceConfig(result.config);
       if ("error" in saveResult) return { success: false, error: saveResult.error };
@@ -119633,8 +120199,8 @@ ${marker}`,
         const ordinal = [];
         let om;
         while ((om = re.exec(hay)) !== null) {
-          const label = String(om[labelGroup] ?? "").trim();
-          if (!label) continue;
+          const label2 = String(om[labelGroup] ?? "").trim();
+          if (!label2) continue;
           let key2;
           if (rule.key_group !== void 0) {
             const mapped = mapButtonKeyToken(String(om[rule.key_group] ?? ""));
@@ -119643,7 +120209,7 @@ ${marker}`,
           } else {
             key2 = keyTemplate.replace(/\{index\}/g, String(ordinal.length + 1));
           }
-          ordinal.push({ index: ordinal.length + 1, label, key: key2, current: hasCursorMarker(om[0], rule.cursor_marker) });
+          ordinal.push({ index: ordinal.length + 1, label: label2, key: key2, current: hasCursorMarker(om[0], rule.cursor_marker) });
         }
         return ordinal;
       }
@@ -119656,8 +120222,8 @@ ${marker}`,
           const m = re.exec(lines[i]);
           if (!m) continue;
           const idx = Number(m[1]);
-          let label = String(m[2] ?? "").trim();
-          if (!Number.isFinite(idx) || idx <= 0 || !label) continue;
+          let label2 = String(m[2] ?? "").trim();
+          if (!Number.isFinite(idx) || idx <= 0 || !label2) continue;
           const current2 = hasCursorMarker(lines[i], rule.cursor_marker);
           let j = i + 1;
           while (j < lines.length) {
@@ -119665,11 +120231,11 @@ ${marker}`,
             if (!next.trim()) break;
             if (re.test(next) && continuesButtonSequence(next, re, idx)) break;
             if (!/^\s+/.test(next)) break;
-            label += " " + next.trim();
+            label2 += " " + next.trim();
             j += 1;
           }
           const key2 = keyTemplate.replace(/\{index\}/g, String(idx));
-          buttons.push({ index: idx, label, key: key2, current: current2 });
+          buttons.push({ index: idx, label: label2, key: key2, current: current2 });
           i = j - 1;
         }
       } else {
@@ -119677,10 +120243,10 @@ ${marker}`,
         let m;
         while ((m = re.exec(hay)) !== null) {
           const idx = Number(m[1]);
-          const label = String(m[2] ?? "").trim();
-          if (!Number.isFinite(idx) || idx <= 0 || !label) continue;
+          const label2 = String(m[2] ?? "").trim();
+          if (!Number.isFinite(idx) || idx <= 0 || !label2) continue;
           const key2 = keyTemplate.replace(/\{index\}/g, String(idx));
-          buttons.push({ index: idx, label, key: key2, current: hasCursorMarker(m[0], rule.cursor_marker) });
+          buttons.push({ index: idx, label: label2, key: key2, current: hasCursorMarker(m[0], rule.cursor_marker) });
         }
       }
       const block2 = lastContiguousNumberedBlock(buttons);
@@ -121423,15 +121989,15 @@ ${marker}`,
       if (Array.isArray(req.workspaces) && req.workspaces.length > 0) return true;
       return (req.tasks ?? []).some(isAdvancedGraphTask);
     }
-    function normalizeRef(value, label) {
+    function normalizeRef(value, label2) {
       const ref = typeof value === "string" ? value.trim() : "";
-      if (!ref) throw new MeshGraphPlanError("invalid_graph_ref", `${label} requires a non-empty ref`);
+      if (!ref) throw new MeshGraphPlanError("invalid_graph_ref", `${label2} requires a non-empty ref`);
       return ref;
     }
-    function pickEnum(value, allowed, fallback, code, label) {
+    function pickEnum(value, allowed, fallback, code, label2) {
       if (value === void 0 || value === null || value === "") return fallback;
       if (typeof value === "string" && allowed.includes(value)) return value;
-      throw new MeshGraphPlanError(code, `${label} must be one of ${allowed.join(" | ")} (got ${JSON.stringify(value)})`);
+      throw new MeshGraphPlanError(code, `${label2} must be one of ${allowed.join(" | ")} (got ${JSON.stringify(value)})`);
     }
     function computeMeshGraphPlanDigest(req) {
       const normalized = {
@@ -122142,12 +122708,12 @@ ${marker}`,
     }
     function readAudit(audit) {
       const a = audit ?? {};
-      const str7 = (v) => typeof v === "string" && v ? v : void 0;
+      const str8 = (v) => typeof v === "string" && v ? v : void 0;
       return {
-        ...str7(a.batchId) ? { batchId: str7(a.batchId) } : {},
-        ...str7(a.missionId) ? { missionId: str7(a.missionId) } : {},
-        ...str7(a.coordinatorSessionId) ? { coordinatorSessionId: str7(a.coordinatorSessionId) } : {},
-        ...str7(a.onDependencyFailure) ? { onDependencyFailure: str7(a.onDependencyFailure) } : {},
+        ...str8(a.batchId) ? { batchId: str8(a.batchId) } : {},
+        ...str8(a.missionId) ? { missionId: str8(a.missionId) } : {},
+        ...str8(a.coordinatorSessionId) ? { coordinatorSessionId: str8(a.coordinatorSessionId) } : {},
+        ...str8(a.onDependencyFailure) ? { onDependencyFailure: str8(a.onDependencyFailure) } : {},
         ...a.orchestrationDecision !== void 0 ? { orchestrationDecision: a.orchestrationDecision } : {},
         ...typeof a.taskCount === "number" ? { taskCount: a.taskCount } : {},
         errorCodes: Array.isArray(a.errorCodes) ? a.errorCodes.filter((c) => typeof c === "string") : []
@@ -122712,7 +123278,7 @@ ${marker}`,
         const graph = graphStore.getGraph(gate.graphId);
         let graphCompleted = false;
         if (graph && freshNodes.every(isTerminalEquivalent)) {
-          graphStore.updateGraphStatus(gate.graphId, "completed", nowIso, true);
+          markGraphTerminalInTxn(store2, gate.graphId, "completed", nowIso);
           insertGateOutbox(graphStore, gate.meshId, gate.graphId, "graph_completed", { graphId: gate.graphId }, nowIso);
           graphCompleted = true;
         } else if (graph?.status === "waiting_gate") {
@@ -122953,7 +123519,7 @@ ${marker}`,
             cancelledNodeIds = cancelGateDownstreamSubtree(store2, node, nowIso);
             if (cancelledNodeIds.length > 0) autoAbandonGatesWithTerminalDownstreamInTxn(store2, gate.graphId, nowIso);
           } else if (gate.onTimeout === "fail_graph") {
-            graphStore.updateGraphStatus(gate.graphId, "failed", nowIso, true);
+            markGraphTerminalInTxn(store2, gate.graphId, "failed", nowIso);
           }
           insertGateOutbox(graphStore, gate.meshId, gate.graphId, "graph_gate_expired", {
             meshId: gate.meshId,
@@ -125543,9 +126109,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         if (!observedQuestion || normalizeClaudeTuiIdentity(expectedQuestion.question) !== normalizeClaudeTuiIdentity(observedQuestion.question)) return false;
         const observedHeader = normalizeClaudeTuiIdentity(observedQuestion.header || "");
         if (observedHeader && normalizeClaudeTuiIdentity(expectedQuestion.header || "") !== observedHeader) return false;
-        const expectedLabels = expectedQuestion.options.map((option) => normalizeClaudeTuiIdentity(option.label)).filter((label) => !/^(?:Type something\.?|Chat about this)$/i.test(label));
+        const expectedLabels = expectedQuestion.options.map((option) => normalizeClaudeTuiIdentity(option.label)).filter((label2) => !/^(?:Type something\.?|Chat about this)$/i.test(label2));
         const observedLabels = observedQuestion.options.map((option) => normalizeClaudeTuiIdentity(option.label));
-        return expectedLabels.length === observedLabels.length && expectedLabels.every((label, optionIndex) => label === observedLabels[optionIndex]);
+        return expectedLabels.length === observedLabels.length && expectedLabels.every((label2, optionIndex) => label2 === observedLabels[optionIndex]);
       });
     }
     function readClaudeToolResultIds(value) {
@@ -126805,11 +127371,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           }
           /** Status edge from the driver's commitTransition. Ends the episode when the
            *  machine leaves `generating`, and reports a nudge-driven recovery. */
-          onTransition(fromStatus, toStatus, label) {
+          onTransition(fromStatus, toStatus, label2) {
             if (fromStatus !== "generating" || toStatus === "generating") return;
             const now = Date.now();
             if (this.episodeNudges > 0 && toStatus === "idle" && now - this.lastNudgeAt <= Math.max(this.policy.silentMs, 5e3)) {
-              LOG.info("FsmDriver", `[${this.host.tag()}] false busy: screen redraw revealed idle (${label}) after ${this.episodeNudges} redraw nudge(s), ${now - this.lastNudgeAt}ms after the last`);
+              LOG.info("FsmDriver", `[${this.host.tag()}] false busy: screen redraw revealed idle (${label2}) after ${this.episodeNudges} redraw nudge(s), ${now - this.lastNudgeAt}ms after the last`);
             }
             this.episodeNudges = 0;
             this.clearTimer();
@@ -128893,13 +129459,13 @@ trust_level = "trusted"
             });
             this.shutdown();
           }
-          pushHistory(stateId, label, meta3) {
+          pushHistory(stateId, label2, meta3) {
             const now = Date.now();
             const durationMs = this.prevStateAt > 0 ? now - this.prevStateAt : 0;
             this.prevStateAt = now;
             this.stateHistory.push({
               stateId,
-              label,
+              label: label2,
               at: now,
               durationMs,
               reason: meta3.reason,
@@ -129035,10 +129601,10 @@ trust_level = "trusted"
         if (!m) continue;
         const idx = Number(m[1]);
         if (!Number.isFinite(idx) || idx <= 0) continue;
-        const label = (m[2] ?? "").replace(/\s+/g, " ").trim();
-        if (!label) continue;
-        const current2 = /^\s*[❯›>]/.test(line) || /[✔✓●]\s*$/.test(label);
-        all.push({ index: idx, label, current: current2 });
+        const label2 = (m[2] ?? "").replace(/\s+/g, " ").trim();
+        if (!label2) continue;
+        const current2 = /^\s*[❯›>]/.test(line) || /[✔✓●]\s*$/.test(label2);
+        all.push({ index: idx, label: label2, current: current2 });
       }
       return lastContiguousNumberedBlock(all);
     }
@@ -129839,10 +130405,10 @@ ${text}` : text;
       const m = line.match(/^\s*(?:❯\s*)?(\S[\s\S]*?)\s*$/);
       if (!m) return null;
       const parts = m[1].split(/\s{2,}/);
-      const label = (parts[0] ?? "").trim();
-      if (!label) return null;
+      const label2 = (parts[0] ?? "").trim();
+      if (!label2) return null;
       const description = parts.length > 1 ? parts.slice(1).join(" ").trim() : void 0;
-      return { label, ...description ? { description } : {} };
+      return { label: label2, ...description ? { description } : {} };
     }
     function detectKimiIdleSelectorPrompt(screenText) {
       if (!screenText) return null;
@@ -132356,7 +132922,7 @@ ${text}` : text;
       if (cleanMessage) lines.push(cleanMessage);
       const labels = (buttons || []).map((button) => String(button || "").trim()).filter(Boolean);
       if (labels.length > 0) {
-        lines.push(labels.map((label) => `[${label}]`).join(" "));
+        lines.push(labels.map((label2) => `[${label2}]`).join(" "));
       }
       return lines.join("\n");
     }
@@ -135635,8 +136201,8 @@ ${buttons.join("\n")}`;
       }
       LOG.debug("CLI", `[${host.type}] flush attempt: latestVisible=${latestVisibleStatus} decision=${decision.kind} generatingStartedAt=${host.generatingStartedAt}`);
       if (decision.kind === "cancel") {
-        const label = decision.reason === "resumed_status" ? `resumed ${latestVisibleStatus}` : decision.reason === "busy_reentry" ? `busy re-entry during settle: epoch ${pending.busyEpochAtArm}\u2192${host.busyEpoch}` : `new PTY output during settle: ${pending.lastOutputAtArm}\u2192${decision.trace.lastOutputAt}`;
-        LOG.info("CLI", `[${host.type}] cancelled pending completed (${label})`);
+        const label2 = decision.reason === "resumed_status" ? `resumed ${latestVisibleStatus}` : decision.reason === "busy_reentry" ? `busy re-entry during settle: epoch ${pending.busyEpochAtArm}\u2192${host.busyEpoch}` : `new PTY output during settle: ${pending.lastOutputAtArm}\u2192${decision.trace.lastOutputAt}`;
+        LOG.info("CLI", `[${host.type}] cancelled pending completed (${label2})`);
         if (host.completionTraceOn()) host.recordCompletionGateTrace("cancel", { blockReason: decision.reason, ...decision.trace });
         host.completedDebouncePending = null;
         host.completedDebounceTimer = null;
@@ -137718,9 +138284,9 @@ ${buttons.join("\n")}`;
         ...metadata?.annotations ? { annotations: metadata.annotations } : {}
       });
     }
-    function appendMediaFallbackText(promptParts, label, details) {
+    function appendMediaFallbackText(promptParts, label2, details) {
       const normalizedDetails = details.map((value) => typeof value === "string" ? value.trim() : "").filter(Boolean);
-      appendPromptText(promptParts, `[${[label, ...normalizedDetails].join(": ")}]`);
+      appendPromptText(promptParts, `[${[label2, ...normalizedDetails].join(": ")}]`);
     }
     function buildAcpPromptParts(input, agentCapabilities) {
       const caps = getPromptCapabilityFlags(agentCapabilities);
@@ -138863,26 +139429,26 @@ ${rawInput}` : rawInput;
               const content = this.summarizeToolCallBubbleContent(toolCall);
               if (!content) return null;
               const isRunning = toolCall.status === "pending" || toolCall.status === "in_progress";
-              const label = toolCall.title || void 0;
+              const label2 = toolCall.title || void 0;
               const kind = this.buildToolCallBubbleKind(toolCall);
               if (kind === "thought") {
                 return buildThoughtChatMessage({
                   content,
                   timestamp: timestamp2,
-                  meta: { label: label || "Thought", isRunning }
+                  meta: { label: label2 || "Thought", isRunning }
                 });
               }
               if (kind === "terminal") {
                 return buildTerminalChatMessage({
                   content,
                   timestamp: timestamp2,
-                  meta: { label: label || "Ran command", isRunning }
+                  meta: { label: label2 || "Ran command", isRunning }
                 });
               }
               return buildToolChatMessage({
                 content,
                 timestamp: timestamp2,
-                meta: { label: label || "Tool call", isRunning }
+                meta: { label: label2 || "Tool call", isRunning }
               });
             }).filter(Boolean);
           }
@@ -142103,14 +142669,14 @@ ${tail}`;
     function isSubmoduleFastForward(submoduleRepoPath, baseCommit, branchCommit) {
       return probeSubmoduleFastForward(submoduleRepoPath, baseCommit, branchCommit) === true;
     }
-    function buildGitlinkFastForwardUndeterminableWarning(label, gitlinks) {
+    function buildGitlinkFastForwardUndeterminableWarning(label2, gitlinks) {
       const entries = gitlinks.filter((entry) => entry.fastForwardUndeterminable);
       if (entries.length === 0) return void 0;
       const detail = entries.map((entry) => `${entry.path} (base=${(entry.baseCommit || "?").slice(0, 12)} branch=${(entry.branchCommit || "?").slice(0, 12)})`).join(", ");
-      return `[Refinery] Could NOT determine submodule gitlink fast-forward for ${label} \u2014 ancestry probe had NO ANSWER (a gitlink commit is missing from the local submodule object store, or the submodule checkout is absent). "undeterminable", NOT "diverged": ${detail}`;
+      return `[Refinery] Could NOT determine submodule gitlink fast-forward for ${label2} \u2014 ancestry probe had NO ANSWER (a gitlink commit is missing from the local submodule object store, or the submodule checkout is absent). "undeterminable", NOT "diverged": ${detail}`;
     }
-    function warnGitlinkFastForwardUndeterminable(label, gitlinks) {
-      const message = buildGitlinkFastForwardUndeterminableWarning(label, gitlinks);
+    function warnGitlinkFastForwardUndeterminable(label2, gitlinks) {
+      const message = buildGitlinkFastForwardUndeterminableWarning(label2, gitlinks);
       if (message) LOG.warn("Mesh", message);
     }
     function readChangedPathKinds(repoRoot, fromRef, toRef) {
@@ -148592,14 +149158,14 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_REFINE_MAX_CONCURRENT_JOBS;
       return parsed;
     }
-    async function runWithRefineExecutionSlot(label, task) {
+    async function runWithRefineExecutionSlot(label2, task) {
       const limit = resolveRefineMaxConcurrentJobs();
       if (activeExecutions >= limit) {
-        LOG.info("Mesh", `[Refinery] ${label} QUEUED \u2014 ${activeExecutions} refine job(s) already executing (limit ${limit}), ${waitQueue.length + 1} waiting. It starts automatically; do not re-invoke.`);
+        LOG.info("Mesh", `[Refinery] ${label2} QUEUED \u2014 ${activeExecutions} refine job(s) already executing (limit ${limit}), ${waitQueue.length + 1} waiting. It starts automatically; do not re-invoke.`);
         await new Promise((resolve38) => {
           waitQueue.push(resolve38);
         });
-        LOG.info("Mesh", `[Refinery] ${label} dequeued \u2014 starting now (${activeExecutions} other job(s) still executing).`);
+        LOG.info("Mesh", `[Refinery] ${label2} dequeued \u2014 starting now (${activeExecutions} other job(s) still executing).`);
       }
       activeExecutions += 1;
       try {
@@ -165220,9 +165786,9 @@ async (params) => {
                   break;
                 case "tool_call_update":
                   if (update.status === "completed" || update.status === "failed") {
-                    const label = update.status === "completed" ? "\u2705" : "\u274C";
+                    const label2 = update.status === "completed" ? "\u2705" : "\u274C";
                     const out = update.rawOutput ? typeof update.rawOutput === "string" ? update.rawOutput : JSON.stringify(update.rawOutput) : "";
-                    sendAutoImplSSE(ctx, { event: "output", data: { chunk: `${label} Result: ${out.slice(0, 1e3)}
+                    sendAutoImplSSE(ctx, { event: "output", data: { chunk: `${label2} Result: ${out.slice(0, 1e3)}
 `, stream: "stdout" } });
                   }
                   break;
@@ -168881,15 +169447,15 @@ data: ${JSON.stringify(msg.data)}
       if (quota.metadata?.lastGoodWindows === true) return "refreshing";
       return void 0;
     }
-    function formatWindow(label, window, cue = void 0) {
+    function formatWindow(label2, window, cue = void 0) {
       if (!window) {
-        return `  ${label.padEnd(8)} ${import_chalk2.default.gray("not reported")}`;
+        return `  ${label2.padEnd(8)} ${import_chalk2.default.gray("not reported")}`;
       }
       const percent = `${window.usedPercent.toFixed(1)}%`;
       const bar = renderBar(window.usedPercent);
       const reset = window.resetsAt === null ? "" : import_chalk2.default.gray(`  resets ${formatRelative(window.resetsAt)}`);
       const marker = cue === "refreshing" ? import_chalk2.default.gray("  (refreshing)") : cue === "stale" ? import_chalk2.default.gray("  (stale)") : "";
-      return `  ${label.padEnd(8)} ${bar} ${percent.padStart(6)} used${reset}${marker}`;
+      return `  ${label2.padEnd(8)} ${bar} ${percent.padStart(6)} used${reset}${marker}`;
     }
     function renderBar(usedPercent) {
       const width = 20;
@@ -170911,7 +171477,7 @@ data: ${JSON.stringify(msg.data)}
           ...ctx.attempt.terminal ? { reason: ctx.attempt.terminal.reason } : {},
           ...ctx.envelope ? { envelope: ctx.envelope } : {}
         });
-        if (result.transitioned) propagateLedgerDependencyFailure(effect.meshId, effect.taskId, effect.outcome);
+        if (result.transitioned) propagateLedgerDependencyFailure(effect.meshId, effect.taskId, effect.outcome, ctx.attempt.terminal?.reason);
         return { transitioned: result.transitioned };
       }
     };
@@ -171123,7 +171689,7 @@ data: ${JSON.stringify(msg.data)}
         replicaObservedAt: snapshot.observedAt
       };
     }
-    function str6(value) {
+    function str7(value) {
       return typeof value === "string" ? value.trim() : "";
     }
     function unwrapReadChatPayload(raw) {
@@ -171195,7 +171761,7 @@ data: ${JSON.stringify(msg.data)}
       if (transport !== "pty" && transport !== "acp") return void 0;
       try {
         const state = components.instanceManager.getInstance(key2)?.getState?.();
-        return str6(state?.status).toLowerCase() || void 0;
+        return str7(state?.status).toLowerCase() || void 0;
       } catch {
         return void 0;
       }
@@ -171329,9 +171895,9 @@ data: ${JSON.stringify(msg.data)}
         } catch {
           return { presence: "unknown" };
         }
-        const row = sessions.find((s2) => str6(s2?.id) === attempt.sessionId || str6(s2?.sessionId) === attempt.sessionId);
+        const row = sessions.find((s2) => str7(s2?.id) === attempt.sessionId || str7(s2?.sessionId) === attempt.sessionId);
         if (!row) return sessions.length > 0 ? { presence: "absent" } : { presence: "unknown" };
-        const status = str6(row.status).toLowerCase() || void 0;
+        const status = str7(row.status).toLowerCase() || void 0;
         if (!wantsTranscript(attempt, holds, status)) return { presence: "present", ...status ? { status } : {} };
         const replica = readTranscriptForDaemonConsumer({
           consumerId: "daemon_terminal_evidence",
@@ -174662,6 +175228,7 @@ ${notice.notice}${supersededHint}`;
     init_runtime_defaults();
     init_refresh();
     init_registry();
+    init_provider_loader();
     init_logger();
     init_fsm_driver();
     var RESIDUE_PROBE_CHARS = 24;
@@ -175450,8 +176017,8 @@ ${notice.notice}${supersededHint}`;
       return [...counts.entries()].map(([state, n]) => `${n} ${state}`).join(", ");
     }
     function gateSummary(gate) {
-      const label = gate.ref || gate.gateId;
-      return `'${label}' (${gate.action}, ${gate.state})`;
+      const label2 = gate.ref || gate.gateId;
+      return `'${label2}' (${gate.action}, ${gate.state})`;
     }
     function deadWorkspaceSummaries(graphStore, graphId) {
       let intents;
@@ -175490,6 +176057,7 @@ ${notice.notice}${supersededHint}`;
         if (queueGraphReminder(graphStore, graph, nowMs2, updatedAtMs, bucket2)) result.remindersQueued += 1;
       }
       for (const gate of graphStore.listGatesByMesh(meshId, STALE_GATE_STATES)) {
+        if (gate.state === "expired" && gate.onTimeout !== "hold") continue;
         const updatedAtMs = parseIsoMs(gate.updatedAt) ?? parseIsoMs(gate.createdAt);
         if (updatedAtMs === null || nowMs2 - updatedAtMs < staleThresholdMs) continue;
         result.staleGates += 1;
@@ -175546,6 +176114,187 @@ ${notice.notice}${supersededHint}`;
         coordinatorMessage,
         queuedAt: nowMs2
       });
+    }
+    var import_crypto23 = require("crypto");
+    init_mesh_runtime_store();
+    init_deliver();
+    init_mesh_task_predicates();
+    init_mesh_graph_stop_notice();
+    init_mesh_queue_dependency_notice();
+    var IN_PROGRESS_SAGA_STATES = /* @__PURE__ */ new Set(["declared", "preparing", "compensating"]);
+    var DONE_NODE_STATES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled", "skipped", "released", "expired"]);
+    var OPEN_GATE_STATES = /* @__PURE__ */ new Set(["awaiting_coordinator", "claimed"]);
+    function detectGraphStall(meshId, graphId) {
+      const store2 = MeshRuntimeStore.getInstance();
+      const graphStore = store2.graphStore();
+      const graph = graphStore.getGraph(graphId);
+      if (!graph || graph.status !== "active") return null;
+      if (graphStore.listGatesByGraph(graphId).some((g3) => OPEN_GATE_STATES.has(g3.state))) return null;
+      try {
+        if (graphStore.listWorkspaceIntents(graphId).some((i) => IN_PROGRESS_SAGA_STATES.has(i.sagaState))) return null;
+      } catch {
+      }
+      const nodes = graphStore.listNodes(graphId);
+      const workers = nodes.filter((n) => n.kind === "worker_task" && n.queueTaskId);
+      const rows = new Map(workers.map((n) => [n.nodeId, store2.findQueueEntryById(meshId, n.queueTaskId)]));
+      const statusById = /* @__PURE__ */ new Map();
+      for (const row of rows.values()) if (row) statusById.set(row.id, row.status);
+      for (const row of rows.values()) {
+        for (const dep of row?.dependsOn ?? []) {
+          if (!statusById.has(dep)) {
+            const depRow = store2.findQueueEntryById(meshId, dep);
+            if (depRow) statusById.set(dep, depRow.status);
+          }
+        }
+      }
+      const inGraphTaskIds = new Set(workers.map((n) => n.queueTaskId));
+      for (const row of rows.values()) {
+        if (!row) continue;
+        if (row.status === "assigned") return null;
+        if (row.status === "pending" && taskDependenciesSatisfied3(row, statusById)) return null;
+        if (row.status === "pending" && (row.dependsOn ?? []).some((d) => !inGraphTaskIds.has(d) && (statusById.get(d) === "pending" || statusById.get(d) === "assigned"))) return null;
+      }
+      const stuckNodes = nodes.filter((n) => !DONE_NODE_STATES.has(n.state));
+      if (stuckNodes.length === 0) return null;
+      const edges = graphStore.listEdges(graphId);
+      const byId = new Map(nodes.map((n) => [n.nodeId, n]));
+      const deadUpstream = /* @__PURE__ */ new Map();
+      for (const s2 of stuckNodes) {
+        for (const e of edges.filter((x) => x.toNodeId === s2.nodeId)) {
+          const src = byId.get(e.fromNodeId);
+          if (src && (src.state === "failed" || src.state === "cancelled")) deadUpstream.set(src.nodeId, src);
+        }
+      }
+      const pagedRoots = /* @__PURE__ */ new Set();
+      for (const row of graphStore.listOutboxEvents(meshId, graphId)) {
+        if (row.kind !== "graph_dependency_blocked" && row.kind !== "graph_dependency_cancelled") continue;
+        try {
+          const rootId = JSON.parse(row.payload ?? "{}")?.root?.nodeId;
+          if (typeof rootId === "string") pagedRoots.add(rootId);
+        } catch {
+        }
+      }
+      if (deadUpstream.size > 0 && [...deadUpstream.keys()].every((id22) => pagedRoots.has(id22))) {
+        const explained = /* @__PURE__ */ new Set();
+        let frontier = [...deadUpstream.keys()];
+        while (frontier.length > 0) {
+          const next = [];
+          for (const id22 of frontier) {
+            for (const e of edges.filter((x) => x.fromNodeId === id22)) {
+              if (explained.has(e.toNodeId)) continue;
+              explained.add(e.toNodeId);
+              next.push(e.toNodeId);
+            }
+          }
+          frontier = next;
+        }
+        if (stuckNodes.every((n) => explained.has(n.nodeId))) return null;
+      }
+      const describe32 = (n) => {
+        const row = n.queueTaskId ? rows.get(n.nodeId) : null;
+        const gateId = n.kind === "coordinator_gate" ? graphStore.findGateByNodeId(graphId, n.nodeId)?.gateId : void 0;
+        const code = row?.blockedReason ? reasonCodeOf(row.blockedReason) : void 0;
+        return {
+          nodeId: n.nodeId,
+          ...n.ref ? { ref: n.ref } : {},
+          kind: n.kind === "coordinator_gate" ? "coordinator_gate" : "worker_task",
+          ...n.queueTaskId ? { taskId: n.queueTaskId } : {},
+          ...gateId ? { gateId } : {},
+          state: row && row.status !== "pending" ? `${n.state}/${row.status}` : n.state,
+          ...code && code !== "unspecified" ? { reasonCode: code } : {}
+        };
+      };
+      const stuck = stuckNodes.map(describe32);
+      const fingerprint = (0, import_crypto23.createHash)("sha256").update(JSON.stringify(stuck.map((s2) => [s2.nodeId, s2.state, s2.reasonCode ?? ""]).sort())).digest("hex").slice(0, 16);
+      return {
+        kind: "graph_stalled",
+        meshId,
+        graphId,
+        fingerprint,
+        stuck,
+        deadUpstream: [...deadUpstream.values()].map((n) => ({
+          nodeId: n.nodeId,
+          ...n.ref ? { ref: n.ref } : {},
+          kind: "worker_task",
+          ...n.queueTaskId ? { taskId: n.queueTaskId } : {},
+          state: n.state
+        }))
+      };
+    }
+    function sweepMeshGraphStalls(meshId, opts) {
+      const graphStore = MeshRuntimeStore.getInstance().graphStore();
+      const result = { checkedGraphs: 0, stalledGraphs: 0, stalledQueueChains: 0, noticesQueued: 0 };
+      for (const graph of graphStore.listGraphsByMesh(meshId, { statuses: ["active"] })) {
+        result.checkedGraphs += 1;
+        const stall = detectGraphStall(meshId, graph.graphId);
+        if (!stall) continue;
+        result.stalledGraphs += 1;
+        const rendered = renderGraphStopNotice(stall);
+        const queued = notifyMeshCoordinator({
+          event: rendered.event,
+          meshId,
+          nodeLabel: rendered.nodeLabel,
+          eventId: rendered.eventId,
+          metadataEvent: rendered.metadataEvent,
+          coordinatorMessage: rendered.coordinatorMessage,
+          ...opts?.nowMs !== void 0 ? { queuedAt: opts.nowMs } : {}
+        });
+        if (queued) result.noticesQueued += 1;
+      }
+      for (const stall of detectQueueChainStalls(meshId)) {
+        result.stalledQueueChains += 1;
+        const rendered = renderGraphStopNotice(stall);
+        const queued = notifyMeshCoordinator({
+          event: rendered.event,
+          meshId,
+          nodeLabel: rendered.nodeLabel,
+          eventId: rendered.eventId,
+          metadataEvent: rendered.metadataEvent,
+          coordinatorMessage: rendered.coordinatorMessage,
+          ...opts?.nowMs !== void 0 ? { queuedAt: opts.nowMs } : {}
+        });
+        if (queued) result.noticesQueued += 1;
+      }
+      return result;
+    }
+    function detectQueueChainStalls(meshId) {
+      const store2 = MeshRuntimeStore.getInstance();
+      const graphStore = store2.graphStore();
+      const pending = store2.getQueueEntries(meshId, ["pending"]);
+      const deadRoots = /* @__PURE__ */ new Map();
+      for (const entry of pending) {
+        for (const dep of entry.dependsOn ?? []) {
+          if (deadRoots.has(dep)) continue;
+          const row = store2.findQueueEntryById(meshId, dep);
+          if (row && (row.status === "failed" || row.status === "cancelled")) {
+            deadRoots.set(dep, { status: row.status, ...row.cancelReason ? { cancelReason: row.cancelReason } : {} });
+          }
+        }
+      }
+      if (deadRoots.size === 0) return [];
+      const covered = /* @__PURE__ */ new Set();
+      for (const row of graphStore.listOutboxEventsByKinds(meshId, ["queue_dependency_blocked", "queue_dependency_cancelled"])) {
+        try {
+          const id22 = JSON.parse(row.payload ?? "{}")?.root?.taskId;
+          if (typeof id22 === "string") covered.add(id22);
+        } catch {
+        }
+      }
+      const out = [];
+      for (const [rootId, root] of deadRoots) {
+        if (covered.has(rootId)) continue;
+        const waiting = collectWaitingQueueDependents(store2, meshId, rootId);
+        if (waiting.length === 0) continue;
+        const fingerprint = (0, import_crypto23.createHash)("sha256").update(JSON.stringify([root.status, ...waiting.map((w) => w.taskId).sort()])).digest("hex").slice(0, 16);
+        out.push({
+          kind: "queue_chain_stalled",
+          meshId,
+          fingerprint,
+          root: { taskId: rootId, outcome: root.status, reasonCode: queueRootReasonCode({ status: root.status, cancelReason: root.cancelReason }) },
+          waiting
+        });
+      }
+      return out;
     }
     init_mesh_graph_provenance();
     var DISK_RETENTION_INTERVAL_MS = 60 * 60 * 1e3;
@@ -175629,6 +176378,11 @@ ${notice.notice}${supersededHint}`;
             sweepMeshGraphStaleness(mesh.id);
           } catch (e) {
             LOG.warn("MeshHousekeeping", `Graph staleness sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
+          }
+          try {
+            sweepMeshGraphStalls(mesh.id);
+          } catch (e) {
+            LOG.warn("MeshHousekeeping", `Graph stall sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
           }
         }
         const router = components.router;
@@ -175756,13 +176510,22 @@ ${notice.notice}${supersededHint}`;
           hydrateModelCache(process.env);
         } catch {
         }
-        const targets = (components.providerLoader.getAvailableProviderInfos?.() || []).filter((p) => p?.category === "cli" && p?.modelDiscovery).filter((p) => p.enabled !== false).map((p) => ({
-          type: p.type,
-          modelDiscovery: p.modelDiscovery,
-          binary: p.detectedPath || p.binary
-        }));
-        void refreshDueModelDiscovery(targets).catch(() => {
-        });
+        try {
+          const targets = (components.providerLoader.getAvailableProviderInfos?.() || []).filter((p) => p?.category === "cli" && p?.modelDiscovery).filter((p) => p.enabled !== false).map((p) => ({
+            type: p.type,
+            modelDiscovery: p.modelDiscovery,
+            // A shell-wrapped spawn (antigravity-cli: `bash -c "… exec agy"`)
+            // must never hand the wrapper to discovery — that ran `bash models`
+            // (2026-09-25). Detection now resolves the wrapped binary, so
+            // detectedPath is the real CLI; this guard covers a stale
+            // detection recorded before that fix.
+            binary: resolveWrappedCliBinary(p.spawn?.command, p.binary) && isShellWrapperCommand(p.detectedPath) ? p.binary : p.detectedPath || p.binary
+          }));
+          void refreshDueModelDiscovery(targets).catch(() => {
+          });
+        } catch (e) {
+          LOG.warn("Models", `model discovery scheduling failed (manifest lists stand): ${e?.message || e}`);
+        }
       });
     }
     var TURN_SUMMARY_HANDOFF_KIND = "turn.summary";
@@ -176278,8 +177041,8 @@ ${notice.notice}${supersededHint}`;
     }
     init_dist();
     init_logger();
-    function swallow(label) {
-      return (error48) => LOG.debug("HostRuntime", `${label} failed: ${error48?.message ?? error48}`);
+    function swallow(label2) {
+      return (error48) => LOG.debug("HostRuntime", `${label2} failed: ${error48?.message ?? error48}`);
     }
     function flushTopic(topics, topic) {
       if (!topics.hasSubscriptions(topic)) return;
@@ -184797,7 +185560,7 @@ async function meshEnqueueBatch(ctx, args) {
   }
   const batchIdArg = readString(args.batch_id) || readString(args.batchId) || void 0;
   const plan = buildGraphPlanShape(specs, rawGraphEntries, args.gates, args.workspaces, !!batchIdArg);
-  const useGraphPath = plan.useGraphPath;
+  const useGraphPath = plan.useGraphPath || onDependencyFailure === "cancel";
   const decision = (0, import_daemon_core10.normalizeOrchestrationDecision)(
     args.orchestration_decision ?? args.orchestrationDecision,
     "batch"

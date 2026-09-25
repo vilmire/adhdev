@@ -58,4 +58,13 @@ export type CliDetectionEntry = {
   category: string;
   enabled: boolean;
   versionCommand?: string;
+  /**
+   * The command install detection resolves, when it differs from `command`.
+   * Set only when `spawn.command` is a shell wrapper (e.g. antigravity-cli's
+   * `bash -c "… exec agy"`) and the manifest names the real CLI in `binary`:
+   * detecting the wrapper would resolve `/bin/bash`, which exists everywhere —
+   * the provider looked installed on machines without the CLI, its version was
+   * bash's, and model discovery ran `bash models` (2026-09-25).
+   */
+  detectCommand?: string;
 };

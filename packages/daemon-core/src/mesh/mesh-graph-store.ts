@@ -594,6 +594,16 @@ export class MeshGraphStore {
         return rows.map(mapOutboxRow);
     }
 
+    /** Outbox rows of the given kinds for one mesh (any graph, incl. graph-less queue-chain rows). */
+    listOutboxEventsByKinds(meshId: string, kinds: readonly string[]): MeshGraphOutboxRow[] {
+        if (kinds.length === 0) return [];
+        const placeholders = kinds.map(() => '?').join(',');
+        const rows = this.db.prepare(
+            `SELECT * FROM mesh_graph_outbox WHERE mesh_id = ? AND kind IN (${placeholders}) ORDER BY created_at ASC`
+        ).all(meshId, ...kinds) as any[];
+        return rows.map(mapOutboxRow);
+    }
+
     /** Phase-B drain bookkeeping: terminal delivery state for one outbox row. */
     markOutboxEventStatus(
         id: string,

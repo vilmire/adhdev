@@ -1071,6 +1071,7 @@
                 "blockedByGate": "대기 원인: {{ref}}, {{age}}",
                 "waitingOn": "대기 중:",
                 "waitingOnMore": "외 {{count}}개",
+                "blockedByDeadDependency": "실패/취소된 선행 작업에 막힘:",
                 "chainGroup": "체인: {{title}}"
             }
         },

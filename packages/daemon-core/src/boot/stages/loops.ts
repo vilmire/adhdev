@@ -12,6 +12,7 @@ import {
     refreshQuotaCacheOnBoot,
 } from '../../quota/refresh.js';
 import { hydrateModelCache, refreshDueModelDiscovery } from '../../models/registry.js';
+import { isShellWrapperCommand, resolveWrappedCliBinary } from '../../providers/provider-loader.js';
 import { scheduleComposerResidueSweep } from '../composer-residue-sweep.js';
 import { startEventLoopMonitor } from '../event-loop-monitor.js';
 import type { Disposer } from '../daemon-components.js';
@@ -66,15 +67,28 @@ export function scheduleQuotaBootRefresh(components: MeshRuntimeStage['component
 export function scheduleModelDiscovery(components: MeshRuntimeStage['components']): void {
     setImmediate(() => {
         try { hydrateModelCache(process.env); } catch { /* fail-soft */ }
+        // Background work: a throw here is uncaught inside setImmediate and would
+        // take the whole daemon down (observed 2026-09-25 on a standalone boot).
+        try {
         const targets = (components.providerLoader.getAvailableProviderInfos?.() || [])
             .filter((p: any) => p?.category === 'cli' && p?.modelDiscovery)
             .filter((p: any) => p.enabled !== false)
             .map((p: any) => ({
                 type: p.type,
                 modelDiscovery: p.modelDiscovery,
-                binary: p.detectedPath || p.binary,
+                // A shell-wrapped spawn (antigravity-cli: `bash -c "… exec agy"`)
+                // must never hand the wrapper to discovery — that ran `bash models`
+                // (2026-09-25). Detection now resolves the wrapped binary, so
+                // detectedPath is the real CLI; this guard covers a stale
+                // detection recorded before that fix.
+                binary: resolveWrappedCliBinary(p.spawn?.command, p.binary) && isShellWrapperCommand(p.detectedPath)
+                    ? p.binary
+                    : (p.detectedPath || p.binary),
             }));
         void refreshDueModelDiscovery(targets).catch(() => { /* background; manifest lists stand */ });
+        } catch (e: any) {
+            LOG.warn('Models', `model discovery scheduling failed (manifest lists stand): ${e?.message || e}`);
+        }
     });
 }
 
