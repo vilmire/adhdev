@@ -885,6 +885,15 @@ export class ProviderLoader {
      * intent record needs no .upstream write.
      */
     extraTargetTypes?: readonly string[];
+    /**
+     * Restrict the sync to EXACTLY these provider types (the dashboard's
+     * per-provider "Update" button). Replaces the default target set instead
+     * of extending it, so one row's update never moves another provider's
+     * pin. A restricted sync is partial by construction, so it does not write
+     * the channel-activation stamp — the boot-time daemon-update ride-along
+     * (maybeSyncVerifiedChannelOnDaemonUpdate) must still run for the rest.
+     */
+    onlyTargetTypes?: readonly string[];
   }): Promise<ChannelSyncReport> {
     if (!this.channelStore) {
       return {
@@ -902,9 +911,17 @@ export class ProviderLoader {
       logFn: this.logFn,
       ...this.channelSyncIO,
     });
-    const targetTypes = collectSyncTargetTypes(this.upstreamDir, this.channelStore, this.channel);
-    for (const extra of options?.extraTargetTypes ?? []) {
-      if (typeof extra === 'string' && extra.trim()) targetTypes.add(extra.trim());
+    const onlyTypes = (options?.onlyTargetTypes ?? [])
+      .filter((t): t is string => typeof t === 'string' && t.trim() !== '')
+      .map((t) => t.trim());
+    const restricted = onlyTypes.length > 0;
+    const targetTypes = restricted
+      ? new Set(onlyTypes)
+      : collectSyncTargetTypes(this.upstreamDir, this.channelStore, this.channel);
+    if (!restricted) {
+      for (const extra of options?.extraTargetTypes ?? []) {
+        if (typeof extra === 'string' && extra.trim()) targetTypes.add(extra.trim());
+      }
     }
     const report = await runtime.sync({ channel: this.channel, targetTypes, bootstrapAll: options?.bootstrapAll });
     for (const skip of report.skipped) {
@@ -926,7 +943,7 @@ export class ProviderLoader {
         };
       }
     }
-    if (report.status !== 'error') {
+    if (report.status !== 'error' && !restricted) {
       // Record which daemon version last completed a verified sync — the
       // boot-time daemon-update activation (maybeSyncVerifiedChannelOnDaemonUpdate)
       // short-circuits on this stamp. Errored syncs write nothing so the next

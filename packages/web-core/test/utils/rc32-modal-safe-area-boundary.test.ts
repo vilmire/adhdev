@@ -30,17 +30,6 @@ describe('RC32 modal safe-area hardening (audited peers)', () => {
     expect(source).toContain('aria-label="Close"')
   })
 
-  it('ProviderCloneModal uses the modal z-token and a usable close target', () => {
-    const cloneSource = readSource('pages/machine/ProviderCloneModal.tsx')
-
-    expect(cloneSource).toContain('z-[var(--z-modal)]')
-    expect(cloneSource).not.toContain('z-50')
-    expect(cloneSource).toContain('aria-label="Close"')
-    expect(cloneSource).toContain('h-11 w-11')
-    // Clone modal previously had NO header close button at all.
-    expect(cloneSource).toContain('flex items-start justify-between gap-3')
-  })
-
   it('LaunchPickModal dismisses via backdrop click and Escape in addition to Cancel', () => {
     const source = readSource('pages/machine/LaunchPickModal.tsx')
 

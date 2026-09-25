@@ -1,8 +1,7 @@
 /**
  * ProvidersTab — Dynamic provider settings with filter and inline editing.
- * Includes the Clone Provider modal.
  */
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ProviderSettingsEntry, ProviderInfo } from './types'
 import { QUOTA_SUPPORTED_PROVIDERS, type MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
@@ -23,9 +22,8 @@ const QUOTA_ACCOUNT_PROVIDERS = new Set(['codex-cli'])
  * (daemon-core test/quota/quota-supported-providers-drift.test.ts).
  */
 const QUOTA_PROVIDERS = new Set(QUOTA_SUPPORTED_PROVIDERS)
-import { buildProviderSettingsEntries, extractProviderSettingsPayload } from './providerSettings'
+import { buildProviderSettingsEntries, extractProviderSettingsPayload, type ProviderSettingsPayload } from './providerSettings'
 import { extractProviderSourceConfigPayload, normalizeProviderDirInput, type ProviderSourceConfigPayload } from './providerSourceConfig'
-import ProviderCloneModal from './ProviderCloneModal'
 import ProviderInstallOptionsModal from './ProviderInstallOptionsModal'
 import InstalledProviderRow, { type ProviderPinInfo } from './InstalledProviderRow'
 import { extractChannelSyncErrors, hasDigestMismatch, type ChannelSyncErrorInfo } from './providerChannelErrors'
@@ -33,6 +31,8 @@ import Card from '../../components/Card'
 import SourcesPanel from './SourcesPanel'
 import { IconSpinner } from '../../components/Icons'
 import { AlertBanner } from '../../components/ui/AlertBanner'
+import { eventManager } from '../../managers/EventManager'
+import { interpretProviderChannelSyncResult } from '../../utils/provider-channel-sync'
 
 interface ProvidersTabProps {
     machineId: string
@@ -40,13 +40,29 @@ interface ProvidersTabProps {
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
     /** Machine plan quota (MachineInfo.quota) — rendered per provider row. */
     quota?: Record<string, MeshNodeFactsProviderQuota>
-    /** Incremented after an external channel sync so pins/settings re-read. */
-    refreshNonce?: number
+    /**
+     * Channel staleness as read by this tab's own check_provider_updates, so
+     * the machine page's tab dot stays current without an extra command.
+     */
+    onChannelStaleness?: (snap: { staleTypes: string[]; newTypes: string[] }) => void
 }
 
-export default function ProvidersTab({ machineId, providers, sendDaemonCommand, quota, refreshNonce = 0 }: ProvidersTabProps) {
+/**
+ * ★No background refetch (owner feedback 2026-09-25: "every click runs
+ * something in the background"). Rules this component keeps:
+ *   - `providers` changes on EVERY status tick. It is joined into the rows by
+ *     a pure useMemo, never a dependency of a daemon fetch — it used to be a
+ *     useCallback dep of fetchSettings, which re-sent get_provider_settings +
+ *     check_provider_updates on every status update after one sync click.
+ *   - A write that succeeded is applied optimistically and NOT followed by a
+ *     full re-read; reconciliation re-reads only on failure.
+ *   - The Refresh button is the only thing that shows a spinner. Background
+ *     reconciles never touch `loading`.
+ */
+export default function ProvidersTab({ machineId, providers, sendDaemonCommand, quota, onChannelStaleness }: ProvidersTabProps) {
     const { t } = useTranslation('common')
-    const [settings, setSettings] = useState<ProviderSettingsEntry[]>([])
+    // Raw daemon payload; the rows are DERIVED from it + `providers` below.
+    const [settingsPayload, setSettingsPayload] = useState<ProviderSettingsPayload | null>(null)
     // Quota account label — machine-level config, so it has its own read/write
     // pair (get/set_quota_account_label) rather than riding the provider-manifest
     // settings payload. Rendered on the provider whose quota carries the label.
@@ -60,9 +76,10 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
     const [channelNewTypes, setChannelNewTypes] = useState<string[]>([])
     /** Providers whose model list is discoverable but whose last read failed. */
     const [modelStaleTypes, setModelStaleTypes] = useState<string[]>([])
-    /** Providers that declare they cannot be enumerated at all (kind: 'none'). */
-    const [modelCannotVerifyTypes, setModelCannotVerifyTypes] = useState<string[]>([])
     const [installingNewType, setInstallingNewType] = useState<string | null>(null)
+    // Provider types whose per-row Update is in flight.
+    const [updatingTypes, setUpdatingTypes] = useState<Record<string, true>>({})
+    const [updatingAll, setUpdatingAll] = useState(false)
     // Why a channel install failed, per provider type. The daemon already
     // returns the typed channelSync errors (DIGEST_MISMATCH, TRANSPORT_FAILED,
     // …); before this they were dropped on the floor, so a refusing install
@@ -73,7 +90,6 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
     const [loadError, setLoadError] = useState<string | null>(null)
     const [savingKey, setSavingKey] = useState<string | null>(null)
     const [filter, setFilter] = useState<'all' | 'acp' | 'cli' | 'ide' | 'extension'>('cli')
-    const [showClone, setShowClone] = useState(false)
     // Provider type whose install-options modal is open, or null. Set when a
     // provider is switched ON; nothing is persisted until it is confirmed.
     const [installOptionsFor, setInstallOptionsFor] = useState<string | null>(null)
@@ -99,25 +115,43 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
         }
     }, [machineId, sendDaemonCommand, t])
 
-    const fetchSettings = useCallback(async () => {
+    /**
+     * Re-read the provider settings payload. `explicit` (the Refresh button,
+     * and the very first load) is the only case that shows the spinner.
+     */
+    const fetchSettings = useCallback(async (opts?: { explicit?: boolean }) => {
         if (!machineId) return
-        setLoading(true)
+        if (opts?.explicit) setLoading(true)
         try {
             const res = await sendDaemonCommand(machineId, 'get_provider_settings', {})
             const payload = extractProviderSettingsPayload(res)
             if (payload) {
-                const entries: ProviderSettingsEntry[] = buildProviderSettingsEntries(payload, providers, {
-                    filterSchema: (schema) => schema.filter((setting) => setting.key !== 'enabled'),
-                })
-                entries.sort((a, b) => a.category.localeCompare(b.category) || a.displayName.localeCompare(b.displayName))
-                setSettings(entries)
+                setSettingsPayload(payload)
                 setLoadError(null)
             }
         } catch (e: any) {
             setLoadError(t('machine.providers.loadFailed', { error: e?.message || String(e) }))
+        } finally {
+            if (opts?.explicit) setLoading(false)
         }
-        setLoading(false)
-    }, [machineId, providers, sendDaemonCommand, t])
+    }, [machineId, sendDaemonCommand, t])
+
+    // Pure join — re-runs on status churn, sends nothing.
+    const settings = useMemo<ProviderSettingsEntry[]>(() => {
+        if (!settingsPayload) return []
+        const entries = buildProviderSettingsEntries(settingsPayload, providers, {
+            filterSchema: (schema) => schema.filter((setting) => setting.key !== 'enabled'),
+        })
+        entries.sort((a, b) => a.category.localeCompare(b.category) || a.displayName.localeCompare(b.displayName))
+        return entries
+    }, [settingsPayload, providers])
+
+    /** Optimistically patch one stored value in the payload. */
+    const patchSettingValue = useCallback((providerType: string, key: string, value: unknown) => {
+        setSettingsPayload(prev => prev
+            ? { ...prev, values: { ...prev.values, [providerType]: { ...(prev.values[providerType] || {}), [key]: value } } }
+            : prev)
+    }, [])
 
     const fetchQuotaAccountLabel = useCallback(async () => {
         if (!machineId) return
@@ -134,27 +168,33 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
         if (!machineId) return
         setQuotaAccountLabel(enabled) // optimistic: the switch responds immediately
         try {
-            await sendDaemonCommand(machineId, 'set_quota_account_label', { enabled })
-        } finally {
-            // Reconcile with what the daemon actually stored.
+            const res = await sendDaemonCommand(machineId, 'set_quota_account_label', { enabled })
+            const body = (res && typeof res === 'object' && 'result' in (res as any) ? (res as any).result : res) as { success?: boolean } | undefined
+            // Reconcile with what the daemon actually stored — only on failure.
+            if (body?.success === false) await fetchQuotaAccountLabel()
+        } catch {
             await fetchQuotaAccountLabel()
         }
     }, [machineId, sendDaemonCommand, fetchQuotaAccountLabel])
 
-    const fetchQuotaEnabled = useCallback(async () => {
+    /** Read one provider's quota probe switch. */
+    const fetchQuotaEnabledOne = useCallback(async (providerType: string) => {
         if (!machineId) return
-        await Promise.all([...QUOTA_PROVIDERS].map(async (providerType) => {
-            try {
-                const res = await sendDaemonCommand(machineId, 'get_quota_provider_enabled', { providerType })
-                // Standalone returns the raw response, cloud wraps it as
-                // { success, result } — accept both, as the transport docs require.
-                const body = (res && typeof res === 'object' && 'result' in (res as any) ? (res as any).result : res) as { enabled?: unknown } | undefined
-                if (typeof body?.enabled === 'boolean') {
-                    setQuotaEnabled(prev => ({ ...prev, [providerType]: body.enabled as boolean }))
-                }
-            } catch { /* leave unset — renders as ON, which is also the config default */ }
-        }))
+        try {
+            const res = await sendDaemonCommand(machineId, 'get_quota_provider_enabled', { providerType })
+            // Standalone returns the raw response, cloud wraps it as
+            // { success, result } — accept both, as the transport docs require.
+            const body = (res && typeof res === 'object' && 'result' in (res as any) ? (res as any).result : res) as { enabled?: unknown } | undefined
+            if (typeof body?.enabled === 'boolean') {
+                setQuotaEnabled(prev => ({ ...prev, [providerType]: body.enabled as boolean }))
+            }
+        } catch { /* leave unset — renders as ON, which is also the config default */ }
     }, [machineId, sendDaemonCommand])
+
+    /** Mount-time read of every quota provider's switch (one fan-out). */
+    const fetchQuotaEnabled = useCallback(async () => {
+        await Promise.all([...QUOTA_PROVIDERS].map((providerType) => fetchQuotaEnabledOne(providerType)))
+    }, [fetchQuotaEnabledOne])
 
     const handleQuotaToggle = useCallback(async (providerType: string, enabled: boolean) => {
         if (!machineId) return
@@ -164,14 +204,14 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
             const body = (res && typeof res === 'object' && 'result' in (res as any) ? (res as any).result : res) as { success?: boolean; error?: unknown } | undefined
             if (body?.success === false) {
                 setLoadError(t('machine.providers.quotaToggleFailed', { provider: providerType, error: typeof body.error === 'string' ? body.error : 'unknown error' }))
+                // Reconcile THIS provider with what the daemon actually stored.
+                await fetchQuotaEnabledOne(providerType)
             }
         } catch (e: any) {
             setLoadError(t('machine.providers.quotaToggleFailed', { provider: providerType, error: e?.message || String(e) }))
-        } finally {
-            // Reconcile with what the daemon actually stored.
-            await fetchQuotaEnabled()
+            await fetchQuotaEnabledOne(providerType)
         }
-    }, [machineId, sendDaemonCommand, fetchQuotaEnabled, t])
+    }, [machineId, sendDaemonCommand, fetchQuotaEnabledOne, t])
 
     /**
      * Verified-channel pins + what the channel currently offers.
@@ -187,8 +227,8 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
             const body = (res && typeof res === 'object' && 'result' in (res as any) ? (res as any).result : res) as
                 {
                     providers?: Array<Record<string, any>>
-                    channelStaleness?: { newTypes?: string[] }
-                    modelStaleness?: { cannotVerifyTypes?: string[]; staleTypes?: string[] }
+                    channelStaleness?: { staleTypes?: string[]; newTypes?: string[]; error?: string }
+                    modelStaleness?: { staleTypes?: string[] }
                 } | undefined
             const next: Record<string, ProviderPinInfo> = {}
             for (const row of body?.providers ?? []) {
@@ -207,15 +247,20 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
             // the kimi class: without this list there is NO dashboard path to
             // install a type first published after bootstrap.
             setChannelNewTypes(Array.isArray(body?.channelStaleness?.newTypes) ? body.channelStaleness.newTypes : [])
-            // Model-list axis. ★Two DISTINCT lists, never merged: "we looked
-            // and the read failed" (staleTypes) is a different fact from "this
-            // provider can never be enumerated" (cannotVerifyTypes —
-            // claude-cli, hermes-cli). Showing either as up-to-date would
-            // assert a check that never happened.
+            const staleness = body?.channelStaleness
+            if (onChannelStaleness && staleness && !staleness.error) {
+                onChannelStaleness({
+                    staleTypes: Array.isArray(staleness.staleTypes) ? staleness.staleTypes : [],
+                    newTypes: Array.isArray(staleness.newTypes) ? staleness.newTypes : [],
+                })
+            }
+            // Model-list axis: only "discovery is supported but the last read
+            // FAILED" is shown. Providers that cannot be enumerated at all
+            // (daemon `cannotVerifyTypes`) are deliberately not rendered —
+            // owner decision 2026-09-25; an outdated list surfaces as an issue.
             setModelStaleTypes(Array.isArray(body?.modelStaleness?.staleTypes) ? body.modelStaleness.staleTypes : [])
-            setModelCannotVerifyTypes(Array.isArray(body?.modelStaleness?.cannotVerifyTypes) ? body.modelStaleness.cannotVerifyTypes : [])
         } catch { /* leave empty — rows then show no pin rather than a wrong one */ }
-    }, [machineId, sendDaemonCommand])
+    }, [machineId, sendDaemonCommand, onChannelStaleness])
 
     const handleInstallNewType = useCallback(async (providerType: string) => {
         if (!machineId) return
@@ -248,20 +293,37 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
         } finally {
             setInstallingNewType(null)
             await fetchPins()
-            await fetchSettings()
+            // A newly activated spec can change the settings schema.
+            void fetchSettings()
         }
-    }, [machineId, sendDaemonCommand, fetchPins])
+    }, [machineId, sendDaemonCommand, fetchPins, fetchSettings])
 
+    /** "Update all" — every stale pin (no types: the default target set). */
     const handleActivatePins = useCallback(async () => {
         if (!machineId) return
+        setUpdatingAll(true)
         try {
-            await sendDaemonCommand(machineId, 'activate_provider_updates', {})
+            const res = await sendDaemonCommand(machineId, 'activate_provider_updates', {})
+            const outcome = interpretProviderChannelSyncResult(res)
+            if ('error' in outcome) {
+                eventManager.showToast(t('machine.detail.providerSyncFailed', { error: outcome.error }), 'warning')
+            } else {
+                eventManager.showToast(
+                    outcome.activatedCount > 0
+                        ? t('machine.detail.providerSyncSuccess', { count: outcome.activatedCount })
+                        : t('machine.detail.providerSyncAlreadyCurrent'),
+                    'success',
+                )
+            }
+        } catch (e) {
+            eventManager.showToast(t('machine.detail.providerSyncFailed', { error: e instanceof Error ? e.message : String(e) }), 'warning')
         } finally {
+            setUpdatingAll(false)
             // Report what actually moved, not what we hoped would.
             await fetchPins()
-            await fetchSettings()
+            void fetchSettings()
         }
-    }, [machineId, sendDaemonCommand, fetchPins])
+    }, [machineId, sendDaemonCommand, fetchPins, fetchSettings, t])
 
     const handleRollbackPin = useCallback(async (providerType: string) => {
         if (!machineId) return
@@ -269,35 +331,65 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
             await sendDaemonCommand(machineId, 'rollback_provider_update', { providerType })
         } finally {
             await fetchPins()
-            await fetchSettings()
+            void fetchSettings()
         }
-    }, [machineId, sendDaemonCommand, fetchPins])
+    }, [machineId, sendDaemonCommand, fetchPins, fetchSettings])
+
+    /**
+     * Per-provider inline "Update" (owner feedback 2026-09-25: a button next
+     * to the provider, not a number badge). `only: true` restricts the daemon
+     * sync to THIS type — without it `types` is unioned into the default
+     * target set and one row's button would move every stale pin. An older
+     * daemon ignores `only`; the toast still reports what really moved.
+     */
+    const handleUpdateProvider = useCallback(async (providerType: string) => {
+        if (!machineId) return
+        setUpdatingTypes(prev => ({ ...prev, [providerType]: true }))
+        try {
+            const res = await sendDaemonCommand(machineId, 'activate_provider_updates', { types: [providerType], only: true })
+            const outcome = interpretProviderChannelSyncResult(res)
+            const errors = extractChannelSyncErrors(res)
+            if ('error' in outcome || errors.length > 0) {
+                const error = 'error' in outcome ? outcome.error : errors.map(e => e.message || e.code).join('; ')
+                eventManager.showToast(t('machine.detail.providerSyncFailed', { error }), 'warning')
+            } else {
+                eventManager.showToast(
+                    outcome.activatedCount > 0
+                        ? t('machine.detail.providerSyncSuccess', { count: outcome.activatedCount })
+                        : t('machine.detail.providerSyncAlreadyCurrent'),
+                    'success',
+                )
+            }
+        } catch (e) {
+            eventManager.showToast(t('machine.detail.providerSyncFailed', { error: e instanceof Error ? e.message : String(e) }), 'warning')
+        } finally {
+            setUpdatingTypes(prev => {
+                const next = { ...prev }
+                delete next[providerType]
+                return next
+            })
+            await fetchPins()
+            void fetchSettings()
+        }
+    }, [machineId, sendDaemonCommand, fetchPins, fetchSettings, t])
 
     useEffect(() => {
-        if (settings.length === 0) fetchSettings()
+        if (!settingsPayload) void fetchSettings({ explicit: true })
         if (!sourceConfig) fetchSourceConfig()
         if (quotaAccountLabel === undefined) fetchQuotaAccountLabel()
         fetchQuotaEnabled()
         fetchPins()
     }, [])
 
-    useEffect(() => {
-        if (!refreshNonce) return
-        void fetchPins()
-        void fetchSettings()
-    }, [refreshNonce, fetchPins, fetchSettings])
-
     const handleSetSetting = async (providerType: string, key: string, value: unknown) => {
         setSavingKey(`${providerType}.${key}`)
-        // Optimistic update
-        setSettings(prev => prev.map(p =>
-            p.type === providerType ? { ...p, values: { ...p.values, [key]: value } } : p
-        ))
+        // Optimistic update; re-read only when the write did not land.
+        patchSettingValue(providerType, key, value)
         try {
             const res = await sendDaemonCommand(machineId, 'set_provider_setting', { providerType, key, value })
-            if (!res?.success) fetchSettings()
+            if (!res?.success) void fetchSettings()
         } catch {
-            fetchSettings()
+            void fetchSettings()
         }
         setSavingKey(null)
     }
@@ -319,7 +411,6 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
             return
         }
         await handleSetSetting(providerType, 'enabled', false)
-        await fetchSettings()
     }
 
     /**
@@ -350,29 +441,47 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
             // Written explicitly even when it matches the manifest default, so
             // the stored value records a choice the user actually made rather
             // than inheriting whatever the default later becomes.
-            await sendDaemonCommand(machineId, 'set_provider_setting', {
+            const autoApproveRes = await sendDaemonCommand(machineId, 'set_provider_setting', {
                 providerType,
                 key: 'autoApprove',
                 value: options.autoApprove,
             })
-            await sendDaemonCommand(machineId, 'set_provider_setting', {
+            const enableRes = await sendDaemonCommand(machineId, 'set_provider_setting', {
                 providerType,
                 key: 'enabled',
                 value: true,
             })
+            if (autoApproveRes?.success === false || enableRes?.success === false) {
+                throw new Error('set_provider_setting refused')
+            }
+            // All writes landed — apply them locally, no re-read.
+            patchSettingValue(providerType, 'autoApprove', options.autoApprove)
+            patchSettingValue(providerType, 'enabled', true)
+            if (options.quotaEnabled !== undefined) {
+                setQuotaEnabled(prev => ({ ...prev, [providerType]: options.quotaEnabled as boolean }))
+            }
+        } catch {
+            // Something refused mid-way: reconcile with what was stored.
+            void fetchSettings()
+            void fetchQuotaEnabledOne(providerType)
         } finally {
             setSavingKey(null)
-            await fetchSettings()
-            await fetchQuotaEnabled()
         }
-    }, [machineId, sendDaemonCommand, fetchSettings, fetchQuotaEnabled])
+    }, [machineId, sendDaemonCommand, fetchSettings, fetchQuotaEnabledOne, patchSettingValue])
 
+    // Detection results arrive through the status broadcast
+    // (providerInfo.machineStatus) — settings do not change, so no re-read.
     const handleDetectProvider = async (providerType: string) => {
         setSavingKey(`${providerType}.detect`)
         try {
-            await sendDaemonCommand(machineId, 'detect_provider', { providerType })
+            const res = await sendDaemonCommand(machineId, 'detect_provider', { providerType })
+            const body = (res && typeof res === 'object' && 'result' in (res as any) ? (res as any).result : res) as { success?: boolean; error?: unknown } | undefined
+            if (body?.success === false) {
+                setLoadError(t('machine.providers.loadFailed', { error: typeof body.error === 'string' ? body.error : 'detect failed' }))
+            }
+        } catch (e: any) {
+            setLoadError(t('machine.providers.loadFailed', { error: e?.message || String(e) }))
         } finally {
-            await fetchSettings()
             setSavingKey(null)
         }
     }
@@ -380,7 +489,6 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
     const handleResetProviderCommand = async (providerType: string) => {
         await handleSetSetting(providerType, 'executablePath', '')
         await handleSetSetting(providerType, 'executableArgs', '')
-        await fetchSettings()
     }
 
     const handleApplySourceConfig = async () => {
@@ -398,7 +506,8 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
             } else {
                 await fetchSourceConfig()
             }
-            await fetchSettings()
+            // Source mode genuinely reloads providers — background re-read.
+            void fetchSettings()
         } catch {
             await fetchSourceConfig()
         }
@@ -406,6 +515,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
     }
 
     const filteredSettings = settings.filter(p => filter === 'all' || p.category === filter)
+    const stalePinCount = Object.values(pins).filter(p => p.stale).length
 
     return (
         <div className="flex flex-col gap-3">
@@ -429,12 +539,22 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                         className={`machine-btn text-3xs ${showSources ? 'bg-sky-500/[0.10] border-sky-500/30 text-sky-300' : ''}`}
                         title="Manage 3rd-party provider sources"
                     >{t('machine.providers.sources')}</button>
+                    {/* "Update all" only when more than one provider is behind —
+                        a single stale provider has its own inline Update. */}
+                    {stalePinCount >= 2 && (
+                        <button
+                            onClick={() => { void handleActivatePins() }}
+                            disabled={updatingAll}
+                            className="machine-btn text-3xs text-amber-400 border-amber-500/25"
+                        >
+                            {updatingAll ? <IconSpinner size={11} /> : null} {t('machine.providers.updateAll')}
+                        </button>
+                    )}
                     <button
-                        onClick={() => setShowClone(true)}
+                        onClick={() => { void fetchSettings({ explicit: true }); void fetchPins() }}
+                        disabled={loading}
                         className="machine-btn text-3xs"
-                        title="Create a new provider from an existing one"
-                    >{t('machine.providers.create')}</button>
-                    <button onClick={fetchSettings} disabled={loading} className="machine-btn text-3xs">
+                    >
                         {loading ? <IconSpinner size={11} /> : '↻'} {t('machine.providers.refresh')}
                     </button>
                     <button
@@ -507,44 +627,22 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                 </Card>
             )}
 
-            {/* Model-list verification status. Reuses the channel-staleness card
-                convention rather than inventing a second one.
-
-                ★The two lists stay visually and textually SEPARATE. A provider
-                that cannot be enumerated at all (claude-cli, hermes-cli) is not
-                "stale" — nothing failed, and nothing will ever succeed. Folding
-                it into the stale list would imply a retry might fix it; folding
-                either into a green "up to date" state would claim a check that
-                never happened. */}
-            {(modelStaleTypes.length > 0 || modelCannotVerifyTypes.length > 0) && (
+            {/* Model lists that COULD be discovered but whose last read failed
+                (signed out, offline, unparseable) — the manifest list is in
+                force and may be wrong. Providers that cannot be enumerated at
+                all are intentionally not listed (owner decision 2026-09-25). */}
+            {modelStaleTypes.length > 0 && (
                 <Card padding="none" className="px-4.5 py-3.5">
                     <div className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">{t('machine.providers.modelListTitle')}</div>
-                    {modelStaleTypes.length > 0 && (
-                        <>
-                            <div className="text-2xs text-text-muted mt-1 mb-2">{t('machine.providers.modelListStaleDesc')}</div>
-                            <div className="flex flex-wrap gap-1.5 mb-2.5">
-                                {modelStaleTypes.map((providerType) => (
-                                    <span key={providerType} className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/[0.07] px-2 py-0.5">
-                                        <span className="font-mono text-xxs text-text-primary">{providerType}</span>
-                                        <span className="text-3xs uppercase tracking-wider text-amber-300/90">{t('machine.providers.modelListStaleBadge')}</span>
-                                    </span>
-                                ))}
-                            </div>
-                        </>
-                    )}
-                    {modelCannotVerifyTypes.length > 0 && (
-                        <>
-                            <div className="text-2xs text-text-muted mt-1 mb-2">{t('machine.providers.modelListCannotVerifyDesc')}</div>
-                            <div className="flex flex-wrap gap-1.5">
-                                {modelCannotVerifyTypes.map((providerType) => (
-                                    <span key={providerType} className="inline-flex items-center gap-1.5 rounded-md border border-border-subtle bg-bg-tertiary px-2 py-0.5">
-                                        <span className="font-mono text-xxs text-text-primary">{providerType}</span>
-                                        <span className="text-3xs uppercase tracking-wider text-text-muted">{t('machine.providers.modelListCannotVerifyBadge')}</span>
-                                    </span>
-                                ))}
-                            </div>
-                        </>
-                    )}
+                    <div className="text-2xs text-text-muted mt-1 mb-2">{t('machine.providers.modelListStaleDesc')}</div>
+                    <div className="flex flex-wrap gap-1.5">
+                        {modelStaleTypes.map((providerType) => (
+                            <span key={providerType} className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/[0.07] px-2 py-0.5">
+                                <span className="font-mono text-xxs text-text-primary">{providerType}</span>
+                                <span className="text-3xs uppercase tracking-wider text-amber-300/90">{t('machine.providers.modelListStaleBadge')}</span>
+                            </span>
+                        ))}
+                    </div>
                 </Card>
             )}
 
@@ -632,7 +730,8 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                             quotaEnabled={QUOTA_PROVIDERS.has(prov.type) ? (quotaEnabled[prov.type] ?? true) : undefined}
                             onQuotaToggle={QUOTA_PROVIDERS.has(prov.type) ? handleQuotaToggle : undefined}
                             pin={pins[prov.type]}
-                            onActivateUpdate={handleActivatePins}
+                            onUpdate={() => handleUpdateProvider(prov.type)}
+                            updating={updatingTypes[prov.type] === true}
                             onRollbackUpdate={() => handleRollbackPin(prov.type)}
                         />
                     ))}
@@ -648,15 +747,6 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                     quotaInstallsClaudeStatusline={installOptionsFor === 'claude-cli'}
                     onCancel={() => setInstallOptionsFor(null)}
                     onConfirm={(options) => { void handleInstallOptionsConfirm(installOptionsFor, options) }}
-                />
-            )}
-            {showClone && (
-                <ProviderCloneModal
-                    machineId={machineId}
-                    providers={providers}
-                    sendDaemonCommand={sendDaemonCommand}
-                    onClose={() => setShowClone(false)}
-                    onCreated={() => { setShowClone(false); fetchSettings(); }}
                 />
             )}
         </div>

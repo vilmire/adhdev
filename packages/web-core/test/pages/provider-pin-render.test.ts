@@ -17,7 +17,8 @@ import { describe, expect, it } from 'vitest'
 //  - pin absent      → nothing renders (no empty row implying "no pin known")
 //  - pin present     → active version renders
 //  - stale           → a badge naming the version the channel offers
-//  - update          → confirm step (it changes what later sessions load)
+//  - update          → inline "Update" in the row header, no confirm step
+//                      (owner decision 2026-09-25 — rollback is one click)
 //  - rollback        → NO confirm step (local flip back to what was running)
 
 const ROW = path.join(import.meta.dirname, '../../src/pages/machine/InstalledProviderRow.tsx')
@@ -57,17 +58,17 @@ describe('provider pin — machine page row', () => {
 })
 
 describe('provider pin — actions', () => {
-  it('update asks for confirmation before moving the pointer', () => {
-    expect(rowSource).toContain('confirmActivate')
-    expect(rowSource).toContain('machine.providerRow.specPinUpdateConfirm')
-    expect(rowSource).toContain('machine.providerRow.specPinCancel')
+  it('update is ONE inline affordance, not a confirm dialog in the details', () => {
+    // Behavior (header placement, per-provider command) is covered by
+    // providers-tab-behavior.test.tsx; this pins that the old confirm flow is gone.
+    expect(rowSource).not.toContain('confirmActivate')
+    expect(rowSource).toContain('machine.providerRow.updateInline')
+    expect(rowSource).not.toContain('machine.providerRow.specPinUpdateConfirm')
   })
 
   it('rollback does NOT ask — it returns to what was already running', () => {
-    // Deliberate asymmetry. Rollback is the action reached for when an update
-    // just broke something; a dialog there is friction at the worst moment.
     const rollbackBlock = rowSource.slice(rowSource.indexOf('onRollbackUpdate && pin?.previousVersion'))
-    expect(rollbackBlock).not.toContain('setConfirmActivate(true)')
+    expect(rollbackBlock).not.toContain('confirm')
     expect(rowSource).toContain('machine.providerRow.specPinRollback')
   })
 
@@ -112,9 +113,8 @@ describe('i18n', () => {
   it('every pin key exists in all shipped locales', () => {
     const keys = [
       'labelSpecPin', 'labelActivatedAt', 'labelPreviousPin', 'labelDigest',
-      'specPinStale', 'specPinStaleHint', 'specPinUpdate', 'specPinUpdateHint',
-      'specPinUpdateConfirm', 'specPinUpdating', 'specPinCancel',
-      'specPinRollback', 'specPinRollbackHint', 'specPinRollingBack',
+      'specPinStale', 'specPinStaleHint', 'updateInline', 'updateInlineHint',
+      'specPinUpdating', 'specPinRollback', 'specPinRollbackHint', 'specPinRollingBack',
     ]
     for (const lang of ['en', 'ko', 'ja', 'zh-CN', 'es']) {
       const file = path.join(import.meta.dirname, `../../src/i18n/locales/${lang}/common.json`)

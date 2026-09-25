@@ -993,7 +993,9 @@ export class DaemonCommandHandler implements CommandHelpers {
         // ★`cannotVerifyTypes` must stay distinct from `staleTypes`: claude-cli
         // and hermes-cli can never be enumerated, and rendering them as "up to
         // date" would assert a check that never happened — the same class of
-        // comfortable lie as a phantom approval.
+        // comfortable lie as a phantom approval. (The machine dashboard renders
+        // only `staleTypes` since 2026-09-25 — owner decision; the field stays
+        // in the payload as a harmless cache read.)
         let modelStaleness: unknown = null;
         try {
             modelStaleness = this._ctx.providerLoader?.getModelDiscoveryStaleness?.() ?? null;
@@ -1018,6 +1020,13 @@ export class DaemonCommandHandler implements CommandHelpers {
      * installed from the dashboard (kimi class): the default target set is
      * pins+installed, which by construction cannot contain a type published
      * after this machine's bootstrap.
+     *
+     * `only: true` (with non-empty `types`) RESTRICTS the sync to exactly
+     * those types instead of extending the default set — the dashboard's
+     * per-provider "Update" button. Without it, updating one provider also
+     * moved every other stale pin. A restricted sync writes no
+     * channel-activation stamp (it is partial). Older daemons ignore `only`
+     * and update everything; `activated` still reports what really moved.
      */
     async handleActivateProviderUpdates(args: any): Promise<CommandResult> {
         const typesRaw = Array.isArray(args?.types) ? args.types : [];
@@ -1030,11 +1039,17 @@ export class DaemonCommandHandler implements CommandHelpers {
             }
             types.push(type);
         }
+        const only = args?.only === true;
+        if (only && types.length === 0) {
+            return { success: false, error: 'only requires a non-empty types list' };
+        }
         const before = this._ctx.providerLoader?.listVerifiedChannelPins?.() ?? new Map();
         let channelSync: unknown = null;
         try {
             channelSync = await this._ctx.providerLoader?.syncVerifiedChannel?.(
-                types.length > 0 ? { extraTargetTypes: types } : undefined,
+                only
+                    ? { onlyTargetTypes: types }
+                    : types.length > 0 ? { extraTargetTypes: types } : undefined,
             ) ?? null;
         } catch (e: any) {
             return { success: false, error: e?.message ?? String(e) };

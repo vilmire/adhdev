@@ -1045,6 +1045,23 @@ export type { DashboardEvent, DashboardCommand, SpecDriverOpts, ISpecDriver } fr
 export { TerminalAdapter } from './providers/spec/adapter.js';
 export type { TerminalAdapterOpts, TerminalAdapterHandlers } from './providers/spec/adapter.js';
 
+// v1-contract provider scaffolding (cli/acp) — shared by `adhdev provider
+// init`/`create` (daemon-cloud CLI) and the DevServer /api/scaffold route
+// (daemon/dev-server.ts, used by web-devconsole). See scaffold-v1.ts header.
+export {
+  buildCliProviderV1Scaffold,
+  buildAcpProviderV1Scaffold,
+  resolveCliSpecPath,
+  CUSTOM_PROVIDERS_DOCS_URL,
+  INIT_SCAFFOLDABLE_CATEGORIES,
+} from './providers/scaffold-v1.js';
+export type {
+  CliProviderScaffoldOptions,
+  CliProviderScaffoldResult,
+  AcpProviderScaffoldOptions,
+  AcpProviderScaffoldResult,
+} from './providers/scaffold-v1.js';
+
 // ── Provider SDK (v1) — selective re-exports for external tooling ──
 // Tooling (registry publish, dashboard validators, the e2e harness) needs
 // the manifest validator, the builder catalog, and the contract version.
