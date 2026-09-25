@@ -4,11 +4,16 @@
         "select": "언어 선택"
     },
     "common": {
+        "closeDialog": "대화상자 닫기",
+        "noRecords": "기록이 없습니다.",
+        "close": "닫기",
+        "back": "뒤로",
         "cancel": "취소",
         "confirm": "확인",
         "confirmTitle": "계속할까요?"
     },
     "connection": {
+        "loadingShort": "불러오는 중…",
         "loadingDashboard": "대시보드를 불러오는 중...",
         "machinesConnectedCount": "머신 {{connected}}/{{total}}개 연결됨",
         "disconnected": "연결 끊김",
@@ -54,7 +59,7 @@
     },
     "dashboard": {
         "header": {
-            "title": "Dashboard",
+            "title": "대시보드",
             "guide": "대시보드 가이드",
             "guideOpen": "대시보드 가이드 열기",
             "guideShort": "가이드",
@@ -83,13 +88,24 @@
             "empty": "대기 중인 활동이 없습니다."
         },
         "metaChips": {
+            "queuePending": "대기 {{count}}",
+            "queueTooltip": "대기열: 대기 {{pending}}, 배정 {{assigned}}, 완료 {{completed}}, 실패 {{failed}}",
             "meshNode": "Mesh 노드"
         },
         "versionBanner": {
+            "restarting": "재시작 중",
+            "upgrading": "업데이트 중…",
+            "unknownVersion": "알 수 없음",
+            "updateAvailable": "업데이트 가능",
             "required": "필수 업데이트",
             "retry": "재시도"
         },
         "remoteDialog": {
+            "liveRemoteView": "실시간 원격 화면",
+            "remoteUnavailable": "원격 화면을 사용할 수 없음",
+            "remoteOnly": "원격만",
+            "splitView": "분할 보기",
+            "remoteFallback": "원격",
             "history": "히스토리"
         },
         "sourceTimeline": {
@@ -275,6 +291,7 @@
         }
     },
     "cliStop": {
+        "stopProcess": "CLI 프로세스 중지",
         "title": "{{agent}}을(를) 중지할까요?",
         "gracefulDescription": "중지는 지원되는 경우 프로바이더에게 정상 종료를 요청합니다. 강제 중지는 런타임을 즉시 종료합니다.",
         "forceOnlyDescription": "이 프로바이더는 정상 중지를 지원하지 않습니다. 강제 중지는 런타임을 즉시 종료합니다.",
@@ -289,6 +306,7 @@
         "answerQuestion": "질문에 답하기"
     },
     "chatControls": {
+        "loading": "불러오는 중…",
         "launchModelChanged": "{{from}} → {{to}} (변경됨)",
         "launchModelSource": {
           "user": "선택함",
@@ -437,6 +455,42 @@
         "stopSessionTitle": "세션 중지 (에이전트를 종료합니다)"
     },
     "mesh": {
+        "graph": {
+            "remoteBadge": "원격",
+            "activeSessionAria": "활성 세션"
+        },
+        "statusTab": {
+            "v2ScopeHint": "범위별 대기 이벤트",
+            "providerSkewHint": "노드마다 다른 버전으로 실행 중인 프로바이더",
+            "providerSkew": "프로바이더 버전 불일치 {{count}}개",
+            "v2RatioHint": "대기 중인 코디네이터 이벤트 중 현재 메시지 형식을 쓰는 비율",
+            "daemonBuildHint": "이 노드에서 실행 중인 정확한 데몬 빌드 (버전@커밋)",
+            "quotaFailedHint": "이 머신이 이 프로바이더의 사용량을 읽지 못했습니다",
+            "quotaOkNoWindowHint": "정상적으로 읽음 — 이 프로바이더는 표시할 비율 한도가 없습니다",
+            "nodeCountHint": "이 머신의 메시 노드(워크스페이스/워크트리) — 하나의 플랜 사용량을 함께 씁니다",
+            "nodeCount_other": "노드 {{count}}개",
+            "nodeCount_one": "노드 {{count}}개",
+            "daemonVersionHint": "이 머신에서 실행 중인 데몬 버전",
+            "blockedReasonHint": "이 노드가 지금 코드 변경 작업을 새로 받을 수 없는 이유",
+            "providerCapHint": "이 노드의 프로바이더별 진행 중 작업 수 / 선언된 한도",
+            "priorityHint": "배정 선호도 (높을수록 우선)",
+            "priority": "우선순위 {{value}}",
+            "loadHint": "이 노드에 배정된 진행 중 작업",
+            "load": "부하 {{count}}",
+            "readonlyCapHint": "진행 중인 읽기 전용 조사 작업 수 / 한도(쓰기 한도의 2배)",
+            "readonlyCap": "읽기 전용 {{active}}/{{max}}",
+            "writeCapHint": "코드를 바꾸는 진행 중 작업 수 / 메시 전체 동시 실행 한도",
+            "writeCap": "쓰기 {{active}}/{{max}}"
+        },
+        "manualSetup": {
+            "restartHint": "설정을 수정한 뒤 새 CLI 세션을 시작하세요.",
+            "configPath": "설정 경로:",
+            "format": "형식:",
+            "server": "서버:",
+            "titleFor": "{{provider}}의 MCP 수동 설정 필요",
+            "title": "MCP 수동 설정 필요"
+        },
+        "openLiveGraph": "실시간 Repo Mesh 그래프 열기",
         "help": {
             "toggleAria": "메시 도움말",
             "toggleTitle": "메시 개념 도움말",
@@ -644,7 +698,7 @@
             "machineTitle": "이 에이전트를 실행할 머신. \"any\"로 두면 코디네이터가 태그로 라우팅합니다.",
             "anyMachine": "아무 머신",
             "offlineSuffix": "{{label}} (오프라인)",
-            "worktreeSuffix": "{{label}} — worktree ({{branch}})",
+            "worktreeSuffix": "{{label}} — 워크트리 ({{branch}})",
             "worktreeUnknownBranch": "브랜치 알 수 없음",
             "worktreeDisabledTitle": "일시적인 워크트리 노드는 MAGI 슬롯에 새로 배정할 수 없습니다 — 정리 시 사라질 수 있습니다. 기존 배정은 검토/해제할 수 있도록 여기에 계속 표시됩니다.",
             "provider": "프로바이더",
@@ -734,7 +788,7 @@
             "tooltipUpstreamUnverified": "업스트림 미확인",
             "tooltipStartedNotReported": "시작됨: 미보고",
             "tooltipRefineCompleted": "refine 완료",
-            "tooltipRefinedBranch": "refined {{branch}}",
+            "tooltipRefinedBranch": "{{branch}} 정리 완료",
             "tooltipP2PRelayed": "P2P 링크가 TURN을 통해 중계됨 (느린 경로)",
             "tooltipP2PRtt": "P2P 왕복 지연",
             "tooltipPrefixStatus": "상태:",
@@ -776,9 +830,9 @@
             "refineWorktree": "워크트리 refine",
             "needsFollowUp": "후속 조치 필요",
             "offline": "오프라인",
-            "ahead": "ahead {{count}}",
-            "behind": "behind {{count}}",
-            "aheadBehind": "ahead {{ahead}} / behind {{behind}}"
+            "ahead": "{{count}}개 앞섬",
+            "behind": "{{count}}개 뒤처짐",
+            "aheadBehind": "{{ahead}}개 앞섬 / {{behind}}개 뒤처짐"
         },
         "summary": {
             "anchor": "기본 브랜치 앵커",
@@ -859,6 +913,9 @@
             "jumpToState": "클릭하면 이 상태의 다음 카드로 이동"
         },
         "obs": {
+            "closeDetailAria": "상세 패널 닫기",
+            "layoutDirectionAria": "그래프 배치 방향",
+            "viewAria": "메시 보기",
             "tabOverview": "개요",
             "tabTasks": "설계도면",
             "tabStatus": "상태",
@@ -948,7 +1005,7 @@
             "directionLRTitle": "왼쪽에서 오른쪽",
             "directionTBTitle": "위에서 아래",
             "fastForwardConfirmTitle": "{{label}}에 fast-forward를 적용할까요?",
-            "fastForwardConfirmLabel": "Fast-forward"
+            "fastForwardConfirmLabel": "빨리 감기 병합"
         },
         "notes": {
             "expired": "만료됨",
@@ -996,6 +1053,18 @@
             "errorUnexpectedPayload": "그래프 정보를 불러오지 못했습니다. 잠시 후 다시 시도해주세요."
         },
         "health": {
+            "awaitingLiveData": "실시간 데이터 대기 중",
+            "recentFailuresCount": "최근 실패 {{count}}개",
+            "refineFailedCount": "{{count}}개 병합 실패",
+            "refiningCount": "{{count}}개 병합 중",
+            "failedCount": "{{count}}개 실패",
+            "statLedgerDone": "기록된 완료",
+            "statRecent": "최근 실패",
+            "statSessions": "세션",
+            "statFailed": "실패",
+            "statDone": "완료",
+            "statActive": "진행 중",
+            "statPending": "대기",
             "panelTitle": "메시 헬스 패널",
             "lastActivity": "마지막 활동",
             "refineJobs": "Refine 작업",
@@ -1004,6 +1073,8 @@
             "sessions": "세션"
         },
         "blueprint": {
+            "gateFallback": "게이트",
+            "readonlyBadge": "읽기 전용",
             "liveQueue": "라이브 큐",
             "scheduling": "스케줄링 미리보기",
             "schedObservedAt": "{{time}} 기준",
@@ -1082,11 +1153,11 @@
             "observabilitySecondary": "메시 관측성"
         },
         "list": {
-            "title": "Repo Meshes",
+            "title": "Repo Mesh 목록",
             "count_one": "메시 {{count}}개",
             "count_other": "메시 {{count}}개",
             "createMesh": "+ 메시 생성",
-            "createTitle": "Create Repo Mesh",
+            "createTitle": "Repo Mesh 만들기",
             "createOnMachine": "생성할 머신",
             "createOnMachineHint": "메시 설정은 선택한 데몬에 저장됩니다.",
             "noConnectedDaemon": "연결된 데몬 없음",
@@ -1104,7 +1175,7 @@
             "creating": "생성 중…",
             "cancel": "취소",
             "loading": "메시 불러오는 중...",
-            "emptyTitle": "No Repo Meshes",
+            "emptyTitle": "Repo Mesh가 없습니다",
             "emptyWithDaemons": "Repo Mesh는 여러 머신에서 여러 코딩 에이전트가 하나의 저장소에서 동시에 작업하도록 한곳에서 조율합니다. 메시를 생성하여 시작하세요.",
             "emptyNoDaemons": "Repo Mesh는 여러 머신에서 여러 코딩 에이전트가 하나의 저장소에서 동시에 작업하도록 한곳에서 조율합니다. 먼저 ADHDev 데몬을 연결하세요.",
             "createFirst": "첫 메시 생성",
@@ -1204,6 +1275,9 @@
             "repoMeshJsonInvalid": "이 저장소의 .adhdev/mesh.json 을 파싱할 수 없어 해당 프롬프트 레이어가 무시됩니다."
         },
         "nodeList": {
+            "addingIsExplicit": "추가는 직접 하셔야 합니다.",
+            "compatibleWorkspace": "호환되는 Git 워크스페이스를 찾았습니다.",
+            "inspectingRepo": "Git 저장소 확인 중 (읽기 전용)…",
             "title": "노드 & 프로바이더 ({{count}})",
             "descriptionCloud": "이 메시의 워크스페이스와 선호 AI 도구. 설정 인벤토리 전용 — 라이브 그래프/git/세션 실측은 위의 메시 호스트 상태가 소유합니다.",
             "descriptionStandalone": "이 메시에 참여하는 워크스페이스와 선호 AI 도구.",
@@ -1257,6 +1331,8 @@
             "machineTabCounts": "노드 {{nodes}}개 · 슬롯 {{slots}}개"
         },
         "host": {
+            "setupNode": "설정 노드",
+            "willHostOn": "호스트 예정:",
             "coordinatorProvider": "코디네이터 CLI 프로바이더",
             "coordinatorProviderHint": "호스트 코디네이터 세션에 실행되는 도구.",
             "useNodePriority": "노드 프로바이더 우선순위 사용",
@@ -1329,6 +1405,7 @@
             "empty": "라우팅 태그 없음 — 특정 역량과 매칭 없이 여기서 작업을 실행할 수 있습니다. 태그는 선택 사항입니다."
         },
         "missions": {
+            "filterAllCount": "전체 {{count}}",
             "errorFetch": "전체 미션 목표를 가져오지 못했습니다",
             "title": "미션",
             "description": "코디네이터가 보고한 활성 및 과거 미션. 목표를 펼치면 전체 텍스트를 온디맨드로 가져옵니다.",
@@ -1483,6 +1560,11 @@
             "machineVersionsTitle": "이 머신에 설치된 프로바이더 CLI 버전 — 소속 노드 전체가 공유"
         },
         "overview": {
+            "sessionCount_other": "세션 {{count}}개",
+            "sessionCount_one": "세션 {{count}}개",
+            "leaseExpired": "점유 만료",
+            "providerUnknown": "프로바이더 알 수 없음",
+            "truncated": "(생략됨)",
             "missionCard": "미션",
             "ledgerCard": "원장",
             "queueCard": "큐",
@@ -1582,6 +1664,12 @@
         }
     },
     "chat": {
+        "showMoreChars": "더 보기 ({{count}}자)",
+        "collapse": "접기",
+        "you": "나",
+        "toolMessageAria": "도구 메시지",
+        "activityMessageAria": "활동 메시지",
+        "activityFallback": "활동",
         "copyMessage": "메시지 복사",
         "copyCode": "코드 복사",
         "showMore": "더 보기",
@@ -1627,12 +1715,29 @@
         "reconnectMachineTitle": "이 머신의 자동 재연결이 중단됨 — 지금 재연결"
     },
     "chatInput": {
+        "addMessageOptional": "메시지 추가 (선택)…",
+        "showControls": "컨트롤 표시",
+        "hideControls": "컨트롤 숨기기",
+        "sendTo": "{{panel}}에 메시지 보내기",
         "attachImage": "이미지 첨부",
         "placeholder": "{{panel}}에 메시지 전송...",
         "sendMessage": "메시지 전송",
         "dropImage": "여기에 이미지를 놓으세요"
     },
     "paneGroup": {
+        "hideFromDashboard": "대시보드에서 숨기기",
+        "removeShortcut": "단축키 삭제",
+        "changeShortcut": "단축키 변경 ({{shortcut}})",
+        "meshChat": "메시 채팅",
+        "dropSplitRight": "오른쪽으로 분할",
+        "dropMoveHere": "여기로 이동",
+        "dropSplitLeft": "왼쪽으로 분할",
+        "relaunchWithCdp": "연결해서 다시 실행",
+        "cdpDisconnected": "IDE에 연결되지 않았습니다 — 채팅 기록과 스크린샷을 사용할 수 없습니다.",
+        "resizeHandleHint": "드래그해서 크기 조절 · 더블클릭해서 합치기",
+        "shortcutListening": "입력 대기 중…",
+        "shortcutPressCombo": "키 조합을 누르세요 (예: {{example1}}, {{example2}})",
+        "shortcutSetTitle": "단축키 설정",
         "loadingSessions": "세션을 불러오는 중...",
         "noConversations": "아직 대화가 없습니다",
         "waitingForDaemon": "데몬을 기다리는 중",
@@ -1647,6 +1752,18 @@
         "moveTabHere": "탭을 이곳으로 옮기면 표시됩니다"
     },
     "terminal": {
+        "growViewport": "터미널 화면 키우기",
+        "shrinkViewport": "터미널 화면 줄이기",
+        "sendInterrupt": "중단 신호 보내기 (Ctrl-C)",
+        "arrowRight": "오른쪽 화살표",
+        "arrowDown": "아래쪽 화살표",
+        "arrowLeft": "왼쪽 화살표",
+        "arrowUp": "위쪽 화살표",
+        "keysPanelTitle": "터미널 키",
+        "keysButton": "키",
+        "copyHint": "선택한 터미널 텍스트를 복사합니다. 선택이 없으면 보이는 화면 전체를 복사합니다",
+        "specDebugHint": "스펙 디버그 — 현재 상태, 섹션, 전환 기록 확인",
+        "replayScrollbackHint": "이전 터미널 출력을 불러와 더 위로 스크롤할 수 있게 합니다",
         "loadOlderOutput": "이전 터미널 출력 불러오기",
         "loadingOlder": "이전 항목 불러오는 중...",
         "debug": "디버그",
@@ -1665,6 +1782,19 @@
         "switchToChat": "채팅 보기로 전환"
     },
     "launch": {
+        "updatedAt": "{{time}} 업데이트",
+        "messageCountShort_other": "메시지 {{count}}개",
+        "messageCountShort_one": "메시지 {{count}}개",
+        "workspaceUnknown": "워크스페이스 알 수 없음",
+        "clearSelection": "선택 해제",
+        "selectedSavedHistory": "선택한 저장 기록",
+        "refresh": "새로 고침",
+        "loadingShort": "불러오는 중…",
+        "savedHistoryNoneYet": "아직 저장된 기록이 없습니다. ADHDev가 대화를 저장하면 여기에 표시됩니다.",
+        "savedHistoryLoadedCount_other": "저장된 기록 {{count}}개를 불러왔습니다. 저장된 기록을 열어 선택하세요.",
+        "savedHistoryLoadedCount_one": "저장된 기록 {{count}}개를 불러왔습니다. 저장된 기록을 열어 선택하세요.",
+        "savedHistoryIntro": "새로 시작하거나, 저장된 기록을 열어 이전 대화를 이어가세요.",
+        "savedHistoryBadge": "저장된 기록",
         "resumeSavedHistory": "저장된 기록 재개",
         "startFresh": "새로 시작",
         "resumingSavedHistory": "저장된 기록 재개 중…",
@@ -1981,7 +2111,7 @@
             "minutesAgo": "{{minutes}}분 전",
             "hoursAgo": "{{hours}}시간 전",
             "daysAgo": "{{days}}일 전",
-            "frozenFeatureTitle": "동결됨 — 이 기능은 일시 중지되어 사용할 수 없습니다. docs/FROZEN_SURFACES.md 참고"
+            "frozenFeatureTitle": "동결됨 — 이 기능은 일시 중지되어 사용할 수 없습니다."
         },
         "billing": {
             "currentPlan": "현재 플랜:",
@@ -2098,11 +2228,11 @@
             "adminTokens": "어드민 토큰",
             "adminEntry": "Admin",
             "footerPlanTitle": "현재 플랜: {{plan}} — 관리 또는 업그레이드",
-            "expandSidebar": "Expand sidebar",
-            "collapseSidebar": "Collapse sidebar",
-            "collapse": "Collapse",
+            "expandSidebar": "사이드바 펼치기",
+            "collapseSidebar": "사이드바 접기",
+            "collapse": "접기",
             "logoutConfirm": "정말 로그아웃하시겠습니까?",
-            "logout": "Logout",
+            "logout": "로그아웃",
             "machineLimitBadge": "머신 한도",
             "machineLimitBadgeTitle": "플랜 머신 한도({{count}}개{{plural}})에 도달했습니다 — 결제 페이지에서 업그레이드",
             "pushBudget": "일일 알림 {{used}}/{{limit}}"
@@ -2300,7 +2430,7 @@
             "revoke": "취소",
             "usageLabel": "사용법:",
             "apiReference": "API 레퍼런스 →",
-            "frozenFeatureTitle": "동결됨 — 이 기능은 일시 중지되었습니다. docs/FROZEN_SURFACES.md 참고"
+            "frozenFeatureTitle": "동결됨 — 이 기능은 일시 중지되었습니다."
         },
         "shareModal": {
             "title": "세션 공유",
@@ -2791,6 +2921,51 @@
         }
     },
     "app": {
+        "onboardingTour": {
+            "next": "다음",
+            "getStarted": "시작하기",
+            "learnMore": "문서에서 더 알아보기",
+            "closeAria": "안내 닫기",
+            "allSetStandalone": {
+                "desc": "이 대시보드는 이미 로컬 데몬에 연결되어 있습니다. 대시보드 탭에서 세션을 시작하거나, 머신 → 프로바이더에서 프로바이더를 추가하세요.",
+                "title": "준비가 끝났습니다"
+            },
+            "getStartedCloud": {
+                "desc": "조작하려는 머신에서 이 명령을 실행한 뒤 로그인하세요. 데몬이 대시보드에 자동으로 연결됩니다.",
+                "title": "시작하기"
+            },
+            "orchestrate": {
+                "desc": "Repo Mesh(Cloud Pro)를 쓰면 코디네이터 하나가 여러 머신의 에이전트에게 작업을 나눠 줍니다 — 병렬 git 워크트리, 자동 브랜치 수렴, 같은 저장소를 여러 관점에서 교차 검증.",
+                "title": "에이전트 오케스트레이션"
+            },
+            "watchAndSteer": {
+                "desc": "각 에이전트의 세션을 실시간으로 따라가며 작업 중에 방향을 잡아 주세요. 세션을 전환하고, 스크린샷을 찍고, (IDE 세션이라면) 직접 연결로 화면을 보고 조작할 수 있습니다.",
+                "title": "실시간으로 보고 조종하기"
+            },
+            "realtimeChat": {
+                "desc": "AI 에이전트가 하는 일을 실시간으로 보세요. 메시지를 보내고, 작업을 승인하거나 거절하는 일을 모두 브라우저나 휴대폰에서 할 수 있습니다.",
+                "title": "실시간 채팅"
+            },
+            "welcome": {
+                "desc": "Claude Code, Codex, Antigravity CLI 같은 로컬 CLI 코딩 에이전트를 브라우저나 휴대폰에서 바로 조작하세요. 에이전트는 내 머신에서 계속 실행되고, 웹에서 제어합니다.",
+                "title": "ADHDev에 오신 것을 환영합니다"
+            }
+        },
+        "installCommand": {
+            "orViaNpm": "또는 npm으로:",
+            "clickToCopy": "클릭해서 복사"
+        },
+        "errorBoundary": {
+            "reload": "페이지 새로 고침",
+            "description": "예상치 못한 오류가 발생했습니다. 계속하려면 페이지를 새로 고치세요.",
+            "title": "문제가 발생했습니다"
+        },
+        "shellFreshness": {
+            "dismissAria": "업데이트 알림 닫기",
+            "later": "나중에",
+            "reload": "새로 고침",
+            "message": "ADHDev 새 버전이 나왔습니다."
+        },
         "openMenu": "메뉴 열기",
         "closeMenu": "메뉴 닫기"
     },
@@ -2816,6 +2991,7 @@
         "toggleFullscreen": "전체화면 전환"
     },
     "remote": {
+        "screenshotAlt": "원격 화면",
         "mouse": "마우스",
         "touch": "터치",
         "connected": "연결됨",
@@ -2862,6 +3038,13 @@
         "openChatHint": "클릭하면 이 세션의 채팅을 엽니다"
     },
     "sessionInfo": {
+        "gitClean": "변경 없음",
+        "gitDirty": "커밋 안 된 변경 있음",
+        "gitDetached": "(분리됨)",
+        "blockRawMetadata": "원본 런타임 메타데이터 (클릭해서 펼치기)",
+        "blockFinalPrompt": "최종 시스템 프롬프트 (클릭해서 펼치기)",
+        "blockExtraPrompt": "이번 실행의 추가 프롬프트",
+        "buttonHint": "세션 정보 — 실행 설정, 메시 노드, 시스템 프롬프트 등",
         "quotaOkNoWindows": "조회 성공 — 퍼센트 윈도우 없음",
         "sectionMeshWorker": "코디네이터가 스폰한 세션",
         "rowMeshId": "Mesh ID",
@@ -2899,7 +3082,7 @@
         "rowRole": "역할",
         "rowMachineStatus": "머신 상태",
         "rowHealth": "상태",
-        "rowWorktree": "Worktree",
+        "rowWorktree": "워크트리",
         "rowLaunchReady": "실행 준비",
         "rowGit": "Git",
         "rowProviders": "프로바이더",
@@ -2916,6 +3099,131 @@
         "rowAttachedClients": "연결된 클라이언트"
     },
     "machine": {
+        "mobile": {
+            "noHistoryMatches": "이 필터에 맞는 저장 기록이 없습니다.",
+            "workspaceMissing": "(워크스페이스 없음)",
+            "resumableOnly": "이어갈 수 있는 것만",
+            "sortMessages": "메시지 많은 순",
+            "sortOldest": "오래된 순",
+            "sortRecent": "최신순",
+            "filterModel": "모델로 필터",
+            "filterWorkspace": "워크스페이스로 필터",
+            "searchHistory": "제목 또는 미리보기 검색",
+            "useThisFolder": "이 폴더 사용",
+            "browseDescription": "일반 탐색기처럼 폴더를 이동한 뒤, 현재 폴더를 이 머신에 사용하세요.",
+            "browseTitle": "워크스페이스 선택",
+            "machineDetailsDescription": "세션, 프로바이더, 시스템 정보, 로그",
+            "machineDetails": "머신 상세",
+            "updateDescription": "최신 데몬으로 이 머신을 재시작합니다",
+            "inspect": "살펴보기",
+            "createFolder": "폴더 만들기",
+            "showMore": "{{count}}개 더 보기",
+            "showFewer": "간략히 보기",
+            "recentLaunches": "최근 실행",
+            "currentChats": "진행 중인 채팅",
+            "machineFallback": "머신"
+        },
+        "daemonUpdate": {
+            "previewUnknownDescription": "앱은 프리뷰에 연결되어 있지만 서버가 아직 프리뷰 대상 버전을 알려 주지 않았습니다.",
+            "previewUpToDateDescription": "이 머신은 이미 현재 프리뷰 데몬을 실행 중입니다.",
+            "previewUnknownTitle": "프리뷰 업데이트 상태를 알 수 없음",
+            "previewUpToDateTitle": "프리뷰 데몬이 최신입니다",
+            "mismatchDescription": "이 머신은 현재 앱과 다른 데몬 버전을 실행 중입니다. 세션을 더 시작하기 전에 업데이트하세요.",
+            "previewUpgradeDescription": "원격 셸을 열지 않고도 이 머신을 현재 프리뷰 데몬으로 업데이트할 수 있습니다.",
+            "requiredDescription": "이 머신의 데몬 버전이 호환되지 않습니다. 세션을 더 시작하기 전에 업데이트하세요.",
+            "mismatchTitle": "버전 불일치 감지",
+            "requiredTitle": "데몬 업데이트 필요",
+            "upgrade": "업데이트",
+            "updateNow": "지금 업데이트"
+        },
+        "launchPick": {
+            "empty": "저장된 워크스페이스가 아직 없습니다. 워크스페이스 탭에서 추가하거나 위에 경로를 입력하세요.",
+            "description": "미리 정해진 곳은 없습니다. 저장된 워크스페이스, 기본 워크스페이스, 홈 중에서 고르거나 — 취소하고 경로를 직접 입력하세요.",
+            "title": "어디에서 실행할까요?"
+        },
+        "workspacePicker": {
+            "noneSelected": "선택한 워크스페이스가 없습니다. 홈 폴더에서 시작합니다.",
+            "selectedWorkspace": "선택한 워크스페이스",
+            "defaultWorkspace": "기본 워크스페이스",
+            "enterPathFirst": "시작할 폴더의 전체 경로를 입력하세요.",
+            "browseFirst": "시작하기 전에 폴더를 골라 주세요.",
+            "enterPath": "폴더 전체 경로 입력…",
+            "customPath": "직접 경로 입력…",
+            "selectWorkspace": "워크스페이스 선택…",
+            "noneSaved": "(저장된 워크스페이스 없음 — 워크스페이스 탭에서 추가)",
+            "noWorkspaceHome": "(워크스페이스 없음 — 홈 폴더에서 시작)"
+        },
+        "trustBadge": {
+            "externalUntrustedHint": "직접 추가한 외부 소스에서 왔고, ADHDev가 실행할 코드를 포함합니다. 켜기 전에 소스를 검토하세요.",
+            "externalSafeHint": "직접 추가한 외부 소스에서 왔습니다. 설정만 담고 있어 ADHDev가 그 코드를 실행하지 않습니다.",
+            "trustedWithScriptsHint": "ADHDev가 공식 제공합니다. ADHDev가 실행하는 스크립트를 포함합니다.",
+            "trustedHint": "ADHDev가 공식 제공합니다. 설정만 담고 있어 프로바이더 코드가 실행되지 않습니다.",
+            "userCustomHint": "내 프로바이더 폴더에서 직접 만든 프로바이더입니다. 내 코드가 실행됩니다.",
+            "externalUntrusted": "외부 · 코드 실행",
+            "externalSafe": "외부",
+            "trustedWithScripts": "공식 · 스크립트",
+            "trusted": "공식",
+            "userCustom": "사용자 정의"
+        },
+        "providerSettings": {
+            "notifications": {
+                "description": "{{provider}}의 상태가 바뀌면 알림을 표시합니다.",
+                "label": "알림"
+            },
+            "showCoordinatorSystemPrompt": {
+                "description": "주입된 시스템 프롬프트를 채팅 메시지로 표시합니다. 기본값은 끔이며, 채팅 헤더의 세션 정보(ⓘ)에서 언제든 볼 수 있습니다.",
+                "label": "시스템 프롬프트 메시지 표시"
+            },
+            "showTerminal": {
+                "description": "터미널 명령과 출력을 채팅에 표시합니다.",
+                "label": "터미널 표시"
+            },
+            "showToolCalls": {
+                "description": "도구 호출 요약(검색, 편집 등)을 채팅에 표시합니다.",
+                "label": "도구 호출 표시"
+            },
+            "showThinking": {
+                "description": "에이전트의 추론 과정을 채팅에 표시합니다.",
+                "label": "생각 과정 표시"
+            },
+            "longGeneratingThresholdSec": {
+                "description": "장시간 작업 알림이 울리기까지의 시간입니다.",
+                "label": "장시간 기준 (초)"
+            },
+            "longGeneratingAlert": {
+                "description": "응답이 유난히 오래 걸리면 알려 줍니다.",
+                "label": "장시간 작업 알림"
+            },
+            "approvalAlert": {
+                "description": "{{provider}}이(가) 승인을 기다릴 때 알려 줍니다.",
+                "label": "승인 알림"
+            },
+            "appPathOverride": {
+                "description": "IDE 앱의 전체 경로(선택). 비워 두면 일반적인 설치 위치에서 찾습니다.",
+                "label": "앱 경로"
+            },
+            "cliPathOverride": {
+                "description": "IDE 명령줄 실행기의 전체 경로(선택). 비워 두면 감지된 경로를 사용합니다.",
+                "label": "CLI 실행기 경로"
+            },
+            "executableArgs": {
+                "description": "{{provider}} 시작 시 기본 인자 대신 쓸 인자(선택). 비워 두면 기본값을 사용합니다.",
+                "label": "실행 인자"
+            },
+            "executablePath": {
+                "description": "{{provider}} 프로그램의 전체 경로(선택). 비워 두면 PATH에서 찾습니다.",
+                "label": "실행 파일 경로"
+            },
+            "autoApprove": {
+                "description": "{{provider}}의 도구 실행·확인 요청을 묻지 않고 자동으로 승인합니다.",
+                "label": "자동 승인"
+            },
+            "enabled": {
+                "description": "ADHDev가 이 머신에서 {{provider}}을(를) 감지·실행·확인하기 전에 먼저 켜 주세요.",
+                "label": "이 머신에서 사용"
+            },
+            "thisProvider": "이 프로바이더"
+        },
         "launchConfirm": {
             "workspace": "워크스페이스",
             "languageModel": "언어 모델 (선택 사항)",
@@ -2928,6 +3236,8 @@
             "launching": "실행 중…"
         },
         "confirmExternal": {
+            "aboutToActivateFrom": "{{source}}의 {{provider}}을(를) 켜려고 합니다.",
+            "aboutToActivate": "{{provider}}을(를) 켜려고 합니다.",
             "dialogAria": "신뢰할 수 없는 외부 프로바이더 확인",
             "title": "신뢰할 수 없는 외부 프로바이더를 활성화하시겠습니까?",
             "description": "이 manifest는 데몬이 실행할 JavaScript를 포함하고 있습니다. 신뢰할 수 없는 코드로 취급하여 활성화 전에 소스를 검토하세요.",
@@ -2938,6 +3248,8 @@
         "workspace": {
         },
         "providers": {
+            "advancedHint": "기술 정보 표시: 프로바이더를 불러오는 위치와 원본 메타데이터",
+            "sourcesHint": "추가한 프로바이더 소스를 관리합니다",
             "filter": "필터",
             "sourceConfigTitle": "프로바이더 소스 설정",
             "sourceConfigDesc": "데몬이 프로바이더 manifest를 찾는 위치입니다. 해석 및 재로드에 영향을 줍니다.",
@@ -2995,6 +3307,20 @@
             "setActiveFailed": "활성 소스 설정 실패"
         },
         "providerRow": {
+            "detectDisabledHint": "확인하기 전에 프로바이더를 켜 주세요",
+            "detectHint": "설정된 프로그램을 찾고 실행할 수 있는지 확인합니다",
+            "originExternalScripts": "추가한 외부 소스 {{source}} · 자체 코드를 실행합니다 — 켜기 전에 검토하세요",
+            "originExternal": "추가한 외부 소스 {{source}}",
+            "originUserFolder": "내 프로바이더 폴더",
+            "originOfficialScripts": "공식 제공 (ADHDev 레지스트리) · 스크립트 포함",
+            "originOfficial": "공식 제공 (ADHDev 레지스트리)",
+            "labelOrigin": "제공:",
+            "lifecycleDeprecated": "지원 종료",
+            "lifecycleExperimental": "실험적",
+            "lifecycleBeta": "베타",
+            "lifecycleStable": "안정",
+            "checkFailed": "실패",
+            "checkOk": "정상",
             "statusDetected": "감지됨",
             "statusNotDetected": "감지되지 않음",
             "statusEnabledUnchecked": "활성화됨 (미확인)",
@@ -3055,6 +3381,11 @@
         "connectedMachines": {
         },
         "card": {
+            "transportDirectShort": "직접",
+            "transportRelayShort": "중계",
+            "coresCount_other": "{{count}}코어",
+            "coresCount_one": "{{count}}코어",
+            "onMachine": "{{machine}}에서",
             "sectionIDEs": "IDEs",
             "sectionCLIs": "CLIs",
             "sectionACPAgents": "ACP 에이전트",
@@ -3081,19 +3412,24 @@
             "transportRelay": "TURN 릴레이 — 직접 연결 실패",
             "transportDirect": "직접 연결 (STUN/host)",
             "beacon": {
-                "behindLabel": "{{count}}건 뒤처짐",
-                "behindTooltip": "이 머신이 피어보다 {{count}}건 뒤처져 있습니다(최다 토픽: {{topic}}).",
-                "soleCopyLabel": "유일 보유 가능",
-                "soleCopyTooltip": "이 머신이 {{count}}개 토픽의 {{entries}}건을 유일하게 보유 중일 수 있습니다. 피어가 아직 확인하지 않았습니다.",
-                "deferredLabel": "판정 보류",
-                "deferredTooltip": "피어 보드가 잘려서(truncated) 유일 보유 판정을 보류했습니다 — 비교 대상이 플릿 전체가 아닙니다.",
-                "lastSyncedTooltip": "{{minutes}}분 전 마지막 동기화{{behindPart}}.",
-                "lastSyncedBehindPart": ", {{topic}}에서 {{count}}건 뒤처짐"
+                "lastSyncedBehindPart_other": " (받을 기록 {{count}}건 남음)",
+                "lastSyncedBehindPart_one": " (받을 기록 {{count}}건 남음)",
+                "soleCopyTooltip_other": "아직 다른 머신에 백업되지 않은 기록이 {{entries}}건 있습니다. 다른 머신이 동기화할 때까지 이 머신을 켜 두세요.",
+                "soleCopyTooltip_one": "아직 다른 머신에 백업되지 않은 기록이 {{entries}}건 있습니다. 다른 머신이 동기화할 때까지 이 머신을 켜 두세요.",
+                "soleCopyLabel_other": "백업 안 된 기록 {{count}}건",
+                "soleCopyLabel_one": "백업 안 된 기록 {{count}}건",
+                "behindTooltip_other": "이 머신이 다른 머신의 최근 기록 {{count}}건을 아직 받지 못했습니다. 보통 저절로 따라잡습니다.",
+                "behindTooltip_one": "이 머신이 다른 머신의 최근 기록 {{count}}건을 아직 받지 못했습니다. 보통 저절로 따라잡습니다.",
+                "behindLabel": "동기화 지연",
+                "deferredLabel": "백업 확인 불가",
+                "deferredTooltip": "이 머신의 기록이 모두 백업됐는지 확인하지 못했습니다. 일부 머신과만 비교할 수 있었습니다. 오류는 아닙니다.",
+                "lastSyncedTooltip": "{{minutes}}분 전에 마지막으로 동기화했습니다{{behindPart}}."
             },
             "fleetPeer": {
-                "label": "seqscribe 피어",
-                "divergedLabel": "seqscribe 불일치",
-                "tooltip": "WS 라우팅: {{wsState}}, 세션 {{wsCount}}개. seqscribe 피어 뷰: {{peerState}}, 세션 {{peerCount}}개 ({{age}}초 전)."
+                "stateOffline": "오프라인",
+                "stateOnline": "온라인",
+                "divergedLabel": "동기화 지연",
+                "tooltip": "서버는 이 머신을 {{wsState}}·세션 {{wsCount}}개로 보지만, 다른 머신은 {{peerState}}·세션 {{peerCount}}개로 봤습니다({{age}}초 전). 보통 몇 초 안에 맞춰집니다."
             },
             "noAgentsRunning": "실행 중인 에이전트 없음",
             "launchCta": "실행 →"
@@ -3123,6 +3459,15 @@
             "providerSyncFailed": "프로바이더 채널 동기화 실패: {{error}}"
         },
         "commandCenter": {
+            "previewNoActionNeeded": "업데이트할 필요가 없습니다.",
+            "updateDaemon": "데몬 업데이트",
+            "updateToVersion": "v{{version}}로 업데이트",
+            "updateChannel": {
+                "preview": "프리뷰",
+                "stable": "정식"
+            },
+            "updateTargetWithChannel": "대상: v{{version}} ({{channel}})",
+            "updateTarget": "대상: v{{version}}",
             "currentChats": "현재 채팅",
             "recentLaunches": "최근 실행",
             "daemonUpdate": "데몬 업데이트"
@@ -3137,6 +3482,8 @@
             "useThisFolder": "이 폴더 사용"
         },
         "managedWorkspaces": {
+            "setDefaultHint": "기본 워크스페이스로 설정",
+            "unsetDefaultHint": "기본 워크스페이스 — 클릭하면 해제",
             "title": "워크스페이스",
             "addWorkspace": "워크스페이스 추가",
             "empty": "저장된 워크스페이스가 없습니다. \"{{button}}\" 버튼으로 폴더를 선택하세요.",
@@ -3155,10 +3502,53 @@
             "renameFailed": "워크스페이스 이름을 바꾸지 못했습니다"
         },
         "overview": {
+            "approx": "(근사치)",
+            "memory": "메모리",
+            "cpuDetail": "평균 {{load}} / {{cores}}코어",
+            "cpuLoad": "CPU 부하",
+            "resourceUsage": "리소스 사용량",
+            "waiting": "대기 중…",
+            "uptime": "가동 시간",
             "waitingForStats": "실시간 통계 대기 중…",
             "waitingForStatsWithTotal": "실시간 통계 대기 중… · 총 {{total}}"
         },
         "quota": {
+            "text": {
+                "failureKind": {
+                    "unknown": "알 수 없는 오류",
+                    "no-data": "아직 읽은 값 없음",
+                    "setup-required": "설정 필요",
+                    "unsupported": "지원되지 않음",
+                    "cli-unavailable": "프로그램을 찾을 수 없음",
+                    "parse": "응답을 해석할 수 없음",
+                    "server": "프로바이더 서버 오류",
+                    "network": "네트워크 오류",
+                    "rate-limited": "요청 제한됨",
+                    "quota-exhausted": "플랜 한도 도달",
+                    "unauthorized": "접근 거부",
+                    "expired-token": "로그인 만료",
+                    "missing-credentials": "로그인 필요"
+                },
+                "agoDays": "{{days}}일 {{hours}}시간 전",
+                "agoHours": "{{hours}}시간 {{minutes}}분 전",
+                "agoMinutes": "{{minutes}}분 전",
+                "justNow": "방금",
+                "unreadable": "사용량을 읽지 못함",
+                "unavailable": "이 머신에서는 사용할 수 없음",
+                "pool": "풀",
+                "usageSessions": "세션 {{count}}",
+                "usageTokens": "토큰 {{count}}",
+                "windowReset": "초기화됨 · 새 값 대기 중",
+                "cue": {
+                    "stale": "오래된 값",
+                    "refreshing": "새로 고치는 중"
+                },
+                "resetsInDays": "{{days}}일 {{hours}}시간 후 초기화",
+                "resetsInHours": "{{hours}}시간 {{minutes}}분 후 초기화",
+                "resetsInMinutes": "{{minutes}}분 후 초기화",
+                "resetsNow": "곧 초기화",
+                "used": "{{percent}}% 사용"
+            },
             "title": "플랜 사용량",
             "sessionHint": "이 머신이 보고한 5시간 롤링 플랜 창",
             "weeklyHint": "이 머신이 보고한 7일 롤링 플랜 창",
@@ -3251,6 +3641,10 @@
         }
     },
     "sessionHost": {
+        "lastErrorLabel": "마지막 오류:",
+        "unknown": "알 수 없음",
+        "endpointLabel": "엔드포인트:",
+        "activeAgo": "{{time}} 활동",
         "title": "호스팅 런타임 복구",
         "stopConfirmTitle": "{{name}}을(를) 중지할까요?",
         "stopConfirmDescription": "호스팅 런타임이 종료됩니다.",
@@ -3319,7 +3713,21 @@
         "lifecycleInterrupted": "중단됨"
     },
     "settings": {
+        "mobileMode": {
+            "workspaceMode": "작업 공간",
+            "chatMode": "채팅 모드",
+            "descriptionWorkspace": "휴대폰과 태블릿에서도 전체 작업 공간 레이아웃을 사용합니다.",
+            "descriptionChat": "채팅 중심의 모바일 받은편지함 레이아웃을 사용합니다. 메신저 앱에 가깝습니다.",
+            "label": "모바일 받은편지함 (채팅 모드)"
+        },
         "theme": {
+            "preset": {
+                "honey": "따뜻한 노란색 포인트",
+                "aurora": "핑크 포인트 테마",
+                "ember": "랜딩 페이지에서 영감을 받은 기본 앰버 테마",
+                "midnight": "클래식 보라색 테마"
+            },
+            "presetCustomDescription": "앱 전체 + 채팅 사용자 정의",
             "helloHelp": "안녕하세요! 어떻게 도와드릴까요?",
             "fixBug": "버그를 고쳐주세요",
             "onIt": "알겠습니다! ✨",
@@ -3352,6 +3760,15 @@
             "customLabel": "커스텀"
         },
         "providerPriority": {
+            "undetectedHint_other": "{{count}}개 프로바이더가 여기서 감지되지 않았습니다 — 순서는 유지되며 사용 가능해질 때까지 건너뜁니다.",
+            "undetectedHint_one": "{{count}}개 프로바이더가 여기서 감지되지 않았습니다 — 순서는 유지되며 사용 가능해질 때까지 건너뜁니다.",
+            "orderHint": "실행 시 위에서 아래 순서로 사용합니다.",
+            "noMoreProviders": "감지된 다른 CLI 프로바이더 없음",
+            "selectProvider": "프로바이더 선택…",
+            "moveDown": "아래로 이동",
+            "moveUp": "위로 이동",
+            "keptUntilDetected": "순서는 유지되며, 이 머신에서 감지될 때까지 실행 시 건너뜁니다.",
+            "emptyWarning": "프로바이더 순서가 설정되지 않았습니다. CLI 프로바이더를 지정하지 않은 실행은 거부됩니다.",
             "available": "사용 가능",
             "notOnMachine": "이 머신에 없음",
             "remove": "제거",
@@ -3359,10 +3776,21 @@
             "addProvider": "프로바이더 추가"
         },
         "coordinatorPrompts": {
+            "saved": "저장됨",
+            "saveAppend": "덧붙이기 저장",
+            "saveOverride": "덮어쓰기 저장",
+            "saving": "저장 중…",
+            "appendPlaceholder": "(비어 있음 — 이 단계에서 덧붙이는 내용 없음)",
+            "overridePlaceholder": "(비어 있음 — 기본 프롬프트 사용)",
+            "placeholdersHint": "사용 가능한 자리표시자:",
+            "resetHint": "필드를 비우고 저장하면 제거됩니다(기본값으로 복원).",
+            "intro": "이 데몬의 메시 코디네이터 세션이 받는 프롬프트를 사용자 정의합니다.",
+            "loading": "불러오는 중…",
+            "connectDaemon": "코디네이터 프롬프트를 편집하려면 데몬을 연결하세요.",
             "overrideDesc": "<strong>Override</strong>는 해당 CLI의 데몬 내장 기본 프롬프트를 대체합니다.",
             "appendDesc": "<strong>Append</strong>는 선택된 기본 프롬프트 뒤에 추가됩니다.",
-            "overrideLabel": "Override",
-            "appendLabel": "Append",
+            "overrideLabel": "덮어쓰기",
+            "appendLabel": "덧붙이기",
             "expandLabel": "프롬프트 편집",
             "collapseLabel": "접기",
             "customizedBadge": "커스텀",
@@ -3372,6 +3800,11 @@
             "sectionDescription": "이 머신의 메시 코디네이터 세션에 적용되는 CLI별 기본 프롬프트입니다. 메시 단위 프롬프트는 Repo Mesh 페이지에 있습니다."
         },
         "appearance": {
+            "modeSystem": "시스템",
+            "modeLight": "라이트",
+            "modeDark": "다크",
+            "mobileDescription": "휴대폰에서 대시보드를 채팅 앱처럼 열지, 전체 작업 공간 레이아웃을 유지할지 선택하세요.",
+            "themeDescription": "프리셋을 고르거나 완전히 새로운 테마를 만드세요. 사용자 정의 테마는 앱 전체(배경, 글자, 테두리, 채팅 말풍선)를 바꿉니다.",
             "modeLabel": "모드",
             "themeLabel": "테마",
             "mobileLabel": "모바일",
@@ -3413,6 +3846,10 @@
         "confirmSwitchAction": "전환"
     },
     "landing": {
+        "gallery": {
+            "next": "다음 화면",
+            "previous": "이전 화면"
+        },
         "nav": {
             "home": "ADHDev 홈",
             "mesh": "Mesh",
@@ -3715,6 +4152,10 @@
         }
     },
     "interactivePrompt": {
+        "submit": "제출",
+        "submitting": "제출 중…",
+        "cancelAria": "질문 취소",
+        "actionRequired": "확인 필요",
         "selectAllThatApply": "해당하는 항목을 모두 선택하세요",
         "multipleChoice": "다중 선택",
         "singleChoice": "단일 선택",
@@ -3725,11 +4166,58 @@
         "errorReviewUnconfirmed": "답변 키는 터미널에 전달됐지만 질문이 아직 화면에 남아 있습니다 — 답변이 제출되지 않았을 수 있습니다. 터미널을 확인하세요: 제출되지 않았다면 터미널에서 직접 답하세요. 여기서 재전송하면 두 번 제출될 수 있습니다"
     },
     "git": {
+        "diffPreview": {
+            "truncatedAfter": "을(를) 로컬에서 실행하세요.",
+            "truncatedBefore": "변경 내용이 잘렸습니다 — 전체를 보려면",
+            "empty": "표시할 변경 내용이 없습니다.",
+            "binary": "바이너리 파일 — 변경 내용을 표시할 수 없습니다.",
+            "loading": "변경 내용 불러오는 중…"
+        },
         "changeList": {
+            "stagedHint": "스테이징됨",
+            "noChanges": "변경된 파일이 없습니다.",
             "binaryBadge": "bin",
             "truncatedNote": "파일 목록이 잘렸습니다 — 전체 출력은 로컬에서 <code>git status</code>를 실행하세요."
         },
         "statusDialog": {
+            "working": "처리 중…",
+            "includeUntracked": "추적 안 된 파일 포함",
+            "messageRequired": "메시지 (필수)",
+            "fileFallback": "파일",
+            "confirmRevert": "{{path}}의 변경 사항을 되돌릴까요?",
+            "confirmPop": "가장 최근 스태시를 복원할까요?",
+            "confirmStash": "변경 사항 스태시",
+            "confirmCheckpoint": "체크포인트 커밋 만들기",
+            "copySummary": "요약 복사",
+            "copied": "클립보드에 복사했습니다",
+            "checkoutSelected": "선택한 파일 되돌리기",
+            "selectFileToRevert": "되돌릴 파일을 선택하세요",
+            "revertFile": "{{path}}의 변경 사항 되돌리기",
+            "popStash": "스태시 복원",
+            "noStashes": "복원할 스태시가 없습니다",
+            "popHint": "가장 최근 스태시를 복원합니다",
+            "resolveBeforePop": "스태시를 복원하기 전에 충돌을 해결하세요",
+            "stash": "스태시",
+            "stashHint": "현재 변경 사항을 잠시 치워 둡니다 (git stash)",
+            "resolveBeforeStash": "스태시하기 전에 충돌을 해결하세요",
+            "checkpoint": "체크포인트",
+            "checkpointHint": "체크포인트로 git 커밋을 만듭니다",
+            "resolveBeforeCheckpoint": "체크포인트를 만들기 전에 충돌을 해결하세요",
+            "selectFile": "파일을 선택하면 변경 내용을 볼 수 있습니다",
+            "noDiffData": "변경 내용 데이터가 없습니다.",
+            "loading": "불러오는 중…",
+            "fileCount_other": "파일 {{count}}개",
+            "fileCount_one": "파일 {{count}}개",
+            "stashed": "스태시 {{count}}",
+            "deleted": "삭제 {{count}}",
+            "untracked": "추적 안 됨 {{count}}",
+            "modified": "수정 {{count}}",
+            "staged": "스테이징 {{count}}",
+            "behind": "{{count}}개 뒤처짐",
+            "ahead": "{{count}}개 앞섬",
+            "refresh": "새로 고침",
+            "openOnGithub": "GitHub에서 열기",
+            "title": "Git 상태",
             "conflicts": "충돌 있음",
             "clean": "변경 없음"
         }

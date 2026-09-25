@@ -243,7 +243,7 @@ export default function MachinesPage() {
                                     <ProviderLogo type={agent.type} label={agent.name} size={16} />
                                     <span className="text-xs text-orange-400 font-semibold">{agent.name}</span>
                                     {agent.workspace && <span className="text-4xs text-text-muted max-w-20 overflow-hidden text-ellipsis whitespace-nowrap">· {agent.workspace}</span>}
-                                    <span className="text-3xs text-text-muted">on {agent.machine}</span>
+                                    <span className="text-3xs text-text-muted">{t('machine.card.onMachine', { machine: agent.machine })}</span>
                                     <span className="ml-auto text-3xs text-orange-500 flex items-center gap-1">
                                         <span
                                             className="w-1 h-1 rounded-full bg-orange-500"
@@ -343,7 +343,7 @@ export default function MachinesPage() {
                                                 </div>
                                                 <div className="text-3xs text-text-muted flex gap-1 items-center">
                                                     {typeof machine.system?.cpus === 'number' && typeof machine.system?.totalMem === 'number' && (
-                                                        <span>{machine.system.cpus} cores · {formatBytes(machine.system.totalMem)}</span>
+                                                        <span>{t('machine.card.coresCount', { count: machine.system.cpus })} · {formatBytes(machine.system.totalMem)}</span>
                                                     )}
                                                     {typeof machine.system?.cpus === 'number' && typeof machine.system?.totalMem === 'number' && (
                                                         <span className="opacity-30">·</span>
@@ -370,7 +370,7 @@ export default function MachinesPage() {
                                                     }`}
                                                     title={transport === 'relay' ? t('machine.card.transportRelay') : t('machine.card.transportDirect')}
                                                 >
-                                                    {transport === 'relay' ? <><IconShuffle size={10} /> relay</> : <><IconLink size={10} /> direct</>}
+                                                    {transport === 'relay' ? <><IconShuffle size={10} /> {t('machine.card.transportRelayShort')}</> : <><IconLink size={10} /> {t('machine.card.transportDirectShort')}</>}
                                                 </span>
                                             )}
                                             {/*

@@ -197,7 +197,7 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
                     )}
                     {task.difficulty && <span className={neutralChip(meshTheme.isDark)}>{task.difficulty}</span>}
                     {task.priority && task.priority !== 'normal' && <span className={neutralChip(meshTheme.isDark)}>{task.priority}</span>}
-                    {(task.taskMode === 'live_debug_readonly' || task.readonly) && <span className={neutralChip(meshTheme.isDark)}>read-only</span>}
+                    {(task.taskMode === 'live_debug_readonly' || task.readonly) && <span className={neutralChip(meshTheme.isDark)}>{t('mesh.blueprint.readonlyBadge')}</span>}
                     {missionTitle && task.missionId && (
                         <button
                             type="button"
@@ -471,7 +471,7 @@ export function MeshBlueprintGateRowView({ row, meshTheme, nowMs, onOpen, planEx
             <div className="flex min-w-0 items-center gap-2">
                 <span className={`h-2 w-2 shrink-0 rounded-full ${dot.dot} ${dot.pulse ? 'motion-safe:animate-pulse' : ''}`} aria-hidden />
                 <span className={`shrink-0 text-3xs font-semibold uppercase tracking-wide ${meshTheme.isDark ? 'text-amber-200' : 'text-amber-700'}`}>
-                    ⛩ {row.gate?.action ?? 'gate'} · {row.state}{row.gate?.leaseExpired ? ` · ${t('mesh.blueprint.leaseExpired')}` : ''}
+                    ⛩ {row.gate?.action ?? t('mesh.blueprint.gateFallback')} · {row.state}{row.gate?.leaseExpired ? ` · ${t('mesh.blueprint.leaseExpired')}` : ''}
                 </span>
                 <span className={`min-w-0 flex-1 truncate text-2xs ${meshTheme.isDark ? 'text-slate-200' : 'text-slate-700'}`} title={row.ref}>
                     {row.ref}

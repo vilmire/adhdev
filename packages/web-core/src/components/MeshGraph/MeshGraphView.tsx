@@ -548,7 +548,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                         {hasActiveSession && (
-                            <span className={`h-1.5 w-1.5 rounded-full ${meshTheme.isDark ? 'bg-emerald-400' : 'bg-emerald-500'} animate-pulse`} aria-label="active session" />
+                            <span className={`h-1.5 w-1.5 rounded-full ${meshTheme.isDark ? 'bg-emerald-400' : 'bg-emerald-500'} animate-pulse`} aria-label={t('mesh.graph.activeSessionAria')} />
                         )}
                         <span
                             className="h-2 w-2 shrink-0 rounded-full"
@@ -658,7 +658,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 </div>
                 <div className="flex items-center gap-1.5 mt-0.5 shrink-0">
                     {hasActiveSession && (
-                        <span className={`h-2 w-2 rounded-full ${meshTheme.isDark ? 'bg-emerald-400' : 'bg-emerald-500'} animate-pulse`} aria-label="active session" />
+                        <span className={`h-2 w-2 rounded-full ${meshTheme.isDark ? 'bg-emerald-400' : 'bg-emerald-500'} animate-pulse`} aria-label={t('mesh.graph.activeSessionAria')} />
                     )}
                     <span
                         className="h-2.5 w-2.5 rounded-full"
@@ -707,7 +707,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     ) : null}
                     {node.locality === 'remote' && (
                         <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('meta', meshTheme.isDark)}`}>
-                            remote
+                            {t('mesh.graph.remoteBadge')}
                         </span>
                     )}
                     {(connectionTransport || connectionRtt) && (

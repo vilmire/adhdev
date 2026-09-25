@@ -190,7 +190,7 @@ Documented standalone runtime inputs:
 | Input | Meaning |
 |-------|---------|
 | `--port` | HTTP and WebSocket port |
-| `--host` | Bind to `0.0.0.0` for LAN access |
+| `--host <address>` | Bind to an explicit address (e.g. `0.0.0.0`) for LAN access — the flag requires the address argument |
 | `--token` | Require dashboard/API token auth |
 | `--no-open` | Skip automatic browser open |
 | `ADHDEV_TOKEN` | Token auth fallback when no `--token` flag is passed |

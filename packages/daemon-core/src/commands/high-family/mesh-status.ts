@@ -502,7 +502,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                 ? { nodeFacts: node.nodeFacts }
                                 : {}),
                             providerPriority,
-                            // ORCHESTRATION_NODE_SLOTS.md: surface the node's capability
+                            // node capability slots design, 2026-07-09: surface the node's capability
                             // slots so the dashboard slot editor can read them. Only
                             // emitted when explicitly configured (derived-from-legacy
                             // slots stay implicit — the editor shows the legacy fields).

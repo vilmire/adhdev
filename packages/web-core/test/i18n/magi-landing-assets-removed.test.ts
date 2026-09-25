@@ -6,8 +6,7 @@
 // orphaned. Owner decision (2026-09, O9): delete the dead assets.
 //
 // `mesh.help.sections.magi` and `landing.mesh.crossSubtitle` are a
-// SEPARATE, live namespace (the Repo Mesh MAGI cross-verification feature,
-// docs/CONCEPTS.md §5) and must never be touched by this cleanup.
+// SEPARATE, live namespace (the Repo Mesh MAGI cross-verification feature) and must never be touched by this cleanup.
 import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'

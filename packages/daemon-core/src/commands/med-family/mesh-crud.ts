@@ -92,7 +92,7 @@ export async function decideOssCloneSync(
 
 /**
  * PROVIDER-PRIORITY-FROM-SLOTS write-path sync: slots order = preference
- * (ORCHESTRATION_NODE_SLOTS.md), and the read paths already fall back to the
+ * (node capability slots design, 2026-07-09), and the read paths already fall back to the
  * slots-derived order (readProviderPriorityFromPolicy). Persist that same order
  * on every node write with slots so the compatibility field cannot drift.
  *

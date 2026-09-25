@@ -4,7 +4,7 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { tmpdir } from 'os';
 
-// D3 — coordinator-gate lifecycle safety (docs/design/2026-09-25-graph-orchestration-simplification.md).
+// D3 — coordinator-gate lifecycle safety (the 2026-09-25 graph orchestration simplification).
 //
 //   (a) auto-close: cancelling a task that leaves a gate's DIRECT downstream all
 //       terminal closes the gate (`cancelled`, reason downstream_all_terminal)

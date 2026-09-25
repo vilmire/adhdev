@@ -101,7 +101,7 @@ export default function MachineCommandCenter({
                     <SectionCard>
                         <div className="flex flex-col gap-1.5">
                             {topRecentLaunches.map(launch => {
-                                const { metaText, updatedLabel } = buildMachineRecentLaunchCardView(launch)
+                                const { metaText, updatedLabel } = buildMachineRecentLaunchCardView(launch, t)
                                 return (
                                     <button
                                         key={launch.id}
@@ -138,13 +138,15 @@ export default function MachineCommandCenter({
                     <SectionCard className={updateStatus.tone === 'good' ? 'border-emerald-500/20 bg-emerald-500/5' : updateStatus.tone === 'info' ? 'border-sky-500/20 bg-sky-500/5' : 'border-amber-500/20 bg-amber-500/5'}>
                         <div className="flex flex-col gap-3">
                             <div className="text-sm font-semibold text-text-primary">
-                                {updateStatus.title}
+                                {t(updateStatus.titleKey)}
                             </div>
                             <div className="text-xs text-text-secondary leading-relaxed">
-                                {updateStatus.description}
+                                {t(updateStatus.descriptionKey)}
                                 {updateStatus.targetVersion && (
                                     <span className="block mt-1 text-text-muted">
-                                        Target: v{updateStatus.targetVersion}{updateStatus.channel ? ` (${updateStatus.channel})` : ''}
+                                        {updateStatus.channel
+                                            ? t('machine.commandCenter.updateTargetWithChannel', { version: updateStatus.targetVersion, channel: t(`machine.commandCenter.updateChannel.${updateStatus.channel}`) })
+                                            : t('machine.commandCenter.updateTarget', { version: updateStatus.targetVersion })}
                                     </span>
                                 )}
                             </div>
@@ -155,11 +157,11 @@ export default function MachineCommandCenter({
                                     onClick={onUpgradeDaemon}
                                 >
                                     <IconRefresh size={13} />
-                                    <span className="text-sm font-medium">{updateStatus.buttonLabel}</span>
+                                    <span className="text-sm font-medium">{updateStatus.targetVersion ? t('machine.commandCenter.updateToVersion', { version: updateStatus.targetVersion }) : t('machine.commandCenter.updateDaemon')}</span>
                                 </button>
                             ) : (
                                 <div className={updateStatus.tone === 'good' ? 'text-xs font-medium text-emerald-300' : 'text-xs font-medium text-sky-300'}>
-                                    No preview update action is needed.
+                                    {t('machine.commandCenter.previewNoActionNeeded')}
                                 </div>
                             )}
                         </div>

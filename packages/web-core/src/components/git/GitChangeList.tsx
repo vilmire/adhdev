@@ -41,7 +41,7 @@ function dirname(path: string): string {
 export default function GitChangeList({ files, truncated, onFileClick, selectedPath, className = '' }: GitChangeListProps) {
     const { t } = useTranslation('common')
     if (files.length === 0) {
-        return <p className="px-3 py-2 text-xs text-text-secondary">No changed files.</p>
+        return <p className="px-3 py-2 text-xs text-text-secondary">{t('git.changeList.noChanges')}</p>
     }
 
     return (
@@ -54,7 +54,7 @@ export default function GitChangeList({ files, truncated, onFileClick, selectedP
                     const dir = dirname(file.path)
                     const name = basename(file.path)
                     const stagedDot = file.staged
-                        ? <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-status-online align-middle" title="Staged" />
+                        ? <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-status-online align-middle" title={t('git.changeList.stagedHint')} />
                         : null
 
                     return (

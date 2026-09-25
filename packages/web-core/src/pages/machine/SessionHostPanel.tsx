@@ -370,7 +370,7 @@ export default function SessionHostPanel({
                                 <IconUsers size={11} /> {clientsLabel}
                             </span>
                             <span className="text-text-muted">·</span>
-                            <span className="text-text-primary/85">active {formatRelativeTime(session.lastActivityAt)}</span>
+                            <span className="text-text-primary/85">{t('sessionHost.activeAgo', { time: formatRelativeTime(session.lastActivityAt) })}</span>
                             <span className="text-text-muted">·</span>
                             <span className="text-sky-200">{t('sessionHost.nextAction', { action: nextActionLabel })}</span>
                         </div>
@@ -584,8 +584,8 @@ export default function SessionHostPanel({
                     </div>
 
                     <div className="text-3xs text-text-secondary mt-3">
-                        Endpoint: <span className="font-mono text-text-primary">{diagnostics.endpoint || 'unknown'}</span>
-                        {error ? <span className="text-amber-200"> · last error: {error}</span> : null}
+                        {t('sessionHost.endpointLabel')} <span className="font-mono text-text-primary">{diagnostics.endpoint || t('sessionHost.unknown')}</span>
+                        {error ? <span className="text-amber-200"> · {t('sessionHost.lastErrorLabel')} {error}</span> : null}
                     </div>
                 </>
             )}

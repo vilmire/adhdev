@@ -1,5 +1,11 @@
 /**
- * seqscribe Beacon advisory badge (design §7.1, mission b60d70b8).
+ * Replication advisory badge (design §7.1, mission b60d70b8).
+ *
+ * ★ User-facing copy rule (owner, 2026-09-25): never name the internal sync
+ * engine or its vocabulary (topics, peers, boards, "sole copy") in the UI.
+ * Labels and tooltips say what it means for the user — "sync delayed",
+ * "N records not yet backed up on another machine". The verdict logic below is
+ * unchanged by that rule; only the words are.
  *
  * Surfaces the two things the Beacon board can actually tell a user about a
  * machine (§7.1.0's reachable features ① and ③):
@@ -101,20 +107,19 @@ export function BeaconAdvisoryBadge({ beacon, className }: BeaconAdvisoryBadgePr
                   // nothing about lag at all.
                   behindPart:
                       behind > 0 && worstTopic
-                          ? t('machine.card.beacon.lastSyncedBehindPart', { count: behind, topic: worstTopic })
+                          ? t('machine.card.beacon.lastSyncedBehindPart', { count: behind })
                           : '',
               })
     const tooltip = [
         behind > 0
-            ? t('machine.card.beacon.behindTooltip', {
-                  count: behind,
-                  topic: worstTopic ?? '',
-              })
+            ? t('machine.card.beacon.behindTooltip', { count: behind })
             : null,
         soleCopies.length > 0
             ? t('machine.card.beacon.soleCopyTooltip', {
-                  count: soleCopies.length,
+                  // Pluralize on the record count the sentence talks about.
+                  count: soleCopies.reduce((sum, c) => sum + c.unreplicated, 0),
                   entries: soleCopies.reduce((sum, c) => sum + c.unreplicated, 0),
+                  topics: soleCopies.length,
               })
             : null,
         // ★ The deferral is explained, not hidden: a user who sees "can't tell"
@@ -140,7 +145,9 @@ export function BeaconAdvisoryBadge({ beacon, className }: BeaconAdvisoryBadgePr
                     className="text-4xs font-semibold px-[5px] py-px rounded bg-orange-500/[0.08] border border-orange-500/20 text-orange-400"
                     data-testid="beacon-sole-copy-badge"
                 >
-                    {t('machine.card.beacon.soleCopyLabel')}
+                    {t('machine.card.beacon.soleCopyLabel', {
+                        count: soleCopies.reduce((sum, c) => sum + c.unreplicated, 0),
+                    })}
                 </span>
             )}
             {/*

@@ -1,14 +1,17 @@
+import { useTranslation } from 'react-i18next'
 import { useTheme, ThemePreference } from '../../hooks/useTheme'
 import { IconMoon, IconSun, IconSystem } from '../Icons'
 
-const THEME_OPTIONS: { id: ThemePreference; label: string; icon: typeof IconMoon }[] = [
-    { id: 'dark', label: 'Dark', icon: IconMoon },
-    { id: 'light', label: 'Light', icon: IconSun },
-    { id: 'system', label: 'System', icon: IconSystem }
+/** `labelKey` is an i18n key in the common namespace. */
+const THEME_OPTIONS: { id: ThemePreference; labelKey: string; icon: typeof IconMoon }[] = [
+    { id: 'dark', labelKey: 'settings.appearance.modeDark', icon: IconMoon },
+    { id: 'light', labelKey: 'settings.appearance.modeLight', icon: IconSun },
+    { id: 'system', labelKey: 'settings.appearance.modeSystem', icon: IconSystem }
 ]
 
 export function GeneralThemeSection() {
     const { preference, setPreference } = useTheme()
+    const { t } = useTranslation('common')
 
     return (
         <div className="flex gap-2">
@@ -24,7 +27,7 @@ export function GeneralThemeSection() {
                     style={preference === opt.id ? { color: 'var(--accent-on-primary)' } : undefined}
                 >
                     <opt.icon size={14} />
-                    {opt.label}
+                    {t(opt.labelKey)}
                 </button>
             ))}
         </div>

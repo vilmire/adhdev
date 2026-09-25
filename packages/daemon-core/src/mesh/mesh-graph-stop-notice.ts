@@ -1,7 +1,7 @@
 /**
  * Coordinator notices for STOPPED downstream work — the "tell the coordinator
  * with enough to act on" half of graph failure handling
- * (docs/design/2026-09-25-graph-orchestration-simplification.md §5).
+ * (the 2026-09-25 graph orchestration simplification §5).
  *
  * Three events, one notice each:
  *   - `graph_dependency_blocked`   — `block` policy: a step FAILED and its

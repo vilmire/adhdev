@@ -1,7 +1,7 @@
 /**
  * CliSpecV4.interactive_prompts — named interactive-prompt protocol on the
  * spec path (third engine feature gating the legacy-to-spec migration,
- * docs/design/2026-08-17-legacy-cli-spec-migration.md).
+ * the 2026-08-17 legacy CLI spec migration).
  *
  * Before this, SpecCliAdapter's prompt capture/answer paths were hardcoded
  * `cliType === 'claude-cli'`, so a kimi spec migration would silently lose

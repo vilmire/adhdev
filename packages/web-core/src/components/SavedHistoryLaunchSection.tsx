@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import LaunchSectionCard from './LaunchSectionCard'
 import {
   buildSavedHistorySummaryView,
@@ -23,22 +24,21 @@ export interface SavedHistoryLaunchSectionProps {
   onClearSelection: () => void
 }
 
-function buildSavedHistoryRefreshStatus({
+function buildSavedHistoryRefreshStatus(t: TFunction, {
   savedSessionsLoading,
   savedSessionsLoaded,
   savedSessionsCount = 0,
 }: Pick<SavedHistoryLaunchSectionProps, 'savedSessionsLoading' | 'savedSessionsLoaded' | 'savedSessionsCount'>): string {
   if (savedSessionsLoading) {
-    return 'Refreshing saved history…'
+    return t('launch.refreshingSavedHistory')
   }
   if (!savedSessionsLoaded) {
-    return 'Start fresh, or open saved history when you want continuity.'
+    return t('launch.savedHistoryIntro')
   }
   if (savedSessionsCount > 0) {
-    const noun = savedSessionsCount === 1 ? 'history' : 'histories'
-    return `${savedSessionsCount} saved ${noun} loaded. Open saved history to choose one.`
+    return t('launch.savedHistoryLoadedCount', { count: savedSessionsCount })
   }
-  return 'No saved history found yet. New Hermes CLI conversations will appear here after ADHDev captures provider history.'
+  return t('launch.savedHistoryNoneYet')
 }
 
 export default function SavedHistoryLaunchSection({
@@ -53,8 +53,8 @@ export default function SavedHistoryLaunchSection({
   onClearSelection,
 }: SavedHistoryLaunchSectionProps) {
   const { t } = useTranslation('common')
-  const summary = selectedSession ? buildSavedHistorySummaryView(selectedSession) : null
-  const refreshStatus = buildSavedHistoryRefreshStatus({
+  const summary = selectedSession ? buildSavedHistorySummaryView(selectedSession, t) : null
+  const refreshStatus = buildSavedHistoryRefreshStatus(t, {
     savedSessionsLoading,
     savedSessionsLoaded,
     savedSessionsCount,
@@ -62,7 +62,7 @@ export default function SavedHistoryLaunchSection({
 
   return (
     <LaunchSectionCard
-      title="Saved history"
+      title={t('launch.savedHistoryBadge')}
       description={getSavedHistoryHelperLabel(t)}
       action={(
         <>
@@ -72,7 +72,7 @@ export default function SavedHistoryLaunchSection({
             disabled={busy || savedSessionsLoading}
             onClick={onRefresh}
           >
-            {savedSessionsLoading ? 'Loading…' : 'Refresh'}
+            {savedSessionsLoading ? t('launch.loadingShort') : t('launch.refresh')}
           </button>
           <button
             type="button"
@@ -89,7 +89,7 @@ export default function SavedHistoryLaunchSection({
         <div className="rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2.5 text-2xs text-text-muted leading-relaxed">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
-              <div className="text-3xs uppercase tracking-[0.08em] text-text-muted">Selected saved history</div>
+              <div className="text-3xs uppercase tracking-[0.08em] text-text-muted">{t('launch.selectedSavedHistory')}</div>
               <div className="mt-1 font-semibold text-text-primary truncate">{summary.title}</div>
               <div className="font-mono break-all mt-0.5">{summary.providerSessionId}</div>
               <div className="mt-1">{summary.metaLine}</div>
@@ -106,7 +106,7 @@ export default function SavedHistoryLaunchSection({
               onClick={onClearSelection}
               disabled={busy}
             >
-              Clear
+              {t('launch.clearSelection')}
             </button>
           </div>
         </div>

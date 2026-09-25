@@ -4,7 +4,7 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { tmpdir } from 'os';
 
-// D6 — graphUsage counters (docs/design/2026-09-25-graph-orchestration-simplification.md).
+// D6 — graphUsage counters (the 2026-09-25 graph orchestration simplification).
 // Computed from the graph/queue tables over a 7-day window, cached ≥ 60 s.
 
 const testTmpDir = path.join(tmpdir(), `adhdev-graph-usage-${randomUUID().slice(0, 8)}`);

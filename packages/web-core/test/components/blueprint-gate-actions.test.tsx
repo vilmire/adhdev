@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * D5 (docs/design/2026-09-25-graph-orchestration-simplification.md) — the
+ * D5 (the 2026-09-25 graph orchestration simplification) — the
  * Blueprint Blocked-section gate row gets Release/Abandon/Extend 24h buttons
  * plus a distinct `expired` badge with age, and blocked task rows get a
  * "blocked by: <gate>, <elapsed>" one-liner. This supersedes the 2026-08-24

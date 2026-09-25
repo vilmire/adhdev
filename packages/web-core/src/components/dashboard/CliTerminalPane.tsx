@@ -610,7 +610,7 @@ export default function CliTerminalPane({
                             className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-2xs font-medium text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55 disabled:cursor-not-allowed disabled:opacity-60"
                             onClick={() => { void loadOlderRuntimeScrollback(); }}
                             disabled={!sessionId || isLoadingScrollback}
-                            title="Replay raw session scrollback so the terminal viewport can scroll farther up"
+                            title={t('terminal.replayScrollbackHint')}
                         >
                             {isLoadingScrollback ? t('terminal.loadingOlder') : t('terminal.loadOlderOutput')}
                         </button>
@@ -632,7 +632,7 @@ export default function CliTerminalPane({
                             type="button"
                             className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-2xs font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
                             onClick={() => setShowSpecDebug(v => !v)}
-                            title="Spec debug — inspect current state, sections, and transition history"
+                            title={t('terminal.specDebugHint')}
                         >
                             {t('terminal.debug')}
                         </button>
@@ -642,7 +642,7 @@ export default function CliTerminalPane({
                         className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-2xs font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55 disabled:cursor-not-allowed disabled:opacity-60"
                         onClick={() => { void copyCurrentTerminalText(); }}
                         disabled={!runtimeReady}
-                        title="Copy selected terminal text, or the visible terminal viewport if nothing is selected"
+                        title={t('terminal.copyHint')}
                     >
                         {t('terminal.copy')}
                     </button>
@@ -655,9 +655,9 @@ export default function CliTerminalPane({
                             aria-label={terminalControlsOpen ? t('terminal.closeControlKeys') : t('terminal.openControlKeys')}
                             aria-expanded={terminalControlsOpen}
                             aria-controls="terminal-control-keys-popover"
-                            title="Open mobile-friendly terminal control keys"
+                            title={t('terminal.openControlKeys')}
                         >
-                            Keys
+                            {t('terminal.keysButton')}
                         </button>
                         {terminalControlsOpen && (
                             <div
@@ -667,7 +667,7 @@ export default function CliTerminalPane({
                                 className="absolute right-0 top-10 w-72 rounded-2xl border border-white/10 bg-[#0b0d12]/95 p-3 text-white/85 shadow-2xl shadow-black/40 backdrop-blur-md"
                             >
                                 <div className="mb-2 flex items-center justify-between gap-2">
-                                    <span className="text-3xs font-semibold uppercase tracking-[0.14em] text-white/45">Terminal keys</span>
+                                    <span className="text-3xs font-semibold uppercase tracking-[0.14em] text-white/45">{t('terminal.keysPanelTitle')}</span>
                                     <button
                                         type="button"
                                         className="rounded-full px-2 py-0.5 text-2xs text-white/55 transition-colors hover:bg-white/10 hover:text-white/85"
@@ -706,12 +706,12 @@ export default function CliTerminalPane({
                                     <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-xs font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Tab')}>Tab</button>
                                     <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-xs font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Enter')}>Enter</button>
                                     <span aria-hidden="true" />
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] leading-[22px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('ArrowUp')} aria-label="Arrow up">↑</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] leading-[22px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('ArrowUp')} aria-label={t('terminal.arrowUp')}>↑</button>
                                     <span aria-hidden="true" />
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] leading-[22px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('ArrowLeft')} aria-label="Arrow left">←</button>
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] leading-[22px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('ArrowDown')} aria-label="Arrow down">↓</button>
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] leading-[22px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('ArrowRight')} aria-label="Arrow right">→</button>
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-xs font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u0003')} title="Send SIGINT (Ctrl-C)">Ctrl-C</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] leading-[22px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('ArrowLeft')} aria-label={t('terminal.arrowLeft')}>←</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] leading-[22px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('ArrowDown')} aria-label={t('terminal.arrowDown')}>↓</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] leading-[22px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('ArrowRight')} aria-label={t('terminal.arrowRight')}>→</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-xs font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u0003')} title={t('terminal.sendInterrupt')}>Ctrl-C</button>
                                     <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-xs font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Space')}>Space</button>
                                     <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-xs font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Backspace')}>Bksp</button>
                                 </div>
@@ -729,7 +729,7 @@ export default function CliTerminalPane({
                                 return nextScale;
                             });
                         }}
-                        title="Shrink terminal viewport"
+                        title={t('terminal.shrinkViewport')}
                     >
                         -
                     </button>
@@ -744,7 +744,7 @@ export default function CliTerminalPane({
                                 return nextScale;
                             });
                         }}
-                        title="Increase terminal viewport"
+                        title={t('terminal.growViewport')}
                     >
                         +
                     </button>

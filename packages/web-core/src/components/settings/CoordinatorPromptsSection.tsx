@@ -129,7 +129,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
     if (!daemonId) {
         return (
             <div className="text-xs text-text-muted">
-                Connect a daemon to edit coordinator prompts.
+                {t('settings.coordinatorPrompts.connectDaemon')}
             </div>
         )
     }
@@ -143,7 +143,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
                 <div className="flex items-center justify-between gap-3 rounded-lg border border-border-subtle bg-bg-secondary/40 px-3 py-2.5">
                     <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-text-muted">
                         {loading ? (
-                            <span>Loading…</span>
+                            <span>{t('settings.coordinatorPrompts.loading')}</span>
                         ) : customizedKeys.length === 0 ? (
                             <span>{t('settings.coordinatorPrompts.collapsedNone')}</span>
                         ) : (
@@ -178,15 +178,15 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
             <div className="flex items-start justify-between gap-3">
                 <div className="text-xs text-text-muted">
                     <p>
-                        Customize the coordinator prompt this daemon's mesh coordinator
-                        sessions get. <span className="font-mono text-2xs">{dir || '~/.adhdev/coordinator-prompts/'}</span>
+                        {t('settings.coordinatorPrompts.intro')} <span className="font-mono text-2xs">{dir || '~/.adhdev/coordinator-prompts/'}</span>
                     </p>
                     <p className="mt-1">
                         <Trans i18nKey="settings.coordinatorPrompts.overrideDesc" ns="common" components={{ strong: <strong /> }} />
                         {' '}
                         <Trans i18nKey="settings.coordinatorPrompts.appendDesc" ns="common" components={{ strong: <strong /> }} />
-                        Leave a field empty + Save to remove it (reset to default).
-                        Supports placeholders: {'{{meshName}}'}, {'{{repo}}'}, {'{{nodes}}'}, {'{{rules}}'}, etc.
+                        {t('settings.coordinatorPrompts.resetHint')}{' '}
+                        {t('settings.coordinatorPrompts.placeholdersHint')}{' '}
+                        <span className="font-mono">{'{{meshName}}'}, {'{{repo}}'}, {'{{nodes}}'}, {'{{rules}}'}</span>…
                     </p>
                 </div>
                 <button
@@ -199,7 +199,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
             </div>
 
             {error && <div className="text-xs text-status-error bg-status-error/10 border border-status-error/40 rounded px-3 py-2">{error}</div>}
-            {loading && <div className="text-xs text-text-muted">Loading…</div>}
+            {loading && <div className="text-xs text-text-muted">{t('settings.coordinatorPrompts.loading')}</div>}
 
             {providerKeys.length > 0 && (
                 <SettingsTabs
@@ -238,7 +238,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
                                         rows={4}
                                         value={entry.override}
                                         onChange={e => setDrafts(prev => ({ ...prev, [key]: { ...prev[key], override: e.target.value } }))}
-                                        placeholder="(empty — use daemon default base prompt)"
+                                        placeholder={t('settings.coordinatorPrompts.overridePlaceholder')}
                                         disabled={savingKey === `${key}:override`}
                                     />
                                     <div className="mt-1 mb-3 flex justify-end">
@@ -248,7 +248,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
                                             onClick={() => void save(key, 'override')}
                                             disabled={savingKey === `${key}:override` || !dirtyOf(key, 'override')}
                                         >
-                                            {savingKey === `${key}:override` ? 'Saving…' : dirtyOf(key, 'override') ? 'Save override' : 'Saved'}
+                                            {savingKey === `${key}:override` ? t('settings.coordinatorPrompts.saving') : dirtyOf(key, 'override') ? t('settings.coordinatorPrompts.saveOverride') : t('settings.coordinatorPrompts.saved')}
                                         </button>
                                     </div>
 
@@ -258,7 +258,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
                                         rows={3}
                                         value={entry.append}
                                         onChange={e => setDrafts(prev => ({ ...prev, [key]: { ...prev[key], append: e.target.value } }))}
-                                        placeholder="(empty — nothing appended at this layer)"
+                                        placeholder={t('settings.coordinatorPrompts.appendPlaceholder')}
                                         disabled={savingKey === `${key}:append`}
                                     />
                                     <div className="mt-1 flex justify-end">
@@ -268,7 +268,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
                                             onClick={() => void save(key, 'append')}
                                             disabled={savingKey === `${key}:append` || !dirtyOf(key, 'append')}
                                         >
-                                            {savingKey === `${key}:append` ? 'Saving…' : dirtyOf(key, 'append') ? 'Save append' : 'Saved'}
+                                            {savingKey === `${key}:append` ? t('settings.coordinatorPrompts.saving') : dirtyOf(key, 'append') ? t('settings.coordinatorPrompts.saveAppend') : t('settings.coordinatorPrompts.saved')}
                                         </button>
                                     </div>
                                 </div>

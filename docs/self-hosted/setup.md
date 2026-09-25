@@ -75,7 +75,7 @@ If you want the fuller hosted-runtime workflow (`runtime recover`, `runtime rest
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--port, -p <port>` | `3847` | Change the local HTTP and WebSocket port |
-| `--host, -H` | localhost only | Bind to `0.0.0.0` so other devices on your LAN can open the dashboard |
+| `--host, -H <address>` | localhost only | Bind to an explicit address (e.g. `0.0.0.0`) so other devices on your LAN can open the dashboard — the flag requires the address argument |
 | `--token <token>` | none | Require token auth for dashboard, API, and WebSocket access |
 | `--no-open` | false | Do not auto-open the browser on startup |
 
@@ -84,15 +84,15 @@ If you want the fuller hosted-runtime workflow (`runtime recover`, `runtime rest
 | Choice | What the user experiences |
 |--------|----------------------------|
 | `adhdev standalone` | Dashboard is reachable only from the same machine via localhost |
-| `adhdev standalone --host` | Dashboard is also reachable from other devices on the same LAN |
+| `adhdev standalone --host 0.0.0.0` | Dashboard is also reachable from other devices on the same LAN |
 | `adhdev standalone --token mysecret` | Browser/API/WebSocket access must authenticate with that token |
 | dashboard password enabled in Settings | Browser users see a login prompt and get a local session cookie after signing in |
-| `--host` with no token and no password | Standalone warns that the dashboard is open to the LAN without protection |
+| `--host 0.0.0.0` with no token and no password | Standalone warns that the dashboard is open to the LAN without protection |
 | `--no-open` | Server starts normally, but does not pop open a browser window |
 
-`--host` does not publish your machine to the public internet by itself. It only changes the bind address from localhost to all interfaces on the current network. Whether that is reachable outside your LAN still depends on your router/firewall setup.
+`--host 0.0.0.0` does not publish your machine to the public internet by itself. It only changes the bind address from localhost to all interfaces on the current network. Whether that is reachable outside your LAN still depends on your router/firewall setup.
 
-If you run with `--host` and do not enable either token auth or a dashboard password, standalone prints a warning because the dashboard is open to your LAN until you secure it.
+If you run with `--host 0.0.0.0` and do not enable either token auth or a dashboard password, standalone prints a warning because the dashboard is open to your LAN until you secure it.
 
 If you usually want LAN access, you can save that as the default from `Settings` → `Network Access` so future launches do not require `--host` each time.
 
@@ -105,7 +105,7 @@ If you want a browser-friendly login, set a dashboard password from `Settings` �
 adhdev standalone
 
 # LAN access for other devices on the same network
-adhdev standalone --host
+adhdev standalone --host 0.0.0.0
 
 # Custom port with token auth for browser/API access
 adhdev standalone --port 8080 --token mysecret123
@@ -117,7 +117,7 @@ adhdev-standalone --no-open
 Common end-user patterns:
 
 - want to use ADHDev only from the same machine → run plain `adhdev standalone`
-- want to open it from a laptop/tablet on the same Wi-Fi → use `--host`, then set a dashboard password from `Settings` → `Dashboard Security`
+- want to open it from a laptop/tablet on the same Wi-Fi → use `--host 0.0.0.0`, then set a dashboard password from `Settings` → `Dashboard Security`
 - want scripts/curl to access it reliably → use `--token`
 
 ## Dashboard Launch And Recovery Flow

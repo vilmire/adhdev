@@ -332,7 +332,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             type="button"
                             onClick={onClose}
                             className={meshTheme.dialogCloseButtonClass}
-                            aria-label="Close mesh graph"
+                            aria-label={t('common.close')}
                         >
                             <IconX size={16} />
                         </button>

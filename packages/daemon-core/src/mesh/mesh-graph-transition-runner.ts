@@ -64,7 +64,7 @@
  * condition evaluation — a condition that can only ever block is not a
  * condition.
  *
- * D3(a) gate auto-close (docs/design/2026-09-25-graph-orchestration-simplification.md)
+ * D3(a) gate auto-close (the 2026-09-25 graph orchestration simplification)
  * also runs inside this choke point, at the end of a failed/cancelled advance.
  * The runner may import mesh-graph-gate-closure.ts (it imports nothing of the
  * runner/gates/queue and uses no import at module top level) but NEVER
@@ -805,7 +805,7 @@ function advanceGraphForTerminalNode(
         });
     }
 
-    // D3(a) (docs/design/2026-09-25-graph-orchestration-simplification.md): a
+    // D3(a) (the 2026-09-25 graph orchestration simplification): a
     // failed/cancelled terminal — directly, or through the `cancel` cascade
     // above — can leave a gate's downstream all terminal. Close such gates HERE,
     // in the choke point's transaction, so every terminal writer (turn-ledger
@@ -965,7 +965,7 @@ export function maybeOpenCoordinatorGate(
     const specDeadlineSeconds = typeof spec?.deadline_seconds === 'number' && spec.deadline_seconds > 0
         ? spec.deadline_seconds
         : undefined;
-    // D3(b) (docs/design/2026-09-25-graph-orchestration-simplification.md): a gate
+    // D3(b) (the 2026-09-25 graph orchestration simplification): a gate
     // declared WITHOUT `deadline_seconds` gets the default deadline (24 h, env
     // ADHDEV_GRAPH_GATE_DEFAULT_DEADLINE_S, 0 disables) — unless a deadline was
     // already pre-stamped, which an explicit spec value alone may overwrite.

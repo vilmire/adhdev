@@ -1,6 +1,6 @@
 /**
  * mesh_node_slots_* — the coordinator's surface for PROPOSING and APPLYING node
- * capability-slot changes (ORCHESTRATION_NODE_SLOTS.md §5: orchestrator autonomous
+ * capability-slot changes (node capability slots design, 2026-07-09 §5: orchestrator autonomous
  * adjustment, propose → approve).
  *
  * A node's capability slots (policy.slots) are the single source of truth for

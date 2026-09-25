@@ -537,7 +537,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                     <button
                         onClick={() => setShowSources(v => !v)}
                         className={`machine-btn text-3xs ${showSources ? 'bg-sky-500/[0.10] border-sky-500/30 text-sky-300' : ''}`}
-                        title="Manage 3rd-party provider sources"
+                        title={t('machine.providers.sourcesHint')}
                     >{t('machine.providers.sources')}</button>
                     {/* "Update all" only when more than one provider is behind —
                         a single stale provider has its own inline Update. */}
@@ -560,7 +560,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                     <button
                         onClick={() => setShowSourceConfig(v => !v)}
                         className="machine-btn text-3xs"
-                        title="Show source configuration (advanced)"
+                        title={t('machine.providers.advancedHint')}
                     >{t('machine.providers.advanced')}</button>
                 </div>
             </div>
@@ -663,7 +663,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                             <div className="text-2xs font-semibold uppercase tracking-wider text-accent-primary">{t('machine.providers.sourceConfigTitle')}</div>
                             <div className="text-2xs text-text-muted mt-1">{t('machine.providers.sourceConfigDesc')}</div>
                         </div>
-                        <button onClick={fetchSourceConfig} className="machine-btn text-3xs">↻ Refresh</button>
+                        <button onClick={fetchSourceConfig} className="machine-btn text-3xs">↻ {t('machine.providers.refresh')}</button>
                     </div>
                     <div className="grid md:grid-cols-[180px_1fr_auto] gap-3 items-end">
                         <label className="flex flex-col gap-1 text-2xs text-text-secondary">
@@ -733,6 +733,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                             onUpdate={() => handleUpdateProvider(prov.type)}
                             updating={updatingTypes[prov.type] === true}
                             onRollbackUpdate={() => handleRollbackPin(prov.type)}
+                            showAdvanced={showSourceConfig}
                         />
                     ))}
                 </div>

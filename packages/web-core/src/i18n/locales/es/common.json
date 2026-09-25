@@ -4,11 +4,16 @@
         "select": "Seleccionar idioma"
     },
     "common": {
+        "closeDialog": "Cerrar diálogo",
+        "noRecords": "No hay registros.",
+        "close": "Cerrar",
+        "back": "Atrás",
         "cancel": "Cancelar",
         "confirm": "Confirmar",
         "confirmTitle": "¿Estás seguro?"
     },
     "connection": {
+        "loadingShort": "Cargando…",
         "loadingDashboard": "Cargando tu panel...",
         "machinesConnectedCount": "{{connected}}/{{total}} máquinas conectadas",
         "disconnected": "Desconectado",
@@ -54,7 +59,7 @@
     },
     "dashboard": {
         "header": {
-            "title": "Dashboard",
+            "title": "Panel",
             "guide": "Guía del panel",
             "guideOpen": "Abrir la guía del panel",
             "guideShort": "Guía",
@@ -83,13 +88,24 @@
             "empty": "No hay actividad pendiente."
         },
         "metaChips": {
+            "queuePending": "{{count}} en espera",
+            "queueTooltip": "Cola: {{pending}} en espera, {{assigned}} asignadas, {{completed}} completadas, {{failed}} fallidas",
             "meshNode": "Nodo Mesh"
         },
         "versionBanner": {
+            "restarting": "reiniciando",
+            "upgrading": "actualizando…",
+            "unknownVersion": "desconocida",
+            "updateAvailable": "Actualización disponible",
             "required": "requerido",
             "retry": "reintentar"
         },
         "remoteDialog": {
+            "liveRemoteView": "Vista remota en vivo",
+            "remoteUnavailable": "Vista remota no disponible",
+            "remoteOnly": "Solo remoto",
+            "splitView": "Vista dividida",
+            "remoteFallback": "Remoto",
             "history": "Historial"
         },
         "sourceTimeline": {
@@ -275,6 +291,7 @@
         }
     },
     "cliStop": {
+        "stopProcess": "Detener el proceso CLI",
         "title": "¿Detener {{agent}}?",
         "gracefulDescription": "«Detener» pide al proveedor que salga de forma limpia cuando es compatible. «Forzar detención» finaliza el runtime de inmediato.",
         "forceOnlyDescription": "Este proveedor no admite la detención limpia. «Forzar detención» finalizará el runtime de inmediato.",
@@ -289,6 +306,7 @@
         "answerQuestion": "Responder la pregunta"
     },
     "chatControls": {
+        "loading": "Cargando…",
         "launchModelChanged": "{{from}} → {{to}} (cambiado)",
         "launchModelSource": {
           "user": "elegido",
@@ -324,7 +342,7 @@
         "loadingMeshes": "Cargando meshes…",
         "noMeshes": "No hay ningún Repo Mesh configurado en esta máquina. Primero crea o sincroniza un mesh y luego vuelve a abrir este selector.",
         "mesh": "Mesh",
-        "repoMesh": "Repo mesh",
+        "repoMesh": "Repo Mesh",
         "nodeCount_one": "{{count}} nodo",
         "nodeCount_other": "{{count}} nodos",
         "coordinatorWorkspace": "Espacio de trabajo del coordinador: {{path}}",
@@ -437,6 +455,42 @@
         "stopSessionTitle": "Detener la sesión (termina el agente)"
     },
     "mesh": {
+        "graph": {
+            "remoteBadge": "remoto",
+            "activeSessionAria": "sesión activa"
+        },
+        "statusTab": {
+            "v2ScopeHint": "Eventos pendientes por ámbito",
+            "providerSkewHint": "Proveedores con versiones distintas en distintos nodos",
+            "providerSkew": "{{count}} proveedor con versión distinta",
+            "v2RatioHint": "Proporción de eventos pendientes del coordinador en el formato de mensaje actual",
+            "daemonBuildHint": "Compilación exacta del daemon (versión@commit) en este nodo",
+            "quotaFailedHint": "Esta máquina no pudo leer el uso de este proveedor",
+            "quotaOkNoWindowHint": "Lectura correcta: este proveedor no tiene un límite porcentual que mostrar",
+            "nodeCountHint": "Nodos del mesh (espacios/worktrees) en esta máquina: comparten una misma cuota del plan",
+            "nodeCount_other": "{{count}} nodos",
+            "nodeCount_one": "{{count}} nodo",
+            "daemonVersionHint": "Versión del daemon en esta máquina",
+            "blockedReasonHint": "Por qué este nodo no puede aceptar ahora una nueva tarea que modifique código",
+            "providerCapHint": "Tareas activas por proveedor en este nodo frente a su límite declarado",
+            "priorityHint": "Preferencia de asignación (más alto = preferido)",
+            "priority": "prioridad {{value}}",
+            "loadHint": "Tareas activas asignadas a este nodo",
+            "load": "carga {{count}}",
+            "readonlyCapHint": "Tareas de investigación de solo lectura activas frente a su límite (2× el de escritura)",
+            "readonlyCap": "solo lectura {{active}}/{{max}}",
+            "writeCapHint": "Tareas activas que modifican código frente al límite de paralelismo del mesh",
+            "writeCap": "escritura {{active}}/{{max}}"
+        },
+        "manualSetup": {
+            "restartHint": "Inicia una nueva sesión de CLI después de editar la configuración.",
+            "configPath": "Ruta de configuración:",
+            "format": "Formato:",
+            "server": "Servidor:",
+            "titleFor": "Se requiere configurar MCP manualmente para {{provider}}",
+            "title": "Se requiere configurar MCP manualmente"
+        },
+        "openLiveGraph": "Abrir el gráfico en vivo del Repo Mesh",
         "help": {
             "toggleAria": "Ayuda de mesh",
             "toggleTitle": "Ayuda sobre conceptos de mesh",
@@ -776,9 +830,9 @@
             "refineWorktree": "refinar worktree",
             "needsFollowUp": "requiere seguimiento",
             "offline": "sin conexión",
-            "ahead": "ahead {{count}}",
-            "behind": "behind {{count}}",
-            "aheadBehind": "ahead {{ahead}} / behind {{behind}}"
+            "ahead": "{{count}} por delante",
+            "behind": "{{count}} por detrás",
+            "aheadBehind": "{{ahead}} por delante / {{behind}} por detrás"
         },
         "summary": {
             "anchor": "Ancla de la rama principal",
@@ -859,6 +913,9 @@
             "jumpToState": "Clic para saltar a la siguiente tarjeta en este estado"
         },
         "obs": {
+            "closeDetailAria": "Cerrar panel de detalles",
+            "layoutDirectionAria": "Dirección del diseño del gráfico",
+            "viewAria": "Vista del mesh",
             "tabOverview": "Resumen",
             "tabTasks": "Plano",
             "tabStatus": "Estado",
@@ -953,7 +1010,7 @@
             "directionLRTitle": "De izquierda a derecha",
             "directionTBTitle": "De arriba abajo",
             "fastForwardConfirmTitle": "¿Aplicar fast-forward a {{label}}?",
-            "fastForwardConfirmLabel": "Fast-forward"
+            "fastForwardConfirmLabel": "Avance rápido (fast-forward)"
         },
         "notes": {
             "expired": "caducada",
@@ -1001,6 +1058,18 @@
             "errorUnexpectedPayload": "No se pudo cargar la información del grafo. Inténtalo de nuevo en unos momentos."
         },
         "health": {
+            "awaitingLiveData": "esperando datos en vivo",
+            "recentFailuresCount": "{{count}} fallos recientes",
+            "refineFailedCount": "{{count}} fusiones fallidas",
+            "refiningCount": "{{count}} fusionando",
+            "failedCount": "{{count}} fallidas",
+            "statLedgerDone": "Completadas registradas",
+            "statRecent": "Fallos recientes",
+            "statSessions": "Sesiones",
+            "statFailed": "Fallidas",
+            "statDone": "Hechas",
+            "statActive": "Activas",
+            "statPending": "En espera",
             "panelTitle": "Panel de salud de la malla",
             "lastActivity": "Última actividad",
             "refineJobs": "Trabajos de refinado",
@@ -1009,6 +1078,8 @@
             "sessions": "Sesiones"
         },
         "blueprint": {
+            "gateFallback": "puerta",
+            "readonlyBadge": "solo lectura",
             "liveQueue": "Cola en vivo",
             "scheduling": "Vista previa de scheduling",
             "schedObservedAt": "a las {{time}}",
@@ -1087,7 +1158,7 @@
             "observabilitySecondary": "Observabilidad de la malla"
         },
         "list": {
-            "title": "Repo Meshes",
+            "title": "Tus Repo Mesh",
             "count_one": "{{count}} malla",
             "count_other": "{{count}} mallas",
             "createMesh": "+ Crear malla",
@@ -1109,7 +1180,7 @@
             "creating": "Creando…",
             "cancel": "Cancelar",
             "loading": "Cargando mallas...",
-            "emptyTitle": "No hay Repo Meshes",
+            "emptyTitle": "No hay Repo Mesh",
             "emptyWithDaemons": "Un Repo Mesh ejecuta varios agentes de código en tus máquinas sobre un mismo repositorio, coordinados desde un solo lugar. Crea uno para empezar.",
             "emptyNoDaemons": "Un Repo Mesh ejecuta varios agentes de código en tus máquinas sobre un mismo repositorio, coordinados desde un solo lugar. Conecta primero un daemon de ADHDev.",
             "createFirst": "Crear la primera malla",
@@ -1209,6 +1280,9 @@
             "repoMeshJsonInvalid": "No se pudo analizar el .adhdev/mesh.json de este repositorio, por lo que su capa de prompt se ignora."
         },
         "nodeList": {
+            "addingIsExplicit": "Añadirlo sigue siendo decisión tuya.",
+            "compatibleWorkspace": "Se detectó un espacio de trabajo Git compatible.",
+            "inspectingRepo": "Revisando el repositorio Git (solo lectura)…",
             "title": "Nodos y proveedores ({{count}})",
             "descriptionCloud": "Espacios de trabajo en este mesh y sus herramientas de IA preferidas. Solo inventario de configuración — la verdad en vivo de grafo/git/sesión la posee el estado del Mesh Host de arriba.",
             "descriptionStandalone": "Espacios de trabajo que participan en este mesh y sus herramientas de IA preferidas.",
@@ -1262,6 +1336,8 @@
             "machineTabCounts": "{{nodes}} nodo(s) · {{slots}} ranura(s)"
         },
         "host": {
+            "setupNode": "nodo de configuración",
+            "willHostOn": "Se alojará en",
             "coordinatorProvider": "Proveedor CLI del coordinador",
             "coordinatorProviderHint": "Herramienta iniciada para la sesión del coordinador host.",
             "useNodePriority": "Usar la prioridad de proveedores del nodo",
@@ -1334,6 +1410,7 @@
             "empty": "No hay etiquetas de enrutamiento — las tareas pueden ejecutarse aquí sin coincidir con ninguna capacidad específica. Las etiquetas son opcionales."
         },
         "missions": {
+            "filterAllCount": "Todas {{count}}",
             "errorFetch": "Error al obtener los objetivos completos de las misiones",
             "title": "Misiones",
             "description": "Misiones actuales e históricas reportadas por el coordinador. Expande un objetivo para obtener su texto completo bajo demanda.",
@@ -1388,27 +1465,27 @@
             "fallbackProvider": "Hermes CLI"
         },
         "providerAutoApprove": {
-            "title": "Provider auto-approve defaults",
-            "subtitle": "Per-provider default auto-approve mode for coordinator-launched workers.",
-            "loading": "Loading provider defaults…",
-            "loadError": "Failed to load provider auto-approve defaults.",
-            "noProviders": "No CLI providers with auto-approve modes detected on this mesh's machines.",
-            "awaitingNodes": "Waiting for {{count}} node(s) to report their installed providers…",
-            "partialInventory": "Provider list may be incomplete — {{count}} node(s) have not reported yet.",
-            "noHostDaemon": "Connect the mesh host daemon to configure provider auto-approve defaults.",
+            "title": "Valores predeterminados de aprobación automática por proveedor",
+            "subtitle": "Modo de aprobación automática predeterminado por proveedor para los trabajadores que inicia el coordinador.",
+            "loading": "Cargando los valores predeterminados…",
+            "loadError": "No se pudieron cargar los valores predeterminados de aprobación automática.",
+            "noProviders": "No se detectaron proveedores CLI con modos de aprobación automática en las máquinas de este mesh.",
+            "awaitingNodes": "Esperando a que {{count}} nodo(s) informen de sus proveedores instalados…",
+            "partialInventory": "La lista de proveedores puede estar incompleta: {{count}} nodo(s) aún no han informado.",
+            "noHostDaemon": "Conecta el daemon anfitrión del mesh para configurar los valores de aprobación automática.",
             "repoSection": {
-                "title": "Repository default",
-                "hint": "Committed to .adhdev/mesh.json — shared with the whole team. Sets which mode a delegated worker requests; it does not grant permission to run it.",
-                "usesProviderDefault": "Uses provider default",
-                "clear": "Use provider default"
+                "title": "Valor predeterminado del repositorio",
+                "hint": "Se guarda en .adhdev/mesh.json y se comparte con todo el equipo. Define qué modo solicita un trabajador delegado; no concede permiso para ejecutarlo.",
+                "usesProviderDefault": "Usa el valor del proveedor",
+                "clear": "Usar el valor del proveedor"
             },
             "machineSection": {
-                "title": "This machine authorization",
-                "hint": "Local only (meshes.json) — never committed. Controls whether workers on THIS machine auto-approve at all, and whether dangerous modes are allowed.",
-                "autoApproveOn": "Auto-approve enabled",
-                "autoApproveOff": "Auto-approve disabled",
-                "dangerousOn": "Dangerous modes allowed",
-                "dangerousOff": "Dangerous modes not allowed (will downgrade)",
+                "title": "Autorización de esta máquina",
+                "hint": "Solo local (meshes.json), nunca se guarda en el repositorio. Controla si los trabajadores de ESTA máquina aprueban automáticamente y si se permiten los modos peligrosos.",
+                "autoApproveOn": "Aprobación automática activada",
+                "autoApproveOff": "Aprobación automática desactivada",
+                "dangerousOn": "Modos peligrosos permitidos",
+                "dangerousOff": "Modos peligrosos no permitidos (se rebajarán)",
                 "autoApproveToggleLabel": "Aprobación automática de workers delegados",
                 "autoApproveToggleHint": "Si está desactivada, los workers delegados en esta máquina se detienen en cada solicitud de aprobación.",
                 "dangerousToggleLabel": "Permitir modos dangerous en esta máquina",
@@ -1423,22 +1500,22 @@
                 "confirmConfirm": "Opt-in"
             },
             "effectiveSection": {
-                "title": "Effective result on this machine",
-                "hint": "What each provider actually runs here after combining the repository default with this machine's authorization.",
-                "statusRequested": "Runs: {{mode}}",
-                "statusInvalidFallback": "Requested mode not found → runs provider default: {{mode}}",
-                "statusDowngraded": "{{requested}} requested → downgraded to {{mode}}: this machine has not opted into dangerous modes.",
-                "statusDisabled": "Auto-approve disabled on this machine — worker will ask for approval.",
-                "statusNone": "No usable auto-approve mode — worker will ask for approval."
+                "title": "Resultado efectivo en esta máquina",
+                "hint": "Lo que ejecuta realmente cada proveedor aquí, combinando el valor del repositorio con la autorización de esta máquina.",
+                "statusRequested": "Ejecuta: {{mode}}",
+                "statusInvalidFallback": "No se encontró el modo solicitado → se usa el del proveedor: {{mode}}",
+                "statusDowngraded": "Se solicitó {{requested}} → rebajado a {{mode}}: esta máquina no permite modos peligrosos.",
+                "statusDisabled": "Aprobación automática desactivada en esta máquina: el trabajador pedirá aprobación.",
+                "statusNone": "No hay un modo de aprobación automática utilizable: el trabajador pedirá aprobación."
             },
             "dangerous": {
-                "sharedWarningTitle": "This is committed to the repository",
-                "sharedWarning": "This dangerous mode is committed to .adhdev/mesh.json and shared with the whole team. Each machine still runs it ONLY if that machine has opted into dangerous modes (delegatedWorkerDangerousModeAllow); otherwise it is downgraded to pty-parse."
+                "sharedWarningTitle": "Esto se guarda en el repositorio",
+                "sharedWarning": "Este modo peligroso se guarda en .adhdev/mesh.json y se comparte con todo el equipo. Cada máquina solo lo ejecuta si ha permitido los modos peligrosos (delegatedWorkerDangerousModeAllow); si no, se rebaja a pty-parse."
             },
-            "save": "Save to mesh.json",
-            "saving": "Saving…",
-            "saved": "Saved to .adhdev/mesh.json",
-            "saveError": "Failed to save provider defaults."
+            "save": "Guardar en mesh.json",
+            "saving": "Guardando…",
+            "saved": "Guardado en .adhdev/mesh.json",
+            "saveError": "No se pudieron guardar los valores predeterminados."
         },
         "graphs": {
             "includeTerminal": "Incluir terminados",
@@ -1488,6 +1565,11 @@
             "machineVersionsTitle": "Versiones de CLI instaladas en esta máquina — compartidas por sus nodos"
         },
         "overview": {
+            "sessionCount_other": "{{count}} sesiones",
+            "sessionCount_one": "{{count}} sesión",
+            "leaseExpired": "reserva caducada",
+            "providerUnknown": "proveedor desconocido",
+            "truncated": "(recortado)",
             "missionCard": "Misiones",
             "ledgerCard": "Registro",
             "queueCard": "Cola",
@@ -1587,6 +1669,12 @@
         }
     },
     "chat": {
+        "showMoreChars": "Mostrar más ({{count}} caracteres)",
+        "collapse": "Contraer",
+        "you": "Tú",
+        "toolMessageAria": "Mensaje de herramienta",
+        "activityMessageAria": "Mensaje de actividad",
+        "activityFallback": "Actividad",
         "copyMessage": "Copiar mensaje",
         "copyCode": "Copiar código",
         "showMore": "Mostrar más",
@@ -1632,12 +1720,29 @@
         "reconnectMachineTitle": "La reconexión automática se detuvo para esta máquina: reconecta ahora"
     },
     "chatInput": {
+        "addMessageOptional": "Añade un mensaje (opcional)…",
+        "showControls": "Mostrar controles",
+        "hideControls": "Ocultar controles",
+        "sendTo": "Enviar un mensaje a {{panel}}",
         "attachImage": "Adjuntar imagen",
         "placeholder": "Enviar mensaje a {{panel}}...",
         "sendMessage": "Enviar mensaje",
         "dropImage": "Suelta la imagen aquí"
     },
     "paneGroup": {
+        "hideFromDashboard": "Ocultar del panel",
+        "removeShortcut": "Quitar atajo",
+        "changeShortcut": "Cambiar atajo ({{shortcut}})",
+        "meshChat": "Chat de mesh",
+        "dropSplitRight": "Dividir a la derecha",
+        "dropMoveHere": "Mover aquí",
+        "dropSplitLeft": "Dividir a la izquierda",
+        "relaunchWithCdp": "Reiniciar con conexión",
+        "cdpDisconnected": "Sin conexión con el IDE: el historial del chat y las capturas no están disponibles.",
+        "resizeHandleHint": "Arrastra para cambiar el tamaño · Doble clic para unir",
+        "shortcutListening": "Escuchando…",
+        "shortcutPressCombo": "Pulsa una combinación de teclas (p. ej. {{example1}}, {{example2}})",
+        "shortcutSetTitle": "Definir atajo",
         "loadingSessions": "Cargando sesiones...",
         "noConversations": "Aún no hay conversaciones",
         "waitingForDaemon": "Esperando a tu daemon",
@@ -1652,6 +1757,18 @@
         "moveTabHere": "Mueve una pestaña aquí para verla"
     },
     "terminal": {
+        "growViewport": "Ampliar la vista del terminal",
+        "shrinkViewport": "Reducir la vista del terminal",
+        "sendInterrupt": "Enviar interrupción (Ctrl-C)",
+        "arrowRight": "Flecha derecha",
+        "arrowDown": "Flecha abajo",
+        "arrowLeft": "Flecha izquierda",
+        "arrowUp": "Flecha arriba",
+        "keysPanelTitle": "Teclas del terminal",
+        "keysButton": "Teclas",
+        "copyHint": "Copia el texto seleccionado del terminal o, si no hay selección, la pantalla visible",
+        "specDebugHint": "Depuración de spec: estado actual, secciones e historial de transiciones",
+        "replayScrollbackHint": "Carga la salida anterior del terminal para poder desplazarte más arriba",
         "loadOlderOutput": "Cargar salida anterior del terminal",
         "loadingOlder": "Cargando anteriores...",
         "debug": "Depurar",
@@ -1670,6 +1787,19 @@
         "switchToChat": "Cambiar a la vista de Chat"
     },
     "launch": {
+        "updatedAt": "Actualizado {{time}}",
+        "messageCountShort_other": "{{count}} mensajes",
+        "messageCountShort_one": "{{count}} mensaje",
+        "workspaceUnknown": "Espacio de trabajo desconocido",
+        "clearSelection": "Quitar",
+        "selectedSavedHistory": "Historial guardado seleccionado",
+        "refresh": "Actualizar",
+        "loadingShort": "Cargando…",
+        "savedHistoryNoneYet": "Aún no hay historial guardado. Las conversaciones nuevas aparecerán aquí cuando ADHDev las guarde.",
+        "savedHistoryLoadedCount_other": "Se cargaron {{count}} historiales guardados. Abre el historial guardado para elegir uno.",
+        "savedHistoryLoadedCount_one": "Se cargó {{count}} historial guardado. Abre el historial guardado para elegirlo.",
+        "savedHistoryIntro": "Empieza de cero o abre el historial guardado para continuar una conversación anterior.",
+        "savedHistoryBadge": "Historial guardado",
         "resumeSavedHistory": "Reanudar el historial guardado",
         "startFresh": "Empezar de cero",
         "resumingSavedHistory": "Reanudando el historial guardado…",
@@ -1779,7 +1909,7 @@
             "profileDescription": "Cómo aparece tu nombre en los hilos de chat locales y en las vistas del panel.",
             "displayNameLabel": "Nombre visible",
             "displayNameHint": "Tu nombre mostrado en los hilos de chat y en el panel del equipo.",
-            "displayNamePlaceholder": "Anonymous"
+            "displayNamePlaceholder": "Anónimo"
         },
         "onboarding": {
             "title": "Te damos la bienvenida a ADHDev",
@@ -1986,7 +2116,7 @@
             "minutesAgo": "hace {{minutes}} min",
             "hoursAgo": "hace {{hours}} h",
             "daysAgo": "hace {{days}} d",
-            "frozenFeatureTitle": "Congelado — esta función está en pausa y no está disponible. Consulta docs/FROZEN_SURFACES.md"
+            "frozenFeatureTitle": "Congelado — esta función está en pausa y no está disponible."
         },
         "billing": {
             "currentPlan": "Plan actual:",
@@ -2103,11 +2233,11 @@
             "adminTokens": "Tokens de admin",
             "adminEntry": "Admin",
             "footerPlanTitle": "Plan actual: {{plan}} — gestionar o mejorar",
-            "expandSidebar": "Expand sidebar",
-            "collapseSidebar": "Collapse sidebar",
-            "collapse": "Collapse",
+            "expandSidebar": "Expandir barra lateral",
+            "collapseSidebar": "Contraer barra lateral",
+            "collapse": "Contraer",
             "logoutConfirm": "¿Seguro que quieres cerrar sesión?",
-            "logout": "Logout",
+            "logout": "Cerrar sesión",
             "machineLimitBadge": "Máquinas llenas",
             "machineLimitBadgeTitle": "Has alcanzado el límite de {{count}} máquina{{plural}} de tu plan — abre facturación para mejorar",
             "pushBudget": "Notificaciones diarias {{used}}/{{limit}}"
@@ -2305,7 +2435,7 @@
             "revoke": "Revocar",
             "usageLabel": "Uso:",
             "apiReference": "Referencia de API →",
-            "frozenFeatureTitle": "Congelado — esta función está en pausa. Consulta docs/FROZEN_SURFACES.md"
+            "frozenFeatureTitle": "Congelado — esta función está en pausa."
         },
         "shareModal": {
             "title": "Compartir sesión",
@@ -2796,6 +2926,51 @@
         }
     },
     "app": {
+        "onboardingTour": {
+            "next": "Siguiente",
+            "getStarted": "Empezar",
+            "learnMore": "Más información en la documentación",
+            "closeAria": "Cerrar la introducción",
+            "allSetStandalone": {
+                "desc": "Este panel ya está conectado a tu daemon local. Inicia una sesión desde la pestaña Panel o añade proveedores en Máquinas → Proveedores.",
+                "title": "Todo listo"
+            },
+            "getStartedCloud": {
+                "desc": "Ejecuta esto en cualquier máquina que quieras manejar e inicia sesión: el daemon se vincula a tu panel automáticamente.",
+                "title": "Empezar"
+            },
+            "orchestrate": {
+                "desc": "Repo Mesh (Cloud Pro) permite que un coordinador reparta trabajo entre agentes de muchas máquinas: worktrees de git en paralelo, convergencia automática de ramas y revisión cruzada del mismo repositorio desde varios ángulos.",
+                "title": "Coordina a tus agentes"
+            },
+            "watchAndSteer": {
+                "desc": "Sigue la sesión de cada agente en tiempo real y dirígela mientras trabaja: cambia de sesión, haz capturas y, en sesiones de IDE, ve y controla la pantalla mediante una conexión directa.",
+                "title": "Observa y dirige en vivo"
+            },
+            "realtimeChat": {
+                "desc": "Mira en tiempo real lo que hace tu agente de IA. Envía mensajes y aprueba o rechaza acciones desde el navegador o el móvil.",
+                "title": "Chat en tiempo real"
+            },
+            "welcome": {
+                "desc": "Maneja cualquier agente de programación CLI local (Claude Code, Codex, Antigravity CLI) desde el navegador o el móvil. Los agentes siguen ejecutándose en tu máquina; tú los controlas desde la web.",
+                "title": "Te damos la bienvenida a ADHDev"
+            }
+        },
+        "installCommand": {
+            "orViaNpm": "O con npm:",
+            "clickToCopy": "Clic para copiar"
+        },
+        "errorBoundary": {
+            "reload": "Recargar página",
+            "description": "Se produjo un error inesperado. Recarga la página para continuar.",
+            "title": "Algo salió mal"
+        },
+        "shellFreshness": {
+            "dismissAria": "Cerrar el aviso de actualización",
+            "later": "Más tarde",
+            "reload": "Recargar",
+            "message": "Hay una nueva versión de ADHDev."
+        },
         "openMenu": "Abrir menú",
         "closeMenu": "Cerrar menú"
     },
@@ -2821,6 +2996,7 @@
         "toggleFullscreen": "Alternar pantalla completa"
     },
     "remote": {
+        "screenshotAlt": "Pantalla remota",
         "mouse": "Ratón",
         "touch": "Táctil",
         "connected": "Conectado",
@@ -2867,6 +3043,13 @@
         "openChatHint": "Clic para abrir el chat de esta sesión"
     },
     "sessionInfo": {
+        "gitClean": "sin cambios",
+        "gitDirty": "cambios sin confirmar",
+        "gitDetached": "(separado)",
+        "blockRawMetadata": "Metadatos de ejecución sin procesar (clic para expandir)",
+        "blockFinalPrompt": "Prompt del sistema final (clic para expandir)",
+        "blockExtraPrompt": "Prompt adicional de este inicio",
+        "buttonHint": "Información de la sesión: ajustes de inicio, nodo del mesh, prompt del sistema…",
         "quotaOkNoWindows": "Lectura correcta — sin ventana porcentual",
         "sectionMeshWorker": "Generada por el coordinador",
         "rowMeshId": "Mesh ID",
@@ -2921,6 +3104,131 @@
         "rowAttachedClients": "Clientes conectados"
     },
     "machine": {
+        "mobile": {
+            "noHistoryMatches": "Ningún historial guardado coincide con estos filtros.",
+            "workspaceMissing": "(falta el espacio de trabajo)",
+            "resumableOnly": "Solo los que se pueden reanudar",
+            "sortMessages": "Más mensajes",
+            "sortOldest": "Más antiguos primero",
+            "sortRecent": "Más recientes",
+            "filterModel": "Filtrar por modelo",
+            "filterWorkspace": "Filtrar por espacio de trabajo",
+            "searchHistory": "Buscar por título o vista previa",
+            "useThisFolder": "Usar esta carpeta",
+            "browseDescription": "Navega por las carpetas como en un explorador y usa la carpeta actual para esta máquina.",
+            "browseTitle": "Seleccionar espacio de trabajo",
+            "machineDetailsDescription": "Sesiones, proveedores, información del sistema y registros",
+            "machineDetails": "Detalles de la máquina",
+            "updateDescription": "Reinicia esta máquina con el daemon más reciente",
+            "inspect": "Revisar",
+            "createFolder": "Crear carpeta",
+            "showMore": "Mostrar {{count}} más",
+            "showFewer": "Mostrar menos",
+            "recentLaunches": "Inicios recientes",
+            "currentChats": "Chats actuales",
+            "machineFallback": "máquina"
+        },
+        "daemonUpdate": {
+            "previewUnknownDescription": "La app está conectada a la vista previa, pero el servidor aún no ha indicado la versión de destino.",
+            "previewUpToDateDescription": "Esta máquina ya ejecuta el daemon de vista previa actual.",
+            "previewUnknownTitle": "Estado de actualización de vista previa desconocido",
+            "previewUpToDateTitle": "El daemon de vista previa está actualizado",
+            "mismatchDescription": "Esta máquina ejecuta una versión del daemon distinta a la de la app. Actualízala antes de iniciar más sesiones.",
+            "previewUpgradeDescription": "Puedes actualizar esta máquina al daemon de vista previa actual sin abrir una shell remota.",
+            "requiredDescription": "Esta máquina tiene una versión del daemon incompatible. Actualízala antes de iniciar más sesiones.",
+            "mismatchTitle": "Se detectó una versión distinta",
+            "requiredTitle": "Es necesario actualizar el daemon",
+            "upgrade": "Actualizar",
+            "updateNow": "Actualizar ahora"
+        },
+        "launchPick": {
+            "empty": "Aún no hay espacios guardados. Añade uno en la pestaña Espacio de trabajo o escribe una ruta arriba.",
+            "description": "No se da nada por hecho. Elige un espacio guardado, tu espacio predeterminado o la carpeta personal, o cancela y escribe una ruta.",
+            "title": "¿Dónde debe ejecutarse?"
+        },
+        "workspacePicker": {
+            "noneSelected": "No hay espacio de trabajo seleccionado. Se iniciará en la carpeta personal.",
+            "selectedWorkspace": "Espacio de trabajo seleccionado",
+            "defaultWorkspace": "Espacio de trabajo predeterminado",
+            "enterPathFirst": "Escribe la ruta completa de la carpeta donde iniciar.",
+            "browseFirst": "Elige una carpeta antes de iniciar ahí.",
+            "enterPath": "Escribe la ruta completa de la carpeta…",
+            "customPath": "Ruta personalizada…",
+            "selectWorkspace": "Seleccionar espacio de trabajo…",
+            "noneSaved": "(no hay espacios guardados — añade uno en la pestaña Espacio de trabajo)",
+            "noWorkspaceHome": "(sin espacio de trabajo — iniciar en la carpeta personal)"
+        },
+        "trustBadge": {
+            "externalUntrustedHint": "Viene de una fuente que añadiste e incluye código que ADHDev ejecutará. Revisa la fuente antes de activarlo.",
+            "externalSafeHint": "Viene de una fuente que añadiste. Solo configuración: ADHDev nunca ejecuta código de ella.",
+            "trustedWithScriptsHint": "Proporcionado oficialmente por ADHDev. Incluye scripts que ADHDev ejecuta.",
+            "trustedHint": "Proporcionado oficialmente por ADHDev. Solo configuración: no se ejecuta código del proveedor.",
+            "userCustomHint": "Creaste este proveedor en tu carpeta de proveedores. Ejecuta tu propio código.",
+            "externalUntrusted": "Externo · ejecuta código",
+            "externalSafe": "Externo",
+            "trustedWithScripts": "Oficial · scripts",
+            "trusted": "Oficial",
+            "userCustom": "Personalizado"
+        },
+        "providerSettings": {
+            "notifications": {
+                "description": "Muestra notificaciones cuando {{provider}} cambia de estado.",
+                "label": "Notificaciones"
+            },
+            "showCoordinatorSystemPrompt": {
+                "description": "Muestra el prompt del sistema inyectado como un mensaje en el chat. Desactivado por defecto: siempre puedes verlo en Información de sesión (ⓘ) de la cabecera del chat.",
+                "label": "Mostrar el mensaje del prompt del sistema"
+            },
+            "showTerminal": {
+                "description": "Muestra los comandos de terminal y su salida en el chat.",
+                "label": "Mostrar terminal"
+            },
+            "showToolCalls": {
+                "description": "Muestra resúmenes de las llamadas a herramientas (búsquedas, ediciones…) en el chat.",
+                "label": "Mostrar llamadas a herramientas"
+            },
+            "showThinking": {
+                "description": "Muestra el razonamiento del agente en el chat.",
+                "label": "Mostrar razonamiento"
+            },
+            "longGeneratingThresholdSec": {
+                "description": "Cuánto puede durar una respuesta antes de que salte el aviso.",
+                "label": "Umbral de tarea larga (segundos)"
+            },
+            "longGeneratingAlert": {
+                "description": "Te avisa cuando una respuesta tarda más de lo normal.",
+                "label": "Aviso de tarea larga"
+            },
+            "approvalAlert": {
+                "description": "Te avisa cuando {{provider}} espera tu aprobación.",
+                "label": "Avisos de aprobación"
+            },
+            "appPathOverride": {
+                "description": "Ruta completa opcional a la aplicación del IDE. Déjala vacía para buscar en las ubicaciones habituales.",
+                "label": "Ruta de la aplicación"
+            },
+            "cliPathOverride": {
+                "description": "Ruta completa opcional al lanzador de línea de comandos del IDE. Déjala vacía para usar el detectado.",
+                "label": "Ruta del lanzador CLI"
+            },
+            "executableArgs": {
+                "description": "Argumentos opcionales que sustituyen a los predeterminados al iniciar {{provider}}. Déjalo vacío para usar los predeterminados.",
+                "label": "Argumentos de inicio"
+            },
+            "executablePath": {
+                "description": "Ruta completa opcional al programa {{provider}}. Déjala vacía para buscarlo en tu PATH.",
+                "label": "Ruta del ejecutable"
+            },
+            "autoApprove": {
+                "description": "Aprueba automáticamente las llamadas a herramientas y solicitudes de {{provider}} sin preguntarte.",
+                "label": "Aprobación automática"
+            },
+            "enabled": {
+                "description": "Actívalo antes de que ADHDev detecte, inicie o compruebe {{provider}} en esta máquina.",
+                "label": "Activado en esta máquina"
+            },
+            "thisProvider": "este proveedor"
+        },
         "launchConfirm": {
             "workspace": "Espacio de trabajo",
             "languageModel": "Modelo de lenguaje (opcional)",
@@ -2933,6 +3241,8 @@
             "launching": "Iniciando…"
         },
         "confirmExternal": {
+            "aboutToActivateFrom": "Estás a punto de activar {{provider}} de {{source}}.",
+            "aboutToActivate": "Estás a punto de activar {{provider}}.",
             "dialogAria": "Confirmar proveedor externo no confiable",
             "title": "¿Activar proveedor externo no confiable?",
             "description": "Este manifiesto incluye JavaScript que el daemon ejecutará. Trátalo como código no confiable — revisa la fuente antes de habilitarlo.",
@@ -2943,6 +3253,8 @@
         "workspace": {
         },
         "providers": {
+            "advancedHint": "Muestra detalles técnicos: de dónde se cargan los proveedores y sus metadatos sin procesar",
+            "sourcesHint": "Gestiona las fuentes de proveedores que añadiste",
             "filter": "Filtrar",
             "sourceConfigTitle": "Configuración de origen de proveedores",
             "sourceConfigDesc": "Dónde busca el daemon los manifiestos de proveedores. Afecta a la resolución y las recargas.",
@@ -3000,6 +3312,20 @@
             "setActiveFailed": "No se pudo establecer la fuente activa"
         },
         "providerRow": {
+            "detectDisabledHint": "Activa el proveedor antes de comprobarlo",
+            "detectHint": "Comprueba que el programa configurado se encuentra y se puede ejecutar",
+            "originExternalScripts": "Fuente añadida {{source}} · ejecuta su propio código; revísala antes de activarla",
+            "originExternal": "Fuente añadida {{source}}",
+            "originUserFolder": "Tu carpeta de proveedores",
+            "originOfficialScripts": "Oficial (registro de ADHDev) · incluye scripts",
+            "originOfficial": "Oficial (registro de ADHDev)",
+            "labelOrigin": "Proporcionado por:",
+            "lifecycleDeprecated": "Sin soporte",
+            "lifecycleExperimental": "Experimental",
+            "lifecycleBeta": "Beta",
+            "lifecycleStable": "Estable",
+            "checkFailed": "Error",
+            "checkOk": "Correcto",
             "statusDetected": "Detectado",
             "statusNotDetected": "No detectado",
             "statusEnabledUnchecked": "Habilitado (sin comprobar)",
@@ -3060,6 +3386,11 @@
         "connectedMachines": {
         },
         "card": {
+            "transportDirectShort": "directa",
+            "transportRelayShort": "relé",
+            "coresCount_other": "{{count}} núcleos",
+            "coresCount_one": "{{count}} núcleo",
+            "onMachine": "en {{machine}}",
             "sectionIDEs": "IDE",
             "sectionCLIs": "CLI",
             "sectionACPAgents": "Agentes ACP",
@@ -3086,19 +3417,24 @@
             "transportRelay": "Relé TURN — falló la conexión directa",
             "transportDirect": "Conexión directa (STUN/host)",
             "beacon": {
-                "behindLabel": "{{count}} por detrás",
-                "behindTooltip": "Esta máquina está {{count}} entradas por detrás de sus pares (tema con mayor retraso: {{topic}}).",
-                "soleCopyLabel": "copia única",
-                "soleCopyTooltip": "Esta máquina podría tener la única copia de {{entries}} entradas en {{count}} tema(s). Los pares no las han confirmado.",
-                "deferredLabel": "no determinable",
-                "deferredTooltip": "La verificación de copia única se aplazó: el tablero de pares se truncó, así que las máquinas comparadas son solo parte de la flota.",
-                "lastSyncedTooltip": "Última sincronización hace {{minutes}} min{{behindPart}}.",
-                "lastSyncedBehindPart": ", {{count}} entradas por detrás en {{topic}}"
+                "lastSyncedBehindPart_other": ", faltan recibir {{count}} registros",
+                "lastSyncedBehindPart_one": ", falta recibir {{count}} registro",
+                "soleCopyTooltip_other": "Hay {{entries}} registros en esta máquina que aún no tienen copia en otra máquina. Mantenla en línea hasta que otra máquina se sincronice.",
+                "soleCopyTooltip_one": "Hay {{entries}} registro en esta máquina que aún no tiene copia en otra máquina. Mantenla en línea hasta que otra máquina se sincronice.",
+                "soleCopyLabel_other": "{{count}} registros sin copia",
+                "soleCopyLabel_one": "{{count}} registro sin copia",
+                "behindTooltip_other": "Esta máquina aún no ha recibido {{count}} registros recientes de tus otras máquinas. Normalmente se pone al día sola.",
+                "behindTooltip_one": "Esta máquina aún no ha recibido {{count}} registro reciente de tus otras máquinas. Normalmente se pone al día sola.",
+                "behindLabel": "Sincronización con retraso",
+                "deferredLabel": "Copia sin confirmar",
+                "deferredTooltip": "No se pudo confirmar que todo en esta máquina tenga copia: solo se pudo comparar con algunas de tus máquinas. No es un error.",
+                "lastSyncedTooltip": "Última sincronización hace {{minutes}} min{{behindPart}}."
             },
             "fleetPeer": {
-                "label": "par seqscribe",
-                "divergedLabel": "seqscribe difiere",
-                "tooltip": "Enrutamiento WS: {{wsState}}, {{wsCount}} sesiones. Vista del par seqscribe: {{peerState}}, {{peerCount}} sesiones (hace {{age}} s)."
+                "stateOffline": "sin conexión",
+                "stateOnline": "en línea",
+                "divergedLabel": "Sincronización con retraso",
+                "tooltip": "El servidor ve esta máquina {{wsState}} con {{wsCount}} sesiones, pero otra de tus máquinas la vio {{peerState}} con {{peerCount}} sesiones (hace {{age}} s). Suele resolverse en unos segundos."
             },
             "noAgentsRunning": "Aún no hay agentes en ejecución",
             "launchCta": "Iniciar →"
@@ -3128,6 +3464,15 @@
             "providerSyncFailed": "Error al sincronizar el canal de proveedores: {{error}}"
         },
         "commandCenter": {
+            "previewNoActionNeeded": "No hace falta actualizar.",
+            "updateDaemon": "Actualizar daemon",
+            "updateToVersion": "Actualizar a v{{version}}",
+            "updateChannel": {
+                "preview": "vista previa",
+                "stable": "estable"
+            },
+            "updateTargetWithChannel": "Destino: v{{version}} ({{channel}})",
+            "updateTarget": "Destino: v{{version}}",
             "currentChats": "Chats actuales",
             "recentLaunches": "Inicios recientes",
             "daemonUpdate": "Actualización del daemon"
@@ -3142,6 +3487,8 @@
             "useThisFolder": "Usar esta carpeta"
         },
         "managedWorkspaces": {
+            "setDefaultHint": "Establecer como espacio predeterminado",
+            "unsetDefaultHint": "Espacio predeterminado: haz clic para quitarlo",
             "title": "Workspaces",
             "addWorkspace": "Añadir workspace",
             "empty": "Aún no hay workspaces guardados. Pulsa \"{{button}}\" para elegir una carpeta.",
@@ -3160,10 +3507,53 @@
             "renameFailed": "No se pudo actualizar el nombre del workspace"
         },
         "overview": {
+            "approx": "(aprox.)",
+            "memory": "Memoria",
+            "cpuDetail": "{{load}} media / {{cores}} núcleos",
+            "cpuLoad": "Carga de CPU",
+            "resourceUsage": "Uso de recursos",
+            "waiting": "Esperando…",
+            "uptime": "Tiempo activo",
             "waitingForStats": "Esperando estadísticas en vivo…",
             "waitingForStatsWithTotal": "Esperando estadísticas en vivo… · {{total}} en total"
         },
         "quota": {
+            "text": {
+                "failureKind": {
+                    "unknown": "error desconocido",
+                    "no-data": "aún sin lectura",
+                    "setup-required": "requiere configuración",
+                    "unsupported": "no compatible",
+                    "cli-unavailable": "programa no encontrado",
+                    "parse": "respuesta ilegible",
+                    "server": "error del servidor del proveedor",
+                    "network": "error de red",
+                    "rate-limited": "límite de peticiones",
+                    "quota-exhausted": "límite del plan alcanzado",
+                    "unauthorized": "acceso denegado",
+                    "expired-token": "sesión caducada",
+                    "missing-credentials": "sin sesión iniciada"
+                },
+                "agoDays": "hace {{days}} d {{hours}} h",
+                "agoHours": "hace {{hours}} h {{minutes}} min",
+                "agoMinutes": "hace {{minutes}} min",
+                "justNow": "ahora mismo",
+                "unreadable": "no se pudo leer la cuota",
+                "unavailable": "no disponible en esta máquina",
+                "pool": "grupo",
+                "usageSessions": "{{count}} ses.",
+                "usageTokens": "{{count}} tokens",
+                "windowReset": "reiniciado · esperando actualización",
+                "cue": {
+                    "stale": "desactualizado",
+                    "refreshing": "actualizando"
+                },
+                "resetsInDays": "se reinicia en {{days}} d {{hours}} h",
+                "resetsInHours": "se reinicia en {{hours}} h {{minutes}} min",
+                "resetsInMinutes": "se reinicia en {{minutes}} min",
+                "resetsNow": "se reinicia ahora",
+                "used": "{{percent}}% usado"
+            },
             "title": "Cuota del plan",
             "sessionHint": "Ventana móvil de 5 horas del plan reportada por esta máquina",
             "weeklyHint": "Ventana móvil de 7 días del plan reportada por esta máquina",
@@ -3256,6 +3646,10 @@
         }
     },
     "sessionHost": {
+        "lastErrorLabel": "último error:",
+        "unknown": "desconocido",
+        "endpointLabel": "Endpoint:",
+        "activeAgo": "activo {{time}}",
         "title": "Recuperación de runtimes alojados",
         "stopConfirmTitle": "¿Detener {{name}}?",
         "stopConfirmDescription": "Esto terminará el runtime alojado.",
@@ -3324,7 +3718,21 @@
         "lifecycleInterrupted": "Interrumpido"
     },
     "settings": {
+        "mobileMode": {
+            "workspaceMode": "Espacio de trabajo",
+            "chatMode": "Modo chat",
+            "descriptionWorkspace": "Usa el diseño completo de espacio de trabajo en móviles y tabletas.",
+            "descriptionChat": "Usa el diseño de bandeja móvil centrado en el chat, más parecido a una app de mensajería.",
+            "label": "Bandeja móvil (modo chat)"
+        },
         "theme": {
+            "preset": {
+                "honey": "Acentos amarillos cálidos",
+                "aurora": "Tema con acento rosa",
+                "ember": "Tema ámbar predeterminado, inspirado en la página principal",
+                "midnight": "Tema violeta clásico"
+            },
+            "presetCustomDescription": "Personalización completa de app y chat",
             "helloHelp": "¡Hola! ¿En qué puedo ayudarte?",
             "fixBug": "Corrige el error, por favor",
             "onIt": "¡Enseguida! ✨",
@@ -3357,6 +3765,15 @@
             "customLabel": "Personalizado"
         },
         "providerPriority": {
+            "undetectedHint_other": "{{count}} proveedores no se detectan aquí: se mantienen en el orden y se omiten hasta que estén disponibles.",
+            "undetectedHint_one": "{{count}} proveedor no se detecta aquí: se mantiene en el orden y se omite hasta que esté disponible.",
+            "orderHint": "Los inicios usan este orden, de arriba abajo.",
+            "noMoreProviders": "No se detectaron otros proveedores CLI",
+            "selectProvider": "Seleccionar proveedor…",
+            "moveDown": "Bajar",
+            "moveUp": "Subir",
+            "keptUntilDetected": "Se mantiene en el orden; se omite al iniciar hasta que se detecte en esta máquina.",
+            "emptyWarning": "No hay orden de proveedores. Los inicios que no indiquen un proveedor CLI se rechazarán.",
             "available": "disponible",
             "notOnMachine": "no está en esta máquina",
             "remove": "Eliminar",
@@ -3364,10 +3781,21 @@
             "addProvider": "Añadir proveedor"
         },
         "coordinatorPrompts": {
+            "saved": "Guardado",
+            "saveAppend": "Guardar adición",
+            "saveOverride": "Guardar sustitución",
+            "saving": "Guardando…",
+            "appendPlaceholder": "(vacío: no se añade nada en esta capa)",
+            "overridePlaceholder": "(vacío: usar el prompt base predeterminado)",
+            "placeholdersHint": "Marcadores que puedes usar:",
+            "resetHint": "Deja un campo vacío y guarda para quitarlo (vuelve al predeterminado).",
+            "intro": "Personaliza el prompt que reciben las sesiones de coordinador de mesh de este daemon.",
+            "loading": "Cargando…",
+            "connectDaemon": "Conecta un daemon para editar los prompts del coordinador.",
             "overrideDesc": "<strong>Override</strong> reemplaza el prompt base integrado del daemon para esa CLI.",
             "appendDesc": "<strong>Append</strong> se apila después de la base que prevalezca.",
-            "overrideLabel": "Override",
-            "appendLabel": "Append",
+            "overrideLabel": "Sustituir",
+            "appendLabel": "Añadir",
             "expandLabel": "Editar prompts",
             "collapseLabel": "Contraer",
             "customizedBadge": "Personalizado",
@@ -3377,6 +3805,11 @@
             "sectionDescription": "Prompt base por CLI para las sesiones del coordinador de malla en esta máquina. Los prompts a nivel de malla están en la página Repo Mesh."
         },
         "appearance": {
+            "modeSystem": "Sistema",
+            "modeLight": "Claro",
+            "modeDark": "Oscuro",
+            "mobileDescription": "Elige si en el móvil el panel se abre como una app de chat o mantiene el diseño completo de espacio de trabajo.",
+            "themeDescription": "Elige un tema predefinido o crea uno totalmente personalizado. Los temas personalizados controlan toda la app: fondos, texto, bordes y burbujas del chat.",
             "modeLabel": "Modo",
             "themeLabel": "Tema",
             "mobileLabel": "Móvil",
@@ -3418,6 +3851,10 @@
         "confirmSwitchAction": "Cambiar"
     },
     "landing": {
+        "gallery": {
+            "next": "Vista siguiente",
+            "previous": "Vista anterior"
+        },
         "nav": {
             "home": "Inicio de ADHDev",
             "mesh": "Mesh",
@@ -3720,6 +4157,10 @@
         }
     },
     "interactivePrompt": {
+        "submit": "Enviar",
+        "submitting": "Enviando…",
+        "cancelAria": "Cancelar la pregunta",
+        "actionRequired": "Acción necesaria",
         "selectAllThatApply": "Selecciona todas las que correspondan",
         "multipleChoice": "Selección múltiple",
         "singleChoice": "Selección única",
@@ -3730,11 +4171,58 @@
         "errorReviewUnconfirmed": "Las teclas de tu respuesta llegaron a la terminal, pero la pregunta sigue en pantalla — puede que la respuesta no se haya enviado. Revisa la terminal: si no se envió, responde allí; reenviarla desde aquí podría enviarla dos veces."
     },
     "git": {
+        "diffPreview": {
+            "truncatedAfter": "localmente para ver todo.",
+            "truncatedBefore": "Cambios recortados: ejecuta",
+            "empty": "No hay cambios que mostrar.",
+            "binary": "Archivo binario: no se pueden mostrar los cambios.",
+            "loading": "Cargando cambios…"
+        },
         "changeList": {
+            "stagedHint": "Preparado",
+            "noChanges": "No hay archivos modificados.",
             "binaryBadge": "bin",
             "truncatedNote": "Lista de archivos truncada: ejecuta <code>git status</code> localmente para ver la salida completa."
         },
         "statusDialog": {
+            "working": "Procesando…",
+            "includeUntracked": "Incluir archivos sin seguimiento",
+            "messageRequired": "Mensaje (obligatorio)",
+            "fileFallback": "archivo",
+            "confirmRevert": "¿Revertir los cambios de {{path}}?",
+            "confirmPop": "¿Restaurar el stash más reciente?",
+            "confirmStash": "Guardar cambios en stash",
+            "confirmCheckpoint": "Crear commit de punto de control",
+            "copySummary": "Copiar resumen",
+            "copied": "Copiado al portapapeles",
+            "checkoutSelected": "Revertir selección",
+            "selectFileToRevert": "Selecciona un archivo para revertir",
+            "revertFile": "Revertir los cambios de {{path}}",
+            "popStash": "Restaurar stash",
+            "noStashes": "No hay stash que restaurar",
+            "popHint": "Restaura el stash más reciente",
+            "resolveBeforePop": "Resuelve los conflictos antes de restaurar un stash",
+            "stash": "Stash",
+            "stashHint": "Aparta los cambios actuales (git stash)",
+            "resolveBeforeStash": "Resuelve los conflictos antes de guardar en stash",
+            "checkpoint": "Punto de control",
+            "checkpointHint": "Crea un commit de git como punto de control",
+            "resolveBeforeCheckpoint": "Resuelve los conflictos antes de crear un punto de control",
+            "selectFile": "Selecciona un archivo para ver sus cambios",
+            "noDiffData": "No hay datos de diferencias.",
+            "loading": "Cargando…",
+            "fileCount_other": "{{count}} archivos",
+            "fileCount_one": "{{count}} archivo",
+            "stashed": "{{count}} en stash",
+            "deleted": "{{count}} eliminados",
+            "untracked": "{{count}} sin seguimiento",
+            "modified": "{{count}} modificados",
+            "staged": "{{count}} preparados",
+            "behind": "{{count}} por detrás",
+            "ahead": "{{count}} por delante",
+            "refresh": "Actualizar",
+            "openOnGithub": "Abrir en GitHub",
+            "title": "Estado de Git",
             "conflicts": "conflictos",
             "clean": "limpio"
         }

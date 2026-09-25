@@ -91,6 +91,7 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
     longPressTimer,
     isGroupActive,
 }: PaneGroupTabBarItemProps) {
+    const { t } = useTranslation('common')
     const viewStates = getConversationViewStates(conv)
     const tabClass = viewStates.isGenerating ? 'agent-tab-generating'
         : viewStates.isWaiting ? 'agent-tab-waiting' : ''
@@ -196,8 +197,8 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
             {isMeshGraph && (
                 <span
                     className="adhdev-dockview-tab-mesh-badge pointer-events-none absolute top-0.5 right-0.5 text-text-muted"
-                    title="Mesh chat"
-                    aria-label="Mesh chat"
+                    title={t('paneGroup.meshChat')}
+                    aria-label={t('paneGroup.meshChat')}
                 >
                     <IconMesh size={11} />
                 </span>
@@ -391,7 +392,7 @@ export default function PaneGroupTabBar({
                                     setCtxMenu(null)
                                 }}
                             >
-                                ⌨ {tabShortcuts[ctxMenu.tabKey] ? `Change shortcut (${tabShortcuts[ctxMenu.tabKey]})` : 'Set shortcut'}
+                                ⌨ {tabShortcuts[ctxMenu.tabKey] ? t('paneGroup.changeShortcut', { shortcut: tabShortcuts[ctxMenu.tabKey] }) : t('paneGroup.shortcutSetTitle')}
                             </button>
                             {tabShortcuts[ctxMenu.tabKey] && (
                                 <button
@@ -405,7 +406,7 @@ export default function PaneGroupTabBar({
                                         setCtxMenu(null)
                                     }}
                                 >
-                                    ✕ Remove shortcut
+                                    ✕ {t('paneGroup.removeShortcut')}
                                 </button>
                             )}
                         </>
@@ -419,7 +420,7 @@ export default function PaneGroupTabBar({
                                 onMouseDown={preventContextMenuButtonFocus}
                                 onClick={() => { onHideTab(ctxMenu.tabKey); setCtxMenu(null) }}
                             >
-                                <span className="inline-flex items-center gap-1.5"><IconEyeOff size={12} />Hide from Dashboard</span>
+                                <span className="inline-flex items-center gap-1.5"><IconEyeOff size={12} />{t('paneGroup.hideFromDashboard')}</span>
                             </button>
                         </>
                     )}
@@ -437,12 +438,12 @@ export default function PaneGroupTabBar({
                         className="bg-bg-primary border border-border-subtle rounded-xl px-8 py-6 text-center shadow-xl"
                         onClick={e => e.stopPropagation()}
                     >
-                        <div className="text-sm font-bold text-text-primary mb-2">⌨ Set shortcut</div>
+                        <div className="text-sm font-bold text-text-primary mb-2">⌨ {t('paneGroup.shortcutSetTitle')}</div>
                         <div className="text-xs text-text-secondary mb-4">
-                            Press a key combo (e.g. {isMac ? '⌘+1' : 'Ctrl+1'}, {isMac ? '⌥+A' : 'Alt+A'})
+                            {t('paneGroup.shortcutPressCombo', { example1: isMac ? '⌘+1' : 'Ctrl+1', example2: isMac ? '⌥+A' : 'Alt+A' })}
                         </div>
                         <div className="text-lg font-mono text-accent animate-pulse">
-                            Listening...
+                            {t('paneGroup.shortcutListening')}
                         </div>
                         <div className="text-3xs text-text-muted mt-3">{t('paneGroup.pressEscToCancel')}</div>
                     </div>

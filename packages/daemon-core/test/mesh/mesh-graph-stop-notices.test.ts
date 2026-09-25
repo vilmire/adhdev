@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto';
 import { tmpdir } from 'os';
 
 // Wave 25 — stopped downstream work is always settled AND always told.
-// docs/design/2026-09-25-graph-orchestration-simplification.md §5.
+// the 2026-09-25 graph orchestration simplification §5.
 //
 //   F1  every queue-side terminal writer (retry cap, dispatch-failure cap,
 //       undeliverable, park retention, the queue dependency cascade) goes

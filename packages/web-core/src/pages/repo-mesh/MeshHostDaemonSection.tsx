@@ -147,8 +147,8 @@ export function MeshHostDaemonSection({
                         // seed named a specific daemon. Show it as the host-to-be.
                         <div className="mb-3 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-xs text-text-muted">
                             {isHostNodeAttached
-                                ? <>Will host on <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>{selectedHostNode?.workspace ? <> · setup node <span className="font-mono text-text-secondary">{selectedHostNode.workspace}</span></> : null}. {t('mesh.host.confirmSetsHost')}</>
-                                : <>Will host on <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>. {t('mesh.host.attachNodeThenSetHost')}</>}
+                                ? <>{t('mesh.host.willHostOn')} <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>{selectedHostNode?.workspace ? <> · {t('mesh.host.setupNode')} <span className="font-mono text-text-secondary">{selectedHostNode.workspace}</span></> : null}. {t('mesh.host.confirmSetsHost')}</>
+                                : <>{t('mesh.host.willHostOn')} <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>. {t('mesh.host.attachNodeThenSetHost')}</>}
                         </div>
                     ) : (
                         // No authoritative host signal yet. We deliberately do NOT auto-seed

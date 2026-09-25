@@ -1,6 +1,6 @@
 /**
  * mesh-graph-gate-commands — the dashboard-callable gate verbs
- * (docs/design/2026-09-25-graph-orchestration-simplification.md D3(c)).
+ * (the 2026-09-25 graph orchestration simplification D3(c)).
  *
  *   mesh_graph_gate_claim   {mesh_id, gate_id, deadline_seconds?}
  *   mesh_graph_gate_release {mesh_id, gate_id, outcome, evidence?, release_idempotency_key?}

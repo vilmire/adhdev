@@ -27,7 +27,7 @@
  * node_id / session_id / task_id has that key declared required.
  *
  * Accepted-but-unpublished aliases + retired keys (graph-orchestration-
- * simplification D2, docs/design/2026-09-25-graph-orchestration-simplification.md):
+ * simplification D2, 2026-09-25):
  * the enqueue schemas publish ONE canonical snake_case name per field. The old
  * camelCase / alternate spellings are mapped to their canonical key by
  * {@link MESH_ACCEPTED_ARG_ALIASES} BEFORE the unknown-key gate runs, so an existing

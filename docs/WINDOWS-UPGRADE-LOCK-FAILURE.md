@@ -1,5 +1,14 @@
 # Windows self-upgrade failure — root-cause analysis and patch spec
 
+> **Status: Implemented.** All four patches recommended in §4 have landed in
+> `packages/daemon-core/src/commands/upgrade-helper.ts`: P1
+> `stopForeignNativeAddonHolders()`, P2 (user-visible failure messaging +
+> realistic `maxInstallAttempts` retry budget), P3 (`env.ADHDEV_BOOTSTRAP = '1'`
+> injected by `buildInstallEnvWithNodeOnPath()`), and P4
+> (`cleanupStaleGlobalInstallDirs()` / `safeRemoveStaleEntry()`, called from
+> multiple sites in the install/rollback flow). This document is kept as the
+> RCA record; treat §4's recommendations as already applied, not open work.
+
 > Target file: `packages/daemon-core/src/commands/upgrade-helper.ts`
 > Related guards: `preinstall` in `packages/daemon-cloud/package.json` and `packages/daemon-standalone/package.json`
 > Basis: a real-world case (Windows 11, nvm-windows) on 2026-06-23 where the

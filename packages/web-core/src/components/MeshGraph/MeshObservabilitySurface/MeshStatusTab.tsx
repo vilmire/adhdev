@@ -12,7 +12,8 @@ import {
     SCHEDULING_STRATEGY_LABELS,
     collectMachineQuotaGroups,
     machineKeyForMeshNode,
-    buildQuotaDisplayModel,
+    bindQuotaDisplayModel,
+    createQuotaTextFormatter,
     formatQuotaAccount,
     formatQuotaFreshness,
     healthTone,
@@ -55,16 +56,16 @@ function MeshSchedulingCard({ scheduling }: { scheduling?: RepoMeshSchedulingSta
                 <Badge label={SCHEDULING_STRATEGY_LABELS[scheduling.strategy] ?? scheduling.strategy} tone="info" />
                 {hasGlobalCaps && (
                     <Badge
-                        label={`write ${scheduling.activeWriteAssigned}/${scheduling.maxParallelTasks}`}
+                        label={t('mesh.statusTab.writeCap', { active: scheduling.activeWriteAssigned, max: scheduling.maxParallelTasks })}
                         tone={scheduling.globalWriteCapReached ? 'warn' : 'good'}
-                        title="Active write (non-readonly) assigned tasks vs the global parallel cap"
+                        title={t('mesh.statusTab.writeCapHint')}
                     />
                 )}
                 {hasGlobalCaps && typeof scheduling.activeReadonlyAssigned === 'number' && typeof scheduling.maxReadonlyParallelTasks === 'number' && (
                     <Badge
-                        label={`readonly ${scheduling.activeReadonlyAssigned}/${scheduling.maxReadonlyParallelTasks}`}
+                        label={t('mesh.statusTab.readonlyCap', { active: scheduling.activeReadonlyAssigned, max: scheduling.maxReadonlyParallelTasks })}
                         tone={scheduling.globalReadonlyCapReached ? 'warn' : 'default'}
-                        title="Active read-only diagnosis tasks vs their (2× write) cap"
+                        title={t('mesh.statusTab.readonlyCapHint')}
                     />
                 )}
             </div>
@@ -76,23 +77,24 @@ function MeshSchedulingCard({ scheduling }: { scheduling?: RepoMeshSchedulingSta
 }
 
 function MeshNodeSchedulingBadges({ scheduling }: { scheduling?: RepoMeshNodeSchedulingStatus }) {
+    const { t } = useTranslation('common')
     if (!scheduling) return null
     return (
         <>
-            <Badge label={`load ${scheduling.load}`} tone={scheduling.load > 0 ? 'info' : 'default'} title="Active assigned tasks on this node" />
+            <Badge label={t('mesh.statusTab.load', { count: scheduling.load })} tone={scheduling.load > 0 ? 'info' : 'default'} title={t('mesh.statusTab.loadHint')} />
             {typeof scheduling.schedulingPriority === 'number' && scheduling.schedulingPriority !== 0 && (
-                <Badge label={`priority ${scheduling.schedulingPriority}`} tone="default" title="Soft scheduling priority (higher = preferred)" />
+                <Badge label={t('mesh.statusTab.priority', { value: scheduling.schedulingPriority })} tone="default" title={t('mesh.statusTab.priorityHint')} />
             )}
             {(scheduling.providerRoles ?? []).map(role => (
                 <Badge
                     key={role.providerType}
                     label={`${role.providerType} ${role.activeAssigned}${typeof role.maxParallel === 'number' ? `/${role.maxParallel}` : ''}`}
                     tone={role.capReached ? 'warn' : 'default'}
-                    title="Per-(node, provider) active assignments vs declared maxParallel cap"
+                    title={t('mesh.statusTab.providerCapHint')}
                 />
             ))}
             {scheduling.capReached && (scheduling.capReasons ?? []).map(reason => (
-                <Badge key={reason} label={schedulingReasonLabel(reason)} tone="warn" title="Why this node cannot currently claim a new write task" />
+                <Badge key={reason} label={schedulingReasonLabel(reason)} tone="warn" title={t('mesh.statusTab.blockedReasonHint')} />
             ))}
         </>
     )
@@ -128,19 +130,22 @@ const QUOTA_CHIP_TITLES: Record<QuotaChipHint, string> = {
 export function MeshMachineQuotaCard({ machine, providerVersions }: { machine: MachineQuotaGroup; providerVersions?: Array<[string, string]> }) {
     const { t } = useTranslation('common')
     const meshTheme = useContext(MeshGraphThemeContext)
-    const freshness = formatQuotaFreshness(machine.reportedAt)
+    const quotaText = createQuotaTextFormatter(t)
+    // Localized binding; keeps the one-argument model call the drift guard pins.
+    const buildQuotaDisplayModel = bindQuotaDisplayModel(quotaText)
+    const freshness = formatQuotaFreshness(machine.reportedAt, Date.now(), quotaText)
     return (
         <div className={`rounded-xl border p-3 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
             <div className="flex flex-wrap items-center gap-2">
                 <span className={`text-xs font-semibold ${meshTheme.textPrimary}`}>{machine.label}</span>
                 {machine.daemonBuildVersion && (
-                    <Badge label={machine.daemonBuildVersion} tone="default" title="Daemon build version running on this machine" />
+                    <Badge label={machine.daemonBuildVersion} tone="default" title={t('mesh.statusTab.daemonVersionHint')} />
                 )}
                 {machine.nodeCount > 1 && (
                     <Badge
-                        label={`${machine.nodeCount} nodes`}
+                        label={t('mesh.statusTab.nodeCount', { count: machine.nodeCount })}
                         tone="default"
-                        title="Mesh nodes (workspaces/worktrees) hosted by this machine — they share this one plan quota"
+                        title={t('mesh.statusTab.nodeCountHint')}
                     />
                 )}
                 {freshness && (
@@ -195,12 +200,12 @@ export function MeshMachineQuotaCard({ machine, providerVersions }: { machine: M
                                     />
                                 )}
                                 {model.kind === 'okNoWindows' && (
-                                    <span className={`text-2xs ${meshTheme.textSecondary}`} title="Read successfully — this provider reports no percentage window">
+                                    <span className={`text-2xs ${meshTheme.textSecondary}`} title={t('mesh.statusTab.quotaOkNoWindowHint')}>
                                         {model.message ?? t('mesh.status.quotaOkNoWindows')}
                                     </span>
                                 )}
                                 {model.kind === 'failure' && (
-                                    <span className={`text-2xs ${meshTheme.textSecondary}`} title="This machine reported that it could not read this provider's quota">
+                                    <span className={`text-2xs ${meshTheme.textSecondary}`} title={t('mesh.statusTab.quotaFailedHint')}>
                                         {model.message}
                                     </span>
                                 )}
@@ -383,7 +388,7 @@ function MeshNodeRuntimeRow({ node, previewVersion, machineVersions }: { node: R
                 {sessionCount > 0 && <Badge label={t('mesh.status.badgeSessions', { count: sessionCount })} tone="default" />}
                 {node.autoFastForwardEligible && <Badge label={t('mesh.status.badgeFastForwardReady')} tone="info" title={t('mesh.status.badgeFastForwardReadyTitle')} />}
                 {!!staleBuild && <Badge label={t('mesh.status.badgeStaleBuild')} tone="warn" title={t('mesh.status.badgeStaleBuildTitle')} />}
-                {buildChipLabel && <Badge label={buildChipLabel} tone={staleBuild || deployLag ? 'warn' : 'default'} title="Daemon build (version@commit) reported by this node — the running daemon's actual code identity" />}
+                {buildChipLabel && <Badge label={buildChipLabel} tone={staleBuild || deployLag ? 'warn' : 'default'} title={t('mesh.statusTab.daemonBuildHint')} />}
                 {deployLag && <Badge label={`deploy-lag vs ${previewVersion}`} tone="warn" title={t('mesh.status.badgeDeployLagTitle')} />}
                 <MeshNodeSchedulingBadges scheduling={node.scheduling} />
             </div>
@@ -424,17 +429,17 @@ function MeshProtocolVisibilityCard({ status }: { status: RepoMeshStatus }) {
                     <Badge
                         label={`v2 ${Math.round(metrics.v2Ratio * 100)}% (${metrics.v2}/${metrics.total})`}
                         tone={metrics.total > 0 && metrics.v2 === metrics.total ? 'good' : 'info'}
-                        title="Share of pending coordinator events carrying a mesh-protocol-v2 envelope in this drain"
+                        title={t('mesh.statusTab.v2RatioHint')}
                     />
                 )}
                 {skew.length > 0 && (
-                    <Badge label={`${skew.length} provider skew`} tone="warn" title="Providers running different versions across nodes" />
+                    <Badge label={t('mesh.statusTab.providerSkew', { count: skew.length })} tone="warn" title={t('mesh.statusTab.providerSkewHint')} />
                 )}
             </div>
             {metrics && Object.keys(metrics.scopes).length > 0 && (
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                     {Object.entries(metrics.scopes).map(([scope, count]) => (
-                        <Badge key={scope} label={`${scope}: ${count}`} tone="default" title="v2 event scope breakdown" />
+                        <Badge key={scope} label={`${scope}: ${count}`} tone="default" title={t('mesh.statusTab.v2ScopeHint')} />
                     ))}
                 </div>
             )}

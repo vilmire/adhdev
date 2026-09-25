@@ -1,7 +1,7 @@
 /**
  * seqscribe topic table — the single source for every topic ADHDev defines.
  *
- * Phase 0 of the seqscribe integration (docs/design/2026-08-26-seqscribe-integration-plan.md §1).
+ * Phase 0 of the seqscribe integration (the 2026-08-26 seqscribe integration plan §1).
  * Nothing here consumes a topic yet; later phases attach producers/consumers to
  * these names. Keeping the table in one module means a policy change is a
  * one-line diff rather than a fleet-wide grep — which matters because several

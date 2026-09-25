@@ -1,3 +1,4 @@
+import i18next from 'i18next'
 import { Component } from 'react'
 import type { ErrorInfo, ReactNode } from 'react'
 import { IconWarning } from '../Icons'
@@ -42,10 +43,10 @@ export class ErrorBoundary extends Component<Props, State> {
                             <IconWarning size={44} className="text-status-warning" />
                         </div>
                         <h2 style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 600, color: 'var(--text-primary, #eee)' }}>
-                            Something went wrong
+                            {i18next.t('app.errorBoundary.title')}
                         </h2>
                         <p style={{ margin: '0 0 20px', fontSize: 14, opacity: 0.7, lineHeight: 1.5 }}>
-                            An unexpected error occurred. Please reload the page to continue.
+                            {i18next.t('app.errorBoundary.description')}
                         </p>
                         <button
                             onClick={() => window.location.reload()}
@@ -60,7 +61,7 @@ export class ErrorBoundary extends Component<Props, State> {
                                 cursor: 'pointer',
                             }}
                         >
-                            Reload page
+                            {i18next.t('app.errorBoundary.reload')}
                         </button>
                     </div>
                 </div>

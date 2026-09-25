@@ -228,7 +228,7 @@ export function useMeshNodeActions({
     // Per-node scheduling settings (priority / provider roles). Saved as a minimal
     // policy patch — updateNode shallow-merges into the existing node policy, so
     // this never clobbers providerPriority/systemPrompt or vice versa.
-    // Per-node capability slots (ORCHESTRATION_NODE_SLOTS.md). Saved as a minimal
+    // Per-node capability slots (node capability slots design, 2026-07-09). Saved as a minimal
     // policy patch — update_mesh_node shallow-merges the policy, so sending only
     // `{ slots }` replaces the slots array without clobbering sibling policy fields.
     // An explicit empty array clears the slots (node falls back to legacy routing).

@@ -9,7 +9,7 @@
  * per-snapshot dedupe. This is the spec-path port of the legacy
  * `tui.startupDismiss` manifest feature — a prerequisite for migrating
  * opencode off ProviderCliAdapter
- * (docs/design/2026-08-17-legacy-cli-spec-migration.md).
+ * (the 2026-08-17 legacy CLI spec migration).
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';

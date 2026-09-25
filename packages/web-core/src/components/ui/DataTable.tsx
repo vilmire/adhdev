@@ -1,3 +1,4 @@
+import i18next from 'i18next'
 import React from 'react'
 import { cn } from '../../lib/utils'
 
@@ -23,7 +24,7 @@ export function DataTable<T>({ columns, data, rowKey, emptyMessage, onRowClick, 
     if (data.length === 0) {
         return (
             <div className="py-12 text-center text-text-muted text-sm">
-                {emptyMessage || 'No records found.'}
+                {emptyMessage || i18next.t('common.noRecords')}
             </div>
         )
     }

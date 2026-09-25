@@ -330,7 +330,7 @@ export const MESH_GRAPH_GATE_EXTEND_COMMAND = 'mesh_graph_gate_extend';
 
 /**
  * `mesh_graph_gate_claim` with `extend_seconds` — the gate EXTEND verb
- * (docs/design/2026-09-25-graph-orchestration-simplification.md D3(c)).
+ * (the 2026-09-25 graph orchestration simplification D3(c)).
  *
  * Exposed as an optional argument on claim rather than a separate tool because
  * the published tool count is pinned at 60 (scripts/verify-docs.mjs). It is a

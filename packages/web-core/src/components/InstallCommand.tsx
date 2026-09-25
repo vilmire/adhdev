@@ -5,6 +5,7 @@
  * macOS/Linux: curl | sh
  * Windows: PowerShell (irm | iex) or CMD
  */
+import { useTranslation } from 'react-i18next'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { IconCheck, IconClipboard } from './Icons'
 import { getInstallCommands, type InstallShellType } from '../utils/install-base'
@@ -17,6 +18,7 @@ function detectPlatform(): PlatformTab {
 }
 
 export default function InstallCommand({ isStandalone = false }: { isStandalone?: boolean } = {}) {
+    const { t } = useTranslation('common')
     const [platform, setPlatform] = useState<PlatformTab>('unix')
     const [winShell, setWinShell] = useState<'powershell' | 'cmd'>('powershell')
     const [copied, setCopied] = useState(false)
@@ -79,7 +81,7 @@ export default function InstallCommand({ isStandalone = false }: { isStandalone?
             <div
                 className="flex items-center gap-3 text-text-primary cursor-pointer group"
                 onClick={copyCommand}
-                title="Click to copy"
+                title={t('app.installCommand.clickToCopy')}
             >
                 <span className="text-text-muted select-none">{INSTALL_COMMANDS[shell].prompt}</span>
                 <span className="flex-1 break-all">{INSTALL_COMMANDS[shell].cmd}</span>
@@ -91,7 +93,7 @@ export default function InstallCommand({ isStandalone = false }: { isStandalone?
             {/* npm fallback — the standalone package is local-only; cloud surfaces
                 must point at the cloud CLI (`adhdev login` pairs the machine). */}
             <div className="text-text-muted text-3xs font-sans mt-2">
-                Or via npm: <span className="text-text-secondary font-mono">
+                {t('app.installCommand.orViaNpm')} <span className="text-text-secondary font-mono">
                     {isStandalone
                         ? 'npm i -g @adhdev/daemon-standalone && adhdev-standalone'
                         : 'npm i -g adhdev && adhdev login'}

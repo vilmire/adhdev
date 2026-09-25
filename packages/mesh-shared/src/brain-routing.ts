@@ -112,7 +112,7 @@ export function normalizeDifficultyBrainMap(raw: unknown): DifficultyBrainMap {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Node capability slots (ORCHESTRATION_NODE_SLOTS.md)
+// Node capability slots (node capability slots design, 2026-07-09)
 //
 // A node's "Preferred AI tools" list is redefined as an ordered array of
 // capability slots. Each slot bundles what used to be scattered across
@@ -252,7 +252,7 @@ export function deriveSlotsFromLegacy(input: {
  * The reverse direction of deriveSlotsFromLegacy: derive the legacy
  * `providerPriority` order from capability slots — each slot's provider, in
  * first-appearance order, de-duplicated. Slot order = preference is the settled
- * slots semantics (ORCHESTRATION_NODE_SLOTS.md), so this is what readers of the
+ * slots semantics (node capability slots design, 2026-07-09), so this is what readers of the
  * legacy `policy.providerPriority` field must fall back to when a node declares
  * slots but no explicit providerPriority (otherwise such a node reads as
  * unlaunchable even though its slots fully determine the preference order).

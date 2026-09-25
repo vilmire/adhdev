@@ -169,7 +169,7 @@ adhdev-standalone
 유용한 플래그:
 
 ```bash
-adhdev standalone --host          # 동일 LAN의 다른 기기 접근 허용
+adhdev standalone --host 0.0.0.0  # 동일 LAN의 다른 기기 접근 허용
 adhdev standalone --port 8080     # 커스텀 포트
 adhdev standalone --token mysecret # 스크립트/운영자 접근을 위한 토큰 인증
 adhdev standalone --no-open       # 브라우저 자동 열기 비활성화
@@ -236,7 +236,7 @@ provider는 포크해야 하는 코드가 아니라 데이터입니다. provider
 
 - 이 레포의 `web-devconsole`은 라이브 세션에 대고 provider 스크립트를 작성·테스트하는 Monaco 기반 에디터입니다.
 - 검증 티어는 명시적입니다: **Verified / Partial / Unverified**. "내장"은 통합이 존재한다는 뜻일 뿐입니다.
-- 가이드: [Provider SDK](https://docs.adhf.dev/guide/provider-sdk) · [Provider 가이드](https://docs.adhf.dev/guide/providers)
+- 가이드: [지원 프로바이더](https://docs.adhf.dev/reference/supported-providers) · [커스텀 프로바이더 가이드](https://docs.adhf.dev/guide/custom-providers)
 
 카탈로그에 없는 에이전트를 동작시켰다면, 그것이 이 레포에 가장 유용한 기여입니다.
 

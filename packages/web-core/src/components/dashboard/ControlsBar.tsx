@@ -589,7 +589,7 @@ export default function ControlsBar({
                                         title={ctrl.label}
                                     >
                                         {ctrl.icon && <span className="text-2xs opacity-70">{ctrl.icon}</span>}
-                                        <span className="min-w-0 overflow-hidden text-ellipsis">{isLoading ? 'Loading…' : currentLabel || ctrl.label}</span>
+                                        <span className="min-w-0 overflow-hidden text-ellipsis">{isLoading ? t('chatControls.loading') : currentLabel || ctrl.label}</span>
                                         <span className="text-4xs opacity-55">▼</span>
                                     </button>
                                     {isOpen && options.length > 0 && (

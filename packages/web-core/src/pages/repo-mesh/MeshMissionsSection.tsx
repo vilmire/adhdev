@@ -145,7 +145,7 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
                             : 'border-border-subtle text-text-muted hover:text-text-secondary'
                     }`}
                 >
-                    All {missions.length}
+                    {t('mesh.missions.filterAllCount', { count: missions.length })}
                 </button>
             </div>
             {filtered.length === 0 && (

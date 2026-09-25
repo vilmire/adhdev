@@ -185,7 +185,7 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                     <span aria-hidden="true" className="text-sm">⑂</span>
                     <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-semibold text-text-primary">
-                            {status?.branch ?? 'Git Status'}
+                            {status?.branch ?? t('git.statusDialog.title')}
                         </p>
                         <p className="truncate text-xs text-text-secondary">{workspace}</p>
                         {githubUrl && (
@@ -194,7 +194,7 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="truncate text-3xs text-text-secondary hover:text-accent-primary underline"
-                                title="Open on GitHub"
+                                title={t('git.statusDialog.openOnGithub')}
                             >
                                 GitHub ↗
                             </a>
@@ -204,7 +204,7 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                         onClick={refresh}
                         disabled={loading}
                         className="rounded px-2 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
-                        title="Refresh"
+                        title={t('git.statusDialog.refresh')}
                     >
                         ↺
                     </button>
@@ -212,7 +212,7 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                         type="button"
                         onClick={onClose}
                         className="-m-1.5 flex h-11 w-11 shrink-0 items-center justify-center rounded text-text-secondary hover:text-text-primary"
-                        aria-label="Close"
+                        aria-label={t('common.close')}
                     >
                         <IconX className="h-4 w-4" />
                     </button>
@@ -227,18 +227,18 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                                 {status.headMessage && <span className="ml-1 truncate">{status.headMessage.slice(0, 60)}</span>}
                             </span>
                         )}
-                        {status.ahead > 0 && <span className="text-orange-400">↑{status.ahead} ahead</span>}
-                        {status.behind > 0 && <span className="text-orange-400">↓{status.behind} behind</span>}
-                        {status.staged > 0 && <span className="text-status-online">{status.staged} staged</span>}
-                        {status.modified > 0 && <span>{status.modified} modified</span>}
-                        {status.untracked > 0 && <span>{status.untracked} untracked</span>}
-                        {status.deleted > 0 && <span className="text-status-error">{status.deleted} deleted</span>}
-                        {status.stashCount > 0 && <span>{status.stashCount} stashed</span>}
+                        {status.ahead > 0 && <span className="text-orange-400">↑{t('git.statusDialog.ahead', { count: status.ahead })}</span>}
+                        {status.behind > 0 && <span className="text-orange-400">↓{t('git.statusDialog.behind', { count: status.behind })}</span>}
+                        {status.staged > 0 && <span className="text-status-online">{t('git.statusDialog.staged', { count: status.staged })}</span>}
+                        {status.modified > 0 && <span>{t('git.statusDialog.modified', { count: status.modified })}</span>}
+                        {status.untracked > 0 && <span>{t('git.statusDialog.untracked', { count: status.untracked })}</span>}
+                        {status.deleted > 0 && <span className="text-status-error">{t('git.statusDialog.deleted', { count: status.deleted })}</span>}
+                        {status.stashCount > 0 && <span>{t('git.statusDialog.stashed', { count: status.stashCount })}</span>}
                         {status.hasConflicts && <span className="font-bold text-status-error">{t('git.statusDialog.conflicts')}</span>}
                         {totalChanged === 0 && !status.error && <span className="text-status-online">{t('git.statusDialog.clean')}</span>}
                         {diffSummary && diffSummary.files.length > 0 && (
                             <span className="text-text-secondary">
-                                {diffSummary.files.length} file{diffSummary.files.length !== 1 ? 's' : ''}
+                                {t('git.statusDialog.fileCount', { count: diffSummary.files.length })}
                                 {diffSummary.totalInsertions > 0 && <span className="text-status-online"> +{diffSummary.totalInsertions}</span>}
                                 {diffSummary.totalDeletions > 0 && <span className="text-status-error"> -{diffSummary.totalDeletions}</span>}
                             </span>
@@ -258,7 +258,7 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                     {/* File list */}
                     <div className="flex w-56 shrink-0 flex-col overflow-y-auto border-r border-border/50">
                         {loading && !diffSummary && (
-                            <p className="px-3 py-4 text-xs text-text-secondary">Loading…</p>
+                            <p className="px-3 py-4 text-xs text-text-secondary">{t('git.statusDialog.loading')}</p>
                         )}
                         {diffSummary && (
                             <GitChangeList
@@ -269,7 +269,7 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                             />
                         )}
                         {!loading && !diffSummary && !error && (
-                            <p className="px-3 py-4 text-xs text-text-secondary">No diff data.</p>
+                            <p className="px-3 py-4 text-xs text-text-secondary">{t('git.statusDialog.noDiffData')}</p>
                         )}
                     </div>
 
@@ -286,7 +286,7 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                             />
                         ) : (
                             <div className="flex h-full items-center justify-center text-xs text-text-secondary">
-                                Select a file to view diff
+                                {t('git.statusDialog.selectFile')}
                             </div>
                         )}
                     </div>
@@ -305,52 +305,52 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                     <button
                         onClick={() => openAction('checkpoint')}
                         disabled={hasConflicts}
-                        title={hasConflicts ? 'Resolve conflicts before checkpointing' : 'Create a git commit checkpoint'}
+                        title={hasConflicts ? t('git.statusDialog.resolveBeforeCheckpoint') : t('git.statusDialog.checkpointHint')}
                         className="rounded px-2 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed border border-border/50 hover:border-border"
                     >
-                        Checkpoint
+                        {t('git.statusDialog.checkpoint')}
                     </button>
                     <button
                         onClick={() => openAction('stash')}
                         disabled={hasConflicts}
-                        title={hasConflicts ? 'Resolve conflicts before stashing' : 'Stash current changes'}
+                        title={hasConflicts ? t('git.statusDialog.resolveBeforeStash') : t('git.statusDialog.stashHint')}
                         className="rounded px-2 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed border border-border/50 hover:border-border"
                     >
-                        Stash
+                        {t('git.statusDialog.stash')}
                     </button>
                     <button
                         onClick={() => openAction('stash_pop')}
                         disabled={hasConflicts || !status?.stashCount}
                         title={
                             hasConflicts
-                                ? 'Resolve conflicts before restoring a stash'
+                                ? t('git.statusDialog.resolveBeforePop')
                                 : status?.stashCount
-                                    ? 'Restore the latest stash'
-                                    : 'No stashes to restore'
+                                    ? t('git.statusDialog.popHint')
+                                    : t('git.statusDialog.noStashes')
                         }
                         className="rounded px-2 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed border border-border/50 hover:border-border"
                     >
-                        Pop stash
+                        {t('git.statusDialog.popStash')}
                     </button>
                     <button
                         onClick={() => openAction('checkout_files')}
                         disabled={!selectedFile}
-                        title={selectedFile ? `Revert changes to ${selectedFile.path}` : 'Select a file to revert'}
+                        title={selectedFile ? t('git.statusDialog.revertFile', { path: selectedFile.path }) : t('git.statusDialog.selectFileToRevert')}
                         className="rounded px-2 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed border border-border/50 hover:border-border"
                     >
-                        Checkout selected
+                        {t('git.statusDialog.checkoutSelected')}
                     </button>
                     {diffSummary && diffSummary.files.length > 0 && (
                         <button
                             onClick={() => {
                                 const text = buildPRSummary(status?.branch ?? null, diffSummary)
                                 void navigator.clipboard.writeText(text)
-                                setActionSuccess('Copied to clipboard')
+                                setActionSuccess(t('git.statusDialog.copied'))
                                 setTimeout(() => setActionSuccess(null), 2000)
                             }}
                             className="rounded border border-border px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary"
                         >
-                            Copy summary
+                            {t('git.statusDialog.copySummary')}
                         </button>
                     )}
                 </div>
@@ -360,10 +360,10 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                 <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/60">
                     <div className="flex w-80 flex-col gap-3 rounded-xl border border-border bg-surface p-4 shadow-xl">
                         <p className="text-sm font-semibold text-text-primary">
-                            {pendingAction === 'checkpoint' && 'Create checkpoint commit'}
-                            {pendingAction === 'stash' && 'Stash changes'}
-                            {pendingAction === 'stash_pop' && 'Restore latest stash?'}
-                            {pendingAction === 'checkout_files' && `Revert changes to ${selectedFile?.path ?? 'file'}?`}
+                            {pendingAction === 'checkpoint' && t('git.statusDialog.confirmCheckpoint')}
+                            {pendingAction === 'stash' && t('git.statusDialog.confirmStash')}
+                            {pendingAction === 'stash_pop' && t('git.statusDialog.confirmPop')}
+                            {pendingAction === 'checkout_files' && t('git.statusDialog.confirmRevert', { path: selectedFile?.path ?? t('git.statusDialog.fileFallback') })}
                         </p>
 
                         {(pendingAction === 'checkpoint' || pendingAction === 'stash') && (
@@ -373,7 +373,7 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                                     value={actionMessage}
                                     onChange={(e) => setActionMessage(e.target.value)}
                                     maxLength={200}
-                                    placeholder="Message (required)"
+                                    placeholder={t('git.statusDialog.messageRequired')}
                                     className="rounded border border-border bg-surface-secondary px-2 py-1 text-xs text-text-primary placeholder:text-text-secondary focus:outline-none focus:ring-1 focus:ring-border"
                                     autoFocus
                                 />
@@ -383,7 +383,7 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                                         checked={includeUntracked}
                                         onChange={(e) => setIncludeUntracked(e.target.checked)}
                                     />
-                                    Include untracked files
+                                    {t('git.statusDialog.includeUntracked')}
                                 </label>
                             </>
                         )}
@@ -398,14 +398,14 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                                 disabled={actionLoading}
                                 className="rounded px-3 py-1 text-xs text-text-secondary hover:text-text-primary border border-border/50 disabled:opacity-40"
                             >
-                                Cancel
+                                {t('common.cancel')}
                             </button>
                             <button
                                 onClick={confirmAction}
                                 disabled={actionLoading || ((pendingAction === 'checkpoint' || pendingAction === 'stash') && !actionMessage.trim())}
                                 className="rounded px-3 py-1 text-xs text-text-primary bg-border hover:bg-border/80 disabled:opacity-40"
                             >
-                                {actionLoading ? 'Working…' : 'Confirm'}
+                                {actionLoading ? t('git.statusDialog.working') : t('common.confirm')}
                             </button>
                         </div>
                     </div>

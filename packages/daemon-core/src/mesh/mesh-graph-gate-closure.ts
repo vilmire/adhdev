@@ -1,6 +1,6 @@
 /**
  * Coordinator-gate CLOSURE — the abandon state change and the D3(a) auto-close
- * (docs/design/2026-09-25-graph-orchestration-simplification.md), split out of
+ * (the 2026-09-25 graph orchestration simplification), split out of
  * mesh-graph-gates.ts so the terminal choke point (the transition runner) can
  * close gates inside its own transaction.
  *
@@ -234,7 +234,7 @@ export function markGraphTerminalInTxn(
 
 /**
  * The reason an auto-closed gate records (node failure reason suffix and the
- * `graph_gate_abandoned` outbox payload). docs/design/2026-09-25-graph-orchestration-simplification.md D3(a).
+ * `graph_gate_abandoned` outbox payload). The 2026-09-25 graph orchestration simplification, D3(a).
  */
 export const MESH_GATE_AUTO_ABANDON_REASON = 'downstream_all_terminal';
 

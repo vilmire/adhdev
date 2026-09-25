@@ -18,7 +18,7 @@
  *
  * So the shadow appends from its OWN call site alongside the existing send, and
  * the design document's "발행부가 ring append로 전환" line has been corrected to
- * say 병행 기록 accordingly (docs/design/2026-08-26-seqscribe-integration-plan.md
+ * say 병행 기록 accordingly (the 2026-08-26 seqscribe integration plan,
  * §5). Retiring the legacy write is a later stage's decision, not this one's.
  *
  * ── The one invariant, inherited from the mesh leg ──────────────────────────

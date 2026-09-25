@@ -285,7 +285,7 @@ export function tryReconcileTranscriptCompletionForStall(
     // adapter's failure to notice. The idle path keeps the original veto unchanged.
     if (!wedgedGeneratingProven && host.hasAdapterPendingResponse()) return false;
     // MID-TURN-LIVE-STATE parity (M1-deletion prerequisite — see
-    // docs/design/2026-08-17-mesh-hold-absorption.md): this gate historically
+    // the 2026-08-17 mesh hold absorption design): this gate historically
     // checked only the adapter axis, which is why the delivery-time mesh gate
     // re-checks live evidence on every rescue-originated emit. Enforce the two
     // missing axes at the source: a parked modal is a real pending user

@@ -25,7 +25,8 @@ import {
 import Dialog from '../ui/Dialog'
 import { requestOpenSessionChat } from '../../utils/session-nav'
 import {
-    buildQuotaDisplayModel,
+    bindQuotaDisplayModel,
+    createQuotaTextFormatter,
     collectQuotaEntries,
     formatQuotaAccount,
     quotaProviderLabel,
@@ -141,6 +142,8 @@ function formatRelative(ms?: number): string {
 
 export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }: Props) {
     const { t } = useTranslation('common')
+    // Localized binding; keeps the one-argument model call the drift guard pins.
+    const buildQuotaDisplayModel = bindQuotaDisplayModel(createQuotaTextFormatter(t))
     const { sendCommand } = useTransport()
     const meshOverrides = useDashboardMeshOverrides()
     const [loading, setLoading] = useState(true)
@@ -289,10 +292,10 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                                     k={t('sessionInfo.rowWorkspaceGit')}
                                     v={
                                         <span>
-                                            {conv.git.branch || '(detached)'}
+                                            {conv.git.branch || t('sessionInfo.gitDetached')}
                                             {conv.git.ahead ? ` ↑${conv.git.ahead}` : ''}
                                             {conv.git.behind ? ` ↓${conv.git.behind}` : ''}
-                                            {conv.git.dirty ? ' · dirty' : ' · clean'}
+                                            {conv.git.dirty ? ` · ${t('sessionInfo.gitDirty')}` : ` · ${t('sessionInfo.gitClean')}`}
                                         </span>
                                     }
                                 />
@@ -383,11 +386,11 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                                     k={t('sessionInfo.rowGit')}
                                     v={
                                         <span>
-                                            {meshNode.git.branch || '(detached)'}
+                                            {meshNode.git.branch || t('sessionInfo.gitDetached')}
                                             {meshNode.git.headCommit ? ` @ ${String(meshNode.git.headCommit).slice(0, 10)}` : ''}
                                             {meshNode.git.ahead ? ` ↑${meshNode.git.ahead}` : ''}
                                             {meshNode.git.behind ? ` ↓${meshNode.git.behind}` : ''}
-                                            {meshNode.git.dirty ? ' · dirty' : ' · clean'}
+                                            {meshNode.git.dirty ? ` · ${t('sessionInfo.gitDirty')}` : ` · ${t('sessionInfo.gitClean')}`}
                                             {meshNode.git.upstream ? ` · ${meshNode.git.upstream}` : ''}
                                         </span>
                                     }
@@ -441,10 +444,10 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                                 <Row k={t('sessionInfo.rowMcpConfig')} v={<Mono>{data.coordinator.mcpConfigPath}</Mono>} />
                             )}
                             {data.coordinator.extraSystemPrompt && (
-                                <Block title="Per-launch extra prompt" body={data.coordinator.extraSystemPrompt} defaultOpen />
+                                <Block title={t('sessionInfo.blockExtraPrompt')} body={data.coordinator.extraSystemPrompt} defaultOpen />
                             )}
                             {data.coordinator.systemPrompt && (
-                                <Block title="Final system prompt (click to expand)" body={data.coordinator.systemPrompt} />
+                                <Block title={t('sessionInfo.blockFinalPrompt')} body={data.coordinator.systemPrompt} />
                             )}
                         </Section>
                     )}
@@ -517,7 +520,7 @@ function RuntimeMetadataSection({ meta }: { meta: unknown }) {
                 <Row k={t('sessionInfo.rowRestoredFromStorage')} v={m.restoredFromStorage ? 'yes' : 'no'} />
             )}
             {attached != null && <Row k={t('sessionInfo.rowAttachedClients')} v={String(attached)} />}
-            <Block title="Raw runtime metadata (click to expand)" body={safeJson(meta)} />
+            <Block title={t('sessionInfo.blockRawMetadata')} body={safeJson(meta)} />
         </Section>
     )
 }

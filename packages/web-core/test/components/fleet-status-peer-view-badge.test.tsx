@@ -43,21 +43,24 @@ function render(props: { peer?: FleetStatusPeerEntry; wsOnline: boolean; wsSessi
 }
 
 describe('FleetStatusPeerViewBadge', () => {
-    it('shows a quiet auxiliary badge when the fresh SUB view agrees with WS', () => {
+    it('renders NOTHING when the fresh SUB view agrees with WS (healthy case is silent)', () => {
+        // Owner rule 2026-09-25: no "all good" badge on every machine card.
         render({ peer, wsOnline: true, wsSessionCount: 3 })
-        const badge = container.querySelector('[data-testid="fleet-status-peer-view-badge"]')
-        expect(badge).not.toBeNull()
-        expect(badge?.getAttribute('data-diverged')).toBe('false')
+        expect(container.querySelector('[data-testid="fleet-status-peer-view-badge"]')).toBeNull()
+        expect(container.textContent).toBe('')
     })
 
     it('highlights the cross-check when WS is offline but the P2P peer view is fresh', () => {
         render({ peer, wsOnline: false, wsSessionCount: 0 })
         const badge = container.querySelector('[data-testid="fleet-status-peer-view-badge"]')
         expect(badge?.getAttribute('data-diverged')).toBe('true')
+        // Plain-language label and tooltip — never the internal engine name.
+        expect(badge?.textContent).toBe('Sync delayed')
         const tooltip = badge?.getAttribute('title') || ''
-        expect(tooltip).toContain('WS')
-        expect(tooltip).toContain('seqscribe')
+        expect(tooltip).toContain('offline')
         expect(tooltip).toContain('online')
+        expect(tooltip.toLowerCase()).not.toContain('seqscribe')
+        expect(tooltip).not.toContain('WS')
     })
 
     it('renders nothing for an old peer observation', () => {
@@ -155,7 +158,7 @@ describe('countDaemonFleetSessions — matches the daemon-side counting rule', (
         ], 'daemon_mach_local')).toBe(1)
     })
 
-    it('agrees with a peer report built from the same sessions (badge reads quiet)', () => {
+    it('agrees with a peer report built from the same sessions (badge stays hidden)', () => {
         const sessions = [
             row({ sessionKind: 'workspace', transport: 'cdp-page' }),
             row({ sessionKind: 'agent', transport: 'pty' }),
@@ -169,9 +172,7 @@ describe('countDaemonFleetSessions — matches the daemon-side counting rule', (
             wsOnline: true,
             wsSessionCount: local,
         })
-        expect(
-            container.querySelector('[data-testid="fleet-status-peer-view-badge"]')
-                ?.getAttribute('data-diverged'),
-        ).toBe('false')
+        // Agreement = healthy = nothing rendered (a diverged count would show the chip).
+        expect(container.querySelector('[data-testid="fleet-status-peer-view-badge"]')).toBeNull()
     })
 })

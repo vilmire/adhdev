@@ -1,6 +1,6 @@
 /**
  * Graph-orchestration usage counters + the open-gate listing that mesh_status
- * surfaces (docs/design/2026-09-25-graph-orchestration-simplification.md D3(b), D6).
+ * surfaces (the 2026-09-25 graph orchestration simplification D3(b), D6).
  *
  * Both ride the daemon's `active_work_query` response as extra keys of
  * `activeWork.summary`, which the mcp-server's mesh_status passes through

@@ -4,11 +4,16 @@
         "select": "选择语言"
     },
     "common": {
+        "closeDialog": "关闭对话框",
+        "noRecords": "没有记录。",
+        "close": "关闭",
+        "back": "返回",
         "cancel": "取消",
         "confirm": "确认",
         "confirmTitle": "确定继续吗？"
     },
     "connection": {
+        "loadingShort": "加载中…",
         "loadingDashboard": "正在加载仪表板...",
         "machinesConnectedCount": "已连接 {{connected}}/{{total}} 台机器",
         "disconnected": "已断开连接",
@@ -54,7 +59,7 @@
     },
     "dashboard": {
         "header": {
-            "title": "Dashboard",
+            "title": "仪表板",
             "guide": "仪表板指南",
             "guideOpen": "打开仪表板指南",
             "guideShort": "指南",
@@ -83,13 +88,24 @@
             "empty": "没有待处理的活动。"
         },
         "metaChips": {
+            "queuePending": "等待 {{count}}",
+            "queueTooltip": "队列：等待 {{pending}}，已分配 {{assigned}}，已完成 {{completed}}，失败 {{failed}}",
             "meshNode": "Mesh 节点"
         },
         "versionBanner": {
+            "restarting": "重启中",
+            "upgrading": "更新中…",
+            "unknownVersion": "未知",
+            "updateAvailable": "有可用更新",
             "required": "必需",
             "retry": "重试"
         },
         "remoteDialog": {
+            "liveRemoteView": "实时远程视图",
+            "remoteUnavailable": "远程视图不可用",
+            "remoteOnly": "仅远程",
+            "splitView": "分屏视图",
+            "remoteFallback": "远程",
             "history": "历史记录"
         },
         "sourceTimeline": {
@@ -275,6 +291,7 @@
         }
     },
     "cliStop": {
+        "stopProcess": "停止 CLI 进程",
         "title": "停止 {{agent}}？",
         "gracefulDescription": "在支持的情况下，“停止”会请求提供方正常退出。“强制停止”会立即结束运行时。",
         "forceOnlyDescription": "此提供方不支持正常停止。“强制停止”会立即结束运行时。",
@@ -289,6 +306,7 @@
         "answerQuestion": "回答问题"
     },
     "chatControls": {
+        "loading": "加载中…",
         "launchModelChanged": "{{from}} → {{to}}（已更改）",
         "launchModelSource": {
           "user": "已选择",
@@ -324,7 +342,7 @@
         "loadingMeshes": "正在加载网格…",
         "noMeshes": "此机器上未配置任何 Repo Mesh。请先创建或同步网格，然后重新打开此选择器。",
         "mesh": "Mesh",
-        "repoMesh": "Repo mesh",
+        "repoMesh": "Repo Mesh",
         "nodeCount_one": "{{count}} 个节点",
         "nodeCount_other": "{{count}} 个节点",
         "coordinatorWorkspace": "协调器工作区：{{path}}",
@@ -437,6 +455,42 @@
         "stopSessionTitle": "停止会话（终止该智能体）"
     },
     "mesh": {
+        "graph": {
+            "remoteBadge": "远程",
+            "activeSessionAria": "活动会话"
+        },
+        "statusTab": {
+            "v2ScopeHint": "按范围划分的待处理事件",
+            "providerSkewHint": "各节点上版本不同的提供方",
+            "providerSkew": "{{count}} 个提供方版本不一致",
+            "v2RatioHint": "待处理协调器事件中使用当前消息格式的比例",
+            "daemonBuildHint": "此节点上运行的守护进程确切构建（版本@提交）",
+            "quotaFailedHint": "此机器无法读取该提供方的用量",
+            "quotaOkNoWindowHint": "读取成功——此提供方没有可显示的百分比限额",
+            "nodeCountHint": "此机器上的 Mesh 节点（工作区/工作树）——共享同一套餐配额",
+            "nodeCount_other": "{{count}} 个节点",
+            "nodeCount_one": "{{count}} 个节点",
+            "daemonVersionHint": "此机器上运行的守护进程版本",
+            "blockedReasonHint": "此节点目前无法接收新的修改代码任务的原因",
+            "providerCapHint": "此节点上各提供方的进行中任务数 / 声明的上限",
+            "priorityHint": "调度偏好（越高越优先）",
+            "priority": "优先级 {{value}}",
+            "loadHint": "分配给此节点的进行中任务",
+            "load": "负载 {{count}}",
+            "readonlyCapHint": "正在进行的只读调查任务数 / 上限（写入上限的 2 倍）",
+            "readonlyCap": "只读 {{active}}/{{max}}",
+            "writeCapHint": "正在进行的修改代码任务数 / Mesh 全局并行上限",
+            "writeCap": "写入 {{active}}/{{max}}"
+        },
+        "manualSetup": {
+            "restartHint": "编辑配置后，请启动新的 CLI 会话。",
+            "configPath": "配置路径：",
+            "format": "格式：",
+            "server": "服务器：",
+            "titleFor": "{{provider}} 需要手动设置 MCP",
+            "title": "需要手动设置 MCP"
+        },
+        "openLiveGraph": "打开实时 Repo Mesh 图",
         "help": {
             "toggleAria": "Mesh 帮助",
             "toggleTitle": "Mesh 概念帮助",
@@ -644,7 +698,7 @@
             "machineTitle": "运行此代理的机器。保持为 \"any\" 可让协调器按标签路由。",
             "anyMachine": "任意机器",
             "offlineSuffix": "{{label}}（离线）",
-            "worktreeSuffix": "{{label}} — worktree（{{branch}}）",
+            "worktreeSuffix": "{{label}} — 工作树（{{branch}}）",
             "worktreeUnknownBranch": "未知分支",
             "worktreeDisabledTitle": "临时 worktree 节点无法新分配到 MAGI 插槽——清理时可能会消失。已有的分配仍会显示在此处，以便查看或清除。",
             "provider": "提供方",
@@ -776,9 +830,9 @@
             "refineWorktree": "refine 工作树",
             "needsFollowUp": "需要跟进",
             "offline": "离线",
-            "ahead": "ahead {{count}}",
-            "behind": "behind {{count}}",
-            "aheadBehind": "ahead {{ahead}} / behind {{behind}}"
+            "ahead": "领先 {{count}}",
+            "behind": "落后 {{count}}",
+            "aheadBehind": "领先 {{ahead}} / 落后 {{behind}}"
         },
         "summary": {
             "anchor": "默认分支锚点",
@@ -859,6 +913,9 @@
             "jumpToState": "点击跳转到此状态的下一张卡片"
         },
         "obs": {
+            "closeDetailAria": "关闭详情面板",
+            "layoutDirectionAria": "图布局方向",
+            "viewAria": "Mesh 视图",
             "tabOverview": "概览",
             "tabTasks": "蓝图",
             "tabStatus": "状态",
@@ -948,7 +1005,7 @@
             "directionLRTitle": "从左到右",
             "directionTBTitle": "从上到下",
             "fastForwardConfirmTitle": "对 {{label}} 应用 fast-forward？",
-            "fastForwardConfirmLabel": "Fast-forward"
+            "fastForwardConfirmLabel": "快进合并"
         },
         "notes": {
             "expired": "已过期",
@@ -996,6 +1053,18 @@
             "errorUnexpectedPayload": "图数据加载失败，请稍后重试。"
         },
         "health": {
+            "awaitingLiveData": "等待实时数据",
+            "recentFailuresCount": "最近失败 {{count}} 个",
+            "refineFailedCount": "{{count}} 个合并失败",
+            "refiningCount": "{{count}} 个合并中",
+            "failedCount": "{{count}} 个失败",
+            "statLedgerDone": "已记录完成",
+            "statRecent": "最近失败",
+            "statSessions": "会话",
+            "statFailed": "失败",
+            "statDone": "已完成",
+            "statActive": "进行中",
+            "statPending": "等待",
             "panelTitle": "网格健康面板",
             "lastActivity": "最近活动",
             "refineJobs": "精炼作业",
@@ -1004,6 +1073,8 @@
             "sessions": "会话"
         },
         "blueprint": {
+            "gateFallback": "关卡",
+            "readonlyBadge": "只读",
             "liveQueue": "实时队列",
             "scheduling": "调度预览",
             "schedObservedAt": "截至 {{time}}",
@@ -1204,6 +1275,9 @@
             "repoMeshJsonInvalid": "无法解析此仓库的 .adhdev/mesh.json，因此其提示词层被忽略。"
         },
         "nodeList": {
+            "addingIsExplicit": "是否添加仍由你决定。",
+            "compatibleWorkspace": "检测到兼容的 Git 工作区。",
+            "inspectingRepo": "正在检查 Git 仓库（只读）…",
             "title": "节点与提供方（{{count}}）",
             "descriptionCloud": "此 mesh 中的工作区及其首选 AI 工具。仅为设置清单 — 实时的图／git／会话真实数据由上方的 Mesh Host 状态负责。",
             "descriptionStandalone": "参与此 mesh 的工作区及其首选 AI 工具。",
@@ -1257,10 +1331,12 @@
             "machineTabCounts": "{{nodes}} 个节点 · {{slots}} 个插槽"
         },
         "host": {
+            "setupNode": "设置节点",
+            "willHostOn": "将托管于",
             "coordinatorProvider": "协调器 CLI 提供方",
             "coordinatorProviderHint": "为主机协调器会话启动的工具。",
             "useNodePriority": "使用节点提供方优先级",
-            "title": "Mesh Host daemon",
+            "title": "Mesh 主机守护进程",
             "descriptionSet": "拥有此 mesh 的协调器和实时真实数据（状态、队列、图、节点详情）的 daemon。设置主机时确立一次 — 不会在此重新分配。",
             "descriptionUnset": "此 mesh 尚无主机。请选择一个已连接的 daemon 并将其设为主机 — 此后由它拥有该 mesh 的协调器和实时真实数据（1:1 绑定）。",
             "hostLabel": "主机：",
@@ -1329,6 +1405,7 @@
             "empty": "没有路由标签——任务无需匹配任何特定能力即可在此运行。标签是可选的。"
         },
         "missions": {
+            "filterAllCount": "全部 {{count}}",
             "errorFetch": "获取完整任务目标失败",
             "title": "任务",
             "description": "协调器报告的当前和历史任务。展开某个目标可按需获取其完整文本。",
@@ -1383,27 +1460,27 @@
             "fallbackProvider": "Hermes CLI"
         },
         "providerAutoApprove": {
-            "title": "Provider auto-approve defaults",
-            "subtitle": "Per-provider default auto-approve mode for coordinator-launched workers.",
-            "loading": "Loading provider defaults…",
-            "loadError": "Failed to load provider auto-approve defaults.",
-            "noProviders": "No CLI providers with auto-approve modes detected on this mesh's machines.",
-            "awaitingNodes": "Waiting for {{count}} node(s) to report their installed providers…",
-            "partialInventory": "Provider list may be incomplete — {{count}} node(s) have not reported yet.",
-            "noHostDaemon": "Connect the mesh host daemon to configure provider auto-approve defaults.",
+            "title": "提供方自动批准默认值",
+            "subtitle": "协调器启动的工作者按提供方的默认自动批准模式。",
+            "loading": "正在加载提供方默认值…",
+            "loadError": "无法加载提供方自动批准默认值。",
+            "noProviders": "在此 Mesh 的机器上未检测到支持自动批准模式的 CLI 提供方。",
+            "awaitingNodes": "正在等待 {{count}} 个节点报告已安装的提供方…",
+            "partialInventory": "提供方列表可能不完整——还有 {{count}} 个节点尚未报告。",
+            "noHostDaemon": "连接 Mesh 主机守护进程后即可配置提供方自动批准默认值。",
             "repoSection": {
-                "title": "Repository default",
-                "hint": "Committed to .adhdev/mesh.json — shared with the whole team. Sets which mode a delegated worker requests; it does not grant permission to run it.",
-                "usesProviderDefault": "Uses provider default",
-                "clear": "Use provider default"
+                "title": "仓库默认值",
+                "hint": "提交到 .adhdev/mesh.json 并与整个团队共享。它只决定委派工作者请求哪种模式，并不授予运行权限。",
+                "usesProviderDefault": "使用提供方默认值",
+                "clear": "使用提供方默认值"
             },
             "machineSection": {
-                "title": "This machine authorization",
-                "hint": "Local only (meshes.json) — never committed. Controls whether workers on THIS machine auto-approve at all, and whether dangerous modes are allowed.",
-                "autoApproveOn": "Auto-approve enabled",
-                "autoApproveOff": "Auto-approve disabled",
-                "dangerousOn": "Dangerous modes allowed",
-                "dangerousOff": "Dangerous modes not allowed (will downgrade)",
+                "title": "此机器的授权",
+                "hint": "仅本地（meshes.json）——不会提交。控制此机器上的工作者是否自动批准，以及是否允许危险模式。",
+                "autoApproveOn": "自动批准已启用",
+                "autoApproveOff": "自动批准已禁用",
+                "dangerousOn": "允许危险模式",
+                "dangerousOff": "不允许危险模式（将降级）",
                 "autoApproveToggleLabel": "委派工作器自动批准",
                 "autoApproveToggleHint": "关闭后，委派到本机的工作器会在每个批准提示处停下。",
                 "dangerousToggleLabel": "允许本机使用 dangerous 模式",
@@ -1418,22 +1495,22 @@
                 "confirmConfirm": "选择加入"
             },
             "effectiveSection": {
-                "title": "Effective result on this machine",
-                "hint": "What each provider actually runs here after combining the repository default with this machine's authorization.",
-                "statusRequested": "Runs: {{mode}}",
-                "statusInvalidFallback": "Requested mode not found → runs provider default: {{mode}}",
-                "statusDowngraded": "{{requested}} requested → downgraded to {{mode}}: this machine has not opted into dangerous modes.",
-                "statusDisabled": "Auto-approve disabled on this machine — worker will ask for approval.",
-                "statusNone": "No usable auto-approve mode — worker will ask for approval."
+                "title": "在此机器上的实际结果",
+                "hint": "结合仓库默认值与此机器的授权后，各提供方在这里实际运行的模式。",
+                "statusRequested": "运行：{{mode}}",
+                "statusInvalidFallback": "未找到请求的模式 → 运行提供方默认值：{{mode}}",
+                "statusDowngraded": "请求 {{requested}} → 降级为 {{mode}}：此机器未允许危险模式。",
+                "statusDisabled": "此机器已禁用自动批准——工作者会请求批准。",
+                "statusNone": "没有可用的自动批准模式——工作者会请求批准。"
             },
             "dangerous": {
-                "sharedWarningTitle": "This is committed to the repository",
-                "sharedWarning": "This dangerous mode is committed to .adhdev/mesh.json and shared with the whole team. Each machine still runs it ONLY if that machine has opted into dangerous modes (delegatedWorkerDangerousModeAllow); otherwise it is downgraded to pty-parse."
+                "sharedWarningTitle": "此设置会提交到仓库",
+                "sharedWarning": "此危险模式会提交到 .adhdev/mesh.json 并与整个团队共享。每台机器只有在允许危险模式（delegatedWorkerDangerousModeAllow）时才会运行，否则会降级为 pty-parse。"
             },
-            "save": "Save to mesh.json",
-            "saving": "Saving…",
-            "saved": "Saved to .adhdev/mesh.json",
-            "saveError": "Failed to save provider defaults."
+            "save": "保存到 mesh.json",
+            "saving": "保存中…",
+            "saved": "已保存到 .adhdev/mesh.json",
+            "saveError": "无法保存提供方默认值。"
         },
         "graphs": {
             "includeTerminal": "包含已结束",
@@ -1464,7 +1541,7 @@
             "healthProbePending": "等待该节点的首次 git 探测",
             "healthPeerConnection": "节点连接状态 {{state}} — 无实时报告",
             "healthNoLiveReport": "该节点尚无实时运行报告",
-            "badgeWorktree": "worktree",
+            "badgeWorktree": "工作树",
             "badgeWorktreeTitle": "本地 worktree 节点",
             "badgeWorktreeBranchTitle": "worktree 分支 {{branch}}",
             "badgeBootstrapTitle": "worktree 引导进行中",
@@ -1483,6 +1560,11 @@
             "machineVersionsTitle": "该机器安装的提供方 CLI 版本 — 由其所有节点共享"
         },
         "overview": {
+            "sessionCount_other": "{{count}} 个会话",
+            "sessionCount_one": "{{count}} 个会话",
+            "leaseExpired": "租约已过期",
+            "providerUnknown": "提供方未知",
+            "truncated": "（已截断）",
             "missionCard": "任务",
             "ledgerCard": "台账",
             "queueCard": "队列",
@@ -1582,6 +1664,12 @@
         }
     },
     "chat": {
+        "showMoreChars": "显示更多（{{count}} 个字符）",
+        "collapse": "收起",
+        "you": "你",
+        "toolMessageAria": "工具消息",
+        "activityMessageAria": "活动消息",
+        "activityFallback": "活动",
         "copyMessage": "复制消息",
         "copyCode": "复制代码",
         "showMore": "展开",
@@ -1627,12 +1715,29 @@
         "reconnectMachineTitle": "该机器的自动重连已停止 — 立即重新连接"
     },
     "chatInput": {
+        "addMessageOptional": "添加消息（可选）…",
+        "showControls": "显示控件",
+        "hideControls": "隐藏控件",
+        "sendTo": "向 {{panel}} 发送消息",
         "attachImage": "附加图片",
         "placeholder": "向 {{panel}} 发送消息...",
         "sendMessage": "发送消息",
         "dropImage": "将图片拖放到此处"
     },
     "paneGroup": {
+        "hideFromDashboard": "从仪表板隐藏",
+        "removeShortcut": "移除快捷键",
+        "changeShortcut": "更改快捷键（{{shortcut}}）",
+        "meshChat": "Mesh 聊天",
+        "dropSplitRight": "向右拆分",
+        "dropMoveHere": "移到这里",
+        "dropSplitLeft": "向左拆分",
+        "relaunchWithCdp": "重新启动并连接",
+        "cdpDisconnected": "未连接到 IDE——聊天记录和截图不可用。",
+        "resizeHandleHint": "拖动以调整大小 · 双击以合并",
+        "shortcutListening": "等待输入…",
+        "shortcutPressCombo": "按下组合键（例如 {{example1}}、{{example2}}）",
+        "shortcutSetTitle": "设置快捷键",
         "loadingSessions": "正在加载会话...",
         "noConversations": "尚无对话",
         "waitingForDaemon": "正在等待你的守护进程",
@@ -1647,6 +1752,18 @@
         "moveTabHere": "将标签页移到此处查看"
     },
     "terminal": {
+        "growViewport": "放大终端视图",
+        "shrinkViewport": "缩小终端视图",
+        "sendInterrupt": "发送中断（Ctrl-C）",
+        "arrowRight": "右箭头",
+        "arrowDown": "下箭头",
+        "arrowLeft": "左箭头",
+        "arrowUp": "上箭头",
+        "keysPanelTitle": "终端按键",
+        "keysButton": "按键",
+        "copyHint": "复制所选的终端文本；未选择时复制当前可见屏幕",
+        "specDebugHint": "Spec 调试——查看当前状态、分区和转换历史",
+        "replayScrollbackHint": "加载更早的终端输出，以便向上滚动更多",
         "loadOlderOutput": "加载更早的终端输出",
         "loadingOlder": "正在加载更早的内容...",
         "debug": "调试",
@@ -1665,6 +1782,19 @@
         "switchToChat": "切换到聊天视图"
     },
     "launch": {
+        "updatedAt": "更新于 {{time}}",
+        "messageCountShort_other": "{{count}} 条消息",
+        "messageCountShort_one": "{{count}} 条消息",
+        "workspaceUnknown": "工作区未知",
+        "clearSelection": "清除",
+        "selectedSavedHistory": "已选的保存记录",
+        "refresh": "刷新",
+        "loadingShort": "加载中…",
+        "savedHistoryNoneYet": "还没有已保存的记录。ADHDev 保存对话后会显示在这里。",
+        "savedHistoryLoadedCount_other": "已加载 {{count}} 条已保存的记录。打开已保存的记录进行选择。",
+        "savedHistoryLoadedCount_one": "已加载 {{count}} 条已保存的记录。打开已保存的记录进行选择。",
+        "savedHistoryIntro": "重新开始，或打开已保存的记录继续之前的对话。",
+        "savedHistoryBadge": "已保存的记录",
         "resumeSavedHistory": "恢复已保存的历史记录",
         "startFresh": "全新开始",
         "resumingSavedHistory": "正在恢复已保存的历史记录…",
@@ -1774,7 +1904,7 @@
             "profileDescription": "你的名字在本地聊天会话和仪表板视图中的显示方式。",
             "displayNameLabel": "显示名称",
             "displayNameHint": "在聊天会话和团队仪表板上显示的你的名字。",
-            "displayNamePlaceholder": "Anonymous"
+            "displayNamePlaceholder": "匿名"
         },
         "onboarding": {
             "title": "欢迎使用 ADHDev",
@@ -1981,7 +2111,7 @@
             "minutesAgo": "{{minutes}} 分钟前",
             "hoursAgo": "{{hours}} 小时前",
             "daysAgo": "{{days}} 天前",
-            "frozenFeatureTitle": "已冻结 — 此功能已暂停，暂不可用。请参阅 docs/FROZEN_SURFACES.md"
+            "frozenFeatureTitle": "已冻结 — 此功能已暂停，暂不可用。"
         },
         "billing": {
             "currentPlan": "当前套餐：",
@@ -2098,11 +2228,11 @@
             "adminTokens": "管理员令牌",
             "adminEntry": "Admin",
             "footerPlanTitle": "当前套餐：{{plan}} — 管理或升级",
-            "expandSidebar": "Expand sidebar",
-            "collapseSidebar": "Collapse sidebar",
-            "collapse": "Collapse",
+            "expandSidebar": "展开侧边栏",
+            "collapseSidebar": "收起侧边栏",
+            "collapse": "收起",
             "logoutConfirm": "确定要退出登录吗？",
-            "logout": "Logout",
+            "logout": "退出登录",
             "machineLimitBadge": "机器已满",
             "machineLimitBadgeTitle": "已达到套餐 {{count}} 台机器{{plural}}的上限 — 打开账单页面升级",
             "pushBudget": "每日通知 {{used}}/{{limit}}"
@@ -2257,7 +2387,7 @@
         "apiKeys": {
             "title": "API 密钥",
             "keyCount": "{{count}} 个密钥",
-            "playground": "Playground",
+            "playground": "调试台",
             "create": "+ 创建",
             "scopeDaemonRead": "守护进程读取",
             "scopeDaemonReadDesc": "列出守护进程及状态",
@@ -2300,7 +2430,7 @@
             "revoke": "吊销",
             "usageLabel": "用量：",
             "apiReference": "API 参考 →",
-            "frozenFeatureTitle": "已冻结 — 此功能已暂停。请参阅 docs/FROZEN_SURFACES.md"
+            "frozenFeatureTitle": "已冻结 — 此功能已暂停。"
         },
         "shareModal": {
             "title": "分享会话",
@@ -2791,6 +2921,51 @@
         }
     },
     "app": {
+        "onboardingTour": {
+            "next": "下一步",
+            "getStarted": "开始使用",
+            "learnMore": "在文档中了解更多",
+            "closeAria": "关闭引导",
+            "allSetStandalone": {
+                "desc": "此仪表板已连接到本地守护进程。在“仪表板”标签页中启动会话，或在“机器 → 提供方”中添加更多提供方。",
+                "title": "一切就绪"
+            },
+            "getStartedCloud": {
+                "desc": "在要操控的机器上运行此命令，然后登录——守护进程会自动与你的仪表板配对。",
+                "title": "开始使用"
+            },
+            "orchestrate": {
+                "desc": "Repo Mesh（Cloud Pro）让一个协调器把工作分派给多台机器上的代理——并行 git 工作树、自动分支收敛，并从多个角度交叉检查同一仓库。",
+                "title": "编排你的代理"
+            },
+            "watchAndSteer": {
+                "desc": "实时跟进每个代理的会话并在其工作时进行引导——切换会话、截图，以及（IDE 会话）通过直连查看和控制屏幕。",
+                "title": "实时观看与引导"
+            },
+            "realtimeChat": {
+                "desc": "实时查看 AI 代理在做什么。发送消息、批准或拒绝操作——都能在浏览器或手机上完成。",
+                "title": "实时聊天"
+            },
+            "welcome": {
+                "desc": "直接在浏览器或手机上操控任何本地 CLI 编程代理——Claude Code、Codex、Antigravity CLI。代理在你的机器上持续运行，你在网页上控制它们。",
+                "title": "欢迎使用 ADHDev"
+            }
+        },
+        "installCommand": {
+            "orViaNpm": "或通过 npm：",
+            "clickToCopy": "点击复制"
+        },
+        "errorBoundary": {
+            "reload": "重新加载页面",
+            "description": "发生意外错误。请重新加载页面以继续。",
+            "title": "出了点问题"
+        },
+        "shellFreshness": {
+            "dismissAria": "关闭更新提示",
+            "later": "稍后",
+            "reload": "重新加载",
+            "message": "ADHDev 有新版本可用。"
+        },
         "openMenu": "打开菜单",
         "closeMenu": "关闭菜单"
     },
@@ -2816,6 +2991,7 @@
         "toggleFullscreen": "切换全屏"
     },
     "remote": {
+        "screenshotAlt": "远程屏幕",
         "mouse": "鼠标",
         "touch": "触摸",
         "connected": "已连接",
@@ -2862,6 +3038,13 @@
         "openChatHint": "点击打开此会话的聊天"
     },
     "sessionInfo": {
+        "gitClean": "无更改",
+        "gitDirty": "有未提交的更改",
+        "gitDetached": "（游离）",
+        "blockRawMetadata": "原始运行时元数据（点击展开）",
+        "blockFinalPrompt": "最终系统提示（点击展开）",
+        "blockExtraPrompt": "本次启动的额外提示",
+        "buttonHint": "会话信息——启动设置、Mesh 节点、系统提示等",
         "quotaOkNoWindows": "读取成功 — 无百分比窗口",
         "sectionMeshWorker": "由协调器派生的会话",
         "rowMeshId": "Mesh ID",
@@ -2916,6 +3099,131 @@
         "rowAttachedClients": "已连接客户端"
     },
     "machine": {
+        "mobile": {
+            "noHistoryMatches": "没有符合这些筛选条件的已保存记录。",
+            "workspaceMissing": "（工作区缺失）",
+            "resumableOnly": "仅显示可恢复的",
+            "sortMessages": "消息最多",
+            "sortOldest": "最早",
+            "sortRecent": "最新",
+            "filterModel": "按模型筛选",
+            "filterWorkspace": "按工作区筛选",
+            "searchHistory": "搜索标题或预览",
+            "useThisFolder": "使用此文件夹",
+            "browseDescription": "像普通文件浏览器一样浏览文件夹，然后将当前文件夹用于此机器。",
+            "browseTitle": "选择工作区",
+            "machineDetailsDescription": "会话、提供方、系统信息和日志",
+            "machineDetails": "机器详情",
+            "updateDescription": "使用最新守护进程重启此机器",
+            "inspect": "查看",
+            "createFolder": "创建文件夹",
+            "showMore": "再显示 {{count}} 个",
+            "showFewer": "收起",
+            "recentLaunches": "最近启动",
+            "currentChats": "当前聊天",
+            "machineFallback": "机器"
+        },
+        "daemonUpdate": {
+            "previewUnknownDescription": "应用已连接到预览环境，但服务器尚未报告预览目标版本。",
+            "previewUpToDateDescription": "此机器已在运行当前预览版守护进程。",
+            "previewUnknownTitle": "预览版更新状态未知",
+            "previewUpToDateTitle": "预览版守护进程已是最新",
+            "mismatchDescription": "此机器运行的守护进程版本与当前应用不同。请先更新再启动更多会话。",
+            "previewUpgradeDescription": "无需打开远程 shell，即可将此机器更新到当前预览版守护进程。",
+            "requiredDescription": "此机器的守护进程版本不兼容。请先更新再启动更多会话。",
+            "mismatchTitle": "检测到版本不一致",
+            "requiredTitle": "需要更新守护进程",
+            "upgrade": "更新",
+            "updateNow": "立即更新"
+        },
+        "launchPick": {
+            "empty": "还没有已保存的工作区。请在“工作区”标签页中添加，或在上方输入路径。",
+            "description": "不做任何默认假设。请选择已保存的工作区、默认工作区或主目录——或取消后输入路径。",
+            "title": "要在哪里运行？"
+        },
+        "workspacePicker": {
+            "noneSelected": "未选择工作区，将在主目录中启动。",
+            "selectedWorkspace": "已选工作区",
+            "defaultWorkspace": "默认工作区",
+            "enterPathFirst": "输入要启动的文件夹完整路径。",
+            "browseFirst": "请先选择一个文件夹再启动。",
+            "enterPath": "输入文件夹完整路径…",
+            "customPath": "自定义路径…",
+            "selectWorkspace": "选择工作区…",
+            "noneSaved": "（没有已保存的工作区——在“工作区”标签页中添加）",
+            "noWorkspaceHome": "（无工作区——在主目录中启动）"
+        },
+        "trustBadge": {
+            "externalUntrustedHint": "来自你添加的外部来源，且包含 ADHDev 将运行的代码。启用前请审查来源。",
+            "externalSafeHint": "来自你添加的外部来源。仅包含配置，ADHDev 不会运行其代码。",
+            "trustedWithScriptsHint": "由 ADHDev 官方提供。包含由 ADHDev 运行的脚本。",
+            "trustedHint": "由 ADHDev 官方提供。仅包含配置，不运行提供方代码。",
+            "userCustomHint": "你在自己的提供方文件夹中编写了此提供方，它运行你自己的代码。",
+            "externalUntrusted": "外部 · 运行代码",
+            "externalSafe": "外部",
+            "trustedWithScripts": "官方 · 脚本",
+            "trusted": "官方",
+            "userCustom": "自定义"
+        },
+        "providerSettings": {
+            "notifications": {
+                "description": "{{provider}} 状态变化时显示通知。",
+                "label": "通知"
+            },
+            "showCoordinatorSystemPrompt": {
+                "description": "将注入的系统提示显示为聊天消息。默认关闭——随时可在聊天标题栏的会话信息（ⓘ）中查看。",
+                "label": "显示系统提示消息"
+            },
+            "showTerminal": {
+                "description": "在聊天中显示终端命令及其输出。",
+                "label": "显示终端"
+            },
+            "showToolCalls": {
+                "description": "在聊天中显示工具调用摘要（搜索、编辑等）。",
+                "label": "显示工具调用"
+            },
+            "showThinking": {
+                "description": "在聊天中显示代理的推理过程。",
+                "label": "显示思考过程"
+            },
+            "longGeneratingThresholdSec": {
+                "description": "回复运行多久后触发长时间提醒。",
+                "label": "长时间阈值（秒）"
+            },
+            "longGeneratingAlert": {
+                "description": "回复耗时异常长时通知你。",
+                "label": "长时间运行提醒"
+            },
+            "approvalAlert": {
+                "description": "{{provider}} 等待你批准时通知你。",
+                "label": "批准通知"
+            },
+            "appPathOverride": {
+                "description": "IDE 应用的完整路径（可选）。留空则在常见安装位置中查找。",
+                "label": "应用路径"
+            },
+            "cliPathOverride": {
+                "description": "IDE 命令行启动器的完整路径（可选）。留空则使用检测到的路径。",
+                "label": "CLI 启动器路径"
+            },
+            "executableArgs": {
+                "description": "启动 {{provider}} 时替换默认参数的可选参数。留空则使用默认值。",
+                "label": "启动参数"
+            },
+            "executablePath": {
+                "description": "{{provider}} 程序的完整路径（可选）。留空则从 PATH 中查找。",
+                "label": "可执行文件路径"
+            },
+            "autoApprove": {
+                "description": "自动批准 {{provider}} 的工具调用和确认请求，不再询问。",
+                "label": "自动批准"
+            },
+            "enabled": {
+                "description": "在 ADHDev 检测、启动或检查此机器上的 {{provider}} 之前，请先开启。",
+                "label": "在此机器上启用"
+            },
+            "thisProvider": "此提供方"
+        },
         "launchConfirm": {
             "workspace": "工作区",
             "languageModel": "语言模型（可选）",
@@ -2928,6 +3236,8 @@
             "launching": "启动中…"
         },
         "confirmExternal": {
+            "aboutToActivateFrom": "你即将启用来自 {{source}} 的 {{provider}}。",
+            "aboutToActivate": "你即将启用 {{provider}}。",
             "dialogAria": "确认不受信任的外部提供程序",
             "title": "激活不受信任的外部提供程序？",
             "description": "此清单附带了守护进程将执行的 JavaScript。请将其视为不受信任的代码 — 启用前请审查源代码。",
@@ -2938,6 +3248,8 @@
         "workspace": {
         },
         "providers": {
+            "advancedHint": "显示技术详情：提供方的加载位置和原始元数据",
+            "sourcesHint": "管理你添加的提供方来源",
             "filter": "筛选",
             "sourceConfigTitle": "提供程序来源配置",
             "sourceConfigDesc": "守护进程查找提供程序清单的位置。会影响解析和重新加载。",
@@ -2995,6 +3307,20 @@
             "setActiveFailed": "设置活动来源失败"
         },
         "providerRow": {
+            "detectDisabledHint": "检查前请先启用该提供方",
+            "detectHint": "检查已配置的程序能否找到并运行",
+            "originExternalScripts": "已添加的外部来源 {{source}} · 会运行其自带代码——启用前请审查",
+            "originExternal": "已添加的外部来源 {{source}}",
+            "originUserFolder": "你的提供方文件夹",
+            "originOfficialScripts": "官方（ADHDev 注册表）· 含脚本",
+            "originOfficial": "官方（ADHDev 注册表）",
+            "labelOrigin": "提供方：",
+            "lifecycleDeprecated": "已停止支持",
+            "lifecycleExperimental": "实验性",
+            "lifecycleBeta": "测试版",
+            "lifecycleStable": "稳定版",
+            "checkFailed": "失败",
+            "checkOk": "正常",
             "statusDetected": "已检测",
             "statusNotDetected": "未检测",
             "statusEnabledUnchecked": "已启用（未检查）",
@@ -3055,6 +3381,11 @@
         "connectedMachines": {
         },
         "card": {
+            "transportDirectShort": "直连",
+            "transportRelayShort": "中继",
+            "coresCount_other": "{{count}} 核",
+            "coresCount_one": "{{count}} 核",
+            "onMachine": "在 {{machine}} 上",
             "sectionIDEs": "IDE",
             "sectionCLIs": "CLI",
             "sectionACPAgents": "ACP 代理",
@@ -3081,19 +3412,24 @@
             "transportRelay": "TURN 中继 — 直连失败",
             "transportDirect": "直接连接 (STUN/host)",
             "beacon": {
-                "behindLabel": "落后 {{count}} 条",
-                "behindTooltip": "此机器比对等节点落后 {{count}} 条(最多的主题：{{topic}})。",
-                "soleCopyLabel": "可能唯一副本",
-                "soleCopyTooltip": "此机器可能是 {{count}} 个主题中 {{entries}} 条记录的唯一持有者。对等节点尚未确认。",
-                "deferredLabel": "无法判定",
-                "deferredTooltip": "对等看板被截断，因此推迟了唯一副本判定 — 比较对象并非整个集群。",
-                "lastSyncedTooltip": "{{minutes}} 分钟前最后同步{{behindPart}}。",
-                "lastSyncedBehindPart": "，在 {{topic}} 上落后 {{count}} 条"
+                "lastSyncedBehindPart_other": "，还有 {{count}} 条记录待接收",
+                "lastSyncedBehindPart_one": "，还有 {{count}} 条记录待接收",
+                "soleCopyTooltip_other": "此机器上有 {{entries}} 条记录尚未备份到其他机器。请保持在线，直到其他机器完成同步。",
+                "soleCopyTooltip_one": "此机器上有 {{entries}} 条记录尚未备份到其他机器。请保持在线，直到其他机器完成同步。",
+                "soleCopyLabel_other": "{{count}} 条记录未备份",
+                "soleCopyLabel_one": "{{count}} 条记录未备份",
+                "behindTooltip_other": "此机器尚未收到来自其他机器的 {{count}} 条最新记录，通常会自动追上。",
+                "behindTooltip_one": "此机器尚未收到来自其他机器的 {{count}} 条最新记录，通常会自动追上。",
+                "behindLabel": "同步延迟",
+                "deferredLabel": "备份未确认",
+                "deferredTooltip": "无法确认此机器上的所有内容都已备份：只能与部分机器进行比较。这不是错误。",
+                "lastSyncedTooltip": "最近一次同步在 {{minutes}} 分钟前{{behindPart}}。"
             },
             "fleetPeer": {
-                "label": "seqscribe 对等视图",
-                "divergedLabel": "seqscribe 不一致",
-                "tooltip": "WS 路由：{{wsState}}，{{wsCount}} 个会话。seqscribe 对等视图：{{peerState}}，{{peerCount}} 个会话（{{age}} 秒前）。"
+                "stateOffline": "离线",
+                "stateOnline": "在线",
+                "divergedLabel": "同步延迟",
+                "tooltip": "服务器认为此机器{{wsState}}、有 {{wsCount}} 个会话，但你的另一台机器看到的是{{peerState}}、{{peerCount}} 个会话（{{age}} 秒前）。通常几秒内就会一致。"
             },
             "noAgentsRunning": "尚无运行中的代理",
             "launchCta": "启动 →"
@@ -3123,6 +3459,15 @@
             "providerSyncFailed": "提供方通道同步失败：{{error}}"
         },
         "commandCenter": {
+            "previewNoActionNeeded": "无需更新。",
+            "updateDaemon": "更新守护进程",
+            "updateToVersion": "更新到 v{{version}}",
+            "updateChannel": {
+                "preview": "预览版",
+                "stable": "稳定版"
+            },
+            "updateTargetWithChannel": "目标：v{{version}}（{{channel}}）",
+            "updateTarget": "目标：v{{version}}",
             "currentChats": "当前聊天",
             "recentLaunches": "最近启动",
             "daemonUpdate": "守护进程更新"
@@ -3137,6 +3482,8 @@
             "useThisFolder": "使用此文件夹"
         },
         "managedWorkspaces": {
+            "setDefaultHint": "设为默认工作区",
+            "unsetDefaultHint": "默认工作区——点击取消",
             "title": "工作区",
             "addWorkspace": "添加工作区",
             "empty": "还没有保存的工作区。点击 \"{{button}}\" 选择文件夹。",
@@ -3155,10 +3502,53 @@
             "renameFailed": "无法更新工作区名称"
         },
         "overview": {
+            "approx": "（约）",
+            "memory": "内存",
+            "cpuDetail": "平均 {{load}} / {{cores}} 核",
+            "cpuLoad": "CPU 负载",
+            "resourceUsage": "资源使用情况",
+            "waiting": "等待中…",
+            "uptime": "运行时间",
             "waitingForStats": "正在等待实时统计…",
             "waitingForStatsWithTotal": "正在等待实时统计… · 共 {{total}}"
         },
         "quota": {
+            "text": {
+                "failureKind": {
+                    "unknown": "未知错误",
+                    "no-data": "暂无读数",
+                    "setup-required": "需要设置",
+                    "unsupported": "不支持",
+                    "cli-unavailable": "未找到程序",
+                    "parse": "无法解析响应",
+                    "server": "提供方服务器错误",
+                    "network": "网络错误",
+                    "rate-limited": "请求受限",
+                    "quota-exhausted": "已达套餐上限",
+                    "unauthorized": "访问被拒绝",
+                    "expired-token": "登录已过期",
+                    "missing-credentials": "未登录"
+                },
+                "agoDays": "{{days}} 天 {{hours}} 小时前",
+                "agoHours": "{{hours}} 小时 {{minutes}} 分钟前",
+                "agoMinutes": "{{minutes}} 分钟前",
+                "justNow": "刚刚",
+                "unreadable": "无法读取配额",
+                "unavailable": "此机器上不可用",
+                "pool": "池",
+                "usageSessions": "{{count}} 个会话",
+                "usageTokens": "{{count}} 令牌",
+                "windowReset": "已重置 · 等待刷新",
+                "cue": {
+                    "stale": "已过时",
+                    "refreshing": "刷新中"
+                },
+                "resetsInDays": "{{days}} 天 {{hours}} 小时后重置",
+                "resetsInHours": "{{hours}} 小时 {{minutes}} 分钟后重置",
+                "resetsInMinutes": "{{minutes}} 分钟后重置",
+                "resetsNow": "即将重置",
+                "used": "已用 {{percent}}%"
+            },
             "title": "套餐用量",
             "sessionHint": "该机器上报的 5 小时滚动套餐窗口",
             "weeklyHint": "该机器上报的 7 天滚动套餐窗口",
@@ -3251,6 +3641,10 @@
         }
     },
     "sessionHost": {
+        "lastErrorLabel": "最近错误：",
+        "unknown": "未知",
+        "endpointLabel": "端点：",
+        "activeAgo": "{{time}} 活动",
         "title": "托管运行时恢复",
         "stopConfirmTitle": "停止 {{name}}？",
         "stopConfirmDescription": "这将终止该托管运行时。",
@@ -3319,7 +3713,21 @@
         "lifecycleInterrupted": "已中断"
     },
     "settings": {
+        "mobileMode": {
+            "workspaceMode": "工作区",
+            "chatMode": "聊天模式",
+            "descriptionWorkspace": "在手机和平板上使用完整的工作区布局。",
+            "descriptionChat": "使用以聊天为主的移动收件箱布局，更接近即时通讯应用。",
+            "label": "移动收件箱（聊天模式）"
+        },
         "theme": {
+            "preset": {
+                "honey": "温暖的黄色点缀",
+                "aurora": "粉色点缀主题",
+                "ember": "默认琥珀色主题，灵感来自首页",
+                "midnight": "经典紫色主题"
+            },
+            "presetCustomDescription": "完整自定义应用与聊天",
             "helloHelp": "你好！有什么可以帮你的？",
             "fixBug": "请修复这个 bug",
             "onIt": "马上处理！✨",
@@ -3352,6 +3760,15 @@
             "customLabel": "自定义"
         },
         "providerPriority": {
+            "undetectedHint_other": "{{count}} 个提供方在此未检测到——保留顺序，可用前将跳过。",
+            "undetectedHint_one": "{{count}} 个提供方在此未检测到——保留顺序，可用前将跳过。",
+            "orderHint": "启动时按从上到下的顺序使用。",
+            "noMoreProviders": "未检测到其他 CLI 提供方",
+            "selectProvider": "选择提供方…",
+            "moveDown": "下移",
+            "moveUp": "上移",
+            "keptUntilDetected": "保留在顺序中；在此机器上检测到之前，启动时会跳过。",
+            "emptyWarning": "未设置提供方顺序。未指定 CLI 提供方的启动将被拒绝。",
             "available": "可用",
             "notOnMachine": "此机器上不存在",
             "remove": "移除",
@@ -3359,10 +3776,21 @@
             "addProvider": "添加提供方"
         },
         "coordinatorPrompts": {
+            "saved": "已保存",
+            "saveAppend": "保存追加",
+            "saveOverride": "保存覆盖",
+            "saving": "保存中…",
+            "appendPlaceholder": "（空——此层不追加内容）",
+            "overridePlaceholder": "（空——使用默认基础提示）",
+            "placeholdersHint": "可用的占位符：",
+            "resetHint": "将字段留空并保存即可移除（恢复默认）。",
+            "intro": "自定义此守护进程的 Mesh 协调器会话所接收的提示。",
+            "loading": "加载中…",
+            "connectDaemon": "连接守护进程后即可编辑协调器提示。",
             "overrideDesc": "<strong>Override</strong> 会替换该 CLI 的守护进程内置基础提示词。",
             "appendDesc": "<strong>Append</strong> 会在胜出的基础提示词之后追加。",
-            "overrideLabel": "Override",
-            "appendLabel": "Append",
+            "overrideLabel": "覆盖",
+            "appendLabel": "追加",
             "expandLabel": "编辑提示词",
             "collapseLabel": "收起",
             "customizedBadge": "自定义",
@@ -3372,6 +3800,11 @@
             "sectionDescription": "本机网格协调器会话按 CLI 划分的基础提示词。网格级提示词位于 Repo Mesh 页面。"
         },
         "appearance": {
+            "modeSystem": "跟随系统",
+            "modeLight": "浅色",
+            "modeDark": "深色",
+            "mobileDescription": "选择在手机上以聊天应用形式打开仪表板，还是保留完整的工作区布局。",
+            "themeDescription": "选择预设或创建完全自定义的主题。自定义主题会控制整个应用——背景、文字、边框和聊天气泡。",
             "modeLabel": "模式",
             "themeLabel": "主题",
             "mobileLabel": "移动端",
@@ -3413,6 +3846,10 @@
         "confirmSwitchAction": "切换"
     },
     "landing": {
+        "gallery": {
+            "next": "下一个视图",
+            "previous": "上一个视图"
+        },
         "nav": {
             "home": "ADHDev 首页",
             "mesh": "Mesh",
@@ -3715,6 +4152,10 @@
         }
     },
     "interactivePrompt": {
+        "submit": "提交",
+        "submitting": "提交中…",
+        "cancelAria": "取消问题",
+        "actionRequired": "需要操作",
         "selectAllThatApply": "选择所有适用项",
         "multipleChoice": "多选",
         "singleChoice": "单选",
@@ -3725,11 +4166,58 @@
         "errorReviewUnconfirmed": "回答按键已送达终端，但问题仍显示在屏幕上——回答可能尚未提交。请检查终端：如果未提交，请直接在终端中回答；从这里重新发送可能会提交两次。"
     },
     "git": {
+        "diffPreview": {
+            "truncatedAfter": "以查看完整输出。",
+            "truncatedBefore": "更改已截断——请在本地运行",
+            "empty": "没有可显示的更改。",
+            "binary": "二进制文件——无法显示更改。",
+            "loading": "正在加载更改…"
+        },
         "changeList": {
+            "stagedHint": "已暂存",
+            "noChanges": "没有已更改的文件。",
             "binaryBadge": "bin",
             "truncatedNote": "文件列表已截断 — 在本地运行 <code>git status</code> 查看完整输出。"
         },
         "statusDialog": {
+            "working": "处理中…",
+            "includeUntracked": "包含未跟踪的文件",
+            "messageRequired": "消息（必填）",
+            "fileFallback": "文件",
+            "confirmRevert": "撤销 {{path}} 的更改？",
+            "confirmPop": "恢复最近的储藏？",
+            "confirmStash": "储藏更改",
+            "confirmCheckpoint": "创建检查点提交",
+            "copySummary": "复制摘要",
+            "copied": "已复制到剪贴板",
+            "checkoutSelected": "撤销所选",
+            "selectFileToRevert": "选择要撤销的文件",
+            "revertFile": "撤销 {{path}} 的更改",
+            "popStash": "恢复储藏",
+            "noStashes": "没有可恢复的储藏",
+            "popHint": "恢复最近的储藏",
+            "resolveBeforePop": "恢复储藏前请先解决冲突",
+            "stash": "储藏",
+            "stashHint": "暂时搁置当前更改（git stash）",
+            "resolveBeforeStash": "储藏前请先解决冲突",
+            "checkpoint": "检查点",
+            "checkpointHint": "创建一个 git 提交作为检查点",
+            "resolveBeforeCheckpoint": "创建检查点前请先解决冲突",
+            "selectFile": "选择文件以查看其更改",
+            "noDiffData": "没有差异数据。",
+            "loading": "加载中…",
+            "fileCount_other": "{{count}} 个文件",
+            "fileCount_one": "{{count}} 个文件",
+            "stashed": "已储藏 {{count}}",
+            "deleted": "已删除 {{count}}",
+            "untracked": "未跟踪 {{count}}",
+            "modified": "已修改 {{count}}",
+            "staged": "已暂存 {{count}}",
+            "behind": "落后 {{count}}",
+            "ahead": "领先 {{count}}",
+            "refresh": "刷新",
+            "openOnGithub": "在 GitHub 上打开",
+            "title": "Git 状态",
             "conflicts": "冲突",
             "clean": "干净"
         }

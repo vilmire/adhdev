@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ToggleRow } from './ToggleRow'
 import { IconChat } from '../Icons'
 
@@ -59,6 +60,7 @@ export function setMobileDashboardMode(mode: MobileDashboardMode) {
 }
 
 export function MobileDashboardModeSection() {
+    const { t } = useTranslation('common')
     const [chatModeEnabled, setChatModeEnabled] = useState(true)
 
     useEffect(() => {
@@ -67,10 +69,10 @@ export function MobileDashboardModeSection() {
 
     return (
         <ToggleRow
-            label={<span className="flex items-center gap-1.5"><IconChat size={15} /> Mobile Inbox (Chat Mode)</span>}
+            label={<span className="flex items-center gap-1.5"><IconChat size={15} /> {t('settings.mobileMode.label')}</span>}
             description={chatModeEnabled
-                ? 'Use the chat-first mobile inbox layout. This keeps mobile closer to a messaging app.'
-                : 'Use the full workspace layout on phones and tablets.'}
+                ? t('settings.mobileMode.descriptionChat')
+                : t('settings.mobileMode.descriptionWorkspace')}
             checked={chatModeEnabled}
             onChange={(checked) => {
                 setChatModeEnabled(checked)
@@ -78,7 +80,7 @@ export function MobileDashboardModeSection() {
             }}
             extra={
                 <span className="text-2xs text-text-muted">
-                    {chatModeEnabled ? 'Chat mode' : 'Workspace'}
+                    {chatModeEnabled ? t('settings.mobileMode.chatMode') : t('settings.mobileMode.workspaceMode')}
                 </span>
             }
         />

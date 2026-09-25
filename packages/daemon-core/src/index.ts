@@ -1131,7 +1131,7 @@ export {
   printQuotaInstallError,
 } from './quota/cli.js';
 
-// seqscribe integration (docs/design/2026-08-26-seqscribe-integration-plan.md).
+// seqscribe integration (the 2026-08-26 seqscribe integration plan).
 // Phase 0 surface: node lifecycle, the topic table, the authority wiring and
 // the status projection. Phase 1 adds the fleet-secret store (auth_ok delivery)
 // and the assistant.journal producer/consumer API.

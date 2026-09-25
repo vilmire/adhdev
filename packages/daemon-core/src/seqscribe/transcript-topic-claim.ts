@@ -1,6 +1,6 @@
 /**
  * transcript topic identity claim — fail-closed defense against safeSessionId
- * collisions (design §3.5, docs/design/2026-08-29-phase3-transcript-migration.md).
+ * collisions (design §3.5, the 2026-08-29 phase 3 transcript migration design).
  *
  * `safeSessionId` (topics.ts) is a deliberately non-injective, non-reversible
  * sanitizer: two distinct raw session ids (`'A:B'`, `'a.b'`, `'a_b'`, ...) can

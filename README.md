@@ -170,7 +170,7 @@ Everything runs on your machine as a local daemon with an embedded dashboard —
 Useful flags:
 
 ```bash
-adhdev standalone --host          # allow other devices on the same LAN
+adhdev standalone --host 0.0.0.0  # allow other devices on the same LAN
 adhdev standalone --port 8080     # custom port
 adhdev standalone --token mysecret # token auth for scripts / operator access
 adhdev standalone --no-open       # don't auto-open the browser
@@ -237,7 +237,7 @@ Providers are data, not code you have to fork. A provider is a versioned manifes
 
 - `web-devconsole` (in this repo) is a Monaco-based editor for writing and testing provider scripts against a live session.
 - Verification tiers are explicit: **Verified / Partial / Unverified**. "Built-in" only means the integration exists.
-- Guides: [Supported Providers](https://docs.adhf.dev/reference/supported-providers) · [Provider manifest guide](https://docs.adhf.dev/reference/supported-providers)
+- Guides: [Supported Providers](https://docs.adhf.dev/reference/supported-providers) · [Custom providers guide](https://docs.adhf.dev/guide/custom-providers)
 
 If you get an agent working that isn't in the catalog, that's the single most useful contribution to this repo.
 

@@ -44056,7 +44056,7 @@ ${renderWorkerProtocolFooter2(input)}`;
           allowAutoPublishSubmoduleMainCommits: false,
           dirtyWorkspaceBehavior: "warn",
           // Mesh-wide task cap is effectively unlimited by default: the real concurrency
-          // limits live per node / per capability slot (ORCHESTRATION_NODE_SLOTS.md), so a
+          // limits live per node / per capability slot (node capability slots design, 2026-07-09), so a
           // global ceiling is rarely meaningful. The UI hides this control; set it via the
           // API only to impose a deliberate mesh-wide cap.
           maxParallelTasks: 200,
@@ -147624,7 +147624,7 @@ ${ptyResult.output.slice(-2e3)}`);
                   // never rebuild it field-by-field (deploy-lag design §a).
                   ...node.nodeFacts && typeof node.nodeFacts === "object" ? { nodeFacts: node.nodeFacts } : {},
                   providerPriority,
-                  // ORCHESTRATION_NODE_SLOTS.md: surface the node's capability
+                  // node capability slots design, 2026-07-09: surface the node's capability
                   // slots so the dashboard slot editor can read them. Only
                   // emitted when explicitly configured (derived-from-legacy
                   // slots stay implicit — the editor shows the legacy fields).
@@ -181440,7 +181440,7 @@ var MESH_MAGI_KIND_PANEL_LIST_TOOL = {
 };
 var MESH_NODE_SLOTS_SET_TOOL = {
   name: "mesh_node_slots_set",
-  description: "PROPOSE (dry-run) or APPLY a mesh node's capability-slot list (policy.slots) \u2014 the orchestrator's surface for autonomously adjusting a node's AI-tool profile mid-run (ORCHESTRATION_NODE_SLOTS.md \xA75). A node's slots drive task\u2192node fitness routing and MAGI fan-out, so changing them changes how work is distributed. IMPORTANT \u2014 WHOLESALE REPLACEMENT: the `slots` you pass become the node's COMPLETE new slot list; any prior slot not in the list is dropped (not merged). Because it silently replaces the profile, get EXPLICIT user approval before writing: the default dry-run (write=false) returns `currentSlots` vs `proposedSlots` for you to present as a diff \u2014 re-run with write=true ONLY after the user approves. Apply goes through update_mesh_node (machine-local node policy).",
+  description: "PROPOSE (dry-run) or APPLY a mesh node's capability-slot list (policy.slots) \u2014 the orchestrator's surface for autonomously adjusting a node's AI-tool profile mid-run. A node's slots drive task\u2192node fitness routing and MAGI fan-out, so changing them changes how work is distributed. IMPORTANT \u2014 WHOLESALE REPLACEMENT: the `slots` you pass become the node's COMPLETE new slot list; any prior slot not in the list is dropped (not merged). Because it silently replaces the profile, get EXPLICIT user approval before writing: the default dry-run (write=false) returns `currentSlots` vs `proposedSlots` for you to present as a diff \u2014 re-run with write=true ONLY after the user approves. Apply goes through update_mesh_node (machine-local node policy).",
   inputSchema: {
     type: "object",
     properties: {

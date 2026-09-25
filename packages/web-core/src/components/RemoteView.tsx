@@ -393,7 +393,7 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
                     <img
                         ref={imgRef}
                         src={displayScreenshot}
-                        alt="Remote View"
+                        alt={t('remote.screenshotAlt')}
                         style={{
                             display: 'block',
                             maxWidth: '100%',

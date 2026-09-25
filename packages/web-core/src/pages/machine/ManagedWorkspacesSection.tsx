@@ -282,7 +282,7 @@ export default function ManagedWorkspacesSection({
                                 >
                                     <button
                                         type="button"
-                                        title={isDefault ? 'Default workspace — click to unset' : 'Set as default workspace'}
+                                        title={isDefault ? t('machine.managedWorkspaces.unsetDefaultHint') : t('machine.managedWorkspaces.setDefaultHint')}
                                         disabled={workspaceBusy}
                                         onClick={() => void handleWorkspaceSetDefault(isDefault ? null : w.id)}
                                         className={`text-base leading-none shrink-0 transition-colors ${

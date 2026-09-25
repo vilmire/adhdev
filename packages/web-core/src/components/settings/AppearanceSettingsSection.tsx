@@ -17,10 +17,6 @@ export interface AppearanceSettingsSectionProps {
     fontsSlot?: ReactNode
 }
 
-const DEFAULT_THEME_DESCRIPTION =
-    'Choose a preset or create a fully custom theme. Custom themes control the entire app — backgrounds, text, borders, and chat bubbles.'
-const DEFAULT_MOBILE_DESCRIPTION =
-    'Choose whether the dashboard opens like a chat app on phones or keeps the full workspace layout.'
 
 /**
  * Shared Appearance settings body used by both the cloud and standalone
@@ -30,11 +26,13 @@ const DEFAULT_MOBILE_DESCRIPTION =
  * each host so they can keep their own copy and framing.
  */
 export function AppearanceSettingsSection({
-    themeDescription = DEFAULT_THEME_DESCRIPTION,
-    mobileDescription = DEFAULT_MOBILE_DESCRIPTION,
+    themeDescription,
+    mobileDescription,
     fontsSlot,
 }: AppearanceSettingsSectionProps) {
     const { t } = useTranslation('common')
+    const themeCopy = themeDescription ?? t('settings.appearance.themeDescription')
+    const mobileCopy = mobileDescription ?? t('settings.appearance.mobileDescription')
     return (
         <div className="flex flex-col gap-5">
             {/* Mode */}
@@ -46,7 +44,7 @@ export function AppearanceSettingsSection({
             {/* Theme */}
             <div className="border-t border-border-subtle pt-4">
                 <div className="text-xs text-text-muted mb-1 font-medium">{t('settings.appearance.themeLabel')}</div>
-                <p className="text-2xs text-text-muted mb-3">{themeDescription}</p>
+                <p className="text-2xs text-text-muted mb-3">{themeCopy}</p>
                 <ChatThemeSection />
             </div>
 
@@ -62,7 +60,7 @@ export function AppearanceSettingsSection({
             {/* Mobile */}
             <div className="border-t border-border-subtle pt-4">
                 <div className="text-xs text-text-muted mb-1 font-medium">{t('settings.appearance.mobileLabel')}</div>
-                <p className="text-2xs text-text-muted mb-3">{mobileDescription}</p>
+                <p className="text-2xs text-text-muted mb-3">{mobileCopy}</p>
                 <MobileDashboardModeSection />
             </div>
         </div>

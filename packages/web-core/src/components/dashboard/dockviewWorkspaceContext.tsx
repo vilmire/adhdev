@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import {
     createContext,
     useCallback,
@@ -79,6 +80,7 @@ function useDockviewHeaderRenderTick(props: Pick<IDockviewPanelHeaderProps, 'api
 
 export function DashboardDockviewRemotePanel({ params }: IDockviewPanelProps<DashboardDockviewRemotePanelParams>) {
     const ctx = useDashboardDockviewContext()
+    const { t } = useTranslation('common')
     const activeConv = useMemo(
         () => getPreferredConversationForIde([...ctx.conversationsByTabKey.values()], params.routeId),
         [ctx.conversationsByTabKey, params.routeId],
@@ -98,7 +100,7 @@ export function DashboardDockviewRemotePanel({ params }: IDockviewPanelProps<Das
     if (!activeConv) {
         return (
             <div className="h-full min-h-0 min-w-0 flex items-center justify-center text-sm text-text-muted">
-                Remote view unavailable
+                {t('dashboard.remoteDialog.remoteUnavailable')}
             </div>
         )
     }
@@ -137,6 +139,7 @@ export function DashboardDockviewWatermark() {
 export function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockviewPanelParams | DashboardDockviewRemotePanelParams>) {
     useDockviewHeaderRenderTick(props)
     const ctx = useDashboardDockviewContext()
+    const { t } = useTranslation('common')
     const activatePanel = useCallback((event: React.MouseEvent | React.PointerEvent | React.TouchEvent) => {
         if ('button' in event && event.button !== 0) return
         props.api.setActive()
@@ -173,7 +176,7 @@ export function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardD
         return (
             <div
                 className={`adhdev-dockview-tab${isActive ? ' is-active' : ''}${isGroupActive ? ' is-group-active' : ''}`}
-                title={props.api.title || 'Remote'}
+                title={props.api.title || t('dashboard.remoteDialog.remoteFallback')}
                 data-tab-key={remoteConversation?.tabKey || ''}
                 onMouseDown={activatePanel}
                 onTouchStart={activatePanel}
@@ -182,16 +185,16 @@ export function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardD
                     <span className="adhdev-dockview-tab-status-text is-connected">◫</span>
                 </div>
                 <div className="adhdev-dockview-tab-copy">
-                    <div className="adhdev-dockview-tab-primary">{props.api.title || 'Remote'}</div>
+                    <div className="adhdev-dockview-tab-primary">{props.api.title || t('dashboard.remoteDialog.remoteFallback')}</div>
                     <div className="adhdev-dockview-tab-meta">
                         {remoteConversation?.machineName ? (
                             <>
-                                <span>Live remote view</span>
+                                <span>{t('dashboard.remoteDialog.liveRemoteView')}</span>
                                 <span className="adhdev-dockview-tab-dot">·</span>
                                 <span className="adhdev-dockview-tab-machine">{remoteConversation.machineName}</span>
                             </>
                         ) : (
-                            <span>Live remote view</span>
+                            <span>{t('dashboard.remoteDialog.liveRemoteView')}</span>
                         )}
                     </div>
                 </div>

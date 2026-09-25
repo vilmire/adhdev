@@ -187,7 +187,7 @@ describe('MeshRuntimeStore — round-robin cursor', () => {
     });
 });
 
-// ── Fitness strategy: task→capability-slot ranking (ORCHESTRATION_NODE_SLOTS.md) ──
+// ── Fitness strategy: task→capability-slot ranking (node capability slots design, 2026-07-09) ──
 describe('mesh scheduling pipeline — fitness strategy', () => {
     afterEach(() => {
         __resetMeshRuntimeStoreForTests();

@@ -36,7 +36,7 @@ function firstProviderPriority(policy: unknown): string | undefined {
 
 /**
  * Ordered, de-duplicated provider types a node can launch, resolved from
- * `policy.slots` (the single source of truth — ORCHESTRATION_NODE_SLOTS.md) with a
+ * `policy.slots` (the single source of truth — node capability slots design, 2026-07-09) with a
  * fallback to the legacy `policy.providerPriority`. Used to advertise a
  * `provider=<type>` capability tag for EVERY provider the node supports, not just
  * providerPriority[0], so required_tags: ["provider=cursor-cli"] is satisfiable on a

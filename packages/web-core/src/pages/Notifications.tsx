@@ -20,6 +20,7 @@ import type { ProviderSettingsEntry, ProviderInfo } from './machine/types'
 import { buildProviderSettingsEntries, extractProviderSettingsPayload } from './machine/providerSettings'
 import { IconBell, IconMonitor, IconCheckCircle, IconZap, IconPlug, IconVolume } from '../components/Icons'
 import { getMachineDisplayName } from '../utils/daemon-utils'
+import { localizeProviderSetting } from '../utils/provider-setting-copy'
 
 /* ─── helpers ──────────────────────────────────────────────── */
 
@@ -444,7 +445,7 @@ function ProviderCategoryDetail({ entries, multiMachine, savingKey, onSet }: {
                                 const saving = savingKey === `${prov.type}.${s.key}`
                                 return (
                                     <div key={s.key} className="flex items-center gap-1 shrink-0">
-                                        <span className="text-4xs text-text-muted">{s.label || s.key}</span>
+                                        <span className="text-4xs text-text-muted">{localizeProviderSetting(t, s, prov.displayName).label}</span>
                                         {saving && <span className="text-5xs text-violet-400">...</span>}
                                         <Toggle checked={val} onChange={v => void onSet(prov.machineId, prov.type, s.key, v)} />
                                     </div>

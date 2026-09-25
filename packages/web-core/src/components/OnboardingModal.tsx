@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { IconX } from './Icons'
 import ModalPortal from './ui/ModalPortal'
 import { IconCheckCircle, IconEye, IconGitBranch, IconGlobe, IconInfo, IconChat, IconMousePointer, IconRocket, IconSmartphone } from './Icons'
@@ -10,57 +11,36 @@ interface OnboardingModalProps {
   standalone?: boolean
 }
 
+/** `key` selects the copy under `app.onboardingTour.<key>.{title,desc}` (common ns). */
 interface OnboardingStep {
   icon: typeof IconInfo
-  title: string
-  desc: string
+  key: string
   visual?: typeof IconInfo
   code?: string
 }
 
 const SHARED_STEPS: OnboardingStep[] = [
-  {
-    icon: IconRocket,
-    title: 'Welcome to ADHDev',
-    desc: 'Drive any local CLI coding agent — Claude Code, Codex, Antigravity CLI — straight from your browser or phone. The agents keep running on your machine; you control them from the web.',
-    visual: IconGlobe,
-  },
-  {
-    icon: IconChat,
-    title: 'Real-time chat',
-    desc: 'See what your AI agent is doing in real-time. Send messages, approve or reject actions — all from your browser or phone.',
-    visual: IconSmartphone,
-  },
-  {
-    icon: IconEye,
-    title: 'Watch and steer, live',
-    desc: "Follow each agent's session in real time and steer it as it works — switch sessions, take screenshots, and (for IDE sessions) view and control the screen over a P2P connection.",
-    visual: IconMousePointer,
-  },
-  {
-    icon: IconGitBranch,
-    title: 'Orchestrate your agents',
-    desc: 'Repo Mesh (Cloud Pro) lets one coordinator hand work to agents across many machines — parallel git worktrees, automatic branch convergence, and cross-checking the same repo from several angles.',
-    visual: IconGitBranch,
-  },
+  { icon: IconRocket, key: 'welcome', visual: IconGlobe },
+  { icon: IconChat, key: 'realtimeChat', visual: IconSmartphone },
+  { icon: IconEye, key: 'watchAndSteer', visual: IconMousePointer },
+  { icon: IconGitBranch, key: 'orchestrate', visual: IconGitBranch },
 ]
 
 const CLOUD_FINAL_STEP: OnboardingStep = {
   icon: IconRocket,
-  title: 'Get started',
-  desc: 'Run this on any machine you want to drive, then sign in — the daemon pairs itself to your dashboard automatically.',
+  key: 'getStartedCloud',
   code: 'curl -fsSL https://adhf.dev/install | sh',
 }
 
 const STANDALONE_FINAL_STEP: OnboardingStep = {
   icon: IconRocket,
-  title: "You're all set",
-  desc: 'This dashboard is already connected to your local daemon. Start a session from the Dashboard tab, or add more providers under Machines → Providers.',
+  key: 'allSetStandalone',
   visual: IconCheckCircle,
 }
 
 export default function OnboardingModal({ onClose, standalone = false }: OnboardingModalProps) {
   const [step, setStep] = useState(0)
+  const { t } = useTranslation('common')
   const steps = [...SHARED_STEPS, standalone ? STANDALONE_FINAL_STEP : CLOUD_FINAL_STEP]
   const current = steps[step]
   const isLast = step === steps.length - 1
@@ -109,7 +89,7 @@ export default function OnboardingModal({ onClose, standalone = false }: Onboard
             visual position identical to the old 20px icon-only button. */}
         <button
           onClick={onClose}
-          aria-label="Close onboarding"
+          aria-label={t('app.onboardingTour.closeAria')}
           className="absolute top-3 right-4 bg-transparent border-none text-text-muted hover:text-text-primary transition-colors cursor-pointer"
           style={{ minWidth: 44, minHeight: 44, margin: -6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
         ><IconX size={20} /></button>
@@ -143,13 +123,13 @@ export default function OnboardingModal({ onClose, standalone = false }: Onboard
             color: 'var(--text-primary)', marginBottom: '0.75rem',
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
           }}>
-            <current.icon size={18} /> {current.title}
+            <current.icon size={18} /> {t(`app.onboardingTour.${current.key}.title`)}
           </h2>
           <p style={{
             fontSize: '0.9rem', color: 'var(--text-secondary)',
             lineHeight: 1.6, marginBottom: '1.25rem',
           }}>
-            {current.desc}
+            {t(`app.onboardingTour.${current.key}.desc`)}
           </p>
           {current.code && (
             <div style={{
@@ -172,7 +152,7 @@ export default function OnboardingModal({ onClose, standalone = false }: Onboard
               rel="noopener noreferrer"
               style={{ fontSize: '0.75rem', color: 'var(--accent, #a78bfa)', textDecoration: 'none' }}
             >
-              Learn more in the docs →
+              {t('app.onboardingTour.learnMore')} →
             </a>
           )}
         </div>
@@ -183,7 +163,7 @@ export default function OnboardingModal({ onClose, standalone = false }: Onboard
             onClick={() => isLast ? onClose() : setStep(s => s + 1)}
             className="btn btn-primary"
           >
-            {isLast ? 'Get Started →' : 'Next →'}
+            {isLast ? `${t('app.onboardingTour.getStarted')} →` : `${t('app.onboardingTour.next')} →`}
           </button>
         </div>
       </div>

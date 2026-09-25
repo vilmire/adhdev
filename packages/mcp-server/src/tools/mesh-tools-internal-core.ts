@@ -558,7 +558,7 @@ export function findNodeByWorkspace(mesh: LocalMeshEntry, workspace: string): Lo
  * SLOTS FIRST, providerPriority as the LEGACY FALLBACK — deliberately aligned
  * with the auto-launch/queue-drain path (daemon-core resolveUsableProvider →
  * resolveNodeCapabilitySlots), which reads `policy.slots` as the authoritative
- * capability list (ORCHESTRATION_NODE_SLOTS.md) and only derives from
+ * capability list (node capability slots design, 2026-07-09) and only derives from
  * providerPriority when a node declares no slots at all.
  *
  * WHY THE ORDER WAS FLIPPED: this function used to prefer providerPriority, so
@@ -585,7 +585,7 @@ export function readProviderPriority(policy: unknown): string[] {
 
 /**
  * Ordered, de-duplicated provider types a node can launch — every provider it could
- * be asked to run. Reads `policy.slots` (the SSOT — ORCHESTRATION_NODE_SLOTS.md),
+ * be asked to run. Reads `policy.slots` (the SSOT — node capability slots design, 2026-07-09),
  * unioned with the legacy `policy.providerPriority`. Used to ENUMERATE per-provider
  * capability-tag sets for observability (buildNodeCapabilityExposure). Note: the
  * mesh_launch_session fail-closed GATE deliberately checks slots ALONE (not this

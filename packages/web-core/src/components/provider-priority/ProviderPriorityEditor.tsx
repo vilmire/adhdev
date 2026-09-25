@@ -63,7 +63,7 @@ export default function ProviderPriorityEditor({
       <div className="flex flex-col gap-2">
         {orderedValue.length === 0 ? (
           <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-            No provider priority configured. Launches without an explicit CLI provider will fail closed.
+            {t('settings.providerPriority.emptyWarning')}
           </div>
         ) : orderedValue.map((type, index) => {
           const provider = availableByType.get(type)
@@ -82,16 +82,16 @@ export default function ProviderPriorityEditor({
                   )}
                 </div>
                 <div className="mt-1 text-3xs text-text-muted">
-                  {provider ? `${provider.label} · ${provider.statusLabel}` : 'Kept in order; skipped at launch until detected here.'}
+                  {provider ? `${provider.label} · ${provider.statusLabel}` : t('settings.providerPriority.keptUntilDetected')}
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-1">
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm inline-flex h-8 w-8 items-center justify-center p-0"
-                  aria-label="Move up"
+                  aria-label={t('settings.providerPriority.moveUp')}
                   disabled={disabled || index === 0}
-                  title="Move up"
+                  title={t('settings.providerPriority.moveUp')}
                   onClick={() => onChange(moveProviderPriorityItem(orderedValue, type, 'up'))}
                 >
                   <IconChevron direction="up" />
@@ -99,9 +99,9 @@ export default function ProviderPriorityEditor({
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm inline-flex h-8 w-8 items-center justify-center p-0"
-                  aria-label="Move down"
+                  aria-label={t('settings.providerPriority.moveDown')}
                   disabled={disabled || index === orderedValue.length - 1}
-                  title="Move down"
+                  title={t('settings.providerPriority.moveDown')}
                   onClick={() => onChange(moveProviderPriorityItem(orderedValue, type, 'down'))}
                 >
                   <IconChevron direction="down" />
@@ -121,7 +121,7 @@ export default function ProviderPriorityEditor({
             onChange={event => setAddType(event.target.value)}
             disabled={disabled || addableProviders.length === 0}
           >
-            <option value="">{addableProviders.length ? 'Select provider…' : 'No additional detected CLI providers'}</option>
+            <option value="">{addableProviders.length ? t('settings.providerPriority.selectProvider') : t('settings.providerPriority.noMoreProviders')}</option>
             {addableProviders.map(provider => (
               <option key={provider.type} value={provider.type}>{provider.label} ({provider.type})</option>
             ))}
@@ -131,8 +131,8 @@ export default function ProviderPriorityEditor({
         {saveButton}
       </div>
       <div className="mt-2 text-2xs text-text-muted">
-        Launches use this order, top to bottom.
-        {undetectedCount > 0 ? ` ${undetectedCount} provider${undetectedCount === 1 ? '' : 's'} not detected here — kept in order, skipped until available.` : ''}
+        {t('settings.providerPriority.orderHint')}
+        {undetectedCount > 0 ? ` ${t('settings.providerPriority.undetectedHint', { count: undetectedCount })}` : ''}
       </div>
     </div>
   )

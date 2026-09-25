@@ -1893,7 +1893,7 @@ export async function meshLaunchSession(
         if (requestedType) {
             // PROVIDER-TYPE-HONORED: an explicit type is validated ONLY against the node's
             // capability slots (policy.slots) — the single authoritative capability list
-            // (ORCHESTRATION_NODE_SLOTS.md). When the node declares slots and none names the
+            // (node capability slots design, 2026-07-09). When the node declares slots and none names the
             // requested provider, fail closed instead of proceeding: silently resolving to
             // providerPriority[0] was the exact bug (mesh_launch_session(type:"cursor-cli")
             // spawned claude-cli). providerPriority is deliberately NOT consulted here — it is

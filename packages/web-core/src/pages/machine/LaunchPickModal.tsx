@@ -41,14 +41,14 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
                 onClick={(event) => event.stopPropagation()}
             >
                 <h2 id="launch-pick-title" className="text-sm font-semibold text-text-primary m-0 mb-1">
-                    Where should this run?
+                    {t('machine.launchPick.title')}
                 </h2>
                 <p className="text-2xs text-text-muted m-0 mb-4">
-                    Nothing is assumed. Pick a saved workspace, your default workspace, or home — or cancel and type a path.
+                    {t('machine.launchPick.description')}
                 </p>
                 <div className="flex flex-col gap-2 mb-4 max-h-48 overflow-y-auto">
                     {(machine.workspaces || []).length === 0 ? (
-                        <span className="text-2xs text-text-muted">No saved workspaces yet. Add one in the Workspace tab or type a path above.</span>
+                        <span className="text-2xs text-text-muted">{t('machine.launchPick.empty')}</span>
                     ) : (
                         (machine.workspaces || []).map(w => (
                             <button
@@ -108,7 +108,7 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
                         className="machine-btn text-2xs flex-1 min-w-[80px]"
                         onClick={() => setLaunchPick(null)}
                     >
-                        Cancel
+                        {t('common.cancel')}
                     </button>
                 </div>
             </div>

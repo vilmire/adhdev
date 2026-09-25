@@ -60,8 +60,9 @@ export default function ConfirmExternalUntrustedModal({
                 </div>
                 <div className="px-4 py-3 text-xs flex flex-col gap-3">
                     <p>
-                        You're about to activate <span className="font-mono">{providerType}</span>
-                        {sourceName ? <> from <span className="font-mono">{sourceName}</span></> : null}.
+                        {sourceName
+                            ? t('machine.confirmExternal.aboutToActivateFrom', { provider: providerType, source: sourceName })
+                            : t('machine.confirmExternal.aboutToActivate', { provider: providerType })}
                     </p>
                     <p className="text-text-secondary">
                         {description ?? t('machine.confirmExternal.description')}

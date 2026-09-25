@@ -164,7 +164,7 @@ export type RepoMeshSchedulingStrategy =
     | 'least_loaded'
     | 'round_robin'
     | 'priority_only'
-    // ORCHESTRATION_NODE_SLOTS.md: rank nodes by task→capability-slot fitness
+    // node capability slots design, 2026-07-09: rank nodes by task→capability-slot fitness
     // (task difficulty/requiredTags vs the node's slots), then priority/load/order.
     // Falls back to load ordering when no task is in scope (idle-session drain).
     | 'fitness';
@@ -620,7 +620,7 @@ export interface RepoMeshNodePolicy {
      */
     providerPriority?: string[];
     /**
-     * Node capability slots (ORCHESTRATION_NODE_SLOTS.md) — the ordered "Preferred
+     * Node capability slots (node capability slots design, 2026-07-09) — the ordered "Preferred
      * AI tools" profile that is the single source of truth for task routing, MAGI
      * fan-out, and orchestrator-proposed edits. Each slot bundles provider + model
      * + thinkingLevel + difficulty range + capability tags + per-slot maxParallel.
@@ -718,7 +718,7 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     allowAutoPublishSubmoduleMainCommits: false,
     dirtyWorkspaceBehavior: 'warn',
     // Mesh-wide task cap is effectively unlimited by default: the real concurrency
-    // limits live per node / per capability slot (ORCHESTRATION_NODE_SLOTS.md), so a
+    // limits live per node / per capability slot (node capability slots design, 2026-07-09), so a
     // global ceiling is rarely meaningful. The UI hides this control; set it via the
     // API only to impose a deliberate mesh-wide cap.
     maxParallelTasks: 200,
@@ -1922,7 +1922,7 @@ export interface RepoMeshNodeStatus {
     activeSessions: string[];
     activeSessionDetails?: RepoMeshSessionStatus[];
     providerPriority?: string[];
-    /** Explicitly-configured node capability slots (ORCHESTRATION_NODE_SLOTS.md). */
+    /** Explicitly-configured node capability slots (node capability slots design, 2026-07-09). */
     slots?: NodeCapabilitySlot[];
     launchReady?: boolean;
     /** True when the node is clean, ahead=0, behind>0, and safe for fast-forward consideration. */

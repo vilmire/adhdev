@@ -12,7 +12,7 @@ logic for that lives in OSS packages and is documented here.
 | Concern | Lives in |
 | --- | --- |
 | Mesh engine — config, queue, ledger, missions, refinery, delivery policy, events | `oss/packages/daemon-core/src/mesh/` + `repo-mesh-types.ts` |
-| MCP tool handlers (`mesh_*`) | `oss/packages/mcp-server/src/tools/mesh-tools.ts` |
+| MCP tool handlers (`mesh_*`) | `oss/packages/mcp-server/src/tools/mesh-tool-schemas.ts` (schema/count SoT) + `mesh-tools-*.ts` (implementation, split by domain) |
 | Dashboard UI (list, detail, queue, review inbox) | `oss/packages/web-core/src/pages/repo-mesh/` |
 | Shared status/git normalizers | `oss/packages/mesh-shared` (`@adhdev/mesh-shared`) |
 | Cloud transport (P2P relay, CF DO signaling, billing/plan gating) | `packages/` (proprietary) |
@@ -56,16 +56,16 @@ unless their write flag is explicitly enabled.
 | `coordinator-registry.ts` | Tracks which daemon/session currently owns the coordinator role for a mesh. |
 | `contracts.ts` | Internal contracts/interfaces shared across mesh modules. |
 | `mesh-ledger.ts` | Append-only event ledger (task dispatch/complete/fail, session/node lifecycle, checkpoints) + completion-evidence builders. JSONL on disk, SQLite at runtime. |
-| `mesh-ledger-reconciliation.ts` | Reconciles ledger state vs. live runtime to detect missed terminal events. |
+| `mesh-ledger-paths.ts` | Resolves on-disk ledger/runtime-store paths (`~/.adhdev/mesh-ledger/...`). |
 | `mesh-work-queue.ts` | Task queue: enqueue/claim/update, task modes & guardrails (`live_debug_readonly` forbidden-op detection), capability-tag matching, dependencies. |
 | `mesh-runtime-store.ts` | `better-sqlite3` runtime store — the source of truth for queue, dispatches, deliveries, events, missions, fingerprints. |
 | `mesh-missions.ts` | Mission records (multi-task goals). Progress is *derived* from queue task statuses, never stored. |
 | `mesh-active-work.ts` | Computes the live "active work" view (queue + direct dispatch) with per-task status/staleness. |
 | `mesh-delivery-policy.ts` | Decides whether a task delivers `immediate` / `queued` / `rejected` based on target session state; tracks delivery records. |
 | `mesh-host-ownership.ts` | Resolves host vs. member daemon role and which daemon may own the coordinator/queue. |
-| `mesh-events-coordinator.ts` | The event hub: routes worker terminal/approval events back to the right coordinator (local inject vs. pending-event queue), with workspace→mesh recovery. |
-| `mesh-events-pending.ts` | Pending-event inbox the coordinator drains via `get_pending_mesh_events`. |
-| `mesh-events-stale.ts` | Stale/long-generating completion reconciliation helpers. |
+| `mesh-events-coordinator.ts` | The event hub: routes worker terminal/approval events back to the right coordinator, with workspace→mesh recovery. |
+| `mesh-events.ts` | Entry point re-exporting the events surface. Since the wiring-unification C-W3 rework, coordinator notification is the turn ledger's job (`turn.notify` entries on `mesh.<id>.events`, delivered by `turn.deliver`) — there is no separate pending-events queue or stale/long-generating reconciliation module anymore. |
+| `mesh-event-forwarding.ts` | Turns a mesh session's provider events into content-free `TurnEvidence` observed by the turn ledger reducer; the reducer alone decides commit/hold/reclaim/record. |
 | `mesh-events-utils.ts` | Shared event parsing/identity helpers. |
 | `mesh-routing.ts` | Resolves delegate-worker routing metadata; records unroutable delegate events. |
 | `mesh-review-inbox.ts` | Review-inbox model (work awaiting human approval/merge). |
@@ -95,21 +95,28 @@ session starts. `resolveMeshCoordinatorSetup()` returns one of `auto_import`
 `applyMeshCoordinatorSystemPromptInjection()` injects the generated prompt, and
 `buildMeshCoordinatorRegistrationPlan()` assembles the full launch plan.
 
-### `mcp-server/src/tools/mesh-tools.ts`
+### `mcp-server/src/tools/mesh-tool-schemas.ts` and `mesh-tools-*.ts`
 
-Defines and implements every `mesh_*` MCP tool the coordinator calls. The tool
-set (~30 tools) includes:
+`mesh-tools.ts` is now a **re-export barrel only** — implementations are split
+by domain across `mesh-tools-{status,queue,mission,session,git,refine,crud,
+graph,slots,magi,...}.ts`, with shared helpers/types/state in
+`mesh-tools-internal.ts`. The authoritative tool list and count live in
+`mesh-tool-schemas.ts`'s `ALL_MESH_TOOLS` array — currently **60 tools**
+(kept in sync with the coordinator-prompt TOOLS table by a consistency test in
+`coordinator-prompt.test.ts`). Highlights:
 
 - **Inspection** — `mesh_status`, `mesh_list_nodes`, `mesh_git_status`,
   `mesh_view_queue`, `mesh_task_history`, `mesh_review_inbox`,
   `mesh_read_chat`, `mesh_read_debug`
 - **Dispatch** — `mesh_enqueue_task`, `mesh_send_task`, `mesh_launch_session`,
   `mesh_queue_cancel`, `mesh_queue_requeue`, `mesh_approve`
-- **Missions** — `mesh_mission_upsert`
+- **Missions** — `mesh_mission_upsert`, `mesh_mission_list`
 - **Git / convergence** — `mesh_checkpoint`, `mesh_fast_forward_node`,
   `mesh_refine_node`, `mesh_refine_batch`, `mesh_refine_plan`,
-  `mesh_refine_config_schema`, `mesh_validate_refine_config`,
-  `mesh_suggest_refine_config`
+  `mesh_refine_config` (unified read-only `mode`-dispatched helper —
+  `mode=schema|validate|suggest` — replacing the former separate
+  `mesh_refine_config_schema` / `mesh_validate_refine_config` /
+  `mesh_suggest_refine_config` tools)
 - **Topology / housekeeping** — `mesh_clone_node`, `mesh_remove_node`,
   `mesh_cleanup_sessions`, `mesh_reconcile_ledger`, `mesh_prune_stale_direct`
 
@@ -235,9 +242,11 @@ which transport delivered the data.
 
 ### Add a new `mesh_*` MCP tool
 
-1. Add the tool definition (name, description, input schema) and its handler in
-   `mcp-server/src/tools/mesh-tools.ts`. Default new read tools to `compact: true`
-   to keep coordinator token cost bounded.
+1. Add the tool definition (name, description, input schema) to `ALL_MESH_TOOLS`
+   in `mcp-server/src/tools/mesh-tool-schemas.ts`, and its handler in the
+   relevant domain file (`mesh-tools-*.ts`; `mesh-tools.ts` itself is just the
+   re-export barrel). Default new read tools to `compact: true` to keep
+   coordinator token cost bounded.
 2. Implement the engine logic in the relevant `daemon-core/src/mesh/` module
    (queue mutation → `mesh-work-queue.ts`, persisted state → `mesh-runtime-store.ts`,
    an event → `mesh-ledger.ts` + `mesh-events-coordinator.ts`). Keep the MCP

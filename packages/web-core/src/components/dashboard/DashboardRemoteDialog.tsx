@@ -208,11 +208,11 @@ export default function DashboardRemoteDialog({
                                 <span className="w-7 h-7 flex items-center justify-center rounded-lg bg-accent-primary/10 text-accent-primary shrink-0">
                                     <IconMonitor size={16} />
                                 </span>
-                                <span className="truncate">{getConversationDisplayLabel(effectiveConv) || 'Remote'}</span>
+                                <span className="truncate">{getConversationDisplayLabel(effectiveConv) || t('dashboard.remoteDialog.remoteFallback')}</span>
                             </div>
                         </div>
                         <button className="btn btn-primary btn-sm h-8 px-4 rounded-lg font-bold md:hidden shrink-0" onClick={onClose}>
-                            Close
+                            {t('common.close')}
                         </button>
                     </div>
                     <div className="flex items-center gap-2 shrink-0 w-full md:w-auto justify-between md:justify-end">
@@ -228,7 +228,7 @@ export default function DashboardRemoteDialog({
                                                 : 'bg-bg-secondary border border-border-subtle text-text-secondary hover:bg-bg-glass hover:text-text-primary'
                                         }`}
                                         onClick={() => setViewMode(mode)}
-                                        title={mode === 'split' ? 'Split view' : 'Remote only'}
+                                        title={mode === 'split' ? t('dashboard.remoteDialog.splitView') : t('dashboard.remoteDialog.remoteOnly')}
                                     >
                                         {mode === 'split' ? <IconSplitView size={15} /> : <IconMonitor size={15} />}
                                     </button>
@@ -239,13 +239,13 @@ export default function DashboardRemoteDialog({
                         <button
                             className="btn btn-secondary btn-sm h-8 px-2.5 md:px-3 rounded-lg"
                             onClick={() => onOpenHistory(effectiveConv)}
-                            title="Chat History"
+                            title={t('dashboard.remoteDialog.history')}
                         >
                             <IconScroll size={14} className="md:mr-1.5" />
                             <span className="hidden md:inline">{t('dashboard.remoteDialog.history')}</span>
                         </button>
                         <button className="hidden md:inline-flex btn btn-primary btn-sm h-8 px-4 rounded-lg font-bold" onClick={onClose}>
-                            Close
+                            {t('common.close')}
                         </button>
                     </div>
                 </div>
