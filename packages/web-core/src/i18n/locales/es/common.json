@@ -1037,6 +1037,21 @@
             "schedUnpinnedTitle": "Envío hipotético sin nodo fijado — las tareas fijadas a un nodo muestran su propia previsión en sus tarjetas",
             "schedPointInTime": "Predicción puntual, no una asignación definitiva: la capacidad de los slots puede quedar obsoleta en cuanto se ocupa o libera uno",
             "schedulingShort": "Scheduling",
+            "gate": {
+                "release": "Liberar",
+                "abandon": "Abandonar",
+                "extend24h": "Extender 24h",
+                "outcomePassed": "Aprobado",
+                "outcomeFailed": "Fallido",
+                "evidencePlaceholder": "Evidencia (opcional)",
+                "reasonPlaceholder": "Motivo para abandonar este gate",
+                "abandonReasonRequired": "Se requiere un motivo para abandonar un gate.",
+                "submitRelease": "Enviar liberación",
+                "submitAbandon": "Enviar abandono",
+                "extendConfirmTitle": "¿Extender \"{{ref}}\" 24 horas?",
+                "expiredBadge": "Vencido · hace {{age}}",
+                "commandUnavailable": "No hay conexión con el daemon para enviar este comando."
+            },
             "list": {
                 "barActive": "Activas {{count}}",
                 "barBlocked": "Bloqueadas {{count}}",
@@ -1057,7 +1072,11 @@
                 "noMission": "Sin misión",
                 "loadMore_one": "Mostrar {{count}} más",
                 "loadMore_other": "Mostrar {{count}} más",
-                "emptyActive": "No hay trabajo en ejecución ni bloqueado ahora mismo — el trabajo terminado está en Historial."
+                "emptyActive": "No hay trabajo en ejecución ni bloqueado ahora mismo — el trabajo terminado está en Historial.",
+                "blockedByGate": "bloqueado por: {{ref}}, {{age}}",
+                "waitingOn": "esperando a:",
+                "waitingOnMore": "+{{count}} más",
+                "chainGroup": "Cadena: {{title}}"
             }
         },
         "page": {

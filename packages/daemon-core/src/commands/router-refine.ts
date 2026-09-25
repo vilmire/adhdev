@@ -279,11 +279,11 @@ export async function refineResolveRefsStage(self: DaemonCommandRouter,
             const execFileAsync = promisify(execFile) as unknown as RefineExecFileAsync;
 
             const resolveStarted = Date.now();
-            const { stdout: branchStdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: node.workspace, encoding: 'utf8', env: gitChildEnv() });
+            const { stdout: branchStdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: node.workspace, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
             const branch = branchStdout.trim();
             if (!branch) return { kind: 'terminal', result: { success: false, error: 'Could not determine branch of the worktree node', refineStages } };
 
-            const { stdout: baseBranchStdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
+            const { stdout: baseBranchStdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
             const baseBranch = baseBranchStdout.trim();
 
             // Fetch origin so baseHead reflects the latest pushed state, not a stale local HEAD.
@@ -294,7 +294,7 @@ export async function refineResolveRefsStage(self: DaemonCommandRouter,
                 // `timeout` mirrors the async sibling call sites in `mesh-fast-forward.ts`:
                 // without it an unreachable remote hangs this await forever, so the refine
                 // job never completes and holds its node slot indefinitely.
-                await execFileAsync('git', ['fetch', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv(), timeout: 30_000 });
+                await execFileAsync('git', ['fetch', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv(), timeout: 30_000 });
             } catch (e: any) {
                 fetchWarning = `git fetch origin ${baseBranch} failed (proceeding with local HEAD): ${e?.message}`;
             }
@@ -310,14 +310,14 @@ export async function refineResolveRefsStage(self: DaemonCommandRouter,
             // fail-closed.
             let baseHeadRaw: string;
             try {
-                const { stdout } = await execFileAsync('git', ['rev-parse', `origin/${baseBranch}`], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
+                const { stdout } = await execFileAsync('git', ['rev-parse', `origin/${baseBranch}`], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
                 baseHeadRaw = stdout.trim();
             } catch {
-                const { stdout: localHead } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
+                const { stdout: localHead } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
                 baseHeadRaw = localHead.trim();
             }
 
-            const { stdout: branchHeadStdout } = await execFileAsync('git', ['rev-parse', branch], { cwd: node.workspace, encoding: 'utf8', env: gitChildEnv() });
+            const { stdout: branchHeadStdout } = await execFileAsync('git', ['rev-parse', branch], { cwd: node.workspace, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
             const baseHead = baseHeadRaw;
             const branchHead = branchHeadStdout.trim();
 
@@ -378,7 +378,7 @@ async function computeBranchBaseDivergence(
 ): Promise<{ mergeBase?: string; ahead: number; behind: number; diverged: boolean; isStrictlyBehind: boolean }> {
     let mergeBase: string | undefined;
     try {
-        const { stdout } = await execFileAsync('git', ['merge-base', baseHead, branchHead], { cwd, encoding: 'utf8', env: gitChildEnv() });
+        const { stdout } = await execFileAsync('git', ['merge-base', baseHead, branchHead], { cwd, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
         mergeBase = stdout.trim() || undefined;
     } catch { /* unresolved base/branch — treat as no shared history */ }
     let ahead = 0;
@@ -386,7 +386,7 @@ async function computeBranchBaseDivergence(
     try {
         // `--left-right --count base...branch` → "<behind>\t<ahead>": left (base-only) =
         // commits the branch is BEHIND; right (branch-only) = commits the branch is AHEAD.
-        const { stdout } = await execFileAsync('git', ['rev-list', '--left-right', '--count', `${baseHead}...${branchHead}`], { cwd, encoding: 'utf8', env: gitChildEnv() });
+        const { stdout } = await execFileAsync('git', ['rev-list', '--left-right', '--count', `${baseHead}...${branchHead}`], { cwd, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
         const [left, right] = stdout.trim().split(/\s+/).map(n => Number.parseInt(n, 10));
         behind = Number.isFinite(left) ? left : 0;
         ahead = Number.isFinite(right) ? right : 0;
@@ -703,7 +703,7 @@ export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: Refine
 
             // Rebase succeeded — recompute branchHead and re-derive changeImpact against the
             // rebased tree (baseHead..branchHead changed, so the change area may have too).
-            const { stdout: rebasedHeadStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: node.workspace, encoding: 'utf8', env: gitChildEnv() });
+            const { stdout: rebasedHeadStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: node.workspace, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
             branchHead = rebasedHeadStdout.trim();
             ctx.branchHead = branchHead;
             let changeImpact: ChangedPackageClassification | undefined = ctx.changeImpact;
@@ -1085,7 +1085,7 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
             let mergeResult: Record<string, unknown> | undefined;
             const mergeStarted = Date.now();
             try {
-                const result = await execFileAsync('git', ['merge', '--no-ff', branch, '-m', `Auto-merge branch '${branch}' via Refinery`], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
+                const result = await execFileAsync('git', ['merge', '--no-ff', branch, '-m', `Auto-merge branch '${branch}' via Refinery`], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
                 mergeResult = {
                     stdout: truncateValidationOutput(result.stdout),
                     stderr: truncateValidationOutput(result.stderr),
@@ -1104,7 +1104,7 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
                     .map(m => m[1].trim())
                     .filter(Boolean);
                 try {
-                    await execFileAsync('git', ['merge', '--abort'], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
+                    await execFileAsync('git', ['merge', '--abort'], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
                 } catch { /* nothing to abort (e.g. merge never started) — best-effort */ }
                 recordMeshRefineStage(refineStages, 'merge', 'failed', mergeStarted, {
                     error: e?.message || String(e),
@@ -1203,7 +1203,7 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
                     // `timeout` mirrors the async sibling call sites in `mesh-fast-forward.ts`:
                     // an unreachable remote must surface as a push FAILURE (which the catch
                     // below already reports) rather than an await that never settles.
-                    await execFileAsync('git', ['push', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv(), timeout: 30_000 });
+                    await execFileAsync('git', ['push', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv(), timeout: 30_000 });
                     pushResult = { pushed: true, remote: 'origin', branch: baseBranch, durationMs: Date.now() - pushStarted };
                     recordMeshRefineStage(refineStages, 'push', 'passed', pushStarted, pushResult);
                 } catch (e: any) {

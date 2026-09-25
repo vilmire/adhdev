@@ -157,7 +157,7 @@ export async function batchRefineMeshNodes(self: DaemonCommandRouter, meshId: st
             const pending = (async (): Promise<string> => {
                 let baseBranch = 'main';
                 try {
-                    const { stdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
+                    const { stdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
                     if (stdout.trim()) baseBranch = stdout.trim();
                 } catch { /* fall back to main */ }
                 let baseRef = 'HEAD';
@@ -172,14 +172,14 @@ export async function batchRefineMeshNodes(self: DaemonCommandRouter, meshId: st
                     // converges (each node's own refine re-fetches origin/<base> anyway). The
                     // old 30s exactly equalled the caller's outer IPC deadline, leaving zero
                     // headroom for everything else in the plan.
-                    await execFileAsync('git', ['fetch', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv(), timeout: BATCH_PLAN_FETCH_TIMEOUT_MS });
+                    await execFileAsync('git', ['fetch', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv(), timeout: BATCH_PLAN_FETCH_TIMEOUT_MS });
                 } catch { /* offline / no remote / timed out — fall through to local refs */ }
                 try {
-                    const { stdout } = await execFileAsync('git', ['rev-parse', `origin/${baseBranch}`], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
+                    const { stdout } = await execFileAsync('git', ['rev-parse', `origin/${baseBranch}`], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
                     baseRef = stdout.trim();
                 } catch {
                     try {
-                        const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
+                        const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
                         baseRef = stdout.trim();
                     } catch { /* leave HEAD */ }
                 }
@@ -196,7 +196,7 @@ export async function batchRefineMeshNodes(self: DaemonCommandRouter, meshId: st
                 // Resolve declared submodule paths once per repo root.
                 const subPaths = new Set<string>();
                 try {
-                    const { stdout } = await execFileAsync('git', ['config', '--file', '.gitmodules', '--get-regexp', 'path'], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
+                    const { stdout } = await execFileAsync('git', ['config', '--file', '.gitmodules', '--get-regexp', 'path'], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
                     for (const line of stdout.split('\n')) {
                         const trimmed = line.trim();
                         const spaceIdx = trimmed.indexOf(' ');
@@ -223,7 +223,7 @@ export async function batchRefineMeshNodes(self: DaemonCommandRouter, meshId: st
                 const repoRoot = resolveRepoRootFor(node);
                 let branch = typeof node.worktreeBranch === 'string' ? node.worktreeBranch : '';
                 try {
-                    const { stdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: node.workspace, encoding: 'utf8', env: gitChildEnv() });
+                    const { stdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: node.workspace, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
                     if (stdout.trim()) branch = stdout.trim();
                 } catch { /* use stored worktreeBranch */ }
 
@@ -242,7 +242,7 @@ export async function batchRefineMeshNodes(self: DaemonCommandRouter, meshId: st
                 ]);
                 let branchRef = branch;
                 try {
-                    const { stdout } = await execFileAsync('git', ['rev-parse', branch], { cwd: node.workspace, encoding: 'utf8', env: gitChildEnv() });
+                    const { stdout } = await execFileAsync('git', ['rev-parse', branch], { cwd: node.workspace, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
                     branchRef = stdout.trim() || branch;
                 } catch { /* use branch name */ }
                 return analyzeMeshRefineNodeChangeArea({

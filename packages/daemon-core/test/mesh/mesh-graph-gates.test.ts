@@ -700,11 +700,12 @@ describe('coordinator death and timeout — sweep never releases', () => {
         const id = meshId('sweep_idem');
         try {
             const t0 = Date.now();
-            const g = buildGateGraph(id); // no deadline_seconds → no deadline at all
+            // No deadline_seconds → the D3(b) default (24 h) applies, far beyond this sweep.
+            const g = buildGateGraph(id);
             openAndClaim(id, g, 'sess-1', t0);
             // Let the 900s default lease lapse "in spirit" by sweeping far in the future.
             const sweep = sweepMeshGraphGateTimeouts(id, t0 + 1_000_000);
-            expect(sweep.expiredGateIds).toEqual([]); // no deadline → nothing expires
+            expect(sweep.expiredGateIds).toEqual([]); // deadline not reached → nothing expires
             expect(sweep.expiredLeaseGateIds).toEqual([g.gateId]); // reported only
             expect(gs().getGate(g.gateId)!.state).toBe('claimed'); // lease lapse never alters the graph
 
@@ -733,6 +734,11 @@ describe('coordinator death and timeout — sweep never releases', () => {
 describe('abandonMeshGraphGate — closure, never passage', () => {
     it('★ the orphan case: a deadline-less gate whose work is cancelled leaves the graph un-terminal until abandoned', () => {
         const id = meshId('abandon_orphan');
+        // The pre-D3(b) orphan: no deadline at all. Since 2026-09-25 a gate gets a
+        // 24 h default deadline; the env override `0` (default disabled) is what
+        // still produces a gate the sweep can never reach, so pin it that way.
+        const prevDefault = process.env.ADHDEV_GRAPH_GATE_DEFAULT_DEADLINE_S;
+        process.env.ADHDEV_GRAPH_GATE_DEFAULT_DEADLINE_S = '0';
         try {
             // No deadline_seconds — exactly the gate the sweep can never reach.
             const g = buildGateGraph(id);
@@ -743,8 +749,10 @@ describe('abandonMeshGraphGate — closure, never passage', () => {
             // `inputs_from` mistake that produced the real stranded gate).
             gs().updateNodeState(g.graphId, g.nodeB!, 'cancelled', nowIso(), { failureReason: 'operator_cancel' });
 
-            // BEFORE abandon: the gate holds the graph hostage. No sweep helps.
-            sweepMeshGraphGateTimeouts(id, Date.now() + 10_000_000);
+            // BEFORE abandon: the gate holds the graph hostage. (Since wave 24 the
+            // housekeeping sweep's D3(a) backstop would auto-close this exact shape —
+            // pinned in mesh-graph-gate-lifecycle-defaults.test.ts — so it is not run
+            // here: this test pins the explicit verb.)
             expect(gs().getGate(g.gateId)!.state).toBe('awaiting_coordinator');
             expect(gs().getGraph(g.graphId)!.status).toBe('waiting_gate');
             expect(gs().getGraph(g.graphId)!.terminalAt).toBeFalsy();
@@ -762,6 +770,8 @@ describe('abandonMeshGraphGate — closure, never passage', () => {
             expect(graph.terminalAt).toBeTruthy();
             expect(res.graphStatus).toBe('cancelled');
         } finally {
+            if (prevDefault === undefined) delete process.env.ADHDEV_GRAPH_GATE_DEFAULT_DEADLINE_S;
+            else process.env.ADHDEV_GRAPH_GATE_DEFAULT_DEADLINE_S = prevDefault;
             cleanup(id);
         }
     });

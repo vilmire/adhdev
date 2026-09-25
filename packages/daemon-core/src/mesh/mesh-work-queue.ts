@@ -1354,6 +1354,9 @@ export function cancelTask(
         // NO backing graph node (the legacy/ad-hoc enqueue path). Like the graph cascade
         // it is a no-op unless the policy is `cancel`.
         const cascaded = propagateDependencyFailure(meshId, taskId);
+        // D3(a) gate auto-close (a gate whose downstream this cancel left all
+        // terminal) runs INSIDE the choke point above — the runner owns it for
+        // every terminal writer, and its post-commit drain delivers the rows.
         return { entry: commit.entry ?? entry, cascaded, priorAssignment };
     });
     if (result) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);

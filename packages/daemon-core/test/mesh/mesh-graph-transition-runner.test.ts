@@ -983,16 +983,18 @@ describe('structural pins — the choke point cannot be silently bypassed', () =
         //   - mesh-graph-transition-runner.ts: phase C1's run_if SKIP path, which
         //     cancels a still-PENDING placeholder for a node whose condition was
         //     false (design :356-359). It is inside the choke point by definition.
-        //   - mesh-graph-gates.ts: phase C2's cancel_downstream deadline policy,
+        //   - mesh-graph-gate-closure.ts (moved out of mesh-graph-gates.ts,
+        //     2026-09-25 D3(a) — same function): phase C2's cancel_downstream deadline policy,
         //     which cancels the still-PENDING placeholders of an expired gate's
         //     downstream subtree (design :431-432). A timeout can never write
         //     'completed' — it is never completion evidence.
-        expect(offenders.sort()).toEqual(['mesh-graph-gates.ts', 'mesh-graph-transition-runner.ts', 'mesh-work-queue.ts']);
+        expect(offenders.sort()).toEqual(['mesh-graph-gate-closure.ts', 'mesh-graph-transition-runner.ts', 'mesh-work-queue.ts']);
         // ...and in none of them may a literal 'completed' write ever appear: every
         // genuine completion routes through the choke point's typed parameter.
         const completedWrite = /\b(entry|dependent|queueEntry|task)\.status\s*=\s*'completed'/;
         expect(read('mesh-work-queue.ts')).not.toMatch(completedWrite);
         expect(read('mesh-graph-transition-runner.ts')).not.toMatch(completedWrite);
+        expect(read('mesh-graph-gate-closure.ts')).not.toMatch(completedWrite);
         expect(read('mesh-graph-gates.ts')).not.toMatch(completedWrite);
     });
 
@@ -1000,7 +1002,7 @@ describe('structural pins — the choke point cannot be silently bypassed', () =
         // Same guard as the C1 skip path: the cancel is guarded on
         // `status === 'pending'` and the check must PRECEDE the terminal write —
         // an assigned/running task is immutable (design :334).
-        const src = read('mesh-graph-gates.ts');
+        const src = read('mesh-graph-gate-closure.ts');
         const fn = src.slice(src.indexOf('function cancelGateDownstreamSubtree'));
         const body = fn.slice(0, fn.indexOf('\n}\n'));
         expect(body).toMatch(/entry\.status === 'pending'/);
@@ -1048,5 +1050,22 @@ describe('structural pins — the choke point cannot be silently bypassed', () =
             .split('\n')
             .filter(line => /^import\b/.test(line));
         expect(runnerImports.join('\n')).not.toMatch(/mesh-queue-assignment|mesh-event-forwarding/);
+    });
+
+    it('D3(a) import discipline: the runner reaches gate closure only through mesh-graph-gate-closure', () => {
+        // mesh-graph-gates.ts imports the runner and evaluates a runner binding at
+        // module top level (MESH_GATE_RELEASE_PATCH_KEYS), so a runner → gates edge
+        // reintroduces the wave-23 init-order failure. The closure module is the
+        // cycle-safe half: it must never import the runner, gates or the queue.
+        const importLines = (rel: string) => read(rel).split('\n').filter(line => /^import\b|^} from\b/.test(line)).join('\n');
+        const runnerImports = importLines('mesh-graph-transition-runner.ts');
+        expect(runnerImports).toMatch(/'\.\/mesh-graph-gate-closure\.js'/);
+        expect(runnerImports).not.toMatch(/'\.\/mesh-graph-gates\.js'/);
+        expect(importLines('mesh-graph-gate-closure.ts'))
+            .not.toMatch(/mesh-graph-transition-runner|'\.\/mesh-graph-gates\.js'|mesh-work-queue/);
+        // ...and the auto-close call lives in the runner's terminal advance.
+        const src = read('mesh-graph-transition-runner.ts');
+        const advance = src.slice(src.indexOf('function advanceGraphForTerminalNode'));
+        expect(advance.slice(0, advance.indexOf('\n}\n'))).toContain('autoAbandonGatesWithTerminalDownstreamInTxn(');
     });
 });

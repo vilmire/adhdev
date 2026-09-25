@@ -45875,8 +45875,8 @@ ${renderWorkerProtocolFooter2(input)}`;
     function uniqueSorted(values) {
       return Array.from(new Set(Array.from(values).filter(Boolean))).sort((a, b) => a.localeCompare(b));
     }
-    function plural(count, singular, pluralText = `${singular}s`) {
-      return count === 1 ? singular : pluralText;
+    function plural(count2, singular, pluralText = `${singular}s`) {
+      return count2 === 1 ? singular : pluralText;
     }
     function compareGitSnapshots(before, after) {
       const beforeFileKeys = new Set(before.diffSummary.files.map(changedFileKey));
@@ -46456,10 +46456,10 @@ ${renderWorkerProtocolFooter2(input)}`;
       } catch {
       }
     }
-    function getRecentLogs(count = 50, minLevel = "info") {
+    function getRecentLogs(count2 = 50, minLevel = "info") {
       const minNum = LEVEL_NUM[minLevel];
       const filtered = ringBuffer.filter((e) => LEVEL_NUM[e.level] >= minNum);
-      return filtered.slice(-count);
+      return filtered.slice(-count2);
     }
     function ts() {
       return (/* @__PURE__ */ new Date()).toISOString().slice(11, 23);
@@ -46743,7 +46743,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       return legacyDisableUpstream === true ? "no-upstream" : "normal";
     }
-    function isPlainObject2(value) {
+    function isPlainObject3(value) {
       return !!value && typeof value === "object" && !Array.isArray(value);
     }
     function asStringArray2(value) {
@@ -46767,7 +46767,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       return fallback;
     }
     function normalizeEnvOverrides(value) {
-      if (!isPlainObject2(value)) return {};
+      if (!isPlainObject3(value)) return {};
       const result = {};
       for (const [key2, raw] of Object.entries(value)) {
         if (typeof key2 !== "string" || !key2.trim()) continue;
@@ -46778,10 +46778,10 @@ ${renderWorkerProtocolFooter2(input)}`;
       return result;
     }
     function normalizeMachineProviders(value) {
-      if (!isPlainObject2(value)) return {};
+      if (!isPlainObject3(value)) return {};
       const result = {};
       for (const [providerType, raw] of Object.entries(value)) {
-        if (!isPlainObject2(raw)) continue;
+        if (!isPlainObject3(raw)) continue;
         const entry = {};
         if (raw.enabled === true) entry.enabled = true;
         if (typeof raw.quotaEnabled === "boolean") entry.quotaEnabled = raw.quotaEnabled;
@@ -46791,10 +46791,10 @@ ${renderWorkerProtocolFooter2(input)}`;
         if (Array.isArray(raw.args)) {
           entry.args = raw.args.filter((arg) => typeof arg === "string");
         }
-        if (isPlainObject2(raw.lastDetection)) {
+        if (isPlainObject3(raw.lastDetection)) {
           entry.lastDetection = raw.lastDetection;
         }
-        if (isPlainObject2(raw.lastVerification)) {
+        if (isPlainObject3(raw.lastVerification)) {
           entry.lastVerification = raw.lastVerification;
         }
         result[providerType] = entry;
@@ -46802,7 +46802,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       return result;
     }
     function normalizeConfig(raw) {
-      const parsed = isPlainObject2(raw) ? raw : {};
+      const parsed = isPlainObject3(raw) ? raw : {};
       return {
         serverUrl: typeof parsed.serverUrl === "string" && parsed.serverUrl.trim() ? parsed.serverUrl : DEFAULT_CONFIG.serverUrl,
         allowServerApiProxy: asBoolean(parsed.allowServerApiProxy, DEFAULT_CONFIG.allowServerApiProxy ?? false),
@@ -46822,9 +46822,9 @@ ${renderWorkerProtocolFooter2(input)}`;
         machineId: asOptionalString(parsed.machineId),
         machineSecret: parsed.machineSecret === null ? null : asOptionalString(parsed.machineSecret),
         registeredMachineId: asOptionalString(parsed.registeredMachineId),
-        providerSettings: isPlainObject2(parsed.providerSettings) ? parsed.providerSettings : {},
+        providerSettings: isPlainObject3(parsed.providerSettings) ? parsed.providerSettings : {},
         machineProviders: normalizeMachineProviders(parsed.machineProviders),
-        ideSettings: isPlainObject2(parsed.ideSettings) ? parsed.ideSettings : {},
+        ideSettings: isPlainObject3(parsed.ideSettings) ? parsed.ideSettings : {},
         providerSourceMode: resolveProviderSourceMode(parsed.providerSourceMode, parsed.disableUpstream),
         providerDir: asOptionalString(parsed.providerDir),
         registryUrl: asOptionalString(parsed.registryUrl),
@@ -46881,9 +46881,9 @@ ${renderWorkerProtocolFooter2(input)}`;
       if ((0, import_fs3.existsSync)(statePath)) return;
       const recentActivity = Array.isArray(raw.recentActivity) ? raw.recentActivity : [];
       const savedProviderSessions = Array.isArray(raw.savedProviderSessions) ? raw.savedProviderSessions : [];
-      const legacySessionReads = isPlainObject2(raw.recentSessionReads) ? raw.recentSessionReads : {};
-      const sessionReads = isPlainObject2(raw.sessionReads) ? raw.sessionReads : {};
-      const sessionReadMarkers = isPlainObject2(raw.sessionReadMarkers) ? raw.sessionReadMarkers : {};
+      const legacySessionReads = isPlainObject3(raw.recentSessionReads) ? raw.recentSessionReads : {};
+      const sessionReads = isPlainObject3(raw.sessionReads) ? raw.sessionReads : {};
+      const sessionReadMarkers = isPlainObject3(raw.sessionReadMarkers) ? raw.sessionReadMarkers : {};
       const hasData = recentActivity.length > 0 || savedProviderSessions.length > 0 || Object.keys(sessionReads).length > 0 || Object.keys(legacySessionReads).length > 0 || Object.keys(sessionReadMarkers).length > 0;
       if (!hasData) return;
       const mergedReads = Object.fromEntries(
@@ -50154,16 +50154,16 @@ child.on('exit', () => process.exit(0));
         return 0;
       }
       if (!restored) return 0;
-      let count = 0;
+      let count2 = 0;
       for (const [provider, quota] of Object.entries(restored)) {
         if (cache.has(provider)) continue;
         if (isEnabled && !isEnabled(provider)) continue;
         cache.set(provider, quota);
         hydratedOnly.add(provider);
-        count += 1;
+        count2 += 1;
       }
-      if (count > 0) LOG.info("Quota", `Restored ${count} provider quota snapshot(s) from the on-disk cache`);
-      return count;
+      if (count2 > 0) LOG.info("Quota", `Restored ${count2} provider quota snapshot(s) from the on-disk cache`);
+      return count2;
     }
     function isRateLimitedSnapshot(entry) {
       return !!entry && entry.status !== "ok" && entry.metadata?.failureKind === "rate-limited";
@@ -53779,7 +53779,7 @@ ${error48.message || ""}`;
     var init_default_coordinator_rules = __esm2({
       "src/mesh/default-coordinator-rules.ts"() {
         "use strict";
-        DEFAULT_COORDINATOR_RULES = "## Orchestration Workflow\n\n1. **Assess** \u2014 Call `mesh_status` to see which nodes are healthy and available. Check `mesh_task_history` to understand what has already been done in this mesh \u2014 previous delegations, completions, and failures.\n2. **Plan** \u2014 Decompose the user's request into independent tasks for parallel execution, or sequential tasks when dependencies exist. If `mesh_task_history` shows a recent failure for a task, decide whether to retry or reassign. Submit the plan as one `mesh_enqueue_batch` \u2014 a mission is not required to do this. **For multi-task work, a mission is recommended**: call `mesh_mission_upsert` with a title and goal first, then carry that `mission_id` on the batch (a top-level `mission_id` applies to every entry) so the plan survives a coordinator restart and shows up in `mesh_mission_list`. A one-off graph with no need for that survivability/tracking can skip `mission_id` entirely and just call `mesh_enqueue_batch`. Express \"B after A\" ordering with `depends_on` instead of waiting and polling \u2014 the system claims dependents automatically when their dependencies complete. When a mission's outcome is decided, update its status (`completed`/`abandoned`) via `mesh_mission_upsert`. If the prompt already shows an **Active Mission**, continue it from its current task state \u2014 do not re-enqueue tasks that already exist.\n3. **Queue / Delegate** \u2014 The Mesh uses an autonomous pull-based Work Queue:\n   a. **Batch-first rule.** Before enqueueing anything, answer ONE question: *when this task reports back, will I read its result and then dispatch more work \u2014 or does the result go to the user with nothing behind it?*\n       - **You will act on the result \u2192 `mesh_enqueue_batch`.** If you already intend to read the output and dispatch a next step, that next step is a step you can declare. Declare it: bind the evidence with `inputs_from`, branch on it with `run_if`, or put your own decision behind a coordinator gate and point the follower at it with `gated_by`. \"I need to see the result first\" is HOW a graph edge is expressed, not a reason to skip the graph \u2014 that is exactly what `inputs_from` and gates are for. An investigation you plan to act on is, by this test, a declarable two-step plan.\n       - **The result goes to the user and nothing follows \u2192 `mesh_enqueue_task`.** One task, no successor you intend to dispatch yourself. Same-subject continuation of an already-running session is `mesh_send_task`, not a new enqueue either way.\n       - Submit the whole materializable plan in ONE batch. A batch may mix worker tasks, `inputs_from` bindings, `run_if` branches, delayed `workspace_ref` preparation, and coordinator gates for approval, Refinery, CI waiting, publish, or deployment. Do not enqueue one known step, wait for it, and then enqueue the next known step by hand.\n       - **A mesh with idle nodes or a short plan does not remove this requirement.** \"It is only two steps\" and \"I will just enqueue the next one when this finishes\" are the two ways the graph gets skipped; neither is a reason. Two declarable steps is precisely the case the batch surface exists for.\n       - **\"The only thing I am sure of right now is this one task\" is not evidence of a single.** That feeling is about your confidence, not about how many steps are settled; two steps are routinely settled at once while it still feels that way. Count the steps you would actually dispatch. If that count is two or more, it is a batch no matter how the plan feels.\n       - **\"I cannot choose the next step until I see this result\" states that the next step EXISTS.** What the result decides is *which branch you take*, not *whether* there is a follow-up \u2014 and a branch that turns on a predecessor's output is what `run_if` selects, what `inputs_from` feeds, and what a coordinator gate holds until you decide. Needing to look at evidence before choosing is the ordinary case for a graph edge, not an exception to it.\n       - **A gate or a batch is not overhead when something follows it.** The extra call buys the dispatch of everything behind it, so it costs one call and saves a whole round-trip through you. The only genuinely wasteful gate is one nothing depends on \u2014 a gate no task names in `gated_by` opens nothing when released, which the release response tells you about; that case is answered by declaring the follower, not by abandoning the batch.\n       - **If you cancel the tasks behind a gate, close the gate too.** Cancelling a task never touches the gate that was holding it \u2014 gates are a separate control plane on purpose. A gate left over a cancelled branch stays `awaiting_coordinator` forever, and while ANY gate is unsettled its graph can reach no terminal state at all, not even `cancelled`. Close it with `mesh_graph_gate_abandon` and a reason. `mesh_graph_view` flags this case for you as a `gate_abandon` action. Abandon is not a shortcut through a gate: it cancels whatever the gate was holding and yields no gate outcome, so use `mesh_graph_gate_release` whenever you actually want the downstream work to run.\n\n   When you do use `mesh_enqueue_task`, pass `orchestration_decision` recording why a single was right (`single_reason`: `only_one_step_known` / `future_step_not_specifiable` / `same_session_continuation` / `legacy_client` / `operator_override`). Omitting it is recorded as `decision_missing`.\n\n   Do not invent speculative downstream instructions merely to form a batch \u2014 a step you would not actually dispatch does not belong in the graph. But check the three declaration surfaces before concluding a step is unstatable: `inputs_from` when the instruction is stable and only needs predecessor evidence, a coordinator gate when a human/coordinator decision or external side effect must come first, `run_if` when the branch turns on a structured result predicate. Only when none of the three can state the future step faithfully is single-task enqueue correct.\n\n   **The line between the two failures.** The rebuttals above are aimed at declining to declare a step you already intend to dispatch; this guard is aimed at fabricating one you do not. They never both apply to the same step: the test is whether the step exists in your plan, not whether its details are settled. A step you intend to run but whose exact branch depends on evidence is KNOWN and belongs in the batch \u2014 that dependency is what the three surfaces express. A step you would have to make up to fill the batch is UNKNOWN and belongs nowhere. When you genuinely cannot tell which one you are looking at, enqueue the single and record `future_step_not_specifiable`; that is the honest answer and it is measured.\n\n   Either way, idle node agents automatically pull tasks from the queue and begin working. A batch inserts atomically (a mid-batch error such as a cycle or bad difficulty rolls the whole set back, so no half-registered chain), and each task's `depends_on` may name sibling tasks by their batch-local `ref` label, forward references included.\n   b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session. Call `mesh_launch_session` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. **A node is not limited to one live session for read-only work** \u2014 `readonly`/`live_debug_readonly` tasks are exempt from the one-active-per-node invariant, so the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed. Cloning a worktree costs roughly 10 seconds, so it is cheap enough to create one whenever write work needs a free node; use it for branch isolation, for parallel write tasks (one active write per node), or when a node's read-only queue is deep enough that a second node would clearly finish faster \u2014 call `mesh_clone_node` to create the worktree node first.\n   b0. **Base nodes are for environment-specific testing, not for general code changes.** Before dispatching any write task, answer ONE question: *does this task verify the physical environment of a specific machine or OS, or does it only change code?*\n       - **Physical-environment task \u2192 base node, targeted.** Pin it with `required_tags` (e.g. `[\"os=win32\"]`) or `target_node_id`. Examples that genuinely require the real machine: verifying a win32 `PATH`/registry/installer layout, a clean-install or uninstall on a specific OS, Homebrew or package-manager state on one particular machine, an OS-dependent runtime behavior (path separators, process spawn, native bindings), or reproducing a bug reported only on that node. A worktree CANNOT substitute for these \u2014 the point is the machine itself.\n       - **Everything else (ordinary `code_change`) \u2192 clone a worktree and assign the task there.** Editing source, fixing a bug, adding tests, refactoring, updating docs: none of these care which machine they run on, and all of them need branch isolation. **Do NOT send these to a base node.**\n       - **A mesh with several nodes does not remove this requirement.** Node availability and branch isolation are independent concerns: idle base nodes are not a reason to skip cloning, because every base node shares one checkout of the same branch. \"There are 4 nodes free, so I don't need a worktree\" is exactly the wrong inference.\n       - **Cloning is nearly free and does NOT cost you an extra dispatch step.** `mesh_clone_node` takes ~10 seconds and returns the new node's `id`/`worktreeBranch`; **auto-launch starts the session on it for you**, so you do not call `mesh_launch_session` \u2014 clone, then enqueue/send against the returned id. Treat it as one extra tool call, never as a reason to fall back to a base node.\n   b1. **Keep a branch's work on its worktree (worktree affinity).** This is about routing a branch's follow-ups back to its OWN worktree \u2014 it is never a reason to avoid creating a NEW worktree for independent work. A worktree node is a durable per-branch workspace, not a one-task throwaway \u2014 implement, review, and fix for the same branch all belong on the SAME worktree, and it lives until its work is converged (merged/pushed) and it is cleaned up. So once you clone a worktree for a branch, route every subsequent `code_change`/`validation`/fix task for that branch back to that same node: pass `required_tags: [\"worktree=<branch>\"]` or `target_node_id: <that worktree node's id>`. **Where to get the node id / tag:** the `mesh_clone_node` result returns the new node's `id` and `worktreeBranch` directly \u2014 use them immediately. The Configured Nodes list in this prompt is a launch-time snapshot and will NOT list a worktree you cloned after this session started, so do not rely on it for freshly-cloned worktrees; take the id/branch from the `mesh_clone_node` result, or call `mesh_status` to re-list the live nodes (each worktree there advertises its `worktree=<branch>` tag). Do NOT leave same-branch follow-ups untargeted \u2014 an untargeted task is claimed by whichever node polls first (usually the base machine node), which strands the work off the branch's worktree. The ONE exception is a `convergence` task (merge/push): that is base-only and must NOT be pinned to the worktree.\n   c. **Targeted Tasks**: Use `mesh_send_task` only when you need to bypass the queue and force a specific node to execute a task immediately.\n   d. For the first dispatch of a new task, provide a **complete, self-contained** instruction that includes all context the agent needs (file paths, line numbers, what to change, why). Do not send partial instructions expecting future follow-up.\n   e. For a continuation of the same issue in an existing session, send a concise **delta instruction**: current verified state, the exact failed/blocked step, the newly approved action, and final reporting requirements. Do not resend the full original task or open a new chat solely to continue the same work; that wastes coordinator and worker context.\n   f. **Let the investigator apply the fix when the findings settle it \u2014 otherwise split deliberately.** An investigator that has read the source and named the file:line and the fix already holds context a fresh worker must rebuild from scratch, and you would have to restate its findings in the new task message to get there. Task mode is **per task, not per session**: the read-only guardrail is evaluated on each dispatch from that task's own `readonly`/`task_mode`, so you hand off by sending a follow-up `mesh_send_task` to the SAME session WITHOUT the read-only flag (use `task_mode: \"code_change\"`). You do not need a new session or a fresh worktree for the mode to change. **Hand off in-session when** the findings match your hypothesis, the fix stays inside the files just investigated, and no user decision is pending. **Split to a separate task when** the investigation needs a user decision (it surfaced design options, or a cost/risk tradeoff), when it OVERTURNED your hypothesis so the direction itself needs rethinking, or when the fix touches files another in-flight worker owns. **Never convert an investigation whose own conclusion was \"do not change this\"** \u2014 a correct no-op finding is a completed task, and pushing it into a fix produces an unverified change nobody asked for. Dispatching the investigation as an ordinary report-first task skips the handoff, but drops the guardrail against premature fixes \u2014 keep `live_debug_readonly` whenever the point is to find out whether anything is wrong at all.\n4. **Monitor** \u2014 Prefer event-driven completion/status notifications. Do **not** poll `mesh_read_chat` repeatedly. Do **not** repeatedly call `mesh_status` or `mesh_view_queue` just to wait for assigned/generating work. After dispatching a direct or queued task, send one progress update with the task/session handle, then stop. Worker completion, progress and blocked reports arrive as events: a worker finishes by calling `report_completion`, and that structured report (outcome, summary, touched files, branch state, handoff notes) is delivered into your session (PTY-hosted coordinators) or surfaced as `pendingCoordinatorEvents` on your next tool call (MCP-only coordinators). Wait for that, an explicit user status request, or a real timeout/stall signal before reading status/chat/queue again. Read the report itself; call `mesh_read_chat` at most once, with `compact=true`, only when the report is missing. Handle approvals via `mesh_approve`. **Proactively parallelize new work.** When the user reports a new bug or asks for new work, start it immediately if it is independent of in-flight tasks and there is headroom under `maxParallelTasks` \u2014 do not wait for a current task to finish or for the user to prompt you to parallelize. Read-only diagnosis (`live_debug_readonly`) has no isolation or merge cost, so dispatch it in parallel right away. The no-polling / concurrency-limit rules constrain *re-checking or duplicating already-dispatched work*; they are **not** a reason to defer starting a new, independent task.\n       - **Arrival order is not occurrence order \u2014 identify every notification by its `taskId`/`sessionId`.** While you are generating, worker notifications are held in the queue and injected together on the tick after you go idle. This is intended (a raw write into a generating session is not consumed as a turn), and the delay is normally well under a minute \u2014 measured median ~1 minute, worst case ~10 minutes. The consequence is that a notification arriving now is **not necessarily about the task you most recently dispatched**. Never infer a notification's subject from timing or from what you just sent: read the `taskId`/`sessionId` in the notification itself and match it to your own record of what you dispatched. Also note that your own coordinator session id appears in these traces, so a session id in a notification is not automatically a worker's. If a notification refers to a task you have already cancelled or completed, treat it as stale \u2014 do not act on it, and say so rather than silently reinterpreting it as being about current work.\n5. **Verify** \u2014 When a task reports completion or git work is visible, call `mesh_git_status` to verify changes were made.\n6. **Checkpoint** \u2014 Call `mesh_checkpoint` to save the work.\n7. **Converge branches** \u2014 Before marking any task complete, classify every touched node/branch into exactly one final state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable`. Use `mesh_status` branchConvergenceSummary. For obvious clean branch catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues), use `mesh_fast_forward_node` dry-run first and execute only when explicitly safe/approved; this avoids consuming an agent session. Use `mesh_refine_node` for clean worktree branches when safe \u2014 but when 2+ sibling worktrees share a base, converge them with `mesh_refine_batch` rather than repeated single-node calls (see the sequencing rule in Rules). Before/refine merging root commits that contain submodule gitlink changes, require each submodule commit to be reachable from the configured submodule remote main branch, not merely present on a feature ref or local checkout. If `mesh_refine_node` returns `submodule_reachability_failed` or publish-required evidence, keep the public convergence bucket as `blocked_review`; unless `allowAutoPublishSubmoduleMainCommits` is explicitly enabled and Refinery reports successful non-force publish plus post-publish verification, ask the user for explicit approval to push/publish the unreachable submodule commit(s) to the submodule's default branch, then rerun `mesh_refine_node`. Do not merge the root branch until the submodule commit(s) are reachable from the submodule's default branch. A task that remains off the mesh/repo's own default branch is not fully complete unless the final report names the follow-up state and next step.\n8. **Clean up** \u2014 Remove worktree nodes via `mesh_remove_node` after their work is merged or no longer needed.\n9. **Report** \u2014 Summarize what was done, what changed, any issues, and the branch convergence state.\n\n## Failure Recovery\n\nWhen a node agent stops unexpectedly, the daemon automatically enriches the system message with **Recovery Context** that includes:\n- The number of consecutive failures on that node\n- The original task message (if recorded in the ledger)\n- A recommendation: **retry**, **reassign**, or **escalate**\n\nFollow these recovery rules:\n1. **If \"Retry recommended\"**: Check `mesh_view_queue` first \u2014 the daemon may have auto-requeued. If not, re-launch the session on the same node (`mesh_launch_session`), then resend the original task (`mesh_send_task`). The system message includes the original task text.\n2. **If \"Max retries exceeded\"**: Do NOT retry on the same node. Either reassign the task to a different node, or inform the user that the task requires manual intervention.\n3. **If no recovery context**: The stop may be intentional (normal completion). Use `mesh_read_chat` once to verify, then move on.\n4. **Always record what happened**: After handling a failure, briefly note the outcome in your report to the user.\n5. **Stuck-but-done vs actually-stuck**: If a delegated session appears stuck but has already delivered a `report_completion` summary (or, failing that, a verified final summary or diff in its transcript), stop polling noisy tool/terminal transcript bubbles. Verify with `mesh_git_status` or a checkpoint and proceed to landing.\n6. **Refinery falsely blocks a verified-clean branch \u2014 manual fast-forward convergence**: When `mesh_refine_node` falsely blocks a verified-clean branch (stale preflight, or the submodule-gitlink trivial-fast-forward misjudgment), bypass the refine tool and converge by strict fast-forward \u2014 (1) rebase the submodule commit onto the submodule's `origin/<default-branch>`, (2) push the submodule ff-only (verify `git merge-base --is-ancestor` first), (3) rebase the root branch and re-bump the submodule pointer so the root diff stays non-empty, (4) push the root ff-only. NEVER force-push or reset; abort and report on any non-fast-forward.\n\n## Rules\n\n- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator \u2014 keep context lean. See also: **Never use local sub-agents** below.\n- **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any equivalent in-process agent-spawning tool) to read code, investigate, run RCA, or implement. Such sub-agents execute on the coordinator's machine, outside the mesh \u2014 they escape mesh parallelism, the ledger/audit trail, node capability profiles, and worktree isolation, and leave no `mesh_task_history` record. ALL code reading, analysis, RCA, and implementation must be delegated through `mesh_enqueue_batch` (the default \u2014 see Workflow 3.a), falling back to `mesh_enqueue_task` only for a terminal single step, to `mesh_send_task` for a same-session continuation (use `task_mode: \"live_debug_readonly\"` for read-only investigation), or cross-verified via `mesh_magi_review` for read-only fan-out. The coordinator's own actions are limited to `mesh_*` tool orchestration and synthesizing results.\n- **Front-load immutable task instructions.** Include everything the agent needs (files, problem, expected fix) in whichever dispatch surface Workflow 3.a selects (`mesh_enqueue_batch` by default; `mesh_enqueue_task` / `mesh_send_task` in their narrower cases). Put predecessor-produced data in explicit `inputs_from` bindings and coordinator decisions in gates; never copy untrusted worker output into a new instruction by hand when a binding can preserve provenance. Append a structured result request at the end: ask the worker to conclude with a JSON block containing `status`, `changedFiles`, `gitStatus`, `validationResults`, `errors`, `nextAction`. The daemon parses this automatically; you can read it from `mesh_task_history`.\n- **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** \u2014 a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred \u2014 this rule blocks concurrent unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: carrying an investigation forward into its own fix is the SAME subject and belongs in that session (Workflow 3f), while an unrelated bug is a new subject even if the same session just went idle.\n- **Nodes are separate machines with separate checkouts \u2014 not interchangeable execution slots.** Each node is a different physical computer with its own clone of the repo. Work done on another node must be committed, pushed, and pulled back before this machine sees it, and since RELEASE/DEPLOY runs on the coordinator's own machine, sending a code change elsewhere buys a round trip out and another one back. So **default to this coordinator's own machine for code changes** \u2014 its local node (base or a worktree cloned from it). Routing to a DIFFERENT machine is the exception and needs a reason, of which there are exactly two: (a) **platform-specific verification** that cannot be done here \u2014 win32 PATH/registry, a clean install/uninstall on that OS, that machine's package-manager state; or (b) **parallelizing read-only investigation** across machines. \"That node is idle\" is not a reason. If you catch yourself dispatching a fix to another machine without (a) or (b), route it here instead.\n- **Don't split investigation from the fix.** When a task will plainly end in a code change, dispatch it as `code_change` from the start \u2014 the in-session handoff and split criteria live in Workflow 3f. Split only when the fix genuinely belongs on another machine for reason (a) above; redoing an investigator's context in a fresh session (worse, on another machine) is pure loss.\n- **Batch is the default enqueue surface.** Apply Workflow 3.a: before every enqueue, ask whether you will read this task's result and then dispatch more work. If yes, that successor is declarable \u2014 submit the whole plan as one `mesh_enqueue_batch` with `inputs_from` / `run_if` / `gated_by`, rather than enqueueing a step, waiting, and enqueueing the next by hand. `mesh_enqueue_task` is the fallback for a genuinely terminal single step, and it takes an `orchestration_decision` stating which `single_reason` applies.\n- **Base nodes are reserved for environment-specific testing.** Apply Workflow 3.b0: only work that verifies a machine's physical environment runs on a base node (pinned with `required_tags`/`target_node_id`); every ordinary `code_change` gets its own cloned worktree. Node availability is not branch isolation.\n- **Worktree affinity.** Apply Workflow 3.b1: route a branch's follow-ups back to its own worktree node (`required_tags: [\"worktree=<branch>\"]` or `target_node_id`, taken from the `mesh_clone_node` result or a live `mesh_status`); only `convergence` (merge/push) runs base-side.\n- **Classify task difficulty honestly.** Judge each task's real difficulty (`easy`/`medium`/`difficult`/`freeform`) per the Task difficulty section above \u2014 it is a routing hint, and the matched slot's own model/thinking is what launches. Never bend difficulty to chase a model; retune slots instead (`mesh_node_slots_set`).\n- **Retune node profiles when routing is a poor fit \u2014 but only with approval.** A node's capability slots (its provider/model/thinking + difficulty range + capability tags, seen via `mesh_node_slots_list`) are what task\u2192node fitness routing matches against. If you notice a persistent mismatch \u2014 e.g. every `difficult` task lands on a node whose only slot is a cheap model, or a capability a node clearly has isn't declared \u2014 you MAY propose a slot change with `mesh_node_slots_set` (write=false). That returns current-vs-proposed; present that diff to the user with a one-line reason and apply (write=true) ONLY after they approve. It is a WHOLESALE replacement of the node's slots, so include the slots you want to keep. Never rewrite a node's profile silently or without a clear routing reason.\n- **Bootstrap a node's slots from what's actually installed.** When a node has NO slots configured (routing then falls back to \"first available provider\"), or CLI agents were newly installed on it, call `mesh_node_slots_propose({ node_id })` instead of hand-writing a profile. It detects the node's installed CLI agents and drafts a slot list from them \u2014 read-only, it never writes. Present its `proposedSlots` with the `droppedSlots` / `destructive` fields it reports (a wholesale write would delete any existing hand-tuned slot the draft doesn't reproduce, including providers not currently on PATH), then apply with `mesh_node_slots_set({ slots: proposedSlots, write: true })` after approval. It flags `unknownProvider` / `provisional` slots whose placement is a conservative guess rather than an attested one \u2014 call those out rather than presenting them as settled.\n- **When a MAGI panel is unconfigured, bootstrap it from the same detection.** `mesh_magi_review({ task_kind })` resolves its panel SOLELY from the configured kind-panel binding, so a task_kind with no slots fails outright with `magi_kind_not_configured` \u2014 MAGI is simply unavailable until someone binds it, and the usual reason nobody has is that this path is easy to miss. Pass `mesh_node_slots_propose({ node_id, include_magi: true })` to also get a `magiPanel` draft: one slot per DISTINCT detected provider, with no model pinned, because a panel's value is cross-provider independence rather than picking the best provider. It is read-only like the rest of the tool. Apply it per kind with `mesh_magi_kind_panel_set({ task_kind, slots, write: true })` after approval \u2014 and note that write is a WHOLESALE replacement of that kind's binding, so present the dry-run's `currentSlots` first. Do NOT reach for `include_magi` on every slot proposal; it is for when the panels are actually empty or a newly installed provider should join them.\n- **Respect explicit provider requests.** Map: Hermes \u2192 `hermes-cli`, Claude/Claude Code \u2192 `claude-cli`, Codex \u2192 `codex-cli`, Gemini \u2192 `gemini-cli`, Antigravity \u2192 `antigravity-cli`. Never substitute the coordinator's own runtime.\n- **Verify via git, not source.** Use `mesh_git_status` to confirm side effects. Treat agent summaries as self-reports, not verification.\n- **Match concurrency to task kind.** Independent read-only tasks (`live_debug_readonly`) dispatch all at once up to the read-only cap \u2014 no worktree, no free node needed. Each write task needs its OWN branch workspace (Workflow 3.b0); spreading writes across base nodes is NOT a substitute: a mesh with four base nodes still has zero branch isolation. Ramp up cautiously only when tasks share a base branch or submodule pointer (landing order matters). Never launch a second session onto in-flight work for the same issue, even when `mesh_read_chat` shows no final message yet \u2014 successive stages of one investigation stay in their session (see Workflow 3f).\n- **Check history first.** Call `mesh_task_history` at session start to avoid duplicate work and inform recovery. On failure, read task history before retrying.\n- **Don't reopen already-done work after a resume.** Before reopening a reported issue after context compaction or session resume, check current git state and recent session context. If another session has already completed the work, continue from the existing diff/commit instead of starting a duplicate investigation.\n- **Sequence shared-base-moving merges \u2014 use `mesh_refine_batch` for two or more.** Merging one worktree advances another in-flight worktree's base \u2014 especially a shared submodule pointer \u2014 turning a clean fast-forward into a diverged rebase. When you have 2+ sibling worktrees to land, pass them to `mesh_refine_batch` (dry-run first) instead of calling `mesh_refine_node` once per node: it picks a conflict-aware order (non-submodule first, submodule-touching serialized last), and because each node re-resolves the base and auto-rebases before its own gates, siblings that fall behind are rebased for you rather than by hand. It also avoids the `base_locked` contention that concurrent single-node refines cause. It is not a conflict solver \u2014 a real content or submodule conflict still lands that node in `blocked_review` for manual resolution while the rest of the batch proceeds. Only drop to per-node `mesh_refine_node` for a single branch, or to hand-resolve a node the batch reported blocked.\n- **Converge branches.** After worktree tasks: refine/fast-forward, or classify as `pushed_feature_branch_needs_merge` / `blocked_review` / `cleanup_candidate` / `not_mergeable`. Clean up with `mesh_remove_node`.\n- **Refinery is config-driven.** `mesh_refine_node` must run validation from `.adhdev/refine.{json,yaml,yml}` or `repo-mesh.refine.*`. Heuristics are scaffolding only.\n- **Submodule reachability = publish-needed.** `submodule_reachability_failed` \u2192 classify as `blocked_review`, request user approval to push to submodule main, then rerun `mesh_refine_node`.\n- **Honor per-node instructions.** When a node carries a \u{1F4CC} Node instruction in the nodes section, include the relevant parts of that instruction in the task message you send to that node. Don't paraphrase the instruction into your own words \u2014 quote it verbatim so the worker agent sees exactly what the user wrote.\n- **Mission status does not update itself.** When a mission's tasks are all done or the work is abandoned, explicitly call `mesh_mission_upsert` to set status `completed` or `abandoned`. Never leave a finished mission in `active`. All-cancelled tasks with no further work \u2192 `abandoned`.\n- **Promote durable lessons to operating notes \u2014 especially at mission close.** Before calling `mesh_mission_upsert` with status `completed`/`abandoned`, ask whether this mission taught something a future coordinator needs (a provider quirk, a pattern to avoid, a recovery lesson); if so, call `mesh_record_note` FIRST \u2014 a mission's goal/history is invisible to the next coordinator once it completes, so an unrecorded lesson is lost at exactly the moment it was learned. Record only when all three hold: (a) a coordinator on another day or another session would act differently knowing it, (b) it cannot be rediscovered from code, config, or `git log`, and (c) it is not a one-off detail specific to this single mission. Note that operating notes reach the COORDINATOR prompt only \u2014 they are never injected into delegated worker sessions, so a convention workers must follow belongs in a CI gate or the repo's agent instructions file, not in a note.\n- **Don't spawn a nested coordinator for simple inspection.** Do not spawn a nested coordinator-like agent for simple inspection tasks. If delegation is required, use explicit provider selection and a fully self-contained, bounded task instruction.\n- **Keep internal traffic out of the transcript.** Internal tool calls, status events, control messages, and debug output must not appear as ordinary user-visible chat transcript content unless explicitly marked user-facing by the producing agent.\n- **Never fabricate tool results.** Always call the actual tool.\n- **Keep the user informed.** One or two sentences after each delegation round.\n- **`gated_by` alone does not branch on outcome.** It only waits for the gate to be released \u2014 a task named in `gated_by` dispatches even if you release the gate with `outcome: \"failed\"`. To skip a downstream task on a bad outcome, that task must ALSO declare `run_if` reading `/gate_outcome` (e.g. `{ from: \"<gateRef>\", select: \"/gate_outcome\", op: \"eq\", value: \"passed\" }`). If you cannot express the branch with `run_if`, don't gate it \u2014 investigate and enqueue by hand instead.\n- **Verify a mission goal's claims before dispatching on them.** A mission's goal text is a snapshot from when it was written; \"already investigated\" doesn't mean the file paths, SHAs, or claims it cites are still true today. Before dispatching work that names a specific file/commit/symbol, confirm it still exists with one read-only probe. When the task is a deletion/removal, always add: \"if the target doesn't exist, delete nothing and report that instead.\"\n- **Close missions yourself \u2014 don't wait on passive signals.** `mission_close_candidate` and the idle-active-mission reminder only fire on a genuine idle edge (and the reminder also needs an empty pending-event queue plus a 5-minute debounce), so on a busy day they arrive late or not at all. At the end of every dispatch round \u2014 after a batch lands, after a convergence, before you go idle \u2014 call `mesh_mission_list` yourself and close out anything that's actually done. An `active` mission with no remaining work is a debt, not a state to wait out.\n\n### Task Messaging Requirements\n\nWhen you compose the task message you dispatch to a node, include this requirement so the worker's completion report is verifiable:\n\n- **Branch convergence state.** For a worktree task, require the completion report to classify the touched branch into exactly one final state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable`. A task that ends on a non-main branch is not complete unless the report names that state and the next step.\n";
+        DEFAULT_COORDINATOR_RULES = "## Orchestration Workflow\n\n1. **Assess** \u2014 Call `mesh_status` to see which nodes are healthy and available. Check `mesh_task_history` to understand what has already been done in this mesh \u2014 previous delegations, completions, and failures.\n2. **Plan** \u2014 Decompose the user's request into independent tasks for parallel execution, or sequential tasks when dependencies exist. If `mesh_task_history` shows a recent failure for a task, decide whether to retry or reassign. Enqueue incrementally with `mesh_enqueue_task`, chaining known follow-ups via `depends_on` as they become known (see Workflow 3.a) \u2014 a mission is not required to do this. **For multi-task work, a mission is recommended**: call `mesh_mission_upsert` with a title and goal first, then carry that `mission_id` on each enqueued task so the plan survives a coordinator restart and shows up in `mesh_mission_list`. A one-off task or two with no need for that survivability/tracking can skip `mission_id` entirely. Express \"B after A\" ordering with `depends_on` instead of waiting and polling \u2014 the system claims dependents automatically when their dependencies complete. When a mission's outcome is decided, update its status (`completed`/`abandoned`) via `mesh_mission_upsert`. If the prompt already shows an **Active Mission**, continue it from its current task state \u2014 do not re-enqueue tasks that already exist.\n3. **Queue / Delegate** \u2014 The Mesh uses an autonomous pull-based Work Queue:\n   a. **Incremental enqueue rule.** Default to `mesh_enqueue_task`. When a predecessor is already known (queued or just enqueued), chain the new task to it with `depends_on` \u2014 the graph grows append-only, so you don't need to plan the whole thing up front. A task with `depends_on` automatically receives an \"Upstream results\" appendix summarizing its predecessors' completions, so you rarely need `inputs_from` as well; reach for `inputs_from` only when a specific field must be bound exactly. Use `mesh_enqueue_batch` only when three or more steps are already settled AND the plan needs a coordinator gate or a deferred worktree (`workspace_ref`) \u2014 not as the everyday enqueue path. Never invent speculative steps just to reach that threshold; a step you would not actually dispatch does not belong in the graph. `orchestration_decision` is optional \u2014 pass it when it helps explain your choice, but omitting it is not a violation. Gates get a default 24-hour deadline and are closed automatically once every task behind them reaches a terminal state (cancelled/completed/failed), so you no longer need to close a gate by hand after cancelling its dependents \u2014 but an `expired` gate notice still means the coordinator must act: release it, abandon it, or extend it.\n   b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session. Call `mesh_launch_session` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. **A node is not limited to one live session for read-only work** \u2014 `readonly`/`live_debug_readonly` tasks are exempt from the one-active-per-node invariant, so the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed. Cloning a worktree costs roughly 10 seconds, so it is cheap enough to create one whenever write work needs a free node; use it for branch isolation, for parallel write tasks (one active write per node), or when a node's read-only queue is deep enough that a second node would clearly finish faster \u2014 call `mesh_clone_node` to create the worktree node first.\n   b0. **Base nodes are for environment-specific testing, not for general code changes.** Before dispatching any write task, answer ONE question: *does this task verify the physical environment of a specific machine or OS, or does it only change code?*\n       - **Physical-environment task \u2192 base node, targeted.** Pin it with `required_tags` (e.g. `[\"os=win32\"]`) or `target_node_id`. Examples that genuinely require the real machine: verifying a win32 `PATH`/registry/installer layout, a clean-install or uninstall on a specific OS, Homebrew or package-manager state on one particular machine, an OS-dependent runtime behavior (path separators, process spawn, native bindings), or reproducing a bug reported only on that node. A worktree CANNOT substitute for these \u2014 the point is the machine itself.\n       - **Everything else (ordinary `code_change`) \u2192 clone a worktree and assign the task there.** Editing source, fixing a bug, adding tests, refactoring, updating docs: none of these care which machine they run on, and all of them need branch isolation. **Do NOT send these to a base node.**\n       - **A mesh with several nodes does not remove this requirement.** Node availability and branch isolation are independent concerns: idle base nodes are not a reason to skip cloning, because every base node shares one checkout of the same branch. \"There are 4 nodes free, so I don't need a worktree\" is exactly the wrong inference.\n       - **Cloning is nearly free and does NOT cost you an extra dispatch step.** `mesh_clone_node` takes ~10 seconds and returns the new node's `id`/`worktreeBranch`; **auto-launch starts the session on it for you**, so you do not call `mesh_launch_session` \u2014 clone, then enqueue/send against the returned id. Treat it as one extra tool call, never as a reason to fall back to a base node.\n   b1. **Keep a branch's work on its worktree (worktree affinity).** This is about routing a branch's follow-ups back to its OWN worktree \u2014 it is never a reason to avoid creating a NEW worktree for independent work. A worktree node is a durable per-branch workspace, not a one-task throwaway \u2014 implement, review, and fix for the same branch all belong on the SAME worktree, and it lives until its work is converged (merged/pushed) and it is cleaned up. So once you clone a worktree for a branch, route every subsequent `code_change`/`validation`/fix task for that branch back to that same node: pass `required_tags: [\"worktree=<branch>\"]` or `target_node_id: <that worktree node's id>`. **Where to get the node id / tag:** the `mesh_clone_node` result returns the new node's `id` and `worktreeBranch` directly \u2014 use them immediately. The Configured Nodes list in this prompt is a launch-time snapshot and will NOT list a worktree you cloned after this session started, so do not rely on it for freshly-cloned worktrees; take the id/branch from the `mesh_clone_node` result, or call `mesh_status` to re-list the live nodes (each worktree there advertises its `worktree=<branch>` tag). Do NOT leave same-branch follow-ups untargeted \u2014 an untargeted task is claimed by whichever node polls first (usually the base machine node), which strands the work off the branch's worktree. The ONE exception is a `convergence` task (merge/push): that is base-only and must NOT be pinned to the worktree.\n   c. **Targeted Tasks**: Use `mesh_send_task` only when you need to bypass the queue and force a specific node to execute a task immediately.\n   d. For the first dispatch of a new task, provide a **complete, self-contained** instruction that includes all context the agent needs (file paths, line numbers, what to change, why). Do not send partial instructions expecting future follow-up.\n   e. For a continuation of the same issue in an existing session, send a concise **delta instruction**: current verified state, the exact failed/blocked step, the newly approved action, and final reporting requirements. Do not resend the full original task or open a new chat solely to continue the same work; that wastes coordinator and worker context.\n   f. **Let the investigator apply the fix when the findings settle it \u2014 otherwise split deliberately.** An investigator that has read the source and named the file:line and the fix already holds context a fresh worker must rebuild from scratch, and you would have to restate its findings in the new task message to get there. Task mode is **per task, not per session**: the read-only guardrail is evaluated on each dispatch from that task's own `readonly`/`task_mode`, so you hand off by sending a follow-up `mesh_send_task` to the SAME session WITHOUT the read-only flag (use `task_mode: \"code_change\"`). You do not need a new session or a fresh worktree for the mode to change. **Hand off in-session when** the findings match your hypothesis, the fix stays inside the files just investigated, and no user decision is pending. **Split to a separate task when** the investigation needs a user decision (it surfaced design options, or a cost/risk tradeoff), when it OVERTURNED your hypothesis so the direction itself needs rethinking, or when the fix touches files another in-flight worker owns. **Never convert an investigation whose own conclusion was \"do not change this\"** \u2014 a correct no-op finding is a completed task, and pushing it into a fix produces an unverified change nobody asked for. Dispatching the investigation as an ordinary report-first task skips the handoff, but drops the guardrail against premature fixes \u2014 keep `live_debug_readonly` whenever the point is to find out whether anything is wrong at all.\n4. **Monitor** \u2014 Prefer event-driven completion/status notifications. Do **not** poll `mesh_read_chat` repeatedly. Do **not** repeatedly call `mesh_status` or `mesh_view_queue` just to wait for assigned/generating work. After dispatching a direct or queued task, send one progress update with the task/session handle, then stop. Worker completion, progress and blocked reports arrive as events: a worker finishes by calling `report_completion`, and that structured report (outcome, summary, touched files, branch state, handoff notes) is delivered into your session (PTY-hosted coordinators) or surfaced as `pendingCoordinatorEvents` on your next tool call (MCP-only coordinators). Wait for that, an explicit user status request, or a real timeout/stall signal before reading status/chat/queue again. Read the report itself; call `mesh_read_chat` at most once, with `compact=true`, only when the report is missing. Handle approvals via `mesh_approve`. **Proactively parallelize new work.** When the user reports a new bug or asks for new work, start it immediately if it is independent of in-flight tasks and there is headroom under `maxParallelTasks` \u2014 do not wait for a current task to finish or for the user to prompt you to parallelize. Read-only diagnosis (`live_debug_readonly`) has no isolation or merge cost, so dispatch it in parallel right away. The no-polling / concurrency-limit rules constrain *re-checking or duplicating already-dispatched work*; they are **not** a reason to defer starting a new, independent task.\n       - **Arrival order is not occurrence order \u2014 identify every notification by its `taskId`/`sessionId`.** While you are generating, worker notifications are held in the queue and injected together on the tick after you go idle. This is intended (a raw write into a generating session is not consumed as a turn), and the delay is normally well under a minute \u2014 measured median ~1 minute, worst case ~10 minutes. The consequence is that a notification arriving now is **not necessarily about the task you most recently dispatched**. Never infer a notification's subject from timing or from what you just sent: read the `taskId`/`sessionId` in the notification itself and match it to your own record of what you dispatched. Also note that your own coordinator session id appears in these traces, so a session id in a notification is not automatically a worker's. If a notification refers to a task you have already cancelled or completed, treat it as stale \u2014 do not act on it, and say so rather than silently reinterpreting it as being about current work.\n5. **Verify** \u2014 When a task reports completion or git work is visible, call `mesh_git_status` to verify changes were made.\n6. **Checkpoint** \u2014 Call `mesh_checkpoint` to save the work.\n7. **Converge branches** \u2014 Before marking any task complete, classify every touched node/branch into exactly one final state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable`. Use `mesh_status` branchConvergenceSummary. For obvious clean branch catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues), use `mesh_fast_forward_node` dry-run first and execute only when explicitly safe/approved; this avoids consuming an agent session. Use `mesh_refine_node` for clean worktree branches when safe \u2014 but when 2+ sibling worktrees share a base, converge them with `mesh_refine_batch` rather than repeated single-node calls (see the sequencing rule in Rules). Before/refine merging root commits that contain submodule gitlink changes, require each submodule commit to be reachable from the configured submodule remote main branch, not merely present on a feature ref or local checkout. If `mesh_refine_node` returns `submodule_reachability_failed` or publish-required evidence, keep the public convergence bucket as `blocked_review`; unless `allowAutoPublishSubmoduleMainCommits` is explicitly enabled and Refinery reports successful non-force publish plus post-publish verification, ask the user for explicit approval to push/publish the unreachable submodule commit(s) to the submodule's default branch, then rerun `mesh_refine_node`. Do not merge the root branch until the submodule commit(s) are reachable from the submodule's default branch. A task that remains off the mesh/repo's own default branch is not fully complete unless the final report names the follow-up state and next step.\n8. **Clean up** \u2014 Remove worktree nodes via `mesh_remove_node` after their work is merged or no longer needed.\n9. **Report** \u2014 Summarize what was done, what changed, any issues, and the branch convergence state.\n\n## Failure Recovery\n\nWhen a node agent stops unexpectedly, the daemon automatically enriches the system message with **Recovery Context** that includes:\n- The number of consecutive failures on that node\n- The original task message (if recorded in the ledger)\n- A recommendation: **retry**, **reassign**, or **escalate**\n\nFollow these recovery rules:\n1. **If \"Retry recommended\"**: Check `mesh_view_queue` first \u2014 the daemon may have auto-requeued. If not, re-launch the session on the same node (`mesh_launch_session`), then resend the original task (`mesh_send_task`). The system message includes the original task text.\n2. **If \"Max retries exceeded\"**: Do NOT retry on the same node. Either reassign the task to a different node, or inform the user that the task requires manual intervention.\n3. **If no recovery context**: The stop may be intentional (normal completion). Use `mesh_read_chat` once to verify, then move on.\n4. **Always record what happened**: After handling a failure, briefly note the outcome in your report to the user.\n5. **Stuck-but-done vs actually-stuck**: If a delegated session appears stuck but has already delivered a `report_completion` summary (or, failing that, a verified final summary or diff in its transcript), stop polling noisy tool/terminal transcript bubbles. Verify with `mesh_git_status` or a checkpoint and proceed to landing.\n6. **Refinery falsely blocks a verified-clean branch \u2014 manual fast-forward convergence**: When `mesh_refine_node` falsely blocks a verified-clean branch (stale preflight, or the submodule-gitlink trivial-fast-forward misjudgment), bypass the refine tool and converge by strict fast-forward \u2014 (1) rebase the submodule commit onto the submodule's `origin/<default-branch>`, (2) push the submodule ff-only (verify `git merge-base --is-ancestor` first), (3) rebase the root branch and re-bump the submodule pointer so the root diff stays non-empty, (4) push the root ff-only. NEVER force-push or reset; abort and report on any non-fast-forward.\n\n## Rules\n\n- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator \u2014 keep context lean. See also: **Never use local sub-agents** below.\n- **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any equivalent in-process agent-spawning tool) to read code, investigate, run RCA, or implement. Such sub-agents execute on the coordinator's machine, outside the mesh \u2014 they escape mesh parallelism, the ledger/audit trail, node capability profiles, and worktree isolation, and leave no `mesh_task_history` record. ALL code reading, analysis, RCA, and implementation must be delegated through `mesh_enqueue_task` (the default \u2014 see Workflow 3.a), chaining follow-ups with `depends_on`, escalating to `mesh_enqueue_batch` only for a settled multi-step plan needing gates or deferred worktrees, using `mesh_send_task` for a same-session continuation (use `task_mode: \"live_debug_readonly\"` for read-only investigation), or cross-verified via `mesh_magi_review` for read-only fan-out. The coordinator's own actions are limited to `mesh_*` tool orchestration and synthesizing results.\n- **Front-load immutable task instructions.** Include everything the agent needs (files, problem, expected fix) in whichever dispatch surface Workflow 3.a selects (`mesh_enqueue_task` by default, chained with `depends_on`; `mesh_enqueue_batch` for a settled multi-step plan; `mesh_send_task` for same-session continuation). Put predecessor-produced data in explicit `inputs_from` bindings when a specific field must be bound exactly (a `depends_on` chain already appends an \"Upstream results\" summary automatically) and coordinator decisions in gates; never copy untrusted worker output into a new instruction by hand when a binding can preserve provenance. Append a structured result request at the end: ask the worker to conclude with a JSON block containing `status`, `changedFiles`, `gitStatus`, `validationResults`, `errors`, `nextAction`. The daemon parses this automatically; you can read it from `mesh_task_history`.\n- **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** \u2014 a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred \u2014 this rule blocks concurrent unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: carrying an investigation forward into its own fix is the SAME subject and belongs in that session (Workflow 3f), while an unrelated bug is a new subject even if the same session just went idle.\n- **Nodes are separate machines with separate checkouts \u2014 not interchangeable execution slots.** Each node is a different physical computer with its own clone of the repo. Work done on another node must be committed, pushed, and pulled back before this machine sees it, and since RELEASE/DEPLOY runs on the coordinator's own machine, sending a code change elsewhere buys a round trip out and another one back. So **default to this coordinator's own machine for code changes** \u2014 its local node (base or a worktree cloned from it). Routing to a DIFFERENT machine is the exception and needs a reason, of which there are exactly two: (a) **platform-specific verification** that cannot be done here \u2014 win32 PATH/registry, a clean install/uninstall on that OS, that machine's package-manager state; or (b) **parallelizing read-only investigation** across machines. \"That node is idle\" is not a reason. If you catch yourself dispatching a fix to another machine without (a) or (b), route it here instead.\n- **Don't split investigation from the fix.** When a task will plainly end in a code change, dispatch it as `code_change` from the start \u2014 the in-session handoff and split criteria live in Workflow 3f. Split only when the fix genuinely belongs on another machine for reason (a) above; redoing an investigator's context in a fresh session (worse, on another machine) is pure loss.\n- **`mesh_enqueue_task` is the default enqueue surface.** Apply Workflow 3.a: default to `mesh_enqueue_task` and chain known follow-ups with `depends_on` as they become known \u2014 the graph grows append-only, so you don't need the whole plan up front. Reach for `mesh_enqueue_batch` only when three or more steps are already settled and the plan needs a coordinator gate or a deferred worktree (`workspace_ref`). Never fabricate steps just to assemble a batch.\n- **Base nodes are reserved for environment-specific testing.** Apply Workflow 3.b0: only work that verifies a machine's physical environment runs on a base node (pinned with `required_tags`/`target_node_id`); every ordinary `code_change` gets its own cloned worktree. Node availability is not branch isolation.\n- **Worktree affinity.** Apply Workflow 3.b1: route a branch's follow-ups back to its own worktree node (`required_tags: [\"worktree=<branch>\"]` or `target_node_id`, taken from the `mesh_clone_node` result or a live `mesh_status`); only `convergence` (merge/push) runs base-side.\n- **Classify task difficulty honestly.** Judge each task's real difficulty (`easy`/`medium`/`difficult`/`freeform`) per the Task difficulty section above \u2014 it is a routing hint, and the matched slot's own model/thinking is what launches. Never bend difficulty to chase a model; retune slots instead (`mesh_node_slots_set`).\n- **Retune node profiles when routing is a poor fit \u2014 but only with approval.** A node's capability slots (its provider/model/thinking + difficulty range + capability tags, seen via `mesh_node_slots_list`) are what task\u2192node fitness routing matches against. If you notice a persistent mismatch \u2014 e.g. every `difficult` task lands on a node whose only slot is a cheap model, or a capability a node clearly has isn't declared \u2014 you MAY propose a slot change with `mesh_node_slots_set` (write=false). That returns current-vs-proposed; present that diff to the user with a one-line reason and apply (write=true) ONLY after they approve. It is a WHOLESALE replacement of the node's slots, so include the slots you want to keep. Never rewrite a node's profile silently or without a clear routing reason.\n- **Bootstrap a node's slots from what's actually installed.** When a node has NO slots configured (routing then falls back to \"first available provider\"), or CLI agents were newly installed on it, call `mesh_node_slots_propose({ node_id })` instead of hand-writing a profile. It detects the node's installed CLI agents and drafts a slot list from them \u2014 read-only, it never writes. Present its `proposedSlots` with the `droppedSlots` / `destructive` fields it reports (a wholesale write would delete any existing hand-tuned slot the draft doesn't reproduce, including providers not currently on PATH), then apply with `mesh_node_slots_set({ slots: proposedSlots, write: true })` after approval. It flags `unknownProvider` / `provisional` slots whose placement is a conservative guess rather than an attested one \u2014 call those out rather than presenting them as settled.\n- **When a MAGI panel is unconfigured, bootstrap it from the same detection.** `mesh_magi_review({ task_kind })` resolves its panel SOLELY from the configured kind-panel binding, so a task_kind with no slots fails outright with `magi_kind_not_configured` \u2014 MAGI is simply unavailable until someone binds it, and the usual reason nobody has is that this path is easy to miss. Pass `mesh_node_slots_propose({ node_id, include_magi: true })` to also get a `magiPanel` draft: one slot per DISTINCT detected provider, with no model pinned, because a panel's value is cross-provider independence rather than picking the best provider. It is read-only like the rest of the tool. Apply it per kind with `mesh_magi_kind_panel_set({ task_kind, slots, write: true })` after approval \u2014 and note that write is a WHOLESALE replacement of that kind's binding, so present the dry-run's `currentSlots` first. Do NOT reach for `include_magi` on every slot proposal; it is for when the panels are actually empty or a newly installed provider should join them.\n- **Respect explicit provider requests.** Map: Hermes \u2192 `hermes-cli`, Claude/Claude Code \u2192 `claude-cli`, Codex \u2192 `codex-cli`, Gemini \u2192 `gemini-cli`, Antigravity \u2192 `antigravity-cli`. Never substitute the coordinator's own runtime.\n- **Verify via git, not source.** Use `mesh_git_status` to confirm side effects. Treat agent summaries as self-reports, not verification.\n- **Match concurrency to task kind.** Independent read-only tasks (`live_debug_readonly`) dispatch all at once up to the read-only cap \u2014 no worktree, no free node needed. Each write task needs its OWN branch workspace (Workflow 3.b0); spreading writes across base nodes is NOT a substitute: a mesh with four base nodes still has zero branch isolation. Ramp up cautiously only when tasks share a base branch or submodule pointer (landing order matters). Never launch a second session onto in-flight work for the same issue, even when `mesh_read_chat` shows no final message yet \u2014 successive stages of one investigation stay in their session (see Workflow 3f).\n- **Check history first.** Call `mesh_task_history` at session start to avoid duplicate work and inform recovery. On failure, read task history before retrying.\n- **Don't reopen already-done work after a resume.** Before reopening a reported issue after context compaction or session resume, check current git state and recent session context. If another session has already completed the work, continue from the existing diff/commit instead of starting a duplicate investigation.\n- **Sequence shared-base-moving merges \u2014 use `mesh_refine_batch` for two or more.** Merging one worktree advances another in-flight worktree's base \u2014 especially a shared submodule pointer \u2014 turning a clean fast-forward into a diverged rebase. When you have 2+ sibling worktrees to land, pass them to `mesh_refine_batch` (dry-run first) instead of calling `mesh_refine_node` once per node: it picks a conflict-aware order (non-submodule first, submodule-touching serialized last), and because each node re-resolves the base and auto-rebases before its own gates, siblings that fall behind are rebased for you rather than by hand. It also avoids the `base_locked` contention that concurrent single-node refines cause. It is not a conflict solver \u2014 a real content or submodule conflict still lands that node in `blocked_review` for manual resolution while the rest of the batch proceeds. Only drop to per-node `mesh_refine_node` for a single branch, or to hand-resolve a node the batch reported blocked.\n- **Converge branches.** After worktree tasks: refine/fast-forward, or classify as `pushed_feature_branch_needs_merge` / `blocked_review` / `cleanup_candidate` / `not_mergeable`. Clean up with `mesh_remove_node`.\n- **Refinery is config-driven.** `mesh_refine_node` must run validation from `.adhdev/refine.{json,yaml,yml}` or `repo-mesh.refine.*`. Heuristics are scaffolding only.\n- **Submodule reachability = publish-needed.** `submodule_reachability_failed` \u2192 classify as `blocked_review`, request user approval to push to submodule main, then rerun `mesh_refine_node`.\n- **Honor per-node instructions.** When a node carries a \u{1F4CC} Node instruction in the nodes section, include the relevant parts of that instruction in the task message you send to that node. Don't paraphrase the instruction into your own words \u2014 quote it verbatim so the worker agent sees exactly what the user wrote.\n- **Mission status does not update itself.** When a mission's tasks are all done or the work is abandoned, explicitly call `mesh_mission_upsert` to set status `completed` or `abandoned`. Never leave a finished mission in `active`. All-cancelled tasks with no further work \u2192 `abandoned`.\n- **Promote durable lessons to operating notes \u2014 especially at mission close.** Before calling `mesh_mission_upsert` with status `completed`/`abandoned`, ask whether this mission taught something a future coordinator needs (a provider quirk, a pattern to avoid, a recovery lesson); if so, call `mesh_record_note` FIRST \u2014 a mission's goal/history is invisible to the next coordinator once it completes, so an unrecorded lesson is lost at exactly the moment it was learned. Record only when all three hold: (a) a coordinator on another day or another session would act differently knowing it, (b) it cannot be rediscovered from code, config, or `git log`, and (c) it is not a one-off detail specific to this single mission. Note that operating notes reach the COORDINATOR prompt only \u2014 they are never injected into delegated worker sessions, so a convention workers must follow belongs in a CI gate or the repo's agent instructions file, not in a note.\n- **Don't spawn a nested coordinator for simple inspection.** Do not spawn a nested coordinator-like agent for simple inspection tasks. If delegation is required, use explicit provider selection and a fully self-contained, bounded task instruction.\n- **Keep internal traffic out of the transcript.** Internal tool calls, status events, control messages, and debug output must not appear as ordinary user-visible chat transcript content unless explicitly marked user-facing by the producing agent.\n- **Never fabricate tool results.** Always call the actual tool.\n- **Keep the user informed.** One or two sentences after each delegation round.\n- **`gated_by` alone does not branch on outcome.** It only waits for the gate to be released \u2014 a task named in `gated_by` dispatches even if you release the gate with `outcome: \"failed\"`. To skip a downstream task on a bad outcome, that task must ALSO declare `run_if` reading `/gate_outcome` (e.g. `{ from: \"<gateRef>\", select: \"/gate_outcome\", op: \"eq\", value: \"passed\" }`). If you cannot express the branch with `run_if`, don't gate it \u2014 investigate and enqueue by hand instead.\n- **Verify a mission goal's claims before dispatching on them.** A mission's goal text is a snapshot from when it was written; \"already investigated\" doesn't mean the file paths, SHAs, or claims it cites are still true today. Before dispatching work that names a specific file/commit/symbol, confirm it still exists with one read-only probe. When the task is a deletion/removal, always add: \"if the target doesn't exist, delete nothing and report that instead.\"\n- **Close missions yourself \u2014 don't wait on passive signals.** `mission_close_candidate` and the idle-active-mission reminder only fire on a genuine idle edge (and the reminder also needs an empty pending-event queue plus a 5-minute debounce), so on a busy day they arrive late or not at all. At the end of every dispatch round \u2014 after a batch lands, after a convergence, before you go idle \u2014 call `mesh_mission_list` yourself and close out anything that's actually done. An `active` mission with no remaining work is a debt, not a state to wait out.\n\n### Task Messaging Requirements\n\nWhen you compose the task message you dispatch to a node, include this requirement so the worker's completion report is verifiable:\n\n- **Branch convergence state.** For a worktree task, require the completion report to classify the touched branch into exactly one final state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable`. A task that ends on a non-main branch is not complete unless the report names that state and the next step.\n";
       }
     });
     function resolveCoordinatorRules(meshBaseWorkspace) {
@@ -54367,6 +54367,31 @@ ${blocks.join("\n\n")}`;
         nonce
       };
     }
+    function renderUntrustedEvidenceEnvelopes(blocks, nonceSeed) {
+      const cleaned = blocks.map((b) => ({
+        attributes: b.attributes,
+        text: defangEnvelopeMarkers(stripControlCharacters(redactLogLine(b.text)))
+      }));
+      const nonce = sha256Hex(canonicalJson({
+        seed: nonceSeed ?? null,
+        blocks: cleaned.map((b) => sha256Hex(b.text))
+      })).slice(0, 8);
+      const tag = `${ENVELOPE_TAG}_${nonce}`;
+      const rendered = cleaned.map((b) => {
+        const attrs = ['trust="untrusted"', ...Object.entries(b.attributes).filter(([key2]) => key2 !== "trust").map(([key2, value]) => `${key2.replace(/[^A-Za-z0-9_]/g, "_")}="${escapeAttribute(String(value))}"`)].join(" ");
+        return `<${tag} ${attrs}>
+${b.text}
+</${tag}>`;
+      });
+      return {
+        text: `${MESH_UPSTREAM_DATA_PREAMBLE}
+
+${rendered.join("\n\n")}`,
+        nonce,
+        preamble: MESH_UPSTREAM_DATA_PREAMBLE,
+        envelopes: rendered
+      };
+    }
     function assertDeliveryIntegrity(rendered) {
       if (!rendered.message.startsWith(rendered.baseMessage)) {
         throw new MeshMaterializationError("envelope_integrity", "the base instruction must precede all bound data", "base_prefix");
@@ -54502,6 +54527,25 @@ ${blocks.join("\n\n")}`;
           "compensated",
           "compensation_required"
         ];
+      }
+    });
+    function resolveDefaultGateDeadlineSeconds(env2 = process.env) {
+      const raw = env2[MESH_GATE_DEFAULT_DEADLINE_ENV];
+      if (raw !== void 0 && raw.trim() !== "") {
+        const parsed = Number(raw.trim());
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          return parsed === 0 ? null : Math.max(1, Math.floor(parsed));
+        }
+      }
+      return MESH_GATE_DEFAULT_DEADLINE_SECONDS;
+    }
+    var MESH_GATE_DEFAULT_DEADLINE_SECONDS;
+    var MESH_GATE_DEFAULT_DEADLINE_ENV;
+    var init_mesh_graph_gate_defaults = __esm2({
+      "src/mesh/mesh-graph-gate-defaults.ts"() {
+        "use strict";
+        MESH_GATE_DEFAULT_DEADLINE_SECONDS = 24 * 60 * 60;
+        MESH_GATE_DEFAULT_DEADLINE_ENV = "ADHDEV_GRAPH_GATE_DEFAULT_DEADLINE_S";
       }
     });
     function isSupportedMeshCoordinatorConfigFormat(format) {
@@ -56100,6 +56144,193 @@ ${lines.join("\n")}
         ]);
       }
     });
+    function coordinatorGateAbandonedReason(gateId) {
+      return `coordinator_gate_abandoned:${gateId}`;
+    }
+    function abandonGateInTxn(store2, input, nowIso) {
+      const graphStore = store2.graphStore();
+      const gate = graphStore.getGate(input.gateId);
+      if (!gate || gate.meshId !== input.meshId) {
+        return { abandoned: false, reason: "gate_not_found", cancelledNodeIds: [], cancelledTaskIds: [] };
+      }
+      if (gate.state === "cancelled") {
+        return { abandoned: true, reason: "gate_already_abandoned", gate, cancelledNodeIds: [], cancelledTaskIds: [] };
+      }
+      if (gate.state === "released") {
+        return { abandoned: false, reason: `gate_terminal:${gate.state}`, gate, cancelledNodeIds: [], cancelledTaskIds: [] };
+      }
+      if (!input.force && gate.state === "claimed" && gate.leaseExpiresAt && gate.leaseExpiresAt > nowIso) {
+        return { abandoned: false, reason: "gate_lease_held", gate, cancelledNodeIds: [], cancelledTaskIds: [] };
+      }
+      const abandonReason = `${coordinatorGateAbandonedReason(gate.gateId)}:${input.reason}`;
+      const won = graphStore.patchGate(gate.gateId, {
+        state: "cancelled",
+        // Drop the lease: an abandoned gate has no owner and no live fence.
+        leaseOwnerSessionId: null,
+        fencingToken: null,
+        leaseExpiresAt: null
+      }, nowIso, { leaseGeneration: gate.leaseGeneration });
+      if (!won) {
+        return { abandoned: false, reason: "gate_abandon_race", gate, cancelledNodeIds: [], cancelledTaskIds: [] };
+      }
+      const node = graphStore.getNode(gate.graphId, gate.nodeId);
+      if (node && node.state !== "cancelled") {
+        graphStore.updateNodeState(gate.graphId, gate.nodeId, "cancelled", nowIso, { failureReason: abandonReason });
+      }
+      const cancelledNodeIds = node ? cancelGateDownstreamSubtree(store2, node, nowIso, abandonReason) : [];
+      const cancelledTaskIds = [];
+      for (const nodeId of cancelledNodeIds) {
+        const target = graphStore.getNode(gate.graphId, nodeId);
+        if (target?.queueTaskId) cancelledTaskIds.push(target.queueTaskId);
+      }
+      const graph = graphStore.getGraph(gate.graphId);
+      let graphStatus;
+      const rolled = classifyGraphRollup(graphStore.listNodes(gate.graphId));
+      if (graph && rolled && graph.status !== rolled) {
+        graphStore.updateGraphStatus(gate.graphId, rolled, nowIso, true);
+        graphStatus = rolled;
+        insertGateOutbox(
+          graphStore,
+          gate.meshId,
+          gate.graphId,
+          rolled === "completed" ? "graph_completed" : rolled === "failed" ? "graph_failed" : "graph_cancelled",
+          { graphId: gate.graphId, status: rolled },
+          nowIso
+        );
+      } else if (graph?.status === "waiting_gate") {
+        const stillWaiting = graphStore.listGatesByGraph(gate.graphId).some((g3) => g3.gateId !== gate.gateId && (g3.state === "awaiting_coordinator" || g3.state === "claimed"));
+        if (!stillWaiting) {
+          graphStore.updateGraphStatus(gate.graphId, "active", nowIso);
+          graphStatus = "active";
+        }
+      }
+      insertGateOutbox(graphStore, gate.meshId, gate.graphId, "graph_gate_abandoned", {
+        graphId: gate.graphId,
+        gateId: gate.gateId,
+        nodeId: gate.nodeId,
+        ref: gate.ref,
+        action: gate.action,
+        priorState: gate.state,
+        reason: input.reason,
+        ...input.coordinatorSessionId ? { coordinatorSessionId: input.coordinatorSessionId } : {},
+        ...input.force ? { force: true } : {},
+        ...input.auto ? { auto: true } : {},
+        ...cancelledNodeIds.length > 0 ? { cancelledNodeIds } : {}
+      }, nowIso);
+      return {
+        abandoned: true,
+        gate: graphStore.getGate(gate.gateId),
+        cancelledNodeIds,
+        cancelledTaskIds,
+        ...graphStatus ? { graphStatus } : {}
+      };
+    }
+    function autoAbandonGatesWithTerminalDownstreamInTxn(store2, graphId, nowIso) {
+      const graphStore = store2.graphStore();
+      const closed = [];
+      for (let pass = 0; pass < 64; pass += 1) {
+        const gates = graphStore.listGatesByGraph(graphId).filter((g3) => g3.state !== "released" && g3.state !== "cancelled");
+        if (gates.length === 0) break;
+        const nodes = graphStore.listNodes(graphId);
+        const edges = graphStore.listEdges(graphId);
+        const byId = new Map(nodes.map((n) => [n.nodeId, n]));
+        let closedThisPass = 0;
+        for (const gate of gates) {
+          if (gate.state === "expired" && gate.onTimeout !== "hold") continue;
+          if (gate.state === "claimed" && gate.leaseExpiresAt && gate.leaseExpiresAt > nowIso) continue;
+          const downstream = edges.filter((e) => e.fromNodeId === gate.nodeId).map((e) => byId.get(e.toNodeId));
+          if (downstream.length === 0) continue;
+          if (!downstream.every((n) => !!n && DOWNSTREAM_TERMINAL_STATES.has(n.state))) continue;
+          const res = abandonGateInTxn(store2, {
+            meshId: gate.meshId,
+            gateId: gate.gateId,
+            reason: MESH_GATE_AUTO_ABANDON_REASON,
+            coordinatorSessionId: MESH_GATE_AUTO_ABANDON_ACTOR,
+            auto: true
+          }, nowIso);
+          if (res.abandoned && res.reason !== "gate_already_abandoned") {
+            closed.push(gate.gateId);
+            closedThisPass += 1;
+          }
+        }
+        if (closedThisPass === 0) break;
+      }
+      if (closed.length > 0) {
+        LOG.info("MeshGraph", `Auto-closed ${closed.length} gate(s) on graph ${graphId} (${MESH_GATE_AUTO_ABANDON_REASON}): ${closed.join(",")}`);
+      }
+      return closed;
+    }
+    function isCancelExempt(state) {
+      return state === "completed" || state === "released" || state === "skipped" || state === "cancelled" || state === "failed" || state === "expired";
+    }
+    function cancelGateDownstreamSubtree(store2, gateNode, nowIso, reason = `coordinator_gate_timeout:${gateNode.nodeId}`) {
+      const graphStore = store2.graphStore();
+      const nodes = graphStore.listNodes(gateNode.graphId);
+      const edges = graphStore.listEdges(gateNode.graphId);
+      const byId = new Map(nodes.map((n) => [n.nodeId, n]));
+      const cancelled = [];
+      const visited = /* @__PURE__ */ new Set([gateNode.nodeId]);
+      let frontier = [gateNode.nodeId];
+      while (frontier.length > 0) {
+        const next = [];
+        for (const id22 of frontier) {
+          for (const edge of edges.filter((e) => e.fromNodeId === id22)) {
+            if (visited.has(edge.toNodeId)) continue;
+            visited.add(edge.toNodeId);
+            const target = byId.get(edge.toNodeId);
+            if (!target || isCancelExempt(target.state)) continue;
+            graphStore.updateNodeState(target.graphId, target.nodeId, "cancelled", nowIso, {
+              failureReason: reason
+            });
+            if (target.queueTaskId) {
+              const entry = store2.findQueueEntryById(target.meshId, target.queueTaskId);
+              if (entry && entry.status === "pending") {
+                entry.status = "cancelled";
+                entry.blockedReason = reason;
+                store2.updateQueueEntry(entry);
+              }
+            }
+            cancelled.push(target.nodeId);
+            next.push(target.nodeId);
+          }
+        }
+        frontier = next;
+      }
+      return cancelled;
+    }
+    function insertGateOutbox(graphStore, meshId, graphId, kind, payload, nowIso) {
+      graphStore.insertOutboxEvent({
+        id: newMeshGraphOutboxId(),
+        meshId,
+        graphId,
+        kind,
+        payload: JSON.stringify(payload),
+        status: "pending",
+        attemptCount: 0,
+        createdAt: nowIso,
+        updatedAt: nowIso
+      });
+    }
+    var MESH_GATE_AUTO_ABANDON_REASON;
+    var MESH_GATE_AUTO_ABANDON_ACTOR;
+    var DOWNSTREAM_TERMINAL_STATES;
+    var init_mesh_graph_gate_closure = __esm2({
+      "src/mesh/mesh-graph-gate-closure.ts"() {
+        "use strict";
+        init_logger();
+        init_mesh_graph_types();
+        init_mesh_graph_derived_failure();
+        MESH_GATE_AUTO_ABANDON_REASON = "downstream_all_terminal";
+        MESH_GATE_AUTO_ABANDON_ACTOR = "daemon_auto_close";
+        DOWNSTREAM_TERMINAL_STATES = /* @__PURE__ */ new Set([
+          "completed",
+          "failed",
+          "cancelled",
+          "skipped",
+          "released"
+        ]);
+      }
+    });
     function graphMaterializationBlockReason(nodeId, materializationVersion) {
       return `${GRAPH_BLOCK_PREFIX}${nodeId}:${materializationVersion}`;
     }
@@ -56130,7 +56361,8 @@ ${lines.join("\n")}
       gateNotifyHandler = handler;
     }
     function toGateNotification(kind, meshId, rawPayload) {
-      if (!GATE_NOTIFY_OUTBOX_KINDS.has(kind)) return null;
+      const noticeKind = GATE_NOTIFY_OUTBOX_KINDS.get(kind);
+      if (!noticeKind) return null;
       let payload = {};
       try {
         const parsed = rawPayload ? JSON.parse(rawPayload) : {};
@@ -56141,15 +56373,21 @@ ${lines.join("\n")}
       const gateId = str7(payload.gateId);
       const graphId = str7(payload.graphId);
       if (!gateId || !graphId) return null;
+      const ageMs2 = typeof payload.ageMs === "number" && Number.isFinite(payload.ageMs) ? payload.ageMs : void 0;
       return {
-        kind,
+        kind: noticeKind,
         meshId,
         graphId,
         gateId,
         ref: str7(payload.ref),
         action: str7(payload.action),
         instructions: str7(payload.instructions),
-        deadlineAt: str7(payload.deadlineAt)
+        deadlineAt: str7(payload.deadlineAt),
+        ...noticeKind === "graph_gate_deadline_expired" ? {
+          ...str7(payload.nodeId) ? { nodeId: str7(payload.nodeId) } : {},
+          ...str7(payload.policy) ? { policy: str7(payload.policy) } : {},
+          ...ageMs2 !== void 0 ? { ageMs: ageMs2 } : {}
+        } : {}
       };
     }
     function drainMeshGraphOutbox(meshId) {
@@ -56452,6 +56690,13 @@ ${lines.join("\n")}
           updatedAt: nowIso
         });
       }
+      if (terminal.status === "failed" || terminal.status === "cancelled") {
+        try {
+          store2.transaction(() => autoAbandonGatesWithTerminalDownstreamInTxn(store2, node.graphId, nowIso));
+        } catch (e) {
+          LOG.warn("MeshGraph", `Gate auto-close after ${terminal.status} of ${terminal.taskId} failed (graph ${node.graphId}): ${e?.message || e}`);
+        }
+      }
       return materialized;
     }
     function isTerminalEquivalent(n) {
@@ -56469,7 +56714,8 @@ ${lines.join("\n")}
       });
       if (!satisfied) return false;
       const spec = safeParseJson(gateNode.baseSpecJson);
-      const deadlineSeconds = typeof spec?.deadline_seconds === "number" ? spec.deadline_seconds : void 0;
+      const specDeadlineSeconds = typeof spec?.deadline_seconds === "number" && spec.deadline_seconds > 0 ? spec.deadline_seconds : void 0;
+      const deadlineSeconds = specDeadlineSeconds ?? (gate.deadlineAt ? void 0 : resolveDefaultGateDeadlineSeconds() ?? void 0);
       const deadlineAt = deadlineSeconds && deadlineSeconds > 0 ? new Date(Date.parse(nowIso) + deadlineSeconds * 1e3).toISOString() : void 0;
       graphStore.patchGate(gate.gateId, {
         state: "awaiting_coordinator",
@@ -56960,13 +57206,19 @@ ${lines.join("\n")}
         init_mesh_graph_types();
         init_mesh_graph_input_binding();
         init_mesh_graph_workspace_bind();
+        init_mesh_graph_gate_defaults();
         init_worker_mcp_isolation();
         init_worker_mailbox();
         init_mesh_graph_derived_failure();
+        init_mesh_graph_gate_closure();
         GRAPH_BLOCK_PREFIX = "graph_materialization_pending:";
         WORKSPACE_DEAD_PREFIX = "workspace_terminal:";
         GATE_BLOCK_PREFIX = "coordinator_gate:";
-        GATE_NOTIFY_OUTBOX_KINDS = /* @__PURE__ */ new Set(["graph_gate_awaiting", "graph_gate_lease_expired"]);
+        GATE_NOTIFY_OUTBOX_KINDS = /* @__PURE__ */ new Map([
+          ["graph_gate_awaiting", "graph_gate_awaiting"],
+          ["graph_gate_lease_expired", "graph_gate_lease_expired"],
+          ["graph_gate_expired", "graph_gate_deadline_expired"]
+        ]);
         MESH_NODE_PATCH_KEYS3 = ["run_if", "on_false", "inputs_from", "workspace_ref"];
       }
     });
@@ -57139,9 +57391,9 @@ ${lines.join("\n")}
         return i < 0 ? text.length : i;
       })();
       for (const q of ['"', "'"]) {
-        let count = 0;
-        for (let i = lineStart; i < matchStart; i++) if (text[i] === q) count++;
-        if (count % 2 === 1 && text.indexOf(q, matchEnd) >= 0 && text.indexOf(q, matchEnd) < lineEnd) {
+        let count2 = 0;
+        for (let i = lineStart; i < matchStart; i++) if (text[i] === q) count2++;
+        if (count2 % 2 === 1 && text.indexOf(q, matchEnd) >= 0 && text.indexOf(q, matchEnd) < lineEnd) {
           if (q === '"') return true;
           let openPos = -1, c = 0;
           for (let i = lineStart; i < matchStart; i++) {
@@ -60177,15 +60429,15 @@ ${line}`;
       }
     });
     function autoLaunchUnclaimedSpawnCount(task) {
-      const count = task.autoLaunchUnclaimedCount;
-      return typeof count === "number" && Number.isFinite(count) && count > 0 ? count : 0;
+      const count2 = task.autoLaunchUnclaimedCount;
+      return typeof count2 === "number" && Number.isFinite(count2) && count2 > 0 ? count2 : 0;
     }
     function maybeParkSpawnCappedTask(meshId, task, park, markSkip) {
-      const count = autoLaunchUnclaimedSpawnCount(task);
-      if (count < AUTO_LAUNCH_UNCLAIMED_SPAWN_CAP) return false;
+      const count2 = autoLaunchUnclaimedSpawnCount(task);
+      if (count2 < AUTO_LAUNCH_UNCLAIMED_SPAWN_CAP) return false;
       const parked = park(meshId, task.id, { reason: SPAWN_CAP_PARK_REASON, allowUntargeted: true });
       if (parked) {
-        LOG.warn("MeshQueue", `AUTOLAUNCH-SPAWN-CAP: task ${task.id} (mesh ${meshId}) recorded ${count} auto-launches with no successful claim (cap ${AUTO_LAUNCH_UNCLAIMED_SPAWN_CAP}) \u2014 PARKED. No further sessions will be spawned for it; the coordinator is paged. mesh_queue_requeue unparks it and resets the budget.`);
+        LOG.warn("MeshQueue", `AUTOLAUNCH-SPAWN-CAP: task ${task.id} (mesh ${meshId}) recorded ${count2} auto-launches with no successful claim (cap ${AUTO_LAUNCH_UNCLAIMED_SPAWN_CAP}) \u2014 PARKED. No further sessions will be spawned for it; the coordinator is paged. mesh_queue_requeue unparks it and resets the budget.`);
       }
       markSkip(SPAWN_CAP_PARK_REASON);
       return true;
@@ -60505,11 +60757,11 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
     });
     function createInflightGate(maxInflight) {
-      let count = 0;
+      let count2 = 0;
       let generation = 0;
       return {
         run(start, onSettled, onRejected) {
-          if (count >= maxInflight) return { admitted: false, reason: "shed" };
+          if (count2 >= maxInflight) return { admitted: false, reason: "shed" };
           const admittedGeneration = generation;
           let promise2;
           try {
@@ -60517,9 +60769,9 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           } catch (error48) {
             return { admitted: false, reason: "threw", error: error48 };
           }
-          count++;
+          count2++;
           const release2 = () => {
-            if (admittedGeneration === generation) count--;
+            if (admittedGeneration === generation) count2--;
           };
           void promise2.then(
             () => {
@@ -60534,11 +60786,11 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           return { admitted: true };
         },
         count() {
-          return count;
+          return count2;
         },
         reconfigure() {
           generation++;
-          count = 0;
+          count2 = 0;
         }
       };
     }
@@ -77015,8 +77267,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           ensureLegacyQueueMigrated(meshId) {
             if (this.migratedMeshIds.has(meshId)) return;
             this.migratedMeshIds.add(meshId);
-            const count = this.db.prepare("SELECT COUNT(*) AS count FROM mesh_queue WHERE mesh_id = ?").get(meshId);
-            if (count.count > 0) return;
+            const count2 = this.db.prepare("SELECT COUNT(*) AS count FROM mesh_queue WHERE mesh_id = ?").get(meshId);
+            if (count2.count > 0) return;
             const path74 = legacyQueuePath(meshId);
             if (!(0, import_fs15.existsSync)(path74)) return;
             try {
@@ -77222,22 +77474,22 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            */
           activeSlotAssignmentCount(meshId, nodeId, providerType, assignedModel, daemonNodeIds) {
             const rows = this.assignedRowsForDaemon(meshId, nodeId, daemonNodeIds);
-            let count = 0;
+            let count2 = 0;
             for (const row of rows) {
               try {
                 const entry = JSON.parse(row.payload);
                 if (entry.assignedProviderType !== providerType) continue;
                 const rowModel = typeof entry.assignedModel === "string" ? entry.assignedModel.trim() : "";
                 if (!rowModel) {
-                  count += 1;
+                  count2 += 1;
                   continue;
                 }
                 if (!assignedModel) continue;
-                if (modelNamesEquivalent(rowModel, assignedModel)) count += 1;
+                if (modelNamesEquivalent(rowModel, assignedModel)) count2 += 1;
               } catch {
               }
             }
-            return count;
+            return count2;
           }
           /**
            * Assigned rows charged to the DAEMON MACHINE that owns `nodeId`.
@@ -77286,15 +77538,15 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           }
           activeProviderAssignmentCount(meshId, nodeId, providerType, daemonNodeIds) {
             const rows = this.assignedRowsForDaemon(meshId, nodeId, daemonNodeIds);
-            let count = 0;
+            let count2 = 0;
             for (const row of rows) {
               try {
                 const entry = JSON.parse(row.payload);
-                if (entry.assignedProviderType === providerType) count += 1;
+                if (entry.assignedProviderType === providerType) count2 += 1;
               } catch {
               }
             }
-            return count;
+            return count2;
           }
           // O(1) claim: transaction ensures only one session claims a pending task
           claimNextQueueTask(meshId, nodeId, sessionId, capabilityTags = [], opts) {
@@ -78312,7 +78564,7 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
       const lines = [
         "## Task difficulty",
         "",
-        "Pass `difficulty` on every worker entry in `mesh_enqueue_batch`, or on `mesh_enqueue_task` for the single-task fallback. The values (`easy` / `medium` / `difficult` / `freeform`) describe how hard the work is. It is a ROUTING HINT: it is matched against each node's capability slots, so a task goes to a slot configured for that difficulty.",
+        "Pass `difficulty` on `mesh_enqueue_task` (the default), or on every worker entry in `mesh_enqueue_batch` for a settled multi-step plan. The values (`easy` / `medium` / `difficult` / `freeform`) describe how hard the work is. It is a ROUTING HINT: it is matched against each node's capability slots, so a task goes to a slot configured for that difficulty.",
         "",
         '**The slot decides the model and thinking level \u2014 not the difficulty.** `difficulty: "difficult"` does not mean "use opus"; it means "route to a slot that handles difficult work", and that slot\'s own model/thinking is what launches. So classify honestly by how hard the task is, and change what a difficulty RUNS ON by editing the node\'s slots (`mesh_node_slots_set`), never by picking a different difficulty. Passing an explicit `model`/`thinkingLevel` still overrides everything for one task.'
       ];
@@ -78430,8 +78682,8 @@ ${rules.join("\n")}`;
 | \`mesh_status\` | Nodes' health, git state, sessions, branch convergence |
 | \`mesh_route_preview\` | Explain a hypothetical difficulty/tags/readonly/node route from the current point-in-time capacity + quota-facts snapshot (read-only, fetch-free) |
 | \`mesh_list_nodes\` | List nodes with workspace paths |
-| \`mesh_enqueue_batch\` | **DEFAULT enqueue surface** for a plan with two or more known graph steps. Atomically enqueues a dependency-wired task set; \`depends_on\` may name batch-local \`ref\`s (forward refs OK). Carries the full graph surface: \`inputs_from\`, \`run_if\`, \`gates\` + \`gated_by\`, \`workspaces\` + \`workspace_ref\` |
-| \`mesh_enqueue_task\` | SINGLE-TASK FALLBACK \u2014 one ready task with no declarable downstream step; idle nodes auto-claim |
+| \`mesh_enqueue_batch\` | For a **settled plan of three or more steps** that needs a coordinator gate or a deferred worktree (\`workspace_ref\`) \u2014 not the everyday enqueue path. Atomically enqueues a dependency-wired task set; \`depends_on\` may name batch-local \`ref\`s (forward refs OK). Carries the full graph surface: \`inputs_from\`, \`gates\` + \`gated_by\`, \`workspaces\` + \`workspace_ref\` (\`run_if\` retired) |
+| \`mesh_enqueue_task\` | **DEFAULT enqueue surface.** One task; chain a known follow-up onto it with \`depends_on\` as it becomes known \u2014 the graph grows append-only. A task with \`depends_on\` automatically receives an "Upstream results" appendix summarizing its predecessors' completions. Idle nodes auto-claim |
 | \`mesh_view_queue\` | Queue status \u2014 pending/assigned/completed/failed/cancelled |
 | \`mesh_graph_view\` | Inspect orchestration graphs \u2014 node states, gates awaiting you, workspace sagas, why something is blocked |
 | \`mesh_graph_gate_claim\` | Take the lease on a gate awaiting a coordinator; returns the fencing token + generation a release needs |
@@ -78497,8 +78749,6 @@ ${rules.join("\n")}`;
           "- Attach a `brief` (`goal`, `constraints`, `doneCriteria`, `handoffNotes`, `ownedPaths`) to a mission via `mesh_mission_upsert` whenever that mission is meant to outlive this coordinator session \u2014 a long multi-task plan, or one a differently-scoped coordinator (fresh session, different machine) may pick up later. The brief is rendered into every task dispatched under that mission's worker protocol footer, so a worker sees it without a separate lookup; `mesh_mission_list` / a mission upsert response both echo the stored `brief` back to you. A mission you expect to finish within this session does not need one."
         ].join("\n");
         TOOL_EXPOSURE_PREFLIGHT_SECTION = `## Tool Exposure Preflight
-
-Before searching for an enqueue tool, classify the whole currently known work frontier. For every new delegation search, include \`mesh_enqueue_batch\` by exact name; never search for or load only \`mesh_enqueue_task\`. Load \`mesh_enqueue_task\` only as the single-task fallback after the batch eligibility check below fails.
 
 Before doing any coordinator work, confirm that the actual callable tool list includes \`mesh_status\` and the other \`mesh_*\` tools from the table above. If this Repo Mesh coordinator prompt is present but the callable \`mesh_*\` tools are missing, the MCP server/tool manifest is stale or not injected yet. Do not substitute terminal/file/git tools, do not inspect or edit the repository directly, and do not continue as a non-mesh local coding agent. Stop immediately and tell the user to run \`/reload-mcp\` or start a fresh coordinator session so ADHDev can reconnect \`adhdev-mesh\`.`;
         QUOTA_SECTION = `## Provider Quota
@@ -82139,6 +82389,123 @@ ${block2.text}`,
         NOTE_TEXT_STORE = /* @__PURE__ */ new Map();
       }
     });
+    function readIds(value) {
+      if (!Array.isArray(value)) return [];
+      return value.filter((v) => typeof v === "string" && v.trim().length > 0).map((v) => v.trim());
+    }
+    function collectPredecessorTaskIds(meshId, task) {
+      const ids = new Set(readIds(task.dependsOn));
+      try {
+        const graphStore = MeshRuntimeStore.getInstance().graphStore();
+        const node = graphStore.findNodeByQueueTaskId(meshId, task.id);
+        if (node) {
+          const nodes = new Map(graphStore.listNodes(node.graphId).map((n) => [n.nodeId, n]));
+          for (const edge of graphStore.listEdges(node.graphId)) {
+            if (edge.toNodeId !== node.nodeId || edge.kind !== "requires") continue;
+            const source = nodes.get(edge.fromNodeId);
+            if (source?.kind === "worker_task" && source.queueTaskId) ids.add(source.queueTaskId);
+          }
+        }
+      } catch {
+      }
+      ids.delete(task.id);
+      return [...ids];
+    }
+    function loadPredecessor(meshId, taskId) {
+      const store2 = MeshRuntimeStore.getInstance();
+      let atMs = Number.MAX_SAFE_INTEGER;
+      try {
+        const entry = store2.findQueueEntryById(meshId, taskId);
+        const created = entry ? Date.parse(entry.createdAt) : NaN;
+        if (Number.isFinite(created)) atMs = created;
+      } catch {
+      }
+      try {
+        const output = store2.graphStore().getLatestOutput(taskId);
+        if (output) {
+          const envelope = JSON.parse(output.envelopeJson);
+          const completedAt = typeof envelope.completed_at === "string" ? Date.parse(envelope.completed_at) : NaN;
+          const at = Number.isFinite(completedAt) ? completedAt : Date.parse(output.createdAt);
+          if (Number.isFinite(at)) atMs = at;
+          const summary = typeof envelope.final_summary === "string" ? envelope.final_summary.trim() : "";
+          if (output.status === "completed" && summary) return { taskId, atMs, summary, outputVersion: output.version };
+        }
+      } catch {
+      }
+      return { taskId, atMs };
+    }
+    function truncateChars(text, max) {
+      const chars = Array.from(text);
+      if (chars.length <= max) return { text, truncated: false };
+      return { text: `${chars.slice(0, max - 1).join("")}\u2026`, truncated: true };
+    }
+    function render(taskId, items, omitted) {
+      const segments = [];
+      const blocks = [];
+      const segmentKinds = [];
+      for (const item of items) {
+        if (item.summary) {
+          const { text, truncated } = truncateChars(item.summary, UPSTREAM_RESULT_MAX_CHARS);
+          blocks.push({
+            attributes: {
+              kind: "upstream_result",
+              source_task_id: item.taskId,
+              output_version: item.outputVersion ?? 0,
+              format: "text",
+              sha256: sha256Hex(item.summary),
+              ...truncated ? { truncated: true } : {}
+            },
+            text
+          });
+          segmentKinds.push("block");
+        } else {
+          segmentKinds.push("line");
+        }
+      }
+      const envelopes = blocks.length > 0 ? renderUntrustedEvidenceEnvelopes(blocks, { kind: "upstream_results", taskId }) : null;
+      const preamble = envelopes?.preamble ?? "";
+      const renderedBlocks = envelopes?.envelopes ?? [];
+      let blockIndex = 0;
+      items.forEach((item, i) => {
+        if (segmentKinds[i] === "block") segments.push(renderedBlocks[blockIndex++]);
+        else segments.push(`- Upstream task ${item.taskId}: ${UPSTREAM_RESULT_NO_REPORT}`);
+      });
+      const omissionLine = omitted > 0 ? `
+
+_${omitted} older upstream result(s) omitted to fit the ${UPSTREAM_RESULTS_MAX_BYTES}-byte budget \u2014 the nearest predecessors are shown._` : "";
+      return `${UPSTREAM_RESULTS_HEADING}
+
+${preamble ? `${preamble}
+
+` : ""}${segments.join("\n\n")}${omissionLine}`;
+    }
+    function buildUpstreamResultsAppendix(meshId, task) {
+      const predecessorIds = collectPredecessorTaskIds(meshId, task);
+      if (predecessorIds.length === 0) return null;
+      const all = predecessorIds.map((id22) => loadPredecessor(meshId, id22)).sort((a, b) => a.atMs - b.atMs || a.taskId.localeCompare(b.taskId));
+      for (let drop = 0; drop < all.length; drop += 1) {
+        const kept = all.slice(drop);
+        const text = render(task.id, kept, drop);
+        if (Buffer.byteLength(text, "utf8") <= UPSTREAM_RESULTS_MAX_BYTES || kept.length === 1) return text;
+      }
+      return null;
+    }
+    var UPSTREAM_RESULT_MAX_CHARS;
+    var UPSTREAM_RESULTS_MAX_BYTES;
+    var UPSTREAM_RESULTS_HEADING;
+    var UPSTREAM_RESULT_NO_REPORT;
+    var init_mesh_upstream_results = __esm2({
+      "src/mesh/mesh-upstream-results.ts"() {
+        "use strict";
+        init_mesh_runtime_store();
+        init_mesh_graph_input_binding();
+        init_hash();
+        UPSTREAM_RESULT_MAX_CHARS = 600;
+        UPSTREAM_RESULTS_MAX_BYTES = 4 * 1024;
+        UPSTREAM_RESULTS_HEADING = "## Upstream results";
+        UPSTREAM_RESULT_NO_REPORT = "(no report)";
+      }
+    });
     function readNonEmpty2(value) {
       return typeof value === "string" && value.trim() ? value.trim() : void 0;
     }
@@ -82147,13 +82514,24 @@ ${block2.text}`,
         LOG.debug("WorkerProtocol", `Task ${task.id} body already carries the worker protocol footer \u2014 not re-materializing`);
         return task.message;
       }
-      let body = task.message;
+      let messageWithUpstream = task.message;
+      try {
+        const upstream = buildUpstreamResultsAppendix(meshId, task);
+        if (upstream) messageWithUpstream = `${task.message}
+
+---
+
+${upstream}`;
+      } catch (e) {
+        LOG.warn("UpstreamResults", `Failed to build upstream results for ${task.id}: ${e?.message || e}`);
+      }
+      let body = messageWithUpstream;
       let enclosedHandoffNotes = 0;
       if (isWorkerMcpEnabled()) {
         try {
           const touchedFiles = task.touchedFiles;
           const branch = readNonEmpty2(node?.worktreeBranch);
-          const composed = composeTaskDispatchBody(task.message, {
+          const composed = composeTaskDispatchBody(messageWithUpstream, {
             meshId,
             taskId: task.id,
             ...Array.isArray(touchedFiles) ? { touchedFiles } : {},
@@ -82180,7 +82558,7 @@ ${block2.text}`,
           enclosedHandoffNotes = composed.enclosedNotes;
         } catch (e) {
           LOG.warn("HandoffNotes", `Failed to compose dispatch body for ${task.id}: ${e?.message || e}`);
-          body = task.message;
+          body = messageWithUpstream;
           enclosedHandoffNotes = 0;
         }
       }
@@ -82210,6 +82588,7 @@ ${block2.text}`,
         init_worker_handoff_notes();
         init_mesh_work_queue();
         init_mesh_missions();
+        init_mesh_upstream_results();
       }
     });
     function applyBoundedRetention(map3, options) {
@@ -86959,12 +87338,12 @@ ${block2.text}`,
         const status = readNonEmptyString(state.status).toLowerCase();
         return !isTerminalSessionStatus(status);
       });
-      let count = localInstances.length;
+      let count2 = localInstances.length;
       const localSessionIds = localInstances.map((inst) => readNonEmptyString(inst.getState().instanceId)).filter(Boolean);
       for (const sid of inWindowAutoLaunchSessionIdsForNode(meshId, nodeId)) {
-        if (!localSessionIds.some((local) => sessionIdsEquivalent(local, sid))) count += 1;
+        if (!localSessionIds.some((local) => sessionIdsEquivalent(local, sid))) count2 += 1;
       }
-      return count;
+      return count2;
     }
     function nodeHasLiveSessionPendingClaim(components, meshId, nodeId, task, node) {
       if (inWindowAutoLaunchSessionIdsForNode(meshId, nodeId).length > 0) return true;
@@ -90615,7 +90994,11 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         const { stdout } = await execAsync2("vm_stat", {
           encoding: "utf-8",
           timeout: 4e3,
-          maxBuffer: 256 * 1024
+          maxBuffer: 256 * 1024,
+          // Inert here (this function returns above unless platform === 'darwin'),
+          // but windowsHide is a no-op on non-win32, so there's no reason to leave
+          // this call unhidden against a future loosening of that platform guard.
+          windowsHide: true
         });
         const pageSizeMatch = stdout.match(/page size of (\d+)\s*bytes/i);
         const pageSize = pageSizeMatch ? parseInt(pageSizeMatch[1], 10) : 4096;
@@ -91231,11 +91614,11 @@ ${cleanBody}`;
       return Array.from(types2);
     }
     function getEffectiveSemanticPartCount(input) {
-      let count = input.parts.length;
+      let count2 = input.parts.length;
       if (hasNonEmptyFallbackText(input) && !input.parts.some((part) => part.type === "text")) {
-        count += 1;
+        count2 += 1;
       }
-      return count;
+      return count2;
     }
     function assertTextOnlyInput(provider, input) {
       const unsupported = getRequestedInputMediaTypes(input).filter((type2) => type2 !== "text");
@@ -93367,12 +93750,15 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
       registerMeshGraphGateNotifyHandler((notification) => {
         const gateLabel = notification.ref || notification.gateId;
         const actionLabel = notification.action ? ` (${notification.action})` : "";
-        const coordinatorMessage = notification.kind === "graph_gate_awaiting" ? `Coordinator gate '${gateLabel}'${actionLabel} is awaiting you (graph ${notification.graphId}). ${notification.instructions ? `Instructions: ${notification.instructions} ` : ""}Claim it with mesh_graph_gate_claim (gateId: ${notification.gateId}), perform the action, then release or abandon it. Downstream tasks stay blocked until the gate is released.` : `Coordinator gate '${gateLabel}'${actionLabel} lease expired without release (graph ${notification.graphId}, gateId: ${notification.gateId}). If the external action already happened, reconcile its evidence and release; otherwise reclaim the gate before retrying.`;
+        const ageLabel = typeof notification.ageMs === "number" ? ` after ${Math.max(1, Math.round(notification.ageMs / 36e5))}h` : "";
+        const coordinatorMessage = notification.kind === "graph_gate_awaiting" ? `Coordinator gate '${gateLabel}'${actionLabel} is awaiting you (graph ${notification.graphId}). ${notification.instructions ? `Instructions: ${notification.instructions} ` : ""}Claim it with mesh_graph_gate_claim (gateId: ${notification.gateId}), perform the action, then release or abandon it. Downstream tasks stay blocked until the gate is released.` : notification.kind === "graph_gate_deadline_expired" ? `Coordinator gate '${gateLabel}'${actionLabel} passed its deadline${ageLabel} without release and is now expired (graph ${notification.graphId}, gateId: ${notification.gateId}, policy: ${notification.policy ?? "hold"}). ` + (notification.policy === "hold" || !notification.policy ? "Downstream stays blocked. Extend it (mesh_graph_gate_extend), reclaim and release it with evidence, or abandon it if the work is obsolete." : "The timeout policy already settled its downstream; nothing is waiting on this gate.") : `Coordinator gate '${gateLabel}'${actionLabel} lease expired without release (graph ${notification.graphId}, gateId: ${notification.gateId}). If the external action already happened, reconcile its evidence and release; otherwise reclaim the gate before retrying.`;
         notifyMeshCoordinator({
           event: `mesh:${notification.kind}`,
           meshId: notification.meshId,
           nodeLabel: gateLabel,
-          eventId: `gate:${notification.kind}:${notification.gateId}`,
+          // A deadline expiry is keyed per deadline so an extended/reclaimed
+          // gate that expires AGAIN pages again; the same expiry never twice.
+          eventId: notification.kind === "graph_gate_deadline_expired" ? `gate:${notification.kind}:${notification.gateId}:${notification.deadlineAt ?? ""}` : `gate:${notification.kind}:${notification.gateId}`,
           metadataEvent: {
             source: "mesh_graph_outbox",
             taskId: notification.gateId,
@@ -93380,7 +93766,11 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
             graphId: notification.graphId,
             ...notification.ref ? { ref: notification.ref } : {},
             ...notification.action ? { action: notification.action } : {},
-            ...notification.deadlineAt ? { deadlineAt: notification.deadlineAt } : {}
+            ...notification.deadlineAt ? { deadlineAt: notification.deadlineAt } : {},
+            // graph node id — NOT a mesh node id, hence the distinct key.
+            ...notification.nodeId ? { gateNodeId: notification.nodeId } : {},
+            ...notification.policy ? { policy: notification.policy } : {},
+            ...typeof notification.ageMs === "number" ? { ageMs: notification.ageMs } : {}
           },
           coordinatorMessage
         });
@@ -95357,7 +95747,7 @@ ${effect.notification.body || ""}`.trim();
     function isValidReadChatStatus(status) {
       return typeof status === "string" && VALID_STATUSES.includes(status);
     }
-    function isPlainObject3(value) {
+    function isPlainObject32(value) {
       return !!value && typeof value === "object" && !Array.isArray(value);
     }
     function isFiniteNumber4(value) {
@@ -95393,7 +95783,7 @@ ${effect.notification.body || ""}`.trim();
       throw new Error(`${source}: messages[${index}].content must be a string or structured content array`);
     }
     function validateMessage(message, source, index) {
-      if (!isPlainObject3(message)) {
+      if (!isPlainObject32(message)) {
         throw new Error(`${source}: messages[${index}] must be an object`);
       }
       const normalized = {
@@ -95410,7 +95800,7 @@ ${effect.notification.body || ""}`.trim();
       if (isFiniteNumber4(message.receivedAt)) normalized.receivedAt = message.receivedAt;
       if (isFiniteNumber4(message.sequence)) normalized.sequence = message.sequence;
       if (typeof message._turnKey === "string") normalized._turnKey = message._turnKey;
-      if (isPlainObject3(message.toolBlockRef)) {
+      if (isPlainObject32(message.toolBlockRef)) {
         const ref = message.toolBlockRef;
         if (isFiniteNumber4(ref.sourceMtimeMs) && isFiniteNumber4(ref.recordIndex) && isFiniteNumber4(ref.blockIndex)) {
           normalized.toolBlockRef = {
@@ -95421,7 +95811,7 @@ ${effect.notification.body || ""}`.trim();
         }
       }
       if (Array.isArray(message.toolCalls)) normalized.toolCalls = message.toolCalls;
-      if (isPlainObject3(message.meta)) normalized.meta = message.meta;
+      if (isPlainObject32(message.meta)) normalized.meta = message.meta;
       if (typeof message.senderName === "string") normalized.senderName = message.senderName;
       if (typeof message.toolName === "string" && message.toolName) normalized.toolName = message.toolName;
       if (typeof message._type === "string") normalized._type = message._type;
@@ -95443,7 +95833,7 @@ ${effect.notification.body || ""}`.trim();
         }
         return activeModal === null ? null : void 0;
       }
-      if (!isPlainObject3(activeModal)) {
+      if (!isPlainObject32(activeModal)) {
         throw new Error(`${source}: activeModal must be an object when provided`);
       }
       if (typeof activeModal.message !== "string") {
@@ -95465,7 +95855,7 @@ ${effect.notification.body || ""}`.trim();
         throw new Error(`${source}: turnTerminalMarkers must be an array`);
       }
       return value.map((marker, index) => {
-        if (!isPlainObject3(marker)) {
+        if (!isPlainObject32(marker)) {
           throw new Error(`${source}: turnTerminalMarkers[${index}] must be an object`);
         }
         if (!isFiniteNumber4(marker.receivedAt)) {
@@ -95488,7 +95878,7 @@ ${effect.notification.body || ""}`.trim();
     }
     function validateControlValues(controlValues, source) {
       if (controlValues === void 0) return void 0;
-      if (!isPlainObject3(controlValues)) {
+      if (!isPlainObject32(controlValues)) {
         throw new Error(`${source}: controlValues must be an object when provided`);
       }
       const normalized = {};
@@ -95501,7 +95891,7 @@ ${effect.notification.body || ""}`.trim();
       return normalized;
     }
     function validateReadChatResultPayload(raw, source = "read_chat") {
-      if (!isPlainObject3(raw)) {
+      if (!isPlainObject32(raw)) {
         throw new Error(`${source}: payload must be an object`);
       }
       const status = validateStatus(raw.status, source);
@@ -97729,7 +98119,7 @@ ${effect.notification.body || ""}`.trim();
           safeOpts.input = o.input;
         }
       }
-      return nodeChildProcess.execFileSync(file2, safeArgs, safeOpts);
+      return nodeChildProcess.execFileSync(file2, safeArgs, { ...safeOpts, windowsHide: true });
     }
     function callStackTouchesProviderRoot() {
       if (_gatedRoots.length === 0) return false;
@@ -100711,7 +101101,7 @@ ${effect.notification.body || ""}`.trim();
     }
     function loadProviderDir(ctx, dir, excludeDirs) {
       if (!fs25.existsSync(dir)) return 0;
-      let count = 0;
+      let count2 = 0;
       const scan = (d) => {
         let entries;
         try {
@@ -100793,7 +101183,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
               }
               const existed = ctx.providers.has(normalizedProvider.type);
               ctx.providers.set(normalizedProvider.type, normalizedProvider);
-              count++;
+              count2++;
               const source = normalizedProvider._sourceLayer ?? "upstream";
               const overrideWarning = existed && source === "user" ? " \u26A0 OVERRIDES upstream" : "";
               const sourceName = normalizedProvider._sourceName;
@@ -100816,7 +101206,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         }
       };
       scan(dir);
-      return count;
+      return count2;
     }
     var fs25;
     var path33;
@@ -106383,13 +106773,13 @@ ${result.stderr}`, result.code);
             for (const err of result.errors) {
               this.log(`\u26A0 Verified channel: ${err.code}: ${err.message}`);
             }
-            let count = 0;
+            let count2 = 0;
             for (const { objectDir } of result.activations) {
-              count += this.loadDir(objectDir);
+              count2 += this.loadDir(objectDir);
               this.channelObjectRoots.push(objectDir);
             }
-            if (count > 0) {
-              this.log(`Loaded ${count} verified channel providers (${this.channel}, content-addressed store)`);
+            if (count2 > 0) {
+              this.log(`Loaded ${count2} verified channel providers (${this.channel}, content-addressed store)`);
             }
           }
           /**
@@ -107263,7 +107653,7 @@ ${result.stderr}`, result.code);
           * → Enables detectIDEs() to detect provider.js-based IDEs
           */
           registerToDetector() {
-            let count = 0;
+            let count2 = 0;
             for (const p of this.providers.values()) {
               if (p.category === "ide" && p.cli && p.paths) {
                 registerIDEDefinition({
@@ -107274,11 +107664,11 @@ ${result.stderr}`, result.code);
                   cli: p.cli,
                   paths: p.paths
                 });
-                count++;
+                count2++;
               }
             }
-            this.log(`Registered ${count} IDE providers to detector`);
-            return count;
+            this.log(`Registered ${count2} IDE providers to detector`);
+            return count2;
           }
           /**
           * Return final provider with OS/version overrides applied.
@@ -107543,12 +107933,12 @@ ${result.stderr}`, result.code);
           /** Count provider files (provider.v1.json or provider.json — at most one per dir). */
           countProviders(dir) {
             if (!fs36.existsSync(dir)) return 0;
-            let count = 0;
+            let count2 = 0;
             const scan = (d) => {
               try {
                 const entries = fs36.readdirSync(d, { withFileTypes: true });
                 const hasManifest = entries.some((e) => e.name === "provider.v1.json" || e.name === "provider.json");
-                if (hasManifest) count++;
+                if (hasManifest) count2++;
                 for (const entry of entries) {
                   if (entry.isDirectory()) scan(path43.join(d, entry.name));
                 }
@@ -107556,7 +107946,7 @@ ${result.stderr}`, result.code);
               }
             };
             scan(dir);
-            return count;
+            return count2;
           }
           // ─── Provider Settings API ─────────────────────────
           /**
@@ -108608,8 +108998,8 @@ ${result.stderr}`, result.code);
       const meshContext = record2(args.meshContext);
       return !!meshContext && str5(meshContext.meshId) === meshId && sameDaemon(str5(meshContext.coordinatorDaemonId), sender);
     }
-    function refuse(sender, refusal, detail) {
-      return { ok: false, sender, refusal, detail };
+    function refuse(sender, refusal2, detail) {
+      return { ok: false, sender, refusal: refusal2, detail };
     }
     async function checkRoster(deps, meshId, sender, args, opts = {}) {
       if (!meshId) return refuse(sender, "mesh_sender_not_on_roster", "command names no mesh");
@@ -108805,6 +109195,8 @@ ${result.stderr}`, result.code);
     });
     var hidden_spawn_exports = {};
     __export2(hidden_spawn_exports, {
+      hiddenExec: () => hiddenExec,
+      hiddenExecFileAsync: () => hiddenExecFileAsync,
       hiddenExecFileSync: () => hiddenExecFileSync,
       hiddenExecSync: () => hiddenExecSync,
       hiddenSpawn: () => hiddenSpawn,
@@ -108822,11 +109214,26 @@ ${result.stderr}`, result.code);
     function hiddenExecSync(command, options = {}) {
       return (0, import_node_child_process7.execSync)(command, { windowsHide: true, ...options });
     }
+    function hiddenExec(command, optionsOrCallback, callback) {
+      if (typeof optionsOrCallback === "function") {
+        return (0, import_node_child_process7.exec)(command, { windowsHide: true }, optionsOrCallback);
+      }
+      const options = { windowsHide: true, ...optionsOrCallback };
+      return callback ? (0, import_node_child_process7.exec)(command, options, callback) : (0, import_node_child_process7.exec)(command, options);
+    }
+    function hiddenExecFileAsync(file2, args = [], options = {}) {
+      return (0, import_node_util5.promisify)(import_node_child_process7.execFile)(file2, args, { windowsHide: true, ...options });
+    }
     var import_node_child_process7;
+    var import_node_util5;
     var init_hidden_spawn = __esm2({
       "src/process/hidden-spawn.ts"() {
         "use strict";
         import_node_child_process7 = require("child_process");
+        import_node_util5 = require("util");
+        hiddenExec[import_node_util5.promisify.custom] = (command, options) => {
+          return (0, import_node_util5.promisify)(import_node_child_process7.exec)(command, { windowsHide: true, ...options });
+        };
       }
     });
     function errorText(error48) {
@@ -119911,13 +120318,13 @@ ${marker}`,
       } catch {
       }
     }
-    function getRecentCommands(count = 50) {
+    function getRecentCommands(count2 = 50) {
       try {
         refreshCurrentFile();
         if (!fs46.existsSync(currentFile)) return [];
         const content = fs46.readFileSync(currentFile, "utf-8");
         const lines = content.trim().split("\n").filter(Boolean);
-        return lines.slice(-count).map((line) => {
+        return lines.slice(-count2).map((line) => {
           try {
             const parsed = JSON.parse(line);
             return {
@@ -119995,11 +120402,11 @@ ${marker}`,
         init_command_registry();
         diagnosticsHandlers = {
           get_logs: async (_ctx, args) => {
-            const count = parseInt(args?.count) || parseInt(args?.lines) || 100;
+            const count2 = parseInt(args?.count) || parseInt(args?.lines) || 100;
             const minLevel = args?.minLevel || "info";
             const sinceTs = args?.since || 0;
             try {
-              let logs = getRecentLogs(count, minLevel);
+              let logs = getRecentLogs(count2, minLevel);
               if (sinceTs > 0) {
                 logs = logs.filter((l) => l.ts > sinceTs);
               }
@@ -120013,7 +120420,7 @@ ${marker}`,
               if (fs47.existsSync(logPath)) {
                 const content = fs47.readFileSync(logPath, "utf-8");
                 const allLines = content.split("\n");
-                const recent = allLines.slice(-count).join("\n");
+                const recent = allLines.slice(-count2).join("\n");
                 return { success: true, logs: recent, totalLines: allLines.length };
               }
               return { success: true, logs: [], totalBuffered: 0 };
@@ -120022,11 +120429,11 @@ ${marker}`,
             }
           },
           get_debug_trace: async (_ctx, args) => {
-            const count = parseInt(args?.count) || parseInt(args?.limit) || 100;
+            const count2 = parseInt(args?.count) || parseInt(args?.limit) || 100;
             const sinceTs = Number(args?.since) || 0;
             const interactionId = typeof args?.interactionId === "string" ? args.interactionId : void 0;
             const category = typeof args?.category === "string" ? args.category : void 0;
-            const trace = getRecentDebugTrace({ interactionId, category, limit: count }).filter((entry) => !sinceTs || entry.ts > sinceTs);
+            const trace = getRecentDebugTrace({ interactionId, category, limit: count2 }).filter((entry) => !sinceTs || entry.ts > sinceTs);
             return { success: true, trace, count: trace.length };
           },
           /**
@@ -120037,8 +120444,8 @@ ${marker}`,
            * original "never relayed by the server" property.
            */
           get_command_history: async (_ctx, args) => {
-            const count = parseInt(args?.count) || 50;
-            return { success: true, history: getRecentCommands(count) };
+            const count2 = parseInt(args?.count) || 50;
+            return { success: true, history: getRecentCommands(count2) };
           }
         };
         diagnosticsSpecs = defineCommandSpecs("low", diagnosticsHandlers, {
@@ -121487,6 +121894,93 @@ ${marker}`,
         };
       }
     });
+    function count(sql, ...params) {
+      const row = MeshRuntimeStore.getInstance().db.prepare(sql).get(...params);
+      return typeof row?.n === "number" ? row.n : 0;
+    }
+    function computeMeshGraphUsage(meshId, nowMs2 = Date.now()) {
+      const cached5 = usageCache.get(meshId);
+      if (cached5 && nowMs2 - cached5.atMs < GRAPH_USAGE_CACHE_TTL_MS && nowMs2 >= cached5.atMs) return cached5.usage;
+      const db = MeshRuntimeStore.getInstance().db;
+      const sinceIso = new Date(nowMs2 - GRAPH_USAGE_WINDOW_MS).toISOString();
+      const sizes = db.prepare(
+        `SELECT task_count + gate_count AS n FROM mesh_task_graphs WHERE mesh_id = ? AND created_at >= ? ORDER BY n`
+      ).all(meshId, sinceIso).map((r) => r.n);
+      const nodesPerGraphP50 = sizes.length === 0 ? 0 : sizes.length % 2 === 1 ? sizes[(sizes.length - 1) / 2] : (sizes[sizes.length / 2 - 1] + sizes[sizes.length / 2]) / 2;
+      const usage = {
+        graphsLast7d: sizes.length,
+        nodesPerGraphP50,
+        gatesExpired: count(
+          `SELECT COUNT(*) AS n FROM mesh_graph_gates WHERE mesh_id = ? AND state = 'expired' AND updated_at >= ?`,
+          meshId,
+          sinceIso
+        ),
+        gatesAutoAbandoned: count(
+          `SELECT COUNT(*) AS n FROM mesh_task_graph_nodes
+             WHERE mesh_id = ? AND kind = 'coordinator_gate' AND state = 'cancelled'
+               AND failure_reason LIKE ? AND updated_at >= ?`,
+          meshId,
+          `%:${MESH_GATE_AUTO_ABANDON_REASON}`,
+          sinceIso
+        ),
+        // `"dependsOn":["` is how JSON.stringify writes a NON-empty string array
+        // (an empty one is `"dependsOn":[]`), so LIKE is exact without JSON1.
+        depsChainedViaEnqueueTask: count(
+          `SELECT COUNT(*) AS n FROM mesh_queue q
+             WHERE q.mesh_id = ? AND q.created_at >= ? AND q.payload LIKE '%"dependsOn":["%'
+               AND NOT EXISTS (SELECT 1 FROM mesh_task_graph_nodes g WHERE g.queue_task_id = q.id)`,
+          meshId,
+          sinceIso
+        ),
+        windowDays: 7,
+        computedAt: new Date(nowMs2).toISOString()
+      };
+      usageCache.set(meshId, { atMs: nowMs2, usage });
+      return usage;
+    }
+    function listMeshBlockedGates(meshId, nowMs2 = Date.now()) {
+      const graphStore = MeshRuntimeStore.getInstance().graphStore();
+      const gates = graphStore.listGatesByMesh(meshId, ["awaiting_coordinator", "claimed", "expired"]).filter((g3) => g3.state !== "expired" || g3.onTimeout === "hold");
+      const rows = gates.map((g3) => {
+        const node = graphStore.getNode(g3.graphId, g3.nodeId);
+        const openedMs = Date.parse(node?.stateChangedAt && g3.state !== "expired" ? node.stateChangedAt : g3.createdAt);
+        return {
+          gateId: g3.gateId,
+          graphId: g3.graphId,
+          ...g3.ref ? { ref: g3.ref } : {},
+          action: g3.action,
+          state: g3.state,
+          ...Number.isFinite(openedMs) ? { ageMs: Math.max(0, nowMs2 - openedMs) } : {},
+          ...g3.deadlineAt ? { deadlineAt: g3.deadlineAt } : {},
+          ...g3.state === "claimed" && g3.leaseOwnerSessionId ? { leaseOwnerSessionId: g3.leaseOwnerSessionId } : {}
+        };
+      });
+      rows.sort((a, b) => {
+        const ae = a.state === "expired" ? 0 : 1;
+        const be = b.state === "expired" ? 0 : 1;
+        return ae - be || (b.ageMs ?? 0) - (a.ageMs ?? 0);
+      });
+      return {
+        blockedGates: rows.slice(0, BLOCKED_GATES_LIST_LIMIT),
+        blockedGatesTotal: rows.length,
+        expiredGatesTotal: rows.filter((r) => r.state === "expired").length
+      };
+    }
+    var GRAPH_USAGE_WINDOW_MS;
+    var GRAPH_USAGE_CACHE_TTL_MS;
+    var BLOCKED_GATES_LIST_LIMIT;
+    var usageCache;
+    var init_mesh_graph_usage = __esm2({
+      "src/mesh/mesh-graph-usage.ts"() {
+        "use strict";
+        init_mesh_runtime_store();
+        init_mesh_graph_gate_closure();
+        GRAPH_USAGE_WINDOW_MS = 7 * 24 * 60 * 60 * 1e3;
+        GRAPH_USAGE_CACHE_TTL_MS = 6e4;
+        BLOCKED_GATES_LIST_LIMIT = 10;
+        usageCache = /* @__PURE__ */ new Map();
+      }
+    });
     var mesh_scheduling_runtime_exports = {};
     __export2(mesh_scheduling_runtime_exports, {
       buildMeshSchedulingRuntime: () => buildMeshSchedulingRuntime3
@@ -121659,6 +122153,22 @@ ${marker}`,
         errorCodes: Array.isArray(a.errorCodes) ? a.errorCodes.filter((c) => typeof c === "string") : []
       };
     }
+    function withGraphGateSummary(meshId, activeWork) {
+      try {
+        const gates = listMeshBlockedGates(meshId);
+        const graphUsage = computeMeshGraphUsage(meshId);
+        return {
+          ...activeWork,
+          summary: {
+            ...activeWork.summary,
+            ...gates.blockedGatesTotal > 0 ? gates : {},
+            graphUsage
+          }
+        };
+      } catch {
+        return activeWork;
+      }
+    }
     var toolCallRecord2;
     var ledgerQuery2;
     var missionListQuery2;
@@ -121687,6 +122197,7 @@ ${marker}`,
         init_mesh_graph_plan();
         init_mesh_missions();
         init_mesh_active_work();
+        init_mesh_graph_usage();
         init_mesh_scheduling_runtime();
         init_mesh_host_ownership();
         init_logger();
@@ -121922,14 +122433,14 @@ ${marker}`,
             const queue = req.queue ? [...req.queue] : liveQueue;
             const response = {
               ...req.compute !== false ? {
-                activeWork: buildMeshActiveWork3({
+                activeWork: withGraphGateSummary(req.meshId, buildMeshActiveWork3({
                   meshId: req.meshId,
                   queue,
                   ledgerEntries: records,
                   directDispatches,
                   nodes: req.nodes ? [...req.nodes] : [],
                   ...req.includeTerminalDirect ? { includeTerminalDirect: true } : {}
-                })
+                }))
               } : {},
               ...req.includeInputs ? {
                 records,
@@ -122320,89 +122831,16 @@ ${marker}`,
         store2.updateQueueEntry(entry);
       }
     }
-    function coordinatorGateAbandonedReason(gateId) {
-      return `coordinator_gate_abandoned:${gateId}`;
-    }
     function abandonMeshGraphGate(input) {
       const store2 = MeshRuntimeStore.getInstance();
       const nowMs2 = input.nowMs ?? Date.now();
       const nowIso = new Date(nowMs2).toISOString();
       const result = store2.transaction(() => {
-        const graphStore = store2.graphStore();
-        const gate = graphStore.getGate(input.gateId);
-        if (!gate || gate.meshId !== input.meshId) {
-          return { abandoned: false, reason: "gate_not_found", cancelledNodeIds: [], cancelledTaskIds: [] };
+        const res = abandonGateInTxn(store2, input, nowIso);
+        if (res.abandoned && res.gate && res.cancelledNodeIds.length > 0) {
+          autoAbandonGatesWithTerminalDownstreamInTxn(store2, res.gate.graphId, nowIso);
         }
-        if (gate.state === "cancelled") {
-          return { abandoned: true, reason: "gate_already_abandoned", gate, cancelledNodeIds: [], cancelledTaskIds: [] };
-        }
-        if (gate.state === "released") {
-          return { abandoned: false, reason: `gate_terminal:${gate.state}`, gate, cancelledNodeIds: [], cancelledTaskIds: [] };
-        }
-        if (!input.force && gate.state === "claimed" && gate.leaseExpiresAt && gate.leaseExpiresAt > nowIso) {
-          return { abandoned: false, reason: "gate_lease_held", gate, cancelledNodeIds: [], cancelledTaskIds: [] };
-        }
-        const abandonReason = `${coordinatorGateAbandonedReason(gate.gateId)}:${input.reason}`;
-        const won = graphStore.patchGate(gate.gateId, {
-          state: "cancelled",
-          // Drop the lease: an abandoned gate has no owner and no live fence.
-          leaseOwnerSessionId: null,
-          fencingToken: null,
-          leaseExpiresAt: null
-        }, nowIso, { leaseGeneration: gate.leaseGeneration });
-        if (!won) {
-          return { abandoned: false, reason: "gate_abandon_race", gate, cancelledNodeIds: [], cancelledTaskIds: [] };
-        }
-        const node = graphStore.getNode(gate.graphId, gate.nodeId);
-        if (node && node.state !== "cancelled") {
-          graphStore.updateNodeState(gate.graphId, gate.nodeId, "cancelled", nowIso, { failureReason: abandonReason });
-        }
-        const cancelledNodeIds = node ? cancelGateDownstreamSubtree(store2, node, nowIso, abandonReason) : [];
-        const cancelledTaskIds = [];
-        for (const nodeId of cancelledNodeIds) {
-          const target = graphStore.getNode(gate.graphId, nodeId);
-          if (target?.queueTaskId) cancelledTaskIds.push(target.queueTaskId);
-        }
-        const graph = graphStore.getGraph(gate.graphId);
-        let graphStatus;
-        const rolled = classifyGraphRollup(graphStore.listNodes(gate.graphId));
-        if (graph && rolled && graph.status !== rolled) {
-          graphStore.updateGraphStatus(gate.graphId, rolled, nowIso, true);
-          graphStatus = rolled;
-          insertGateOutbox(
-            graphStore,
-            gate.meshId,
-            gate.graphId,
-            rolled === "completed" ? "graph_completed" : rolled === "failed" ? "graph_failed" : "graph_cancelled",
-            { graphId: gate.graphId, status: rolled },
-            nowIso
-          );
-        } else if (graph?.status === "waiting_gate") {
-          const stillWaiting = graphStore.listGatesByGraph(gate.graphId).some((g3) => g3.gateId !== gate.gateId && (g3.state === "awaiting_coordinator" || g3.state === "claimed"));
-          if (!stillWaiting) {
-            graphStore.updateGraphStatus(gate.graphId, "active", nowIso);
-            graphStatus = "active";
-          }
-        }
-        insertGateOutbox(graphStore, gate.meshId, gate.graphId, "graph_gate_abandoned", {
-          graphId: gate.graphId,
-          gateId: gate.gateId,
-          nodeId: gate.nodeId,
-          ref: gate.ref,
-          action: gate.action,
-          priorState: gate.state,
-          reason: input.reason,
-          ...input.coordinatorSessionId ? { coordinatorSessionId: input.coordinatorSessionId } : {},
-          ...input.force ? { force: true } : {},
-          ...cancelledNodeIds.length > 0 ? { cancelledNodeIds } : {}
-        }, nowIso);
-        return {
-          abandoned: true,
-          gate: graphStore.getGate(gate.gateId),
-          cancelledNodeIds,
-          cancelledTaskIds,
-          ...graphStatus ? { graphStatus } : {}
-        };
+        return res;
       });
       if (result.abandoned) {
         try {
@@ -122412,18 +122850,99 @@ ${marker}`,
       }
       return result;
     }
+    function extendMeshGraphGateDeadline(input) {
+      const store2 = MeshRuntimeStore.getInstance();
+      const nowMs2 = input.nowMs ?? Date.now();
+      const nowIso = new Date(nowMs2).toISOString();
+      if (!Number.isFinite(input.extendSeconds) || input.extendSeconds <= 0 || input.extendSeconds > MESH_GATE_MAX_EXTEND_SECONDS) {
+        return { extended: false, reason: "invalid_extend_seconds" };
+      }
+      const extendSeconds = Math.floor(input.extendSeconds);
+      return store2.transaction(() => {
+        const graphStore = store2.graphStore();
+        const gate = graphStore.getGate(input.gateId);
+        if (!gate || gate.meshId !== input.meshId) return { extended: false, reason: "gate_not_found" };
+        if (gate.state === "released" || gate.state === "cancelled") {
+          return { extended: false, reason: `gate_terminal:${gate.state}`, gate };
+        }
+        if (gate.state === "expired" && gate.onTimeout !== "hold") {
+          return { extended: false, reason: "gate_terminal:expired", gate };
+        }
+        if (gate.state === "declared") {
+          return { extended: false, reason: "gate_not_awaiting", gate };
+        }
+        const base = gate.deadlineAt && gate.deadlineAt > nowIso ? Date.parse(gate.deadlineAt) : nowMs2;
+        const deadlineAt = isoAfter(base, extendSeconds);
+        const reopened = gate.state === "expired";
+        const leaseLive = !!gate.leaseExpiresAt && gate.leaseExpiresAt > nowIso && !!gate.fencingToken;
+        const nextState = reopened ? leaseLive ? "claimed" : "awaiting_coordinator" : gate.state;
+        const won = graphStore.patchGate(gate.gateId, {
+          deadlineAt,
+          ...reopened ? { state: nextState } : {}
+        }, nowIso, { leaseGeneration: gate.leaseGeneration });
+        if (!won) return { extended: false, reason: "gate_extend_race", gate };
+        if (reopened) {
+          const node = graphStore.getNode(gate.graphId, gate.nodeId);
+          if (node && node.state === "expired") {
+            graphStore.updateNodeState(gate.graphId, gate.nodeId, "awaiting_coordinator", nowIso);
+          }
+        }
+        insertGateOutbox(graphStore, gate.meshId, gate.graphId, "graph_gate_deadline_extended", {
+          graphId: gate.graphId,
+          gateId: gate.gateId,
+          nodeId: gate.nodeId,
+          ref: gate.ref,
+          previousDeadlineAt: gate.deadlineAt ?? null,
+          deadlineAt,
+          extendSeconds,
+          ...reopened ? { reopened: true, state: nextState } : {},
+          ...input.actorSessionId ? { actorSessionId: input.actorSessionId } : {}
+        }, nowIso);
+        return {
+          extended: true,
+          gate: graphStore.getGate(gate.gateId),
+          ...gate.deadlineAt ? { previousDeadlineAt: gate.deadlineAt } : {},
+          deadlineAt,
+          ...reopened ? { reopened: true } : {}
+        };
+      });
+    }
     function sweepMeshGraphGateTimeouts(meshId, nowMs2) {
       const store2 = MeshRuntimeStore.getInstance();
       const now = nowMs2 ?? Date.now();
       const nowIso = new Date(now).toISOString();
       const result = store2.transaction(() => {
         const graphStore = store2.graphStore();
+        const openGraphIds = new Set(
+          graphStore.listGatesByMesh(meshId, ["declared", "awaiting_coordinator", "claimed", "expired"]).map((g3) => g3.graphId)
+        );
+        const autoClosedGateIds = [];
+        for (const graphId of openGraphIds) {
+          autoClosedGateIds.push(...autoAbandonGatesWithTerminalDownstreamInTxn(store2, graphId, nowIso));
+        }
         const candidates = graphStore.listGatesByMesh(meshId, ["awaiting_coordinator", "claimed"]);
         const expiredLeaseGateIds = candidates.filter((g3) => g3.state === "claimed" && g3.leaseExpiresAt && g3.leaseExpiresAt <= nowIso).map((g3) => g3.gateId);
         const expiredGateIds = [];
+        const backfilledDeadlineGateIds = [];
+        const defaultDeadlineSeconds = resolveDefaultGateDeadlineSeconds();
         for (const gate of candidates) {
-          if (!gate.deadlineAt || gate.deadlineAt > nowIso) continue;
+          if (!gate.deadlineAt) {
+            if (defaultDeadlineSeconds !== null) {
+              graphStore.patchGate(
+                gate.gateId,
+                { deadlineAt: isoAfter(now, defaultDeadlineSeconds) },
+                nowIso,
+                { leaseGeneration: gate.leaseGeneration }
+              );
+              backfilledDeadlineGateIds.push(gate.gateId);
+            }
+            continue;
+          }
+          if (gate.deadlineAt > nowIso) continue;
           const node = graphStore.getNode(gate.graphId, gate.nodeId);
+          const openedAt = node?.stateChangedAt ?? gate.createdAt;
+          const openedAtMs = Date.parse(openedAt);
+          const ageMs2 = Number.isFinite(openedAtMs) ? Math.max(0, now - openedAtMs) : void 0;
           const won = graphStore.patchGate(gate.gateId, { state: "expired" }, nowIso, { leaseGeneration: gate.leaseGeneration });
           if (!won) continue;
           if (node && node.state !== "expired") {
@@ -122432,10 +122951,12 @@ ${marker}`,
           let cancelledNodeIds = [];
           if (gate.onTimeout === "cancel_downstream" && node) {
             cancelledNodeIds = cancelGateDownstreamSubtree(store2, node, nowIso);
+            if (cancelledNodeIds.length > 0) autoAbandonGatesWithTerminalDownstreamInTxn(store2, gate.graphId, nowIso);
           } else if (gate.onTimeout === "fail_graph") {
             graphStore.updateGraphStatus(gate.graphId, "failed", nowIso, true);
           }
           insertGateOutbox(graphStore, gate.meshId, gate.graphId, "graph_gate_expired", {
+            meshId: gate.meshId,
             graphId: gate.graphId,
             gateId: gate.gateId,
             nodeId: gate.nodeId,
@@ -122443,79 +122964,31 @@ ${marker}`,
             action: gate.action,
             policy: gate.onTimeout,
             deadlineAt: gate.deadlineAt,
+            openedAt,
+            ...ageMs2 !== void 0 ? { ageMs: ageMs2 } : {},
             urgent: true,
             ...cancelledNodeIds.length > 0 ? { cancelledNodeIds } : {}
           }, nowIso);
           expiredGateIds.push(gate.gateId);
         }
-        return { expiredGateIds, expiredLeaseGateIds };
+        return { expiredGateIds, expiredLeaseGateIds, backfilledDeadlineGateIds, autoClosedGateIds };
       });
-      if (result.expiredGateIds.length > 0) {
+      if (result.expiredGateIds.length > 0 || result.autoClosedGateIds.length > 0) {
         try {
           drainMeshGraphOutbox(meshId);
         } catch {
         }
       }
-      if (result.expiredGateIds.length > 0 || result.expiredLeaseGateIds.length > 0) {
-        LOG.info("MeshGraph", `Gate sweep for mesh ${meshId}: expired=[${result.expiredGateIds.join(",")}] lease-lapsed=[${result.expiredLeaseGateIds.join(",")}]`);
+      if (result.expiredGateIds.length > 0 || result.expiredLeaseGateIds.length > 0 || result.autoClosedGateIds.length > 0) {
+        LOG.info("MeshGraph", `Gate sweep for mesh ${meshId}: expired=[${result.expiredGateIds.join(",")}] lease-lapsed=[${result.expiredLeaseGateIds.join(",")}] auto-closed=[${result.autoClosedGateIds.join(",")}]`);
       }
       return result;
-    }
-    function isCancelExempt(state) {
-      return state === "completed" || state === "released" || state === "skipped" || state === "cancelled" || state === "failed" || state === "expired";
-    }
-    function cancelGateDownstreamSubtree(store2, gateNode, nowIso, reason = `coordinator_gate_timeout:${gateNode.nodeId}`) {
-      const graphStore = store2.graphStore();
-      const nodes = graphStore.listNodes(gateNode.graphId);
-      const edges = graphStore.listEdges(gateNode.graphId);
-      const byId = new Map(nodes.map((n) => [n.nodeId, n]));
-      const cancelled = [];
-      const visited = /* @__PURE__ */ new Set([gateNode.nodeId]);
-      let frontier = [gateNode.nodeId];
-      while (frontier.length > 0) {
-        const next = [];
-        for (const id22 of frontier) {
-          for (const edge of edges.filter((e) => e.fromNodeId === id22)) {
-            if (visited.has(edge.toNodeId)) continue;
-            visited.add(edge.toNodeId);
-            const target = byId.get(edge.toNodeId);
-            if (!target || isCancelExempt(target.state)) continue;
-            graphStore.updateNodeState(target.graphId, target.nodeId, "cancelled", nowIso, {
-              failureReason: reason
-            });
-            if (target.queueTaskId) {
-              const entry = store2.findQueueEntryById(target.meshId, target.queueTaskId);
-              if (entry && entry.status === "pending") {
-                entry.status = "cancelled";
-                entry.blockedReason = reason;
-                store2.updateQueueEntry(entry);
-              }
-            }
-            cancelled.push(target.nodeId);
-            next.push(target.nodeId);
-          }
-        }
-        frontier = next;
-      }
-      return cancelled;
-    }
-    function insertGateOutbox(graphStore, meshId, graphId, kind, payload, nowIso) {
-      graphStore.insertOutboxEvent({
-        id: newMeshGraphOutboxId(),
-        meshId,
-        graphId,
-        kind,
-        payload: JSON.stringify(payload),
-        status: "pending",
-        attemptCount: 0,
-        createdAt: nowIso,
-        updatedAt: nowIso
-      });
     }
     var import_crypto17;
     var MESH_GATE_DEFAULT_LEASE_SECONDS;
     var MESH_GATE_NAMED_OUTCOMES;
     var MESH_GATE_RELEASE_PATCH_KEYS;
+    var MESH_GATE_MAX_EXTEND_SECONDS;
     var init_mesh_graph_gates = __esm2({
       "src/mesh/mesh-graph-gates.ts"() {
         "use strict";
@@ -122524,12 +122997,16 @@ ${marker}`,
         init_logger();
         init_mesh_graph_input_binding();
         init_mesh_graph_types();
-        init_mesh_graph_derived_failure();
+        init_mesh_graph_gate_defaults();
+        init_mesh_graph_gate_closure();
         init_mesh_graph_transition_runner();
+        init_mesh_graph_gate_closure();
+        init_mesh_graph_gate_defaults();
         init_mesh_graph_transition_runner();
         MESH_GATE_DEFAULT_LEASE_SECONDS = 900;
         MESH_GATE_NAMED_OUTCOMES = ["passed", "failed", "rejected"];
         MESH_GATE_RELEASE_PATCH_KEYS = MESH_NODE_PATCH_KEYS3;
+        MESH_GATE_MAX_EXTEND_SECONDS = 30 * 24 * 60 * 60;
       }
     });
     function isCommitReachable(workspace, sha, defaultBranch) {
@@ -131535,10 +132012,10 @@ ${text}` : text;
             } else {
               this.claudeTuiCaptureFailures = { key: navKey, count: 1 };
             }
-            const { count } = this.claudeTuiCaptureFailures;
+            const { count: count2 } = this.claudeTuiCaptureFailures;
             LOG.warn(
               "SpecAdapter",
-              `[${this.cliType}] TUI prompt capture failed to parse (attempt ${count}/${_SpecCliAdapter.CLAUDE_TUI_CAPTURE_MAX_ATTEMPTS}) \u2014 ${count >= _SpecCliAdapter.CLAUDE_TUI_CAPTURE_MAX_ATTEMPTS ? "giving up until the picker leaves the screen" : "one retry remains"}`
+              `[${this.cliType}] TUI prompt capture failed to parse (attempt ${count2}/${_SpecCliAdapter.CLAUDE_TUI_CAPTURE_MAX_ATTEMPTS}) \u2014 ${count2 >= _SpecCliAdapter.CLAUDE_TUI_CAPTURE_MAX_ATTEMPTS ? "giving up until the picker leaves the screen" : "one retry remains"}`
             );
           }
           getDebugState() {
@@ -132802,8 +133279,8 @@ ${buttons.join("\n")}`;
       }
       return Array.from(dirs);
     }
-    function sqlPlaceholderList(count) {
-      return Array.from({ length: count }, () => "?").join(", ");
+    function sqlPlaceholderList(count2) {
+      return Array.from({ length: count2 }, () => "?").join(", ");
     }
     function querySqliteSessionId(cache3, dbPath, query, params) {
       try {
@@ -141713,9 +142190,9 @@ ${tail}`;
       const startedAt = Date.now();
       const entries = [];
       try {
-        const { execFile: execFile9 } = await import("child_process");
-        const { promisify: promisify11 } = await import("util");
-        const execFileAsync8 = promisify11(execFile9);
+        const { execFile: execFile10 } = await import("child_process");
+        const { promisify: promisify12 } = await import("util");
+        const execFileAsync8 = promisify12(execFile10);
         const runGit4 = async (cwd, args) => {
           const { stdout } = await execFileAsync8(GIT, args, {
             cwd,
@@ -143237,14 +143714,15 @@ ${mergeTreeErr?.stderr || ""}`;
       }
       const commandArgs = ["submodule", "update", "--init", "--recursive", "--", ...updatePaths];
       try {
-        const { execFile: execFile9 } = await import("child_process");
-        const { promisify: promisify11 } = await import("util");
-        const execFileAsync8 = promisify11(execFile9);
+        const { execFile: execFile10 } = await import("child_process");
+        const { promisify: promisify12 } = await import("util");
+        const execFileAsync8 = promisify12(execFile10);
         const result = await execFileAsync8(GIT, commandArgs, {
           cwd: repoRoot,
           encoding: "utf8",
           maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
-          timeout: 6e4
+          timeout: 6e4,
+          windowsHide: true
         });
         const postStatus = await getGitRepoStatus(repoRoot, {
           includeSubmodules: true,
@@ -143324,9 +143802,9 @@ ${mergeTreeErr?.stderr || ""}`;
       return "This refine REBASED the branch onto an advanced base before validating, which changed the commit the vendor bundles were built from \u2014 so the committed bundles no longer reproduce and check-vendor-drift fails. This is expected after a rebase and does NOT mean the branch is wrong. Fix: run `npm run bundle:vendor:all` in the worktree, commit the regenerated vendor paths (the daemon-standalone copy lives inside oss, so bump the oss pointer too), then re-run refine.";
     }
     async function runMeshRefineValidationGate(mesh, workspace, opts) {
-      const { execFile: execFile9 } = await import("child_process");
-      const { promisify: promisify11 } = await import("util");
-      const execFileAsync8 = promisify11(execFile9);
+      const { execFile: execFile10 } = await import("child_process");
+      const { promisify: promisify12 } = await import("util");
+      const execFileAsync8 = promisify12(execFile10);
       const selection = resolveMeshRefineValidationPlan(mesh, workspace);
       const summary = {
         status: "skipped",
@@ -143778,7 +144256,7 @@ ${mergeTreeErr?.stderr || ""}`;
       };
     }
     var import_node_child_process10;
-    var import_node_util5;
+    var import_node_util6;
     var import_path22;
     var execFileAsync4;
     var runGit2;
@@ -143786,14 +144264,14 @@ ${mergeTreeErr?.stderr || ""}`;
       "src/mesh/mesh-refine-submodule-preflight.ts"() {
         "use strict";
         import_node_child_process10 = require("child_process");
-        import_node_util5 = require("util");
+        import_node_util6 = require("util");
         import_path22 = require("path");
         init_dist();
         init_git_locale();
         init_mesh_refine_gitlink_utils();
         init_mesh_refine_gates();
         init_worktree_bootstrap_config();
-        execFileAsync4 = (0, import_node_util5.promisify)(import_node_child_process10.execFile);
+        execFileAsync4 = (0, import_node_util6.promisify)(import_node_child_process10.execFile);
         runGit2 = async (cwd, args) => {
           const { stdout } = await execFileAsync4(GIT, args, {
             cwd,
@@ -144093,9 +144571,9 @@ ${mergeTreeErr?.stderr || ""}`;
       }
     }
     async function defaultRunGit(args, cwd) {
-      const { execFile: execFile9 } = await import("child_process");
-      const { promisify: promisify11 } = await import("util");
-      const { stdout } = await promisify11(execFile9)("git", args, {
+      const { execFile: execFile10 } = await import("child_process");
+      const { promisify: promisify12 } = await import("util");
+      const { stdout } = await promisify12(execFile10)("git", args, {
         cwd,
         encoding: "utf8",
         timeout: 3e4,
@@ -144554,7 +145032,7 @@ ${mergeTreeErr?.stderr || ""}`;
         `tick mesh=${meshId} dryRun=${!execute} mode=${executeMode}: scanned=${summary.scanned} candidates=${summary.candidates} skipped=${summary.skipped} autoEligible=${summary.autoEligible} removed=${summary.removed} failed=${summary.removalFailures} leaseConflicts=${summary.leaseConflicts}`
       );
       if (summary.scanned > 0) {
-        const reasons = Object.entries(summary.byReason).sort((a, b) => b[1] - a[1]).map(([reason, count]) => `${reason}=${count}`).join(" ");
+        const reasons = Object.entries(summary.byReason).sort((a, b) => b[1] - a[1]).map(([reason, count2]) => `${reason}=${count2}`).join(" ");
         LOG.debug(LOG_CATEGORY, `tick mesh=${meshId} byReason: ${reasons}`);
       }
       return { meshId, tickId: opts.tickId, dryRun: !execute, executeMode, graceMs, entries, summary };
@@ -144883,18 +145361,12 @@ ${mergeTreeErr?.stderr || ""}`;
     function readString8(value) {
       return typeof value === "string" && value.trim().length > 0 ? value.trim() : void 0;
     }
-    function extractErrorCode(message) {
-      const match = /^([a-z0-9_]+):/.exec(message);
-      return match ? match[1] : "gate_operation_failed";
-    }
     var meshGraphCommandHandlers;
     var meshGraphCommandSpecs;
     var init_mesh_graph_commands = __esm2({
       "src/commands/med-family/mesh-graph-commands.ts"() {
         "use strict";
         init_mesh_graph_view();
-        init_mesh_graph_gates();
-        init_mesh_graph_gate_evidence();
         init_mesh_route_preview();
         init_mesh_config();
         init_mesh_runtime_store();
@@ -144979,99 +145451,241 @@ ${mergeTreeErr?.stderr || ""}`;
             } catch (e) {
               return { success: false, error: `graph overview failed: ${e?.message || e}` };
             }
-          },
-          mesh_gate_claim: async (_ctx, args) => {
-            const meshId = readString8(args?.meshId);
-            const gateId = readString8(args?.gateId);
-            if (!meshId || !gateId) return { success: false, error: "meshId and gateId are required" };
-            const coordinatorSessionId = readString8(args?.coordinatorSessionId) || "dashboard_operator";
+          }
+        };
+        meshGraphCommandSpecs = defineCommandSpecs("med", meshGraphCommandHandlers, {}, { meshSender: "authenticated_peer" });
+      }
+    });
+    function readString9(args, snake, camel) {
+      const value = args?.[snake] ?? args?.[camel];
+      return typeof value === "string" && value.trim().length > 0 ? value.trim() : void 0;
+    }
+    function readNumber22(args, snake, camel) {
+      const value = args?.[snake] ?? args?.[camel];
+      return typeof value === "number" && Number.isFinite(value) ? value : void 0;
+    }
+    function actorOf(args) {
+      return readString9(args, "coordinator_session_id", "coordinatorSessionId") ?? MESH_GATE_OPERATOR_SESSION_ID;
+    }
+    function refusal(code, error48, extra = {}) {
+      return { success: false, code, error: error48, ...extra };
+    }
+    function extractErrorCode(message) {
+      const match = /^([a-z0-9_]+):/.exec(message);
+      return match ? match[1] : "gate_operation_failed";
+    }
+    function requireIds(args) {
+      const meshId = readString9(args, "mesh_id", "meshId");
+      const gateId = readString9(args, "gate_id", "gateId");
+      return meshId && gateId ? { meshId, gateId } : null;
+    }
+    var MESH_GRAPH_GATE_COMMAND_SOURCES;
+    var MESH_GATE_OPERATOR_SESSION_ID;
+    var meshGraphGateCommandHandlers;
+    var meshGraphGateCommandSpecs;
+    var init_mesh_graph_gate_commands = __esm2({
+      "src/commands/med-family/mesh-graph-gate-commands.ts"() {
+        "use strict";
+        init_command_registry();
+        init_mesh_graph_gates();
+        init_mesh_runtime_store();
+        init_mesh_graph_provenance();
+        MESH_GRAPH_GATE_COMMAND_SOURCES = ["ipc", "standalone", "p2p"];
+        MESH_GATE_OPERATOR_SESSION_ID = "dashboard_operator";
+        meshGraphGateCommandHandlers = {
+          mesh_graph_gate_claim: async (_ctx, args) => {
+            const ids = requireIds(args);
+            if (!ids) return refusal("bad_request", "mesh_id and gate_id are required");
+            const deadlineSeconds = readNumber22(args, "deadline_seconds", "deadlineSeconds");
+            const actor = actorOf(args);
             try {
               const result = claimMeshGraphGate({
-                meshId,
-                gateId,
-                coordinatorSessionId,
-                ...typeof args?.leaseSeconds === "number" ? { leaseSeconds: args.leaseSeconds } : {}
+                ...ids,
+                coordinatorSessionId: actor,
+                ...deadlineSeconds !== void 0 && deadlineSeconds > 0 ? { extendDeadlineSeconds: deadlineSeconds } : {}
               });
               if (!result.claimed) {
-                return {
-                  success: false,
+                return refusal(result.reason ?? "gate_not_claimable", `gate not claimable (${result.reason ?? "unknown"})`, {
                   claimed: false,
-                  code: result.reason ?? "gate_not_claimable",
-                  ...result.gate ? { gateState: result.gate.state } : {},
-                  error: `gate not claimable (${result.reason ?? "unknown"})`
-                };
+                  ...result.gate ? { gateState: result.gate.state } : {}
+                });
               }
-              let convergenceEvidence = null;
               try {
-                convergenceEvidence = await collectGateConvergenceEvidence(meshId, gateId);
+                recordGraphGateClaimed(ids.meshId, {
+                  graphId: result.gate.graphId,
+                  gateId: ids.gateId,
+                  ref: result.gate.ref,
+                  action: result.gate.action,
+                  generation: result.leaseGeneration,
+                  ownerSessionId: actor,
+                  leaseExpiresAt: result.leaseExpiresAt,
+                  ambiguousExternalOutcome: result.ambiguousExternalOutcome,
+                  previousLeaseOwnerSessionId: result.previousLeaseOwnerSessionId
+                });
               } catch {
               }
               return {
                 success: true,
                 claimed: true,
-                gateId,
+                gateId: ids.gateId,
                 graphId: result.gate.graphId,
                 action: result.gate.action,
-                ...result.gate.instructions ? { instructions: result.gate.instructions } : {},
                 leaseGeneration: result.leaseGeneration,
                 fencingToken: result.fencingToken,
                 leaseExpiresAt: result.leaseExpiresAt,
-                ...convergenceEvidence ? { convergenceEvidence } : {}
+                ...result.deadlineAt ? { deadlineAt: result.deadlineAt } : {},
+                ...result.ambiguousExternalOutcome ? { ambiguousExternalOutcome: true } : {}
               };
             } catch (e) {
-              return { success: false, error: `gate claim failed: ${e?.message || e}` };
+              const message = String(e?.message || e);
+              return refusal(extractErrorCode(message), message);
             }
           },
-          mesh_gate_release: async (_ctx, args) => {
-            const meshId = readString8(args?.meshId);
-            const gateId = readString8(args?.gateId);
-            const fencingToken = readString8(args?.fencingToken);
-            const outcome = readString8(args?.outcome);
-            const leaseGeneration = typeof args?.leaseGeneration === "number" ? args.leaseGeneration : void 0;
-            if (!meshId || !gateId || !fencingToken || leaseGeneration === void 0 || !outcome) {
-              return { success: false, error: "meshId, gateId, leaseGeneration, fencingToken and outcome are required" };
-            }
+          mesh_graph_gate_release: async (_ctx, args) => {
+            const ids = requireIds(args);
+            const outcome = readString9(args, "outcome", "outcome");
+            if (!ids || !outcome) return refusal("bad_request", "mesh_id, gate_id and outcome are required");
+            const actor = actorOf(args);
+            const idempotencyKey = readString9(args, "release_idempotency_key", "releaseIdempotencyKey") ?? `operator_release:${ids.gateId}`;
+            const rawEvidence = args?.evidence;
+            const evidence = typeof rawEvidence === "string" ? rawEvidence.trim() ? { note: rawEvidence.trim() } : void 0 : rawEvidence && typeof rawEvidence === "object" ? rawEvidence : void 0;
             try {
+              const gate = MeshRuntimeStore.getInstance().graphStore().getGate(ids.gateId);
+              if (!gate || gate.meshId !== ids.meshId) return refusal("gate_not_found", `no gate '${ids.gateId}'`, { released: false });
+              let fence = null;
+              const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+              if (gate.state === "released" && gate.fencingToken) {
+                fence = { leaseGeneration: gate.leaseGeneration, fencingToken: gate.fencingToken };
+              } else if (gate.state === "claimed" && gate.leaseOwnerSessionId === actor && gate.fencingToken && gate.leaseExpiresAt && gate.leaseExpiresAt > nowIso) {
+                fence = { leaseGeneration: gate.leaseGeneration, fencingToken: gate.fencingToken };
+              } else {
+                const claim = claimMeshGraphGate({ ...ids, coordinatorSessionId: actor });
+                if (!claim.claimed) {
+                  return refusal(claim.reason ?? "gate_not_claimable", `gate not releasable (${claim.reason ?? "unknown"})`, {
+                    released: false,
+                    ...claim.gate ? { gateState: claim.gate.state } : {}
+                  });
+                }
+                fence = { leaseGeneration: claim.leaseGeneration, fencingToken: claim.fencingToken };
+              }
               const result = releaseMeshGraphGate({
-                meshId,
-                gateId,
-                leaseGeneration,
-                fencingToken,
+                ...ids,
+                ...fence,
+                idempotencyKey,
                 outcome,
-                // Deterministic per-lease key: retrying the same dashboard release
-                // replays as a duplicate success instead of a conflict.
-                idempotencyKey: readString8(args?.idempotencyKey) || `dashboard_${gateId}_${leaseGeneration}`,
-                ...readString8(args?.evidence) ? { evidence: { note: args.evidence } } : {}
+                ...evidence !== void 0 ? { evidence } : {}
               });
-              return { success: true, released: true, gateId, ...result && typeof result === "object" ? result : {} };
+              try {
+                recordGraphGateReleased(ids.meshId, {
+                  graphId: result.gate.graphId,
+                  gateId: ids.gateId,
+                  ref: result.gate.ref,
+                  action: result.gate.action,
+                  outcome,
+                  generation: fence.leaseGeneration,
+                  releaseDigest: result.gate.releaseEvidenceDigest,
+                  materializedNodeIds: result.materializedNodeIds,
+                  duplicate: result.duplicate
+                });
+              } catch {
+              }
+              return {
+                success: true,
+                released: true,
+                duplicate: result.duplicate,
+                gateId: ids.gateId,
+                materializedNodeIds: result.materializedNodeIds,
+                ...result.downstreamNodeCount !== void 0 ? { downstreamNodeCount: result.downstreamNodeCount } : {},
+                ...result.graphCompleted !== void 0 ? { graphCompleted: result.graphCompleted } : {}
+              };
             } catch (e) {
               const message = String(e?.message || e);
-              return { success: false, released: false, code: extractErrorCode(message), error: message };
+              return refusal(extractErrorCode(message), message, { released: false });
             }
           },
-          mesh_gate_abandon: async (_ctx, args) => {
-            const meshId = readString8(args?.meshId);
-            const gateId = readString8(args?.gateId);
-            if (!meshId || !gateId) return { success: false, error: "meshId and gateId are required" };
+          mesh_graph_gate_abandon: async (_ctx, args) => {
+            const ids = requireIds(args);
+            const reason = readString9(args, "reason", "reason");
+            if (!ids || !reason) return refusal("bad_request", "mesh_id, gate_id and reason are required");
+            const actor = actorOf(args);
             try {
               const result = abandonMeshGraphGate({
-                meshId,
-                gateId,
-                reason: readString8(args?.reason) || "abandoned from dashboard",
-                coordinatorSessionId: readString8(args?.coordinatorSessionId) || "dashboard_operator",
+                ...ids,
+                reason,
+                coordinatorSessionId: actor,
                 ...args?.force === true ? { force: true } : {}
               });
               if (!result.abandoned) {
-                return { success: false, abandoned: false, code: result.reason ?? "gate_not_abandonable", error: `gate not abandonable (${result.reason ?? "unknown"})` };
+                return refusal(result.reason ?? "gate_not_abandonable", `gate not abandonable (${result.reason ?? "unknown"})`, {
+                  abandoned: false,
+                  ...result.gate ? { gateState: result.gate.state } : {}
+                });
               }
-              return { success: true, abandoned: true, gateId, ...result && typeof result === "object" ? result : {} };
+              const duplicate = result.reason === "gate_already_abandoned";
+              if (!duplicate) {
+                try {
+                  recordGraphGateAbandoned(ids.meshId, {
+                    graphId: result.gate.graphId,
+                    gateId: ids.gateId,
+                    ref: result.gate.ref,
+                    action: result.gate.action,
+                    priorState: result.gate.state,
+                    reason,
+                    coordinatorSessionId: actor,
+                    ...args?.force === true ? { force: true } : {},
+                    cancelledNodeIds: result.cancelledNodeIds,
+                    ...result.graphStatus ? { graphStatus: result.graphStatus } : {}
+                  });
+                } catch {
+                }
+              }
+              return {
+                success: true,
+                abandoned: true,
+                ...duplicate ? { duplicate: true } : {},
+                gateId: ids.gateId,
+                cancelledNodeIds: result.cancelledNodeIds,
+                cancelledTaskIds: result.cancelledTaskIds,
+                ...result.graphStatus ? { graphStatus: result.graphStatus } : {}
+              };
             } catch (e) {
               const message = String(e?.message || e);
-              return { success: false, abandoned: false, code: extractErrorCode(message), error: message };
+              return refusal(extractErrorCode(message), message, { abandoned: false });
+            }
+          },
+          mesh_graph_gate_extend: async (_ctx, args) => {
+            const ids = requireIds(args);
+            const extendSeconds = readNumber22(args, "extend_seconds", "extendSeconds");
+            if (!ids || extendSeconds === void 0) return refusal("bad_request", "mesh_id, gate_id and extend_seconds are required");
+            try {
+              const result = extendMeshGraphGateDeadline({ ...ids, extendSeconds, actorSessionId: actorOf(args) });
+              if (!result.extended) {
+                return refusal(result.reason ?? "gate_not_extendable", `gate not extendable (${result.reason ?? "unknown"})`, {
+                  extended: false,
+                  ...result.gate ? { gateState: result.gate.state } : {}
+                });
+              }
+              return {
+                success: true,
+                extended: true,
+                gateId: ids.gateId,
+                gateState: result.gate.state,
+                deadlineAt: result.deadlineAt,
+                ...result.previousDeadlineAt ? { previousDeadlineAt: result.previousDeadlineAt } : {},
+                ...result.reopened ? { reopened: true } : {}
+              };
+            } catch (e) {
+              const message = String(e?.message || e);
+              return refusal(extractErrorCode(message), message, { extended: false });
             }
           }
         };
-        meshGraphCommandSpecs = defineCommandSpecs("med", meshGraphCommandHandlers, {}, { meshSender: "authenticated_peer" });
+        meshGraphGateCommandSpecs = defineCommandSpecs(
+          "med",
+          meshGraphGateCommandHandlers,
+          {},
+          { sources: MESH_GRAPH_GATE_COMMAND_SOURCES }
+        );
       }
     });
     var meshEventsHandlers;
@@ -146042,13 +146656,13 @@ ${ptyResult.output.slice(-2e3)}`);
       getMeshMagiActivityByGroup: () => getMeshMagiActivityByGroup3,
       summarizeMeshMagiActivity: () => summarizeMeshMagiActivity3
     });
-    function readString9(value) {
+    function readString10(value) {
       return typeof value === "string" && value.trim() ? value.trim() : void 0;
     }
     function readRecord8(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : void 0;
     }
-    function readNumber22(value) {
+    function readNumber3(value) {
       return typeof value === "number" && Number.isFinite(value) ? value : void 0;
     }
     function summarizeNeedsVerification(synthesis) {
@@ -146057,14 +146671,14 @@ ${ptyResult.output.slice(-2e3)}`);
       const items = [];
       for (const raw of list.slice(0, MAGI_NEEDS_VERIFICATION_PREVIEW_CAP)) {
         const r = readRecord8(raw);
-        const claim = readString9(r?.claim);
+        const claim = readString10(r?.claim);
         if (!claim) continue;
-        items.push({ claim, category: readString9(r?.category) || "needs_verification" });
+        items.push({ claim, category: readString10(r?.category) || "needs_verification" });
       }
       return items;
     }
     function mergeGroup(groups, patch) {
-      const consensusGroupId = readString9(patch.consensusGroupId);
+      const consensusGroupId = readString10(patch.consensusGroupId);
       if (!consensusGroupId) return;
       const previous = groups.get(consensusGroupId);
       const status = patch.status === "synthesized" || previous?.status === "synthesized" ? "synthesized" : "running";
@@ -146078,20 +146692,20 @@ ${ptyResult.output.slice(-2e3)}`);
       for (const entry of args.ledgerEntries || []) {
         const payload = readRecord8(entry.payload);
         if (payload?.source !== "magi") continue;
-        const consensusGroupId = readString9(payload.consensusGroupId);
+        const consensusGroupId = readString10(payload.consensusGroupId);
         if (!consensusGroupId) continue;
         if (entry.kind === "magi_synthesis") {
           const synthesis = readRecord8(payload.synthesis);
           mergeGroup(groups, {
             consensusGroupId,
             status: "synthesized",
-            missionId: readString9(payload.missionId),
-            panel: readString9(payload.panel),
-            question: readString9(payload.question),
-            replicaCount: readNumber22(synthesis?.replicasExpected) ?? readNumber22(payload.replicaCount),
-            answered: readNumber22(synthesis?.replicasAnswered),
-            missing: readNumber22(synthesis?.replicasMissing),
-            staleReplicas: readNumber22(payload.staleReplicas) ?? readNumber22(synthesis?.staleReplicas),
+            missionId: readString10(payload.missionId),
+            panel: readString10(payload.panel),
+            question: readString10(payload.question),
+            replicaCount: readNumber3(synthesis?.replicasExpected) ?? readNumber3(payload.replicaCount),
+            answered: readNumber3(synthesis?.replicasAnswered),
+            missing: readNumber3(synthesis?.replicasMissing),
+            staleReplicas: readNumber3(payload.staleReplicas) ?? readNumber3(synthesis?.staleReplicas),
             needsVerificationCount: Array.isArray(synthesis?.needsVerification) ? synthesis.needsVerification.length : void 0,
             agreedCount: Array.isArray(synthesis?.agreed) ? synthesis.agreed.length : void 0,
             independenceBanner: synthesis && "independenceBanner" in synthesis ? synthesis.independenceBanner : void 0,
@@ -146105,10 +146719,10 @@ ${ptyResult.output.slice(-2e3)}`);
           mergeGroup(groups, {
             consensusGroupId,
             status: "running",
-            missionId: readString9(payload.missionId),
-            panel: readString9(payload.panel),
-            question: readString9(payload.question),
-            replicaCount: readNumber22(payload.replicaCount),
+            missionId: readString10(payload.missionId),
+            panel: readString10(payload.panel),
+            question: readString10(payload.question),
+            replicaCount: readNumber3(payload.replicaCount),
             lastLedgerKind: entry.kind,
             lastUpdatedAt: entry.timestamp
           });
@@ -146149,7 +146763,7 @@ ${ptyResult.output.slice(-2e3)}`);
       };
     }
     function getMeshMagiActivityByGroup3(ledgerEntries, consensusGroupId) {
-      const key2 = readString9(consensusGroupId);
+      const key2 = readString10(consensusGroupId);
       if (!key2) return void 0;
       return buildMeshMagiActivity3({ ledgerEntries }).find((g3) => g3.consensusGroupId === key2);
     }
@@ -146874,7 +147488,7 @@ ${ptyResult.output.slice(-2e3)}`);
     });
     async function execChangeAreaGit(callSite, gitArgs, cwd, inputs) {
       try {
-        return await execFileAsync5(GIT2, gitArgs, { cwd, encoding: "utf8" });
+        return await execFileAsync5(GIT2, gitArgs, { cwd, encoding: "utf8", windowsHide: true });
       } catch (error48) {
         LOG.warn("Mesh", `[Refinery] Change-area git call failed: ${JSON.stringify({
           callSite,
@@ -146988,7 +147602,7 @@ ${ptyResult.output.slice(-2e3)}`);
     }
     var import_node_child_process11;
     var import_node_fs5;
-    var import_node_util6;
+    var import_node_util7;
     var execFileAsync5;
     var GIT2;
     var MAX_CHANGED_FILES2;
@@ -146997,10 +147611,10 @@ ${ptyResult.output.slice(-2e3)}`);
         "use strict";
         import_node_child_process11 = require("child_process");
         import_node_fs5 = require("fs");
-        import_node_util6 = require("util");
+        import_node_util7 = require("util");
         init_resolve_executable();
         init_logger();
-        execFileAsync5 = (0, import_node_util6.promisify)(import_node_child_process11.execFile);
+        execFileAsync5 = (0, import_node_util7.promisify)(import_node_child_process11.execFile);
         GIT2 = process.platform === "win32" ? resolveWin32Executable("git") : "git";
         MAX_CHANGED_FILES2 = 500;
       }
@@ -147115,7 +147729,7 @@ ${ptyResult.output.slice(-2e3)}`);
       return { verdict, scopes, touchedSubmodulePaths, durationMs: Date.now() - started };
     }
     var import_node_child_process12;
-    var import_node_util7;
+    var import_node_util8;
     var import_node_path5;
     var import_node_fs6;
     var execFileAsync6;
@@ -147124,12 +147738,12 @@ ${ptyResult.output.slice(-2e3)}`);
       "src/mesh/mesh-refine-base-divergence.ts"() {
         "use strict";
         import_node_child_process12 = require("child_process");
-        import_node_util7 = require("util");
+        import_node_util8 = require("util");
         import_node_path5 = require("path");
         import_node_fs6 = require("fs");
         init_resolve_executable();
         init_mesh_refine_batch();
-        execFileAsync6 = (0, import_node_util7.promisify)(import_node_child_process12.execFile);
+        execFileAsync6 = (0, import_node_util8.promisify)(import_node_child_process12.execFile);
         GIT3 = process.platform === "win32" ? resolveWin32Executable("git") : "git";
       }
     });
@@ -148745,9 +149359,9 @@ ${hintLines.join("\n")}` : "",
       if (targetNodes.length === 0) {
         return { success: true, batch: true, dryRun: args?.dryRun !== false, nodeCount: 0, order: [], results: [], note: "No convergeable local worktree nodes found." };
       }
-      const { execFile: execFile9 } = await import("child_process");
-      const { promisify: promisify11 } = await import("util");
-      const execFileAsync8 = promisify11(execFile9);
+      const { execFile: execFile10 } = await import("child_process");
+      const { promisify: promisify12 } = await import("util");
+      const execFileAsync8 = promisify12(execFile10);
       const resolveRepoRootFor = (node) => {
         const sourceNode = node.clonedFromNodeId ? allNodes.find((n) => meshNodeIdMatches5(n, node.clonedFromNodeId)) : allNodes.find((n) => !n.isLocalWorktree);
         return sourceNode?.repoRoot || sourceNode?.workspace;
@@ -148760,21 +149374,21 @@ ${hintLines.join("\n")}` : "",
         const pending = (async () => {
           let baseBranch = "main";
           try {
-            const { stdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+            const { stdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
             if (stdout.trim()) baseBranch = stdout.trim();
           } catch {
           }
           let baseRef = "HEAD";
           try {
-            await execFileAsync8("git", ["fetch", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv(), timeout: BATCH_PLAN_FETCH_TIMEOUT_MS });
+            await execFileAsync8("git", ["fetch", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv(), timeout: BATCH_PLAN_FETCH_TIMEOUT_MS });
           } catch {
           }
           try {
-            const { stdout } = await execFileAsync8("git", ["rev-parse", `origin/${baseBranch}`], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+            const { stdout } = await execFileAsync8("git", ["rev-parse", `origin/${baseBranch}`], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
             baseRef = stdout.trim();
           } catch {
             try {
-              const { stdout } = await execFileAsync8("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+              const { stdout } = await execFileAsync8("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
               baseRef = stdout.trim();
             } catch {
             }
@@ -148790,7 +149404,7 @@ ${hintLines.join("\n")}` : "",
         const pending = (async () => {
           const subPaths = /* @__PURE__ */ new Set();
           try {
-            const { stdout } = await execFileAsync8("git", ["config", "--file", ".gitmodules", "--get-regexp", "path"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+            const { stdout } = await execFileAsync8("git", ["config", "--file", ".gitmodules", "--get-regexp", "path"], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
             for (const line of stdout.split("\n")) {
               const trimmed2 = line.trim();
               const spaceIdx = trimmed2.indexOf(" ");
@@ -148811,7 +149425,7 @@ ${hintLines.join("\n")}` : "",
           const repoRoot = resolveRepoRootFor(node);
           let branch = typeof node.worktreeBranch === "string" ? node.worktreeBranch : "";
           try {
-            const { stdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: node.workspace, encoding: "utf8", env: gitChildEnv() });
+            const { stdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: node.workspace, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
             if (stdout.trim()) branch = stdout.trim();
           } catch {
           }
@@ -148834,7 +149448,7 @@ ${hintLines.join("\n")}` : "",
           ]);
           let branchRef = branch;
           try {
-            const { stdout } = await execFileAsync8("git", ["rev-parse", branch], { cwd: node.workspace, encoding: "utf8", env: gitChildEnv() });
+            const { stdout } = await execFileAsync8("git", ["rev-parse", branch], { cwd: node.workspace, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
             branchRef = stdout.trim() || branch;
           } catch {
           }
@@ -149496,30 +150110,30 @@ ${hintLines.join("\n")}` : "",
       const sourceNode = node.clonedFromNodeId ? mesh?.nodes.find((n) => meshNodeIdMatches5(n, node.clonedFromNodeId)) : mesh?.nodes.find((n) => !n.isLocalWorktree);
       const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
       if (!repoRoot) return { kind: "terminal", result: { success: false, error: "Source node repoRoot not found", refineStages } };
-      const { execFile: execFile9 } = await import("child_process");
-      const { promisify: promisify11 } = await import("util");
-      const execFileAsync8 = promisify11(execFile9);
+      const { execFile: execFile10 } = await import("child_process");
+      const { promisify: promisify12 } = await import("util");
+      const execFileAsync8 = promisify12(execFile10);
       const resolveStarted = Date.now();
-      const { stdout: branchStdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: node.workspace, encoding: "utf8", env: gitChildEnv() });
+      const { stdout: branchStdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: node.workspace, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
       const branch = branchStdout.trim();
       if (!branch) return { kind: "terminal", result: { success: false, error: "Could not determine branch of the worktree node", refineStages } };
-      const { stdout: baseBranchStdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+      const { stdout: baseBranchStdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
       const baseBranch = baseBranchStdout.trim();
       let fetchWarning;
       try {
-        await execFileAsync8("git", ["fetch", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv(), timeout: 3e4 });
+        await execFileAsync8("git", ["fetch", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv(), timeout: 3e4 });
       } catch (e) {
         fetchWarning = `git fetch origin ${baseBranch} failed (proceeding with local HEAD): ${e?.message}`;
       }
       let baseHeadRaw;
       try {
-        const { stdout } = await execFileAsync8("git", ["rev-parse", `origin/${baseBranch}`], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+        const { stdout } = await execFileAsync8("git", ["rev-parse", `origin/${baseBranch}`], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
         baseHeadRaw = stdout.trim();
       } catch {
-        const { stdout: localHead } = await execFileAsync8("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+        const { stdout: localHead } = await execFileAsync8("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
         baseHeadRaw = localHead.trim();
       }
-      const { stdout: branchHeadStdout } = await execFileAsync8("git", ["rev-parse", branch], { cwd: node.workspace, encoding: "utf8", env: gitChildEnv() });
+      const { stdout: branchHeadStdout } = await execFileAsync8("git", ["rev-parse", branch], { cwd: node.workspace, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
       const baseHead = baseHeadRaw;
       const branchHead = branchHeadStdout.trim();
       let changeImpact;
@@ -149562,14 +150176,14 @@ ${hintLines.join("\n")}` : "",
     async function computeBranchBaseDivergence(execFileAsync8, cwd, baseHead, branchHead) {
       let mergeBase;
       try {
-        const { stdout } = await execFileAsync8("git", ["merge-base", baseHead, branchHead], { cwd, encoding: "utf8", env: gitChildEnv() });
+        const { stdout } = await execFileAsync8("git", ["merge-base", baseHead, branchHead], { cwd, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
         mergeBase = stdout.trim() || void 0;
       } catch {
       }
       let ahead = 0;
       let behind = 0;
       try {
-        const { stdout } = await execFileAsync8("git", ["rev-list", "--left-right", "--count", `${baseHead}...${branchHead}`], { cwd, encoding: "utf8", env: gitChildEnv() });
+        const { stdout } = await execFileAsync8("git", ["rev-list", "--left-right", "--count", `${baseHead}...${branchHead}`], { cwd, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
         const [left, right] = stdout.trim().split(/\s+/).map((n) => Number.parseInt(n, 10));
         behind = Number.isFinite(left) ? left : 0;
         ahead = Number.isFinite(right) ? right : 0;
@@ -149800,7 +150414,7 @@ ${hintLines.join("\n")}` : "",
           }
         } };
       }
-      const { stdout: rebasedHeadStdout } = await execFileAsync8("git", ["rev-parse", "HEAD"], { cwd: node.workspace, encoding: "utf8", env: gitChildEnv() });
+      const { stdout: rebasedHeadStdout } = await execFileAsync8("git", ["rev-parse", "HEAD"], { cwd: node.workspace, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
       branchHead = rebasedHeadStdout.trim();
       ctx.branchHead = branchHead;
       let changeImpact = ctx.changeImpact;
@@ -150052,7 +150666,7 @@ ${tail}` : ""
       let mergeResult;
       const mergeStarted = Date.now();
       try {
-        const result = await execFileAsync8("git", ["merge", "--no-ff", branch, "-m", `Auto-merge branch '${branch}' via Refinery`], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+        const result = await execFileAsync8("git", ["merge", "--no-ff", branch, "-m", `Auto-merge branch '${branch}' via Refinery`], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
         mergeResult = {
           stdout: truncateValidationOutput(result.stdout),
           stderr: truncateValidationOutput(result.stderr),
@@ -150064,7 +150678,7 @@ ${tail}` : ""
 ${e?.stderr || ""}`;
         const conflictPaths = [...mergeOutput.matchAll(/Merge conflict in (.+)/g)].map((m) => m[1].trim()).filter(Boolean);
         try {
-          await execFileAsync8("git", ["merge", "--abort"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+          await execFileAsync8("git", ["merge", "--abort"], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
         } catch {
         }
         recordMeshRefineStage(refineStages, "merge", "failed", mergeStarted, {
@@ -150147,7 +150761,7 @@ ${e?.stderr || ""}`;
       if (!requireApprovalForPush) {
         const pushStarted = Date.now();
         try {
-          await execFileAsync8("git", ["push", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv(), timeout: 3e4 });
+          await execFileAsync8("git", ["push", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv(), timeout: 3e4 });
           pushResult = { pushed: true, remote: "origin", branch: baseBranch, durationMs: Date.now() - pushStarted };
           recordMeshRefineStage(refineStages, "push", "passed", pushStarted, pushResult);
         } catch (e) {
@@ -150698,9 +151312,9 @@ ${e?.stderr || ""}`;
     }
     async function hasUnpushedWorktreeCommits(workspace) {
       try {
-        const { execFile: execFile9 } = await import("child_process");
-        const { promisify: promisify11 } = await import("util");
-        const execFileAsync8 = promisify11(execFile9);
+        const { execFile: execFile10 } = await import("child_process");
+        const { promisify: promisify12 } = await import("util");
+        const execFileAsync8 = promisify12(execFile10);
         const git3 = async (gitArgs) => {
           const { stdout } = await execFileAsync8("git", gitArgs, {
             cwd: workspace,
@@ -150713,8 +151327,8 @@ ${e?.stderr || ""}`;
           return String(stdout).trim();
         };
         if (!await git3(["remote"])) return { unpushed: false };
-        const count = Number.parseInt(await git3(["rev-list", "--count", "HEAD", "--not", "--remotes"]), 10);
-        return Number.isFinite(count) && count > 0 ? { unpushed: true, count } : { unpushed: false };
+        const count2 = Number.parseInt(await git3(["rev-list", "--count", "HEAD", "--not", "--remotes"]), 10);
+        return Number.isFinite(count2) && count2 > 0 ? { unpushed: true, count: count2 } : { unpushed: false };
       } catch {
         return { unpushed: false };
       }
@@ -150837,9 +151451,9 @@ ${e?.stderr || ""}`;
         }
       }
       if (args.force !== true) {
-        const { execFile: execFile9 } = await import("child_process");
-        const { promisify: promisify11 } = await import("util");
-        const execFileAsync8 = promisify11(execFile9);
+        const { execFile: execFile10 } = await import("child_process");
+        const { promisify: promisify12 } = await import("util");
+        const execFileAsync8 = promisify12(execFile10);
         try {
           const { stdout } = await execFileAsync8("git", ["status", "--porcelain"], {
             cwd: workspace,
@@ -150937,9 +151551,9 @@ ${e?.stderr || ""}`;
       const managedEntry = entries.find((entry) => normalizePath2(entry.path) === actualPath);
       if (!managedEntry) {
         try {
-          const { execFile: execFile9 } = await import("child_process");
-          const { promisify: promisify11 } = await import("util");
-          const execFileAsync8 = promisify11(execFile9);
+          const { execFile: execFile10 } = await import("child_process");
+          const { promisify: promisify12 } = await import("util");
+          const execFileAsync8 = promisify12(execFile10);
           await execFileAsync8("git", ["worktree", "prune"], {
             cwd: repoRoot,
             encoding: "utf8",
@@ -151029,9 +151643,9 @@ ${e?.stderr || ""}`;
         const isSubmoduleGuard = /working trees containing submodules cannot be moved or removed/i.test(message);
         const submoduleForceBlocked = isSubmoduleGuard && !forceFallbackConvergence.allow;
         if (forceFallbackConvergence.allow && !dirty) {
-          const { execFile: execFile9 } = await import("child_process");
-          const { promisify: promisify11 } = await import("util");
-          const execFileAsync8 = promisify11(execFile9);
+          const { execFile: execFile10 } = await import("child_process");
+          const { promisify: promisify12 } = await import("util");
+          const execFileAsync8 = promisify12(execFile10);
           const GIT_TIMEOUT_CLEANUP = 3e4;
           const GIT_MAX_BUFFER_CLEANUP = 4 * 1024 * 1024;
           const fallbackReason = isSubmoduleGuard ? "working_trees_containing_submodules" : "worktree_remove_failed";
@@ -151113,9 +151727,9 @@ ${e?.stderr || ""}`;
       if (refinedConvergence === "merged_pushed" || refinedConvergence === "merged_to_main") {
         return { allow: true, status: refinedConvergence, source: "node_refine_state" };
       }
-      const { execFile: execFile9 } = await import("child_process");
-      const { promisify: promisify11 } = await import("util");
-      const execFileAsync8 = promisify11(execFile9);
+      const { execFile: execFile10 } = await import("child_process");
+      const { promisify: promisify12 } = await import("util");
+      const execFileAsync8 = promisify12(execFile10);
       const runGit4 = async (gitArgs, cwd) => {
         const { stdout } = await execFileAsync8("git", gitArgs, {
           cwd,
@@ -151631,6 +152245,7 @@ ${e?.stderr || ""}`;
           ...meshOnboardingSpecs,
           ...meshWorktreeRetentionSpecs,
           ...meshGraphCommandSpecs,
+          ...meshGraphGateCommandSpecs,
           ...meshEventsSpecs,
           ...meshCoordinatorLaunchSpecs,
           ...meshStatusSpecs,
@@ -151738,6 +152353,7 @@ ${e?.stderr || ""}`;
         init_mesh_onboarding();
         init_mesh_worktree_retention2();
         init_mesh_graph_commands();
+        init_mesh_graph_gate_commands();
         init_mesh_events2();
         init_mesh_coordinator_launch();
         init_mesh_status();
@@ -154457,7 +155073,7 @@ ${e?.stderr || ""}`;
     var import_node_child_process14;
     var import_node_crypto6;
     var import_node_fs9;
-    var import_node_util8;
+    var import_node_util9;
     var execFileAsync7;
     var GIT_TIMEOUT_MS3;
     var GIT_MAX_BUFFER2;
@@ -154468,14 +155084,14 @@ ${e?.stderr || ""}`;
         import_node_child_process14 = require("child_process");
         import_node_crypto6 = require("crypto");
         import_node_fs9 = require("fs");
-        import_node_util8 = require("util");
+        import_node_util9 = require("util");
         init_git_locale();
         init_git_worktree();
         init_mesh_config();
         init_logger();
         init_mesh_runtime_store();
         init_mesh_graph_workspace_identity();
-        execFileAsync7 = (0, import_node_util8.promisify)(import_node_child_process14.execFile);
+        execFileAsync7 = (0, import_node_util9.promisify)(import_node_child_process14.execFile);
         GIT_TIMEOUT_MS3 = 3e4;
         GIT_MAX_BUFFER2 = 4 * 1024 * 1024;
         WorkspaceSagaPermanentError = class extends Error {
@@ -159360,36 +159976,36 @@ ${e?.stderr || ""}`;
     }
     function buildCloudSeqscribeSummary(seqscribe) {
       if (!seqscribe) return void 0;
-      const count = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+      const count2 = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
       return {
-        topics: count(seqscribe.topics),
-        peers: count(seqscribe.peers),
-        peersReady: count(seqscribe.peersReady),
-        pendingBucket: count(seqscribe.pendingBucket),
-        consumerLagBucket: count(seqscribe.consumerLagBucket),
-        queueBucket: count(seqscribe.queueBucket),
-        fgenAgeBucket: count(seqscribe.fgenAgeBucket),
+        topics: count2(seqscribe.topics),
+        peers: count2(seqscribe.peers),
+        peersReady: count2(seqscribe.peersReady),
+        pendingBucket: count2(seqscribe.pendingBucket),
+        consumerLagBucket: count2(seqscribe.consumerLagBucket),
+        queueBucket: count2(seqscribe.queueBucket),
+        fgenAgeBucket: count2(seqscribe.fgenAgeBucket),
         quarantined: seqscribe.quarantined === true,
         authority: seqscribe.authority === true,
         dualWrite: seqscribe.dualWrite === true,
-        dualWriteFailedBucket: count(seqscribe.dualWriteFailedBucket),
-        dualWriteDroppedBucket: count(seqscribe.dualWriteDroppedBucket),
-        dualWriteBackfilledBucket: count(seqscribe.dualWriteBackfilledBucket),
-        parityMismatchBucket: count(seqscribe.parityMismatchBucket),
+        dualWriteFailedBucket: count2(seqscribe.dualWriteFailedBucket),
+        dualWriteDroppedBucket: count2(seqscribe.dualWriteDroppedBucket),
+        dualWriteBackfilledBucket: count2(seqscribe.dualWriteBackfilledBucket),
+        parityMismatchBucket: count2(seqscribe.parityMismatchBucket),
         parityRan: seqscribe.parityRan === true,
-        parityMissingInShadowBucket: count(seqscribe.parityMissingInShadowBucket),
-        parityExtraInShadowBucket: count(seqscribe.parityExtraInShadowBucket),
-        parityFieldMismatchBucket: count(seqscribe.parityFieldMismatchBucket),
+        parityMissingInShadowBucket: count2(seqscribe.parityMissingInShadowBucket),
+        parityExtraInShadowBucket: count2(seqscribe.parityExtraInShadowBucket),
+        parityFieldMismatchBucket: count2(seqscribe.parityFieldMismatchBucket),
         // §8 unit 2. transcriptParityPersistentMismatchBucket stays LOCAL-ONLY,
         // absent here — same asymmetry as parityPersistentMismatchBucket above.
         transcriptPublish: seqscribe.transcriptPublish === true,
-        transcriptPublishedBucket: count(seqscribe.transcriptPublishedBucket),
-        transcriptPublishFailedBucket: count(seqscribe.transcriptPublishFailedBucket),
-        transcriptDedupedBucket: count(seqscribe.transcriptDedupedBucket),
-        transcriptOversizedBucket: count(seqscribe.transcriptOversizedBucket),
-        transcriptDroppedBucket: count(seqscribe.transcriptDroppedBucket),
+        transcriptPublishedBucket: count2(seqscribe.transcriptPublishedBucket),
+        transcriptPublishFailedBucket: count2(seqscribe.transcriptPublishFailedBucket),
+        transcriptDedupedBucket: count2(seqscribe.transcriptDedupedBucket),
+        transcriptOversizedBucket: count2(seqscribe.transcriptOversizedBucket),
+        transcriptDroppedBucket: count2(seqscribe.transcriptDroppedBucket),
         transcriptParityRan: seqscribe.transcriptParityRan === true,
-        transcriptParityMismatchBucket: count(seqscribe.transcriptParityMismatchBucket)
+        transcriptParityMismatchBucket: count2(seqscribe.transcriptParityMismatchBucket)
       };
     }
     function buildCloudStatusReportPayload(sessions, p2p, timestamp2, seqscribe) {
@@ -161687,19 +162303,19 @@ ${e?.stderr || ""}`;
       }
       /** Terminate every session attached through a CDP manager. Returns how many were terminated. */
       terminateByManagerKey(managerKey, cause) {
-        let count = 0;
+        let count2 = 0;
         for (const sessionId of [...this.byManagerKey.get(managerKey) || []]) {
-          if (this.terminate(sessionId, cause)) count += 1;
+          if (this.terminate(sessionId, cause)) count2 += 1;
         }
-        return count;
+        return count2;
       }
       /** Terminate every session hosted by one provider instance. Returns how many were terminated. */
       terminateByInstanceKey(instanceKey, cause) {
-        let count = 0;
+        let count2 = 0;
         for (const sessionId of [...this.byInstanceKey.get(instanceKey) || []]) {
-          if (this.terminate(sessionId, cause)) count += 1;
+          if (this.terminate(sessionId, cause)) count2 += 1;
         }
-        return count;
+        return count2;
       }
       listChildren(parentSessionId) {
         const ids = this.byParentSessionId.get(parentSessionId);
@@ -161805,7 +162421,7 @@ ${e?.stderr || ""}`;
       }
       return false;
     }
-    var import_child_process12 = require("child_process");
+    init_hidden_spawn();
     function getArchivePath() {
       return path68.join(getConfigDir(), "version-history.json");
     }
@@ -161863,7 +162479,7 @@ ${e?.stderr || ""}`;
     };
     async function runCommand(cmd, timeout = 1e4) {
       return new Promise((resolve38) => {
-        (0, import_child_process12.exec)(cmd, {
+        hiddenExec(cmd, {
           encoding: "utf-8",
           timeout
         }, (error48, stdout) => {
@@ -167392,7 +168008,7 @@ data: ${JSON.stringify(msg.data)}
         });
       }
     }
-    var import_child_process13 = require("child_process");
+    var import_child_process12 = require("child_process");
     init_hidden_spawn();
     var fs75 = __toESM2(require("fs"));
     var os40 = __toESM2(require("os"));
@@ -167514,7 +168130,7 @@ data: ${JSON.stringify(msg.data)}
           logFd = fs75.openSync(path73.join(logDir, "session-host.log"), "a");
           stdio = ["ignore", logFd, logFd];
         }
-        const child = (0, import_child_process13.spawn)(nodeExecutable, [entry], {
+        const child = (0, import_child_process12.spawn)(nodeExecutable, [entry], {
           detached: true,
           stdio,
           windowsHide: true,
@@ -167702,8 +168318,9 @@ data: ${JSON.stringify(msg.data)}
       if (raw === "0" || raw === "false" || raw === "no") return false;
       return raw === "1" || raw === "true" || raw === "yes";
     }
-    var import_child_process14 = require("child_process");
+    init_hidden_spawn();
     var import_util22 = require("util");
+    var import_child_process13 = require("child_process");
     var EXTENSION_CATALOG = [
       // AI Agent extensions
       {
@@ -167790,7 +168407,7 @@ data: ${JSON.stringify(msg.data)}
         apiKeyName: "OpenAI/Anthropic API key"
       }
     ];
-    var execAsync3 = (0, import_util22.promisify)(import_child_process14.exec);
+    var execAsync3 = (0, import_util22.promisify)(import_child_process13.exec);
     async function isExtensionInstalled(ide, marketplaceId) {
       if (!ide.cliCommand) return false;
       try {
@@ -167835,7 +168452,7 @@ data: ${JSON.stringify(msg.data)}
             fs77.writeFileSync(vsixPath, buffer);
             return new Promise((resolve38) => {
               const cmd = `"${ide.cliCommand}" --install-extension "${vsixPath}" --force`;
-              (0, import_child_process14.exec)(cmd, { timeout: 6e4 }, (error48, _stdout, stderr) => {
+              hiddenExec(cmd, { timeout: 6e4 }, (error48, _stdout, stderr) => {
                 resolve38({
                   extensionId: extension.id,
                   marketplaceId: extension.marketplaceId,
@@ -167851,7 +168468,7 @@ data: ${JSON.stringify(msg.data)}
       }
       return new Promise((resolve38) => {
         const cmd = `"${ide.cliCommand}" --install-extension ${extension.marketplaceId} --force`;
-        (0, import_child_process14.exec)(cmd, { timeout: 6e4 }, (error48, stdout, stderr) => {
+        hiddenExec(cmd, { timeout: 6e4 }, (error48, stdout, stderr) => {
           if (error48) {
             resolve38({
               extensionId: extension.id,
@@ -167888,7 +168505,7 @@ data: ${JSON.stringify(msg.data)}
       if (!ide.cliCommand) return false;
       try {
         const args = workspacePath ? `"${workspacePath}"` : "";
-        (0, import_child_process14.exec)(`"${ide.cliCommand}" ${args}`, { timeout: 1e4 });
+        hiddenExec(`"${ide.cliCommand}" ${args}`, { timeout: 1e4 });
         return true;
       } catch {
         return false;
@@ -169420,9 +170037,9 @@ data: ${JSON.stringify(msg.data)}
       if (opts.includeLocalDiagnostics) {
         let applyRejects = 0;
         for (const topic of Object.values(stats.topics)) {
-          for (const count of Object.values(topic.applyRejects ?? {})) {
-            if (typeof count === "number" && Number.isFinite(count) && count > 0) {
-              applyRejects += count;
+          for (const count2 of Object.values(topic.applyRejects ?? {})) {
+            if (typeof count2 === "number" && Number.isFinite(count2) && count2 > 0) {
+              applyRejects += count2;
             }
           }
         }
@@ -171464,9 +172081,9 @@ data: ${JSON.stringify(msg.data)}
       const record22 = value;
       const result = {};
       for (const [axis] of COUNT_AXES) {
-        const count = record22[axis];
-        if (typeof count !== "number" || !Number.isInteger(count) || count < 0) return null;
-        result[axis] = count;
+        const count2 = record22[axis];
+        if (typeof count2 !== "number" || !Number.isInteger(count2) || count2 < 0) return null;
+        result[axis] = count2;
       }
       return result;
     }
@@ -172251,8 +172868,8 @@ ${notice.notice}${supersededHint}`;
     function sumApplyRejects(stats) {
       let total = 0;
       for (const topic of Object.values(stats.topics ?? {})) {
-        for (const count of Object.values(topic?.applyRejects ?? {})) {
-          total += num(count);
+        for (const count2 of Object.values(topic?.applyRejects ?? {})) {
+          total += num(count2);
         }
       }
       return total;
@@ -173627,8 +174244,8 @@ ${notice.notice}${supersededHint}`;
       if (!Number.isFinite(total) || total <= 0) return null;
       const parts = [];
       for (const status of STATUS_RENDER_ORDER) {
-        const count = inputs.statusCounts?.[status] ?? 0;
-        if (count > 0) parts.push(`${count} ${status}`);
+        const count2 = inputs.statusCounts?.[status] ?? 0;
+        if (count2 > 0) parts.push(`${count2} ${status}`);
       }
       const head = parts.length > 0 ? `[Mesh] active ${total}: ${parts.join(", ")}` : `[Mesh] active ${total}`;
       const entries = [];
@@ -174223,7 +174840,7 @@ ${notice.notice}${supersededHint}`;
             // \x7f (DEL/backspace) is a no-op past an empty composer in
             // every shipped TUI, so overshoot is safe and the clear needs
             // no per-provider keymap.
-            clearComposer: (count) => adapter.writeRaw("\x7F".repeat(Math.max(0, count)))
+            clearComposer: (count2) => adapter.writeRaw("\x7F".repeat(Math.max(0, count2)))
           } : {}
         });
       }
@@ -178735,11 +179352,10 @@ function annotateAll(tools) {
 // src/tools/mesh-tool-schemas.ts
 var MESH_TASK_INPUT_SCHEMA = {
   type: "object",
-  description: 'Optional structured multipart input delivered alongside `message` \u2014 use to attach an image (e.g. a screenshot) to the task. Shape: {parts: [{type: "text", text}, {type: "image", mimeType, data (base64) | uri}]}. The target provider must declare image support (most CLI providers do; opencode and all ACP providers are text-only) \u2014 an unsupported target is refused with an explicit error, never silently stripped. Large attachments are chunked automatically across the mesh transport. Omit entirely for ordinary text tasks.',
+  description: 'Multipart input, e.g. a screenshot: {parts:[{type:"text",text},{type:"image",mimeType,data(base64)|uri}]}. A text-only provider (opencode, ACP) refuses it explicitly.',
   properties: {
     parts: {
       type: "array",
-      description: 'Ordered content parts. A text part carries {type:"text", text}; an image part carries {type:"image", mimeType, and either base64 `data` or a `uri`}.',
       items: { type: "object" }
     }
   }
@@ -178747,16 +179363,16 @@ var MESH_TASK_INPUT_SCHEMA = {
 var MESH_INPUT_BINDING_SCHEMA = {
   type: "object",
   properties: {
-    from: { type: "string", description: "Ref of the predecessor task or gate IN THIS BATCH whose output is read. Must resolve to a declared ref \u2014 an unknown ref rejects the batch." },
-    select: { type: "string", description: "RFC-6901 JSON Pointer into that step's completion envelope, e.g. `/summary` or `/result/sha`. Empty string selects the whole envelope. No JSONPath, wildcards, filters or expressions exist in this grammar." },
-    as: { type: "string", pattern: "^[A-Za-z][A-Za-z0-9_]{0,63}$", description: "Name this value gets in the evidence envelope appended to your instruction. Must match [A-Za-z][A-Za-z0-9_]{0,63} and be unique within the task." },
-    required: { type: "boolean", description: "When true (default false), the task BLOCKS if the source produced nothing at that pointer, instead of running without the value." },
-    format: { type: "string", enum: ["text", "json"], description: "How the selected value is rendered into the envelope. Default `text`." },
+    from: { type: "string", description: "Predecessor task/gate ref." },
+    select: { type: "string", description: 'RFC-6901 JSON Pointer into its completion envelope, e.g. /summary ("" = all).' },
+    as: { type: "string", pattern: "^[A-Za-z][A-Za-z0-9_]{0,63}$", description: "Unique binding name." },
+    required: { type: "boolean", description: "true = block when empty." },
+    format: { type: "string", enum: ["text", "json"] },
     // Snake_case ONLY — unlike the task-level fields, `parseInputBindings`
     // reads no camelCase alias for these, so advertising one would publish a
     // field the parser silently ignores.
-    max_bytes: { type: "number", description: "Per-binding size cap after UTF-8 serialization. Default 16384, hard maximum 65536 \u2014 a larger value is rejected, never silently clamped." },
-    overflow: { type: "string", enum: ["error", "truncate"], description: "What to do when the value exceeds max_bytes. Default `error` \u2014 so a silently half-complete instruction never ships." }
+    max_bytes: { type: "number", description: "Default 16384, max 65536." },
+    overflow: { type: "string", enum: ["error", "truncate"] }
   },
   required: ["from", "select", "as"]
 };
@@ -178817,7 +179433,7 @@ var MESH_LIST_NODES_TOOL = {
   }
 };
 var ENQUEUE_TOOL_GROUP = "mesh.enqueue";
-var ENQUEUE_TOOL_GROUP_MEMBERS = ["mesh_enqueue_batch", "mesh_enqueue_task"];
+var ENQUEUE_TOOL_GROUP_MEMBERS = ["mesh_enqueue_task", "mesh_enqueue_batch"];
 var ENQUEUE_DISCOVERY_KEYWORDS = ["enqueue", "delegate", "task", "graph", "dependency"];
 var ENQUEUE_RANK_QUERIES = ["enqueue", "delegate"];
 var ENQUEUE_BATCH_DISCOVERY_META = {
@@ -178825,149 +179441,110 @@ var ENQUEUE_BATCH_DISCOVERY_META = {
   toolGroupMembers: ENQUEUE_TOOL_GROUP_MEMBERS,
   discoveryKeywords: ENQUEUE_DISCOVERY_KEYWORDS,
   discoveryRankQueries: ENQUEUE_RANK_QUERIES,
-  discoveryRank: 0,
-  enqueueRole: "default"
+  discoveryRank: 10,
+  enqueueRole: "settled_plan"
 };
 var ENQUEUE_TASK_DISCOVERY_META = {
   toolGroup: ENQUEUE_TOOL_GROUP,
   toolGroupMembers: ENQUEUE_TOOL_GROUP_MEMBERS,
   discoveryKeywords: ENQUEUE_DISCOVERY_KEYWORDS,
   discoveryRankQueries: ENQUEUE_RANK_QUERIES,
-  discoveryRank: 10,
-  enqueueRole: "single_task_fallback"
+  discoveryRank: 0,
+  enqueueRole: "default"
 };
 var MESH_ENQUEUE_TASK_TOOL = {
   name: "mesh_enqueue_task",
-  description: "SINGLE-TASK FALLBACK. Use only when exactly one new worker task is currently known and no downstream graph step can yet be declared. If two or more steps are known\u2014including steps that need outputs, worktree preparation, a condition, or a coordinator action\u2014load and use mesh_enqueue_batch instead. Same-session continuation belongs in mesh_send_task. Adds the task to the mesh work queue; idle nodes automatically pull and execute from it. Use this instead of mesh_send_task when you do not need to target a specific node. Supports task-level priority (high tasks are pulled ahead of older normal/low tasks), not_before delayed execution (hold a task pending until a time), maxRetries (auto-fail after N requeues), and duplicate detection (by default warns in the response when an in-flight task with the same message+target already exists; pass block_duplicate=true to refuse instead, or allow_duplicate=true to silence the warning).",
+  description: "Enqueue ONE worker task; an idle node claims it. The default way to delegate: when a step needs queued work to finish first, pass depends_on with those task ids \u2014 grow the plan as results arrive. Use mesh_enqueue_batch only for a settled plan of 3+ steps that needs coordinator gates or deferred worktrees. Same-session continuation belongs in mesh_send_task. Warns when an in-flight task has the same message+target.",
   _meta: ENQUEUE_TASK_DISCOVERY_META,
   inputSchema: {
     type: "object",
     properties: {
-      message: { type: "string", description: "The task instruction for the agent." },
+      message: { type: "string", description: "The task instruction." },
       input: MESH_TASK_INPUT_SCHEMA,
-      task_mode: { ...enumOf(MESH_TASK_MODES), description: "Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch \u2014 and in exchange runs without the one-active-per-node write isolation (N read-only tasks may run in parallel on one busy node, no worktree needed) under a separate, larger read-only concurrency cap. Prefer it for investigation/diagnosis: it is the cheaper mode to schedule, not just the restricted one." },
-      taskMode: { ...enumOf(MESH_TASK_MODES), description: "CamelCase alias for task_mode." },
-      readonly: { type: "boolean", description: "Optional read-only axis (orthogonal to task_mode). When true the task runs without the one-active-per-node write isolation (N read-only tasks may run in parallel on one node), is counted under the read-only safety cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Equivalent to task_mode=live_debug_readonly but composable with any task_mode." },
-      read_only: { type: "boolean", description: "Snake-case alias for readonly." },
-      requiredTags: { type: "array", items: { type: "string" }, description: "Optional capability tags that every eligible node must have, e.g. os=darwin, provider=codex-cli, gpu." },
-      required_tags: { type: "array", items: { type: "string" }, description: "Snake_case alias for requiredTags." },
-      owned_paths: { type: "array", items: { type: "string" }, description: `H1 (path ownership). Repo-relative files/dirs this code_change task will touch, e.g. ["src/foo.ts", "src/mesh/**"] (a trailing /** claims the whole subtree; a bare directory with no /** claims only that literal path, not its contents). Absolute paths and ".." segments are rejected. For code_change only: at claim time, a candidate whose owned_paths overlaps another in-flight code_change task's declared paths is refused (owned_paths_conflict) instead of silently racing it. Optional and opt-in \u2014 an omitted declaration performs no overlap check for this task. Your report_completion.touched_files is compared against this declaration afterward and any mismatch is surfaced back to you as evidence, never rejected.` },
-      ownedPaths: { type: "array", items: { type: "string" }, description: "CamelCase alias for owned_paths." },
-      target_node_id: { type: "string", description: "Optional HARD constraint: ONLY this node may claim the task. No other node (especially a different machine) will ever claim it \u2014 if the target node has no idle session the task stays pending until it does. Use to route a queued task to a specific (e.g. freshly cloned) worktree node instead of letting the first idle base node claim it. Takes priority over prefer_worktree. An unresolvable target id is rejected at enqueue (no silent unpin)." },
-      targetNodeId: { type: "string", description: "CamelCase alias for target_node_id." },
-      target_node: { type: "string", description: "Alias for target_node_id." },
-      targetNode: { type: "string", description: "CamelCase alias for target_node_id." },
-      prefer_worktree: { type: "boolean", description: "Optional: when true, route this task to the most recently cloned idle worktree node (avoids the main/base workspace preemptively claiming an isolated task). No-op if no worktree node exists; resolves to a target_node_id when one does." },
-      preferWorktree: { type: "boolean", description: "CamelCase alias for prefer_worktree." },
-      depends_on: { type: "array", items: { type: "string" }, description: "Task ids that must complete before this task becomes claimable. Cycles are rejected at enqueue." },
-      dependsOn: { type: "array", items: { type: "string" }, description: "CamelCase alias for depends_on." },
-      mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id, full/exact). An unresolvable id is REJECTED at enqueue (mission_not_found), never silently attached \u2014 use mesh_mission_list to get a valid full id." },
-      missionId: { type: "string", description: "CamelCase alias for mission_id." },
-      priority: { ...enumOf(MESH_TASK_PRIORITIES), description: "G6 (task-level scheduling priority). Within the claim tier a high task is pulled ahead of an older normal/low task (created_at is the tie-break); low is pulled last. Defaults to normal. This is the TASK priority (which task a node pulls first) \u2014 distinct from a node's schedulingPriority (which node work goes to). Use high to jump an urgent fix ahead of a backlog without cancelling the queue." },
-      model: { type: "string", description: "Optional model override for the agent that runs this task, e.g. opus, sonnet, haiku. Best-effort: applied at launch for providers that support a model flag (claude-cli --model, ACP setConfigOption); ignored by providers that cannot honor it. Use a cheaper model for simple tasks to save tokens, a stronger one for hard work. Blank = the provider default." },
-      thinkingLevel: { ...enumOf(MESH_THINKING_LEVELS), description: "Optional reasoning-effort level for this task. Best-effort: applied at launch for providers that support it (claude-cli --effort, codex-cli reasoning effort, ACP thought_level); ignored otherwise. Use low for simple tasks (fewer tokens), high for hard reasoning." },
-      difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "REQUIRED task execution difficulty \u2014 a ROUTING HINT, not a model selector. It is matched against each node's capability slots so the task lands on a slot configured for that difficulty, and THAT SLOT's own model + thinkingLevel are what launch. It does not by itself mean a cheaper or stronger model: to change what a difficulty runs on, edit the node's slots (mesh_node_slots_set) rather than picking a different difficulty. Classify each task by how hard the work actually is. An explicit model/thinkingLevel above always wins." },
-      not_before: { type: ["number", "string"], description: "G7 (delayed execution). Hold the task pending until this time \u2014 an absolute epoch-ms number, a small relative-ms offset from now, or an ISO-8601 timestamp string." },
-      notBefore: { type: ["number", "string"], description: "CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string." },
-      max_retries: { type: "number", description: "P3 (retry cap). Max automatic requeue attempts before the task auto-fails instead of returning to pending. When requeueCount reaches this, mesh_queue_requeue auto-fails the task unless force=true. Omit to use the mesh policy default (maxTaskRetries, typically 1)." },
-      maxRetries: { type: "number", description: "CamelCase alias for max_retries." },
-      thinking_level: { ...enumOf(MESH_THINKING_LEVELS), description: "Snake_case alias for thinkingLevel. Optional reasoning-effort level for this task. Best-effort: applied at launch for providers that support it (claude-cli --effort, codex-cli reasoning effort, ACP thought_level); ignored otherwise. Use low for simple tasks (fewer tokens), high for hard reasoning." },
-      block_duplicate: { type: "boolean", description: "G4 (duplicate detection, block mode). Default false = warn-only: if an in-flight (pending/assigned) task with the same message (+ target node when pinned) already exists, the task is still enqueued but the response carries duplicateSuspect. Set true to REFUSE the enqueue with code duplicate_suspect instead (structural TASKBUBBLE-DUP defense \u2014 use when re-sending a task that a slow prior turn may have already enqueued)." },
-      blockDuplicate: { type: "boolean", description: "CamelCase alias for block_duplicate." },
-      allow_duplicate: { type: "boolean", description: "G4. Set true to skip duplicate detection entirely (no warning, no block) for an intentional re-enqueue of the same instruction." },
-      allowDuplicate: { type: "boolean", description: "CamelCase alias for allow_duplicate." },
+      task_mode: { ...enumOf(MESH_TASK_MODES), description: "live_debug_readonly rejects write/push/deploy instructions and may run in parallel on a busy node (cheap for investigation)." },
+      readonly: { type: "boolean", description: "Read-only, composable with task_mode: no write isolation; write instructions rejected." },
+      required_tags: { type: "array", items: { type: "string" }, description: "Capability tags every eligible node must have, e.g. os=darwin, provider=codex-cli." },
+      owned_paths: { type: "array", items: { type: "string" }, description: "code_change only: repo-relative files/dirs this task will touch (dir/** = subtree). A claim overlapping another in-flight code_change task's paths is refused (owned_paths_conflict)." },
+      target_node_id: { type: "string", description: "HARD pin: only this node may claim. Beats prefer_worktree; unresolvable id rejected." },
+      prefer_worktree: { type: "boolean", description: "Route to the most recently cloned idle worktree node (no-op if none)." },
+      depends_on: { type: "array", items: { type: "string" }, description: 'Task ids that must complete first; their completion summaries are appended ("Upstream results"). Cycles rejected.' },
+      mission_id: { type: "string", description: "Mission id (full, exact); an unknown id is rejected (mission_not_found)." },
+      priority: { ...enumOf(MESH_TASK_PRIORITIES), description: "high jumps older normal/low work; default normal." },
+      model: { type: "string", description: "Model override, e.g. opus (best-effort)." },
+      thinking_level: { ...enumOf(MESH_THINKING_LEVELS), description: "Reasoning effort (best-effort)." },
+      difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "REQUIRED routing hint matched to node capability slots (the slot's model launches). Classify by real difficulty." },
+      not_before: { type: ["number", "string"], description: "Hold pending until: epoch-ms, relative ms, or ISO-8601." },
+      max_retries: { type: "number", description: "Requeues before auto-fail." },
+      block_duplicate: { type: "boolean", description: "Refuse (duplicate_suspect) instead of warning on a duplicate." },
+      allow_duplicate: { type: "boolean", description: "Skip duplicate detection." },
       // design :692 — "The single tool should require an orchestration_decision".
-      // OPTIONAL here on purpose: Phase F is warn-only (see the discovery-meta note
-      // above), and a required field would break legacy/external clients that
-      // predate it. An omitted record degrades to decision_missing, which is itself
-      // the signal — never an enqueue failure.
+      // OPTIONAL here on purpose (D1 of the simplification design): a required
+      // field would break legacy/external clients. An omitted record degrades to
+      // decision_missing, which is itself the signal — never an enqueue failure.
       orchestration_decision: {
         type: "object",
-        description: "Record of your planning decision, for adoption measurement: {decision, ready_worker_tasks, known_graph_steps, single_reason, capability_blockers}. On this single-task surface, single_reason says why one task was right \u2014 one of only_one_step_known, future_step_not_specifiable, same_session_continuation, legacy_client, operator_override. output_needed / workspace_unresolved / coordinator_action_between are NOT blockers any more (mesh_enqueue_batch covers them via inputs_from, workspace_ref and coordinator gates); reporting one returns a batch_capability_available warning. Optional and never rejected: omitting it is recorded as decision_missing, and declaring known_graph_steps >= 2 here is recorded as a declared eligible single. Provenance only \u2014 it never changes execution."
-      },
-      orchestrationDecision: { type: "object", description: "CamelCase alias for orchestration_decision." }
+        description: "Optional provenance: {decision, known_graph_steps, single_reason, capability_blockers}. single_reason: only_one_step_known | future_step_not_specifiable | same_session_continuation | legacy_client | operator_override. output_needed / workspace_unresolved / coordinator_action_between are not blockers (batch covers them)."
+      }
     },
     required: ["message", "difficulty"]
   }
 };
 var MESH_ENQUEUE_BATCH_TOOL = {
   name: "mesh_enqueue_batch",
-  description: "DEFAULT enqueue surface for a plan with two or more known graph steps. Atomically persists the graph plan and worker queue entries. Supports batch-local refs, completion dependencies, selected predecessor outputs through `inputs_from`, declarative `run_if`, delayed `workspace_ref` preparation, and coordinator gates. Worker dispatch still requires the shared dependency predicate: all active worker dependencies completed and no system block. Git workspace preparation is a compensated saga and is reported separately from DB atomicity. Atomicity in detail: either EVERY task in the batch is inserted or NONE is (a mid-batch error such as a dependency cycle, invalid difficulty, or guardrail violation rolls the whole batch back). Give each task a batch-local `ref` label and name sibling refs in `depends_on` (forward references allowed \u2014 array order does not matter). A depends_on value that is not a ref in this batch must be an EXISTING queue task id; anything else is rejected. Per-task fields are the same as mesh_enqueue_task. Top-level mission_id applies to every task that lacks its own. `inputs_from` binds selected predecessor outputs into a later task (no hand-copying worker text), `run_if` branches on those outputs, `gates` declare steps that stop for a coordinator action (Refinery landing, approval, CI wait, publish, deploy) with downstream tasks pointing at them via `gated_by`, and `workspaces` + `workspace_ref` prepare a worktree later for a task that needs one. These are strictly additive: a batch using only message/depends_on behaves exactly as before. Only graph-using batches create a graph, inspectable with mesh_graph_view.",
+  description: "Atomically enqueue a SETTLED plan. Use only when 3+ steps are already known AND they need coordinator gates or deferred worktrees (workspace_ref); otherwise chain mesh_enqueue_task with depends_on. Never invent steps to fill a batch. All tasks insert or none do (any invalid entry rolls back the batch). Entries name each other by batch-local `ref` in depends_on (forward refs OK; a non-ref value must be an existing task id). Worktree preparation is a compensated saga and is reported separately from DB atomicity. Inspect with mesh_graph_view.",
   _meta: ENQUEUE_BATCH_DISCOVERY_META,
   inputSchema: {
     type: "object",
     properties: {
       tasks: {
         type: "array",
-        description: "The tasks to enqueue atomically (max 50). Each entry accepts the same fields as mesh_enqueue_task, plus an optional batch-local `ref`.",
+        description: "Tasks (max 50). Fields mean the same as in mesh_enqueue_task.",
         items: {
           type: "object",
           properties: {
-            ref: { type: "string", description: `Batch-local label other entries' depends_on may name (e.g. "investigate", "fix", "verify"). Never persisted \u2014 resolved to the generated task id at insert.` },
-            message: { type: "string", description: "The task instruction for the agent." },
-            input: MESH_TASK_INPUT_SCHEMA,
-            task_mode: { ...enumOf(MESH_TASK_MODES), description: "Optional task-mode contract (same semantics as mesh_enqueue_task)." },
-            taskMode: { ...enumOf(MESH_TASK_MODES), description: "CamelCase alias for task_mode." },
-            readonly: { type: "boolean", description: "Optional read-only axis (orthogonal to task_mode); same semantics as mesh_enqueue_task." },
-            read_only: { type: "boolean", description: "Snake-case alias for readonly." },
-            requiredTags: { type: "array", items: { type: "string" }, description: "Optional capability tags every eligible node must have, e.g. os=darwin, provider=codex-cli, worktree=<branch>." },
-            required_tags: { type: "array", items: { type: "string" }, description: "Snake_case alias for requiredTags." },
-            owned_paths: { type: "array", items: { type: "string" }, description: "H1 (path ownership); same semantics as mesh_enqueue_task. Repo-relative files/dirs this code_change task will touch (a trailing /** claims the subtree). Optional and opt-in \u2014 for code_change only, an overlapping declaration against another in-flight code_change task is refused at claim time." },
-            ownedPaths: { type: "array", items: { type: "string" }, description: "CamelCase alias for owned_paths." },
-            target_node_id: { type: "string", description: "Optional HARD pin: only this node may claim the task. An unresolvable id rejects the WHOLE batch (atomic)." },
-            targetNodeId: { type: "string", description: "CamelCase alias for target_node_id." },
-            target_node: { type: "string", description: "Alias for target_node_id." },
-            targetNode: { type: "string", description: "CamelCase alias for target_node_id." },
-            prefer_worktree: { type: "boolean", description: "Route to the most recently cloned idle worktree node (no-op when none exists)." },
-            preferWorktree: { type: "boolean", description: "CamelCase alias for prefer_worktree." },
-            depends_on: { type: "array", items: { type: "string" }, description: "Refs of sibling entries in THIS batch (forward references allowed) and/or EXISTING queue task ids that must complete before this task becomes claimable. Cycles and unknown values reject the whole batch." },
-            dependsOn: { type: "array", items: { type: "string" }, description: "CamelCase alias for depends_on." },
-            mission_id: { type: "string", description: "Per-task mission override (full/exact id); defaults to the top-level mission_id. An unresolvable id rejects the WHOLE batch (atomic)." },
-            missionId: { type: "string", description: "CamelCase alias for mission_id." },
-            priority: { ...enumOf(MESH_TASK_PRIORITIES), description: "G6 task-level scheduling priority (same semantics as mesh_enqueue_task)." },
-            model: { type: "string", description: "Optional model override for the agent that runs this task (best-effort at launch)." },
-            thinking_level: { ...enumOf(MESH_THINKING_LEVELS), description: "Snake_case alias for thinkingLevel. Optional reasoning-effort level (best-effort at launch)." },
-            thinkingLevel: { ...enumOf(MESH_THINKING_LEVELS), description: "Optional reasoning-effort level (best-effort at launch)." },
-            difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "REQUIRED per task \u2014 routing hint matched against node capability slots (same semantics as mesh_enqueue_task)." },
-            not_before: { type: ["number", "string"], description: "G7 delayed execution: hold the task pending until this time (epoch-ms, relative-ms, or ISO string)." },
-            notBefore: { type: ["number", "string"], description: "CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string." },
-            max_retries: { type: "number", description: "P3 retry cap (same semantics as mesh_enqueue_task)." },
-            maxRetries: { type: "number", description: "CamelCase alias for max_retries." },
-            // ── batch v2 graph fields (design :568-570). All optional; a batch
-            //    using none of them takes the unchanged compatibility path. ──
+            ref: { type: "string", description: "Batch-local label for depends_on / inputs_from." },
+            message: { type: "string" },
+            input: { type: "object" },
+            task_mode: enumOf(MESH_TASK_MODES),
+            readonly: { type: "boolean" },
+            required_tags: { type: "array", items: { type: "string" } },
+            owned_paths: { type: "array", items: { type: "string" }, description: "code_change path ownership, as in mesh_enqueue_task." },
+            target_node_id: { type: "string", description: "HARD pin; an unresolvable id rejects the batch." },
+            prefer_worktree: { type: "boolean" },
+            depends_on: { type: "array", items: { type: "string" }, description: "Sibling refs and/or existing task ids that must complete first." },
+            mission_id: { type: "string", description: "Overrides the top-level mission_id." },
+            priority: enumOf(MESH_TASK_PRIORITIES),
+            model: { type: "string" },
+            thinking_level: enumOf(MESH_THINKING_LEVELS),
+            difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "REQUIRED routing hint." },
+            not_before: { type: ["number", "string"] },
+            max_retries: { type: "number" },
+            // ── graph fields (design :568-570). All optional; a batch using
+            //    none of them takes the unchanged compatibility path. ──
             inputs_from: {
               type: "array",
-              description: "Bind SELECTED outputs of predecessor steps into this task, instead of hand-copying a worker's text into the instruction. Each entry is {from: <ref of a predecessor task or gate IN THIS BATCH>, select: <RFC-6901 JSON Pointer into that step's completion envelope>, as: <binding name>, required?: bool}. Bound values are appended to your immutable instruction inside a clearly-marked untrusted-evidence envelope with provenance and a digest \u2014 they can never alter routing, permissions, task mode or model. Using this makes the task wait for the graph to bind it before it becomes claimable. The binding shape is validated when the batch is ACCEPTED, so a malformed entry rejects the whole batch immediately instead of failing later once the upstream work has already run.",
+              description: "Bind predecessor outputs (JSON Pointer) into this task as untrusted evidence; validated at acceptance. Only when an exact field is needed.",
               items: MESH_INPUT_BINDING_SCHEMA
             },
-            inputsFrom: { type: "array", description: "CamelCase alias for inputs_from.", items: MESH_INPUT_BINDING_SCHEMA },
-            run_if: { type: "object", description: "Declarative condition deciding whether this task runs at all, evaluated against predecessor outputs and released gate outcomes (e.g. only run the deploy when the gate outcome was `passed`). A condition that is false SKIPS the task \u2014 skipped is terminal and, deliberately, is NOT treated as completed, so it never satisfies a downstream dependency. A malformed condition fails closed rather than defaulting to true." },
-            runIf: { type: "object", description: "CamelCase alias for run_if." },
-            on_false: { type: "string", enum: ["skip"], description: "What to do when run_if is false. Only `skip` is defined (and is the default)." },
-            onFalse: { type: "string", enum: ["skip"], description: "CamelCase alias for on_false." },
-            on_upstream_skip: { type: "string", enum: ["skip", "omit_dependency"], description: 'What happens to this task when an upstream step is SKIPPED. `skip` (default) propagates the skip. `omit_dependency` drops that edge from this task\'s dependency projection so it can still run \u2014 the explicit way to say "run anyway if that branch was not taken".' },
-            onUpstreamSkip: { type: "string", enum: ["skip", "omit_dependency"], description: "CamelCase alias for on_upstream_skip." },
-            workspace_ref: { type: "string", description: "Run this task in a worktree declared in the top-level `workspaces` array, prepared LATER rather than before the batch is accepted. The task stays held until that worktree is ready, then it is pinned to it automatically. Worktree preparation is a compensated saga: it is reported separately as workspacePreparation and is never part of the batch's DB atomicity." },
-            workspaceRef: { type: "string", description: "CamelCase alias for workspace_ref." },
-            gated_by: { type: "array", items: { type: "string" }, description: 'Refs of gates in this batch\'s `gates` array that must be RELEASED before this task may run. This is how you say "do not start until I have landed/approved/deployed". Do NOT put a gate ref in depends_on \u2014 a gate is an intentional stop, not an ordinary queue dependency, and listing one there is rejected.' },
-            gatedBy: { type: "array", items: { type: "string" }, description: "CamelCase alias for gated_by." }
+            workspace_ref: { type: "string", description: "Run in a `workspaces` worktree prepared later; the task waits until it is ready, then is pinned to it." },
+            gated_by: { type: "array", items: { type: "string" }, description: "Gate refs that must be RELEASED first. Never put a gate ref in depends_on (rejected)." }
           },
           required: ["message", "difficulty"]
         }
       },
       gates: {
         type: "array",
-        description: "Coordinator GATES: graph steps that intentionally stop progress until YOU act (Refinery landing, approval, CI wait, publish, deploy). The daemon never performs the action and never auto-passes a gate \u2014 you claim it (mesh_graph_gate_claim), do the thing, then release it (mesh_graph_gate_release). Declare the gate here and point downstream tasks at it with gated_by, so the whole plan can be submitted at once instead of waiting to enqueue the later steps by hand. Gate refs share ONE namespace with task and workspace refs.",
+        description: "Coordinator gates: stop until YOU claim (mesh_graph_gate_claim), act, and release (mesh_graph_gate_release); never auto-passed. Refs share one namespace with tasks/workspaces.",
         items: {
           type: "object",
           properties: {
-            ref: { type: "string", description: "Label for this gate; downstream tasks name it in gated_by." },
-            action: { type: "string", enum: ["refinery", "approval", "ci_wait", "publish", "deploy", "custom"], description: "What kind of action this gate is waiting for. A metadata label only \u2014 it tells you (and the view) what the gate means; the daemon never executes it." },
-            instructions: { type: "string", description: "What the coordinator must do at this gate, shown when the gate opens." },
-            depends_on: { type: "array", items: { type: "string" }, description: "Refs of tasks/gates in this batch that must complete before this gate OPENS for a coordinator." },
-            on_timeout: { type: "string", enum: ["hold", "cancel_downstream", "fail_graph"], description: "What happens when the gate passes its deadline. `hold` (default) keeps downstream blocked for an explicit reclaim; `cancel_downstream` cancels the pending downstream branch; `fail_graph` fails the graph. There is deliberately NO auto-release option: a timeout is never treated as the action having succeeded." },
-            deadline_seconds: { type: "number", description: "Seconds from when the gate OPENS until its on_timeout policy fires." },
-            lease_seconds: { type: "number", description: "Default claim lease length for this gate (a claim may override it)." },
+            ref: { type: "string" },
+            action: { type: "string", enum: ["refinery", "approval", "ci_wait", "publish", "deploy", "custom"], description: "Label only; never executed." },
+            instructions: { type: "string", description: "What to do when the gate opens." },
+            depends_on: { type: "array", items: { type: "string" }, description: "Refs that must complete before the gate opens." },
+            on_timeout: { type: "string", enum: ["hold", "cancel_downstream", "fail_graph"], description: "At the deadline. Default hold; never auto-releases." },
+            deadline_seconds: { type: "number", description: "Seconds after opening until on_timeout fires." },
+            lease_seconds: { type: "number", description: "Default claim lease." },
             eligible_coordinator_session_id: { type: "string", description: "Restrict claiming to one coordinator session." }
           },
           required: ["ref"]
@@ -178975,46 +179552,29 @@ var MESH_ENQUEUE_BATCH_TOOL = {
       },
       workspaces: {
         type: "array",
-        description: 'Worktrees to prepare LATER for tasks that name them via workspace_ref \u2014 the way to plan "clone a worktree, then work in it" as one batch instead of enqueueing, waiting, and enqueueing again. Preparation is a compensated saga with owned-resource cleanup: it happens outside the batch transaction and is reported as workspacePreparation, so `atomic: true` never claims the git side effects happened.',
+        description: "Worktrees prepared LATER for tasks naming them in workspace_ref (outside the DB transaction).",
         items: {
           type: "object",
           properties: {
-            ref: { type: "string", description: "Label tasks use in workspace_ref. Shares one namespace with task and gate refs." },
-            source_node_id: { type: "string", description: "Node whose workspace the worktree is cloned from." },
-            sourceNodeId: { type: "string", description: "CamelCase alias for source_node_id." },
-            purpose: { type: "string", description: "Short label folded into the derived branch name." },
-            base_revision: { type: "string", description: "Base revision to prepare from." },
-            baseRevision: { type: "string", description: "CamelCase alias for base_revision." },
-            desired_path: { type: "string", description: "Optional explicit worktree path." },
-            desiredPath: { type: "string", description: "CamelCase alias for desired_path." },
-            cleanup_on_graph_failure: { type: "boolean", description: "Remove the worktree this graph created if the graph fails. Only ever removes a worktree the saga itself owns." },
-            cleanupOnGraphFailure: { type: "boolean", description: "CamelCase alias for cleanup_on_graph_failure." }
+            ref: { type: "string" },
+            source_node_id: { type: "string", description: "Node whose workspace is cloned." },
+            purpose: { type: "string", description: "Folded into the branch name." },
+            base_revision: { type: "string" },
+            desired_path: { type: "string" },
+            cleanup_on_graph_failure: { type: "boolean", description: "Remove the worktree this graph created if the graph fails." }
           },
           required: ["ref"]
         }
       },
-      batch_id: { type: "string", description: "Your own idempotency key for this batch. Re-sending the SAME batch_id with an identical plan replays and inserts nothing new; the same batch_id with a different plan is rejected (batch_id_conflict). Use it whenever a retry might duplicate work. Supplying it records the batch as a graph (so the key can be enforced), which is why the response then carries graphId \u2014 task behavior is unchanged." },
-      batchId: { type: "string", description: "CamelCase alias for batch_id." },
-      orchestration_decision: {
-        type: "object",
-        description: "Optional record of your planning decision, for adoption measurement: {decision, ready_worker_tasks, known_graph_steps, single_reason, capability_blockers}. It is stored as provenance with the graph and never changes execution."
-      },
-      orchestrationDecision: { type: "object", description: "CamelCase alias for orchestration_decision." },
-      mission_id: { type: "string", description: "Optional. Mission every task in this batch belongs to unless an entry overrides it (full/exact id). Recommended for multi-task work: create the mission first (mesh_mission_upsert) and pass it here. Omit entirely for a one-off batch that does not need mission tracking. An unresolvable id rejects the WHOLE batch (atomic) before anything is inserted." },
-      missionId: { type: "string", description: "CamelCase alias for mission_id." },
-      block_duplicate: { type: "boolean", description: "G4: when any entry matches an in-flight task with the same message+target, refuse the WHOLE batch (it is atomic) with code duplicate_suspect. Default false = warn-only via duplicateSuspects in the response." },
-      blockDuplicate: { type: "boolean", description: "CamelCase alias for block_duplicate." },
-      allow_duplicate: { type: "boolean", description: "G4: skip duplicate detection entirely for every entry (intentional re-enqueue)." },
-      allowDuplicate: { type: "boolean", description: "CamelCase alias for allow_duplicate." },
+      batch_id: { type: "string", description: "Idempotency key: same id + same plan replays as a no-op; a different plan is rejected." },
+      orchestration_decision: { type: "object", description: "Optional provenance record; never changes execution." },
+      mission_id: { type: "string", description: "Mission for every entry without its own (full, exact); unknown id rejects the batch." },
+      block_duplicate: { type: "boolean", description: "Refuse the whole batch on a duplicate instead of warning." },
+      allow_duplicate: { type: "boolean", description: "Skip duplicate detection." },
       on_dependency_failure: {
         type: "string",
         enum: ["block", "cancel"],
-        description: "on_dependency_failure controls downstream tasks when a required worker task fails or is cancelled. `block` (default) keeps downstream pending and automatically recovers if the predecessor is retried and later completes. `cancel` terminally cancels the dependent branch; it is not revived by predecessor retry."
-      },
-      onDependencyFailure: {
-        type: "string",
-        enum: ["block", "cancel"],
-        description: "CamelCase alias for on_dependency_failure."
+        description: "On a failed/cancelled dependency: block (default; recovers if the predecessor is retried and completes) or cancel the dependent branch."
       }
     },
     required: ["tasks"]
@@ -179022,7 +179582,7 @@ var MESH_ENQUEUE_BATCH_TOOL = {
 };
 var MESH_GRAPH_GATE_CLAIM_TOOL = {
   name: "mesh_graph_gate_claim",
-  description: "Take the lease on a coordinator GATE that is awaiting a coordinator. A gate is a graph step that intentionally STOPS progress until a human/coordinator does something the daemon must not do itself \u2014 a Refinery landing, an approval, waiting on CI, a publish, a deploy. The daemon NEVER performs a gate action and NEVER auto-passes a gate: the only way through is your own mesh_graph_gate_release. Claim returns a monotonically increasing leaseGeneration and an opaque fencingToken \u2014 you MUST present both at release, so keep them. A gate whose lease has lapsed can be taken over by a new claim at a HIGHER generation; when that happens the response sets ambiguousExternalOutcome, meaning the previous owner may already have performed the external side effect \u2014 reconcile external evidence (did the merge/publish already land?) before doing it again. Use mesh_graph_view to find gates awaiting a coordinator.",
+  description: "Take the lease on a coordinator GATE that is awaiting a coordinator. A gate is a graph step that intentionally STOPS progress until a human/coordinator does something the daemon must not do itself \u2014 a Refinery landing, an approval, waiting on CI, a publish, a deploy. The daemon NEVER performs a gate action and NEVER auto-passes a gate: the only way through is your own mesh_graph_gate_release. Claim returns a monotonically increasing leaseGeneration and an opaque fencingToken \u2014 you MUST present both at release, so keep them. A gate whose lease has lapsed can be taken over by a new claim at a HIGHER generation; when that happens the response sets ambiguousExternalOutcome, meaning the previous owner may already have performed the external side effect \u2014 reconcile external evidence (did the merge/publish already land?) before doing it again. Use mesh_graph_view to find gates awaiting a coordinator. EXTEND-ONLY mode: pass extend_seconds (with gate_id only) to push a gate's deadline out WITHOUT taking a lease \u2014 e.g. extend_seconds=86400 for a gate that expired under on_timeout=hold, or is about to, that you still intend to act on.",
   inputSchema: {
     type: "object",
     properties: {
@@ -179032,6 +179592,12 @@ var MESH_GRAPH_GATE_CLAIM_TOOL = {
       leaseSeconds: { type: "number", description: "CamelCase alias for lease_seconds." },
       extend_deadline_seconds: { type: "number", description: "Push the gate DEADLINE out by this many seconds from now. Distinct from the lease: the deadline is when the on_timeout policy (hold / cancel_downstream / fail_graph) fires. Reclaiming a gate that expired under on_timeout=hold does NOT refresh its deadline unless you pass this, so the next sweep would expire it again." },
       extendDeadlineSeconds: { type: "number", description: "CamelCase alias for extend_deadline_seconds." },
+      // graph-orchestration-simplification D3(c): the gate `extend` verb. An optional
+      // arg on claim rather than a 61st tool (ALL_MESH_TOOLS is pinned at 60 —
+      // scripts/verify-docs.mjs counts it). Dispatches to the daemon command
+      // `mesh_graph_gate_extend {mesh_id, gate_id, extend_seconds}` — the same
+      // command the dashboard's "Extend 24h" button calls — and takes NO lease.
+      extend_seconds: { type: "number", description: "Extend-only: push the gate deadline out by this many seconds and return \u2014 NO claim, NO lease (daemon command mesh_graph_gate_extend). Cannot be combined with lease_seconds / extend_deadline_seconds. Elapsed time is still never completion evidence: extending only delays on_timeout." },
       coordinator_session_id: { type: "string", description: "Owner session for the lease. Defaults to this coordinator session; pass explicitly only when driving a gate on behalf of another session." },
       coordinatorSessionId: { type: "string", description: "CamelCase alias for coordinator_session_id." }
     },
@@ -180043,11 +180609,12 @@ var ALL_MESH_TOOLS = [
   MESH_STATUS_TOOL,
   MESH_ROUTE_PREVIEW_TOOL,
   MESH_LIST_NODES_TOOL,
-  // GRAPH-ORCHESTRATION Phase F — batch BEFORE task. Registry order is what a
-  // client that lists tools without ranking sees first, so the default enqueue
-  // surface leads and the single-task fallback follows it.
-  MESH_ENQUEUE_BATCH_TOOL,
+  // graph-orchestration-simplification D1 — task BEFORE batch. Registry order
+  // is what a client that lists tools without ranking sees first, so the
+  // incremental default (`mesh_enqueue_task` + `depends_on`) leads and the
+  // settled-plan batch follows it (reversal of Phase F's batch-first order).
   MESH_ENQUEUE_TASK_TOOL,
+  MESH_ENQUEUE_BATCH_TOOL,
   MESH_VIEW_QUEUE_TOOL,
   // GRAPH-ORCHESTRATION Phase E — placed next to the queue/enqueue tools so a
   // coordinator that loaded the batch schema also discovers how to pass a gate.
@@ -182452,6 +183019,19 @@ function summarizePendingEventProtocolMetrics(pendingEvents) {
     scopes
   };
 }
+function pickDaemonGraphUsage(...sources) {
+  for (const source of sources) {
+    if (!source || typeof source !== "object") continue;
+    const block = source.graphUsage;
+    if (block && typeof block === "object" && !Array.isArray(block)) return block;
+  }
+  return void 0;
+}
+function withoutGraphUsage(summary) {
+  if (!summary || typeof summary !== "object" || !("graphUsage" in summary)) return summary;
+  const { graphUsage: _hoisted, ...rest } = summary;
+  return rest;
+}
 async function meshStatus(ctx, args = {}) {
   const rateResult = await recordMeshCoordinatorToolCall(ctx, "mesh_status");
   const compact = args.verbose === true ? false : args.compact ?? true;
@@ -182648,6 +183228,8 @@ async function meshStatus(ctx, args = {}) {
   const activeWorkEvidence = activeWorkView.activeWork;
   const ledgerEntries = activeWorkView.records;
   const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
+  const graphUsage = pickDaemonGraphUsage(activeWorkEvidence.summary, runtimeView.summary, runtimeView, ctx.mesh);
+  const activeWorkSummaryForResponse = withoutGraphUsage(activeWorkEvidence.summary);
   const staleDirectWorkSummary = (0, import_daemon_core10.buildCompactStaleDirectWorkSummary)(activeWorkEvidence.staleDirectWork, {
     note: activeWorkEvidence.staleDirectWorkNote,
     detailHint: "Full stale direct entries are omitted from mesh_status by default. Call mesh_status with includeStaleDirectWorkDetails=true or inspect mesh_task_history for ledger detail."
@@ -182898,7 +183480,7 @@ async function meshStatus(ctx, args = {}) {
     ...args.includeStaleDirectWorkDetails === true ? { staleDirectWork: activeWorkEvidence.staleDirectWork } : {},
     // terminalDirectWork is historical (completed/failed direct dispatches) — opt-in only.
     ...args.includeTerminalDirectWork === true ? { terminalDirectWork: activeWorkEvidence.terminalDirectWork } : {},
-    activeWorkSummary: activeWorkEvidence.summary,
+    activeWorkSummary: activeWorkSummaryForResponse,
     ...pollingGuidance ? { pollingGuidance } : {},
     ...rateResult.rateLimitExceeded ? { pollingRateAdvisory: { type: "rate_limit_exceeded", tool: "mesh_status", callsInWindow: rateResult.callsInWindow, message: rateResult.advisory } } : {},
     branchConvergenceSummary: summarizeBranchConvergence(results, compact),
@@ -182911,8 +183493,9 @@ async function meshStatus(ctx, args = {}) {
       }
     } : {}
   };
+  if (!compact && graphUsage) response.graphUsage = graphUsage;
   try {
-    response.ledgerSummary = ledgerSummary;
+    response.ledgerSummary = withoutGraphUsage(ledgerSummary);
   } catch {
   }
   if (args.includeUsage === true) {
@@ -183082,7 +183665,8 @@ function readGraphTaskFields(entry) {
   const onUpstreamSkip = readString(entry.on_upstream_skip) || readString(entry.onUpstreamSkip) || void 0;
   const workspaceRef = readString(entry.workspace_ref) || readString(entry.workspaceRef) || void 0;
   const rawGatedBy = entry.gated_by ?? entry.gatedBy;
-  const gatedBy = Array.isArray(rawGatedBy) ? rawGatedBy.map((g) => readString(g)).filter((g) => !!g) : void 0;
+  const gatedByList = typeof rawGatedBy === "string" ? [rawGatedBy] : rawGatedBy;
+  const gatedBy = Array.isArray(gatedByList) ? gatedByList.map((g) => readString(g)).filter((g) => !!g) : void 0;
   return {
     ...inputsFrom !== void 0 ? { inputs_from: inputsFrom } : {},
     ...runIf !== void 0 ? { run_if: runIf } : {},
@@ -183129,6 +183713,9 @@ async function meshGraphGateClaim(ctx, args) {
       code: "missing_gate_id",
       error: "mesh_graph_gate_claim requires gate_id. Use mesh_graph_view to list gates awaiting a coordinator."
     });
+  }
+  if (args.extend_seconds !== void 0) {
+    return meshGraphGateExtend(ctx, gateId, args);
   }
   const coordinatorSessionId = resolveGateSession(ctx, args.coordinator_session_id ?? args.coordinatorSessionId);
   if (!coordinatorSessionId) {
@@ -183186,6 +183773,71 @@ async function meshGraphGateClaim(ctx, args) {
     const message = e?.message || String(e);
     return JSON.stringify({ success: false, claimed: false, gateId, error: message });
   }
+}
+var MESH_GRAPH_GATE_EXTEND_COMMAND = "mesh_graph_gate_extend";
+async function meshGraphGateExtend(ctx, gateId, args) {
+  const extendSeconds = readNumber(args.extend_seconds);
+  if (extendSeconds === void 0 || extendSeconds <= 0) {
+    return JSON.stringify({
+      success: false,
+      code: "invalid_extend_seconds",
+      gateId,
+      error: "extend_seconds must be a positive number of seconds (e.g. 86400 for 24h)."
+    });
+  }
+  const conflicting = [
+    ["lease_seconds", args.lease_seconds ?? args.leaseSeconds],
+    ["extend_deadline_seconds", args.extend_deadline_seconds ?? args.extendDeadlineSeconds]
+  ].filter(([, value]) => value !== void 0).map(([key]) => key);
+  if (conflicting.length > 0) {
+    return JSON.stringify({
+      success: false,
+      code: "extend_with_claim_args",
+      gateId,
+      conflicting,
+      error: `extend_seconds is extend-only (no claim, no lease) and cannot be combined with ${conflicting.join(", ")}. To take a lease AND push the deadline, claim with extend_deadline_seconds instead.`
+    });
+  }
+  let raw;
+  try {
+    raw = await ctx.transport.command(MESH_GRAPH_GATE_EXTEND_COMMAND, {
+      mesh_id: ctx.mesh.id,
+      gate_id: gateId,
+      extend_seconds: extendSeconds
+    });
+  } catch (e) {
+    const message = e?.message || String(e);
+    return JSON.stringify({
+      success: false,
+      extended: false,
+      gateId,
+      code: /unknown command|not supported|unsupported|no handler/i.test(message) ? "gate_extend_unavailable" : "gate_extend_failed",
+      error: message,
+      hint: "If this daemon predates the extend verb, claim the gate with extend_deadline_seconds instead (that takes a lease)."
+    });
+  }
+  const payload = unwrapCommandPayload(raw);
+  const failed = !payload || typeof payload !== "object" || payload.success === false || payload.extended === false || typeof payload.error === "string" && payload.error.length > 0 && payload.success !== true;
+  if (failed) {
+    const error48 = typeof payload?.error === "string" ? payload.error : "mesh_graph_gate_extend failed";
+    return JSON.stringify({
+      success: false,
+      extended: false,
+      gateId,
+      code: typeof payload?.code === "string" ? payload.code : /unknown command|not supported|unsupported|no handler/i.test(error48) ? "gate_extend_unavailable" : "gate_extend_failed",
+      ...typeof payload?.gateState === "string" ? { gateState: payload.gateState } : {},
+      error: error48
+    });
+  }
+  const { success: _success2, ...rest } = payload;
+  return JSON.stringify({
+    success: true,
+    extended: true,
+    gateId,
+    extendSeconds,
+    ...rest,
+    note: "Deadline extended; no lease was taken. Claim the gate (mesh_graph_gate_claim) when you are ready to act on it."
+  });
 }
 function describeClaimRefusal(reason, state) {
   switch (reason) {
@@ -183486,6 +184138,293 @@ function readNumber(value) {
   return void 0;
 }
 
+// src/tools/validate-tool-args.ts
+function isEnumProperty(value) {
+  return !!value && typeof value === "object" && Array.isArray(value.enum);
+}
+function isArrayOfObjectsProperty(value) {
+  if (!value || typeof value !== "object") return false;
+  const prop = value;
+  return prop.type === "array" && !!prop.items && typeof prop.items === "object" && prop.items.type === "object" && !!prop.items.properties;
+}
+var META_KEYS = /* @__PURE__ */ new Set(["_meta"]);
+function normalizeKey(key) {
+  return key.toLowerCase().replace(/_/g, "");
+}
+function editDistance(a, b) {
+  const m = a.length;
+  const n = b.length;
+  let prev = new Array(n + 1);
+  let curr = new Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
+}
+var MAX_SUGGESTION_DISTANCE = 2;
+function suggestKeys(unknownKey, allowed) {
+  const target = normalizeKey(unknownKey);
+  return allowed.map((key) => ({ key, distance: editDistance(target, normalizeKey(key)) })).filter((entry) => entry.distance <= MAX_SUGGESTION_DISTANCE).sort((x, y) => x.distance - y.distance || x.key.localeCompare(y.key)).slice(0, 3).map((entry) => entry.key);
+}
+function unknownToolArgsError(toolName, properties, args) {
+  const allowed = Object.keys(properties ?? {});
+  const unknown2 = Object.keys(args).filter((key) => !META_KEYS.has(key) && !(key in (properties ?? {})));
+  if (unknown2.length === 0) return null;
+  const parts = unknown2.map((key) => {
+    const suggestions = suggestKeys(key, allowed);
+    return suggestions.length > 0 ? `"${key}" \u2014 did you mean ${suggestions.map((s) => `"${s}"`).join(", ")}?` : `"${key}"`;
+  });
+  const allowedList = allowed.length > 0 ? ` Allowed parameters: ${allowed.join(", ")}.` : " This tool takes no parameters.";
+  return `Unknown parameter(s) for ${toolName}: ${parts.join("; ")}.${allowedList}`;
+}
+function enumValueError(toolName, properties, args) {
+  if (!properties) return null;
+  for (const [key, value] of Object.entries(args)) {
+    if (value === void 0) continue;
+    const propSchema = properties[key];
+    if (!isEnumProperty(propSchema)) continue;
+    const allowedValues = propSchema.enum;
+    if (allowedValues.includes(value)) continue;
+    const allowedList = allowedValues.map((v) => JSON.stringify(v)).join(", ");
+    return `Invalid value for "${key}" in ${toolName}: ${JSON.stringify(value)}. Allowed values: ${allowedList}.`;
+  }
+  return null;
+}
+function nestedArrayItemEnumValueError(toolName, properties, args) {
+  if (!properties) return null;
+  for (const [propName, propSchema] of Object.entries(properties)) {
+    if (!isArrayOfObjectsProperty(propSchema)) continue;
+    const rawItems = args[propName];
+    if (!Array.isArray(rawItems)) continue;
+    const itemProperties = propSchema.items.properties;
+    for (let i = 0; i < rawItems.length; i++) {
+      const item = rawItems[i];
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const label = typeof item.ref === "string" && item.ref ? `${propName}[${i}] (ref '${item.ref}')` : `${propName}[${i}]`;
+      const itemError = enumValueError(`${toolName} ${label}`, itemProperties, item);
+      if (itemError) return itemError;
+    }
+  }
+  return null;
+}
+function nestedArrayItemArgsError(toolName, properties, args) {
+  if (!properties) return null;
+  for (const [propName, propSchema] of Object.entries(properties)) {
+    if (!isArrayOfObjectsProperty(propSchema)) continue;
+    const rawItems = args[propName];
+    if (!Array.isArray(rawItems)) continue;
+    const itemProperties = propSchema.items.properties;
+    for (let i = 0; i < rawItems.length; i++) {
+      const item = rawItems[i];
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const label = typeof item.ref === "string" && item.ref ? `${propName}[${i}] (ref '${item.ref}')` : `${propName}[${i}]`;
+      const itemError = unknownToolArgsError(`${toolName} ${label}`, itemProperties, item);
+      if (itemError) return itemError;
+    }
+  }
+  return null;
+}
+function nestedArrayItemArrayTypeError(toolName, properties, args) {
+  if (!properties) return null;
+  for (const [propName, propSchema] of Object.entries(properties)) {
+    if (!isArrayOfObjectsProperty(propSchema)) continue;
+    const rawItems = args[propName];
+    if (!Array.isArray(rawItems)) continue;
+    const itemProperties = propSchema.items.properties;
+    for (let i = 0; i < rawItems.length; i++) {
+      const item = rawItems[i];
+      if (!isPlainObject2(item)) continue;
+      for (const [key, value] of Object.entries(item)) {
+        const fieldSchema = itemProperties[key];
+        if (!fieldSchema || fieldSchema.type !== "array") continue;
+        if (value === void 0 || value === null || Array.isArray(value) || typeof value === "string") continue;
+        return `Invalid type for ${toolName} ${itemLabel(propName, i, item)} "${key}": expected an array of strings, got ${typeof value}.`;
+      }
+    }
+  }
+  return null;
+}
+var ENQUEUE_TASK_FIELD_ALIASES = {
+  taskMode: "task_mode",
+  read_only: "readonly",
+  requiredTags: "required_tags",
+  ownedPaths: "owned_paths",
+  targetNodeId: "target_node_id",
+  target_node: "target_node_id",
+  targetNode: "target_node_id",
+  preferWorktree: "prefer_worktree",
+  dependsOn: "depends_on",
+  missionId: "mission_id",
+  thinkingLevel: "thinking_level",
+  notBefore: "not_before",
+  maxRetries: "max_retries"
+};
+var TOP_LEVEL_SCOPE = "";
+var MESH_ACCEPTED_ARG_ALIASES = {
+  mesh_enqueue_task: {
+    [TOP_LEVEL_SCOPE]: {
+      ...ENQUEUE_TASK_FIELD_ALIASES,
+      blockDuplicate: "block_duplicate",
+      allowDuplicate: "allow_duplicate",
+      orchestrationDecision: "orchestration_decision"
+    }
+  },
+  mesh_enqueue_batch: {
+    [TOP_LEVEL_SCOPE]: {
+      missionId: "mission_id",
+      blockDuplicate: "block_duplicate",
+      allowDuplicate: "allow_duplicate",
+      batchId: "batch_id",
+      orchestrationDecision: "orchestration_decision",
+      onDependencyFailure: "on_dependency_failure"
+    },
+    tasks: {
+      ...ENQUEUE_TASK_FIELD_ALIASES,
+      inputsFrom: "inputs_from",
+      workspaceRef: "workspace_ref",
+      gatedBy: "gated_by"
+    },
+    workspaces: {
+      sourceNodeId: "source_node_id",
+      baseRevision: "base_revision",
+      desiredPath: "desired_path",
+      cleanupOnGraphFailure: "cleanup_on_graph_failure"
+    }
+  }
+};
+var RETIRED_CONDITIONAL_KEYS = ["run_if", "runIf", "on_false", "onFalse", "on_upstream_skip", "onUpstreamSkip"];
+var RETIRED_CONDITIONAL_REASON = "Conditional branching (run_if / on_false / on_upstream_skip) was retired from the enqueue surface. Order steps with depends_on, and choose what happens to downstream work when a dependency fails with on_dependency_failure (block | cancel \u2014 mesh_enqueue_batch top level). If the next step depends on a result, enqueue it once that result is known (mesh_enqueue_task with depends_on) instead of declaring a branch up front.";
+var MESH_RETIRED_ARGS = {
+  mesh_enqueue_task: { [TOP_LEVEL_SCOPE]: { keys: RETIRED_CONDITIONAL_KEYS, reason: RETIRED_CONDITIONAL_REASON } },
+  mesh_enqueue_batch: { tasks: { keys: RETIRED_CONDITIONAL_KEYS, reason: RETIRED_CONDITIONAL_REASON } }
+};
+function isPlainObject2(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function itemLabel(scope, index, item) {
+  return typeof item.ref === "string" && item.ref ? `${scope}[${index}] (ref '${item.ref}')` : `${scope}[${index}]`;
+}
+function canonicalizeObject(obj, aliases) {
+  if (!aliases) return obj;
+  let changed = false;
+  const out = {};
+  for (const [key, value] of Object.entries(obj)) {
+    const canonical = Object.prototype.hasOwnProperty.call(aliases, key) ? aliases[key] : void 0;
+    if (canonical === void 0) {
+      if (!(key in out)) out[key] = value;
+      continue;
+    }
+    changed = true;
+    if (!Object.prototype.hasOwnProperty.call(obj, canonical) && !(canonical in out)) out[canonical] = value;
+  }
+  return changed ? out : obj;
+}
+function canonicalizeMeshToolArgs(name, args) {
+  const table = MESH_ACCEPTED_ARG_ALIASES[name];
+  if (!table) return args;
+  let out = canonicalizeObject(args, table[TOP_LEVEL_SCOPE]);
+  for (const [scope, aliases] of Object.entries(table)) {
+    if (scope === TOP_LEVEL_SCOPE) continue;
+    const items = out[scope];
+    if (!Array.isArray(items)) continue;
+    const mapped = items.map((item) => isPlainObject2(item) ? canonicalizeObject(item, aliases) : item);
+    if (mapped.some((item, i) => item !== items[i])) {
+      if (out === args) out = { ...args };
+      out[scope] = mapped;
+    }
+  }
+  return out;
+}
+function canonicalizeEnqueueTaskEntry(entry) {
+  return canonicalizeObject(entry, ENQUEUE_TASK_FIELD_ALIASES);
+}
+function canonicalizeMeshTopLevelArgs(name, args) {
+  const table = MESH_ACCEPTED_ARG_ALIASES[name];
+  return canonicalizeObject(args, table?.[TOP_LEVEL_SCOPE]);
+}
+function retiredMeshToolArgsError(name, args) {
+  const table = MESH_RETIRED_ARGS[name];
+  if (!table) return null;
+  for (const [scope, { keys, reason }] of Object.entries(table)) {
+    if (scope === TOP_LEVEL_SCOPE) {
+      const hit = keys.filter((key) => Object.prototype.hasOwnProperty.call(args, key));
+      if (hit.length > 0) return `Retired parameter(s) for ${name}: ${hit.map((k) => `"${k}"`).join(", ")}. ${reason}`;
+      continue;
+    }
+    const items = args[scope];
+    if (!Array.isArray(items)) continue;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!isPlainObject2(item)) continue;
+      const hit = keys.filter((key) => Object.prototype.hasOwnProperty.call(item, key));
+      if (hit.length > 0) {
+        return `Retired parameter(s) for ${name} ${itemLabel(scope, i, item)}: ${hit.map((k) => `"${k}"`).join(", ")}. ${reason}`;
+      }
+    }
+  }
+  return null;
+}
+var MESH_TOOL_BY_NAME = new Map(
+  ALL_MESH_TOOLS.map((tool) => [tool.name, tool])
+);
+var MESH_ALIAS_TOOL = {
+  mesh_refine_config_schema: { schema: MESH_REFINE_CONFIG_TOOL, injected: ["mode"] },
+  mesh_validate_refine_config: { schema: MESH_REFINE_CONFIG_TOOL, injected: ["mode"] },
+  mesh_suggest_refine_config: { schema: MESH_REFINE_CONFIG_TOOL, injected: ["mode"] },
+  mesh_change_impact_config_schema: { schema: MESH_CHANGE_IMPACT_CONFIG_TOOL, injected: ["mode"] },
+  mesh_validate_change_impact_config: { schema: MESH_CHANGE_IMPACT_CONFIG_TOOL, injected: ["mode"] },
+  mesh_suggest_change_impact_config: { schema: MESH_CHANGE_IMPACT_CONFIG_TOOL, injected: ["mode"] },
+  // E-T0: NOT in ALL_MESH_TOOLS on purpose (server.ts publishes it only when
+  // the worker-MCP flag is on, so ListTools stays byte-identical when off —
+  // see the tool's own doc comment in mesh-tool-schemas.ts). Registered here
+  // unconditionally anyway: this map only affects validation of a call that
+  // names the tool explicitly, and the daemon-side handler still refuses the
+  // call when the flag is off, so a harmless, always-present entry is simpler
+  // than threading the flag through this file too.
+  mesh_notify_worker: { schema: MESH_NOTIFY_WORKER_TOOL, injected: [] }
+};
+function resolveMeshTool(name) {
+  const published = MESH_TOOL_BY_NAME.get(name);
+  if (published) return { schema: published, injected: [] };
+  return MESH_ALIAS_TOOL[name];
+}
+function isPresent(value) {
+  if (value === void 0 || value === null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  return true;
+}
+function missingRequiredToolArgsError(toolName, schema2, args, injected = []) {
+  const required2 = (schema2?.required ?? []).filter((key) => !injected.includes(key));
+  if (required2.length === 0) return null;
+  const declared = Object.keys(schema2?.properties ?? {});
+  const missing = required2.filter((key) => {
+    const wanted = normalizeKey(key);
+    const aliases = declared.filter((candidate) => normalizeKey(candidate) === wanted);
+    const names = aliases.length > 0 ? aliases : [key];
+    return !names.some((candidate) => isPresent(args[candidate]));
+  });
+  if (missing.length === 0) return null;
+  return `Missing required parameter(s) for ${toolName}: ${missing.map((key) => `"${key}"`).join(", ")}. Required: ${required2.join(", ")}.`;
+}
+function validateMeshToolArgs(name, rawArgs) {
+  const tool = resolveMeshTool(name);
+  if (!tool) return null;
+  const retired = retiredMeshToolArgsError(name, rawArgs);
+  if (retired) return retired;
+  const args = canonicalizeMeshToolArgs(name, rawArgs);
+  const properties = tool.schema.inputSchema?.properties;
+  return unknownToolArgsError(name, properties, args) ?? nestedArrayItemArgsError(name, properties, args) ?? nestedArrayItemArrayTypeError(name, properties, args) ?? enumValueError(name, properties, args) ?? nestedArrayItemEnumValueError(name, properties, args) ?? missingRequiredToolArgsError(name, tool.schema.inputSchema, args, tool.injected);
+}
+
 // src/tools/mesh-tools-queue.ts
 var import_daemon_core13 = __toESM(require_dist3());
 function normalizeDedupMessage(message) {
@@ -183515,7 +184454,8 @@ function buildUntargetedCodeChangeWorktreeAdvisory(input) {
     worktreeRoutingAdvisory: 'This untargeted `code_change` will be claimed by whichever node polls first \u2014 usually the BASE node, which gives it no branch isolation. Base nodes are for environment-specific testing (win32 PATH/registry, clean install on one OS, that machine\'s package state, OS-dependent runtime behavior). If this task only changes code, cancel it (mesh_queue_cancel), call mesh_clone_node (~10s, auto-launch starts the session), and re-enqueue with target_node_id set to the returned worktree node id \u2014 or pass prefer_worktree: true to route to the most recent worktree. If it DOES need a specific machine, pin it with required_tags (e.g. ["os=win32"]) or target_node_id and this advisory will not appear.'
   };
 }
-async function normalizeEnqueueTaskArgs(ctx, args, callerLabel) {
+async function normalizeEnqueueTaskArgs(ctx, rawArgs, callerLabel) {
+  const args = canonicalizeEnqueueTaskEntry(rawArgs);
   const message = readString(args.message);
   if (!message) {
     return {
@@ -183609,6 +184549,7 @@ function buildProviderPinAdvisory(requiredTags) {
   };
 }
 async function meshEnqueueTask(ctx, args) {
+  args = canonicalizeMeshTopLevelArgs("mesh_enqueue_task", args);
   await refreshMeshFromDaemon(ctx);
   const normalized = await normalizeEnqueueTaskArgs(ctx, args, "mesh_enqueue_task");
   if (!normalized.ok) {
@@ -183742,6 +184683,7 @@ var BATCH_ENQUEUE_ERROR_CODES = [
   "invalid_on_dependency_failure"
 ];
 async function meshEnqueueBatch(ctx, args) {
+  args = canonicalizeMeshTopLevelArgs("mesh_enqueue_batch", args);
   const rawTasks = Array.isArray(args.tasks) ? args.tasks : void 0;
   if (!rawTasks || rawTasks.length === 0) {
     return JSON.stringify({
@@ -190225,150 +191167,6 @@ async function runMeshToolWithPendingEvents(ctx, run) {
   return attachPendingCoordinatorEventsToResponse(ctx, text, before);
 }
 
-// src/tools/validate-tool-args.ts
-function isEnumProperty(value) {
-  return !!value && typeof value === "object" && Array.isArray(value.enum);
-}
-function isArrayOfObjectsProperty(value) {
-  if (!value || typeof value !== "object") return false;
-  const prop = value;
-  return prop.type === "array" && !!prop.items && typeof prop.items === "object" && prop.items.type === "object" && !!prop.items.properties;
-}
-var META_KEYS = /* @__PURE__ */ new Set(["_meta"]);
-function normalizeKey(key) {
-  return key.toLowerCase().replace(/_/g, "");
-}
-function editDistance(a, b) {
-  const m = a.length;
-  const n = b.length;
-  let prev = new Array(n + 1);
-  let curr = new Array(n + 1);
-  for (let j = 0; j <= n; j++) prev[j] = j;
-  for (let i = 1; i <= m; i++) {
-    curr[0] = i;
-    for (let j = 1; j <= n; j++) {
-      curr[j] = Math.min(
-        prev[j] + 1,
-        curr[j - 1] + 1,
-        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
-      );
-    }
-    [prev, curr] = [curr, prev];
-  }
-  return prev[n];
-}
-var MAX_SUGGESTION_DISTANCE = 2;
-function suggestKeys(unknownKey, allowed) {
-  const target = normalizeKey(unknownKey);
-  return allowed.map((key) => ({ key, distance: editDistance(target, normalizeKey(key)) })).filter((entry) => entry.distance <= MAX_SUGGESTION_DISTANCE).sort((x, y) => x.distance - y.distance || x.key.localeCompare(y.key)).slice(0, 3).map((entry) => entry.key);
-}
-function unknownToolArgsError(toolName, properties, args) {
-  const allowed = Object.keys(properties ?? {});
-  const unknown2 = Object.keys(args).filter((key) => !META_KEYS.has(key) && !(key in (properties ?? {})));
-  if (unknown2.length === 0) return null;
-  const parts = unknown2.map((key) => {
-    const suggestions = suggestKeys(key, allowed);
-    return suggestions.length > 0 ? `"${key}" \u2014 did you mean ${suggestions.map((s) => `"${s}"`).join(", ")}?` : `"${key}"`;
-  });
-  const allowedList = allowed.length > 0 ? ` Allowed parameters: ${allowed.join(", ")}.` : " This tool takes no parameters.";
-  return `Unknown parameter(s) for ${toolName}: ${parts.join("; ")}.${allowedList}`;
-}
-function enumValueError(toolName, properties, args) {
-  if (!properties) return null;
-  for (const [key, value] of Object.entries(args)) {
-    if (value === void 0) continue;
-    const propSchema = properties[key];
-    if (!isEnumProperty(propSchema)) continue;
-    const allowedValues = propSchema.enum;
-    if (allowedValues.includes(value)) continue;
-    const allowedList = allowedValues.map((v) => JSON.stringify(v)).join(", ");
-    return `Invalid value for "${key}" in ${toolName}: ${JSON.stringify(value)}. Allowed values: ${allowedList}.`;
-  }
-  return null;
-}
-function nestedArrayItemEnumValueError(toolName, properties, args) {
-  if (!properties) return null;
-  for (const [propName, propSchema] of Object.entries(properties)) {
-    if (!isArrayOfObjectsProperty(propSchema)) continue;
-    const rawItems = args[propName];
-    if (!Array.isArray(rawItems)) continue;
-    const itemProperties = propSchema.items.properties;
-    for (let i = 0; i < rawItems.length; i++) {
-      const item = rawItems[i];
-      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-      const label = typeof item.ref === "string" && item.ref ? `${propName}[${i}] (ref '${item.ref}')` : `${propName}[${i}]`;
-      const itemError = enumValueError(`${toolName} ${label}`, itemProperties, item);
-      if (itemError) return itemError;
-    }
-  }
-  return null;
-}
-function nestedArrayItemArgsError(toolName, properties, args) {
-  if (!properties) return null;
-  for (const [propName, propSchema] of Object.entries(properties)) {
-    if (!isArrayOfObjectsProperty(propSchema)) continue;
-    const rawItems = args[propName];
-    if (!Array.isArray(rawItems)) continue;
-    const itemProperties = propSchema.items.properties;
-    for (let i = 0; i < rawItems.length; i++) {
-      const item = rawItems[i];
-      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-      const label = typeof item.ref === "string" && item.ref ? `${propName}[${i}] (ref '${item.ref}')` : `${propName}[${i}]`;
-      const itemError = unknownToolArgsError(`${toolName} ${label}`, itemProperties, item);
-      if (itemError) return itemError;
-    }
-  }
-  return null;
-}
-var MESH_TOOL_BY_NAME = new Map(
-  ALL_MESH_TOOLS.map((tool) => [tool.name, tool])
-);
-var MESH_ALIAS_TOOL = {
-  mesh_refine_config_schema: { schema: MESH_REFINE_CONFIG_TOOL, injected: ["mode"] },
-  mesh_validate_refine_config: { schema: MESH_REFINE_CONFIG_TOOL, injected: ["mode"] },
-  mesh_suggest_refine_config: { schema: MESH_REFINE_CONFIG_TOOL, injected: ["mode"] },
-  mesh_change_impact_config_schema: { schema: MESH_CHANGE_IMPACT_CONFIG_TOOL, injected: ["mode"] },
-  mesh_validate_change_impact_config: { schema: MESH_CHANGE_IMPACT_CONFIG_TOOL, injected: ["mode"] },
-  mesh_suggest_change_impact_config: { schema: MESH_CHANGE_IMPACT_CONFIG_TOOL, injected: ["mode"] },
-  // E-T0: NOT in ALL_MESH_TOOLS on purpose (server.ts publishes it only when
-  // the worker-MCP flag is on, so ListTools stays byte-identical when off —
-  // see the tool's own doc comment in mesh-tool-schemas.ts). Registered here
-  // unconditionally anyway: this map only affects validation of a call that
-  // names the tool explicitly, and the daemon-side handler still refuses the
-  // call when the flag is off, so a harmless, always-present entry is simpler
-  // than threading the flag through this file too.
-  mesh_notify_worker: { schema: MESH_NOTIFY_WORKER_TOOL, injected: [] }
-};
-function resolveMeshTool(name) {
-  const published = MESH_TOOL_BY_NAME.get(name);
-  if (published) return { schema: published, injected: [] };
-  return MESH_ALIAS_TOOL[name];
-}
-function isPresent(value) {
-  if (value === void 0 || value === null) return false;
-  if (typeof value === "string") return value.trim().length > 0;
-  return true;
-}
-function missingRequiredToolArgsError(toolName, schema2, args, injected = []) {
-  const required2 = (schema2?.required ?? []).filter((key) => !injected.includes(key));
-  if (required2.length === 0) return null;
-  const declared = Object.keys(schema2?.properties ?? {});
-  const missing = required2.filter((key) => {
-    const wanted = normalizeKey(key);
-    const aliases = declared.filter((candidate) => normalizeKey(candidate) === wanted);
-    const names = aliases.length > 0 ? aliases : [key];
-    return !names.some((candidate) => isPresent(args[candidate]));
-  });
-  if (missing.length === 0) return null;
-  return `Missing required parameter(s) for ${toolName}: ${missing.map((key) => `"${key}"`).join(", ")}. Required: ${required2.join(", ")}.`;
-}
-function validateMeshToolArgs(name, args) {
-  const tool = resolveMeshTool(name);
-  if (!tool) return null;
-  const properties = tool.schema.inputSchema?.properties;
-  return unknownToolArgsError(name, properties, args) ?? nestedArrayItemArgsError(name, properties, args) ?? enumValueError(name, properties, args) ?? nestedArrayItemEnumValueError(name, properties, args) ?? missingRequiredToolArgsError(name, tool.schema.inputSchema, args, tool.injected);
-}
-
 // src/tools/worker-tools.ts
 function readWorkerCredentials(env2 = process.env) {
   const bind = typeof env2.ADHDEV_WORKER_SESSION_BIND === "string" ? env2.ADHDEV_WORKER_SESSION_BIND.trim() : "";
@@ -190794,14 +191592,15 @@ async function startMcpServer(opts) {
       const a = args ?? {};
       const unknownArgsError = validateMeshToolArgs(name, a);
       if (unknownArgsError) return { content: [{ type: "text", text: unknownArgsError }], isError: true };
+      const canonicalArgs = canonicalizeMeshToolArgs(name, a);
       try {
         let run;
         if (name === "mesh_notify_worker") {
-          run = async () => isWorkerMcpEnabled() ? await meshNotifyWorker(meshCtx, a) : JSON.stringify({ success: false, error: "worker_mcp_disabled" });
+          run = async () => isWorkerMcpEnabled() ? await meshNotifyWorker(meshCtx, canonicalArgs) : JSON.stringify({ success: false, error: "worker_mcp_disabled" });
         } else {
           const handler = resolveMeshToolHandler(name);
           if (!handler) return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
-          run = () => handler(meshCtx, a);
+          run = () => handler(meshCtx, canonicalArgs);
         }
         const text = await runMeshToolWithPendingEvents(meshCtx, run);
         return { content: [{ type: "text", text }] };

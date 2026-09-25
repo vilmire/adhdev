@@ -9,9 +9,12 @@
  *    mesh_graph_overview (this component still owns both fetches)
  *  - MeshBlueprintList: sectioned rows (Running / Blocked / Recent / History)
  *    with scope chips and a status bar; graph gates surface as Blocked rows.
- *    Gate VERBS are deliberately NOT exposed (owner decision 2026-08-24) —
- *    acting on a gate is done by instructing the coordinator, whose MCP tools
- *    (mesh_gate_claim/release/abandon) are the acting surface.
+ *    Gate VERBS (Release / Abandon / Extend 24h) ARE exposed here as of D5
+ *    (docs/design/2026-09-25-graph-orchestration-simplification.md) — this
+ *    supersedes the 2026-08-24 "coordinator-only" decision. They call the
+ *    same mesh_graph_gate_release/abandon/extend daemon commands the MCP
+ *    tools wrap, through the same sendDaemonCommand path every other
+ *    Blueprint action (fast-forward, route preview) already uses.
  *  - on-demand mini DAG: a row backed by a graph WITH edges (or queue
  *    dependency edges) can expand a small React Flow plan (MeshMiniDag) —
  *    the only graph drawing left on this tab.
@@ -361,6 +364,10 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                         onGateOpen={(graph, nodeId, gate) => setDetail({ kind: 'gate', graph, nodeId, gate: gate ?? null })}
                         onMissionOpen={openMission}
                         headerExtras={headerExtras}
+                        daemonId={daemonId}
+                        meshId={meshId}
+                        sendDaemonCommand={sendDaemonCommand}
+                        onGatesChanged={refreshGraphs}
                     />
                 </div>
 

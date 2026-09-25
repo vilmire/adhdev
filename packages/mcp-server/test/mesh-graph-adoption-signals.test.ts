@@ -67,7 +67,8 @@ test('P2: mesh_enqueue_task exposes orchestration_decision and does NOT require 
     const tool = ALL_MESH_TOOLS.find(t => t.name === 'mesh_enqueue_task')!;
     const props = (tool.inputSchema as any).properties;
     assert.ok(props.orchestration_decision, 'mesh_enqueue_task must expose orchestration_decision');
-    assert.ok(props.orchestrationDecision, 'and its camelCase alias, like every other field here');
+    // D2 schema diet: the camelCase alias is accepted by the validator but no longer published.
+    assert.equal(props.orchestrationDecision, undefined, 'the camelCase alias must not be published (D2)');
 
     // ★ The optionality is the contract, not an oversight — see the file header.
     assert.deepEqual(

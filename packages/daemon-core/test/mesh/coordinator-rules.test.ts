@@ -107,7 +107,7 @@ describe('prompt assembly with the rules layer', () => {
         const prompt = buildCoordinatorSystemPrompt(baseCtx({ repoRules: resolveCoordinatorRules(repo) }));
         expect(prompt).toContain('always deploy on Tuesdays');
         // A bundled-default-only phrase must be gone (wholesale replacement).
-        expect(prompt).not.toContain('Batch-first rule');
+        expect(prompt).not.toContain('Incremental enqueue rule');
         // The compiled safety tail still rides.
         expect(prompt).toContain('Never run destructive git operations');
         expect(prompt).toContain('Coordinator runtime is not a delegation default');

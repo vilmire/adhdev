@@ -975,7 +975,7 @@ function buildBrainPresetsSection(): string {
     const lines = [
         '## Task difficulty',
         '',
-        'Pass `difficulty` on every worker entry in `mesh_enqueue_batch`, or on `mesh_enqueue_task` for the single-task fallback. The values (`easy` / `medium` / `difficult` / `freeform`) describe how hard the work is. It is a ROUTING HINT: it is matched against each node\'s capability slots, so a task goes to a slot configured for that difficulty.',
+        'Pass `difficulty` on `mesh_enqueue_task` (the default), or on every worker entry in `mesh_enqueue_batch` for a settled multi-step plan. The values (`easy` / `medium` / `difficult` / `freeform`) describe how hard the work is. It is a ROUTING HINT: it is matched against each node\'s capability slots, so a task goes to a slot configured for that difficulty.',
         '',
         '**The slot decides the model and thinking level — not the difficulty.** `difficulty: "difficult"` does not mean "use opus"; it means "route to a slot that handles difficult work", and that slot\'s own model/thinking is what launches. So classify honestly by how hard the task is, and change what a difficulty RUNS ON by editing the node\'s slots (`mesh_node_slots_set`), never by picking a different difficulty. Passing an explicit `model`/`thinkingLevel` still overrides everything for one task.',
     ];
@@ -1092,8 +1092,8 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_status\` | Nodes' health, git state, sessions, branch convergence |
 | \`mesh_route_preview\` | Explain a hypothetical difficulty/tags/readonly/node route from the current point-in-time capacity + quota-facts snapshot (read-only, fetch-free) |
 | \`mesh_list_nodes\` | List nodes with workspace paths |
-| \`mesh_enqueue_batch\` | **DEFAULT enqueue surface** for a plan with two or more known graph steps. Atomically enqueues a dependency-wired task set; \`depends_on\` may name batch-local \`ref\`s (forward refs OK). Carries the full graph surface: \`inputs_from\`, \`run_if\`, \`gates\` + \`gated_by\`, \`workspaces\` + \`workspace_ref\` |
-| \`mesh_enqueue_task\` | SINGLE-TASK FALLBACK — one ready task with no declarable downstream step; idle nodes auto-claim |
+| \`mesh_enqueue_batch\` | For a **settled plan of three or more steps** that needs a coordinator gate or a deferred worktree (\`workspace_ref\`) — not the everyday enqueue path. Atomically enqueues a dependency-wired task set; \`depends_on\` may name batch-local \`ref\`s (forward refs OK). Carries the full graph surface: \`inputs_from\`, \`gates\` + \`gated_by\`, \`workspaces\` + \`workspace_ref\` (\`run_if\` retired) |
+| \`mesh_enqueue_task\` | **DEFAULT enqueue surface.** One task; chain a known follow-up onto it with \`depends_on\` as it becomes known — the graph grows append-only. A task with \`depends_on\` automatically receives an "Upstream results" appendix summarizing its predecessors' completions. Idle nodes auto-claim |
 | \`mesh_view_queue\` | Queue status — pending/assigned/completed/failed/cancelled |
 | \`mesh_graph_view\` | Inspect orchestration graphs — node states, gates awaiting you, workspace sagas, why something is blocked |
 | \`mesh_graph_gate_claim\` | Take the lease on a gate awaiting a coordinator; returns the fencing token + generation a release needs |
@@ -1177,16 +1177,13 @@ const OWNERSHIP_AND_BRIEF_SECTION = [
 ].join('\n');
 
 // GRAPH-ORCHESTRATION Phase F (design "Required tool-discovery instruction").
-// The enqueue-discovery paragraph is deliberately the FIRST thing in this section,
-// ahead of the staleness check and ahead of the Orchestration Workflow, because the
-// observed failure mode happens before any workflow reasoning: on providers with
-// deferred tool schemas the coordinator ran ONE ToolSearch for "enqueue", got
-// mesh_enqueue_task, and never loaded the batch schema — after which batch-first was
-// unreachable no matter what later prompt sections said. Ordering is the fix; do not
-// relocate this below the general workflow.
+// D1 (docs/design/2026-09-25-graph-orchestration-simplification.md) retired the
+// batch-discovery mandate that used to open this section: incremental enqueue via
+// mesh_enqueue_task is now the default, so there is no eligibility check to gate
+// tool loading on. What remains is the tool-availability check below, kept FIRST
+// in this section (ahead of the Orchestration Workflow) because a stale/missing
+// mesh_* tool manifest must be caught before any workflow reasoning runs.
 const TOOL_EXPOSURE_PREFLIGHT_SECTION = `## Tool Exposure Preflight
-
-Before searching for an enqueue tool, classify the whole currently known work frontier. For every new delegation search, include \`mesh_enqueue_batch\` by exact name; never search for or load only \`mesh_enqueue_task\`. Load \`mesh_enqueue_task\` only as the single-task fallback after the batch eligibility check below fails.
 
 Before doing any coordinator work, confirm that the actual callable tool list includes \`mesh_status\` and the other \`mesh_*\` tools from the table above. If this Repo Mesh coordinator prompt is present but the callable \`mesh_*\` tools are missing, the MCP server/tool manifest is stale or not injected yet. Do not substitute terminal/file/git tools, do not inspect or edit the repository directly, and do not continue as a non-mesh local coding agent. Stop immediately and tell the user to run \`/reload-mcp\` or start a fresh coordinator session so ADHDev can reconnect \`adhdev-mesh\`.`;
 

@@ -69,6 +69,7 @@ import type { MeshContext, MeshGraphGatePlanSpec, MeshTaskGraphEntrySpec } from 
 // audit record and post-materialization queue nudge all happen there in one
 // round trip. This tool layer is now a thin client + response-shape mapper.
 import { graphGateAbandon, graphGateClaim, graphGateRelease, graphNodePatch, graphViewQuery } from '../ipc/turn-commands.js';
+import { unwrapCommandPayload } from './mesh-session-helpers.js';
 
 // ── batch v2 request normalization (design :566-592) ─────────────────────────
 //
@@ -96,8 +97,8 @@ export interface GraphTaskFieldsShape {
     onUpstreamSkip?: string;
     workspace_ref?: string;
     workspaceRef?: string;
-    gated_by?: string[];
-    gatedBy?: string[];
+    gated_by?: string[] | string;
+    gatedBy?: string[] | string;
 }
 
 /** design :570 — a delayed worktree declaration; preparation is a compensated saga. */
@@ -137,8 +138,12 @@ export function readGraphTaskFields(entry: GraphTaskFieldsShape): Record<string,
     const onUpstreamSkip = readString(entry.on_upstream_skip) || readString(entry.onUpstreamSkip) || undefined;
     const workspaceRef = readString(entry.workspace_ref) || readString(entry.workspaceRef) || undefined;
     const rawGatedBy = entry.gated_by ?? entry.gatedBy;
-    const gatedBy = Array.isArray(rawGatedBy)
-        ? rawGatedBy.map(g => readString(g)).filter((g): g is string => !!g)
+    // A single string is one gate ref, not "no gates": dropping it silently built a
+    // gate with no edge (live 2026-09-25). Other non-array shapes are refused by
+    // validate-tool-args.ts nestedArrayItemArrayTypeError before reaching here.
+    const gatedByList = typeof rawGatedBy === 'string' ? [rawGatedBy] : rawGatedBy;
+    const gatedBy = Array.isArray(gatedByList)
+        ? gatedByList.map(g => readString(g)).filter((g): g is string => !!g)
         : undefined;
     return {
         ...(inputsFrom !== undefined ? { inputs_from: inputsFrom } : {}),
@@ -230,6 +235,7 @@ export async function meshGraphGateClaim(
         gate_id?: string; gateId?: string;
         lease_seconds?: number; leaseSeconds?: number;
         extend_deadline_seconds?: number; extendDeadlineSeconds?: number;
+        extend_seconds?: number;
         coordinator_session_id?: string; coordinatorSessionId?: string;
     },
 ): Promise<string> {
@@ -241,6 +247,11 @@ export async function meshGraphGateClaim(
             code: 'missing_gate_id',
             error: 'mesh_graph_gate_claim requires gate_id. Use mesh_graph_view to list gates awaiting a coordinator.',
         });
+    }
+    // D3(c) extend verb — see meshGraphGateExtend. Decided BEFORE the coordinator-
+    // session check: extending a deadline takes no lease, so it needs no owner.
+    if (args.extend_seconds !== undefined) {
+        return meshGraphGateExtend(ctx, gateId, args);
     }
     const coordinatorSessionId = resolveGateSession(ctx, args.coordinator_session_id ?? args.coordinatorSessionId);
     if (!coordinatorSessionId) {
@@ -312,6 +323,98 @@ export async function meshGraphGateClaim(
         const message = e?.message || String(e);
         return JSON.stringify({ success: false, claimed: false, gateId, error: message });
     }
+}
+
+/** The daemon command behind the extend verb (graph-orchestration-simplification D3(c)). */
+export const MESH_GRAPH_GATE_EXTEND_COMMAND = 'mesh_graph_gate_extend';
+
+/**
+ * `mesh_graph_gate_claim` with `extend_seconds` — the gate EXTEND verb
+ * (docs/design/2026-09-25-graph-orchestration-simplification.md D3(c)).
+ *
+ * Exposed as an optional argument on claim rather than a separate tool because
+ * the published tool count is pinned at 60 (scripts/verify-docs.mjs). It is a
+ * different verb, not a claim variant: it takes NO lease and returns no fencing
+ * token — it only pushes the deadline so the gate's on_timeout policy fires later.
+ * The daemon command is the one the dashboard's "Extend 24h" button calls, with
+ * the design's snake_case wire args `{mesh_id, gate_id, extend_seconds}`.
+ *
+ * Mixing it with the claim-only knobs is refused rather than guessed at: a caller
+ * that passes lease_seconds too believes it is taking a lease, and silently
+ * returning without one would leave it acting on a gate it does not hold.
+ */
+async function meshGraphGateExtend(
+    ctx: MeshContext,
+    gateId: string,
+    args: { extend_seconds?: unknown; lease_seconds?: unknown; leaseSeconds?: unknown; extend_deadline_seconds?: unknown; extendDeadlineSeconds?: unknown },
+): Promise<string> {
+    const extendSeconds = readNumber(args.extend_seconds);
+    if (extendSeconds === undefined || extendSeconds <= 0) {
+        return JSON.stringify({
+            success: false,
+            code: 'invalid_extend_seconds',
+            gateId,
+            error: 'extend_seconds must be a positive number of seconds (e.g. 86400 for 24h).',
+        });
+    }
+    const conflicting = ([
+        ['lease_seconds', args.lease_seconds ?? args.leaseSeconds],
+        ['extend_deadline_seconds', args.extend_deadline_seconds ?? args.extendDeadlineSeconds],
+    ] as const).filter(([, value]) => value !== undefined).map(([key]) => key);
+    if (conflicting.length > 0) {
+        return JSON.stringify({
+            success: false,
+            code: 'extend_with_claim_args',
+            gateId,
+            conflicting,
+            error: `extend_seconds is extend-only (no claim, no lease) and cannot be combined with ${conflicting.join(', ')}. `
+                + 'To take a lease AND push the deadline, claim with extend_deadline_seconds instead.',
+        });
+    }
+    let raw: unknown;
+    try {
+        raw = await ctx.transport.command(MESH_GRAPH_GATE_EXTEND_COMMAND, {
+            mesh_id: ctx.mesh.id,
+            gate_id: gateId,
+            extend_seconds: extendSeconds,
+        });
+    } catch (e: any) {
+        const message = e?.message || String(e);
+        return JSON.stringify({
+            success: false,
+            extended: false,
+            gateId,
+            code: /unknown command|not supported|unsupported|no handler/i.test(message) ? 'gate_extend_unavailable' : 'gate_extend_failed',
+            error: message,
+            hint: 'If this daemon predates the extend verb, claim the gate with extend_deadline_seconds instead (that takes a lease).',
+        });
+    }
+    const payload = unwrapCommandPayload(raw);
+    const failed = !payload || typeof payload !== 'object'
+        || (payload as any).success === false || (payload as any).extended === false
+        || (typeof (payload as any).error === 'string' && (payload as any).error.length > 0 && (payload as any).success !== true);
+    if (failed) {
+        const error = typeof (payload as any)?.error === 'string' ? (payload as any).error : 'mesh_graph_gate_extend failed';
+        return JSON.stringify({
+            success: false,
+            extended: false,
+            gateId,
+            code: typeof (payload as any)?.code === 'string' ? (payload as any).code
+                : /unknown command|not supported|unsupported|no handler/i.test(error) ? 'gate_extend_unavailable' : 'gate_extend_failed',
+            ...(typeof (payload as any)?.gateState === 'string' ? { gateState: (payload as any).gateState } : {}),
+            error,
+        });
+    }
+    // Pass the daemon's answer through (deadlineAt / gate state) — no local math.
+    const { success: _success, ...rest } = payload as Record<string, unknown>;
+    return JSON.stringify({
+        success: true,
+        extended: true,
+        gateId,
+        extendSeconds,
+        ...rest,
+        note: 'Deadline extended; no lease was taken. Claim the gate (mesh_graph_gate_claim) when you are ready to act on it.',
+    });
 }
 
 function describeClaimRefusal(reason: string | undefined, state?: string): string {

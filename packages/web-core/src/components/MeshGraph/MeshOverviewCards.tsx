@@ -263,9 +263,11 @@ export type DetailSelection =
     | { kind: 'ledger'; entry: RepoMeshLedgerEntryStatus }
     | { kind: 'queue'; task: RepoMeshQueueTask }
     | { kind: 'session'; node: RepoMeshNodeStatus; session: MeshGraphSessionDetail }
-    // Coordinator gate on the fused blueprint canvas. READ-ONLY by design
-    // (owner decision 2026-08-24): acting on a gate is done by instructing
-    // the coordinator, never by clicking.
+    // Coordinator gate detail modal — read-only (inspection only). D5
+    // (docs/design/2026-09-25-graph-orchestration-simplification.md) added
+    // Release/Abandon/Extend buttons to the Blocked-section ROW itself
+    // (MeshBlueprintRow's MeshBlueprintGateRowView); this modal stays a
+    // detail view and does not duplicate those actions.
     | { kind: 'gate'; graph: import('@adhdev/daemon-core').MeshGraphView; nodeId: string; gate: import('@adhdev/daemon-core').MeshGraphGateView | null }
 
 /** Command seam used to fetch the verbose (full-goal) mission payload on demand. */

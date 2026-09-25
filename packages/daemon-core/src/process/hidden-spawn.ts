@@ -25,17 +25,39 @@
  *
  * On non-win32 platforms `windowsHide` is inert, so these are safe everywhere
  * and callers need no platform branch.
+ *
+ * `hiddenExec`/`hiddenExecFileAsync` (2026-09-25, win32 console-flash follow-up):
+ * `check-windows-hide.mjs` used to exclude bare `exec(` entirely — matching the
+ * bare identifier `exec` produced far more false positives (`regex.exec(`, a
+ * web-core RPC helper of the same name) than real defects. That let a genuine
+ * violation ship: `providers/version-archive.ts`'s per-provider `--version`/`-V`/
+ * `-v` boot probe used bare `exec` with no `windowsHide`, and after any detached
+ * upgrade/restart the daemon has no console of its own, so each probe allocated
+ * a fresh visible one. The gate is now import-binding-scoped instead of
+ * identifier-scoped (only flags `exec`/`execFile` calls in files that actually
+ * import them from `child_process`), so bare `exec`/`promisify(execFile)` calls
+ * are enforceable without the old false-positive class. These two wrappers are
+ * the sanctioned replacement for both shapes.
  */
 
 import {
+    exec,
+    execFile,
     execFileSync,
     execSync,
     spawn,
     spawnSync,
     type ChildProcess,
     type ChildProcessWithoutNullStreams,
+    type ExecException,
+    type ExecFileOptions,
+    type ExecFileOptionsWithBufferEncoding,
+    type ExecFileOptionsWithStringEncoding,
     type ExecFileSyncOptions,
     type ExecFileSyncOptionsWithStringEncoding,
+    type ExecOptions,
+    type ExecOptionsWithBufferEncoding,
+    type ExecOptionsWithStringEncoding,
     type ExecSyncOptions,
     type ExecSyncOptionsWithStringEncoding,
     type SpawnOptions,
@@ -43,6 +65,7 @@ import {
     type SpawnSyncOptionsWithStringEncoding,
     type SpawnSyncReturns,
 } from 'node:child_process';
+import { promisify } from 'node:util';
 
 /** `spawn` with the win32 console window hidden by default. */
 export function hiddenSpawn(
@@ -119,6 +142,101 @@ export function hiddenExecSync(
     options: ExecSyncOptions = {},
 ): Buffer | string {
     return execSync(command, { windowsHide: true, ...options });
+}
+
+/**
+ * `exec` with the win32 console window hidden by default.
+ *
+ * Mirrors `child_process.exec`'s own 4-overload shape (bare command with an
+ * optional callback, `ExecOptionsWithStringEncoding` → string results,
+ * `ExecOptionsWithBufferEncoding` → Buffer results, generic `ExecOptions` →
+ * the `string | Buffer` fallback) so this is a drop-in replacement for any
+ * existing `exec(...)` call shape and callers keep the same result typing
+ * they'd get from real `exec` — no extra casts needed at the call site.
+ */
+export function hiddenExec(
+    command: string,
+    callback?: (error: ExecException | null, stdout: string, stderr: string) => void,
+): ChildProcess;
+export function hiddenExec(
+    command: string,
+    options: ExecOptionsWithBufferEncoding,
+    callback?: (error: ExecException | null, stdout: Buffer, stderr: Buffer) => void,
+): ChildProcess;
+export function hiddenExec(
+    command: string,
+    options: ExecOptionsWithStringEncoding,
+    callback?: (error: ExecException | null, stdout: string, stderr: string) => void,
+): ChildProcess;
+export function hiddenExec(
+    command: string,
+    options: ExecOptions | undefined | null,
+    callback?: (error: ExecException | null, stdout: string | Buffer, stderr: string | Buffer) => void,
+): ChildProcess;
+// The implementation signature's parameter types only need to be broad enough
+// to be assignable FROM every overload above — they are not part of the
+// public surface (TS hides the implementation signature from callers), so
+// `any` here is the standard pattern for a manually-overloaded function whose
+// individually-typed overloads already give callers real safety.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function hiddenExec(command: string, optionsOrCallback?: any, callback?: any): ChildProcess {
+    if (typeof optionsOrCallback === 'function') {
+        return exec(command, { windowsHide: true }, optionsOrCallback);
+    }
+    const options: ExecOptions = { windowsHide: true, ...optionsOrCallback };
+    return callback ? exec(command, options, callback) : exec(command, options);
+}
+
+// `util.promisify` special-cases `child_process.exec` by function identity
+// (its `[util.promisify.custom]` resolves to `{ stdout, stderr }`, not the
+// generic single-positional-arg shape a plain `promisify(fn)` would infer from
+// a `(err, a, b) => void` callback). A caller who does `promisify(hiddenExec)`
+// expecting exec-shaped behavior would silently get back a bare `stdout`
+// string instead — this attaches the same custom-promisify contract `exec`
+// itself has, wired through `hiddenExec`'s windowsHide default, so
+// `promisify(hiddenExec)` is a true drop-in for `promisify(exec)`.
+(hiddenExec as unknown as Record<symbol, unknown>)[promisify.custom] = (
+    command: string,
+    options?: ExecOptions,
+): Promise<{ stdout: string | Buffer; stderr: string | Buffer }> => {
+    return promisify(exec)(command, { windowsHide: true, ...options } as ExecOptions);
+};
+
+/**
+ * Promisified `execFile` with the win32 console window hidden by default.
+ *
+ * For the `await promisify(execFile)(...)`/`execFileAsync(...)` shape used
+ * throughout `commands/router-refine.ts`, `mesh/mesh-refine-*.ts`, and the
+ * `git/*.ts` helpers. Most existing call sites in this package add
+ * `windowsHide: true` inline to a locally-bound `execFileAsync` instead of
+ * switching to this wrapper (smaller diff against an established pattern); use
+ * this one for new call sites so there's a single sanctioned name instead of
+ * remembering the flag by hand. Overloaded on encoding the same way
+ * `hiddenExecFileSync` already is, for the same reason: a caller passing
+ * `encoding: 'utf8'` gets `Promise<{ stdout: string; stderr: string }>` back
+ * without a cast.
+ */
+export function hiddenExecFileAsync(
+    file: string,
+    args: readonly string[] | undefined,
+    options: ExecFileOptionsWithBufferEncoding,
+): Promise<{ stdout: Buffer; stderr: Buffer }>;
+export function hiddenExecFileAsync(
+    file: string,
+    args?: readonly string[],
+    options?: ExecFileOptionsWithStringEncoding,
+): Promise<{ stdout: string; stderr: string }>;
+export function hiddenExecFileAsync(
+    file: string,
+    args?: readonly string[],
+    options?: ExecFileOptions,
+): Promise<{ stdout: string | Buffer; stderr: string | Buffer }>;
+export function hiddenExecFileAsync(
+    file: string,
+    args: readonly string[] = [],
+    options: ExecFileOptions = {},
+): Promise<{ stdout: string | Buffer; stderr: string | Buffer }> {
+    return promisify(execFile)(file, args as string[], { windowsHide: true, ...options } as ExecFileOptions);
 }
 
 export type { ChildProcess, ChildProcessWithoutNullStreams };

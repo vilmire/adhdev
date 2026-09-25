@@ -27,8 +27,10 @@ import { buildCoordinatorSystemPrompt } from '@adhdev/daemon-core';
 //
 //   1. the prompt tells the model to include batch by exact name BEFORE it searches,
 //      and that instruction physically precedes the workflow in the rendered string;
-//   2. a ranked deferred search for "enqueue"/"delegate" returns batch first;
-//   3. an unranked lister sees batch first by registry order.
+//   2. a ranked deferred search for "enqueue"/"delegate" returns BOTH tools, with
+//      the incremental default (task) first and batch right behind it (D1 flipped
+//      Phase F's batch-first rank on 2026-09-25 — see F-3 below);
+//   3. an unranked lister sees task first by registry order, batch adjacent.
 //
 // Phase F is WARN-ONLY: nothing here asserts that a single enqueue is rejected, and
 // `batch_required` enforcement is deliberately NOT implemented yet (design :6 stages
@@ -141,17 +143,20 @@ test('F-4: a two-task request returns mesh_enqueue_batch among the first candida
     }
 });
 
-test('F-4: batch outranks the single-task fallback for enqueue/delegate queries', () => {
-    // ★ The precise regression: the coordinator picked the FALLBACK first and stopped.
+test('F-4: the incremental default outranks batch for enqueue/delegate queries, batch adjacent', () => {
+    // D1: `mesh_enqueue_task` + `depends_on` is the default, so it ranks first. The
+    // original Phase F regression (coordinator found ONE tool and never learned the
+    // other existed) is still covered: batch must be surfaced right behind it.
     for (const query of ['enqueue', 'delegate']) {
         const candidates = deferredToolSearch(query);
         const batchAt = candidates.indexOf('mesh_enqueue_batch');
         const taskAt = candidates.indexOf('mesh_enqueue_task');
         assert.ok(batchAt >= 0 && taskAt >= 0, `"${query}" must surface both enqueue tools`);
         assert.ok(
-            batchAt < taskAt,
-            `"${query}" ranked mesh_enqueue_task (${taskAt}) ahead of mesh_enqueue_batch (${batchAt})`,
+            taskAt < batchAt,
+            `"${query}" ranked mesh_enqueue_batch (${batchAt}) ahead of mesh_enqueue_task (${taskAt}) — D1 makes task the default`,
         );
+        assert.equal(batchAt, taskAt + 1, `"${query}" must keep batch adjacent to task so a coordinator sees both`);
     }
 });
 
@@ -171,15 +176,16 @@ test('F-4: a bare "enqueue"/"delegate" query matches BOTH tools via shared keywo
 
 // ── Registry order (the unranked-client path) ─────────────────────────────────
 
-test('F-2: mesh_enqueue_batch precedes mesh_enqueue_task in ALL_MESH_TOOLS', () => {
+test('F-2: mesh_enqueue_task precedes mesh_enqueue_batch in ALL_MESH_TOOLS, adjacent', () => {
     const names = ALL_MESH_TOOLS.map(t => t.name);
     const batchAt = names.indexOf('mesh_enqueue_batch');
     const taskAt = names.indexOf('mesh_enqueue_task');
     assert.ok(batchAt >= 0 && taskAt >= 0, 'both enqueue tools must be published');
     assert.ok(
-        batchAt < taskAt,
-        `registry order puts the fallback first (batch ${batchAt}, task ${taskAt}) — a client that lists without ranking sees the wrong default`,
+        taskAt < batchAt,
+        `registry order puts batch first (batch ${batchAt}, task ${taskAt}) — D1 makes the incremental task the default an unranked client sees first`,
     );
+    assert.equal(batchAt, taskAt + 1, 'batch must stay adjacent to task in registry order');
 });
 
 test('F-2: both enqueue tools declare the same enqueue sibling group', () => {
@@ -194,148 +200,82 @@ test('F-2: both enqueue tools declare the same enqueue sibling group', () => {
     for (const tool of [batch, task]) {
         assert.deepEqual(
             [...(tool._meta?.toolGroupMembers ?? [])],
-            ['mesh_enqueue_batch', 'mesh_enqueue_task'],
+            ['mesh_enqueue_task', 'mesh_enqueue_batch'],
             `${tool.name} must list both siblings so loading either exposes the other`,
         );
     }
 });
 
-// ── F-3: the tool descriptions carry the design's verbatim framing ────────────
+// ── F-3: the tool descriptions carry the D1 framing ───────────────────────────
+//
+// graph-orchestration-simplification D1 (docs/design/2026-09-25-graph-orchestration-
+// simplification.md) REVERSED Phase F's batch-first framing: work is discovered
+// step by step, so incremental `mesh_enqueue_task` + `depends_on` is the default and
+// batch is reserved for a SETTLED plan (3+ steps needing gates / deferred worktrees).
+// The discovery `_meta` (rank, registry order, role) was flipped to task-first to
+// match, and is pinned above.
 
-test('F-3: mesh_enqueue_batch is described as the DEFAULT enqueue surface', () => {
+test('F-3: mesh_enqueue_batch is described as the settled-plan surface, not the default', () => {
     const description = findTool('mesh_enqueue_batch').description ?? '';
-    assert.match(description, /DEFAULT enqueue surface for a plan with two or more known graph steps/);
-    assert.match(description, /Atomically persists the graph plan and worker queue entries/);
+    assert.match(description, /Atomically enqueue a SETTLED plan/);
+    assert.match(description, /3\+ steps/);
+    assert.match(description, /otherwise chain mesh_enqueue_task with depends_on/);
+    assert.match(description, /Never invent steps to fill a batch/);
     // The atomicity boundary must stay stated: DB plan atomicity is NOT git.
     assert.match(description, /compensated saga and is reported separately from DB atomicity/);
+    assert.doesNotMatch(description, /DEFAULT enqueue surface/);
 });
 
-test('F-3: mesh_enqueue_task is described as the SINGLE-TASK FALLBACK and redirects to batch', () => {
+test('F-3: mesh_enqueue_task is described as the default and chains with depends_on', () => {
     const description = findTool('mesh_enqueue_task').description ?? '';
-    assert.match(description, /SINGLE-TASK FALLBACK/);
-    assert.match(description, /load and use mesh_enqueue_batch instead/);
+    assert.match(description, /default way to delegate/);
+    assert.match(description, /depends_on/);
+    assert.match(description, /Use mesh_enqueue_batch only for a settled plan of 3\+ steps/);
     assert.match(description, /Same-session continuation belongs in mesh_send_task/);
+    assert.doesNotMatch(description, /SINGLE-TASK FALLBACK/);
 });
 
-// ── F-1: the prompt instruction, and its ORDERING ─────────────────────────────
+// ── F-1 (as amended by D1): the prompt's enqueue guidance ─────────────────────
 
-test('F-1: the prompt carries the verbatim tool-discovery instruction', () => {
+test('F-1/D1: the batch-first discovery instruction is gone from the prompt', () => {
+    // The Phase F instruction forced every delegation search to load batch first;
+    // D1 removed it. Its return would re-impose the pre-declared-DAG interface.
     const prompt = realCoordinatorPrompt();
-    assert.ok(
-        prompt.includes(
-            'Before searching for an enqueue tool, classify the whole currently known work frontier. For every new delegation search, include `mesh_enqueue_batch` by exact name; never search for or load only `mesh_enqueue_task`. Load `mesh_enqueue_task` only as the single-task fallback after the batch eligibility check below fails.',
-        ),
-        'the required tool-discovery instruction is missing or reworded',
-    );
+    assert.ok(!prompt.includes('never search for or load only `mesh_enqueue_task`'), 'batch-first discovery instruction must stay removed');
+    assert.ok(!prompt.includes('**Batch-first rule.**'), 'the batch-first rule must stay removed');
+    // The Tool Exposure Preflight section itself survives (staleness check).
+    assert.ok(prompt.includes('## Tool Exposure Preflight'));
+    assert.ok(prompt.includes('Before doing any coordinator work, confirm that the actual callable tool list'));
 });
 
-test('F-1: ★ the discovery instruction precedes the workflow and the tool table rows', () => {
-    // ★ This ordering assertion is the whole point of placement. The instruction only
-    // works if the model reads it BEFORE issuing its first deferred tool search; an
-    // identical sentence further down the prompt would not have prevented the observed
-    // failure. Assert position, not just presence.
+test('F-1/D1: the prompt makes mesh_enqueue_task + depends_on the default and scopes batch to settled plans', () => {
     const prompt = realCoordinatorPrompt();
-
-    const discoveryAt = prompt.indexOf('Before searching for an enqueue tool');
-    const preflightAt = prompt.indexOf('## Tool Exposure Preflight');
-    const stalenessAt = prompt.indexOf('Before doing any coordinator work, confirm that the actual callable tool list');
-    const workflowAt = prompt.indexOf('## Orchestration Workflow');
-
-    assert.ok(discoveryAt >= 0, 'discovery instruction missing');
-    assert.ok(preflightAt >= 0 && stalenessAt >= 0 && workflowAt >= 0, 'prompt sections missing');
-
-    assert.ok(
-        discoveryAt > preflightAt,
-        'the discovery instruction must live inside Tool Exposure Preflight',
-    );
-    assert.ok(
-        discoveryAt < stalenessAt,
-        'the discovery instruction must come at the BEGINNING of Tool Exposure Preflight, before the staleness check',
-    );
-    assert.ok(
-        discoveryAt < workflowAt,
-        'the discovery instruction must precede the general Orchestration Workflow',
-    );
+    assert.match(prompt, /`mesh_enqueue_task`[^\n]*DEFAULT enqueue surface/);
+    assert.match(prompt, /Default to `mesh_enqueue_task`/);
+    assert.match(prompt, /chain[^\n]*`depends_on`/);
+    assert.match(prompt, /three or more steps are already settled/);
+    // ★ The anti-speculation boundary survives the reversal: batch must never be
+    // assembled from invented steps.
+    assert.match(prompt, /Never (invent speculative steps|fabricate steps)/);
 });
 
-test('F-1: the prompt carries the batch-first eligibility text and its safety boundary', () => {
+test('F-1/D1: difficulty is stated for the default single task as well as batch entries', () => {
     const prompt = realCoordinatorPrompt();
-
-    // ★ GRAPH-ADOPTION P4-b restated the ELIGIBILITY TRIGGER, not the rule's content.
-    // The original phrasing ("whenever the currently known plan contains two or more
-    // graph steps") is a predicate over the coordinator's own private, momentary
-    // awareness — it has no observable referent, so it cannot actually be checked, and
-    // measured adoption was zero. It is now a binary question about a checkable fact,
-    // matching the shape of Workflow 3.b0, which is followed 100% of the time. What
-    // this test protects is unchanged: the trigger exists, the whole plan goes in one
-    // batch, the single fallback has a stated condition, and the anti-speculation
-    // boundary sits with the rule.
-    assert.ok(
-        prompt.includes('will I read its result and then dispatch more work'),
-        'batch-first eligibility trigger missing',
-    );
-    assert.ok(
-        prompt.includes('You will act on the result → `mesh_enqueue_batch`'),
-        'the trigger must resolve to the batch surface when a successor is intended',
-    );
-    assert.ok(
-        prompt.includes('Submit the whole materializable plan in ONE batch.'),
-        'the "submit the whole plan once" clause is missing',
-    );
-    assert.ok(
-        prompt.includes('The result goes to the user and nothing follows → `mesh_enqueue_task`'),
-        'single-task fallback condition missing',
-    );
-
-    // ★ Without this boundary the batch-first rule actively backfires: a coordinator
-    // pressured to "form a batch" invents downstream tasks it cannot faithfully state.
-    assert.ok(
-        prompt.includes('Do not invent speculative downstream instructions merely to form a batch'),
-        'the anti-speculation safety boundary is missing',
-    );
-    assert.ok(
-        prompt.includes('is single-task enqueue correct'),
-        'the safety boundary must end by blessing the single-task enqueue',
-    );
-
-    // The boundary has to sit WITH the rule it constrains, not elsewhere in the prompt.
-    const ruleAt = prompt.indexOf('**Batch-first rule.**');
-    const boundaryAt = prompt.indexOf('Do not invent speculative downstream instructions');
-    assert.ok(ruleAt >= 0 && boundaryAt > ruleAt, 'the safety boundary must follow the batch-first rule');
+    assert.match(prompt, /Pass `difficulty` on `mesh_enqueue_task`[^\n]*`mesh_enqueue_batch`/);
 });
 
-test('F-1: difficulty is stated for batch worker entries as well as the single-task fallback', () => {
+test('F-1/D1: delegation routing and front-loading name the incremental default', () => {
     const prompt = realCoordinatorPrompt();
     assert.ok(
-        prompt.includes(
-            'Pass `difficulty` on every worker entry in `mesh_enqueue_batch`, or on `mesh_enqueue_task` for the single-task fallback.',
-        ),
-        'the difficulty sentence was not updated for batch entries',
-    );
-});
-
-test('F-1: delegation routing and front-loading name the batch surface', () => {
-    const prompt = realCoordinatorPrompt();
-
-    // ★ P4-c: this rule's SUBJECT is "never use local sub-agents" — it names the
-    // enqueue surfaces only in passing. It previously listed batch and task as
-    // co-equal options ("batch for a multi-step graph, task for one ready task"),
-    // which re-flattens the very preference Workflow 3.a states, in a rule the
-    // coordinator reads far more often than the workflow. It now orders them.
-    assert.ok(
-        prompt.includes(
-            'must be delegated through `mesh_enqueue_batch` (the default — see Workflow 3.a), falling back to `mesh_enqueue_task` only for a terminal single step',
-        ),
-        'the no-local-sub-agents routing rule must name batch as the default, not as one of two equal options',
+        prompt.includes('must be delegated through `mesh_enqueue_task` (the default — see Workflow 3.a)'),
+        'the no-local-sub-agents routing rule must name mesh_enqueue_task as the default',
     );
     assert.ok(
         prompt.includes('`mesh_send_task` for a same-session continuation'),
         'the same-session continuation route must survive the rewording',
     );
     assert.ok(
-        prompt.includes(
-            'Put predecessor-produced data in explicit `inputs_from` bindings and coordinator decisions in gates; never copy untrusted worker output into a new instruction by hand when a binding can preserve provenance.',
-        ),
+        prompt.includes('never copy untrusted worker output into a new instruction by hand when a binding can preserve provenance.'),
         'the front-load rule does not state the provenance-preserving binding',
     );
 });
@@ -361,16 +301,11 @@ test('F: warn-only — no batch_required enforcement is shipped in this phase', 
         'mesh_enqueue_task must not enforce batch_required during the warn phase',
     );
 
-    // The prompt must still describe the single tool as usable, not forbidden.
-    // ★ P4 sharpened the batch-first trigger; it must NOT have crossed into forbidding
-    // the single surface, which would be enforcement smuggled in through wording.
+    // The prompt must describe the single tool as usable — since D1 it is the default.
     const prompt = realCoordinatorPrompt();
     assert.ok(
-        prompt.includes('is single-task enqueue correct'),
-        'the warn phase must keep an explicitly correct single-task path',
+        prompt.includes('`mesh_enqueue_task` is the default enqueue surface'),
+        'the single-task surface must stay an explicitly correct (default) path',
     );
-    assert.ok(
-        prompt.includes('The result goes to the user and nothing follows → `mesh_enqueue_task`'),
-        'the single surface must keep a stated case where it is the right answer',
-    );
+    assert.ok(!prompt.includes('batch_required'), 'the prompt must not announce batch_required enforcement');
 });

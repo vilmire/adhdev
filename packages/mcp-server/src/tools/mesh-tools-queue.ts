@@ -53,6 +53,7 @@ import {
 // mesh-tools-internal.ts itself imports.
 import { summarizeQueueEntryInputForView } from '@adhdev/daemon-core';
 import { buildGraphPlanShape } from './mesh-tools-graph.js';
+import { canonicalizeEnqueueTaskEntry, canonicalizeMeshTopLevelArgs } from './validate-tool-args.js';
 // C-W9a: the queue and the records are the daemon's — every read and mutation
 // below goes over its IPC commands (the mcp-server never opens mesh-runtime.db).
 // C-W9c: + mission_query (mission_id existence check) and orphaned_pin_notify
@@ -220,9 +221,21 @@ type NormalizeEnqueueTaskResult =
  */
 async function normalizeEnqueueTaskArgs(
     ctx: MeshContext,
-    args: EnqueueTaskArgsShape,
+    rawArgs: EnqueueTaskArgsShape,
     callerLabel: string,
 ): Promise<NormalizeEnqueueTaskResult> {
+    // ★CANONICAL-FIRST (2026-09-25): server.ts now dispatches with
+    // canonicalizeMeshToolArgs's output, so a top-level mesh_enqueue_task call
+    // already arrives canonicalized. This second pass is for the OTHER two
+    // callers of this function that a top-level canonicalization does not
+    // reach: (1) a task entry inside mesh_enqueue_batch's `tasks[]` — that
+    // needs the `tasks` SCOPE's aliases, not the batch's top-level scope,
+    // which is why this uses the dedicated per-entry helper rather than
+    // canonicalizeMeshToolArgs('mesh_enqueue_batch', rawArgs) (see that
+    // helper's own doc comment); (2) any existing/future test that constructs
+    // args directly and calls this function without going through server.ts
+    // at all. Idempotent: canonicalizing already-canonical args is a no-op.
+    const args = canonicalizeEnqueueTaskEntry(rawArgs as unknown as Record<string, unknown>) as unknown as EnqueueTaskArgsShape;
     // DELIVERY-MSG-GUARD: make the schema's nominal `required: ['message']` real. The
     // tool dispatcher forwards raw args without runtime schema validation, so a caller
     // that omits message (or passes a non-string) would otherwise hand undefined to
@@ -380,6 +393,15 @@ export async function meshEnqueueTask(
         orchestration_decision?: unknown; orchestrationDecision?: unknown;
     },
 ): Promise<string> {
+    // ★CANONICAL-FIRST (2026-09-25): mesh_enqueue_task's own top-level scope
+    // (allow_duplicate/block_duplicate/orchestration_decision — the fields
+    // normalizeEnqueueTaskArgs does NOT own) — same rationale as
+    // canonicalizeEnqueueTaskEntry above. Idempotent with server.ts's own
+    // canonicalization pass.
+    // Canonical spelling wins over a camelCase alias (validate-tool-args.ts). Reassigned
+    // in place, not shadowed, so the schema/handler parity audit still reads the inline
+    // `args` type on the signature.
+    args = canonicalizeMeshTopLevelArgs('mesh_enqueue_task', args as unknown as Record<string, unknown>) as unknown as typeof args;
     // STALE-SNAPSHOT-TARGET-REJECT: refresh before validation. Every other
     // membership-reading tool refreshes first; enqueue alone validated
     // target_node_id against the startup snapshot, so a node cloned after this
@@ -587,6 +609,15 @@ export async function meshEnqueueBatch(
         orchestration_decision?: unknown; orchestrationDecision?: unknown;
     },
 ): Promise<string> {
+    // ★CANONICAL-FIRST (2026-09-25): mesh_enqueue_batch's own top-level scope
+    // (mission_id/allow_duplicate/block_duplicate/batch_id/
+    // orchestration_decision/on_dependency_failure). `tasks[]` entries are
+    // NOT touched here — each entry gets canonicalized against the `tasks`
+    // scope inside normalizeEnqueueTaskArgs below, which is a different alias
+    // table than this top-level one (see canonicalizeEnqueueTaskEntry's doc
+    // comment for why the two must not be conflated). Idempotent with
+    // server.ts's own canonicalization pass.
+    args = canonicalizeMeshTopLevelArgs('mesh_enqueue_batch', args) as typeof args;
     const rawTasks = Array.isArray(args.tasks) ? args.tasks : undefined;
     if (!rawTasks || rawTasks.length === 0) {
         return JSON.stringify({

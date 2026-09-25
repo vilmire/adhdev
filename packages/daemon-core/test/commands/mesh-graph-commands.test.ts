@@ -6,15 +6,19 @@ import { tmpdir } from 'os';
 
 // G5 — dashboard-transport surface for the graph control plane.
 //
-//   The graph projection and gate verbs existed only as coordinator MCP tools;
-//   these commands expose the SAME engine over sendDaemonCommand so a human
-//   can finally see and operate gates. Pinned here:
+//   The graph projection existed only as a coordinator MCP tool; these
+//   commands expose the SAME engine over sendDaemonCommand so a human can
+//   finally see it. Pinned here:
 //     (1) mesh_graph_overview returns the projection for a seeded graph;
-//     (2) claim → release round-trips through the real engine (lease
-//         generation + fencing token enforced; releasing with a wrong token
-//         fails with a machine-readable code, not a throw);
-//     (3) abandon settles an awaiting gate and reports abandoned:true;
-//     (4) every handler fails soft ({success:false}) on missing args.
+//     (2) every handler fails soft ({success:false}) on missing args.
+//
+//   ★ The gate verbs (claim/release/abandon/extend) this file used to define
+//   as mesh_gate_claim/release/abandon moved to mesh-graph-gate-commands.ts
+//   as mesh_graph_gate_claim/release/abandon/extend (2026-09-25,
+//   graph-orchestration-simplification D3(c) — see that file's header for
+//   why the old names were removed rather than kept as aliases). Their
+//   round-trip/abandon coverage now lives in
+//   test/commands/mesh-graph-gate-commands.test.ts.
 
 const testTmpDir = path.join(tmpdir(), `adhdev-graph-cmds-${randomUUID().slice(0, 8)}`);
 const testConfigDir = path.join(testTmpDir, '.adhdev');
@@ -105,45 +109,8 @@ describe('mesh graph dashboard commands', () => {
         expect(res.totalGraphCount).toBe(22);
     });
 
-    it('claim → release round-trips through the fenced engine', async () => {
-        const mesh = meshId('roundtrip');
-        const { gateId } = seedGateGraph(mesh);
-
-        const claim: any = await meshGraphCommandHandlers.mesh_gate_claim(ctx, { meshId: mesh, gateId });
-        expect(claim.success).toBe(true);
-        expect(claim.claimed).toBe(true);
-        expect(typeof claim.fencingToken).toBe('string');
-        expect(typeof claim.leaseGeneration).toBe('number');
-
-        // Wrong fencing token is rejected with a code, never a throw.
-        const badRelease: any = await meshGraphCommandHandlers.mesh_gate_release(ctx, {
-            meshId: mesh, gateId, leaseGeneration: claim.leaseGeneration, fencingToken: 'not-the-token', outcome: 'passed',
-        });
-        expect(badRelease.success).toBe(false);
-        expect(typeof badRelease.code).toBe('string');
-
-        const release: any = await meshGraphCommandHandlers.mesh_gate_release(ctx, {
-            meshId: mesh, gateId, leaseGeneration: claim.leaseGeneration, fencingToken: claim.fencingToken,
-            outcome: 'passed', evidence: 'screenshots verified',
-        });
-        expect(release.success).toBe(true);
-        expect(release.released).toBe(true);
-
-        const gate = MeshRuntimeStore.getInstance().graphStore().getGate(gateId);
-        expect(gate?.state).toBe('released');
-    });
-
-    it('mesh_gate_abandon settles an awaiting gate', async () => {
-        const mesh = meshId('abandon');
-        const { gateId } = seedGateGraph(mesh);
-        const res: any = await meshGraphCommandHandlers.mesh_gate_abandon(ctx, { meshId: mesh, gateId, reason: 'work is dead' });
-        expect(res.success).toBe(true);
-        expect(res.abandoned).toBe(true);
-        expect(MeshRuntimeStore.getInstance().graphStore().getGate(gateId)?.state).toBe('cancelled');
-    });
-
     it('fails soft on missing args', async () => {
-        for (const name of ['mesh_graph_overview', 'mesh_gate_claim', 'mesh_gate_release', 'mesh_gate_abandon', 'mesh_task_output'] as const) {
+        for (const name of ['mesh_graph_overview', 'mesh_task_output'] as const) {
             const res: any = await meshGraphCommandHandlers[name](ctx, {});
             expect(res.success).toBe(false);
             expect(typeof res.error).toBe('string');

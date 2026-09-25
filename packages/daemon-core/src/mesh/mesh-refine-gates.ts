@@ -424,7 +424,7 @@ export function recordMeshRefineStage(
  * once in the orchestrator and threaded through RefineContext so every stage runs
  * git the same way (execFile + promisify, utf8). Returns the child's stdout/stderr.
  */
-export type RefineExecFileAsync = (file: string, args: string[], options: { cwd: string; encoding: 'utf8'; env?: NodeJS.ProcessEnv; timeout?: number }) => Promise<{ stdout: string; stderr: string }>;
+export type RefineExecFileAsync = (file: string, args: string[], options: { cwd: string; encoding: 'utf8'; env?: NodeJS.ProcessEnv; timeout?: number; windowsHide?: boolean }) => Promise<{ stdout: string; stderr: string }>;
 
 /**
  * Accumulated state shared by the synchronous-refine stages. The orchestrator
@@ -1709,6 +1709,7 @@ export async function alignRefinerySubmodulesAfterMerge(
             encoding: 'utf8',
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
             timeout: 60_000,
+            windowsHide: true,
         });
         const postStatus = await getGitRepoStatus(repoRoot, {
             includeSubmodules: true,

@@ -55,7 +55,15 @@ import {
     type MeshGraphGateRow,
     type MeshTaskGraphNodeRow,
 } from './mesh-graph-types.js';
-import { classifyGraphRollup } from './mesh-graph-derived-failure.js';
+import { resolveDefaultGateDeadlineSeconds } from './mesh-graph-gate-defaults.js';
+import {
+    abandonGateInTxn,
+    autoAbandonGatesWithTerminalDownstreamInTxn,
+    cancelGateDownstreamSubtree,
+    insertGateOutbox,
+    type MeshGraphGateAbandonInput,
+    type MeshGraphGateAbandonResult,
+} from './mesh-graph-gate-closure.js';
 import {
     drainMeshGraphOutbox,
     graphMaterializationBlockReason,
@@ -65,6 +73,23 @@ import {
     parseCoordinatorGateBlock,
     settleDownstreamNode,
 } from './mesh-graph-transition-runner.js';
+
+// The closure half (abandon core + D3(a) auto-close) lives in
+// mesh-graph-gate-closure.ts — re-exported so existing importers are unaffected.
+export {
+    autoAbandonGatesWithTerminalDownstreamInTxn,
+    coordinatorGateAbandonedReason,
+    MESH_GATE_AUTO_ABANDON_ACTOR,
+    MESH_GATE_AUTO_ABANDON_REASON,
+    type MeshGraphGateAbandonInput,
+    type MeshGraphGateAbandonResult,
+} from './mesh-graph-gate-closure.js';
+export {
+    MESH_GATE_DEFAULT_DEADLINE_ENV,
+    MESH_GATE_DEFAULT_DEADLINE_SECONDS,
+    MESH_GATE_DEFAULT_ON_TIMEOUT,
+    resolveDefaultGateDeadlineSeconds,
+} from './mesh-graph-gate-defaults.js';
 
 /** design :384 — the spec's own example lease; used when the gate spec omits `lease_seconds`. */
 export const MESH_GATE_DEFAULT_LEASE_SECONDS = 900;
@@ -568,44 +593,6 @@ function clearReleasedGateHold(store: MeshRuntimeStore, target: MeshTaskGraphNod
 
 // ── mesh_graph_gate_abandon (design :399 — the `-> cancelled` edge) ───────────
 
-export interface MeshGraphGateAbandonInput {
-    meshId: string;
-    gateId: string;
-    /** Free-form operator reason, recorded on the gate node and the cancelled downstream rows. */
-    reason: string;
-    /**
-     * Who is abandoning. Recorded for provenance. Deliberately NOT matched
-     * against `leaseOwnerSessionId`: the whole point of abandon is to close a
-     * gate whose owner is gone.
-     */
-    coordinatorSessionId?: string;
-    /**
-     * A LIVE foreign lease is refused by default — the holder may be mid-action
-     * on an external side effect, and abandoning under them would strand it.
-     * Set true to abandon anyway (an operator who knows the holder is dead).
-     */
-    force?: boolean;
-    nowMs?: number;
-}
-
-export interface MeshGraphGateAbandonResult {
-    abandoned: boolean;
-    /** gate_not_found / gate_already_abandoned / gate_terminal:<state> / gate_lease_held / gate_abandon_race. */
-    reason?: string;
-    gate?: MeshGraphGateRow;
-    /** Downstream worker nodes cancelled by this abandon. */
-    cancelledNodeIds: string[];
-    /** Their still-pending queue placeholders, now `cancelled`. */
-    cancelledTaskIds: string[];
-    /** The graph status this abandon rolled the graph to, when it rolled at all. */
-    graphStatus?: string;
-}
-
-/** The block/cancel reason an abandoned gate stamps on the work it closes. */
-export function coordinatorGateAbandonedReason(gateId: string): string {
-    return `coordinator_gate_abandoned:${gateId}`;
-}
-
 /**
  * ★ Abandon a gate that can never be opened — the ONLY non-release terminal a
  * coordinator can write, and deliberately NOT a pass.
@@ -643,97 +630,107 @@ export function abandonMeshGraphGate(input: MeshGraphGateAbandonInput): MeshGrap
     const store = MeshRuntimeStore.getInstance();
     const nowMs = input.nowMs ?? Date.now();
     const nowIso = new Date(nowMs).toISOString();
-    const result = store.transaction((): MeshGraphGateAbandonResult => {
-        const graphStore = store.graphStore();
-        const gate = graphStore.getGate(input.gateId);
-        if (!gate || gate.meshId !== input.meshId) {
-            return { abandoned: false, reason: 'gate_not_found', cancelledNodeIds: [], cancelledTaskIds: [] };
+    const result = store.transaction(() => {
+        const res = abandonGateInTxn(store, input, nowIso);
+        // D3(a): the subtree walk may have cancelled a node that a SIBLING gate
+        // also guards — that gate now guards nothing; close it in this transaction.
+        if (res.abandoned && res.gate && res.cancelledNodeIds.length > 0) {
+            autoAbandonGatesWithTerminalDownstreamInTxn(store, res.gate.graphId, nowIso);
         }
-        if (gate.state === 'cancelled') {
-            // Idempotent: abandoning an abandoned gate is a no-op success, so a
-            // retried cleanup never has to distinguish "I did it" from "it was done".
-            return { abandoned: true, reason: 'gate_already_abandoned', gate, cancelledNodeIds: [], cancelledTaskIds: [] };
-        }
-        if (gate.state === 'released') {
-            // A released gate already let its downstream run. Abandoning it would
-            // claim closure over work that is in flight or finished.
-            return { abandoned: false, reason: `gate_terminal:${gate.state}`, gate, cancelledNodeIds: [], cancelledTaskIds: [] };
-        }
-        if (!input.force && gate.state === 'claimed' && gate.leaseExpiresAt && gate.leaseExpiresAt > nowIso) {
-            return { abandoned: false, reason: 'gate_lease_held', gate, cancelledNodeIds: [], cancelledTaskIds: [] };
-        }
-
-        const abandonReason = `${coordinatorGateAbandonedReason(gate.gateId)}:${input.reason}`;
-        const won = graphStore.patchGate(gate.gateId, {
-            state: 'cancelled',
-            // Drop the lease: an abandoned gate has no owner and no live fence.
-            leaseOwnerSessionId: null,
-            fencingToken: null,
-            leaseExpiresAt: null,
-        }, nowIso, { leaseGeneration: gate.leaseGeneration });
-        if (!won) {
-            return { abandoned: false, reason: 'gate_abandon_race', gate, cancelledNodeIds: [], cancelledTaskIds: [] };
-        }
-
-        const node = graphStore.getNode(gate.graphId, gate.nodeId);
-        if (node && node.state !== 'cancelled') {
-            graphStore.updateNodeState(gate.graphId, gate.nodeId, 'cancelled', nowIso, { failureReason: abandonReason });
-        }
-
-        // ★ Downstream is CANCELLED, never materialized. Reuse the same subtree
-        // walk `cancel_downstream` uses so abandon and the timeout policy agree
-        // on what "everything this gate was gating" means.
-        const cancelledNodeIds = node ? cancelGateDownstreamSubtree(store, node, nowIso, abandonReason) : [];
-        const cancelledTaskIds: string[] = [];
-        for (const nodeId of cancelledNodeIds) {
-            const target = graphStore.getNode(gate.graphId, nodeId);
-            if (target?.queueTaskId) cancelledTaskIds.push(target.queueTaskId);
-        }
-
-        // Rollup: with this gate settled, the graph may now be able to reach a
-        // terminal state it could not reach before — that is the whole point.
-        const graph = graphStore.getGraph(gate.graphId);
-        let graphStatus: string | undefined;
-        const rolled = classifyGraphRollup(graphStore.listNodes(gate.graphId));
-        if (graph && rolled && graph.status !== rolled) {
-            graphStore.updateGraphStatus(gate.graphId, rolled, nowIso, true);
-            graphStatus = rolled;
-            insertGateOutbox(graphStore, gate.meshId, gate.graphId,
-                rolled === 'completed' ? 'graph_completed' : rolled === 'failed' ? 'graph_failed' : 'graph_cancelled',
-                { graphId: gate.graphId, status: rolled }, nowIso);
-        } else if (graph?.status === 'waiting_gate') {
-            // Other gates still hold the graph; drop back to `active` only when
-            // this was the last one waiting.
-            const stillWaiting = graphStore.listGatesByGraph(gate.graphId)
-                .some(g => g.gateId !== gate.gateId && (g.state === 'awaiting_coordinator' || g.state === 'claimed'));
-            if (!stillWaiting) {
-                graphStore.updateGraphStatus(gate.graphId, 'active', nowIso);
-                graphStatus = 'active';
-            }
-        }
-
-        insertGateOutbox(graphStore, gate.meshId, gate.graphId, 'graph_gate_abandoned', {
-            graphId: gate.graphId, gateId: gate.gateId, nodeId: gate.nodeId, ref: gate.ref,
-            action: gate.action, priorState: gate.state, reason: input.reason,
-            ...(input.coordinatorSessionId ? { coordinatorSessionId: input.coordinatorSessionId } : {}),
-            ...(input.force ? { force: true } : {}),
-            ...(cancelledNodeIds.length > 0 ? { cancelledNodeIds } : {}),
-        }, nowIso);
-        // ★ Deliberately NO `queue_wake`: abandon opens nothing, so there is
-        // nothing for the scheduler to pick up.
-
-        return {
-            abandoned: true,
-            gate: graphStore.getGate(gate.gateId)!,
-            cancelledNodeIds,
-            cancelledTaskIds,
-            ...(graphStatus ? { graphStatus } : {}),
-        };
+        return res;
     });
     if (result.abandoned) {
         try { drainMeshGraphOutbox(input.meshId); } catch { /* drain is best-effort; the committed state stands */ }
     }
     return result;
+}
+
+// ── mesh_graph_gate_extend (D3(c)) ───────────────────────────────────────────
+
+/** Upper bound for one extension — a typo must not park a gate for years. */
+export const MESH_GATE_MAX_EXTEND_SECONDS = 30 * 24 * 60 * 60;
+
+export interface MeshGraphGateExtendInput {
+    meshId: string;
+    gateId: string;
+    /** Seconds to push `deadline_at` forward from max(now, current deadline). */
+    extendSeconds: number;
+    /** Provenance only (dashboard operator / coordinator session). */
+    actorSessionId?: string;
+    nowMs?: number;
+}
+
+export interface MeshGraphGateExtendResult {
+    extended: boolean;
+    /** gate_not_found / invalid_extend_seconds / gate_not_awaiting / gate_terminal:<state> / gate_extend_race. */
+    reason?: string;
+    gate?: MeshGraphGateRow;
+    previousDeadlineAt?: string;
+    deadlineAt?: string;
+    /** True when the gate was `expired` (hold) and this extension reopened it. */
+    reopened?: boolean;
+}
+
+/**
+ * Push a gate's deadline forward: `deadline_at = max(now, deadline_at) + extendSeconds`.
+ * An `expired` gate under `hold` is REOPENED — back to `claimed` when its lease
+ * is still live (the holder keeps its fence), else `awaiting_coordinator` — and
+ * its node leaves `expired`. Grants no passage: downstream stays blocked, no
+ * outcome is written. cancel_downstream / fail_graph expiries already settled
+ * their downstream and are terminal here, like released/cancelled gates.
+ */
+export function extendMeshGraphGateDeadline(input: MeshGraphGateExtendInput): MeshGraphGateExtendResult {
+    const store = MeshRuntimeStore.getInstance();
+    const nowMs = input.nowMs ?? Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    if (!Number.isFinite(input.extendSeconds) || input.extendSeconds <= 0 || input.extendSeconds > MESH_GATE_MAX_EXTEND_SECONDS) {
+        return { extended: false, reason: 'invalid_extend_seconds' };
+    }
+    const extendSeconds = Math.floor(input.extendSeconds);
+    return store.transaction((): MeshGraphGateExtendResult => {
+        const graphStore = store.graphStore();
+        const gate = graphStore.getGate(input.gateId);
+        if (!gate || gate.meshId !== input.meshId) return { extended: false, reason: 'gate_not_found' };
+        if (gate.state === 'released' || gate.state === 'cancelled') {
+            return { extended: false, reason: `gate_terminal:${gate.state}`, gate };
+        }
+        if (gate.state === 'expired' && gate.onTimeout !== 'hold') {
+            return { extended: false, reason: 'gate_terminal:expired', gate };
+        }
+        if (gate.state === 'declared') {
+            // Not open yet: its deadline is stamped when it opens (runner).
+            return { extended: false, reason: 'gate_not_awaiting', gate };
+        }
+        const base = gate.deadlineAt && gate.deadlineAt > nowIso ? Date.parse(gate.deadlineAt) : nowMs;
+        const deadlineAt = isoAfter(base, extendSeconds);
+        const reopened = gate.state === 'expired';
+        const leaseLive = !!gate.leaseExpiresAt && gate.leaseExpiresAt > nowIso && !!gate.fencingToken;
+        const nextState = reopened ? (leaseLive ? 'claimed' : 'awaiting_coordinator') : gate.state;
+        const won = graphStore.patchGate(gate.gateId, {
+            deadlineAt,
+            ...(reopened ? { state: nextState } : {}),
+        }, nowIso, { leaseGeneration: gate.leaseGeneration });
+        if (!won) return { extended: false, reason: 'gate_extend_race', gate };
+        if (reopened) {
+            const node = graphStore.getNode(gate.graphId, gate.nodeId);
+            if (node && node.state === 'expired') {
+                graphStore.updateNodeState(gate.graphId, gate.nodeId, 'awaiting_coordinator', nowIso);
+            }
+        }
+        insertGateOutbox(graphStore, gate.meshId, gate.graphId, 'graph_gate_deadline_extended', {
+            graphId: gate.graphId, gateId: gate.gateId, nodeId: gate.nodeId, ref: gate.ref,
+            previousDeadlineAt: gate.deadlineAt ?? null, deadlineAt, extendSeconds,
+            ...(reopened ? { reopened: true, state: nextState } : {}),
+            ...(input.actorSessionId ? { actorSessionId: input.actorSessionId } : {}),
+        }, nowIso);
+        return {
+            extended: true,
+            gate: graphStore.getGate(gate.gateId)!,
+            ...(gate.deadlineAt ? { previousDeadlineAt: gate.deadlineAt } : {}),
+            deadlineAt,
+            ...(reopened ? { reopened: true } : {}),
+        };
+    });
 }
 
 // ── Deadline / timeout sweep (design :425-439) ────────────────────────────────
@@ -743,6 +740,14 @@ export interface MeshGraphGateSweepResult {
     expiredGateIds: string[];
     /** Claimed gates whose LEASE lapsed — reported for observability only; the graph is never altered by a lease lapse. */
     expiredLeaseGateIds: string[];
+    /** Open gates that had no deadline and got the D3(b) default stamped by this sweep. */
+    backfilledDeadlineGateIds: string[];
+    /**
+     * D3(a) backstop: open gates this sweep closed because their downstream was
+     * already all terminal (e.g. stranded before the choke-point auto-close
+     * shipped, or by a writer that bypasses it).
+     */
+    autoClosedGateIds: string[];
 }
 
 /**
@@ -759,14 +764,43 @@ export function sweepMeshGraphGateTimeouts(meshId: string, nowMs?: number): Mesh
     const nowIso = new Date(now).toISOString();
     const result = store.transaction((): MeshGraphGateSweepResult => {
         const graphStore = store.graphStore();
+        // D3(a) backstop — BEFORE the deadline pass, so a gate that guards
+        // nothing is closed (abandoned) rather than expired. Idempotent: the
+        // closure skips released/cancelled gates and live foreign leases.
+        const openGraphIds = new Set(
+            graphStore.listGatesByMesh(meshId, ['declared', 'awaiting_coordinator', 'claimed', 'expired']).map(g => g.graphId),
+        );
+        const autoClosedGateIds: string[] = [];
+        for (const graphId of openGraphIds) {
+            autoClosedGateIds.push(...autoAbandonGatesWithTerminalDownstreamInTxn(store, graphId, nowIso));
+        }
         const candidates = graphStore.listGatesByMesh(meshId, ['awaiting_coordinator', 'claimed']);
         const expiredLeaseGateIds = candidates
             .filter(g => g.state === 'claimed' && g.leaseExpiresAt && g.leaseExpiresAt <= nowIso)
             .map(g => g.gateId);
         const expiredGateIds: string[] = [];
+        const backfilledDeadlineGateIds: string[] = [];
+        const defaultDeadlineSeconds = resolveDefaultGateDeadlineSeconds();
         for (const gate of candidates) {
-            if (!gate.deadlineAt || gate.deadlineAt > nowIso) continue;
+            if (!gate.deadlineAt) {
+                // D3(b) lazy backfill: a gate that opened before the default
+                // deadline existed (or while it was disabled) gets one now —
+                // counted from THIS sweep, never retroactively, so an upgrade
+                // cannot expire a long-waiting gate the moment it boots.
+                if (defaultDeadlineSeconds !== null) {
+                    graphStore.patchGate(gate.gateId, { deadlineAt: isoAfter(now, defaultDeadlineSeconds) }, nowIso,
+                        { leaseGeneration: gate.leaseGeneration });
+                    backfilledDeadlineGateIds.push(gate.gateId);
+                }
+                continue;
+            }
+            if (gate.deadlineAt > nowIso) continue;
             const node = graphStore.getNode(gate.graphId, gate.nodeId);
+            // Age = how long the gate has been workable (its node entered
+            // awaiting_coordinator), falling back to the gate row's creation.
+            const openedAt = node?.stateChangedAt ?? gate.createdAt;
+            const openedAtMs = Date.parse(openedAt);
+            const ageMs = Number.isFinite(openedAtMs) ? Math.max(0, now - openedAtMs) : undefined;
             const won = graphStore.patchGate(gate.gateId, { state: 'expired' }, nowIso, { leaseGeneration: gate.leaseGeneration });
             if (!won) continue;
             if (node && node.state !== 'expired') {
@@ -775,107 +809,36 @@ export function sweepMeshGraphGateTimeouts(meshId: string, nowMs?: number): Mesh
             let cancelledNodeIds: string[] = [];
             if (gate.onTimeout === 'cancel_downstream' && node) {
                 cancelledNodeIds = cancelGateDownstreamSubtree(store, node, nowIso);
+                // D3(a): same as explicit abandon — a sibling gate over the
+                // cancelled subtree now guards nothing. (This gate is `expired`
+                // with a non-hold policy, which the auto-close skips.)
+                if (cancelledNodeIds.length > 0) autoAbandonGatesWithTerminalDownstreamInTxn(store, gate.graphId, nowIso);
             } else if (gate.onTimeout === 'fail_graph') {
                 graphStore.updateGraphStatus(gate.graphId, 'failed', nowIso, true);
             }
             // `hold` deliberately does nothing else: downstream blocks are
             // RETAINED and an operator/later coordinator may reclaim (design :433-434).
+            // ONE outbox row per deadline expiry, drained ONCE: it is both the
+            // durable pull-surface record and (D3(b)) the coordinator page —
+            // the drain maps it to the `graph_gate_deadline_expired` notice.
+            // Lease lapses never reach this branch (they are reported only).
             insertGateOutbox(graphStore, gate.meshId, gate.graphId, 'graph_gate_expired', {
-                graphId: gate.graphId, gateId: gate.gateId, nodeId: gate.nodeId, ref: gate.ref,
+                meshId: gate.meshId, graphId: gate.graphId, gateId: gate.gateId, nodeId: gate.nodeId, ref: gate.ref,
                 action: gate.action, policy: gate.onTimeout, deadlineAt: gate.deadlineAt,
+                openedAt, ...(ageMs !== undefined ? { ageMs } : {}),
                 urgent: true, ...(cancelledNodeIds.length > 0 ? { cancelledNodeIds } : {}),
             }, nowIso);
             expiredGateIds.push(gate.gateId);
         }
-        return { expiredGateIds, expiredLeaseGateIds };
+        return { expiredGateIds, expiredLeaseGateIds, backfilledDeadlineGateIds, autoClosedGateIds };
     });
-    if (result.expiredGateIds.length > 0) {
+    if (result.expiredGateIds.length > 0 || result.autoClosedGateIds.length > 0) {
         try { drainMeshGraphOutbox(meshId); } catch { /* drain is best-effort; the committed state stands */ }
     }
-    if (result.expiredGateIds.length > 0 || result.expiredLeaseGateIds.length > 0) {
-        LOG.info('MeshGraph', `Gate sweep for mesh ${meshId}: expired=[${result.expiredGateIds.join(',')}] lease-lapsed=[${result.expiredLeaseGateIds.join(',')}]`);
+    if (result.expiredGateIds.length > 0 || result.expiredLeaseGateIds.length > 0 || result.autoClosedGateIds.length > 0) {
+        LOG.info('MeshGraph', `Gate sweep for mesh ${meshId}: expired=[${result.expiredGateIds.join(',')}] lease-lapsed=[${result.expiredLeaseGateIds.join(',')}] auto-closed=[${result.autoClosedGateIds.join(',')}]`);
     }
     return result;
-}
-
-/** Nodes the release/expire paths must never cancel — terminal or terminal-equivalent. */
-function isCancelExempt(state: MeshTaskGraphNodeRow['state']): boolean {
-    return state === 'completed' || state === 'released' || state === 'skipped'
-        || state === 'cancelled' || state === 'failed' || state === 'expired';
-}
-
-/**
- * `cancel_downstream` (and abandon): mark every non-terminal descendant node
- * `cancelled` and cancel its STILL-PENDING queue placeholder with a gate-owned
- * reason. An already-assigned/running row is not force-flipped here — the
- * derived-failure cascade for in-flight work is phase C3's contract.
- *
- * `reason` distinguishes the two callers: a deadline expiry stamps
- * `coordinator_gate_timeout:<nodeId>`, an explicit abandon stamps
- * `coordinator_gate_abandoned:<gateId>:<operator reason>`. They must stay
- * distinguishable — one is elapsed time, the other is a decision.
- */
-function cancelGateDownstreamSubtree(
-    store: MeshRuntimeStore,
-    gateNode: MeshTaskGraphNodeRow,
-    nowIso: string,
-    reason = `coordinator_gate_timeout:${gateNode.nodeId}`,
-): string[] {
-    const graphStore = store.graphStore();
-    const nodes = graphStore.listNodes(gateNode.graphId);
-    const edges = graphStore.listEdges(gateNode.graphId);
-    const byId = new Map(nodes.map(n => [n.nodeId, n]));
-    const cancelled: string[] = [];
-    const visited = new Set([gateNode.nodeId]);
-    let frontier = [gateNode.nodeId];
-    while (frontier.length > 0) {
-        const next: string[] = [];
-        for (const id of frontier) {
-            for (const edge of edges.filter(e => e.fromNodeId === id)) {
-                if (visited.has(edge.toNodeId)) continue;
-                visited.add(edge.toNodeId);
-                const target = byId.get(edge.toNodeId);
-                if (!target || isCancelExempt(target.state)) continue;
-                graphStore.updateNodeState(target.graphId, target.nodeId, 'cancelled', nowIso, {
-                    failureReason: reason,
-                });
-                if (target.queueTaskId) {
-                    const entry = store.findQueueEntryById(target.meshId, target.queueTaskId);
-                    if (entry && entry.status === 'pending') {
-                        entry.status = 'cancelled';
-                        entry.blockedReason = reason;
-                        store.updateQueueEntry(entry);
-                    }
-                }
-                cancelled.push(target.nodeId);
-                next.push(target.nodeId);
-            }
-        }
-        frontier = next;
-    }
-    return cancelled;
-}
-
-/** One outbox row inside the caller's transaction (design :185-190). */
-function insertGateOutbox(
-    graphStore: ReturnType<MeshRuntimeStore['graphStore']>,
-    meshId: string,
-    graphId: string,
-    kind: string,
-    payload: Record<string, unknown>,
-    nowIso: string,
-): void {
-    graphStore.insertOutboxEvent({
-        id: newMeshGraphOutboxId(),
-        meshId,
-        graphId,
-        kind,
-        payload: JSON.stringify(payload),
-        status: 'pending',
-        attemptCount: 0,
-        createdAt: nowIso,
-        updatedAt: nowIso,
-    });
 }
 
 /** Re-exported for tests/tools: the block a gate places on downstream rows. */

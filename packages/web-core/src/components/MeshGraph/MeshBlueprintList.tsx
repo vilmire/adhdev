@@ -24,11 +24,15 @@ import { buildGraphMiniDag, buildQueueMiniDag, type MiniDagModel } from './miniD
 import MeshMiniDag from './MeshMiniDag'
 import BlueprintStatusBar from './BlueprintStatusBar'
 import BlueprintScopeChips, { DEFAULT_BLUEPRINT_SCOPE, type BlueprintScope } from './BlueprintScopeChips'
-import { MeshBlueprintGateRowView, MeshBlueprintTaskRowView } from './MeshBlueprintRow'
+import { MeshBlueprintGateRowView, MeshBlueprintTaskRowView, type GateActionHandlers } from './MeshBlueprintRow'
+import { useConfirmDialog } from '../../hooks/useConfirmDialog'
+import { unwrapDaemonCommandBody } from '../../utils/daemon-command-envelope'
+import { buildGateAbandonArgs, buildGateExtendArgs, buildGateReleaseArgs } from './blueprintViewModel'
 import {
     BLUEPRINT_HISTORY_LOAD_STEP,
     buildBlueprintMissionGroups,
     useBlueprintGroups,
+    type BlueprintGateRow,
     type BlueprintRow,
     type BlueprintSection,
 } from './useBlueprintGroups'
@@ -37,7 +41,7 @@ function rowKey(row: BlueprintRow): string {
     return row.kind === 'task' ? row.task.id : `gate:${row.graph.graphId}:${row.nodeId}`
 }
 
-export default function MeshBlueprintList({ tasks, status, graphs, meshTheme, nodeLabels, missionTitles, pinnedSlots, emptyMessage, onTaskOpen, onGateOpen, onMissionOpen, headerExtras }: {
+export default function MeshBlueprintList({ tasks, status, graphs, meshTheme, nodeLabels, missionTitles, pinnedSlots, emptyMessage, onTaskOpen, onGateOpen, onMissionOpen, headerExtras, daemonId, meshId, sendDaemonCommand, onGatesChanged }: {
     tasks: RepoMeshQueueTask[]
     status: RepoMeshStatus
     graphs: MeshGraphView[]
@@ -54,12 +58,23 @@ export default function MeshBlueprintList({ tasks, status, graphs, meshTheme, no
     /** Caller chrome (scheduling chip, graph pagination, refresh) sharing the
      *  status-bar row instead of floating over the list. */
     headerExtras?: React.ReactNode
+    /** D5 gate actions (Release/Abandon/Extend) — present only when the tab
+     *  can send daemon commands. Mirrors MeshBlueprintView's canCommand gate. */
+    daemonId?: string | null
+    meshId?: string
+    sendDaemonCommand?: ((id: string, type: string, data?: Record<string, unknown>) => Promise<any>) | null
+    /** Called after a gate command RESOLVES (success or failure attempted) so
+     *  the caller can refresh mesh_graph_overview — no optimistic UI (D5). */
+    onGatesChanged?: () => void
 }) {
     const { t } = useTranslation('common')
     const [scope, setScope] = useState<BlueprintScope>(DEFAULT_BLUEPRINT_SCOPE)
     const [historyLimit, setHistoryLimit] = useState(BLUEPRINT_HISTORY_LOAD_STEP)
     /** Row whose mini plan is open (one at a time — it is a drawing, not a tree). */
     const [expandedPlanKey, setExpandedPlanKey] = useState<string | null>(null)
+    /** Gate row (by rowKey) with a command currently in flight — disables its buttons only. */
+    const [busyGateKey, setBusyGateKey] = useState<string | null>(null)
+    const { confirm, confirmDialog } = useConfirmDialog()
 
     /* Shared relative-time clock: coarse (30s) and paused while hidden, so
      * "3m ago" ages while the tab sits open without a data refetch. */
@@ -98,7 +113,7 @@ export default function MeshBlueprintList({ tasks, status, graphs, meshTheme, no
         return null
     }, [expandedRow, graphById, taskById, tasks])
 
-    const openMiniDagTask = (taskId: string) => {
+    const openTaskById = (taskId: string) => {
         const task = taskById.get(taskId)
         if (task) onTaskOpen(task)
     }
@@ -106,6 +121,49 @@ export default function MeshBlueprintList({ tasks, status, graphs, meshTheme, no
         const graph = graphById.get(graphId)
         if (!graph) return
         onGateOpen(graph, gateNodeId, graph.gates.find(gate => gate.nodeId === gateNodeId))
+    }
+
+    const canCommand = Boolean(daemonId && meshId && sendDaemonCommand)
+
+    /**
+     * Send one D5 gate command and refresh the graph list afterward. No
+     * optimistic UI (per the task): the row keeps showing its pre-command
+     * state — and, on success, whatever mesh_graph_overview returns next —
+     * until onGatesChanged's refetch lands. A non-success envelope throws so
+     * the caller's inline error UI (GateActionsPanel) can show it.
+     */
+    const sendGateCommand = async (gateKey: string, commandType: string, args: Record<string, unknown>): Promise<void> => {
+        if (!daemonId || !sendDaemonCommand) throw new Error(t('mesh.blueprint.gate.commandUnavailable'))
+        setBusyGateKey(gateKey)
+        try {
+            const raw = await sendDaemonCommand(daemonId, commandType, args)
+            const body = unwrapDaemonCommandBody<{ success?: boolean; error?: string }>(raw)
+            if (!body || body.success === false) throw new Error(body?.error || `${commandType} failed`)
+        } finally {
+            setBusyGateKey(current => (current === gateKey ? null : current))
+            onGatesChanged?.()
+        }
+    }
+
+    const gateActionsFor = (row: BlueprintGateRow): { key: string; handlers: GateActionHandlers } | undefined => {
+        if (!canCommand || !row.gate) return undefined
+        const key = rowKey(row)
+        const gateId = row.gate.gateId
+        return {
+            key,
+            handlers: {
+                onRelease: (outcome, evidence) => sendGateCommand(key, 'mesh_graph_gate_release', buildGateReleaseArgs(meshId!, gateId, outcome, evidence)),
+                onAbandon: (reason) => sendGateCommand(key, 'mesh_graph_gate_abandon', buildGateAbandonArgs(meshId!, gateId, reason)),
+                onExtend: async () => {
+                    const ok = await confirm({
+                        title: t('mesh.blueprint.gate.extendConfirmTitle', { ref: row.ref }),
+                        confirmLabel: t('mesh.blueprint.gate.extend24h'),
+                    })
+                    if (!ok) return
+                    await sendGateCommand(key, 'mesh_graph_gate_extend', buildGateExtendArgs(meshId!, gateId))
+                },
+            },
+        }
     }
 
     const renderRow = (row: BlueprintRow) => {
@@ -120,9 +178,12 @@ export default function MeshBlueprintList({ tasks, status, graphs, meshTheme, no
                     <MeshBlueprintGateRowView
                         row={row}
                         meshTheme={meshTheme}
+                        nowMs={nowMs}
                         onOpen={() => onGateOpen(row.graph, row.nodeId, row.gate)}
                         planExpanded={planExpanded}
                         onTogglePlan={togglePlan}
+                        actions={gateActionsFor(row)?.handlers}
+                        actionsBusy={busyGateKey === key}
                     />
                 ) : (
                     <MeshBlueprintTaskRowView
@@ -133,6 +194,7 @@ export default function MeshBlueprintList({ tasks, status, graphs, meshTheme, no
                         pinnedSlot={pinnedSlots?.[row.task.id]}
                         missionTitle={row.task.missionId ? missionTitles?.[row.task.missionId] : undefined}
                         onOpen={() => onTaskOpen(row.task)}
+                        onOpenTaskId={openTaskById}
                         onMissionOpen={onMissionOpen}
                         planExpanded={planExpanded}
                         onTogglePlan={togglePlan}
@@ -145,7 +207,7 @@ export default function MeshBlueprintList({ tasks, status, graphs, meshTheme, no
                         <MeshMiniDag
                             model={expandedMiniDag}
                             meshTheme={meshTheme}
-                            onOpenTask={openMiniDagTask}
+                            onOpenTask={openTaskById}
                             onOpenGate={openMiniDagGate}
                         />
                     </div>
@@ -167,11 +229,12 @@ export default function MeshBlueprintList({ tasks, status, graphs, meshTheme, no
         ...(scope.blocked ? groups.blocked : []),
         ...(scope.history ? [...groups.recent, ...groups.history] : []),
     ]
-    const missionGroups = scope.byMission ? buildBlueprintMissionGroups(visibleSectionRows, missionTitles) : null
+    const missionGroups = scope.byMission ? buildBlueprintMissionGroups(visibleSectionRows, missionTitles, groups.chainByTaskId) : null
     const nothingVisible = visibleSectionRows.length === 0
 
     return (
         <div className="flex min-h-0 flex-1 flex-col gap-1.5">
+            {confirmDialog}
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <BlueprintStatusBar counts={groups.counts} scope={scope} onToggle={toggleScope} meshTheme={meshTheme} />
                 {headerExtras && <div className="ml-auto flex min-w-0 flex-wrap items-center gap-1.5">{headerExtras}</div>}
@@ -189,21 +252,30 @@ export default function MeshBlueprintList({ tasks, status, graphs, meshTheme, no
                     </div>
                 ) : missionGroups ? (
                     <div className="flex flex-col gap-1.5 pb-2">
-                        {missionGroups.map(group => (
-                            <div key={group.missionId ?? '(ad-hoc)'} className="flex flex-col gap-1">
+                        {missionGroups.map(group => {
+                            // Chain groups (W24) open their anchor task; mission groups the mission.
+                            const anchor = group.kind === 'chain' && group.anchorTaskId ? taskById.get(group.anchorTaskId) : undefined
+                            const openGroup = group.kind === 'mission' && group.missionId && onMissionOpen
+                                ? () => onMissionOpen(group.missionId!)
+                                : anchor ? () => onTaskOpen(anchor) : undefined
+                            return (
+                            <div key={`${group.kind}:${group.key}`} className="flex flex-col gap-1">
                                 <button
                                     type="button"
-                                    onClick={group.missionId && onMissionOpen ? () => onMissionOpen(group.missionId!) : undefined}
-                                    className={`flex items-center gap-2 pt-1 text-left text-3xs font-semibold ${meshTheme.isDark ? 'text-indigo-300' : 'text-indigo-700'} ${group.missionId && onMissionOpen ? 'cursor-pointer hover:underline' : 'cursor-default'}`}
-                                    title={group.missionId ?? undefined}
+                                    onClick={openGroup}
+                                    className={`flex items-center gap-2 pt-1 text-left text-3xs font-semibold ${meshTheme.isDark ? 'text-indigo-300' : 'text-indigo-700'} ${openGroup ? 'cursor-pointer hover:underline' : 'cursor-default'}`}
+                                    title={group.kind === 'chain' ? group.anchorTaskId : group.missionId ?? undefined}
                                 >
-                                    <span>⚑ {group.title || group.missionId?.slice(0, 10) || t('mesh.blueprint.list.noMission')}</span>
+                                    <span>{group.kind === 'chain'
+                                        ? `⛓ ${t('mesh.blueprint.list.chainGroup', { title: group.title })}`
+                                        : `⚑ ${group.title || group.missionId?.slice(0, 10) || t('mesh.blueprint.list.noMission')}`}</span>
                                     <span className="opacity-60">{group.rows.length}</span>
                                     <span className={`h-px flex-1 ${meshTheme.isDark ? 'bg-indigo-400/20' : 'bg-indigo-200'}`} aria-hidden />
                                 </button>
                                 {group.rows.map(renderRow)}
                             </div>
-                        ))}
+                            )
+                        })}
                     </div>
                 ) : (
                     <div className="flex flex-col gap-1.5 pb-2">

@@ -360,3 +360,69 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
         return null
     }
 }
+
+/* ── D5: Blueprint gate actions ────────────────────────────────────────────
+ * design/2026-09-25-graph-orchestration-simplification.md decision D5 lifts
+ * the 2026-08-24 "gate verbs stay coordinator-only" call: the dashboard now
+ * exposes Release/Abandon/Extend as first-class buttons on a blocking gate
+ * row, wired to the daemon commands D3(c) adds
+ * (mesh_graph_gate_release/abandon/extend). Payload builders live here, pure
+ * and unit-testable, so the exact wire shape sent to sendDaemonCommand is
+ * pinned independent of the React click plumbing. */
+
+/** `mesh_graph_gate_extend`'s fixed "Extend 24h" duration, in seconds. */
+export const BLUEPRINT_GATE_EXTEND_SECONDS = 24 * 60 * 60
+
+export function buildGateReleaseArgs(
+    meshId: string,
+    gateId: string,
+    outcome: 'passed' | 'failed',
+    evidence?: string,
+): Record<string, unknown> {
+    const trimmedEvidence = evidence?.trim()
+    return {
+        mesh_id: meshId,
+        gate_id: gateId,
+        outcome,
+        ...(trimmedEvidence ? { evidence: trimmedEvidence } : {}),
+    }
+}
+
+export function buildGateAbandonArgs(meshId: string, gateId: string, reason: string): Record<string, unknown> {
+    return { mesh_id: meshId, gate_id: gateId, reason: reason.trim() }
+}
+
+export function buildGateExtendArgs(
+    meshId: string,
+    gateId: string,
+    extendSeconds: number = BLUEPRINT_GATE_EXTEND_SECONDS,
+): Record<string, unknown> {
+    return { mesh_id: meshId, gate_id: gateId, extend_seconds: extendSeconds }
+}
+
+/**
+ * Milliseconds elapsed since an ISO timestamp, clamped to >= 0 so a clock
+ * skew between daemon and browser never renders a negative age.
+ */
+export function elapsedMsSince(isoTimestamp: string | undefined, nowMs: number): number | undefined {
+    if (!isoTimestamp) return undefined
+    const then = Date.parse(isoTimestamp)
+    if (Number.isNaN(then)) return undefined
+    return Math.max(0, nowMs - then)
+}
+
+/**
+ * Compact "age" label for a gate badge/one-liner — "3m", "2h", "5d". Mirrors
+ * the coarse-bucket convention `formatTaskCardTime` uses elsewhere in the
+ * blueprint (taskDagViewModel.ts) rather than inventing a new one.
+ */
+export function formatBlueprintAge(elapsedMs: number): string {
+    const seconds = Math.floor(elapsedMs / 1000)
+    if (seconds < 60) return `${seconds}s`
+    const minutes = Math.floor(seconds / 60)
+    if (minutes < 60) return `${minutes}m`
+    const hours = Math.floor(minutes / 60)
+    if (hours < 24) return `${hours}h`
+    const days = Math.floor(hours / 24)
+    return `${days}d`
+}
