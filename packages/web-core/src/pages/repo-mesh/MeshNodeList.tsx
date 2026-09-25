@@ -152,7 +152,7 @@ interface Props {
 
     availableCliProviders: AvailableCliProviderOption[]
 
-    // Capability slots (ORCHESTRATION_NODE_SLOTS.md)
+    // Capability slots (node capability slots design, 2026-07-09)
     savingNodeSlotsId: string | null
     onUpdateNodeSlots: (node: MeshNode, slots: NodeCapabilitySlot[]) => void
 
@@ -397,9 +397,9 @@ export function MeshNodeList({
                             className="mb-4"
                         >
                             {nodePlanLoading
-                                ? 'Inspecting Git repository (read-only)…'
+                                ? t('mesh.nodeList.inspectingRepo')
                                 : nodeOnboardingPlan?.success
-                                    ? `${nodeOnboardingPlan.plan?.summary || 'Compatible Git workspace detected.'} Adding remains an explicit action.`
+                                    ? `${nodeOnboardingPlan.plan?.summary || t('mesh.nodeList.compatibleWorkspace')} ${t('mesh.nodeList.addingIsExplicit')}`
                                     : describeOnboardingPlanFailure(nodeOnboardingPlan)}
                         </AlertBanner>
                     )}

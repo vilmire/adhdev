@@ -80,7 +80,8 @@ describe('dashboard mobile/touch regressions', () => {
     expect(inboxSource).toContain("title={t('mobileInbox.openLiveMeshGraph')}")
     expect(inboxSource).toContain('onOpenMeshGraph?: (conversation: ActiveConversation) => void')
     expect(roomSource).toContain('const meshGraphAvailable = !!selectedConversation.daemonId')
-    expect(roomSource).toContain('title="Open live repo mesh graph"')
+    // Title is localized (i18n sweep 2026-09-25); the button is still pinned by its key.
+    expect(roomSource).toContain("title={t('mesh.openLiveGraph')}")
     expect(modeSource).toContain('onOpenMeshGraph={onOpenMeshGraph}')
     expect(mainViewSource).toContain('onOpenMeshGraph={handleOpenMeshGraph}')
   })

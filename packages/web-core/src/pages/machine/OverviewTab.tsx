@@ -11,7 +11,8 @@ import StatCard from '../../components/StatCard'
 import Card from '../../components/Card'
 import { IconClock, IconMonitor, IconTerminal, IconBot } from '../../components/Icons'
 import {
-    buildQuotaDisplayModel,
+    bindQuotaDisplayModel,
+    createQuotaTextFormatter,
     collectQuotaEntries,
     formatQuotaAccount,
     quotaProviderLabel,
@@ -57,6 +58,8 @@ function QuotaChip({ label, tone, title }: { label: string; tone: string; title?
  */
 function PlanQuotaCard({ machine }: { machine: MachineData }) {
     const { t } = useTranslation('common')
+    // Localized binding; keeps the one-argument model call the drift guard pins.
+    const buildQuotaDisplayModel = bindQuotaDisplayModel(createQuotaTextFormatter(t))
     const entries = collectQuotaEntries(machine.quota)
     if (entries.length === 0) return null
     return (
@@ -133,7 +136,7 @@ export default function OverviewTab({
         <div>
             {/* System Stats */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-5">
-                <StatCard icon={<IconClock size={16} />} label="Uptime" value={typeof machine.uptime === 'number' ? formatUptime(machine.uptime) : 'Waiting…'} />
+                <StatCard icon={<IconClock size={16} />} label={t('machine.overview.uptime')} value={typeof machine.uptime === 'number' ? formatUptime(machine.uptime) : t('machine.overview.waiting')} />
                 <StatCard icon={<IconMonitor size={16} />} label="IDEs" value={`${ideSessions.length}`} />
                 <StatCard icon={<IconTerminal size={16} />} label="CLIs" value={`${cliSessions.length}`} />
                 <StatCard icon={<IconBot size={16} />} label="ACPs" value={`${acpSessions.length}`} />
@@ -142,11 +145,11 @@ export default function OverviewTab({
             {/* Resource Usage */}
             <Card padding="lg" className="mb-5">
                 <div className="text-2xs text-text-muted font-semibold uppercase tracking-wider mb-3">
-                    Resource Usage
+                    {t('machine.overview.resourceUsage')}
                 </div>
                 <div className="flex gap-6">
-                    <ProgressBar value={hasRuntimeStats ? Math.min(Math.round(loadAvg1m / machine.cpus * 100), 100) : 0} max={100} label="CPU Load" color="#8b5cf6" detail={hasRuntimeStats ? `${loadAvg1m.toFixed(2)} avg / ${machine.cpus} cores` : t('machine.overview.waitingForStats')} />
-                    <ProgressBar value={memUsedPct} max={100} label="Memory" color="#3b82f6" detail={hasRuntimeStats ? `${formatBytes(machine.totalMem - memAvail)} / ${formatBytes(machine.totalMem)}${machine.platform === 'darwin' ? ' (approx.)' : ''}` : t('machine.overview.waitingForStatsWithTotal', { total: formatBytes(machine.totalMem) })} />
+                    <ProgressBar value={hasRuntimeStats ? Math.min(Math.round(loadAvg1m / machine.cpus * 100), 100) : 0} max={100} label={t('machine.overview.cpuLoad')} color="#8b5cf6" detail={hasRuntimeStats ? t('machine.overview.cpuDetail', { load: loadAvg1m.toFixed(2), cores: machine.cpus }) : t('machine.overview.waitingForStats')} />
+                    <ProgressBar value={memUsedPct} max={100} label={t('machine.overview.memory')} color="#3b82f6" detail={hasRuntimeStats ? `${formatBytes(machine.totalMem - memAvail)} / ${formatBytes(machine.totalMem)}${machine.platform === 'darwin' ? ` ${t('machine.overview.approx')}` : ''}` : t('machine.overview.waitingForStatsWithTotal', { total: formatBytes(machine.totalMem) })} />
                 </div>
             </Card>
 

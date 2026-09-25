@@ -117,7 +117,7 @@ test('readiness: slots-only node is launchReady via the slots-derived priority',
 });
 
 // PRECEDENCE FLIPPED (launch/auto-launch path agreement): slots are the
-// authoritative capability list (ORCHESTRATION_NODE_SLOTS.md) and the auto-launch
+// authoritative capability list (node capability slots design, 2026-07-09) and the auto-launch
 // path resolves from them, so the manual path must too — otherwise the two
 // dispatch paths pick DIFFERENT first providers for the same node. This test
 // previously asserted the opposite precedence; the assertion was the pin on the

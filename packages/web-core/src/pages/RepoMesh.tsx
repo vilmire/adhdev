@@ -7,6 +7,7 @@
  *             retry logic, coordinator targeting, and cloud-only UI sections.
  */
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { daemonIdsEquivalent, isPhantomDaemonEntry } from '@adhdev/mesh-shared'
 
 import AppPage from '../components/ui/AppPage'
@@ -81,6 +82,7 @@ const GRAPH_PUSH_BACKSTOP_STALE_MS = 5 * 60 * 1000
 
 export default function RepoMesh() {
     const ctx = useRepoMeshContext()
+    const { t } = useTranslation('common')
     // Modal confirm for destructive mesh actions (delete mesh / remove node).
     // Replaces the two window.confirm leftovers from the CONFIRM-MIGRATION
     // sweep: a browser suppressing native dialogs turned Delete into a silent
@@ -718,8 +720,8 @@ export default function RepoMesh() {
 
     if (!primaryDaemonId) {
         return (
-            <AppPage icon={<IconMesh />} title="Repo Mesh" subtitle="Multi-workspace orchestration">
-                <div className="text-sm text-text-muted p-4">Waiting for daemon connection...</div>
+            <AppPage icon={<IconMesh />} title="Repo Mesh" subtitle={t('mesh.page.subtitle')}>
+                <div className="text-sm text-text-muted p-4">{t('mesh.page.waitingForDaemon')}</div>
             </AppPage>
         )
     }

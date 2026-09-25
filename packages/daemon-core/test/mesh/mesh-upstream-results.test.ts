@@ -1,6 +1,6 @@
 /**
  * D4 — "Upstream results" dispatch appendix
- * (docs/design/2026-09-25-graph-orchestration-simplification.md §1 D4).
+ * (the 2026-09-25 graph orchestration simplification §1 D4).
  *
  * Pinned: a task with predecessors (queue dependsOn OR graph `requires`) is
  * dispatched with each predecessor's accepted completion summary, in the

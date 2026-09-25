@@ -244,7 +244,7 @@ export default function InteractivePromptModal({
         <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border-default px-5 py-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-normal text-status-warning">
-              <IconWarning size={15} /> Action Required
+              <IconWarning size={15} /> {t('interactivePrompt.actionRequired')}
             </div>
             <h2 id={titleId} className="mt-1 text-lg font-bold text-text-primary">
               {promptSession.title || promptSession.providerType}
@@ -255,7 +255,7 @@ export default function InteractivePromptModal({
               type="button"
               onClick={onCancel}
               className="btn btn-ghost btn-sm h-8 w-8 p-0"
-              aria-label="Cancel interactive prompt"
+              aria-label={t('interactivePrompt.cancelAria')}
             >
               <IconX size={16} />
             </button>
@@ -343,7 +343,7 @@ export default function InteractivePromptModal({
             </span>
           )}
           <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel} disabled={isSubmitting}>
-            Cancel
+            {t('common.cancel')}
           </button>
           <button
             type="button"
@@ -351,7 +351,7 @@ export default function InteractivePromptModal({
             onClick={handleSubmit}
             disabled={!canSubmit || isSubmitting || !submitReady}
           >
-            {isSubmitting ? 'Submitting...' : 'Submit'}
+            {isSubmitting ? t('interactivePrompt.submitting') : t('interactivePrompt.submit')}
           </button>
         </div>
       </div>

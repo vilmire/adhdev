@@ -7,6 +7,10 @@ export interface DaemonUpdateStatusView {
     showButton: boolean
     title: string
     description: string
+    /** i18n key for `title` (common ns) — `title` stays the English default. */
+    titleKey: string
+    /** i18n key for `description` (common ns). */
+    descriptionKey: string
     buttonLabel: string
     targetVersion: string | null
     channel: 'stable' | 'preview' | null
@@ -26,6 +30,12 @@ export function buildDaemonUpdateStatusView(daemon: DaemonData, fallbackVersion:
             visible: true,
             showButton: true,
             title: required ? 'Daemon update required' : 'Version mismatch detected',
+            titleKey: required ? 'machine.daemonUpdate.requiredTitle' : 'machine.daemonUpdate.mismatchTitle',
+            descriptionKey: required
+                ? 'machine.daemonUpdate.requiredDescription'
+                : channel === 'preview'
+                    ? 'machine.daemonUpdate.previewUpgradeDescription'
+                    : 'machine.daemonUpdate.mismatchDescription',
             description: required
                 ? 'This machine is on an incompatible daemon version. Update it before starting more sessions.'
                 : channel === 'preview'
@@ -44,6 +54,10 @@ export function buildDaemonUpdateStatusView(daemon: DaemonData, fallbackVersion:
             visible: true,
             showButton: false,
             title: targetVersion ? 'Preview daemon is up to date' : 'Preview update status unknown',
+            titleKey: targetVersion ? 'machine.daemonUpdate.previewUpToDateTitle' : 'machine.daemonUpdate.previewUnknownTitle',
+            descriptionKey: targetVersion
+                ? 'machine.daemonUpdate.previewUpToDateDescription'
+                : 'machine.daemonUpdate.previewUnknownDescription',
             description: targetVersion
                 ? 'This machine is already on the current preview daemon target.'
                 : 'The app is connected to preview, but the server did not report a preview target version yet.',
@@ -60,6 +74,8 @@ export function buildDaemonUpdateStatusView(daemon: DaemonData, fallbackVersion:
         showButton: false,
         title: '',
         description: '',
+        titleKey: '',
+        descriptionKey: '',
         buttonLabel,
         targetVersion,
         channel,

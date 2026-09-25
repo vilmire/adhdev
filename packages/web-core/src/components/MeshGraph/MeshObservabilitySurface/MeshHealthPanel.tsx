@@ -77,17 +77,17 @@ export function MeshHealthPanel({
             <div className="grid grid-cols-4 gap-1.5">
                 {queueSummary ? (
                     <>
-                        <StatTile label="Pending" value={queueSummary.pending} />
-                        <StatTile label="Active" value={queueSummary.active} tone={queueSummary.active > 0 ? 'sky' : undefined} />
-                        <StatTile label="Done" value={queueSummary.completed} tone="emerald" />
-                        <StatTile label="Failed" value={queueSummary.failed} tone={queueSummary.failed > 0 ? 'rose' : undefined} />
+                        <StatTile label={t('mesh.health.statPending')} value={queueSummary.pending} />
+                        <StatTile label={t('mesh.health.statActive')} value={queueSummary.active} tone={queueSummary.active > 0 ? 'sky' : undefined} />
+                        <StatTile label={t('mesh.health.statDone')} value={queueSummary.completed} tone="emerald" />
+                        <StatTile label={t('mesh.health.statFailed')} value={queueSummary.failed} tone={queueSummary.failed > 0 ? 'rose' : undefined} />
                     </>
                 ) : (
                     <>
-                        <StatTile label="Done" value={ledgerSummary.taskCompleted} tone="emerald" />
-                        <StatTile label="Failed" value={ledgerSummary.taskFailed} tone={ledgerSummary.taskFailed > 0 ? 'rose' : undefined} />
-                        <StatTile label="Sessions" value={ledgerSummary.sessionLaunched} />
-                        <StatTile label="Recent↯" value={ledgerSummary.recentFailures} tone={ledgerSummary.recentFailures > 0 ? 'amber' : 'muted'} />
+                        <StatTile label={t('mesh.health.statDone')} value={ledgerSummary.taskCompleted} tone="emerald" />
+                        <StatTile label={t('mesh.health.statFailed')} value={ledgerSummary.taskFailed} tone={ledgerSummary.taskFailed > 0 ? 'rose' : undefined} />
+                        <StatTile label={t('mesh.health.statSessions')} value={ledgerSummary.sessionLaunched} />
+                        <StatTile label={t('mesh.health.statRecent')} value={ledgerSummary.recentFailures} tone={ledgerSummary.recentFailures > 0 ? 'amber' : 'muted'} />
                     </>
                 )}
             </div>
@@ -95,9 +95,9 @@ export function MeshHealthPanel({
             {/* Secondary stats row when queue present */}
             {queueSummary && (
                 <div className="grid grid-cols-3 gap-1.5">
-                    <StatTile label="Ledger done" value={ledgerSummary.taskCompleted} tone="emerald" />
-                    <StatTile label="Sessions" value={ledgerSummary.sessionLaunched} />
-                    <StatTile label="Recent↯" value={ledgerSummary.recentFailures} tone={ledgerSummary.recentFailures > 0 ? 'amber' : 'muted'} />
+                    <StatTile label={t('mesh.health.statLedgerDone')} value={ledgerSummary.taskCompleted} tone="emerald" />
+                    <StatTile label={t('mesh.health.statSessions')} value={ledgerSummary.sessionLaunched} />
+                    <StatTile label={t('mesh.health.statRecent')} value={ledgerSummary.recentFailures} tone={ledgerSummary.recentFailures > 0 ? 'amber' : 'muted'} />
                 </div>
             )}
 
@@ -144,7 +144,7 @@ export function MeshHealthPanel({
                         <summary className={subSummaryClass}>
                             <span className="flex-1">{t('mesh.health.refineJobs')}</span>
                             <span className={`tabular-nums ${dk ? 'text-slate-400' : 'text-slate-500'}`}>{asyncRefineJobs.length}</span>
-                            {failedRefineJobs.length > 0 && <span className={dk ? 'text-rose-300' : 'text-rose-600'}>{failedRefineJobs.length} failed</span>}
+                            {failedRefineJobs.length > 0 && <span className={dk ? 'text-rose-300' : 'text-rose-600'}>{t('mesh.health.failedCount', { count: failedRefineJobs.length })}</span>}
                         </summary>
                         <div className="flex flex-col gap-0.5 px-2.5 pb-2">
                             {asyncRefineJobs.slice(0, 8).map(job => (
@@ -228,22 +228,22 @@ export function MeshHealthPanel({
                 <span className="flex-1">{t('mesh.health.panelTitle')}</span>
                 {activeRefineJobs.length > 0 && (
                     <span className={`rounded-full border px-2 py-0.5 text-3xs uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-sky-400/25 bg-sky-500/10 text-sky-200' : 'border-sky-300 bg-sky-50 text-sky-700'}`}>
-                        {activeRefineJobs.length} refining
+                        {t('mesh.health.refiningCount', { count: activeRefineJobs.length })}
                     </span>
                 )}
                 {failedRefineJobs.length > 0 && (
                     <span className={`rounded-full border px-2 py-0.5 text-3xs uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-rose-400/30 bg-rose-500/12 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700'}`}>
-                        {failedRefineJobs.length} refine failed
+                        {t('mesh.health.refineFailedCount', { count: failedRefineJobs.length })}
                     </span>
                 )}
                 {hasLedgerFailures && (
                     <span className={`rounded-full border px-2 py-0.5 text-3xs uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-rose-400/30 bg-rose-500/12 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700'}`}>
-                        {ledgerSummary.recentFailures} recent failures
+                        {t('mesh.health.recentFailuresCount', { count: ledgerSummary.recentFailures })}
                     </span>
                 )}
                 {isBootstrapMode && (
                     <span className={`rounded-full border px-2 py-0.5 text-3xs uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-700'}`}>
-                        awaiting live data
+                        {t('mesh.health.awaitingLiveData')}
                     </span>
                 )}
             </summary>

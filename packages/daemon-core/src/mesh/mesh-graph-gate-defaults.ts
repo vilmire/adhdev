@@ -1,5 +1,5 @@
 /**
- * Coordinator-gate lifecycle defaults (docs/design/2026-09-25-graph-orchestration-simplification.md D3).
+ * Coordinator-gate lifecycle defaults (the 2026-09-25 graph orchestration simplification D3).
  *
  * A leaf module so BOTH the transition runner (which stamps `deadline_at` when a
  * gate opens) and mesh-graph-gates.ts (the sweep's lazy backfill for gates that

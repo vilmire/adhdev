@@ -33,6 +33,7 @@
  *     the tree renders inline instead of through a portal, so
  *     renderToStaticMarkup works without a DOM.
  */
+import i18next from 'i18next'
 import { useCallback, useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
@@ -267,7 +268,7 @@ export default function Dialog({
                             type="button"
                             onClick={onClose}
                             className="-m-1.5 inline-flex h-11 w-11 shrink-0 items-center justify-center"
-                            aria-label="Close dialog"
+                            aria-label={i18next.t('common.closeDialog')}
                         >
                             <span className="btn btn-ghost btn-sm inline-flex h-8 w-8 items-center justify-center p-0">
                                 <IconX size={16} />

@@ -6,7 +6,7 @@
  * sessions can die or compact; a new coordinator reads the mission back at
  * launch and continues.
  *
- * Explicit non-goals (see docs/mesh-product-plan-v2.md Phase M3): this is not
+ * Explicit non-goals (mesh product plan v2, Phase M3): this is not
  * a workflow engine and there is no automatic takeover daemon. Progress is
  * never stored — it is derived from queue task statuses (mission_id) at
  * query time.
@@ -373,7 +373,7 @@ export function isMissionAllTasksTerminal(aggregate: MeshMissionTaskAggregate): 
  * new task). Fire-and-forget and fully best-effort — a throw here must never break the
  * task mutation that triggered it.
  *
- * Design invariants (docs/MESH_PROMPT_ARCH_REVIEW_2026-07.md §9-1 G3):
+ * Design invariants (mesh prompt architecture review 2026-07, §9-1 G3):
  *  - NEVER transitions the mission status. This only publishes a "consider closing"
  *    hint; the coordinator/human decides via mesh_mission_upsert.
  *  - Idempotent per all-terminal EDGE. The mission's close_candidate_emitted_at marker

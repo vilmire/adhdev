@@ -726,7 +726,7 @@ export interface MeshUntrustedEvidenceBlock {
 /**
  * The SAME untrusted-evidence framing {@link renderMaterializedMessage} uses for
  * `inputs_from`, exported for other appendices that carry worker-authored text
- * (D4 "Upstream results", docs/design/2026-09-25-graph-orchestration-simplification.md):
+ * (D4 "Upstream results", the 2026-09-25 graph orchestration simplification):
  * the fixed {@link MESH_UPSTREAM_DATA_PREAMBLE}, then one
  * `<mesh_upstream_data_<nonce> trust="untrusted" ...>` envelope per block, the
  * value secret-redacted, control-stripped and unable to close its own envelope.

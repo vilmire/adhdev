@@ -21,7 +21,7 @@ import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 
 /**
  * graph-orchestration-simplification D2 + the MCP half of D3(c)/D6
- * (docs/design/2026-09-25-graph-orchestration-simplification.md).
+ * (the 2026-09-25 graph orchestration simplification).
  *
  *  1. Schema diet — the enqueue schemas publish ONE canonical snake_case name per
  *     field and stay under a byte ceiling (the 18 KB batch schema was the measured

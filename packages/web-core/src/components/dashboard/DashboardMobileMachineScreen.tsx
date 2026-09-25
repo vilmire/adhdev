@@ -103,7 +103,7 @@ export default function DashboardMobileMachineScreen({
     })
 
     const recentLaunchCards = useMemo(() => topRecentLaunches.map(session => {
-        const { metaText, updatedLabel } = buildMachineRecentLaunchCardView(session)
+        const { metaText, updatedLabel } = buildMachineRecentLaunchCardView(session, t)
         return {
             key: `recent-launch:${session.id}`,
             primary: session.label,
@@ -181,7 +181,7 @@ export default function DashboardMobileMachineScreen({
                         className="w-[34px] h-[34px] rounded-full border border-border-default bg-surface-primary/70 text-text-secondary shrink-0 inline-flex items-center justify-center hover:bg-surface-primary transition-colors"
                         onClick={onBack}
                         type="button"
-                        aria-label="Back"
+                        aria-label={t('common.back')}
                     >
                         <IconChevronLeft size={18} />
                     </button>
@@ -190,7 +190,7 @@ export default function DashboardMobileMachineScreen({
                             {getMachineDisplayName(selectedMachineEntry, { fallbackId: selectedMachineEntry.id })}
                         </div>
                         <div className="min-w-0 flex items-center flex-wrap gap-1.5 text-xs text-text-secondary truncate">
-                            {(selectedMachineEntry.platform || 'machine')}
+                            {(selectedMachineEntry.platform || t('machine.mobile.machineFallback'))}
                             {selectedMachineEntry.version ? ` · v${selectedMachineEntry.version}` : ''}
                         </div>
                     </div>
@@ -200,7 +200,7 @@ export default function DashboardMobileMachineScreen({
             <div className="flex-1 min-h-0 overflow-y-auto py-2 flex flex-col gap-2 -webkit-overflow-scrolling-touch">
                 {hasCurrentChats && (
                     <section className="flex flex-col gap-0">
-                        <div className="text-2xs font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Current Chats</div>
+                        <div className="text-2xs font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">{t('machine.mobile.currentChats')}</div>
                         <div className="grid grid-cols-1 gap-2.5 px-4">
                             {conversationCards.map(card => (
                                 <button
@@ -221,7 +221,7 @@ export default function DashboardMobileMachineScreen({
 
                 {hasRecentLaunches && (
                     <section className="flex flex-col gap-0">
-                        <div className="text-2xs font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Recent Launches</div>
+                        <div className="text-2xs font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">{t('machine.mobile.recentLaunches')}</div>
                         <div className="grid grid-cols-1 gap-2.5 px-4">
                             {visibleRecentLaunchCards.map(card => (
                                 <button
@@ -249,7 +249,7 @@ export default function DashboardMobileMachineScreen({
                                     className="min-h-[34px] px-3.5 rounded-full border border-border-default/80 bg-surface-primary/90 text-text-secondary text-xs font-bold"
                                     onClick={() => launcher.setShowAllRecent(current => !current)}
                                 >
-                                    {launcher.showAllRecent ? 'Show fewer' : `Show ${recentLaunchCards.length - 4} more`}
+                                    {launcher.showAllRecent ? t('machine.mobile.showFewer') : t('machine.mobile.showMore', { count: recentLaunchCards.length - 4 })}
                                 </button>
                             </div>
                         )}
@@ -480,7 +480,7 @@ export default function DashboardMobileMachineScreen({
                                             className="inline-flex items-center justify-center min-h-[34px] px-4 rounded-lg bg-surface-primary text-text-primary font-bold text-xs"
                                             onClick={() => onAddWorkspace(launcher.resolvedWorkspacePath, { createIfMissing: true })}
                                         >
-                                            Create folder
+                                            {t('machine.mobile.createFolder')}
                                         </button>
                                     </div>
                                 )}
@@ -490,7 +490,7 @@ export default function DashboardMobileMachineScreen({
                 )}
 
                 <section className="flex flex-col gap-0">
-                    <div className="text-2xs font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Inspect</div>
+                    <div className="text-2xs font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">{t('machine.mobile.inspect')}</div>
                     <div className="grid grid-cols-1 gap-2.5 px-4">
                         {selectedMachineNeedsUpgrade && (
                             <button
@@ -498,9 +498,9 @@ export default function DashboardMobileMachineScreen({
                                 type="button"
                                 onClick={onMachineUpgrade}
                             >
-                                <span className="text-sm font-bold text-text-primary">Update to v{appVersion}</span>
+                                <span className="text-sm font-bold text-text-primary">{t('machine.commandCenter.updateToVersion', { version: appVersion })}</span>
                                 <span className="text-xs leading-relaxed text-text-secondary">
-                                    Restart this machine with the latest daemon
+                                    {t('machine.mobile.updateDescription')}
                                 </span>
                             </button>
                         )}
@@ -509,9 +509,9 @@ export default function DashboardMobileMachineScreen({
                             type="button"
                             onClick={onOpenMachineDetails}
                         >
-                            <span className="text-sm font-bold text-text-primary">Machine details</span>
+                            <span className="text-sm font-bold text-text-primary">{t('machine.mobile.machineDetails')}</span>
                             <span className="text-xs leading-relaxed text-text-secondary">
-                                Sessions, providers, system info, and logs
+                                {t('machine.mobile.machineDetailsDescription')}
                             </span>
                         </button>
                     </div>
@@ -519,13 +519,13 @@ export default function DashboardMobileMachineScreen({
             </div>
             {launcher.browseDialogOpen && (
                 <WorkspaceBrowseDialog
-                    title="Select workspace"
-                    description="Move through folders like a normal explorer, then use the current folder for this machine."
+                    title={t('machine.mobile.browseTitle')}
+                    description={t('machine.mobile.browseDescription')}
                     currentPath={launcher.browseCurrentPath}
                     directories={launcher.browseDirectories}
                     busy={launcher.browseBusy}
                     error={launcher.browseError}
-                    confirmLabel="Use this folder"
+                    confirmLabel={t('machine.mobile.useThisFolder')}
                     onClose={() => launcher.setBrowseDialogOpen(false)}
                     onNavigate={(path) => { void launcher.loadBrowsePath(path) }}
                     onConfirm={(path) => {
@@ -559,8 +559,8 @@ export default function DashboardMobileMachineScreen({
                         launcher.launchConfirm.providerType && (launcher.launchConfirmSessionsLoading || launcher.launchConfirmSavedSessions.length > 0) && (
                             <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
                                 <div className="flex items-center justify-between mb-1">
-                                    <div className="text-3xs uppercase tracking-[0.08em] text-text-muted">Resume saved history</div>
-                                    {launcher.launchConfirmSessionsLoading && <div className="text-3xs text-text-secondary font-medium">Loading...</div>}
+                                    <div className="text-3xs uppercase tracking-[0.08em] text-text-muted">{t('launch.resumeSavedHistory')}</div>
+                                    {launcher.launchConfirmSessionsLoading && <div className="text-3xs text-text-secondary font-medium">{t('launch.loadingShort')}</div>}
                                 </div>
                                 <div className="text-2xs text-text-secondary mb-2">{getSavedHistoryHelperLabel(t)}</div>
                                 <div className="grid grid-cols-1 gap-2 mb-2">
@@ -568,7 +568,7 @@ export default function DashboardMobileMachineScreen({
                                         type="text"
                                         value={launcher.launchConfirmTextFilter}
                                         onChange={(e) => launcher.setLaunchConfirmTextFilter(e.target.value)}
-                                        placeholder="Search title or preview"
+                                        placeholder={t('machine.mobile.searchHistory')}
                                         className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
                                         disabled={launcher.launchConfirmBusy || launcher.launchConfirmSessionsLoading}
                                     />
@@ -576,7 +576,7 @@ export default function DashboardMobileMachineScreen({
                                         type="text"
                                         value={launcher.launchConfirmWorkspaceFilter}
                                         onChange={(e) => launcher.setLaunchConfirmWorkspaceFilter(e.target.value)}
-                                        placeholder="Filter by workspace"
+                                        placeholder={t('machine.mobile.filterWorkspace')}
                                         className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
                                         disabled={launcher.launchConfirmBusy || launcher.launchConfirmSessionsLoading}
                                     />
@@ -584,7 +584,7 @@ export default function DashboardMobileMachineScreen({
                                         type="text"
                                         value={launcher.launchConfirmModelFilter}
                                         onChange={(e) => launcher.setLaunchConfirmModelFilter(e.target.value)}
-                                        placeholder="Filter by model"
+                                        placeholder={t('machine.mobile.filterModel')}
                                         className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
                                         disabled={launcher.launchConfirmBusy || launcher.launchConfirmSessionsLoading}
                                     />
@@ -594,9 +594,9 @@ export default function DashboardMobileMachineScreen({
                                         className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
                                         disabled={launcher.launchConfirmBusy || launcher.launchConfirmSessionsLoading}
                                     >
-                                        <option value="recent">Most recent</option>
-                                        <option value="oldest">Oldest first</option>
-                                        <option value="messages">Most messages</option>
+                                        <option value="recent">{t('machine.mobile.sortRecent')}</option>
+                                        <option value="oldest">{t('machine.mobile.sortOldest')}</option>
+                                        <option value="messages">{t('machine.mobile.sortMessages')}</option>
                                     </select>
                                 </div>
                                 <label className="mb-2 flex items-center gap-2 text-2xs text-text-muted">
@@ -606,7 +606,7 @@ export default function DashboardMobileMachineScreen({
                                         onChange={(e) => launcher.setLaunchConfirmResumableOnly(e.target.checked)}
                                         disabled={launcher.launchConfirmBusy || launcher.launchConfirmSessionsLoading}
                                     />
-                                    Resume-ready only
+                                    {t('machine.mobile.resumableOnly')}
                                 </label>
                                 <select
                                     value={launcher.launchConfirmResumeId}
@@ -617,19 +617,19 @@ export default function DashboardMobileMachineScreen({
                                     <option value="">{getCliResumeSelectPlaceholder(t)}</option>
                                     {launcher.filteredLaunchConfirmSavedSessions.map(sess => (
                                         <option key={sess.providerSessionId} value={sess.providerSessionId} disabled={!sess.canResume}>
-                                            {sess.title || sess.providerSessionId} {!sess.canResume ? '(workspace missing)' : ''}
+                                            {sess.title || sess.providerSessionId} {!sess.canResume ? t('machine.mobile.workspaceMissing') : ''}
                                         </option>
                                     ))}
                                 </select>
                                 {!launcher.launchConfirmSessionsLoading && launcher.launchConfirmSavedSessions.length > 0 && launcher.filteredLaunchConfirmSavedSessions.length === 0 && (
-                                    <div className="mt-2 text-2xs text-text-muted">No saved history matches these filters.</div>
+                                    <div className="mt-2 text-2xs text-text-muted">{t('machine.mobile.noHistoryMatches')}</div>
                                 )}
                                 {launcher.launchConfirmResumeId && (() => {
                                     const selectedSession = launcher.filteredLaunchConfirmSavedSessions.find(
                                         sess => sess.providerSessionId === launcher.launchConfirmResumeId,
                                     )
                                     if (!selectedSession) return null
-                                    const summary = buildSavedHistorySummaryView(selectedSession)
+                                    const summary = buildSavedHistorySummaryView(selectedSession, t)
                                     return (
                                         <div className="mt-2 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2.5 text-2xs text-text-muted leading-relaxed">
                                             <div className="font-semibold text-text-primary truncate">{summary.title}</div>

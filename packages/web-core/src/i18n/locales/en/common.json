@@ -4,11 +4,16 @@
         "select": "Select language"
     },
     "common": {
+        "closeDialog": "Close dialog",
+        "noRecords": "No records found.",
+        "close": "Close",
+        "back": "Back",
         "cancel": "Cancel",
         "confirm": "Confirm",
         "confirmTitle": "Are you sure?"
     },
     "connection": {
+        "loadingShort": "Loading…",
         "loadingDashboard": "Loading your dashboard...",
         "machinesConnectedCount": "{{connected}}/{{total}} machines connected",
         "disconnected": "Disconnected",
@@ -83,13 +88,24 @@
             "empty": "No pending activity."
         },
         "metaChips": {
+            "queuePending": "{{count}} waiting",
+            "queueTooltip": "Queue: {{pending}} waiting, {{assigned}} assigned, {{completed}} completed, {{failed}} failed",
             "meshNode": "Mesh Node"
         },
         "versionBanner": {
+            "restarting": "restarting",
+            "upgrading": "updating…",
+            "unknownVersion": "unknown",
+            "updateAvailable": "Update available",
             "required": "required",
             "retry": "retry"
         },
         "remoteDialog": {
+            "liveRemoteView": "Live remote view",
+            "remoteUnavailable": "Remote view unavailable",
+            "remoteOnly": "Remote only",
+            "splitView": "Split view",
+            "remoteFallback": "Remote",
             "history": "History"
         },
         "sourceTimeline": {
@@ -275,6 +291,7 @@
         }
     },
     "cliStop": {
+        "stopProcess": "Stop CLI process",
         "title": "Stop {{agent}}?",
         "gracefulDescription": "Stop asks the provider to exit cleanly when supported. Force Stop ends the runtime immediately.",
         "forceOnlyDescription": "This provider does not support graceful stop. Force Stop will end the runtime immediately.",
@@ -289,6 +306,7 @@
         "answerQuestion": "Answer the question"
     },
     "chatControls": {
+        "loading": "Loading…",
         "launchModelChanged": "{{from}} → {{to}} (changed)",
         "launchModelSource": {
           "user": "chosen",
@@ -437,6 +455,42 @@
         "stopSessionTitle": "Stop session (terminates the agent)"
     },
     "mesh": {
+        "graph": {
+            "remoteBadge": "remote",
+            "activeSessionAria": "active session"
+        },
+        "statusTab": {
+            "v2ScopeHint": "Pending events by scope",
+            "providerSkewHint": "Providers running different versions on different nodes",
+            "providerSkew": "{{count}} provider version mismatch",
+            "v2RatioHint": "Share of pending coordinator events in the current message format",
+            "daemonBuildHint": "Exact daemon build (version@commit) running on this node",
+            "quotaFailedHint": "This machine couldn't read this provider's usage",
+            "quotaOkNoWindowHint": "Read successfully — this provider has no percentage limit to show",
+            "nodeCountHint": "Mesh nodes (workspaces/worktrees) on this machine — they share one plan quota",
+            "nodeCount_other": "{{count}} nodes",
+            "nodeCount_one": "{{count}} node",
+            "daemonVersionHint": "Daemon version running on this machine",
+            "blockedReasonHint": "Why this node can't take a new code-changing task right now",
+            "providerCapHint": "Active tasks per provider on this node vs its declared limit",
+            "priorityHint": "Scheduling preference (higher is preferred)",
+            "priority": "priority {{value}}",
+            "loadHint": "Active tasks assigned to this node",
+            "load": "load {{count}}",
+            "readonlyCapHint": "Active read-only investigation tasks vs their limit (2× the write limit)",
+            "readonlyCap": "read-only {{active}}/{{max}}",
+            "writeCapHint": "Active tasks that change code vs the mesh-wide parallel limit",
+            "writeCap": "write {{active}}/{{max}}"
+        },
+        "manualSetup": {
+            "restartHint": "Start a fresh CLI session after editing config.",
+            "configPath": "Config path:",
+            "format": "Format:",
+            "server": "Server:",
+            "titleFor": "Manual MCP setup required for {{provider}}",
+            "title": "Manual MCP setup required"
+        },
+        "openLiveGraph": "Open live repo mesh graph",
         "help": {
             "toggleAria": "Mesh help",
             "toggleTitle": "Mesh concept help",
@@ -859,6 +913,9 @@
             "jumpToState": "Click to jump to the next card in this state"
         },
         "obs": {
+            "closeDetailAria": "Close detail panel",
+            "layoutDirectionAria": "Graph layout direction",
+            "viewAria": "Mesh view",
             "tabOverview": "Overview",
             "tabTasks": "Blueprint",
             "tabStatus": "Status",
@@ -996,6 +1053,18 @@
             "errorUnexpectedPayload": "Couldn't load graph data. Please try again shortly."
         },
         "health": {
+            "awaitingLiveData": "waiting for live data",
+            "recentFailuresCount": "{{count}} recent failures",
+            "refineFailedCount": "{{count}} merge failed",
+            "refiningCount": "{{count}} merging",
+            "failedCount": "{{count}} failed",
+            "statLedgerDone": "Recorded done",
+            "statRecent": "Recent↯",
+            "statSessions": "Sessions",
+            "statFailed": "Failed",
+            "statDone": "Done",
+            "statActive": "Active",
+            "statPending": "Waiting",
             "panelTitle": "Mesh Health Panel",
             "lastActivity": "Last activity",
             "refineJobs": "Refine jobs",
@@ -1004,6 +1073,8 @@
             "sessions": "Sessions"
         },
         "blueprint": {
+            "gateFallback": "gate",
+            "readonlyBadge": "read-only",
             "liveQueue": "Live queue",
             "scheduling": "Scheduling preview",
             "schedObservedAt": "as of {{time}}",
@@ -1204,6 +1275,9 @@
             "repoMeshJsonInvalid": "This repo's .adhdev/mesh.json could not be parsed, so its prompt layer is ignored."
         },
         "nodeList": {
+            "addingIsExplicit": "Adding it is still up to you.",
+            "compatibleWorkspace": "Compatible Git workspace detected.",
+            "inspectingRepo": "Inspecting the Git repository (read-only)…",
             "title": "Nodes & Providers ({{count}})",
             "descriptionCloud": "Workspaces in this mesh and their preferred AI tools. Setup inventory only — live graph/git/session truth is owned by the Mesh Host status above.",
             "descriptionStandalone": "Workspaces participating in this mesh and their preferred AI tools.",
@@ -1257,6 +1331,8 @@
             "machineTabCounts": "{{nodes}} node(s) · {{slots}} slot(s)"
         },
         "host": {
+            "setupNode": "setup node",
+            "willHostOn": "Will host on",
             "coordinatorProvider": "Coordinator CLI provider",
             "coordinatorProviderHint": "Tool launched for the host coordinator session.",
             "useNodePriority": "Use node provider priority",
@@ -1329,6 +1405,7 @@
             "empty": "No routing tags — tasks can run here without matching any specific capability. Tags are optional."
         },
         "missions": {
+            "filterAllCount": "All {{count}}",
             "errorFetch": "Failed to fetch full mission goals",
             "title": "Missions",
             "description": "Active and historical missions reported by the coordinator. Expand a goal to fetch its full text on demand.",
@@ -1483,6 +1560,11 @@
             "machineVersionsTitle": "Provider CLI versions installed on this machine — shared by all its nodes"
         },
         "overview": {
+            "sessionCount_other": "{{count}} sessions",
+            "sessionCount_one": "{{count}} session",
+            "leaseExpired": "lease expired",
+            "providerUnknown": "provider unknown",
+            "truncated": "(truncated)",
             "missionCard": "Missions",
             "ledgerCard": "Ledger",
             "queueCard": "Queue",
@@ -1582,6 +1664,12 @@
         }
     },
     "chat": {
+        "showMoreChars": "Show more ({{count}} characters)",
+        "collapse": "Collapse",
+        "you": "You",
+        "toolMessageAria": "Tool message",
+        "activityMessageAria": "Activity message",
+        "activityFallback": "Activity",
         "copyMessage": "Copy message",
         "copyCode": "Copy code",
         "showMore": "Show more",
@@ -1627,12 +1715,29 @@
         "reconnectMachineTitle": "Automatic reconnection gave up on this machine — reconnect now"
     },
     "chatInput": {
+        "addMessageOptional": "Add a message (optional)…",
+        "showControls": "Show controls",
+        "hideControls": "Hide controls",
+        "sendTo": "Send message to {{panel}}",
         "attachImage": "Attach image",
         "placeholder": "Send message to {{panel}}...",
         "sendMessage": "Send message",
         "dropImage": "Drop image here"
     },
     "paneGroup": {
+        "hideFromDashboard": "Hide from dashboard",
+        "removeShortcut": "Remove shortcut",
+        "changeShortcut": "Change shortcut ({{shortcut}})",
+        "meshChat": "Mesh chat",
+        "dropSplitRight": "Split right",
+        "dropMoveHere": "Move here",
+        "dropSplitLeft": "Split left",
+        "relaunchWithCdp": "Relaunch with connection",
+        "cdpDisconnected": "Not connected to the IDE — chat history and screenshots are unavailable.",
+        "resizeHandleHint": "Drag to resize · Double-click to merge",
+        "shortcutListening": "Listening…",
+        "shortcutPressCombo": "Press a key combination (e.g. {{example1}}, {{example2}})",
+        "shortcutSetTitle": "Set shortcut",
         "loadingSessions": "Loading sessions...",
         "noConversations": "No conversations yet",
         "waitingForDaemon": "Waiting for your daemon",
@@ -1647,6 +1752,18 @@
         "moveTabHere": "Move a tab here to view"
     },
     "terminal": {
+        "growViewport": "Enlarge terminal view",
+        "shrinkViewport": "Shrink terminal view",
+        "sendInterrupt": "Send interrupt (Ctrl-C)",
+        "arrowRight": "Arrow right",
+        "arrowDown": "Arrow down",
+        "arrowLeft": "Arrow left",
+        "arrowUp": "Arrow up",
+        "keysPanelTitle": "Terminal keys",
+        "keysButton": "Keys",
+        "copyHint": "Copy the selected terminal text, or the visible screen if nothing is selected",
+        "specDebugHint": "Spec debug — inspect current state, sections, and transition history",
+        "replayScrollbackHint": "Load earlier terminal output so you can scroll farther up",
         "loadOlderOutput": "Load older terminal output",
         "loadingOlder": "Loading older...",
         "debug": "Debug",
@@ -1665,6 +1782,19 @@
         "switchToChat": "Switch to Chat view"
     },
     "launch": {
+        "updatedAt": "Updated {{time}}",
+        "messageCountShort_other": "{{count}} msgs",
+        "messageCountShort_one": "{{count}} msg",
+        "workspaceUnknown": "Workspace unknown",
+        "clearSelection": "Clear",
+        "selectedSavedHistory": "Selected saved history",
+        "refresh": "Refresh",
+        "loadingShort": "Loading…",
+        "savedHistoryNoneYet": "No saved history yet. New conversations appear here once ADHDev has captured them.",
+        "savedHistoryLoadedCount_other": "{{count}} saved histories loaded. Open saved history to choose one.",
+        "savedHistoryLoadedCount_one": "{{count}} saved history loaded. Open saved history to choose one.",
+        "savedHistoryIntro": "Start fresh, or open saved history when you want continuity.",
+        "savedHistoryBadge": "Saved history",
         "resumeSavedHistory": "Resume saved history",
         "startFresh": "Start fresh",
         "resumingSavedHistory": "Resuming saved history…",
@@ -1981,7 +2111,7 @@
             "minutesAgo": "{{minutes}}m ago",
             "hoursAgo": "{{hours}}h ago",
             "daysAgo": "{{days}}d ago",
-            "frozenFeatureTitle": "Frozen — this feature is paused and not available. See docs/FROZEN_SURFACES.md"
+            "frozenFeatureTitle": "Frozen — this feature is paused and not available."
         },
         "billing": {
             "currentPlan": "Current Plan:",
@@ -2300,7 +2430,7 @@
             "revoke": "Revoke",
             "usageLabel": "Usage:",
             "apiReference": "API Reference →",
-            "frozenFeatureTitle": "Frozen — this feature is paused. See docs/FROZEN_SURFACES.md"
+            "frozenFeatureTitle": "Frozen — this feature is paused."
         },
         "shareModal": {
             "title": "Share Session",
@@ -2791,6 +2921,51 @@
         }
     },
     "app": {
+        "onboardingTour": {
+            "next": "Next",
+            "getStarted": "Get started",
+            "learnMore": "Learn more in the docs",
+            "closeAria": "Close onboarding",
+            "allSetStandalone": {
+                "desc": "This dashboard is already connected to your local daemon. Start a session from the Dashboard tab, or add more providers under Machines → Providers.",
+                "title": "You're all set"
+            },
+            "getStartedCloud": {
+                "desc": "Run this on any machine you want to drive, then sign in — the daemon pairs itself to your dashboard automatically.",
+                "title": "Get started"
+            },
+            "orchestrate": {
+                "desc": "Repo Mesh (Cloud Pro) lets one coordinator hand work to agents across many machines — parallel git worktrees, automatic branch convergence, and cross-checking the same repo from several angles.",
+                "title": "Orchestrate your agents"
+            },
+            "watchAndSteer": {
+                "desc": "Follow each agent's session in real time and steer it as it works — switch sessions, take screenshots, and (for IDE sessions) view and control the screen over a direct connection.",
+                "title": "Watch and steer, live"
+            },
+            "realtimeChat": {
+                "desc": "See what your AI agent is doing in real time. Send messages, approve or reject actions — all from your browser or phone.",
+                "title": "Real-time chat"
+            },
+            "welcome": {
+                "desc": "Drive any local CLI coding agent — Claude Code, Codex, Antigravity CLI — straight from your browser or phone. The agents keep running on your machine; you control them from the web.",
+                "title": "Welcome to ADHDev"
+            }
+        },
+        "installCommand": {
+            "orViaNpm": "Or via npm:",
+            "clickToCopy": "Click to copy"
+        },
+        "errorBoundary": {
+            "reload": "Reload page",
+            "description": "An unexpected error occurred. Please reload the page to continue.",
+            "title": "Something went wrong"
+        },
+        "shellFreshness": {
+            "dismissAria": "Dismiss update notice",
+            "later": "Later",
+            "reload": "Reload",
+            "message": "A new version of ADHDev is available."
+        },
         "openMenu": "Open menu",
         "closeMenu": "Close menu"
     },
@@ -2816,6 +2991,7 @@
         "toggleFullscreen": "Toggle Fullscreen"
     },
     "remote": {
+        "screenshotAlt": "Remote View",
         "mouse": "Mouse",
         "touch": "Touch",
         "connected": "Connected",
@@ -2862,6 +3038,13 @@
         "openChatHint": "Click to open this session’s chat"
     },
     "sessionInfo": {
+        "gitClean": "clean",
+        "gitDirty": "uncommitted changes",
+        "gitDetached": "(detached)",
+        "blockRawMetadata": "Raw runtime metadata (click to expand)",
+        "blockFinalPrompt": "Final system prompt (click to expand)",
+        "blockExtraPrompt": "Extra prompt for this launch",
+        "buttonHint": "Session info — launch settings, mesh node, system prompt, …",
         "quotaOkNoWindows": "Read OK — no percentage window",
         "sectionMeshWorker": "Spawned by coordinator",
         "rowMeshId": "Mesh ID",
@@ -2916,6 +3099,131 @@
         "rowAttachedClients": "Attached clients"
     },
     "machine": {
+        "mobile": {
+            "noHistoryMatches": "No saved history matches these filters.",
+            "workspaceMissing": "(workspace missing)",
+            "resumableOnly": "Only ones that can be resumed",
+            "sortMessages": "Most messages",
+            "sortOldest": "Oldest first",
+            "sortRecent": "Most recent",
+            "filterModel": "Filter by model",
+            "filterWorkspace": "Filter by workspace",
+            "searchHistory": "Search title or preview",
+            "useThisFolder": "Use this folder",
+            "browseDescription": "Move through folders like a normal file browser, then use the current folder for this machine.",
+            "browseTitle": "Select workspace",
+            "machineDetailsDescription": "Sessions, providers, system info, and logs",
+            "machineDetails": "Machine details",
+            "updateDescription": "Restart this machine with the latest daemon",
+            "inspect": "Inspect",
+            "createFolder": "Create folder",
+            "showMore": "Show {{count}} more",
+            "showFewer": "Show fewer",
+            "recentLaunches": "Recent launches",
+            "currentChats": "Current chats",
+            "machineFallback": "machine"
+        },
+        "daemonUpdate": {
+            "previewUnknownDescription": "The app is connected to preview, but the server hasn't reported a preview target version yet.",
+            "previewUpToDateDescription": "This machine already runs the current preview daemon.",
+            "previewUnknownTitle": "Preview update status unknown",
+            "previewUpToDateTitle": "Preview daemon is up to date",
+            "mismatchDescription": "This machine runs a different daemon version than the current app. Update it before starting more sessions.",
+            "previewUpgradeDescription": "This machine can be updated to the current preview daemon without opening a remote shell.",
+            "requiredDescription": "This machine is on an incompatible daemon version. Update it before starting more sessions.",
+            "mismatchTitle": "Version mismatch detected",
+            "requiredTitle": "Daemon update required",
+            "upgrade": "Update",
+            "updateNow": "Update now"
+        },
+        "launchPick": {
+            "empty": "No saved workspaces yet. Add one in the Workspace tab or type a path above.",
+            "description": "Nothing is assumed. Pick a saved workspace, your default workspace, or home — or cancel and type a path.",
+            "title": "Where should this run?"
+        },
+        "workspacePicker": {
+            "noneSelected": "No workspace selected. This starts in the home folder.",
+            "selectedWorkspace": "Selected workspace",
+            "defaultWorkspace": "Default workspace",
+            "enterPathFirst": "Enter a full folder path to start there.",
+            "browseFirst": "Browse to a folder before starting there.",
+            "enterPath": "Enter a full folder path…",
+            "customPath": "Custom path…",
+            "selectWorkspace": "Select workspace…",
+            "noneSaved": "(no saved workspaces — add one in the Workspace tab)",
+            "noWorkspaceHome": "(no workspace — start in home folder)"
+        },
+        "trustBadge": {
+            "externalUntrustedHint": "From a source you added, and it includes code that ADHDev will run. Review the source before enabling.",
+            "externalSafeHint": "From a source you added. Settings only — ADHDev never runs code from it.",
+            "trustedWithScriptsHint": "Provided officially by ADHDev. Includes scripts that ADHDev runs.",
+            "trustedHint": "Provided officially by ADHDev. Settings only — no provider code runs.",
+            "userCustomHint": "You wrote this provider in your own providers folder. It runs your own code.",
+            "externalUntrusted": "External · runs code",
+            "externalSafe": "External",
+            "trustedWithScripts": "Official · scripts",
+            "trusted": "Official",
+            "userCustom": "Custom"
+        },
+        "providerSettings": {
+            "notifications": {
+                "description": "Show notifications when {{provider}} changes state.",
+                "label": "Notifications"
+            },
+            "showCoordinatorSystemPrompt": {
+                "description": "Show the injected system prompt as a message in the chat. Off by default — you can always see it in the chat header's Session Info (ⓘ).",
+                "label": "Show system prompt message"
+            },
+            "showTerminal": {
+                "description": "Show terminal commands and their output in the chat.",
+                "label": "Show terminal"
+            },
+            "showToolCalls": {
+                "description": "Show short summaries of tool calls (searched, edited, …) in the chat.",
+                "label": "Show tool calls"
+            },
+            "showThinking": {
+                "description": "Show the agent's reasoning in the chat.",
+                "label": "Show thinking"
+            },
+            "longGeneratingThresholdSec": {
+                "description": "How long a reply can run before the long-running alert fires.",
+                "label": "Long-running threshold (seconds)"
+            },
+            "longGeneratingAlert": {
+                "description": "Notify you when a reply takes unusually long.",
+                "label": "Long-running alert"
+            },
+            "approvalAlert": {
+                "description": "Notify you when {{provider}} is waiting for your approval.",
+                "label": "Approval notifications"
+            },
+            "appPathOverride": {
+                "description": "Optional full path to the IDE app. Leave blank to look in the usual install locations.",
+                "label": "App path"
+            },
+            "cliPathOverride": {
+                "description": "Optional full path to the IDE command-line launcher. Leave blank to use the detected one.",
+                "label": "CLI launcher path"
+            },
+            "executableArgs": {
+                "description": "Optional arguments that replace the default ones when {{provider}} starts. Leave blank to use the defaults.",
+                "label": "Launch arguments"
+            },
+            "executablePath": {
+                "description": "Optional full path to the {{provider}} program. Leave blank to find it on your PATH.",
+                "label": "Executable path"
+            },
+            "autoApprove": {
+                "description": "Approve {{provider}} tool calls and prompts automatically, without asking you first.",
+                "label": "Auto approve"
+            },
+            "enabled": {
+                "description": "Turn this on before ADHDev detects, launches, or checks {{provider}} on this machine.",
+                "label": "Enabled on this machine"
+            },
+            "thisProvider": "this provider"
+        },
         "launchConfirm": {
             "workspace": "Workspace",
             "languageModel": "Language Model (Optional)",
@@ -2928,6 +3236,8 @@
             "launching": "Launching…"
         },
         "confirmExternal": {
+            "aboutToActivateFrom": "You're about to turn on {{provider}} from {{source}}.",
+            "aboutToActivate": "You're about to turn on {{provider}}.",
             "dialogAria": "Confirm untrusted external provider",
             "title": "Activate untrusted external provider?",
             "description": "This manifest ships JavaScript that the daemon will execute. Treat as untrusted code — review the source before enabling.",
@@ -2938,6 +3248,8 @@
         "workspace": {
         },
         "providers": {
+            "advancedHint": "Show technical details: where providers are loaded from and raw provider metadata",
+            "sourcesHint": "Manage extra provider sources you added",
             "filter": "Filter",
             "sourceConfigTitle": "Provider source config",
             "sourceConfigDesc": "Where the daemon looks for provider manifests. Affects resolution and reloads.",
@@ -2995,6 +3307,20 @@
             "setActiveFailed": "Failed to set active source"
         },
         "providerRow": {
+            "detectDisabledHint": "Turn the provider on before checking it",
+            "detectHint": "Check that the configured program can be found and run",
+            "originExternalScripts": "Added source {{source}} · runs its own code — review before enabling",
+            "originExternal": "Added source {{source}}",
+            "originUserFolder": "Your providers folder",
+            "originOfficialScripts": "Official (ADHDev registry) · includes scripts",
+            "originOfficial": "Official (ADHDev registry)",
+            "labelOrigin": "Provided by:",
+            "lifecycleDeprecated": "No longer supported",
+            "lifecycleExperimental": "Experimental",
+            "lifecycleBeta": "Beta",
+            "lifecycleStable": "Stable",
+            "checkFailed": "Failed",
+            "checkOk": "OK",
             "statusDetected": "Detected",
             "statusNotDetected": "Not detected",
             "statusEnabledUnchecked": "Enabled (unchecked)",
@@ -3055,6 +3381,11 @@
         "connectedMachines": {
         },
         "card": {
+            "transportDirectShort": "direct",
+            "transportRelayShort": "relay",
+            "coresCount_other": "{{count}} cores",
+            "coresCount_one": "{{count}} core",
+            "onMachine": "on {{machine}}",
             "sectionIDEs": "IDEs",
             "sectionCLIs": "CLIs",
             "sectionACPAgents": "ACP Agents",
@@ -3081,19 +3412,24 @@
             "transportRelay": "TURN relay — direct connection failed",
             "transportDirect": "Direct connection (STUN/host)",
             "beacon": {
-                "behindLabel": "behind {{count}}",
-                "behindTooltip": "This machine is behind its peers by {{count}} entries (worst topic: {{topic}}).",
-                "soleCopyLabel": "sole copy",
-                "soleCopyTooltip": "This machine may hold the only copy of {{entries}} entries across {{count}} topic(s). Peers have not confirmed them.",
-                "deferredLabel": "can't tell",
-                "deferredTooltip": "Sole-copy check was deferred: the peer board was truncated, so the machines compared against are only part of the fleet.",
-                "lastSyncedTooltip": "Last synced {{minutes}} min ago{{behindPart}}.",
-                "lastSyncedBehindPart": ", {{count}} entries behind on {{topic}}"
+                "lastSyncedBehindPart_other": ", {{count}} records still to receive",
+                "lastSyncedBehindPart_one": ", {{count}} record still to receive",
+                "soleCopyTooltip_other": "{{entries}} records on this machine are not yet backed up on another machine. Keep it online until another machine has synced.",
+                "soleCopyTooltip_one": "{{entries}} record on this machine is not yet backed up on another machine. Keep it online until another machine has synced.",
+                "soleCopyLabel_other": "{{count}} records not backed up",
+                "soleCopyLabel_one": "{{count}} record not backed up",
+                "behindTooltip_other": "This machine hasn't received {{count}} recent records from your other machines yet. It usually catches up on its own.",
+                "behindTooltip_one": "This machine hasn't received {{count}} recent record from your other machines yet. It usually catches up on its own.",
+                "behindLabel": "Sync delayed",
+                "deferredLabel": "Backup unconfirmed",
+                "deferredTooltip": "Couldn't confirm that everything on this machine is backed up: only some of your machines could be compared. This is not an error.",
+                "lastSyncedTooltip": "Last synced {{minutes}} min ago{{behindPart}}."
             },
             "fleetPeer": {
-                "label": "seqscribe peer",
-                "divergedLabel": "seqscribe differs",
-                "tooltip": "WS routing: {{wsState}}, {{wsCount}} sessions. seqscribe peer view: {{peerState}}, {{peerCount}} sessions ({{age}}s ago)."
+                "stateOffline": "offline",
+                "stateOnline": "online",
+                "divergedLabel": "Sync delayed",
+                "tooltip": "The server sees this machine as {{wsState}} with {{wsCount}} sessions, but another of your machines saw {{peerState}} with {{peerCount}} sessions ({{age}}s ago). This usually settles within a few seconds."
             },
             "noAgentsRunning": "No agents running yet",
             "launchCta": "Launch →"
@@ -3123,6 +3459,15 @@
             "providerSyncFailed": "Provider channel sync failed: {{error}}"
         },
         "commandCenter": {
+            "previewNoActionNeeded": "No update needed.",
+            "updateDaemon": "Update daemon",
+            "updateToVersion": "Update to v{{version}}",
+            "updateChannel": {
+                "preview": "preview",
+                "stable": "stable"
+            },
+            "updateTargetWithChannel": "Target: v{{version}} ({{channel}})",
+            "updateTarget": "Target: v{{version}}",
             "currentChats": "Current Chats",
             "recentLaunches": "Recent Launches",
             "daemonUpdate": "Daemon Update"
@@ -3137,6 +3482,8 @@
             "useThisFolder": "Use this folder"
         },
         "managedWorkspaces": {
+            "setDefaultHint": "Set as default workspace",
+            "unsetDefaultHint": "Default workspace — click to unset",
             "title": "Workspaces",
             "addWorkspace": "Add workspace",
             "empty": "No saved workspaces yet. Click \"{{button}}\" to pick a folder.",
@@ -3155,10 +3502,53 @@
             "renameFailed": "Could not update workspace name"
         },
         "overview": {
+            "approx": "(approx.)",
+            "memory": "Memory",
+            "cpuDetail": "{{load}} avg / {{cores}} cores",
+            "cpuLoad": "CPU load",
+            "resourceUsage": "Resource usage",
+            "waiting": "Waiting…",
+            "uptime": "Uptime",
             "waitingForStats": "Waiting for live stats…",
             "waitingForStatsWithTotal": "Waiting for live stats… · {{total}} total"
         },
         "quota": {
+            "text": {
+                "failureKind": {
+                    "unknown": "unknown error",
+                    "no-data": "no reading yet",
+                    "setup-required": "setup required",
+                    "unsupported": "not supported",
+                    "cli-unavailable": "program not found",
+                    "parse": "unreadable response",
+                    "server": "provider server error",
+                    "network": "network error",
+                    "rate-limited": "rate limited",
+                    "quota-exhausted": "plan limit reached",
+                    "unauthorized": "access denied",
+                    "expired-token": "sign-in expired",
+                    "missing-credentials": "not signed in"
+                },
+                "agoDays": "{{days}}d {{hours}}h ago",
+                "agoHours": "{{hours}}h {{minutes}}m ago",
+                "agoMinutes": "{{minutes}}m ago",
+                "justNow": "just now",
+                "unreadable": "could not read quota",
+                "unavailable": "not available on this machine",
+                "pool": "pool",
+                "usageSessions": "{{count}} sess",
+                "usageTokens": "{{count}} tok",
+                "windowReset": "reset · awaiting refresh",
+                "cue": {
+                    "stale": "stale",
+                    "refreshing": "refreshing"
+                },
+                "resetsInDays": "resets in {{days}}d {{hours}}h",
+                "resetsInHours": "resets in {{hours}}h {{minutes}}m",
+                "resetsInMinutes": "resets in {{minutes}}m",
+                "resetsNow": "resets now",
+                "used": "{{percent}}% used"
+            },
             "title": "Plan quota",
             "sessionHint": "Rolling 5-hour plan window reported by this machine",
             "weeklyHint": "Rolling 7-day plan window reported by this machine",
@@ -3251,6 +3641,10 @@
         }
     },
     "sessionHost": {
+        "lastErrorLabel": "last error:",
+        "unknown": "unknown",
+        "endpointLabel": "Endpoint:",
+        "activeAgo": "active {{time}}",
         "title": "Hosted Runtime Recovery",
         "stopConfirmTitle": "Stop {{name}}?",
         "stopConfirmDescription": "This will terminate the hosted runtime.",
@@ -3319,7 +3713,21 @@
         "lifecycleInterrupted": "Interrupted"
     },
     "settings": {
+        "mobileMode": {
+            "workspaceMode": "Workspace",
+            "chatMode": "Chat mode",
+            "descriptionWorkspace": "Use the full workspace layout on phones and tablets.",
+            "descriptionChat": "Use the chat-first mobile inbox layout, closer to a messaging app.",
+            "label": "Mobile inbox (chat mode)"
+        },
         "theme": {
+            "preset": {
+                "honey": "Warm yellow accents",
+                "aurora": "Pink accent theme",
+                "ember": "Default amber theme, inspired by the landing page",
+                "midnight": "Classic violet theme"
+            },
+            "presetCustomDescription": "Full app + chat customization",
             "helloHelp": "Hello! How can I help?",
             "fixBug": "Fix the bug please",
             "onIt": "On it! ✨",
@@ -3352,6 +3760,15 @@
             "customLabel": "Custom"
         },
         "providerPriority": {
+            "undetectedHint_other": "{{count}} providers aren't detected here — kept in order, skipped until available.",
+            "undetectedHint_one": "{{count}} provider isn't detected here — kept in order, skipped until available.",
+            "orderHint": "Launches use this order, top to bottom.",
+            "noMoreProviders": "No other CLI providers detected",
+            "selectProvider": "Select provider…",
+            "moveDown": "Move down",
+            "moveUp": "Move up",
+            "keptUntilDetected": "Kept in order; skipped at launch until it's detected on this machine.",
+            "emptyWarning": "No provider priority configured. Launches that don't name a CLI provider will be refused.",
             "available": "available",
             "notOnMachine": "not on this machine",
             "remove": "Remove",
@@ -3359,6 +3776,17 @@
             "addProvider": "Add provider"
         },
         "coordinatorPrompts": {
+            "saved": "Saved",
+            "saveAppend": "Save addition",
+            "saveOverride": "Save override",
+            "saving": "Saving…",
+            "appendPlaceholder": "(empty — nothing added at this layer)",
+            "overridePlaceholder": "(empty — use the default base prompt)",
+            "placeholdersHint": "Placeholders you can use:",
+            "resetHint": "Leave a field empty and save to remove it (back to the default).",
+            "intro": "Customize the prompt that this daemon's mesh coordinator sessions receive.",
+            "loading": "Loading…",
+            "connectDaemon": "Connect a daemon to edit coordinator prompts.",
             "overrideDesc": "<strong>Override</strong> replaces the daemon's built-in base prompt for that CLI.",
             "appendDesc": "<strong>Append</strong> stacks after whichever base wins.",
             "overrideLabel": "Override",
@@ -3372,6 +3800,11 @@
             "sectionDescription": "Per-CLI base prompt for mesh coordinator sessions on this machine. Mesh-level prompts live on the Repo Mesh page."
         },
         "appearance": {
+            "modeSystem": "System",
+            "modeLight": "Light",
+            "modeDark": "Dark",
+            "mobileDescription": "Choose whether the dashboard opens like a chat app on phones or keeps the full workspace layout.",
+            "themeDescription": "Choose a preset or create a fully custom theme. Custom themes control the entire app — backgrounds, text, borders, and chat bubbles.",
             "modeLabel": "Mode",
             "themeLabel": "Theme",
             "mobileLabel": "Mobile",
@@ -3413,6 +3846,10 @@
         "confirmSwitchAction": "Switch"
     },
     "landing": {
+        "gallery": {
+            "next": "Next view",
+            "previous": "Previous view"
+        },
         "nav": {
             "home": "ADHDev Home",
             "mesh": "Mesh",
@@ -3715,6 +4152,10 @@
         }
     },
     "interactivePrompt": {
+        "submit": "Submit",
+        "submitting": "Submitting…",
+        "cancelAria": "Cancel the question",
+        "actionRequired": "Action Required",
         "selectAllThatApply": "Select all that apply",
         "multipleChoice": "Multiple choice",
         "singleChoice": "Single choice",
@@ -3725,11 +4166,58 @@
         "errorReviewUnconfirmed": "The answer keys reached the terminal, but the question is still on screen — the answer may not have been submitted. Check the terminal: if it was not submitted, answer there; resending from here could submit it twice."
     },
     "git": {
+        "diffPreview": {
+            "truncatedAfter": "locally for the full output.",
+            "truncatedBefore": "Changes truncated — run",
+            "empty": "No changes to show.",
+            "binary": "Binary file — changes can't be shown.",
+            "loading": "Loading changes…"
+        },
         "changeList": {
+            "stagedHint": "Staged",
+            "noChanges": "No changed files.",
             "binaryBadge": "bin",
             "truncatedNote": "File list truncated — run <code>git status</code> locally for full output."
         },
         "statusDialog": {
+            "working": "Working…",
+            "includeUntracked": "Include untracked files",
+            "messageRequired": "Message (required)",
+            "fileFallback": "file",
+            "confirmRevert": "Revert changes to {{path}}?",
+            "confirmPop": "Restore latest stash?",
+            "confirmStash": "Stash changes",
+            "confirmCheckpoint": "Create checkpoint commit",
+            "copySummary": "Copy summary",
+            "copied": "Copied to clipboard",
+            "checkoutSelected": "Revert selected",
+            "selectFileToRevert": "Select a file to revert",
+            "revertFile": "Revert changes to {{path}}",
+            "popStash": "Restore stash",
+            "noStashes": "No stashes to restore",
+            "popHint": "Restore the latest stash",
+            "resolveBeforePop": "Resolve conflicts before restoring a stash",
+            "stash": "Stash",
+            "stashHint": "Set current changes aside (git stash)",
+            "resolveBeforeStash": "Resolve conflicts before stashing",
+            "checkpoint": "Checkpoint",
+            "checkpointHint": "Create a git commit as a checkpoint",
+            "resolveBeforeCheckpoint": "Resolve conflicts before creating a checkpoint",
+            "selectFile": "Select a file to view its changes",
+            "noDiffData": "No diff data.",
+            "loading": "Loading…",
+            "fileCount_other": "{{count}} files",
+            "fileCount_one": "{{count}} file",
+            "stashed": "{{count}} stashed",
+            "deleted": "{{count}} deleted",
+            "untracked": "{{count}} untracked",
+            "modified": "{{count}} modified",
+            "staged": "{{count}} staged",
+            "behind": "{{count}} behind",
+            "ahead": "{{count}} ahead",
+            "refresh": "Refresh",
+            "openOnGithub": "Open on GitHub",
+            "title": "Git status",
             "conflicts": "conflicts",
             "clean": "clean"
         }

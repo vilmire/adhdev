@@ -132,7 +132,7 @@ export function MeshSurfaceTabControls({
         : `whitespace-nowrap rounded-lg px-3.5 py-1.5 text-xs font-medium ${meshTheme.textSecondary} border border-transparent hover:bg-white/[0.04]`
     return (
         <div className="flex items-center gap-2">
-            <div className={`inline-flex w-fit items-center gap-1 rounded-xl border p-1 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/40' : 'border-slate-200 bg-slate-50'}`} role="tablist" aria-label="Mesh view">
+            <div className={`inline-flex w-fit items-center gap-1 rounded-xl border p-1 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/40' : 'border-slate-200 bg-slate-50'}`} role="tablist" aria-label={t('mesh.obs.viewAria')}>
                 <button type="button" role="tab" aria-selected={activeTab === 'overview'} className={tabButtonClass(activeTab === 'overview')} onClick={() => onActiveTabChange('overview')}>{t('mesh.obs.tabOverview')}</button>
                 <button
                     type="button"
@@ -630,7 +630,7 @@ export default function MeshObservabilitySurface({
                                 ? 'flex items-center gap-0.5 rounded-md border border-white/10 bg-slate-950/40 p-0.5 text-3xs'
                                 : 'flex items-center gap-0.5 rounded-md border border-slate-300 bg-white/70 p-0.5 text-3xs'}
                             role="group"
-                            aria-label="Graph layout direction"
+                            aria-label={t('mesh.obs.layoutDirectionAria')}
                         >
                             <button type="button" onClick={() => setDirectionPref('LR')} className={directionToggleButtonClass(directionPref === 'LR')} title={t('mesh.obs.directionLRTitle')}>LR</button>
                             <button type="button" onClick={() => setDirectionPref('TB')} className={directionToggleButtonClass(directionPref === 'TB')} title={t('mesh.obs.directionTBTitle')}>TB</button>
@@ -770,7 +770,7 @@ export default function MeshObservabilitySurface({
                                     <button
                                         type="button"
                                         onClick={closeGraphDetail}
-                                        aria-label="Close detail panel"
+                                        aria-label={t('mesh.obs.closeDetailAria')}
                                         className={meshTheme.isDark ? 'rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-xs text-slate-200 transition hover:bg-white/[0.08]' : 'rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs text-slate-600 transition hover:bg-slate-50'}
                                     >
                                         ✕
@@ -883,7 +883,7 @@ export default function MeshObservabilitySurface({
                                                 <div key={task.id} className={`rounded-lg border px-2.5 py-1.5 text-2xs ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/80'}`}>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span className={`font-mono ${meshTheme.textMuted}`}>{task.id.slice(0, 12)}</span>
-                                                        <Badge label={task.status ?? 'unknown'} tone={sessionTone(task.status)} />
+                                                        <Badge label={task.status ?? t('sessionHost.unknown')} tone={sessionTone(task.status)} />
                                                     </div>
                                                     {task.message && (
                                                         <div className={`mt-0.5 truncate ${meshTheme.textMuted}`}>{task.message.slice(0, 48)}</div>
@@ -933,7 +933,7 @@ export default function MeshObservabilitySurface({
                                 <button
                                     type="button"
                                     onClick={closeGraphDetail}
-                                    aria-label="Close detail panel"
+                                    aria-label={t('mesh.obs.closeDetailAria')}
                                     className={meshTheme.isDark ? 'shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-xs text-slate-200 transition hover:bg-white/[0.08]' : 'shrink-0 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs text-slate-600 transition hover:bg-slate-50'}
                                 >
                                     ✕

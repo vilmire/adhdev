@@ -96,7 +96,7 @@ describe('BeaconAdvisoryBadge — quiet unless it has something to say', () => {
 })
 
 describe('BeaconAdvisoryBadge — ①wake-up lag', () => {
-    it('shows the behind badge with the entry count and names the worst topic in the tooltip', () => {
+    it('shows a plain "sync delayed" badge; the tooltip carries the count but no internal topic name', () => {
         render(
             beaconFixture({
                 maxBehind: 42,
@@ -114,15 +114,18 @@ describe('BeaconAdvisoryBadge — ①wake-up lag', () => {
         )
 
         expect(q('beacon-behind-badge')).not.toBeNull()
-        expect(q('beacon-behind-badge')!.textContent).toContain('42')
+        expect(q('beacon-behind-badge')!.textContent).toBe('Sync delayed')
         const tooltip = container.querySelector('[title]')!.getAttribute('title')!
         expect(tooltip).toContain('42')
-        expect(tooltip).toContain('mesh.mesh_abc.events')
+        // Internal vocabulary stays out of the UI (owner rule 2026-09-25).
+        expect(tooltip).not.toContain('mesh.mesh_abc.events')
+        expect(tooltip.toLowerCase()).not.toContain('seqscribe')
+        expect(tooltip.toLowerCase()).not.toContain('topic')
     })
 })
 
 describe('BeaconAdvisoryBadge — "last synced N min ago" (C7-5/B5/E)', () => {
-    it('appends "last synced N min ago, N entries behind on <topic>" to the tooltip', () => {
+    it('appends "last synced N min ago, N records still to receive" to the tooltip', () => {
         render(
             beaconFixture({
                 maxBehind: 42,
@@ -140,9 +143,8 @@ describe('BeaconAdvisoryBadge — "last synced N min ago" (C7-5/B5/E)', () => {
         )
 
         const tooltip = container.querySelector('[title]')!.getAttribute('title')!
-        expect(tooltip).toContain('5')
-        expect(tooltip).toContain('42')
-        expect(tooltip).toContain('mesh.mesh_abc.events')
+        expect(tooltip).toContain('Last synced 5 min ago, 42 records still to receive')
+        expect(tooltip).not.toContain('mesh.mesh_abc.events')
     })
 
     it('omits the trailing "entries behind" clause when there is no lag to report (deferred-only case)', () => {
@@ -172,7 +174,8 @@ describe('BeaconAdvisoryBadge — "last synced N min ago" (C7-5/B5/E)', () => {
         expect(tooltip).toContain('2')
         // No dangling "0 entries behind on" clause — the sub-interpolation must
         // be entirely absent, not rendered with a zero count.
-        expect(tooltip).not.toContain('0 entries')
+        expect(tooltip).not.toContain('0 records')
+        expect(tooltip).not.toContain('still to receive')
     })
 
     it('is silent about "last synced" when there is no peer to derive it from', () => {
@@ -213,8 +216,12 @@ describe('BeaconAdvisoryBadge — ③sole-copy awareness', () => {
         render(soleCopy)
 
         expect(q('beacon-sole-copy-badge')).not.toBeNull()
+        // Plain words with the record count — not "sole copy".
+        expect(q('beacon-sole-copy-badge')!.textContent).toBe('8 records not backed up')
         expect(q('beacon-deferred-badge')).toBeNull()
-        expect(container.querySelector('[title]')!.getAttribute('title')).toContain('8')
+        const tooltip = container.querySelector('[title]')!.getAttribute('title')!
+        expect(tooltip).toContain('8 records on this machine are not yet backed up on another machine')
+        expect(tooltip.toLowerCase()).not.toContain('sole')
     })
 })
 
@@ -247,10 +254,12 @@ describe('★BeaconAdvisoryBadge — a deferred verdict is neither "safe" nor "s
         expect(q('beacon-sole-copy-badge')).toBeNull()
     })
 
-    it('★explains the deferral, so "can\'t tell" is attributable to a truncated board', () => {
+    it('★explains the deferral in plain words (only part of the fleet could be compared)', () => {
         render(deferred)
+        expect(q('beacon-deferred-badge')!.textContent).toBe('Backup unconfirmed')
         const tooltip = container.querySelector('[title]')!.getAttribute('title')!
-        expect(tooltip.toLowerCase()).toContain('truncated')
+        expect(tooltip).toContain('only some of your machines could be compared')
+        expect(tooltip.toLowerCase()).not.toContain('truncated')
     })
 
     it('prefers the confirmed finding when a real sole copy is also present', () => {
@@ -277,8 +286,8 @@ describe('★BeaconAdvisoryBadge — a deferred verdict is neither "safe" nor "s
 
         expect(q('beacon-sole-copy-badge')).not.toBeNull()
         expect(q('beacon-deferred-badge')).toBeNull()
-        expect(container.querySelector('[title]')!.getAttribute('title')!.toLowerCase())
-            .toContain('truncated')
+        expect(container.querySelector('[title]')!.getAttribute('title')!)
+            .toContain('only some of your machines could be compared')
     })
 })
 

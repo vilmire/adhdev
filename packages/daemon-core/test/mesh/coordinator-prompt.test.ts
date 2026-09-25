@@ -26,7 +26,7 @@ describe('Repo Mesh coordinator prompt', () => {
 
     // The mesh-wide cap defaults high (200) but resolveMaxParallelTasks clamps the
     // rendered value to MESH_MAX_PARALLEL_TASKS_MAX (64). The cap is de-emphasized
-    // now that real limits live per capability slot (ORCHESTRATION_NODE_SLOTS.md).
+    // now that real limits live per capability slot (node capability slots design, 2026-07-09).
     expect(prompt).toContain('Maximum **64** concurrent WRITE tasks')
     expect(prompt).toContain('Hermes → `hermes-cli`')
     expect(prompt).toContain('Never substitute the coordinator')
@@ -1278,7 +1278,7 @@ describe('Repo Mesh coordinator prompt', () => {
 })
 
 describe('Repo Mesh coordinator prompt — incremental enqueue is the default (D1)', () => {
-  // GRAPH-ORCHESTRATION D1 (docs/design/2026-09-25-graph-orchestration-simplification.md).
+  // GRAPH-ORCHESTRATION D1 (the 2026-09-25 graph orchestration simplification).
   // Measured 2026-09-02..09-24: 71% of graphs had 1-2 nodes, queue-level depends_on was
   // used in only 1.2% of tasks, and coordinators had generated zero graphs in the prior
   // 40h — the batch-first push (P4, below) never produced the batch-shaped usage it was

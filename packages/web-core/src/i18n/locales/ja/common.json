@@ -4,11 +4,16 @@
         "select": "言語を選択"
     },
     "common": {
+        "closeDialog": "ダイアログを閉じる",
+        "noRecords": "記録がありません。",
+        "close": "閉じる",
+        "back": "戻る",
         "cancel": "キャンセル",
         "confirm": "確認",
         "confirmTitle": "続行しますか？"
     },
     "connection": {
+        "loadingShort": "読み込み中…",
         "loadingDashboard": "ダッシュボードを読み込んでいます...",
         "machinesConnectedCount": "マシン {{connected}}/{{total}} 台が接続済み",
         "disconnected": "切断されました",
@@ -54,7 +59,7 @@
     },
     "dashboard": {
         "header": {
-            "title": "Dashboard",
+            "title": "ダッシュボード",
             "guide": "ダッシュボードガイド",
             "guideOpen": "ダッシュボードガイドを開く",
             "guideShort": "ガイド",
@@ -83,13 +88,24 @@
             "empty": "保留中のアクティビティはありません。"
         },
         "metaChips": {
+            "queuePending": "待機 {{count}}",
+            "queueTooltip": "キュー：待機 {{pending}}、割り当て済み {{assigned}}、完了 {{completed}}、失敗 {{failed}}",
             "meshNode": "Mesh ノード"
         },
         "versionBanner": {
+            "restarting": "再起動中",
+            "upgrading": "更新中…",
+            "unknownVersion": "不明",
+            "updateAvailable": "アップデートがあります",
             "required": "必須",
             "retry": "再試行"
         },
         "remoteDialog": {
+            "liveRemoteView": "ライブのリモート表示",
+            "remoteUnavailable": "リモート表示は利用できません",
+            "remoteOnly": "リモートのみ",
+            "splitView": "分割表示",
+            "remoteFallback": "リモート",
             "history": "履歴"
         },
         "sourceTimeline": {
@@ -275,6 +291,7 @@
         }
     },
     "cliStop": {
+        "stopProcess": "CLI プロセスを停止",
         "title": "{{agent}} を停止しますか？",
         "gracefulDescription": "「停止」はサポートされている場合にプロバイダーへ正常な終了を要求します。「強制停止」はランタイムを即座に終了します。",
         "forceOnlyDescription": "このプロバイダーは正常な停止をサポートしていません。「強制停止」はランタイムを即座に終了します。",
@@ -289,6 +306,7 @@
         "answerQuestion": "質問に回答する"
     },
     "chatControls": {
+        "loading": "読み込み中…",
         "launchModelChanged": "{{from}} → {{to}}（変更済み）",
         "launchModelSource": {
           "user": "選択",
@@ -324,7 +342,7 @@
         "loadingMeshes": "メッシュを読み込み中…",
         "noMeshes": "このマシンには Repo Mesh が構成されていません。先にメッシュを作成または同期してから、このピッカーを再度開いてください。",
         "mesh": "Mesh",
-        "repoMesh": "Repo mesh",
+        "repoMesh": "Repo Mesh",
         "nodeCount_one": "{{count}} ノード",
         "nodeCount_other": "{{count}} ノード",
         "coordinatorWorkspace": "コーディネーターワークスペース: {{path}}",
@@ -437,6 +455,42 @@
         "stopSessionTitle": "セッションを停止（エージェントを終了します）"
     },
     "mesh": {
+        "graph": {
+            "remoteBadge": "リモート",
+            "activeSessionAria": "アクティブなセッション"
+        },
+        "statusTab": {
+            "v2ScopeHint": "スコープ別の保留中イベント",
+            "providerSkewHint": "ノードごとに異なるバージョンで動いているプロバイダー",
+            "providerSkew": "プロバイダーのバージョン不一致 {{count}} 件",
+            "v2RatioHint": "保留中のコーディネーターイベントのうち、現行メッセージ形式のものの割合",
+            "daemonBuildHint": "このノードで実行中のデーモンの正確なビルド（バージョン@コミット）",
+            "quotaFailedHint": "このマシンはこのプロバイダーの使用量を読み取れませんでした",
+            "quotaOkNoWindowHint": "正常に読み取り — このプロバイダーには表示する割合の上限がありません",
+            "nodeCountHint": "このマシン上のメッシュノード（ワークスペース／ワークツリー）— 1 つのプラン使用量を共有します",
+            "nodeCount_other": "ノード {{count}} 件",
+            "nodeCount_one": "ノード {{count}} 件",
+            "daemonVersionHint": "このマシンで実行中のデーモンのバージョン",
+            "blockedReasonHint": "このノードが今、新しいコード変更タスクを受け取れない理由",
+            "providerCapHint": "このノードのプロバイダーごとの実行中タスク数 / 宣言された上限",
+            "priorityHint": "割り当ての優先度（高いほど優先）",
+            "priority": "優先度 {{value}}",
+            "loadHint": "このノードに割り当てられた実行中タスク",
+            "load": "負荷 {{count}}",
+            "readonlyCapHint": "実行中の読み取り専用の調査タスク数 / 上限（書き込み上限の 2 倍）",
+            "readonlyCap": "読み取り専用 {{active}}/{{max}}",
+            "writeCapHint": "コードを変更する実行中タスク数 / メッシュ全体の並列上限",
+            "writeCap": "書き込み {{active}}/{{max}}"
+        },
+        "manualSetup": {
+            "restartHint": "設定を編集したら、新しい CLI セッションを開始してください。",
+            "configPath": "設定パス:",
+            "format": "形式:",
+            "server": "サーバー:",
+            "titleFor": "{{provider}} の MCP の手動設定が必要です",
+            "title": "MCP の手動設定が必要です"
+        },
+        "openLiveGraph": "Repo Mesh のライブグラフを開く",
         "help": {
             "toggleAria": "メッシュのヘルプ",
             "toggleTitle": "メッシュの概念ヘルプ",
@@ -644,7 +698,7 @@
             "machineTitle": "このエージェントを実行するマシン。\"any\" のままにすると、コーディネーターがタグに基づいてルーティングします。",
             "anyMachine": "任意のマシン",
             "offlineSuffix": "{{label}}（オフライン）",
-            "worktreeSuffix": "{{label}} — worktree（{{branch}}）",
+            "worktreeSuffix": "{{label}} — ワークツリー（{{branch}}）",
             "worktreeUnknownBranch": "ブランチ不明",
             "worktreeDisabledTitle": "一時的なworktreeノードはMAGIスロットに新規割り当てできません（クリーンアップで消える可能性があるため）。既存の割り当てはここに表示され、確認・解除できます。",
             "provider": "プロバイダー",
@@ -776,9 +830,9 @@
             "refineWorktree": "ワークツリー refine",
             "needsFollowUp": "要フォローアップ",
             "offline": "オフライン",
-            "ahead": "ahead {{count}}",
-            "behind": "behind {{count}}",
-            "aheadBehind": "ahead {{ahead}} / behind {{behind}}"
+            "ahead": "{{count}} 件先行",
+            "behind": "{{count}} 件遅れ",
+            "aheadBehind": "{{ahead}} 件先行 / {{behind}} 件遅れ"
         },
         "summary": {
             "anchor": "デフォルトブランチアンカー",
@@ -859,6 +913,9 @@
             "jumpToState": "クリックでこの状態の次のカードへ移動"
         },
         "obs": {
+            "closeDetailAria": "詳細パネルを閉じる",
+            "layoutDirectionAria": "グラフのレイアウト方向",
+            "viewAria": "メッシュ表示",
             "tabOverview": "概要",
             "tabTasks": "設計図",
             "tabStatus": "ステータス",
@@ -948,7 +1005,7 @@
             "directionLRTitle": "左から右",
             "directionTBTitle": "上から下",
             "fastForwardConfirmTitle": "{{label}} に fast-forward を適用しますか？",
-            "fastForwardConfirmLabel": "Fast-forward"
+            "fastForwardConfirmLabel": "早送りマージ"
         },
         "notes": {
             "expired": "期限切れ",
@@ -996,6 +1053,18 @@
             "errorUnexpectedPayload": "グラフ情報を読み込めませんでした。しばらくしてから再度お試しください。"
         },
         "health": {
+            "awaitingLiveData": "ライブデータ待ち",
+            "recentFailuresCount": "最近の失敗 {{count}} 件",
+            "refineFailedCount": "{{count}} 件マージ失敗",
+            "refiningCount": "{{count}} 件マージ中",
+            "failedCount": "{{count}} 件失敗",
+            "statLedgerDone": "記録済みの完了",
+            "statRecent": "最近の失敗",
+            "statSessions": "セッション",
+            "statFailed": "失敗",
+            "statDone": "完了",
+            "statActive": "実行中",
+            "statPending": "待機",
             "panelTitle": "メッシュヘルスパネル",
             "lastActivity": "最終アクティビティ",
             "refineJobs": "リファインジョブ",
@@ -1004,6 +1073,8 @@
             "sessions": "セッション"
         },
         "blueprint": {
+            "gateFallback": "ゲート",
+            "readonlyBadge": "読み取り専用",
             "liveQueue": "ライブキュー",
             "scheduling": "スケジューリングプレビュー",
             "schedObservedAt": "{{time}} 時点",
@@ -1204,6 +1275,9 @@
             "repoMeshJsonInvalid": "このリポジトリの .adhdev/mesh.json を解析できないため、そのプロンプトレイヤーは無視されます。"
         },
         "nodeList": {
+            "addingIsExplicit": "追加するかどうかはあなたが決めます。",
+            "compatibleWorkspace": "互換性のある Git ワークスペースを検出しました。",
+            "inspectingRepo": "Git リポジトリを確認中（読み取り専用）…",
             "title": "ノードとプロバイダー（{{count}}）",
             "descriptionCloud": "このメッシュのワークスペースと優先 AI ツール。セットアップインベントリのみ — ライブなグラフ／git／セッションの真実は上記の Mesh Host のステータスが管理します。",
             "descriptionStandalone": "このメッシュに参加しているワークスペースと優先 AI ツール。",
@@ -1257,10 +1331,12 @@
             "machineTabCounts": "ノード {{nodes}} 個 · スロット {{slots}} 個"
         },
         "host": {
+            "setupNode": "セットアップノード",
+            "willHostOn": "ホスト予定:",
             "coordinatorProvider": "コーディネーター CLI プロバイダー",
             "coordinatorProviderHint": "ホストコーディネーターセッション用に起動されるツール。",
             "useNodePriority": "ノードのプロバイダー優先度を使用",
-            "title": "Mesh Host daemon",
+            "title": "Mesh ホストデーモン",
             "descriptionSet": "このメッシュのコーディネーターとライブな真実（ステータス、キュー、グラフ、ノード詳細）を所有する daemon です。ホスト設定時に一度確定し、ここでは再割り当てされません。",
             "descriptionUnset": "このメッシュにはまだホストがありません。接続済みの daemon を選んでホストに設定してください — 以後その daemon がこのメッシュのコーディネーターとライブな真実を所有します（1:1 のピン留め）。",
             "hostLabel": "ホスト：",
@@ -1329,6 +1405,7 @@
             "empty": "ルーティングタグはありません — タスクは特定のケイパビリティに一致しなくてもここで実行できます。タグは任意です。"
         },
         "missions": {
+            "filterAllCount": "すべて {{count}}",
             "errorFetch": "ミッションの完全な目標の取得に失敗しました",
             "title": "ミッション",
             "description": "コーディネーターによって報告された現在および過去のミッションです。目標を展開すると、必要に応じて全文を取得します。",
@@ -1383,27 +1460,27 @@
             "fallbackProvider": "Hermes CLI"
         },
         "providerAutoApprove": {
-            "title": "Provider auto-approve defaults",
-            "subtitle": "Per-provider default auto-approve mode for coordinator-launched workers.",
-            "loading": "Loading provider defaults…",
-            "loadError": "Failed to load provider auto-approve defaults.",
-            "noProviders": "No CLI providers with auto-approve modes detected on this mesh's machines.",
-            "awaitingNodes": "Waiting for {{count}} node(s) to report their installed providers…",
-            "partialInventory": "Provider list may be incomplete — {{count}} node(s) have not reported yet.",
-            "noHostDaemon": "Connect the mesh host daemon to configure provider auto-approve defaults.",
+            "title": "プロバイダーの自動承認の既定値",
+            "subtitle": "コーディネーターが起動したワーカーの、プロバイダーごとの既定の自動承認モード。",
+            "loading": "プロバイダーの既定値を読み込み中…",
+            "loadError": "プロバイダーの自動承認の既定値を読み込めませんでした。",
+            "noProviders": "このメッシュのマシンで、自動承認モードを持つ CLI プロバイダーが見つかりませんでした。",
+            "awaitingNodes": "{{count}} 個のノードがインストール済みプロバイダーを報告するのを待っています…",
+            "partialInventory": "プロバイダー一覧が不完全な可能性があります — {{count}} 個のノードがまだ報告していません。",
+            "noHostDaemon": "プロバイダーの自動承認の既定値を設定するには、メッシュのホストデーモンを接続してください。",
             "repoSection": {
-                "title": "Repository default",
-                "hint": "Committed to .adhdev/mesh.json — shared with the whole team. Sets which mode a delegated worker requests; it does not grant permission to run it.",
-                "usesProviderDefault": "Uses provider default",
-                "clear": "Use provider default"
+                "title": "リポジトリの既定値",
+                "hint": ".adhdev/mesh.json にコミットされ、チーム全体で共有されます。委任ワーカーが要求するモードを決めるだけで、実行の許可は与えません。",
+                "usesProviderDefault": "プロバイダーの既定値を使用",
+                "clear": "プロバイダーの既定値を使う"
             },
             "machineSection": {
-                "title": "This machine authorization",
-                "hint": "Local only (meshes.json) — never committed. Controls whether workers on THIS machine auto-approve at all, and whether dangerous modes are allowed.",
-                "autoApproveOn": "Auto-approve enabled",
-                "autoApproveOff": "Auto-approve disabled",
-                "dangerousOn": "Dangerous modes allowed",
-                "dangerousOff": "Dangerous modes not allowed (will downgrade)",
+                "title": "このマシンの実行許可",
+                "hint": "ローカルのみ（meshes.json）— コミットされません。このマシンのワーカーが自動承認するか、危険なモードを許可するかを制御します。",
+                "autoApproveOn": "自動承認：有効",
+                "autoApproveOff": "自動承認：無効",
+                "dangerousOn": "危険なモード：許可",
+                "dangerousOff": "危険なモード：不許可（格下げされます）",
                 "autoApproveToggleLabel": "委譲ワーカーの自動承認",
                 "autoApproveToggleHint": "オフにすると、このマシンに委譲されたワーカーはすべての承認プロンプトで停止します。",
                 "dangerousToggleLabel": "このマシンで dangerous モードを許可",
@@ -1418,22 +1495,22 @@
                 "confirmConfirm": "オプトイン"
             },
             "effectiveSection": {
-                "title": "Effective result on this machine",
-                "hint": "What each provider actually runs here after combining the repository default with this machine's authorization.",
-                "statusRequested": "Runs: {{mode}}",
-                "statusInvalidFallback": "Requested mode not found → runs provider default: {{mode}}",
-                "statusDowngraded": "{{requested}} requested → downgraded to {{mode}}: this machine has not opted into dangerous modes.",
-                "statusDisabled": "Auto-approve disabled on this machine — worker will ask for approval.",
-                "statusNone": "No usable auto-approve mode — worker will ask for approval."
+                "title": "このマシンでの実際の結果",
+                "hint": "リポジトリの既定値とこのマシンの実行許可を合わせた、各プロバイダーが実際に実行するモードです。",
+                "statusRequested": "実行：{{mode}}",
+                "statusInvalidFallback": "要求されたモードが見つかりません → プロバイダーの既定値で実行：{{mode}}",
+                "statusDowngraded": "{{requested}} を要求 → {{mode}} に格下げ：このマシンは危険なモードを許可していません。",
+                "statusDisabled": "このマシンでは自動承認が無効 — ワーカーが承認を求めます。",
+                "statusNone": "使える自動承認モードがありません — ワーカーが承認を求めます。"
             },
             "dangerous": {
-                "sharedWarningTitle": "This is committed to the repository",
-                "sharedWarning": "This dangerous mode is committed to .adhdev/mesh.json and shared with the whole team. Each machine still runs it ONLY if that machine has opted into dangerous modes (delegatedWorkerDangerousModeAllow); otherwise it is downgraded to pty-parse."
+                "sharedWarningTitle": "この設定はリポジトリにコミットされます",
+                "sharedWarning": "この危険なモードは .adhdev/mesh.json にコミットされ、チーム全体で共有されます。各マシンは危険なモードを許可している場合（delegatedWorkerDangerousModeAllow）にのみ実行し、そうでなければ pty-parse に格下げされます。"
             },
-            "save": "Save to mesh.json",
-            "saving": "Saving…",
-            "saved": "Saved to .adhdev/mesh.json",
-            "saveError": "Failed to save provider defaults."
+            "save": "mesh.json に保存",
+            "saving": "保存中…",
+            "saved": ".adhdev/mesh.json に保存しました",
+            "saveError": "プロバイダーの既定値を保存できませんでした。"
         },
         "graphs": {
             "includeTerminal": "終了済みを含む",
@@ -1464,7 +1541,7 @@
             "healthProbePending": "このピアの最初の git プローブを待機中",
             "healthPeerConnection": "ピア接続状態 {{state}} — ライブ報告なし",
             "healthNoLiveReport": "このノードのライブ報告がまだありません",
-            "badgeWorktree": "worktree",
+            "badgeWorktree": "ワークツリー",
             "badgeWorktreeTitle": "ローカル worktree ノード",
             "badgeWorktreeBranchTitle": "worktree ブランチ {{branch}}",
             "badgeBootstrapTitle": "worktree ブートストラップ進行中",
@@ -1483,6 +1560,11 @@
             "machineVersionsTitle": "このマシンにインストールされたプロバイダCLIバージョン — 全ノード共有"
         },
         "overview": {
+            "sessionCount_other": "セッション {{count}} 件",
+            "sessionCount_one": "セッション {{count}} 件",
+            "leaseExpired": "リース期限切れ",
+            "providerUnknown": "プロバイダー不明",
+            "truncated": "（省略）",
             "missionCard": "ミッション",
             "ledgerCard": "台帳",
             "queueCard": "キュー",
@@ -1582,6 +1664,12 @@
         }
     },
     "chat": {
+        "showMoreChars": "さらに表示（{{count}} 文字）",
+        "collapse": "折りたたむ",
+        "you": "あなた",
+        "toolMessageAria": "ツールメッセージ",
+        "activityMessageAria": "アクティビティメッセージ",
+        "activityFallback": "アクティビティ",
         "copyMessage": "メッセージをコピー",
         "copyCode": "コードをコピー",
         "showMore": "もっと見る",
@@ -1627,12 +1715,29 @@
         "reconnectMachineTitle": "このマシンへの自動再接続は停止しました — 今すぐ再接続"
     },
     "chatInput": {
+        "addMessageOptional": "メッセージを追加（任意）…",
+        "showControls": "コントロールを表示",
+        "hideControls": "コントロールを隠す",
+        "sendTo": "{{panel}} にメッセージを送信",
         "attachImage": "画像を添付",
         "placeholder": "{{panel}} にメッセージを送信...",
         "sendMessage": "メッセージを送信",
         "dropImage": "ここに画像をドロップ"
     },
     "paneGroup": {
+        "hideFromDashboard": "ダッシュボードから隠す",
+        "removeShortcut": "ショートカットを削除",
+        "changeShortcut": "ショートカットを変更（{{shortcut}}）",
+        "meshChat": "メッシュチャット",
+        "dropSplitRight": "右に分割",
+        "dropMoveHere": "ここに移動",
+        "dropSplitLeft": "左に分割",
+        "relaunchWithCdp": "接続して再起動",
+        "cdpDisconnected": "IDE に接続されていません — チャット履歴とスクリーンショットは利用できません。",
+        "resizeHandleHint": "ドラッグでサイズ変更・ダブルクリックで結合",
+        "shortcutListening": "入力待ち…",
+        "shortcutPressCombo": "キーの組み合わせを押してください（例: {{example1}}、{{example2}}）",
+        "shortcutSetTitle": "ショートカットを設定",
         "loadingSessions": "セッションを読み込んでいます...",
         "noConversations": "会話はまだありません",
         "waitingForDaemon": "デーモンを待機中",
@@ -1647,6 +1752,18 @@
         "moveTabHere": "タブをここに移動すると表示されます"
     },
     "terminal": {
+        "growViewport": "ターミナル表示を拡大",
+        "shrinkViewport": "ターミナル表示を縮小",
+        "sendInterrupt": "割り込みを送信（Ctrl-C）",
+        "arrowRight": "右矢印",
+        "arrowDown": "下矢印",
+        "arrowLeft": "左矢印",
+        "arrowUp": "上矢印",
+        "keysPanelTitle": "ターミナルキー",
+        "keysButton": "キー",
+        "copyHint": "選択したターミナルのテキストをコピーします。選択がなければ表示中の画面をコピーします",
+        "specDebugHint": "スペックデバッグ — 現在の状態、セクション、遷移履歴を確認",
+        "replayScrollbackHint": "以前のターミナル出力を読み込み、さらに上までスクロールできるようにします",
         "loadOlderOutput": "以前のターミナル出力を読み込む",
         "loadingOlder": "以前の出力を読み込み中...",
         "debug": "デバッグ",
@@ -1665,6 +1782,19 @@
         "switchToChat": "チャット表示に切り替え"
     },
     "launch": {
+        "updatedAt": "{{time}} に更新",
+        "messageCountShort_other": "{{count}} 件",
+        "messageCountShort_one": "{{count}} 件",
+        "workspaceUnknown": "ワークスペース不明",
+        "clearSelection": "クリア",
+        "selectedSavedHistory": "選択した保存済みの履歴",
+        "refresh": "更新",
+        "loadingShort": "読み込み中…",
+        "savedHistoryNoneYet": "保存済みの履歴はまだありません。ADHDev が会話を保存するとここに表示されます。",
+        "savedHistoryLoadedCount_other": "保存済みの履歴を {{count}} 件読み込みました。保存済みの履歴を開いて選択してください。",
+        "savedHistoryLoadedCount_one": "保存済みの履歴を {{count}} 件読み込みました。保存済みの履歴を開いて選択してください。",
+        "savedHistoryIntro": "新しく始めるか、保存済みの履歴を開いて以前の会話を続けます。",
+        "savedHistoryBadge": "保存済みの履歴",
         "resumeSavedHistory": "保存済み履歴を再開",
         "startFresh": "新規に開始",
         "resumingSavedHistory": "保存済み履歴を再開しています…",
@@ -1774,7 +1904,7 @@
             "profileDescription": "ローカルのチャットスレッドやダッシュボード表示で名前がどのように表示されるか。",
             "displayNameLabel": "表示名",
             "displayNameHint": "チャットスレッドやチームダッシュボードに表示される名前。",
-            "displayNamePlaceholder": "Anonymous"
+            "displayNamePlaceholder": "匿名"
         },
         "onboarding": {
             "title": "ADHDev へようこそ",
@@ -1981,7 +2111,7 @@
             "minutesAgo": "{{minutes}}分前",
             "hoursAgo": "{{hours}}時間前",
             "daysAgo": "{{days}}日前",
-            "frozenFeatureTitle": "凍結中 — この機能は一時停止されており利用できません。docs/FROZEN_SURFACES.md を参照してください"
+            "frozenFeatureTitle": "凍結中 — この機能は一時停止されており利用できません。"
         },
         "billing": {
             "currentPlan": "現在のプラン:",
@@ -2098,11 +2228,11 @@
             "adminTokens": "管理者トークン",
             "adminEntry": "Admin",
             "footerPlanTitle": "現在のプラン: {{plan}} — 管理またはアップグレード",
-            "expandSidebar": "Expand sidebar",
-            "collapseSidebar": "Collapse sidebar",
-            "collapse": "Collapse",
+            "expandSidebar": "サイドバーを展開",
+            "collapseSidebar": "サイドバーを折りたたむ",
+            "collapse": "折りたたむ",
             "logoutConfirm": "ログアウトしてもよろしいですか？",
-            "logout": "Logout",
+            "logout": "ログアウト",
             "machineLimitBadge": "マシン上限",
             "machineLimitBadgeTitle": "プランのマシン上限（{{count}} 台{{plural}}）に達しました — 請求ページでアップグレード",
             "pushBudget": "1日の通知 {{used}}/{{limit}}"
@@ -2257,7 +2387,7 @@
         "apiKeys": {
             "title": "API キー",
             "keyCount": "{{count}} 個のキー",
-            "playground": "Playground",
+            "playground": "プレイグラウンド",
             "create": "+ 作成",
             "scopeDaemonRead": "デーモン読み取り",
             "scopeDaemonReadDesc": "デーモンの一覧と状態",
@@ -2300,7 +2430,7 @@
             "revoke": "取り消し",
             "usageLabel": "使用状況:",
             "apiReference": "API リファレンス →",
-            "frozenFeatureTitle": "凍結中 — この機能は一時停止しています。docs/FROZEN_SURFACES.md を参照してください"
+            "frozenFeatureTitle": "凍結中 — この機能は一時停止しています。"
         },
         "shareModal": {
             "title": "セッションを共有",
@@ -2791,6 +2921,51 @@
         }
     },
     "app": {
+        "onboardingTour": {
+            "next": "次へ",
+            "getStarted": "はじめる",
+            "learnMore": "ドキュメントで詳しく見る",
+            "closeAria": "案内を閉じる",
+            "allSetStandalone": {
+                "desc": "このダッシュボードはすでにローカルのデーモンに接続されています。ダッシュボードタブからセッションを開始するか、マシン → プロバイダーでプロバイダーを追加してください。",
+                "title": "準備完了です"
+            },
+            "getStartedCloud": {
+                "desc": "操作したいマシンでこれを実行してからサインインしてください。デーモンが自動的にダッシュボードとペアリングされます。",
+                "title": "はじめる"
+            },
+            "orchestrate": {
+                "desc": "Repo Mesh（Cloud Pro）では、1 つのコーディネーターが複数マシンのエージェントに作業を割り振ります — 並列の git ワークツリー、ブランチの自動収束、同じリポジトリを複数の視点から相互チェック。",
+                "title": "エージェントを連携させる"
+            },
+            "watchAndSteer": {
+                "desc": "各エージェントのセッションをリアルタイムで追い、作業中に指示を出せます。セッションの切り替えやスクリーンショットの撮影、（IDE セッションなら）直接接続で画面の表示・操作もできます。",
+                "title": "ライブで見て、操る"
+            },
+            "realtimeChat": {
+                "desc": "AI エージェントの動きをリアルタイムで確認できます。メッセージの送信や操作の承認・拒否も、すべてブラウザーやスマートフォンから行えます。",
+                "title": "リアルタイムチャット"
+            },
+            "welcome": {
+                "desc": "Claude Code、Codex、Antigravity CLI などのローカル CLI コーディングエージェントを、ブラウザーやスマートフォンから直接操作できます。エージェントはあなたのマシンで動き続け、Web から操作します。",
+                "title": "ADHDev へようこそ"
+            }
+        },
+        "installCommand": {
+            "orViaNpm": "または npm で:",
+            "clickToCopy": "クリックでコピー"
+        },
+        "errorBoundary": {
+            "reload": "ページを再読み込み",
+            "description": "予期しないエラーが発生しました。続行するにはページを再読み込みしてください。",
+            "title": "問題が発生しました"
+        },
+        "shellFreshness": {
+            "dismissAria": "更新のお知らせを閉じる",
+            "later": "後で",
+            "reload": "再読み込み",
+            "message": "ADHDev の新しいバージョンがあります。"
+        },
         "openMenu": "メニューを開く",
         "closeMenu": "メニューを閉じる"
     },
@@ -2816,6 +2991,7 @@
         "toggleFullscreen": "全画面表示の切り替え"
     },
     "remote": {
+        "screenshotAlt": "リモート画面",
         "mouse": "マウス",
         "touch": "タッチ",
         "connected": "接続済み",
@@ -2862,6 +3038,13 @@
         "openChatHint": "クリックでこのセッションのチャットを開く"
     },
     "sessionInfo": {
+        "gitClean": "変更なし",
+        "gitDirty": "未コミットの変更あり",
+        "gitDetached": "（デタッチ）",
+        "blockRawMetadata": "ランタイムの生メタデータ（クリックで展開）",
+        "blockFinalPrompt": "最終的なシステムプロンプト（クリックで展開）",
+        "blockExtraPrompt": "この起動の追加プロンプト",
+        "buttonHint": "セッション情報 — 起動設定、メッシュノード、システムプロンプトなど",
         "quotaOkNoWindows": "取得成功 — パーセント枠なし",
         "sectionMeshWorker": "コーディネーターが起動したセッション",
         "rowMeshId": "Mesh ID",
@@ -2916,6 +3099,131 @@
         "rowAttachedClients": "接続中のクライアント"
     },
     "machine": {
+        "mobile": {
+            "noHistoryMatches": "この条件に一致する保存済みの履歴はありません。",
+            "workspaceMissing": "（ワークスペースなし）",
+            "resumableOnly": "再開できるもののみ",
+            "sortMessages": "メッセージの多い順",
+            "sortOldest": "古い順",
+            "sortRecent": "新しい順",
+            "filterModel": "モデルで絞り込み",
+            "filterWorkspace": "ワークスペースで絞り込み",
+            "searchHistory": "タイトルやプレビューを検索",
+            "useThisFolder": "このフォルダーを使う",
+            "browseDescription": "通常のファイルブラウザーのようにフォルダーを移動し、現在のフォルダーをこのマシンで使います。",
+            "browseTitle": "ワークスペースを選択",
+            "machineDetailsDescription": "セッション、プロバイダー、システム情報、ログ",
+            "machineDetails": "マシンの詳細",
+            "updateDescription": "最新のデーモンでこのマシンを再起動します",
+            "inspect": "確認",
+            "createFolder": "フォルダーを作成",
+            "showMore": "さらに {{count}} 件表示",
+            "showFewer": "表示を減らす",
+            "recentLaunches": "最近の起動",
+            "currentChats": "進行中のチャット",
+            "machineFallback": "マシン"
+        },
+        "daemonUpdate": {
+            "previewUnknownDescription": "アプリはプレビューに接続していますが、サーバーからプレビューの対象バージョンがまだ届いていません。",
+            "previewUpToDateDescription": "このマシンはすでに現在のプレビュー版デーモンを実行しています。",
+            "previewUnknownTitle": "プレビュー版の更新状況は不明です",
+            "previewUpToDateTitle": "プレビュー版デーモンは最新です",
+            "mismatchDescription": "このマシンは現在のアプリと異なるバージョンのデーモンを実行しています。新しいセッションを始める前に更新してください。",
+            "previewUpgradeDescription": "リモートシェルを開かずに、このマシンを現在のプレビュー版デーモンに更新できます。",
+            "requiredDescription": "このマシンのデーモンは互換性のないバージョンです。新しいセッションを始める前に更新してください。",
+            "mismatchTitle": "バージョンの不一致を検出",
+            "requiredTitle": "デーモンの更新が必要です",
+            "upgrade": "更新",
+            "updateNow": "今すぐ更新"
+        },
+        "launchPick": {
+            "empty": "保存済みのワークスペースはまだありません。ワークスペースタブで追加するか、上にパスを入力してください。",
+            "description": "何も前提にしていません。保存済みワークスペース、既定のワークスペース、ホームから選ぶか — キャンセルしてパスを入力してください。",
+            "title": "どこで実行しますか？"
+        },
+        "workspacePicker": {
+            "noneSelected": "ワークスペースが選択されていません。ホームフォルダーで開始します。",
+            "selectedWorkspace": "選択したワークスペース",
+            "defaultWorkspace": "既定のワークスペース",
+            "enterPathFirst": "開始するフォルダーのフルパスを入力してください。",
+            "browseFirst": "開始する前にフォルダーを選んでください。",
+            "enterPath": "フォルダーのフルパスを入力…",
+            "customPath": "パスを直接入力…",
+            "selectWorkspace": "ワークスペースを選択…",
+            "noneSaved": "（保存済みワークスペースなし — ワークスペースタブで追加）",
+            "noWorkspaceHome": "（ワークスペースなし — ホームフォルダーで開始）"
+        },
+        "trustBadge": {
+            "externalUntrustedHint": "追加した外部ソースから提供され、ADHDev が実行するコードを含みます。有効化する前にソースを確認してください。",
+            "externalSafeHint": "追加した外部ソースから提供されています。設定のみで、ADHDev はそのコードを実行しません。",
+            "trustedWithScriptsHint": "ADHDev の公式提供です。ADHDev が実行するスクリプトを含みます。",
+            "trustedHint": "ADHDev の公式提供です。設定のみで、プロバイダーのコードは実行されません。",
+            "userCustomHint": "自分のプロバイダーフォルダーで作成したプロバイダーです。自分のコードが実行されます。",
+            "externalUntrusted": "外部・コード実行",
+            "externalSafe": "外部",
+            "trustedWithScripts": "公式・スクリプト",
+            "trusted": "公式",
+            "userCustom": "カスタム"
+        },
+        "providerSettings": {
+            "notifications": {
+                "description": "{{provider}} の状態が変わったときに通知を表示します。",
+                "label": "通知"
+            },
+            "showCoordinatorSystemPrompt": {
+                "description": "注入されたシステムプロンプトをチャットのメッセージとして表示します。既定はオフで、チャットヘッダーのセッション情報（ⓘ）からいつでも確認できます。",
+                "label": "システムプロンプトのメッセージを表示"
+            },
+            "showTerminal": {
+                "description": "ターミナルのコマンドと出力をチャットに表示します。",
+                "label": "ターミナルを表示"
+            },
+            "showToolCalls": {
+                "description": "ツール呼び出しの要約（検索、編集など）をチャットに表示します。",
+                "label": "ツール呼び出しを表示"
+            },
+            "showThinking": {
+                "description": "エージェントの推論をチャットに表示します。",
+                "label": "思考過程を表示"
+            },
+            "longGeneratingThresholdSec": {
+                "description": "長時間処理の通知が出るまでの時間です。",
+                "label": "長時間とみなす時間（秒）"
+            },
+            "longGeneratingAlert": {
+                "description": "応答に異常に時間がかかっているときに通知します。",
+                "label": "長時間処理の通知"
+            },
+            "approvalAlert": {
+                "description": "{{provider}} が承認を待っているときに通知します。",
+                "label": "承認通知"
+            },
+            "appPathOverride": {
+                "description": "IDE アプリのフルパス（任意）。空欄なら通常のインストール先を探します。",
+                "label": "アプリのパス"
+            },
+            "cliPathOverride": {
+                "description": "IDE のコマンドラインランチャーのフルパス（任意）。空欄なら検出されたものを使います。",
+                "label": "CLI ランチャーのパス"
+            },
+            "executableArgs": {
+                "description": "{{provider}} 起動時に既定の引数の代わりに使う引数（任意）。空欄なら既定値を使います。",
+                "label": "起動引数"
+            },
+            "executablePath": {
+                "description": "{{provider}} プログラムのフルパス（任意）。空欄なら PATH から探します。",
+                "label": "実行ファイルのパス"
+            },
+            "autoApprove": {
+                "description": "{{provider}} のツール実行や確認を、確認せずに自動で承認します。",
+                "label": "自動承認"
+            },
+            "enabled": {
+                "description": "ADHDev がこのマシンで {{provider}} を検出・起動・確認する前にオンにしてください。",
+                "label": "このマシンで有効"
+            },
+            "thisProvider": "このプロバイダー"
+        },
         "launchConfirm": {
             "workspace": "ワークスペース",
             "languageModel": "言語モデル（任意）",
@@ -2928,6 +3236,8 @@
             "launching": "起動中…"
         },
         "confirmExternal": {
+            "aboutToActivateFrom": "{{source}} の {{provider}} をオンにしようとしています。",
+            "aboutToActivate": "{{provider}} をオンにしようとしています。",
             "dialogAria": "信頼されていない外部プロバイダーを確認",
             "title": "信頼されていない外部プロバイダーを有効化しますか？",
             "description": "このマニフェストにはデーモンが実行する JavaScript が含まれています。信頼されていないコードとして扱い、有効化する前にソースを確認してください。",
@@ -2938,6 +3248,8 @@
         "workspace": {
         },
         "providers": {
+            "advancedHint": "技術情報を表示：プロバイダーの読み込み元と元のメタデータ",
+            "sourcesHint": "追加したプロバイダーのソースを管理します",
             "filter": "フィルター",
             "sourceConfigTitle": "プロバイダーソース設定",
             "sourceConfigDesc": "デーモンがプロバイダーマニフェストを探す場所です。解決とリロードに影響します。",
@@ -2995,6 +3307,20 @@
             "setActiveFailed": "アクティブソースの設定に失敗しました"
         },
         "providerRow": {
+            "detectDisabledHint": "確認する前にプロバイダーをオンにしてください",
+            "detectHint": "設定されたプログラムが見つかり実行できるか確認します",
+            "originExternalScripts": "追加した外部ソース {{source}}・独自のコードを実行します — 有効化する前に確認してください",
+            "originExternal": "追加した外部ソース {{source}}",
+            "originUserFolder": "あなたのプロバイダーフォルダー",
+            "originOfficialScripts": "公式（ADHDev レジストリ）・スクリプトを含む",
+            "originOfficial": "公式（ADHDev レジストリ）",
+            "labelOrigin": "提供元:",
+            "lifecycleDeprecated": "サポート終了",
+            "lifecycleExperimental": "試験的",
+            "lifecycleBeta": "ベータ",
+            "lifecycleStable": "安定版",
+            "checkFailed": "失敗",
+            "checkOk": "OK",
             "statusDetected": "検出済み",
             "statusNotDetected": "未検出",
             "statusEnabledUnchecked": "有効（未確認）",
@@ -3055,6 +3381,11 @@
         "connectedMachines": {
         },
         "card": {
+            "transportDirectShort": "直接",
+            "transportRelayShort": "中継",
+            "coresCount_other": "{{count}} コア",
+            "coresCount_one": "{{count}} コア",
+            "onMachine": "{{machine}} 上",
             "sectionIDEs": "IDE",
             "sectionCLIs": "CLI",
             "sectionACPAgents": "ACP エージェント",
@@ -3081,19 +3412,24 @@
             "transportRelay": "TURN リレー — 直接接続に失敗しました",
             "transportDirect": "直接接続 (STUN/host)",
             "beacon": {
-                "behindLabel": "{{count}}件 遅延",
-                "behindTooltip": "このマシンはピアより {{count}} 件遅れています(最大トピック: {{topic}})。",
-                "soleCopyLabel": "唯一保持の可能性",
-                "soleCopyTooltip": "このマシンが {{count}} 個のトピックの {{entries}} 件を唯一保持している可能性があります。ピアは未確認です。",
-                "deferredLabel": "判定保留",
-                "deferredTooltip": "ピアボードが切り詰められたため、唯一保持の判定を保留しました — 比較対象がフリート全体ではありません。",
-                "lastSyncedTooltip": "{{minutes}}分前に最終同期{{behindPart}}。",
-                "lastSyncedBehindPart": "、{{topic}} で {{count}} 件遅延"
+                "lastSyncedBehindPart_other": "（未受信の記録 {{count}} 件）",
+                "lastSyncedBehindPart_one": "（未受信の記録 {{count}} 件）",
+                "soleCopyTooltip_other": "まだ他のマシンにバックアップされていない記録が {{entries}} 件あります。他のマシンが同期するまで、このマシンをオンラインのままにしてください。",
+                "soleCopyTooltip_one": "まだ他のマシンにバックアップされていない記録が {{entries}} 件あります。他のマシンが同期するまで、このマシンをオンラインのままにしてください。",
+                "soleCopyLabel_other": "未バックアップの記録 {{count}} 件",
+                "soleCopyLabel_one": "未バックアップの記録 {{count}} 件",
+                "behindTooltip_other": "このマシンは他のマシンの最近の記録 {{count}} 件をまだ受け取っていません。通常は自動的に追いつきます。",
+                "behindTooltip_one": "このマシンは他のマシンの最近の記録 {{count}} 件をまだ受け取っていません。通常は自動的に追いつきます。",
+                "behindLabel": "同期の遅れ",
+                "deferredLabel": "バックアップ未確認",
+                "deferredTooltip": "このマシンの記録がすべてバックアップ済みか確認できませんでした。比較できたのは一部のマシンだけです。エラーではありません。",
+                "lastSyncedTooltip": "最終同期は {{minutes}} 分前です{{behindPart}}。"
             },
             "fleetPeer": {
-                "label": "seqscribe ピア",
-                "divergedLabel": "seqscribe 不一致",
-                "tooltip": "WS ルーティング: {{wsState}}、{{wsCount}} セッション。seqscribe ピアビュー: {{peerState}}、{{peerCount}} セッション ({{age}}秒前)。"
+                "stateOffline": "オフライン",
+                "stateOnline": "オンライン",
+                "divergedLabel": "同期の遅れ",
+                "tooltip": "サーバーはこのマシンを {{wsState}}・セッション {{wsCount}} 件と認識していますが、別のマシンは {{peerState}}・セッション {{peerCount}} 件と見ています（{{age}} 秒前）。通常は数秒で一致します。"
             },
             "noAgentsRunning": "実行中のエージェントはまだありません",
             "launchCta": "起動 →"
@@ -3123,6 +3459,15 @@
             "providerSyncFailed": "プロバイダーチャネルの同期に失敗しました: {{error}}"
         },
         "commandCenter": {
+            "previewNoActionNeeded": "更新は不要です。",
+            "updateDaemon": "デーモンを更新",
+            "updateToVersion": "v{{version}} に更新",
+            "updateChannel": {
+                "preview": "プレビュー",
+                "stable": "安定版"
+            },
+            "updateTargetWithChannel": "対象: v{{version}}（{{channel}}）",
+            "updateTarget": "対象: v{{version}}",
             "currentChats": "現在のチャット",
             "recentLaunches": "最近の起動",
             "daemonUpdate": "デーモンの更新"
@@ -3137,6 +3482,8 @@
             "useThisFolder": "このフォルダーを使用"
         },
         "managedWorkspaces": {
+            "setDefaultHint": "既定のワークスペースに設定",
+            "unsetDefaultHint": "既定のワークスペース — クリックで解除",
             "title": "ワークスペース",
             "addWorkspace": "ワークスペースを追加",
             "empty": "保存されたワークスペースはまだありません。\"{{button}}\" でフォルダーを選択してください。",
@@ -3155,10 +3502,53 @@
             "renameFailed": "ワークスペース名を更新できませんでした"
         },
         "overview": {
+            "approx": "（概算）",
+            "memory": "メモリ",
+            "cpuDetail": "平均 {{load}} / {{cores}} コア",
+            "cpuLoad": "CPU 負荷",
+            "resourceUsage": "リソース使用状況",
+            "waiting": "待機中…",
+            "uptime": "稼働時間",
             "waitingForStats": "ライブ統計を待っています…",
             "waitingForStatsWithTotal": "ライブ統計を待っています… ・ 合計 {{total}}"
         },
         "quota": {
+            "text": {
+                "failureKind": {
+                    "unknown": "不明なエラー",
+                    "no-data": "まだ読み取り値なし",
+                    "setup-required": "設定が必要",
+                    "unsupported": "非対応",
+                    "cli-unavailable": "プログラムが見つかりません",
+                    "parse": "応答を解釈できません",
+                    "server": "プロバイダーのサーバーエラー",
+                    "network": "ネットワークエラー",
+                    "rate-limited": "レート制限中",
+                    "quota-exhausted": "プランの上限に到達",
+                    "unauthorized": "アクセス拒否",
+                    "expired-token": "ログインの期限切れ",
+                    "missing-credentials": "未ログイン"
+                },
+                "agoDays": "{{days}}日{{hours}}時間前",
+                "agoHours": "{{hours}}時間{{minutes}}分前",
+                "agoMinutes": "{{minutes}}分前",
+                "justNow": "たった今",
+                "unreadable": "使用量を読み取れませんでした",
+                "unavailable": "このマシンでは利用できません",
+                "pool": "プール",
+                "usageSessions": "{{count}} セッション",
+                "usageTokens": "{{count}} トークン",
+                "windowReset": "リセット済み・更新待ち",
+                "cue": {
+                    "stale": "古い値",
+                    "refreshing": "更新中"
+                },
+                "resetsInDays": "{{days}}日{{hours}}時間後にリセット",
+                "resetsInHours": "{{hours}}時間{{minutes}}分後にリセット",
+                "resetsInMinutes": "{{minutes}}分後にリセット",
+                "resetsNow": "まもなくリセット",
+                "used": "{{percent}}% 使用"
+            },
             "title": "プラン使用量",
             "sessionHint": "このマシンが報告した5時間ローリングのプラン枠",
             "weeklyHint": "このマシンが報告した7日間ローリングのプラン枠",
@@ -3251,6 +3641,10 @@
         }
     },
     "sessionHost": {
+        "lastErrorLabel": "最後のエラー:",
+        "unknown": "不明",
+        "endpointLabel": "エンドポイント:",
+        "activeAgo": "{{time}} に活動",
         "title": "ホスト型ランタイムの復旧",
         "stopConfirmTitle": "{{name}} を停止しますか？",
         "stopConfirmDescription": "ホスト型ランタイムが終了します。",
@@ -3319,7 +3713,21 @@
         "lifecycleInterrupted": "中断済み"
     },
     "settings": {
+        "mobileMode": {
+            "workspaceMode": "ワークスペース",
+            "chatMode": "チャットモード",
+            "descriptionWorkspace": "スマートフォンやタブレットでもフルのワークスペース表示を使います。",
+            "descriptionChat": "チャット中心のモバイル受信箱レイアウトを使います。メッセージアプリに近い操作感です。",
+            "label": "モバイル受信箱（チャットモード）"
+        },
         "theme": {
+            "preset": {
+                "honey": "暖かい黄色のアクセント",
+                "aurora": "ピンクのアクセントテーマ",
+                "ember": "ランディングページ由来の既定のアンバーテーマ",
+                "midnight": "クラシックなバイオレットのテーマ"
+            },
+            "presetCustomDescription": "アプリ全体＋チャットをカスタマイズ",
             "helloHelp": "こんにちは！何かお手伝いできますか？",
             "fixBug": "このバグを修正してください",
             "onIt": "了解しました！✨",
@@ -3352,6 +3760,15 @@
             "customLabel": "カスタム"
         },
         "providerPriority": {
+            "undetectedHint_other": "{{count}} 個のプロバイダーがここで検出されていません — 順序は維持され、利用可能になるまでスキップされます。",
+            "undetectedHint_one": "{{count}} 個のプロバイダーがここで検出されていません — 順序は維持され、利用可能になるまでスキップされます。",
+            "orderHint": "起動時は上から順に使います。",
+            "noMoreProviders": "他に検出された CLI プロバイダーはありません",
+            "selectProvider": "プロバイダーを選択…",
+            "moveDown": "下へ移動",
+            "moveUp": "上へ移動",
+            "keptUntilDetected": "順序は維持され、このマシンで検出されるまで起動時にスキップされます。",
+            "emptyWarning": "プロバイダーの順序が設定されていません。CLI プロバイダーを指定しない起動は拒否されます。",
             "available": "利用可能",
             "notOnMachine": "このマシンにはありません",
             "remove": "削除",
@@ -3359,10 +3776,21 @@
             "addProvider": "プロバイダーを追加"
         },
         "coordinatorPrompts": {
+            "saved": "保存済み",
+            "saveAppend": "追記を保存",
+            "saveOverride": "上書きを保存",
+            "saving": "保存中…",
+            "appendPlaceholder": "（空 — この層では何も追加しない）",
+            "overridePlaceholder": "（空 — 既定のベースプロンプトを使用）",
+            "placeholdersHint": "使用できるプレースホルダー:",
+            "resetHint": "欄を空にして保存すると削除されます（既定値に戻ります）。",
+            "intro": "このデーモンのメッシュ・コーディネーターセッションが受け取るプロンプトをカスタマイズします。",
+            "loading": "読み込み中…",
+            "connectDaemon": "コーディネーターのプロンプトを編集するにはデーモンを接続してください。",
             "overrideDesc": "<strong>Override</strong> は、その CLI のデーモン組み込みベースプロンプトを置き換えます。",
             "appendDesc": "<strong>Append</strong> は、いずれかのベースが選ばれた後に積み重ねられます。",
-            "overrideLabel": "Override",
-            "appendLabel": "Append",
+            "overrideLabel": "上書き",
+            "appendLabel": "追記",
             "expandLabel": "プロンプトを編集",
             "collapseLabel": "折りたたむ",
             "customizedBadge": "カスタム",
@@ -3372,6 +3800,11 @@
             "sectionDescription": "このマシンのメッシュコーディネーターセッションに適用される CLI ごとの基本プロンプトです。メッシュ単位のプロンプトは Repo Mesh ページにあります。"
         },
         "appearance": {
+            "modeSystem": "システム",
+            "modeLight": "ライト",
+            "modeDark": "ダーク",
+            "mobileDescription": "スマートフォンでダッシュボードをチャットアプリのように開くか、フルのワークスペース表示にするかを選びます。",
+            "themeDescription": "プリセットを選ぶか、完全にカスタムなテーマを作成します。カスタムテーマはアプリ全体（背景、文字、枠線、チャットの吹き出し）を変更します。",
             "modeLabel": "モード",
             "themeLabel": "テーマ",
             "mobileLabel": "モバイル",
@@ -3413,6 +3846,10 @@
         "confirmSwitchAction": "切り替え"
     },
     "landing": {
+        "gallery": {
+            "next": "次の画面",
+            "previous": "前の画面"
+        },
         "nav": {
             "home": "ADHDev ホーム",
             "mesh": "Mesh",
@@ -3715,6 +4152,10 @@
         }
     },
     "interactivePrompt": {
+        "submit": "送信",
+        "submitting": "送信中…",
+        "cancelAria": "質問をキャンセル",
+        "actionRequired": "対応が必要です",
         "selectAllThatApply": "該当するものをすべて選択",
         "multipleChoice": "複数選択",
         "singleChoice": "単一選択",
@@ -3725,11 +4166,58 @@
         "errorReviewUnconfirmed": "回答キーはターミナルに届きましたが、質問がまだ画面に残っています — 回答は送信されていない可能性があります。ターミナルを確認してください: 送信されていなければターミナルで直接回答してください。ここから再送信すると二重送信になる可能性があります。"
     },
     "git": {
+        "diffPreview": {
+            "truncatedAfter": "をローカルで実行してください。",
+            "truncatedBefore": "差分は省略されています — 全体を見るには",
+            "empty": "表示する差分はありません。",
+            "binary": "バイナリファイル — 差分は表示できません。",
+            "loading": "差分を読み込み中…"
+        },
         "changeList": {
+            "stagedHint": "ステージ済み",
+            "noChanges": "変更されたファイルはありません。",
             "binaryBadge": "bin",
             "truncatedNote": "ファイル一覧は省略されています — 完全な出力はローカルで <code>git status</code> を実行してください。"
         },
         "statusDialog": {
+            "working": "処理中…",
+            "includeUntracked": "未追跡のファイルを含める",
+            "messageRequired": "メッセージ（必須）",
+            "fileFallback": "ファイル",
+            "confirmRevert": "{{path}} の変更を元に戻しますか？",
+            "confirmPop": "最新のスタッシュを復元しますか？",
+            "confirmStash": "変更をスタッシュ",
+            "confirmCheckpoint": "チェックポイントのコミットを作成",
+            "copySummary": "概要をコピー",
+            "copied": "クリップボードにコピーしました",
+            "checkoutSelected": "選択を元に戻す",
+            "selectFileToRevert": "元に戻すファイルを選択してください",
+            "revertFile": "{{path}} の変更を元に戻す",
+            "popStash": "スタッシュを復元",
+            "noStashes": "復元するスタッシュはありません",
+            "popHint": "最新のスタッシュを復元します",
+            "resolveBeforePop": "スタッシュを復元する前に競合を解決してください",
+            "stash": "スタッシュ",
+            "stashHint": "現在の変更を一時退避します（git stash）",
+            "resolveBeforeStash": "スタッシュする前に競合を解決してください",
+            "checkpoint": "チェックポイント",
+            "checkpointHint": "チェックポイントとして git コミットを作成します",
+            "resolveBeforeCheckpoint": "チェックポイントを作る前に競合を解決してください",
+            "selectFile": "ファイルを選ぶと変更内容を表示します",
+            "noDiffData": "差分データがありません。",
+            "loading": "読み込み中…",
+            "fileCount_other": "ファイル {{count}} 件",
+            "fileCount_one": "ファイル {{count}} 件",
+            "stashed": "スタッシュ {{count}}",
+            "deleted": "削除 {{count}}",
+            "untracked": "未追跡 {{count}}",
+            "modified": "変更 {{count}}",
+            "staged": "ステージ済み {{count}}",
+            "behind": "{{count}} 件遅れ",
+            "ahead": "{{count}} 件先行",
+            "refresh": "更新",
+            "openOnGithub": "GitHub で開く",
+            "title": "Git の状態",
             "conflicts": "コンフリクト",
             "clean": "クリーン"
         }

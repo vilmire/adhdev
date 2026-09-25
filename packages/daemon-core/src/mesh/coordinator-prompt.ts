@@ -1177,7 +1177,7 @@ const OWNERSHIP_AND_BRIEF_SECTION = [
 ].join('\n');
 
 // GRAPH-ORCHESTRATION Phase F (design "Required tool-discovery instruction").
-// D1 (docs/design/2026-09-25-graph-orchestration-simplification.md) retired the
+// D1 (the 2026-09-25 graph orchestration simplification) retired the
 // batch-discovery mandate that used to open this section: incremental enqueue via
 // mesh_enqueue_task is now the default, so there is no eligibility check to gate
 // tool loading on. What remains is the tool-availability check below, kept FIRST

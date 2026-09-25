@@ -4,7 +4,7 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { tmpdir } from 'os';
 
-// D3(c) — dashboard-callable gate verbs (docs/design/2026-09-25-graph-orchestration-simplification.md).
+// D3(c) — dashboard-callable gate verbs (the 2026-09-25 graph orchestration simplification).
 //
 //   Pinned:
 //     (1) the four commands are registered with sources EXACTLY ipc · standalone ·

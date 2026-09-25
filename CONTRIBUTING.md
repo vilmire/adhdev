@@ -62,7 +62,8 @@ packages/
 
 | Package | Key File | Purpose |
 |---------|----------|---------|
-| `daemon-core` | `src/boot/daemon-lifecycle.ts` | `initDaemonComponents()` / `shutdownDaemonComponents()` |
+| `daemon-core` | `src/boot/daemon-runtime.ts` | `bootDaemonRuntime()` — staged boot builder (platform → providers → session core → command plane → mesh runtime → loops) |
+| `daemon-core` | `src/boot/host-runtime.ts` | Host façade both `daemon-standalone` and `daemon-cloud` call to run `bootDaemonRuntime()` |
 | `daemon-core` | `src/cdp/initializer.ts` | `DaemonCdpInitializer` — multi-IDE CDP management |
 | `daemon-core` | `src/commands/router.ts` | `DaemonCommandRouter` — unified command routing |
 | `daemon-core` | `src/providers/provider-loader.ts` | `ProviderLoader` — load/update provider.js |
@@ -71,22 +72,11 @@ packages/
 
 ### 🏗️ Build Order
 
-Use the root `npm run build` whenever possible. It already encodes the current dependency order, including the session-host and terminal-mux packages.
-
-If you need to build selectively, keep the dependency chain in mind:
-
-```text
-1. session-host-core / ghostty-vt-node
-2. daemon-core / terminal-mux-core / terminal-mux-control
-3. terminal-mux-cli / session-host-daemon / terminal-render-web
-4. web-core
-5. web-standalone / web-devconsole
-6. daemon-standalone
-```
+Use the root `npm run build` whenever possible — it already encodes the current dependency order. Rather than duplicate that order here (it drifts as packages are added), treat the `build` script in the root `package.json` as the canonical, up-to-date sequence and read it directly if you need to build selectively.
 
 ### 🧪 Testing
 
-Build first (tests run against built packages), then run the full suite — the same 11 package suites CI runs:
+Build first (tests run against built packages), then run the full suite — the same 12 package suites CI runs:
 
 ```bash
 npm run build
@@ -103,6 +93,7 @@ npm run test -w packages/web-core
 npm run test -w packages/session-host-daemon
 npm run test -w packages/session-host-core
 npm run test -w packages/terminal-mux-core
+npm run test -w packages/terminal-mux-control
 npm run test -w packages/terminal-mux-cli
 npm run test -w packages/terminal-render-web
 npm run test -w packages/web-standalone

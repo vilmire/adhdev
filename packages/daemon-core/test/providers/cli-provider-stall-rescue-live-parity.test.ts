@@ -3,7 +3,7 @@ import { CliProviderInstance } from '../../src/providers/cli-provider-instance.j
 import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // MID-TURN-LIVE-STATE parity on the stall-rescue emit paths (M1-deletion
-// prerequisite — docs/design/2026-08-17-mesh-hold-absorption.md).
+// prerequisite — the 2026-08-17 mesh hold absorption design).
 //
 // Historically tryReconcileTranscriptCompletionForStall gated only on the
 // ADAPTER axis (hasAdapterPendingResponse); a parked modal or trailing

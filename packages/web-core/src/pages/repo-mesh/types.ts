@@ -19,7 +19,7 @@ export interface MeshNode {
         readOnly?: boolean
         /** Soft scheduling priority (higher = preferred) for distribution strategies. */
         schedulingPriority?: number
-        /** Node capability slots (ORCHESTRATION_NODE_SLOTS.md) — the ordered
+        /** Node capability slots (node capability slots design, 2026-07-09) — the ordered
          *  "Preferred AI tools" profile (provider/model/thinking/difficulty/capability/maxParallel). */
         slots?: NodeCapabilitySlot[]
     }

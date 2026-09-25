@@ -261,7 +261,7 @@ export interface MeshWorkQueueEntry {
     /** Same source marker as {@link modelSource}, for the thinkingLevel axis. */
     thinkingLevelSource?: 'explicit' | 'preset';
     /**
-     * SLOT-ROUTING (ORCHESTRATION_NODE_SLOTS.md): the coordinator's difficulty
+     * SLOT-ROUTING (node capability slots design, 2026-07-09): the coordinator's difficulty
      * classification for this task ('easy'|'medium'|'difficult'|'freeform'),
      * PERSISTED on the entry so the scheduler can match it against node capability
      * slots at assignment time. Previously an enqueue-only option consumed to

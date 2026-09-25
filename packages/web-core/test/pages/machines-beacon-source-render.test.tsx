@@ -9,7 +9,7 @@ vi.mock('react-i18next', () => ({
     useTranslation: () => ({
         t: (key: string, params?: Record<string, unknown>) => {
             if (key === 'machine.card.beacon.soleCopyTooltip') {
-                return `sole:${params?.entries}:${params?.count}`
+                return `sole:${params?.entries}:${params?.topics}`
             }
             return key
         },

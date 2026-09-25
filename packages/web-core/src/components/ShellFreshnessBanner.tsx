@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useShellFreshness, type UseShellFreshnessOptions } from '../hooks/useShellFreshness';
 
 /**
@@ -18,6 +19,7 @@ export interface ShellFreshnessBannerProps extends UseShellFreshnessOptions {
 export default function ShellFreshnessBanner({ className, ...options }: ShellFreshnessBannerProps) {
     const { isStale, reload } = useShellFreshness(options);
     const [dismissed, setDismissed] = useState(false);
+    const { t } = useTranslation('common');
 
     if (!isStale || dismissed) return null;
 
@@ -38,21 +40,21 @@ export default function ShellFreshnessBanner({ className, ...options }: ShellFre
                 }}
                 role="status"
             >
-                <span className="min-w-0 text-center">A new version of ADHDev is available.</span>
+                <span className="min-w-0 text-center">{t('app.shellFreshness.message')}</span>
                 <button
                     type="button"
                     className="shrink-0 px-2.5 py-1 rounded-md border border-current/30 text-[12px] leading-[1.6] font-semibold hover:bg-white/5"
                     onClick={reload}
                 >
-                    Reload
+                    {t('app.shellFreshness.reload')}
                 </button>
                 <button
                     type="button"
                     className="shrink-0 px-2 py-1 rounded-md text-[12px] leading-[1.6] font-semibold opacity-70 hover:opacity-100"
                     onClick={() => setDismissed(true)}
-                    aria-label="Dismiss update notice"
+                    aria-label={t('app.shellFreshness.dismissAria')}
                 >
-                    Later
+                    {t('app.shellFreshness.later')}
                 </button>
             </div>
         </div>

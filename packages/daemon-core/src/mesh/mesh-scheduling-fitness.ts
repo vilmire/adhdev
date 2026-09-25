@@ -191,7 +191,7 @@ export function __buildSchedulingPoolForTests(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Node capability slots — task→node/slot fitness (ORCHESTRATION_NODE_SLOTS.md)
+// Node capability slots — task→node/slot fitness (node capability slots design, 2026-07-09)
 //
 // A node's capability slots are the single source of truth for routing. When a
 // node has explicit `policy.slots` we use them; otherwise we derive slots from the

@@ -288,7 +288,7 @@ export function MeshDetailView({
             // Section order below follows the setup flow: add nodes first, then decide how
             // work is scheduled across them, then configure MAGI review panels, then
             // runtime telemetry (missions). Brain presets (difficulty → model/thinking)
-            // are absorbed into per-node capability slots (ORCHESTRATION_NODE_SLOTS.md):
+            // are absorbed into per-node capability slots (node capability slots design, 2026-07-09):
             // each node slot declares the difficulty range it handles plus its
             // provider/model/thinking, so the mesh-wide difficulty→brain mapping is no
             // longer a separate surface — edit per-node in "Nodes & Providers".
@@ -383,7 +383,7 @@ export function MeshDetailView({
             {/* ── Scheduling ── */}
             <Section title={t('mesh.detail.schedulingTitle')} description={t('mesh.detail.schedulingDescription')}>
                 {/* Mesh-level "Max parallel tasks" is hidden: the real concurrency
-                    limits live per node / per capability slot (ORCHESTRATION_NODE_SLOTS.md),
+                    limits live per node / per capability slot (node capability slots design, 2026-07-09),
                     so a global cap has little meaning. The policy field still exists and
                     defaults high — set it via the API only if you genuinely need a
                     mesh-wide ceiling. */}

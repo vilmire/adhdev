@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { memo } from 'react'
 import type { RefObject } from 'react'
 import type { ActiveConversation } from './types'
@@ -71,6 +72,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
     const chatPaneVisible = getPaneGroupContentChildVisibility(isVisible, showChatPane)
     const paneVisible = getPaneGroupContentChildVisibility(isVisible)
     const modalState = useSessionModalSubscription(activeConv)
+    const { t } = useTranslation('common')
     const effectiveConv: ActiveConversation = (
         modalState.status || modalState.modalMessage || modalState.modalButtons
             ? {
@@ -120,11 +122,11 @@ const PaneGroupContent = memo(function PaneGroupContent({
                 <div className="desktop-only px-3 pt-1 pb-2">
                     <div className="flex items-center gap-2.5 px-3.5 py-2 bg-yellow-500/[0.08] border border-yellow-500/20 rounded-lg text-xs text-text-secondary">
                         <span className="text-sm"><IconWarning size={14} /></span>
-                        <span className="flex-1">CDP not connected — chat history & screenshots unavailable.</span>
+                        <span className="flex-1">{t('paneGroup.cdpDisconnected')}</span>
                         <button
                             className="btn btn-sm bg-yellow-500/15 text-yellow-500 border border-yellow-500/30 text-3xs whitespace-nowrap shrink-0"
                             onClick={handleRelaunch}
-                        >Relaunch with CDP</button>
+                        >{t('paneGroup.relaunchWithCdp')}</button>
                     </div>
                 </div>
             ) : null}

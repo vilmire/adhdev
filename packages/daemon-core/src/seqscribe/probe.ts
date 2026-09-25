@@ -2,7 +2,7 @@
  * Stage 1 convergence probe — makes "two machines are converging" OBSERVABLE.
  *
  * Phase 2 Stage 1 of the seqscribe integration
- * (docs/design/2026-08-26-seqscribe-integration-plan.md).
+ * (the 2026-08-26 seqscribe integration plan).
  *
  * ── The gap this closes ────────────────────────────────────────────────────
  * Stage 0 landed the whole apparatus — topics, authority, fleet secret,

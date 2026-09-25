@@ -16,7 +16,93 @@
  * get_session_info) is a plain Record<string, MeshNodeFactsProviderQuota>,
  * not a mesh node/status object.
  */
+import type { TFunction } from 'i18next'
 import type { MeshNodeFactsProviderQuota, MeshNodeFactsQuotaWindow } from '@adhdev/mesh-shared'
+
+/**
+ * Every user-visible word this module produces, behind one seam so the helpers
+ * stay pure (no i18n import at call time) and their tests keep pinning the
+ * English defaults. Surfaces pass `createQuotaTextFormatter(t)`; omitting the
+ * formatter yields exactly the historical English text.
+ *
+ * Numbers, window prefixes (5h/7d/30d), provider product names and the
+ * daemon's own error messages are NOT localized here — the first three are
+ * universal notation/brands, the last is daemon-supplied text.
+ */
+export interface QuotaTextFormatter {
+    /** "23.5% used" — `percent` is already formatted ("23.5"). */
+    used(percent: string): string
+    resetsNow(): string
+    resetsInMinutes(minutes: number): string
+    resetsInHours(hours: number, minutes: number): string
+    resetsInDays(days: number, hours: number): string
+    cue(cue: QuotaWindowCue): string
+    /** A window whose reset boundary passed with no new reading yet. */
+    windowReset(): string
+    /** "184.2K tok" — `count` is already formatted. */
+    usageTokens(count: string): string
+    usageSessions(count: number): string
+    /** Unnamed per-pool bucket fallback label. */
+    pool(): string
+    /** Display label for a daemon failureKind (`fallback` = the de-slugged kind). */
+    failureKind(kind: string, fallback: string): string
+    unavailable(): string
+    unreadable(): string
+    justNow(): string
+    agoMinutes(minutes: number): string
+    agoHours(hours: number, minutes: number): string
+    agoDays(days: number, hours: number): string
+}
+
+export const ENGLISH_QUOTA_TEXT: QuotaTextFormatter = {
+    used: (percent) => `${percent}% used`,
+    resetsNow: () => 'resets now',
+    resetsInMinutes: (m) => `resets in ${m}m`,
+    resetsInHours: (h, m) => `resets in ${h}h ${m}m`,
+    resetsInDays: (d, h) => `resets in ${d}d ${h}h`,
+    cue: (cue) => cue,
+    windowReset: () => 'reset · awaiting refresh',
+    usageTokens: (count) => `${count} tok`,
+    usageSessions: (count) => `${count} sess`,
+    pool: () => 'pool',
+    failureKind: (_kind, fallback) => fallback,
+    unavailable: () => 'not available on this node',
+    unreadable: () => 'could not read quota',
+    justNow: () => 'just now',
+    agoMinutes: (m) => `${m}m ago`,
+    agoHours: (h, m) => `${h}h ${m}m ago`,
+    agoDays: (d, h) => `${d}d ${h}h ago`,
+}
+
+/** Failure kinds with a translated label (`machine.quota.text.failureKind.<kind>`). */
+const LOCALIZED_FAILURE_KINDS = new Set([
+    'missing-credentials', 'expired-token', 'unauthorized', 'quota-exhausted', 'rate-limited', 'network',
+    'server', 'parse', 'cli-unavailable', 'unsupported', 'setup-required', 'no-data', 'unknown',
+])
+
+/** i18n-backed formatter (keys under `machine.quota.text.*` in the common namespace). */
+export function createQuotaTextFormatter(t: TFunction): QuotaTextFormatter {
+    const K = 'machine.quota.text.'
+    return {
+        used: (percent) => t(`${K}used`, { percent }),
+        resetsNow: () => t(`${K}resetsNow`),
+        resetsInMinutes: (minutes) => t(`${K}resetsInMinutes`, { minutes }),
+        resetsInHours: (hours, minutes) => t(`${K}resetsInHours`, { hours, minutes }),
+        resetsInDays: (days, hours) => t(`${K}resetsInDays`, { days, hours }),
+        cue: (cue) => t(`${K}cue.${cue}`),
+        windowReset: () => t(`${K}windowReset`),
+        usageTokens: (count) => t(`${K}usageTokens`, { count }),
+        usageSessions: (count) => t(`${K}usageSessions`, { count }),
+        pool: () => t(`${K}pool`),
+        failureKind: (kind, fallback) => (LOCALIZED_FAILURE_KINDS.has(kind) ? t(`${K}failureKind.${kind}`) : fallback),
+        unavailable: () => t(`${K}unavailable`),
+        unreadable: () => t(`${K}unreadable`),
+        justNow: () => t(`${K}justNow`),
+        agoMinutes: (minutes) => t(`${K}agoMinutes`, { minutes }),
+        agoHours: (hours, minutes) => t(`${K}agoHours`, { hours, minutes }),
+        agoDays: (days, hours) => t(`${K}agoDays`, { days, hours }),
+    }
+}
 
 /** Provider ids are wire keys ('claude-cli'); show the product name. */
 const QUOTA_PROVIDER_LABELS: Record<string, string> = {
@@ -45,7 +131,7 @@ function formatTokenCount(count: number): string {
  * the upstream accounts). Null when the entry carries no usage block, so
  * window-shaped providers are untouched.
  */
-export function formatQuotaUsage(quota: MeshNodeFactsProviderQuota): string | null {
+export function formatQuotaUsage(quota: MeshNodeFactsProviderQuota, fmt: QuotaTextFormatter = ENGLISH_QUOTA_TEXT): string | null {
     const usage = quota.metadata?.usage as { days?: number;[k: string]: unknown } | undefined
     if (!usage || typeof usage.days !== 'number') return null
     const parts: string[] = []
@@ -53,9 +139,9 @@ export function formatQuotaUsage(quota: MeshNodeFactsProviderQuota): string | nu
     const inTok = typeof usage.inputTokens === 'number' ? usage.inputTokens : null
     const outTok = typeof usage.outputTokens === 'number' ? usage.outputTokens : null
     if (inTok !== null || outTok !== null) {
-        parts.push(`${formatTokenCount((inTok ?? 0) + (outTok ?? 0))} tok`)
+        parts.push(fmt.usageTokens(formatTokenCount((inTok ?? 0) + (outTok ?? 0))))
     }
-    if (typeof usage.sessions === 'number') parts.push(`${usage.sessions} sess`)
+    if (typeof usage.sessions === 'number') parts.push(fmt.usageSessions(usage.sessions))
     if (parts.length === 0) return null
     return `${usage.days}d ${parts.join(' · ')}`
 }
@@ -77,18 +163,33 @@ export function quotaUsageTone(usedPercent: number): 'default' | 'good' | 'warn'
 }
 
 /** "resets in 2h 14m" — omitted entirely when the node reported no reset time. */
-export function formatQuotaReset(resetsAt: number | null | undefined, now: number = Date.now()): string | null {
+export function formatQuotaReset(resetsAt: number | null | undefined, now: number = Date.now(), fmt: QuotaTextFormatter = ENGLISH_QUOTA_TEXT): string | null {
     if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt) || resetsAt <= 0) return null
     const deltaMs = resetsAt - now
-    if (deltaMs <= 0) return 'resets now'
+    if (deltaMs <= 0) return fmt.resetsNow()
     const minutes = Math.round(deltaMs / 60_000)
-    if (minutes < 60) return `resets in ${minutes}m`
+    if (minutes < 60) return fmt.resetsInMinutes(minutes)
     const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `resets in ${hours}h ${minutes % 60}m`
-    return `resets in ${Math.floor(hours / 24)}d ${hours % 24}h`
+    if (hours < 24) return fmt.resetsInHours(hours, minutes % 60)
+    return fmt.resetsInDays(Math.floor(hours / 24), hours % 24)
 }
 
 export type QuotaWindowCue = 'refreshing' | 'stale'
+
+/**
+ * Has this window's own reset boundary already passed? Its usedPercent then
+ * describes the PREVIOUS window — the gate already ignores it (daemon-core
+ * mesh-quota-routing isWindowExpired), so the chip must not keep showing it as
+ * the current usage either. Rendered as one state ("reset · awaiting refresh")
+ * instead of "100.0% used · resets now · stale" (owner report 2026-09-25).
+ */
+export function isQuotaWindowReset(window: MeshNodeFactsQuotaWindow | null | undefined, now: number = Date.now()): boolean {
+    const resetsAt = window?.resetsAt
+    return typeof resetsAt === 'number' && Number.isFinite(resetsAt) && resetsAt > 0 && resetsAt <= now
+}
+
+/** Chip text (English default) for a window whose reset has passed but no new reading has arrived. */
+export const QUOTA_WINDOW_RESET_TEXT = ENGLISH_QUOTA_TEXT.windowReset()
 
 function hasUsableQuotaWindow(window: MeshNodeFactsQuotaWindow | null | undefined): boolean {
     return !!window && typeof window.usedPercent === 'number' && Number.isFinite(window.usedPercent)
@@ -163,13 +264,15 @@ export function formatQuotaWindow(
     window: MeshNodeFactsQuotaWindow | null | undefined,
     now: number = Date.now(),
     cue: boolean | QuotaWindowCue | undefined = false,
+    fmt: QuotaTextFormatter = ENGLISH_QUOTA_TEXT,
 ): string | null {
     if (!window || typeof window.usedPercent !== 'number' || !Number.isFinite(window.usedPercent)) return null
-    const used = `${window.usedPercent.toFixed(1)}% used`
-    const resets = formatQuotaReset(window.resetsAt, now)
+    if (isQuotaWindowReset(window, now)) return fmt.windowReset()
+    const used = fmt.used(window.usedPercent.toFixed(1))
+    const resets = formatQuotaReset(window.resetsAt, now, fmt)
     const base = resets ? `${used} · ${resets}` : used
-    const marker = cue === true || cue === 'refreshing' ? 'refreshing' : cue === 'stale' ? 'stale' : null
-    return marker ? `${base} · ${marker}` : base
+    const marker: QuotaWindowCue | null = cue === true || cue === 'refreshing' ? 'refreshing' : cue === 'stale' ? 'stale' : null
+    return marker ? `${base} · ${fmt.cue(marker)}` : base
 }
 
 /** One renderable per-pool quota bucket (antigravity's Gemini vs Claude/GPT). */
@@ -201,7 +304,7 @@ function shortWindowLabel(windowMinutes: number): string {
  * Returns [] when the provider reports fewer than two buckets — a single
  * bucket says nothing the axes do not.
  */
-export function collectQuotaBucketChips(quota: MeshNodeFactsProviderQuota): QuotaBucketChip[] {
+export function collectQuotaBucketChips(quota: MeshNodeFactsProviderQuota, fmt: QuotaTextFormatter = ENGLISH_QUOTA_TEXT): QuotaBucketChip[] {
     const raw = quota.buckets
     if (!Array.isArray(raw) || raw.length < 2) return []
     const chips: QuotaBucketChip[] = []
@@ -213,7 +316,7 @@ export function collectQuotaBucketChips(quota: MeshNodeFactsProviderQuota): Quot
         const name = typeof bucket.name === 'string' ? bucket.name : ''
         const pool = name.split('·')[0]?.trim().replace(/\s+(Models?|Bundled Models?)$/i, '').trim()
         chips.push({
-            label: `${pool || 'pool'} ${shortWindowLabel(windowMinutes)}`,
+            label: `${pool || fmt.pool()} ${shortWindowLabel(windowMinutes)}`,
             usedPercent,
             window: {
                 usedPercent,
@@ -254,17 +357,19 @@ export function describeQuotaOkWithoutWindows(quota: MeshNodeFactsProviderQuota)
  * carry — the kind is the field that separates "not installed" from "expired
  * credentials" from "channel broken".
  */
-export function describeQuotaFailure(quota: MeshNodeFactsProviderQuota): string {
+export function describeQuotaFailure(quota: MeshNodeFactsProviderQuota, fmt: QuotaTextFormatter = ENGLISH_QUOTA_TEXT): string {
     const message = typeof quota.error === 'string' ? quota.error.trim() : ''
     const kindRaw = quota.metadata?.failureKind
     const kind = typeof kindRaw === 'string' ? kindRaw.trim() : ''
     const kindLabel = kind ? kind.replace(/[_-]+/g, ' ') : ''
+    // Dedupe against the daemon's (English) message on the raw kind; display the localized one.
+    const kindDisplay = kind ? fmt.failureKind(kind, kindLabel) : ''
     if (message && kindLabel && !message.toLowerCase().includes(kindLabel.toLowerCase())) {
-        return `${message} (${kindLabel})`
+        return `${message} (${kindDisplay})`
     }
     if (message) return message
-    if (kindLabel) return kindLabel
-    return quota.status === 'unavailable' ? 'not available on this node' : 'could not read quota'
+    if (kindDisplay) return kindDisplay
+    return quota.status === 'unavailable' ? fmt.unavailable() : fmt.unreadable()
 }
 
 export type QuotaTone = 'default' | 'good' | 'warn' | 'danger' | 'info'
@@ -324,13 +429,18 @@ export interface QuotaDisplayModel {
  * live here. Consumers must not reassemble axes from the raw snapshot — the
  * drift-guard test (test/utils/quota-display-model.test.ts) pins that.
  */
-export function buildQuotaDisplayModel(quota: MeshNodeFactsProviderQuota, now: number = Date.now()): QuotaDisplayModel {
+export function buildQuotaDisplayModel(
+    quota: MeshNodeFactsProviderQuota,
+    now: number = Date.now(),
+    fmt: QuotaTextFormatter = ENGLISH_QUOTA_TEXT,
+): QuotaDisplayModel {
     const cue = quotaWindowCue(quota)
     const axisChip = (window: MeshNodeFactsQuotaWindow | null | undefined, hint: 'session' | 'weekly' | 'monthly', prefix: string): QuotaDisplayChip | null => {
-        const text = formatQuotaWindow(window, now, cue)
+        const text = formatQuotaWindow(window, now, cue, fmt)
         if (!text) return null
         const usedPercent = window!.usedPercent
-        return { key: hint, label: `${prefix} ${text}`, usedPercent, hint, tone: quotaUsageTone(usedPercent) }
+        const reset = isQuotaWindowReset(window, now)
+        return { key: hint, label: `${prefix} ${text}`, usedPercent: reset ? null : usedPercent, hint, tone: reset ? 'default' : quotaUsageTone(usedPercent) }
     }
     const session = axisChip(quota.session, 'session', '5h')
     const weekly = axisChip(quota.weekly, 'weekly', '7d')
@@ -339,12 +449,12 @@ export function buildQuotaDisplayModel(quota: MeshNodeFactsProviderQuota, now: n
     // Multi-pool providers (antigravity): the per-pool buckets REPLACE the
     // collapsed worst-of-pools axes — showing both would render the same
     // numbers twice.
-    const bucketChips: QuotaDisplayChip[] = collectQuotaBucketChips(quota).map(chip => ({
+    const bucketChips: QuotaDisplayChip[] = collectQuotaBucketChips(quota, fmt).map(chip => ({
         key: chip.label,
-        label: `${chip.label} ${formatQuotaWindow(chip.window, now, cue)}`,
-        usedPercent: chip.usedPercent,
+        label: `${chip.label} ${formatQuotaWindow(chip.window, now, cue, fmt)}`,
+        usedPercent: isQuotaWindowReset(chip.window, now) ? null : chip.usedPercent,
         hint: 'bucket' as const,
-        tone: quotaUsageTone(chip.usedPercent),
+        tone: isQuotaWindowReset(chip.window, now) ? 'default' as const : quotaUsageTone(chip.usedPercent),
     }))
     const chips = bucketChips.length > 0
         ? bucketChips
@@ -352,7 +462,7 @@ export function buildQuotaDisplayModel(quota: MeshNodeFactsProviderQuota, now: n
 
     // Usage-shaped provider (opencode): absolute tokens/cost, no percent
     // windows to chip. Only reached when no window rendered.
-    const usageLabel = formatQuotaUsage(quota)
+    const usageLabel = formatQuotaUsage(quota, fmt)
     const usageChip: QuotaDisplayChip | null = usageLabel
         ? { key: 'usage', label: usageLabel, usedPercent: null, hint: 'usage', tone: 'info' }
         : null
@@ -371,7 +481,20 @@ export function buildQuotaDisplayModel(quota: MeshNodeFactsProviderQuota, now: n
         // has one, NEVER the failure line. null → caller's neutral i18n line.
         return { kind: 'okNoWindows', cue, chips: [], usageLabel: null, message: describeQuotaOkWithoutWindows(quota), compactChip: null }
     }
-    return { kind: 'failure', cue, chips: [], usageLabel: null, message: describeQuotaFailure(quota), compactChip: null }
+    return { kind: 'failure', cue, chips: [], usageLabel: null, message: describeQuotaFailure(quota, fmt), compactChip: null }
+}
+
+/**
+ * `buildQuotaDisplayModel` pre-bound to a text formatter, so a surface keeps
+ * its one-argument `buildQuotaDisplayModel(quota)` call (the drift guard in
+ * test/utils/quota-display-model.test.ts pins that shape) while rendering in
+ * the user's language:
+ *
+ *     const buildQuotaDisplayModel = bindQuotaDisplayModel(createQuotaTextFormatter(t))
+ */
+export function bindQuotaDisplayModel(fmt: QuotaTextFormatter) {
+    return (quota: MeshNodeFactsProviderQuota, now: number = Date.now()): QuotaDisplayModel =>
+        buildQuotaDisplayModel(quota, now, fmt)
 }
 
 export type ClaudeQuotaHint = 'setup' | 'refresh' | null
@@ -452,14 +575,14 @@ export function collectQuotaEntries(quota: unknown): QuotaEntry[] {
  * so neither end is in a position to assert an expiry (mesh-shared node-facts.ts).
  * The reader judges age instead.
  */
-export function formatQuotaFreshness(reportedAt: number | null | undefined, now: number = Date.now()): string | null {
+export function formatQuotaFreshness(reportedAt: number | null | undefined, now: number = Date.now(), fmt: QuotaTextFormatter = ENGLISH_QUOTA_TEXT): string | null {
     if (typeof reportedAt !== 'number' || !Number.isFinite(reportedAt) || reportedAt <= 0) return null
     const ageMs = now - reportedAt
-    if (ageMs < 0) return 'just now'
+    if (ageMs < 0) return fmt.justNow()
     const minutes = Math.floor(ageMs / 60_000)
-    if (minutes < 1) return 'just now'
-    if (minutes < 60) return `${minutes}m ago`
+    if (minutes < 1) return fmt.justNow()
+    if (minutes < 60) return fmt.agoMinutes(minutes)
     const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h ${minutes % 60}m ago`
-    return `${Math.floor(hours / 24)}d ${hours % 24}h ago`
+    if (hours < 24) return fmt.agoHours(hours, minutes % 60)
+    return fmt.agoDays(Math.floor(hours / 24), hours % 24)
 }

@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import React from 'react'
 import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
@@ -66,6 +67,7 @@ export default function DashboardPaneWorkspace({
     allowTabShortcuts = true,
     liveSessionInboxState,
 }: DashboardPaneWorkspaceProps) {
+    const { t } = useTranslation('common')
     return (
         <div ref={containerRef} className={`flex-1 min-h-0 flex ${isSplitMode ? 'flex-row' : 'flex-col'} overflow-hidden`}>
             {groupedConvs.map((convs, groupIndex) => {
@@ -81,7 +83,7 @@ export default function DashboardPaneWorkspace({
                                 style={{ background: 'var(--border-subtle)' }}
                                 onMouseDown={event => handleResizeStart(groupIndex - 1, event)}
                                 onDoubleClick={() => closeGroup(groupIndex)}
-                                title="Drag to resize · Double-click to merge"
+                                title={t('paneGroup.resizeHandleHint')}
                             >
                                 <div className="absolute inset-y-0 -left-1 -right-1 group-hover:bg-accent/10" />
                             </div>

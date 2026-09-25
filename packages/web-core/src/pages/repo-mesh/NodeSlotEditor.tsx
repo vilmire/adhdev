@@ -1,6 +1,6 @@
 /**
  * NodeSlotEditor — the per-node "Preferred AI tools" capability-slot editor
- * (ORCHESTRATION_NODE_SLOTS.md).
+ * (node capability slots design, 2026-07-09).
  *
  * A node's slots are an ordered array; order = preference. Each slot bundles a
  * provider + optional model + thinking level + the task difficulty range it

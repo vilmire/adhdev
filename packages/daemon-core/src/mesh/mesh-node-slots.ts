@@ -1,6 +1,6 @@
 /**
  * Node capability-slot resolution — the single source of truth for a node's
- * effective slots (ORCHESTRATION_NODE_SLOTS.md). Every layer that needs a node's
+ * effective slots (node capability slots design, 2026-07-09). Every layer that needs a node's
  * slots (queue claim/launch caps, scheduling-runtime status projection, coordinator
  * prompt) resolves them here so the "explicit policy.slots, else legacy-derived"
  * rule is applied identically everywhere.

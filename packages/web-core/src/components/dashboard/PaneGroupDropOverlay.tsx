@@ -1,9 +1,12 @@
+import { useTranslation } from 'react-i18next'
+
 interface PaneGroupDropOverlayProps {
     dropAction: 'split-left' | 'merge' | 'split-right' | null
     canSplit: boolean
 }
 
 export default function PaneGroupDropOverlay({ dropAction, canSplit }: PaneGroupDropOverlayProps) {
+    const { t } = useTranslation('common')
     return (
         <div className="absolute inset-0 z-10 pointer-events-none hidden md:flex">
             <div
@@ -15,7 +18,7 @@ export default function PaneGroupDropOverlay({ dropAction, canSplit }: PaneGroup
                 }}
             >
                 <div className="px-3 py-1.5 rounded-full text-2xs font-semibold text-white bg-black/45 backdrop-blur-sm">
-                    Split Left
+                    {t('paneGroup.dropSplitLeft')}
                 </div>
             </div>
             <div
@@ -26,7 +29,7 @@ export default function PaneGroupDropOverlay({ dropAction, canSplit }: PaneGroup
                 }}
             >
                 <div className="px-3 py-1.5 rounded-full text-2xs font-semibold text-white bg-black/45 backdrop-blur-sm">
-                    Move Here
+                    {t('paneGroup.dropMoveHere')}
                 </div>
             </div>
             <div
@@ -38,7 +41,7 @@ export default function PaneGroupDropOverlay({ dropAction, canSplit }: PaneGroup
                 }}
             >
                 <div className="px-3 py-1.5 rounded-full text-2xs font-semibold text-white bg-black/45 backdrop-blur-sm">
-                    Split Right
+                    {t('paneGroup.dropSplitRight')}
                 </div>
             </div>
         </div>

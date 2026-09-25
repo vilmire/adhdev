@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import type { DaemonData } from '../../types'
 import { IconChevronLeft, IconMesh, IconMonitor, IconScroll, IconX } from '../Icons'
 import PaneGroupContent from './PaneGroupContent'
@@ -51,6 +52,7 @@ export default function DashboardMobileChatRoom({
     cliViewMode,
     onSetCliViewMode,
 }: DashboardMobileChatRoomProps) {
+    const { t } = useTranslation('common')
     const terminalRef = useRef<CliTerminalHandle | null>(null)
     // Mobile chat owns a local selection that intentionally does not update the
     // desktop Dockview group selection. Scope the modal to that same local
@@ -72,7 +74,7 @@ export default function DashboardMobileChatRoom({
                         className="w-[34px] h-[34px] rounded-full border border-border-default bg-surface-primary/70 text-text-secondary shrink-0 inline-flex items-center justify-center hover:bg-surface-primary transition-colors"
                         onClick={onBack}
                         type="button"
-                        aria-label="Back"
+                        aria-label={t('common.back')}
                     >
                         <IconChevronLeft size={18} />
                     </button>
@@ -99,7 +101,7 @@ export default function DashboardMobileChatRoom({
                         <button
                             onClick={() => { void onStopCli(selectedConversation) }}
                             className="btn btn-secondary btn-sm"
-                            title="Stop CLI process"
+                            title={t('cliStop.stopProcess')}
                             style={{
                                 color: 'var(--status-error, #ef4444)',
                                 borderColor: 'color-mix(in srgb, var(--status-error, #ef4444) 25%, transparent)',
@@ -113,8 +115,8 @@ export default function DashboardMobileChatRoom({
                             className="btn btn-secondary btn-sm"
                             onClick={() => onOpenMeshGraph(selectedConversation)}
                             type="button"
-                            title="Open live repo mesh graph"
-                            aria-label="Open live repo mesh graph"
+                            title={t('mesh.openLiveGraph')}
+                            aria-label={t('mesh.openLiveGraph')}
                         >
                             <IconMesh size={14} />
                         </button>

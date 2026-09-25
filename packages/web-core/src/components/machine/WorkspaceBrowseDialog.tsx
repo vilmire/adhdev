@@ -63,7 +63,7 @@ export default function WorkspaceBrowseDialog({
                         type="button"
                         className="inline-flex items-center justify-center w-8 h-8 rounded-full border border-border-subtle bg-bg-primary text-text-secondary hover:text-text-primary hover:bg-surface-primary transition-colors shrink-0"
                         onClick={onClose}
-                        aria-label="Close folder browser"
+                        aria-label={t('common.close')}
                     >
                         <IconX size={16} />
                     </button>

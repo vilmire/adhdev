@@ -277,7 +277,7 @@ const ChatInputBar = memo(function ChatInputBar({
                 </div>
             )}
 
-            <div className="flex gap-2 items-center" title={isActive ? `Send message to ${panelLabel}` : undefined}>
+            <div className="flex gap-2 items-center" title={isActive ? t('chatInput.sendTo', { panel: panelLabel }) : undefined}>
                 {showControlsToggle && (
                     <button
                         type="button"
@@ -285,9 +285,9 @@ const ChatInputBar = memo(function ChatInputBar({
                             toggleControlsVisibility();
                             onControlsToggle?.();
                         }}
-                        aria-label={areControlsVisible ? 'Hide controls' : 'Show controls'}
+                        aria-label={areControlsVisible ? t('chatInput.hideControls') : t('chatInput.showControls')}
                         aria-pressed={areControlsVisible}
-                        title={areControlsVisible ? 'Hide controls' : 'Show controls'}
+                        title={areControlsVisible ? t('chatInput.hideControls') : t('chatInput.showControls')}
                         className="h-10 w-7 shrink-0 rounded-full border border-border-subtle bg-bg-secondary text-text-muted hover:text-text-primary hover:bg-[var(--surface-tertiary)] transition-colors flex items-center justify-center"
                     >
                         <svg width="12" height="18" viewBox="0 0 12 18" fill="currentColor" aria-hidden="true">
@@ -332,7 +332,7 @@ const ChatInputBar = memo(function ChatInputBar({
                     <textarea
                         ref={chatInputRef}
                         rows={1}
-                        placeholder={statusMessage || (canAttachImages && attachments.length > 0 ? 'Add a message (optional)...' : t('chatInput.placeholder', { panel: panelLabel }))}
+                        placeholder={statusMessage || (canAttachImages && attachments.length > 0 ? t('chatInput.addMessageOptional') : t('chatInput.placeholder', { panel: panelLabel }))}
                         value={draftInput}
                         onChange={e => setDraftInput(e.target.value)}
                         onPaste={e => {

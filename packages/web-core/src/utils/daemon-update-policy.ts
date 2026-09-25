@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next'
 import type { DaemonData } from '../types'
 
 export type WebReleaseChannel = 'stable' | 'preview'
@@ -110,11 +111,15 @@ export function buildDaemonUpgradePayload(daemon: DaemonData | null | undefined)
  * policy channel only selects the target version. To move between tracks the
  * user installs the other binary (adhdev vs adhdev-preview), not this button.
  */
+/** `t` (optional) localizes the label; without it the English text is returned (tests, non-React callers). */
 export function buildDaemonUpgradeLabel(
     _daemon: DaemonData,
     opts: { targetVersion?: string | null; required?: boolean; fallback?: string } = {},
+    t?: TFunction,
 ): string {
     const targetVersion = normalizeVersion(opts.targetVersion)
-    if (targetVersion) return `Update to v${targetVersion}`
-    return opts.fallback || (opts.required ? 'Update now' : 'Upgrade')
+    if (targetVersion) return t ? t('machine.commandCenter.updateToVersion', { version: targetVersion }) : `Update to v${targetVersion}`
+    if (opts.fallback) return opts.fallback
+    if (t) return opts.required ? t('machine.daemonUpdate.updateNow') : t('machine.daemonUpdate.upgrade')
+    return opts.required ? 'Update now' : 'Upgrade'
 }

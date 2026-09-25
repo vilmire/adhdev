@@ -510,7 +510,7 @@ export function ChatThemeSection() {
         {
             id: 'custom',
             name: 'Custom',
-            description: 'Full app + chat customization',
+            description: t('settings.theme.presetCustomDescription'),
             preview: {
                 dark: {
                     userBubble: customColors.userBubble,
@@ -578,7 +578,7 @@ export function ChatThemeSection() {
                                     <div className="text-sm font-bold text-text-primary">
                                         {theme.id === 'custom' ? t('settings.theme.customLabel') : theme.name}
                                     </div>
-                                    <div className="text-3xs text-text-muted">{theme.description}</div>
+                                    <div className="text-3xs text-text-muted">{theme.id === 'custom' ? theme.description : t(`settings.theme.preset.${theme.id}`, { defaultValue: theme.description })}</div>
                                 </div>
                             </div>
                         </button>

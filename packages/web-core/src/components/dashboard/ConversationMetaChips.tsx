@@ -118,7 +118,7 @@ export default function ConversationMetaChips({
                 )
             )}
             {isMeshNode && (
-                <span className="conversation-meta-chip" title="Mesh node">
+                <span className="conversation-meta-chip" title={t('dashboard.metaChips.meshNode')}>
                     <IconServer size={12} />
                     <span>{t('dashboard.metaChips.meshNode')}</span>
                 </span>
@@ -127,11 +127,11 @@ export default function ConversationMetaChips({
                 <span 
                     className={`conversation-meta-chip ${meshQueueStats.pending > 0 ? 'is-active' : ''}`}
                     style={meshQueueStats.failed > 0 ? { color: 'var(--color-red-400)', borderColor: 'var(--color-red-400)' } : undefined}
-                    title={`Queue: ${meshQueueStats.pending} pending, ${meshQueueStats.assigned} assigned, ${meshQueueStats.completed} completed, ${meshQueueStats.failed} failed`}
+                    title={t('dashboard.metaChips.queueTooltip', { pending: meshQueueStats.pending, assigned: meshQueueStats.assigned, completed: meshQueueStats.completed, failed: meshQueueStats.failed })}
                 >
                     <IconLayers size={12} />
                     <span>
-                        {meshQueueStats.pending} Pending
+                        {t('dashboard.metaChips.queuePending', { count: meshQueueStats.pending })}
                     </span>
                 </span>
             )}

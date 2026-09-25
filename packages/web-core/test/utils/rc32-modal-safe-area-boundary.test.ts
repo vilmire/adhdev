@@ -27,7 +27,8 @@ describe('RC32 modal safe-area hardening (audited peers)', () => {
     // Escape closes the inline confirmation overlay before the dialog itself.
     expect(source).toContain('if (pendingAction) cancelAction()')
     expect(source).toContain('h-11 w-11')
-    expect(source).toContain('aria-label="Close"')
+    // Label is localized (i18n sweep 2026-09-25); the close control is still pinned.
+    expect(source).toContain("aria-label={t('common.close')}")
   })
 
   it('LaunchPickModal dismisses via backdrop click and Escape in addition to Cancel', () => {
@@ -49,7 +50,8 @@ describe('RC32 modal safe-area hardening (audited peers)', () => {
     expect(source).toContain("overflowY: 'auto'")
     expect(source).toContain('minWidth: 44')
     expect(source).toContain('minHeight: 44')
-    expect(source).toContain('aria-label="Close onboarding"')
+    // Label is localized (i18n sweep 2026-09-25); the close control is still pinned by its key.
+    expect(source).toContain("aria-label={t('app.onboardingTour.closeAria')}")
   })
 
   it('keeps the mesh observability dialog inside both PWA safe-area edges without forcing empty mobile height', () => {

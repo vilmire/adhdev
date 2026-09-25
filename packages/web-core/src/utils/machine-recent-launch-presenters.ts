@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next'
 import type { MachineRecentLaunch } from '../pages/machine/types'
 import { formatRelativeTime } from './time'
 
@@ -7,11 +8,11 @@ export function getMachineRecentLaunchKindLabel(kind: MachineRecentLaunch['kind'
   return 'ACP'
 }
 
-export function getMachineRecentLaunchMetaText(launch: Pick<MachineRecentLaunch, 'kind' | 'subtitle' | 'providerSessionId'>): string {
+export function getMachineRecentLaunchMetaText(launch: Pick<MachineRecentLaunch, 'kind' | 'subtitle' | 'providerSessionId'>, t?: TFunction): string {
   return [
     getMachineRecentLaunchKindLabel(launch.kind),
     launch.subtitle || '',
-    launch.providerSessionId ? 'Saved history' : '',
+    launch.providerSessionId ? (t ? t('launch.savedHistoryBadge') : 'Saved history') : '',
   ].filter(Boolean).join(' · ')
 }
 
@@ -21,9 +22,10 @@ export function getMachineRecentLaunchUpdatedLabel(launch: Pick<MachineRecentLau
 
 export function buildMachineRecentLaunchCardView(
   launch: Pick<MachineRecentLaunch, 'kind' | 'subtitle' | 'providerSessionId' | 'lastLaunchedAt'>,
+  t?: TFunction,
 ): { metaText: string; updatedLabel: string } {
   return {
-    metaText: getMachineRecentLaunchMetaText(launch),
+    metaText: getMachineRecentLaunchMetaText(launch, t),
     updatedLabel: getMachineRecentLaunchUpdatedLabel(launch),
   }
 }

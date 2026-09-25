@@ -547,10 +547,10 @@ export const ChatMessageRow = memo(function ChatMessageRow({
     const contentStr = stringifyTextContent(message.content, { joiner: '\n' });
 
     if (displayClassification.isActivityFacing && kind !== 'thought' && kind !== 'tool' && kind !== 'terminal') {
-        const label = displayClassification.label || 'Activity';
+        const label = displayClassification.label || t('chat.activityFallback');
         return (
             <div className="self-start chat-msg-activity" data-chat-activity-row="true">
-                <div className="chat-msg-activity-meta" aria-label="Activity message">
+                <div className="chat-msg-activity-meta" aria-label={t('chat.activityMessageAria')}>
                     <span className="activity-dot" />
                     <span>{label}</span>
                 </div>
@@ -610,7 +610,7 @@ export const ChatMessageRow = memo(function ChatMessageRow({
                         <span className="chat-time">{formatTime(receivedAt)}</span>
                     )}
                 </span>
-                <div className="chat-msg-tool-meta" aria-label="Tool message">
+                <div className="chat-msg-tool-meta" aria-label={t('chat.toolMessageAria')}>
                     <span className="tool-icon" aria-hidden="true" />
                     <span className="tool-label">{toolLabel}</span>
                 </div>
@@ -714,7 +714,7 @@ export const ChatMessageRow = memo(function ChatMessageRow({
                 <div className={`chat-bubble ${isUser ? 'chat-bubble-user' : 'chat-bubble-assistant'}`}>
                     <div className={`chat-bubble-header ${(displayContent || hasStructuredRenderer) ? 'mb-1.5' : 'mb-0'}`}>
                         <span className="chat-sender">
-                            {isUser ? (userName || 'You') : (message.senderName || agentName)}
+                            {isUser ? (userName || t('chat.you')) : (message.senderName || agentName)}
                         </span>
                         <span className="chat-bubble-header-end">
                             {(displayContent || hasStructuredRenderer) && (
@@ -744,7 +744,7 @@ export const ChatMessageRow = memo(function ChatMessageRow({
                             onClick={onToggleTextExpanded}
                             className="mt-1.5 text-2xs font-semibold text-[var(--accent-primary)] p-0 opacity-80"
                         >
-                            {isTextExpanded ? 'Collapse ↑' : `Show more (${Math.round(displayContent.length / 100) * 100} chars) ↓`}
+                            {isTextExpanded ? `${t('chat.collapse')} ↑` : `${t('chat.showMoreChars', { count: Math.round(displayContent.length / 100) * 100 })} ↓`}
                         </button>
                     )}
                     {/* SEND-NOW: the queued state and its escape hatch live INSIDE

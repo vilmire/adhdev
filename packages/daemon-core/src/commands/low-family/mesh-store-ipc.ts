@@ -450,7 +450,7 @@ const graphAuditRecord: LowFamilyHandler = async (_ctx: LowFamilyContext, args: 
 // ─── active_work_query ──────────────────────────────────────────────────────
 
 /**
- * D3(b) + D6 (docs/design/2026-09-25-graph-orchestration-simplification.md):
+ * D3(b) + D6 (the 2026-09-25 graph orchestration simplification):
  * fold the open-gate listing (expired gates included, with state + age) and the
  * graph usage counters into `activeWork.summary`, which mesh_status passes
  * through verbatim as `activeWorkSummary`. Identifiers/enums/counters only.

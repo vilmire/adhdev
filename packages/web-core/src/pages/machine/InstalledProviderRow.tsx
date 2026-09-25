@@ -15,9 +15,11 @@ import Card from '../../components/Card'
 import type { ProviderInfo, ProviderSettingsEntry } from './types'
 import TrustBadge, { type ProviderTrust } from './TrustBadge'
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
-import { buildQuotaDisplayModel, type QuotaChipHint } from '../../utils/quota-format'
+import { bindQuotaDisplayModel, createQuotaTextFormatter, type QuotaChipHint } from '../../utils/quota-format'
 import { PROVIDER_CATEGORY_COLOR, type ProviderCategory } from './providerCategoryConfig'
 import { ProviderLogo } from '../../components/ProviderLogo'
+import { localizeProviderSetting } from '../../utils/provider-setting-copy'
+import type { TFunction } from 'i18next'
 
 /**
  * Validate a provider-manifest URL before rendering it as an anchor.
@@ -62,11 +64,37 @@ const QUOTA_CHIP_TONE: Record<string, string> = {
     info: 'bg-sky-500/[0.10] border-sky-500/25 text-sky-300',
 }
 
-function formatCheck(check?: ProviderMachineCheck): string {
+function formatCheck(t: TFunction, check?: ProviderMachineCheck): string {
     if (!check) return '—'
-    const ok = check.ok ? 'OK' : 'Failed'
+    const ok = check.ok ? t('machine.providerRow.checkOk') : t('machine.providerRow.checkFailed')
     const detail = check.message || check.path || check.command || ''
     return detail ? `${ok} — ${detail}` : ok
+}
+
+/** Manifest lifecycle labels ("Stable", "Beta", …) → localized word; unknown values pass through. */
+const LIFECYCLE_KEYS: Record<string, string> = {
+    Stable: 'machine.providerRow.lifecycleStable',
+    Beta: 'machine.providerRow.lifecycleBeta',
+    Experimental: 'machine.providerRow.lifecycleExperimental',
+    Deprecated: 'machine.providerRow.lifecycleDeprecated',
+}
+
+/**
+ * Plain-language origin line for the default (non-advanced) details view.
+ * The daemon's `sourceLayer` (upstream/user/external) and manifest-tier trust
+ * description are developer vocabulary; they stay visible under Advanced.
+ */
+const ORIGIN_KEYS: Record<ProviderTrust, string> = {
+    'trusted': 'machine.providerRow.originOfficial',
+    'trusted-with-scripts': 'machine.providerRow.originOfficialScripts',
+    'user-custom': 'machine.providerRow.originUserFolder',
+    'external-safe': 'machine.providerRow.originExternal',
+    'external-untrusted': 'machine.providerRow.originExternalScripts',
+}
+const LAYER_ORIGIN_KEYS: Record<string, string> = {
+    upstream: 'machine.providerRow.originOfficial',
+    user: 'machine.providerRow.originUserFolder',
+    external: 'machine.providerRow.originExternal',
 }
 
 function isMachineRuntimeProvider(category: string): boolean {
@@ -161,6 +189,12 @@ interface InstalledProviderRowProps {
     updating?: boolean
     /** Flip back to the previous pinned object — local, no network. */
     onRollbackUpdate?: () => Promise<void>
+    /**
+     * Mirrors the Providers tab's "Advanced" toggle: when on, the row also
+     * shows the raw developer-facing detail (source layer, manifest trust
+     * tier text, manifest `details`, binary, digest, empty checks).
+     */
+    showAdvanced?: boolean
 }
 
 export interface ProviderPinInfo {
@@ -193,6 +227,7 @@ export default function InstalledProviderRow({
     onUpdate,
     updating,
     onRollbackUpdate,
+    showAdvanced = false,
 }: InstalledProviderRowProps) {
     const [pinBusy, setPinBusy] = useState<'rollback' | null>(null)
     // Turning Claude's quota tracking ON installs a wrapper into the user's
@@ -226,6 +261,8 @@ export default function InstalledProviderRow({
     // row's styling.
     const quotaChip = (() => {
         if (!quota) return null
+        // Localized binding; keeps the one-argument model call the drift guard pins.
+        const buildQuotaDisplayModel = bindQuotaDisplayModel(createQuotaTextFormatter(t))
         const chip = buildQuotaDisplayModel(quota).compactChip
         if (!chip) return null
         return { label: chip.label, tone: QUOTA_CHIP_TONE[chip.tone], title: t(QUOTA_CHIP_TITLE_KEYS[chip.hint]) }
@@ -400,24 +437,40 @@ export default function InstalledProviderRow({
                         {pin?.digest && (
                             <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelDigest')}</span> <span className="font-mono">{pin.digest.replace(/^sha256:/, '').slice(0, 12)}</span></div>
                         )}
-                        {(providerInfo as any)?.binary && (
+                        {showAdvanced && (providerInfo as any)?.binary && (
                             <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelBinary')}</span> <span className="font-mono">{(providerInfo as any).binary}</span></div>
                         )}
                         {(providerInfo as any)?.status && (
-                            <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelStatus')}</span> {(providerInfo as any).status}</div>
+                            <div>
+                                <span className="text-text-secondary font-medium">{t('machine.providerRow.labelStatus')}</span>{' '}
+                                {LIFECYCLE_KEYS[(providerInfo as any).status] ? t(LIFECYCLE_KEYS[(providerInfo as any).status]) : (providerInfo as any).status}
+                            </div>
                         )}
-                        {(providerInfo as any)?.details && (
+                        {/* Manifest free text (English-only, e.g. "Terminal only") — developer detail. */}
+                        {showAdvanced && (providerInfo as any)?.details && (
                             <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelDetails')}</span> {(providerInfo as any).details}</div>
                         )}
-                        {(providerInfo as any)?.sourceLayer && (
+                        {(() => {
+                            const info = providerInfo as any
+                            const originKey = (info?.trust && ORIGIN_KEYS[info.trust as ProviderTrust])
+                                || (info?.sourceLayer && LAYER_ORIGIN_KEYS[info.sourceLayer])
+                            if (!originKey) return null
+                            return (
+                                <div>
+                                    <span className="text-text-secondary font-medium">{t('machine.providerRow.labelOrigin')}</span>{' '}
+                                    {t(originKey, { source: info.sourceName || '' })}
+                                </div>
+                            )
+                        })()}
+                        {showAdvanced && (providerInfo as any)?.sourceLayer && (
                             <div>
                                 <span className="text-text-secondary font-medium">{t('machine.providerRow.labelSource')}</span>{' '}
-                                {(providerInfo as any).sourceLayer}
+                                <span className="font-mono">{(providerInfo as any).sourceLayer}</span>
                                 {(providerInfo as any).sourceName ? ` · ${(providerInfo as any).sourceName}` : ''}
                             </div>
                         )}
-                        {(providerInfo as any)?.trust && (providerInfo as any)?.trustDescription && (
-                            <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelTrust')}</span> {(providerInfo as any).trustDescription}</div>
+                        {showAdvanced && (providerInfo as any)?.trust && (providerInfo as any)?.trustDescription && (
+                            <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelTrust')}</span> <span className="font-mono">{(providerInfo as any).trust}</span> — {(providerInfo as any).trustDescription}</div>
                         )}
                         {(() => {
                             const links = (providerInfo as any)?.links as Record<string, unknown> | undefined
@@ -442,27 +495,34 @@ export default function InstalledProviderRow({
                             )
                         })()}
                     </div>
-                    {isRuntime && (
+                    {/* Checks: a line with nothing to report ("—") is hidden unless Advanced is on. */}
+                    {isRuntime && (showAdvanced || providerInfo?.lastDetection || providerInfo?.lastVerification) && (
                         <div className="grid gap-1 text-3xs text-text-muted">
-                            <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelDetection')}</span> {formatCheck(providerInfo?.lastDetection)}</div>
-                            <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelVerification')}</span> {formatCheck(providerInfo?.lastVerification)}</div>
+                            {(showAdvanced || providerInfo?.lastDetection) && (
+                                <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelDetection')}</span> {formatCheck(t, providerInfo?.lastDetection)}</div>
+                            )}
+                            {(showAdvanced || providerInfo?.lastVerification) && (
+                                <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelVerification')}</span> {formatCheck(t, providerInfo?.lastVerification)}</div>
+                            )}
                         </div>
                     )}
 
                     {/* Settings */}
                     {prov.schema.length > 0 && (
                         <div className="flex flex-col gap-1.5">
-                            {prov.schema.map(s => (
+                            {prov.schema.map(s => {
+                                const copy = localizeProviderSetting(t, s, prov.displayName)
+                                return (
                                 <div key={s.key} className="flex items-center justify-between gap-3">
                                     <div className="flex-1 min-w-0">
                                         <div className="text-2xs font-medium text-text-primary">
-                                            {s.label || s.key}
+                                            {copy.label}
                                             {savingKey === `${prov.type}.${s.key}` && (
                                                 <span className="ml-1.5 text-4xs text-accent-primary">{t('machine.providerRow.saving')}</span>
                                             )}
                                         </div>
-                                        {s.description && (
-                                            <div className="text-3xs text-text-muted mt-px">{s.description}</div>
+                                        {copy.description && (
+                                            <div className="text-3xs text-text-muted mt-px">{copy.description}</div>
                                         )}
                                     </div>
                                     <div className="shrink-0">
@@ -509,7 +569,8 @@ export default function InstalledProviderRow({
                                         )}
                                     </div>
                                 </div>
-                            ))}
+                                )
+                            })}
                         </div>
                     )}
 
@@ -521,7 +582,7 @@ export default function InstalledProviderRow({
                                     onClick={() => void onDetect(prov.type)}
                                     disabled={!enabled || savingKey === `${prov.type}.detect`}
                                     className={`machine-btn text-3xs px-2 py-0.5 text-blue-400 border-blue-500/25 ${enabled ? '' : 'opacity-40 cursor-not-allowed'}`}
-                                    title={enabled ? 'Run detection for the configured executable' : 'Enable provider before detection'}
+                                    title={enabled ? t('machine.providerRow.detectHint') : t('machine.providerRow.detectDisabledHint')}
                                 >{t('machine.providerRow.detect')}</button>
                                 <button
                                     onClick={() => void onResetCommand(prov.type)}

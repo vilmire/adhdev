@@ -10,7 +10,7 @@
  *  - MeshBlueprintList: sectioned rows (Running / Blocked / Recent / History)
  *    with scope chips and a status bar; graph gates surface as Blocked rows.
  *    Gate VERBS (Release / Abandon / Extend 24h) ARE exposed here as of D5
- *    (docs/design/2026-09-25-graph-orchestration-simplification.md) — this
+ *    (the 2026-09-25 graph orchestration simplification) — this
  *    supersedes the 2026-08-24 "coordinator-only" decision. They call the
  *    same mesh_graph_gate_release/abandon/extend daemon commands the MCP
  *    tools wrap, through the same sendDaemonCommand path every other
@@ -397,12 +397,12 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                             {schedObservedAt && <span className="ml-auto text-4xs text-text-muted">{t('mesh.blueprint.schedObservedAt', { time: schedObservedAt.slice(11, 19) })}</span>}
                             <label className="flex items-center gap-1 text-3xs text-text-muted cursor-pointer">
                                 <input type="checkbox" checked={schedReadonly} onChange={e => setSchedReadonly(e.target.checked)} />
-                                read-only
+                                {t('mesh.blueprint.readonlyBadge')}
                             </label>
                             <button type="button" className="btn btn-sm btn-secondary" disabled={schedLoading || !canCommand} onClick={() => void runRoutePreview()}>
                                 <IconRefresh size={11} />
                             </button>
-                            <button type="button" className="btn btn-sm btn-secondary" aria-label="Close scheduling detail" onClick={() => setSchedDetailOpen(false)}>
+                            <button type="button" className="btn btn-sm btn-secondary" aria-label={t('common.close')} onClick={() => setSchedDetailOpen(false)}>
                                 ✕
                             </button>
                         </div>

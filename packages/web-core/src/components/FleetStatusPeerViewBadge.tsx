@@ -1,6 +1,11 @@
 /**
  * Small machine-card cross-check for the Phase 4 Stage 2 fleet.status SUB view.
  *
+ * ★ User-facing rule (owner, 2026-09-25): the internal sync engine's name never
+ * reaches the UI, and the healthy case renders NOTHING — a badge on every
+ * machine that only says "the cross-check agrees" is noise. Only a real
+ * disagreement shows, as a plain "sync delayed" chip with a plain tooltip.
+ *
  * The WS status remains the routing/push source of truth for this stage. This
  * badge does not replace or gate it: it shows that another daemon received a
  * fresh fixed-key status for the same machine, and changes tone when that peer
@@ -43,10 +48,16 @@ export function FleetStatusPeerViewBadge({
         + peer.sessionCounts.acpCount
     const wsState = wsOnline ? 'online' : 'offline'
     const diverged = peer.onlineState !== wsState || peerSessionCount !== wsSessionCount
+    // Healthy (the two views agree): nothing to tell the user.
+    if (!diverged) return null
+    const stateLabel = (state: string) =>
+        state === 'online' ? t('machine.card.fleetPeer.stateOnline')
+            : state === 'offline' ? t('machine.card.fleetPeer.stateOffline')
+                : state
     const tooltip = t('machine.card.fleetPeer.tooltip', {
-        wsState,
+        wsState: stateLabel(wsState),
         wsCount: wsSessionCount,
-        peerState: peer.onlineState,
+        peerState: stateLabel(peer.onlineState),
         peerCount: peerSessionCount,
         age: Math.floor(ageMs / 1000),
     })
@@ -64,7 +75,7 @@ export function FleetStatusPeerViewBadge({
             data-testid="fleet-status-peer-view-badge"
             data-diverged={diverged ? 'true' : 'false'}
         >
-            {t(diverged ? 'machine.card.fleetPeer.divergedLabel' : 'machine.card.fleetPeer.label')}
+            {t('machine.card.fleetPeer.divergedLabel')}
         </span>
     )
 }

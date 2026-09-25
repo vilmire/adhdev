@@ -1,8 +1,8 @@
 // The Ultra plan card advertised "More webhooks & API calls" as a selling
-// point, but Webhooks is a FROZEN surface (docs/FROZEN_SURFACES.md) — its UI
+// point, but Webhooks is a FROZEN surface (owner freeze decision, 2026-07-04) — its UI
 // is hidden behind FEATURE_FLAGS.webhooks=false. Advertising a hidden feature
-// as a paid-tier benefit violates docs/CONCEPTS.md §7's "쓰면 안 되는 것"
-// list (Webhooks·API Keys dashboard: selling point 금지). Owner decision
+// as a paid-tier benefit violates the promo-copy "쓰면 안 되는 것" rules
+// (formerly CONCEPTS §7, now scripts/verify-docs.mjs CONCEPTS_S7_FORBIDDEN) (Webhooks·API Keys dashboard: selling point 금지). Owner decision
 // (2026-09, O2): drop the Webhooks mention, keep the API calls mention since
 // `monthlyApiCalls` is a live plan-limits axis.
 import { describe, expect, it } from 'vitest'

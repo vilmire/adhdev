@@ -362,7 +362,7 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
 }
 
 /* ── D5: Blueprint gate actions ────────────────────────────────────────────
- * design/2026-09-25-graph-orchestration-simplification.md decision D5 lifts
+ * The 2026-09-25 graph orchestration simplification, decision D5, lifts
  * the 2026-08-24 "gate verbs stay coordinator-only" call: the dashboard now
  * exposes Release/Abandon/Extend as first-class buttons on a blocking gate
  * row, wired to the daemon commands D3(c) adds

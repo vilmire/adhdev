@@ -264,7 +264,7 @@ export type DetailSelection =
     | { kind: 'queue'; task: RepoMeshQueueTask }
     | { kind: 'session'; node: RepoMeshNodeStatus; session: MeshGraphSessionDetail }
     // Coordinator gate detail modal — read-only (inspection only). D5
-    // (docs/design/2026-09-25-graph-orchestration-simplification.md) added
+    // (the 2026-09-25 graph orchestration simplification) added
     // Release/Abandon/Extend buttons to the Blocked-section ROW itself
     // (MeshBlueprintRow's MeshBlueprintGateRowView); this modal stays a
     // detail view and does not duplicate those actions.
@@ -748,7 +748,7 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
             {goalText && (
                 <div className={`max-h-64 overflow-y-auto whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>
                     {stripMarkdownSyntax(goalText)}
-                    {showTruncatedLabel && !canFetchGoal && <span className={meshTheme.textMuted}> … (truncated)</span>}
+                    {showTruncatedLabel && !canFetchGoal && <span className={meshTheme.textMuted}> … {t('mesh.overview.truncated')}</span>}
                 </div>
             )}
             {fetchError && <div className="text-2xs text-amber-400">{fetchError}</div>}
@@ -1182,7 +1182,7 @@ function SessionDetail({ meshTheme, node, session, queueTasks, onOpenTask }: {
         <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-1.5">
                 <StatusBadge meshTheme={meshTheme} label={label} tone={sessionStatusTone(label)} />
-                <StatusBadge meshTheme={meshTheme} label={session.providerType || 'provider unknown'} tone="muted" />
+                <StatusBadge meshTheme={meshTheme} label={session.providerType || t('mesh.overview.providerUnknown')} tone="muted" />
                 {session.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(session.difficulty, t)} tone={difficultyTone(session.difficulty)} />}
             </div>
             {session.statusNote && <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{session.statusNote}</div>}
@@ -1273,7 +1273,7 @@ function GateDetail({ meshTheme, graph, nodeId, gate, queueTasks, onOpenTask }: 
             <div className="flex flex-wrap items-center gap-1.5">
                 <StatusBadge meshTheme={meshTheme} label={state} tone={tone} />
                 {gate?.action && <StatusBadge meshTheme={meshTheme} label={gate.action} tone="muted" />}
-                {gate?.leaseExpired && <StatusBadge meshTheme={meshTheme} label="lease expired" tone="rose" />}
+                {gate?.leaseExpired && <StatusBadge meshTheme={meshTheme} label={t('mesh.overview.leaseExpired')} tone="rose" />}
             </div>
             <div className="grid gap-1.5 text-xs">
                 <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelGraph')} value={`${(graph as { batchId?: string }).batchId || graph.graphId.slice(0, 8)} · ${graph.status}`} />
@@ -1544,9 +1544,9 @@ function NodesCard({ meshTheme, nodes }: { meshTheme: MeshGraphTheme; nodes: Rep
                                 <span className={`min-w-0 max-w-full flex-1 truncate text-sm font-medium ${meshTheme.textPrimary}`} title={node.workspace}>{nodeDisplayName(node)}</span>
                                 {branch && <span className={`max-w-full truncate font-mono text-2xs ${meshTheme.textSecondary}`} title={branch}>{branch}</span>}
                                 <span className={`max-w-full truncate font-mono text-3xs ${meshTheme.textMuted}`}>{nodeDriftSummary(node)}</span>
-                                {sessionCount > 0 && <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{sessionCount} session{sessionCount > 1 ? 's' : ''}</span>}
+                                {sessionCount > 0 && <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{t('mesh.overview.sessionCount', { count: sessionCount })}</span>}
                                 {typeof node.daemonBuildVersion === 'string' && node.daemonBuildVersion && (
-                                    <span className={`shrink-0 font-mono text-3xs ${meshTheme.textMuted}`} title="Daemon build version reported by this node">v{node.daemonBuildVersion}</span>
+                                    <span className={`shrink-0 font-mono text-3xs ${meshTheme.textMuted}`} title={t('mesh.statusTab.daemonVersionHint')}>v{node.daemonBuildVersion}</span>
                                 )}
                                 {conv && <StatusBadge meshTheme={meshTheme} label={conv.label} tone={conv.tone} />}
                             </div>

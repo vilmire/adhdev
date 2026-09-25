@@ -193,7 +193,7 @@ const ENQUEUE_TASK_DISCOVERY_META = {
 } as const;
 
 /**
- * graph-orchestration-simplification D2 (docs/design/2026-09-25-graph-orchestration-simplification.md)
+ * graph-orchestration-simplification D2 (2026-09-25)
  * — the enqueue schema diet.
  *
  *  - ONE canonical snake_case name per field. The camelCase / alternate spellings
@@ -1456,7 +1456,7 @@ export const MESH_MAGI_KIND_PANEL_LIST_TOOL = {
 
 export const MESH_NODE_SLOTS_SET_TOOL = {
     name: 'mesh_node_slots_set',
-    description: 'PROPOSE (dry-run) or APPLY a mesh node\'s capability-slot list (policy.slots) — the orchestrator\'s surface for autonomously adjusting a node\'s AI-tool profile mid-run (ORCHESTRATION_NODE_SLOTS.md §5). A node\'s slots drive task→node fitness routing and MAGI fan-out, so changing them changes how work is distributed. IMPORTANT — WHOLESALE REPLACEMENT: the `slots` you pass become the node\'s COMPLETE new slot list; any prior slot not in the list is dropped (not merged). Because it silently replaces the profile, get EXPLICIT user approval before writing: the default dry-run (write=false) returns `currentSlots` vs `proposedSlots` for you to present as a diff — re-run with write=true ONLY after the user approves. Apply goes through update_mesh_node (machine-local node policy).',
+    description: 'PROPOSE (dry-run) or APPLY a mesh node\'s capability-slot list (policy.slots) — the orchestrator\'s surface for autonomously adjusting a node\'s AI-tool profile mid-run. A node\'s slots drive task→node fitness routing and MAGI fan-out, so changing them changes how work is distributed. IMPORTANT — WHOLESALE REPLACEMENT: the `slots` you pass become the node\'s COMPLETE new slot list; any prior slot not in the list is dropped (not merged). Because it silently replaces the profile, get EXPLICIT user approval before writing: the default dry-run (write=false) returns `currentSlots` vs `proposedSlots` for you to present as a diff — re-run with write=true ONLY after the user approves. Apply goes through update_mesh_node (machine-local node policy).',
     inputSchema: {
         type: 'object' as const,
         properties: {

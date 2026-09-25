@@ -5,6 +5,7 @@
  */
 
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import SessionInfoDialog, { type SessionInfoConversation } from './SessionInfoDialog'
 
 interface Props {
@@ -17,14 +18,15 @@ interface Props {
 
 export default function SessionInfoButton({ sessionId, daemonId, conv }: Props) {
     const [open, setOpen] = useState(false)
+    const { t } = useTranslation('common')
     if (!sessionId || !daemonId) return null
     return (
         <>
             <button
                 type="button"
                 onClick={() => setOpen(true)}
-                title="Session info — launch args, mesh node, system prompt, …"
-                aria-label="Session info"
+                title={t('sessionInfo.buttonHint')}
+                aria-label={t('sessionInfo.title')}
                 className="inline-flex items-center justify-center w-6 h-6 rounded-full text-text-secondary hover:text-text-primary hover:bg-surface-secondary text-sm leading-none"
                 /* The parent activity-toggle-bar disables pointer events so the
                    floating overlay doesn't steal clicks from the chat body

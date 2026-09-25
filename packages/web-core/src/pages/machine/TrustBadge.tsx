@@ -7,6 +7,7 @@
  * list_provider_availability.
  */
 import type { ReactElement } from 'react'
+import { useTranslation } from 'react-i18next'
 
 export type ProviderTrust =
     | 'user-custom'
@@ -22,12 +23,20 @@ interface TrustBadgeProps {
     description?: string
 }
 
-const LABEL: Record<ProviderTrust, string> = {
-    'user-custom': 'Custom',
-    'trusted': 'Official',
-    'trusted-with-scripts': 'Official · runs JS',
-    'external-safe': 'External · spec-only',
-    'external-untrusted': 'External · untrusted JS',
+/** i18n keys (`machine.trustBadge.*`) — plain words, no manifest-tier jargon. */
+const LABEL_KEY: Record<ProviderTrust, string> = {
+    'user-custom': 'machine.trustBadge.userCustom',
+    'trusted': 'machine.trustBadge.trusted',
+    'trusted-with-scripts': 'machine.trustBadge.trustedWithScripts',
+    'external-safe': 'machine.trustBadge.externalSafe',
+    'external-untrusted': 'machine.trustBadge.externalUntrusted',
+}
+const TOOLTIP_KEY: Record<ProviderTrust, string> = {
+    'user-custom': 'machine.trustBadge.userCustomHint',
+    'trusted': 'machine.trustBadge.trustedHint',
+    'trusted-with-scripts': 'machine.trustBadge.trustedWithScriptsHint',
+    'external-safe': 'machine.trustBadge.externalSafeHint',
+    'external-untrusted': 'machine.trustBadge.externalUntrustedHint',
 }
 
 const TONE: Record<ProviderTrust, string> = {
@@ -39,13 +48,18 @@ const TONE: Record<ProviderTrust, string> = {
 }
 
 export default function TrustBadge({ trust, sourceName, description }: TrustBadgeProps): ReactElement {
+    const { t } = useTranslation('common')
+    const base = LABEL_KEY[trust] ? t(LABEL_KEY[trust]) : trust
     const label = sourceName && (trust === 'external-safe' || trust === 'external-untrusted')
-        ? `${LABEL[trust]} · ${sourceName}`
-        : LABEL[trust]
+        ? `${base} · ${sourceName}`
+        : base
+    // The daemon's `description` is English developer copy; the localized
+    // plain-language hint is what the user hovers. Unknown tiers fall back.
+    const title = TOOLTIP_KEY[trust] ? t(TOOLTIP_KEY[trust]) : description
     return (
         <span
-            className={`text-3xs px-1.5 py-0.5 rounded border whitespace-nowrap ${TONE[trust]}`}
-            title={description}
+            className={`text-3xs px-1.5 py-0.5 rounded border whitespace-nowrap ${TONE[trust] ?? ''}`}
+            title={title}
         >
             {label}
         </span>

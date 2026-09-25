@@ -1,6 +1,6 @@
 /**
  * D4 — "Upstream results" dispatch appendix
- * (docs/design/2026-09-25-graph-orchestration-simplification.md §1 D4).
+ * (the 2026-09-25 graph orchestration simplification §1 D4).
  *
  * A task with predecessors — queue-level `dependsOn`, or graph `requires` edges
  * from worker nodes — receives, at dispatch, each predecessor's accepted

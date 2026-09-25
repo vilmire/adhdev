@@ -39,15 +39,15 @@ export default function DashboardVersionBanner({
             <span className="text-sm shrink-0 mt-0.5" style={{ color: required ? 'var(--status-danger)' : 'var(--status-warning)' }}><IconRefresh size={14} /></span>
             <span className="flex-1 flex items-center gap-2 flex-wrap min-w-0">
                 <span>
-                    {required ? 'Daemon update required' : 'Update available'}
+                    {required ? t('machine.daemonUpdate.requiredTitle') : t('dashboard.versionBanner.updateAvailable')}
                     {targetVersion ? <>: <strong>v{targetVersion}</strong></> : null}
                 </span>
                 {daemons.map((daemon: any) => {
                     const name = getMachineDisplayName(daemon, { fallbackId: daemon.id })
                     const state = upgradingDaemons[daemon.id]
-                    const currentVersion = daemon.version || daemon.daemonVersion || 'unknown'
+                    const currentVersion = daemon.version || daemon.daemonVersion || t('dashboard.versionBanner.unknownVersion')
                     const isRequired = daemon.versionUpdateRequired === true
-                    const updateLabel = buildDaemonUpgradeLabel(daemon, { targetVersion, required: isRequired })
+                    const updateLabel = buildDaemonUpgradeLabel(daemon, { targetVersion, required: isRequired }, t)
 
                     return (
                         <span
@@ -68,9 +68,9 @@ export default function DashboardVersionBanner({
                                 <span className="text-3xs" style={{ color: 'var(--status-danger)' }}>{t('dashboard.versionBanner.required')}</span>
                             )}
                             {state === 'upgrading' ? (
-                                <span className="text-3xs animate-pulse" style={{ color: isRequired ? 'var(--status-danger)' : 'var(--status-warning)' }}>upgrading…</span>
+                                <span className="text-3xs animate-pulse" style={{ color: isRequired ? 'var(--status-danger)' : 'var(--status-warning)' }}>{t('dashboard.versionBanner.upgrading')}</span>
                             ) : state === 'done' ? (
-                                <span className="text-3xs text-green-400">✓ restarting</span>
+                                <span className="text-3xs text-green-400">✓ {t('dashboard.versionBanner.restarting')}</span>
                             ) : state === 'error' ? (
                                 <button
                                     className="text-3xs text-red-400 hover:text-red-300 underline cursor-pointer"
@@ -99,7 +99,7 @@ export default function DashboardVersionBanner({
                 <button
                     className="text-text-muted hover:text-text-primary transition-colors shrink-0"
                     onClick={onDismiss}
-                    title="Dismiss"
+                    title={t('toast.dismiss')}
                 ><IconX size={16} /></button>
             )}
         </div>

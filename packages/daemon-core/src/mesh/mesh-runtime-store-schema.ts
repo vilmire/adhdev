@@ -285,7 +285,7 @@ export function migrateMeshIsolationColumns(self: MeshRuntimeStore): void {
         }
 
         // 9. ★ Stage 5c-1: drop the retired `mesh_turn_outbox` table (design
-        //    docs/design/2026-08-29-seqscribe-outbox-migration.md §5 row 1).
+        //    the 2026-08-29 seqscribe outbox migration design §5 row 1).
         //    Same shape as steps 5 and 6 above: nothing CREATEs, reads or
         //    writes it any more, so a fresh store never has it and an existing
         //    one sheds it once. Idempotent — DROP TABLE IF EXISTS no-ops on

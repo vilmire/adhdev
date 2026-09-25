@@ -236,7 +236,7 @@ async function resolveUsableProvider(
     const providerLoader = components.providerLoader;
     if (!providerLoader) return { reason: 'provider_loader_unavailable' };
 
-    // Slot-based order (ORCHESTRATION_NODE_SLOTS.md): rank the node's capability
+    // Slot-based order (node capability slots design, 2026-07-09): rank the node's capability
     // slots by task→slot fitness (difficulty/requiredTags) so the best-fit slot's
     // provider is tried first, and its model/thinkingLevel ride along. Falls back
     // to the legacy providerPriority-derived slots when no explicit slots exist.

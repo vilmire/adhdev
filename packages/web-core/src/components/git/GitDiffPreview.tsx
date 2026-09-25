@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useEffect, useRef } from 'react'
 
 export interface GitDiffPreviewProps {
@@ -24,6 +25,7 @@ function renderDiffLine(line: string, idx: number) {
 }
 
 export default function GitDiffPreview({ diff, binary, truncated, loading, error, className = '' }: GitDiffPreviewProps) {
+    const { t } = useTranslation('common')
     const scrollRef = useRef<HTMLDivElement>(null)
 
     useEffect(() => {
@@ -33,7 +35,7 @@ export default function GitDiffPreview({ diff, binary, truncated, loading, error
     if (loading) {
         return (
             <div className={`flex items-center justify-center py-8 text-xs text-text-secondary ${className}`}>
-                Loading diff…
+                {t('git.diffPreview.loading')}
             </div>
         )
     }
@@ -49,7 +51,7 @@ export default function GitDiffPreview({ diff, binary, truncated, loading, error
     if (binary) {
         return (
             <div className={`px-3 py-4 text-xs text-text-secondary ${className}`}>
-                Binary file — diff not available.
+                {t('git.diffPreview.binary')}
             </div>
         )
     }
@@ -57,7 +59,7 @@ export default function GitDiffPreview({ diff, binary, truncated, loading, error
     if (!diff) {
         return (
             <div className={`px-3 py-4 text-xs text-text-secondary ${className}`}>
-                No diff available.
+                {t('git.diffPreview.empty')}
             </div>
         )
     }
@@ -71,7 +73,7 @@ export default function GitDiffPreview({ diff, binary, truncated, loading, error
             </div>
             {truncated && (
                 <p className="px-3 py-1.5 text-3xs text-text-secondary border-t border-border/30">
-                    Diff truncated — run <code className="font-mono">git diff</code> locally for full output.
+                    {t('git.diffPreview.truncatedBefore')} <code className="font-mono">git diff</code> {t('git.diffPreview.truncatedAfter')}
                 </p>
             )}
         </div>

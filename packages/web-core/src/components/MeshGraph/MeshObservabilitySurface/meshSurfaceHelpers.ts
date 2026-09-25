@@ -32,6 +32,8 @@ import {
     claudeQuotaHint,
     shouldShowClaudeSetupHint,
     quotaWindowCue,
+    bindQuotaDisplayModel,
+    createQuotaTextFormatter,
     type QuotaChipHint,
     type QuotaDisplayModel,
 } from '../../../utils/quota-format'
@@ -49,6 +51,8 @@ export {
     describeQuotaOkWithoutWindows,
     formatQuotaFreshness,
     quotaWindowCue,
+    bindQuotaDisplayModel,
+    createQuotaTextFormatter,
     type QuotaChipHint,
     type QuotaDisplayModel,
 }

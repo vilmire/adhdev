@@ -69,7 +69,7 @@ Canonical runtime contract:
 | Flag | Description |
 |------|-------------|
 | `--port, -p <port>` | Change the local HTTP and WebSocket port (default: `3847`) |
-| `--host, -H` | Bind to `0.0.0.0` so other devices on your LAN can open the dashboard |
+| `--host, -H <address>` | Bind to an explicit address (e.g. `0.0.0.0`) so other devices on your LAN can open the dashboard — the flag requires the address argument |
 | `--no-open` | Do not auto-open the browser on startup |
 | `--token <secret>` | Enable token auth for dashboard, API, and WebSocket access |
 | `--dev` | Enable DevConsole and provider debugging helpers |
@@ -81,10 +81,10 @@ Canonical runtime contract:
 | Choice | End-user effect |
 |--------|-----------------|
 | `adhdev-standalone` | Dashboard is reachable only from the same machine via localhost |
-| `adhdev-standalone --host` | Dashboard is also reachable from other devices on the same LAN |
+| `adhdev-standalone --host 0.0.0.0` | Dashboard is also reachable from other devices on the same LAN |
 | `adhdev-standalone --token mysecret` | Browser/API/WebSocket access must authenticate with that token |
 | dashboard password enabled in Settings | Browser users see a password prompt and then get a local session cookie |
-| `--host` with no token and no password | Standalone warns that the dashboard is exposed to the LAN without protection |
+| `--host 0.0.0.0` with no token and no password | Standalone warns that the dashboard is exposed to the LAN without protection |
 | `--no-open` | Server starts normally, but does not auto-launch a browser window |
 
 Environment variables:
@@ -107,12 +107,12 @@ By default, standalone binds to localhost only.
 For LAN access:
 
 ```bash
-adhdev-standalone --host
+adhdev-standalone --host 0.0.0.0
 ```
 
 If you expose standalone on `0.0.0.0` without either token auth or a dashboard password, startup logs warn that anyone on your LAN can open and control the dashboard until you secure it.
 
-`--host` does not publish your machine to the public internet by itself. It only changes the bind address from localhost to all interfaces on the current network. Whether that is reachable outside your LAN still depends on your router/firewall setup.
+`--host 0.0.0.0` does not publish your machine to the public internet by itself. It only changes the bind address from localhost to all interfaces on the current network. Whether that is reachable outside your LAN still depends on your router/firewall setup.
 
 Standalone supports two local auth patterns:
 
@@ -134,7 +134,7 @@ That preference is stored locally under `~/.adhdev/` and controls whether future
 Common end-user patterns:
 
 - using ADHDev only from the same machine → run plain `adhdev-standalone`
-- opening the dashboard from another device on the same Wi-Fi → use `--host`, then set a dashboard password from `Settings` → `Dashboard Security`
+- opening the dashboard from another device on the same Wi-Fi → use `--host 0.0.0.0`, then set a dashboard password from `Settings` → `Dashboard Security`
 - calling the local API from scripts or curl → use `--token`
 
 ## Runtime Helpers
