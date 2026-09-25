@@ -49,6 +49,12 @@ async function runSessionHostCli(args: string[]): Promise<number> {
   const child = childProcess.spawn(process.execPath, [entry, ...args], {
     stdio: 'inherit',
     env: buildSessionHostEnv(process.env),
+    // stdio:'inherit' already blocks CREATE_NO_WINDOW on win32 (an interactive
+    // CLI passthrough prints to the caller's own terminal by design), so this
+    // is harmless rather than load-bearing today — it documents the call as
+    // reviewed rather than missed, in case a future non-interactive caller
+    // reaches this from a console-less parent.
+    windowsHide: true,
   });
   return await new Promise<number>((resolve, reject) => {
     child.on('error', reject);
