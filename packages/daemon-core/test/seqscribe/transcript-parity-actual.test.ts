@@ -164,3 +164,93 @@ describe('readLocalTranscriptParityActual', () => {
         });
     });
 });
+
+/**
+ * CPU fix (2026-09-25): with an `expectedRows` hint the reader first scans only
+ * the head-anchored window that holds the just-published revision, and falls
+ * back to the full ring window only when that yields no complete revision.
+ */
+describe('readLocalTranscriptParityActual — narrow-first window (expectedRows hint)', () => {
+    /** A ring of `count` consecutive complete revisions, seqs 1..N. */
+    function ring(count: number) {
+        const rows: { writer: string; seq: number; kind: string; payload: unknown }[] = [];
+        for (let r = 1; r <= count; r += 1) {
+            const identity = { ...IDENTITY, revision: r };
+            const snapshot = encodeTranscriptSnapshot({ ...candidate(), revision: r });
+            const encoded = encodeTranscriptRevision(snapshot, identity);
+            if (!encoded.ok) throw new Error('fixture encode failed');
+            const kinds: [string, unknown][] = [
+                [TRANSCRIPT_REVISION_BEGIN_KIND, encoded.begin],
+                ...encoded.chunks.map((c) => [TRANSCRIPT_REVISION_CHUNK_KIND, c] as [string, unknown]),
+                [TRANSCRIPT_REVISION_COMMIT_KIND, encoded.commit],
+            ];
+            for (const [kind, payload] of kinds) {
+                rows.push({ writer: IDENTITY.producerWriterId, seq: rows.length + 1, kind, payload });
+            }
+        }
+        return rows;
+    }
+
+    /** A node whose scanEntries honours the writer-form seq window, spied. */
+    function ringNode(rows: ReturnType<typeof ring>, contig = rows.length) {
+        const calls: { fromSeq: number; limit: number }[] = [];
+        const node = fakeNode({
+            vectors: () => ({
+                'session.sess-1.transcript': { writers: { [IDENTITY.producerWriterId]: { contig, chain: 'c' } } },
+            }),
+            scanEntries: (_topic, o) => {
+                const { fromSeq, limit } = o as { fromSeq: number; limit: number };
+                calls.push({ fromSeq, limit });
+                const toSeq = Math.min(contig, fromSeq + limit - 1);
+                return { entries: rows.filter((r) => r.seq >= fromSeq && r.seq <= toSeq) };
+            },
+        });
+        return { node, calls };
+    }
+
+    it('finds the latest revision from the narrow window alone (one scan, narrow fromSeq/limit)', () => {
+        const rows = ring(60); // 60 × 3 rows = 180 seqs
+        const rowsPerRevision = 3; // begin + 1 chunk + commit
+        expect(rows).toHaveLength(60 * rowsPerRevision);
+        const { node, calls } = ringNode(rows);
+
+        const result = readLocalTranscriptParityActual(node, IDENTITY.sessionId, IDENTITY.producerWriterId, {
+            expectedRows: rowsPerRevision,
+        });
+
+        expect(result.status).toBe('found');
+        if (result.status === 'found') expect(result.snapshot.revision).toBe(60);
+        // width = 3 + 8 slack = 11 → [170, 180]; the full 500-row window never runs.
+        expect(calls).toEqual([{ fromSeq: 180 - 11 + 1, limit: 11 }]);
+    });
+
+    it('falls back to the full window when the narrow window holds no complete revision', () => {
+        const rows = ring(10); // seqs 1..30, newest commit at 30
+        // An in-flight revision's begin/chunks landed after ours: 20 more rows
+        // with no commit push our commit out of the narrow window.
+        const inFlight = ring(11).slice(30, 32); // begin + chunk of revision 11 only
+        const padded = [...rows];
+        for (let i = 0; i < 20; i += 1) {
+            const src = inFlight[i % inFlight.length]!;
+            padded.push({ ...src, seq: padded.length + 1, kind: TRANSCRIPT_REVISION_CHUNK_KIND });
+        }
+        const { node, calls } = ringNode(padded);
+
+        const result = readLocalTranscriptParityActual(node, IDENTITY.sessionId, IDENTITY.producerWriterId, {
+            expectedRows: 3,
+        });
+
+        expect(result.status).toBe('found');
+        if (result.status === 'found') expect(result.snapshot.revision).toBe(10);
+        expect(calls).toEqual([
+            { fromSeq: 50 - 11 + 1, limit: 11 },
+            { fromSeq: 1, limit: 500 },
+        ]);
+    });
+
+    it('without a hint only the full window runs (unchanged semantics)', () => {
+        const { node, calls } = ringNode(ring(5));
+        readLocalTranscriptParityActual(node, IDENTITY.sessionId, IDENTITY.producerWriterId);
+        expect(calls).toEqual([{ fromSeq: 1, limit: 500 }]);
+    });
+});

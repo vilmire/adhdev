@@ -101,6 +101,42 @@ export const MAX_TRACKED_SESSIONS = 512;
  */
 export const TRANSCRIPT_PTY_DIRTY_THROTTLE_MS = 350;
 
+/** Snapshots at or below this size keep exactly the base 350 ms window. */
+export const TRANSCRIPT_PTY_DIRTY_SIZE_FREE_BYTES = 64 * 1024;
+
+/** Upper bound on the size-adaptive trailing window. */
+export const TRANSCRIPT_PTY_DIRTY_MAX_WINDOW_MS = 3000;
+
+/**
+ * Size-adaptive PTY-dirty trailing window.
+ *
+ * Every pull re-encodes the WHOLE snapshot (§3.4) and the live publisher then
+ * appends ~one 36 KiB chunk row per 36 KiB of it, so the per-pull cost grows
+ * linearly with snapshot size while the 350 ms ceiling stays fixed. Measured
+ * (preview rc.47): one session held 2.5 pulls/s (the 350 ms ceiling) for a
+ * full minute, each pull ~80 KB. The
+ * window therefore grows by 1 ms per KiB above
+ * `TRANSCRIPT_PTY_DIRTY_SIZE_FREE_BYTES`:
+ *
+ *   window = clamp(350 + max(0, bytes - 64 KiB) / 1024, 350, 3000) ms
+ *
+ *   ≤ 64 KiB → 350 ms (unchanged) · 500 KiB → ~786 ms · 1 MiB → ~1.31 s ·
+ *   ≥ ~2.65 MiB (2714 KiB) → 3000 ms cap
+ *
+ * `lastSnapshotBytes` is the size of the session's most recently ENCODED
+ * snapshot (0 before the first). Only the trailing window stretches: the
+ * leading edge still pulls immediately, the trailing pull is still mandatory,
+ * and the 3 s stat poll is unchanged.
+ */
+export function ptyDirtyWindowMs(lastSnapshotBytes: number): number {
+    const bytes = Number.isFinite(lastSnapshotBytes) ? lastSnapshotBytes : 0;
+    const extraMs = Math.max(0, bytes - TRANSCRIPT_PTY_DIRTY_SIZE_FREE_BYTES) / 1024;
+    return Math.min(
+        TRANSCRIPT_PTY_DIRTY_MAX_WINDOW_MS,
+        Math.max(TRANSCRIPT_PTY_DIRTY_THROTTLE_MS, TRANSCRIPT_PTY_DIRTY_THROTTLE_MS + extraMs),
+    );
+}
+
 /**
  * Safety net only, NOT the latency path. Picks up transcript writes that
  * produced no PTY callback (external edits, a provider that flushes its JSONL
@@ -215,6 +251,12 @@ export class TranscriptProjectionService {
     private readonly epoch: string;
     private readonly counters: TranscriptProjectionCounters = freshCounters();
     private readonly sessionState = new Map<string, SessionState>();
+    /**
+     * Size of each session's most recently encoded snapshot — including an
+     * oversized one, which is exactly the case that most needs a longer PTY
+     * window. Feeds `ptyDirtyWindowMs`; cleared by `forgetSession`.
+     */
+    private readonly lastSnapshotBytes = new Map<string, number>();
 
     // Per-session coalescing bookkeeping. `inFlight` gates concurrent work for
     // a session; `pendingObservation`/`pendingPull` hold "arrived while busy,
@@ -361,7 +403,7 @@ export class TranscriptProjectionService {
             this.ptyDirtyTimers.delete(sessionId);
             this.armPtyDirtyTimer(sessionId);
             this.markDirty(sessionId, 'pty_output');
-        }, TRANSCRIPT_PTY_DIRTY_THROTTLE_MS);
+        }, ptyDirtyWindowMs(this.lastSnapshotBytes.get(sessionId) ?? 0));
         timer.unref?.();
         this.ptyDirtyTimers.set(sessionId, timer);
     }
@@ -397,6 +439,7 @@ export class TranscriptProjectionService {
         if (!sessionId) return;
         this.stopPolling(sessionId);
         this.sessionState.delete(sessionId);
+        this.lastSnapshotBytes.delete(sessionId);
         this.pendingObservation.delete(sessionId);
         this.pendingPull.delete(sessionId);
         this.pendingContext.delete(sessionId);
@@ -575,6 +618,7 @@ export class TranscriptProjectionService {
         const candidate = stampTranscriptObservation(observation, identity, now());
         const snapshot = encodeTranscriptSnapshot(candidate);
         const encoded = encodeTranscriptRevision(snapshot, identity, now);
+        this.lastSnapshotBytes.set(sessionId, encoded.ok ? encoded.begin.snapshotBytes : encoded.snapshotBytes);
 
         if (!encoded.ok) {
             // Design §3.3/§7.2 item 3: no silent truncation. Count it and let the

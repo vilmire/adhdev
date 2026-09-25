@@ -28,7 +28,7 @@ import type { SeqscribeNodeHandle } from './node.js';
 import { ensureSessionTranscriptTopic } from './transcript-activation.js';
 import { readLocalTranscriptParityActual } from './transcript-parity-actual.js';
 import { compareTranscriptRevision, redactSessionId } from './transcript-parity.js';
-import type { TranscriptRevisionEnvelope } from './transcript-publisher.js';
+import { MAX_TRACKED_SESSIONS, type TranscriptRevisionEnvelope } from './transcript-publisher.js';
 import type { TranscriptTopicClaimRegistry } from './transcript-topic-claim.js';
 import {
     TRANSCRIPT_REVISION_BEGIN_KIND,
@@ -58,6 +58,97 @@ function decodeOwnEnvelope(writerId: string, envelope: TranscriptRevisionEnvelop
 }
 
 /**
+ * Minimum wall-clock gap between two parity READ-BACKS for one session (the
+ * `readLocalTranscriptParityActual` + `compareTranscriptRevision` half of the
+ * self-check). The in-memory `decodeOwnEnvelope` codec check still runs on
+ * every publish; only the storage read-back is sampled.
+ *
+ * Why sample: measured on a preview daemon (rc.47), one live session hit the
+ * 350 ms PTY throttle ceiling (~2.5 publishes/s), and the per-publish
+ * read-back — JSON-parse + SHA-256 of the scanned revision rows — was ~20% of
+ * a core. Parity is diagnostics by design (see transcript-parity-actual.ts's
+ * header; `compareTranscriptRevision` never throws and never gates the
+ * append), so checking a sample loses no correctness: a systematic
+ * round-trip defect still shows up on the first publish and at least every
+ * interval thereafter.
+ *
+ * Override with `ADHDEV_TRANSCRIPT_PARITY_SAMPLE_MS` (`0` = read back on every
+ * publish — tests that need deterministic per-publish parity use this).
+ */
+export const TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS = 10_000;
+
+/**
+ * Count-based sampling floor: even inside the interval, every Nth publish of a
+ * session is read back, so a long sub-interval burst still gets verified.
+ */
+export const TRANSCRIPT_PARITY_SAMPLE_EVERY_N = 50;
+
+/** Sampling rows for sessions not published for this long are dropped. */
+export const TRANSCRIPT_PARITY_SAMPLE_IDLE_EVICT_MS = 60 * 60 * 1000;
+
+/** Hard cap on sessions the sampler tracks; oldest-seen evicted beyond it. */
+export const TRANSCRIPT_PARITY_SAMPLE_MAX_SESSIONS = MAX_TRACKED_SESSIONS;
+
+function resolveParitySampleIntervalMs(env: NodeJS.ProcessEnv = process.env): number {
+    const raw = env.ADHDEV_TRANSCRIPT_PARITY_SAMPLE_MS;
+    if (raw === undefined || raw.trim() === '') return TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS;
+}
+
+interface ParitySampleState {
+    /** `Date.now()` of the last read-back for this session. */
+    lastReadBackAt: number;
+    /** Publishes since the last read-back. */
+    publishesSinceReadBack: number;
+    /** `Date.now()` of the last publish seen — drives idle eviction. */
+    lastSeenAt: number;
+}
+
+/**
+ * Per-publisher sampler. Returns true when this publish should run the
+ * read-back. Bounded: idle rows (> `TRANSCRIPT_PARITY_SAMPLE_IDLE_EVICT_MS`)
+ * are swept on insert, and the map never exceeds
+ * `TRANSCRIPT_PARITY_SAMPLE_MAX_SESSIONS` (Map insertion order ≈ least
+ * recently seen, since every publish re-inserts its row).
+ */
+function createParitySampler(): (sessionId: string) => boolean {
+    const state = new Map<string, ParitySampleState>();
+    return (sessionId: string): boolean => {
+        const intervalMs = resolveParitySampleIntervalMs();
+        const now = Date.now();
+        const row = state.get(sessionId);
+        if (row) state.delete(sessionId);
+
+        let readBack: boolean;
+        if (!row || intervalMs === 0) {
+            readBack = true;
+        } else {
+            const publishes = row.publishesSinceReadBack + 1;
+            readBack = now - row.lastReadBackAt >= intervalMs || publishes >= TRANSCRIPT_PARITY_SAMPLE_EVERY_N;
+        }
+
+        const next: ParitySampleState = readBack
+            ? { lastReadBackAt: now, publishesSinceReadBack: 0, lastSeenAt: now }
+            : { lastReadBackAt: row!.lastReadBackAt, publishesSinceReadBack: row!.publishesSinceReadBack + 1, lastSeenAt: now };
+
+        if (!row) {
+            // New row: sweep idle sessions, then enforce the hard cap.
+            for (const [id, other] of state) {
+                if (now - other.lastSeenAt > TRANSCRIPT_PARITY_SAMPLE_IDLE_EVICT_MS) state.delete(id);
+            }
+            while (state.size >= TRANSCRIPT_PARITY_SAMPLE_MAX_SESSIONS) {
+                const oldest = state.keys().next().value;
+                if (oldest === undefined) break;
+                state.delete(oldest);
+            }
+        }
+        state.set(sessionId, next);
+        return readBack;
+    };
+}
+
+/**
  * Build the `publishRevision` function `configureTranscriptProjection` (boot)
  * hands to `TranscriptProjectionService`. `ownerDaemonId` should be the SAME
  * identity `deps.daemonId()` reports — passed separately here only because
@@ -68,6 +159,7 @@ export function createLiveTranscriptPublisher(
     claims: TranscriptTopicClaimRegistry,
     ownerDaemonId: string,
 ): (sessionId: string, envelope: TranscriptRevisionEnvelope) => Promise<void> {
+    const shouldReadBack = createParitySampler();
     return async (sessionId: string, envelope: TranscriptRevisionEnvelope): Promise<void> => {
         const activation = ensureSessionTranscriptTopic(node, claims, sessionId, ownerDaemonId);
         if (!activation.ok) {
@@ -114,7 +206,14 @@ export function createLiveTranscriptPublisher(
                 );
                 return;
             }
-            const actual = readLocalTranscriptParityActual(node, sessionId, node.writerId);
+            // Sampled — see TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS.
+            if (!shouldReadBack(sessionId)) return;
+            // `expectedRows` lets the reader try a narrow window holding just
+            // this revision (begin + chunks + commit) before the full ring
+            // window — see the narrow-first note in transcript-parity-actual.ts.
+            const actual = readLocalTranscriptParityActual(node, sessionId, node.writerId, {
+                expectedRows: envelope.chunks.length + 2,
+            });
             compareTranscriptRevision(`${ownerDaemonId}:${sessionId}`, expected.snapshot, actual);
         } catch (error) {
             LOG.warn(
