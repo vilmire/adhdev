@@ -147,4 +147,92 @@ describe('ChatInputBar IME submit guard', () => {
 
     expect(onSend).toHaveBeenCalledTimes(1)
   })
+
+  // ── Korean (Hangul): one Enter sends (owner report 2026-09-25) ──────────────
+  // macOS passes the composing Enter through to the textarea, so the old guard
+  // (return without preventDefault) inserted a newline and a second Enter was
+  // needed. Now: no stray newline, and the committed text is sent once.
+
+  function composingEnter(textarea: HTMLTextAreaElement, keyCode = 229): KeyboardEvent {
+    const event = new KeyboardEvent('keydown', { key: 'Enter', keyCode, bubbles: true, cancelable: true } as KeyboardEventInit)
+    Object.defineProperty(event, 'isComposing', { value: true })
+    textarea.dispatchEvent(event)
+    return event
+  }
+
+  function renderBar(onSend: ReturnType<typeof vi.fn>, key: string) {
+    act(() => {
+      root.render(<ChatInputBar contextKey={key} panelLabel="Test" isSending={false} onSend={onSend} />)
+    })
+    return getTextarea()
+  }
+
+  it('Hangul: an Enter while the last syllable is composing sends once, with the committed text, and inserts no newline', async () => {
+    const onSend = vi.fn().mockResolvedValue(true)
+    const textarea = renderBar(onSend, 'ko-1')
+    act(() => { typeInto(textarea, '안녕하세') })
+    act(() => {
+      textarea.dispatchEvent(new CompositionEvent('compositionupdate', { bubbles: true, data: '요' }))
+      typeInto(textarea, '안녕하세요')
+    })
+    let enter!: KeyboardEvent
+    act(() => { enter = composingEnter(textarea) })
+    expect(enter.defaultPrevented).toBe(true)
+    expect(onSend).not.toHaveBeenCalled()
+    act(() => {
+      textarea.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '요' }))
+    })
+    await act(async () => { await new Promise((r) => setTimeout(r, 10)) })
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(onSend).toHaveBeenCalledWith('안녕하세요', undefined)
+  })
+
+  it('Hangul, Safari order (compositionend first, then the confirming keydown): still exactly one send', async () => {
+    const onSend = vi.fn().mockResolvedValue(true)
+    const textarea = renderBar(onSend, 'ko-2')
+    act(() => {
+      textarea.dispatchEvent(new CompositionEvent('compositionupdate', { bubbles: true, data: '다' }))
+      typeInto(textarea, '고맙습니다')
+      textarea.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '다' }))
+    })
+    let enter!: KeyboardEvent
+    act(() => {
+      enter = new KeyboardEvent('keydown', { key: 'Enter', keyCode: 229, bubbles: true, cancelable: true } as KeyboardEventInit)
+      textarea.dispatchEvent(enter)
+    })
+    expect(enter.defaultPrevented).toBe(true)
+    await act(async () => { await new Promise((r) => setTimeout(r, 60)) })
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(onSend).toHaveBeenCalledWith('고맙습니다', undefined)
+  })
+
+  it('Japanese: a composing Enter confirms the conversion only — no send, and no stray newline', async () => {
+    const onSend = vi.fn().mockResolvedValue(true)
+    const textarea = renderBar(onSend, 'ja-1')
+    act(() => {
+      textarea.dispatchEvent(new CompositionEvent('compositionupdate', { bubbles: true, data: '日本語' }))
+      typeInto(textarea, '日本語')
+    })
+    let enter!: KeyboardEvent
+    act(() => { enter = composingEnter(textarea) })
+    expect(enter.defaultPrevented).toBe(true)
+    act(() => {
+      textarea.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '日本語' }))
+    })
+    await act(async () => { await new Promise((r) => setTimeout(r, 60)) })
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('Shift+Enter still inserts a newline (not prevented, no send)', async () => {
+    const onSend = vi.fn().mockResolvedValue(true)
+    const textarea = renderBar(onSend, 'shift-1')
+    act(() => { typeInto(textarea, 'line one') })
+    let enter!: KeyboardEvent
+    act(() => {
+      enter = new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true, cancelable: true })
+      textarea.dispatchEvent(enter)
+    })
+    expect(enter.defaultPrevented).toBe(false)
+    expect(onSend).not.toHaveBeenCalled()
+  })
 })

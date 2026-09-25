@@ -158,3 +158,43 @@ describe('handleCheckProviderUpdates (real handler)', () => {
         }
     }, 30000);
 });
+
+// PER-PROVIDER UPDATE: `only: true` must RESTRICT the sync to the named types
+// (onlyTargetTypes). Without it, `types` is unioned into the default target
+// set, so the dashboard's per-row "Update" would move every stale pin.
+describe('handleActivateProviderUpdates — only flag', () => {
+    async function runActivate(args: Record<string, unknown>) {
+        const { DaemonCommandHandler } = await import('../../src/commands/handler.js');
+        const syncSpy = vi.fn(async (_opts?: unknown) => ({ activated: [] }));
+        const handler = new DaemonCommandHandler({
+            providerLoader: {
+                listVerifiedChannelPins: () => new Map(),
+                syncVerifiedChannel: syncSpy,
+            },
+        } as any);
+        const result: any = await (handler as any).handleActivateProviderUpdates(args);
+        return { result, syncSpy };
+    }
+
+    it('only:true restricts the sync to exactly the given types', async () => {
+        const { result, syncSpy } = await runActivate({ types: ['codex-cli'], only: true });
+        expect(result.success).toBe(true);
+        expect(syncSpy).toHaveBeenCalledWith({ onlyTargetTypes: ['codex-cli'] });
+    }, 30000);
+
+    it('types without only keeps the union (install-new-type) semantics', async () => {
+        const { syncSpy } = await runActivate({ types: ['kimi'] });
+        expect(syncSpy).toHaveBeenCalledWith({ extraTargetTypes: ['kimi'] });
+    }, 30000);
+
+    it('no args is a plain full sync', async () => {
+        const { syncSpy } = await runActivate({});
+        expect(syncSpy).toHaveBeenCalledWith(undefined);
+    }, 30000);
+
+    it('only without types is refused before any sync', async () => {
+        const { result, syncSpy } = await runActivate({ only: true });
+        expect(result.success).toBe(false);
+        expect(syncSpy).not.toHaveBeenCalled();
+    }, 30000);
+});

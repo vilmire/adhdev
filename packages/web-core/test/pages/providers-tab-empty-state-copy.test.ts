@@ -14,10 +14,11 @@ import { describe, expect, it } from 'vitest'
 // The onboarding intro string (`standalone.onboarding.intro`) pointed at the
 // same phantom button via "Machines → Providers → Add provider".
 //
-// This test pins both strings to the real button label
-// (`machine.providers.create`) so a future rename of the Create button (or a
-// copy edit that reintroduces "Add provider") fails loudly instead of
-// silently reproducing the same dead end.
+// They were then pinned to the "Create" (clone provider) button — which was
+// itself removed on 2026-09-25 (owner: it made it look as if CLI/IDE/ACP
+// providers could be authored from the dashboard). The copy now points at what
+// really exists: the channel Install buttons and the Sources panel. This test
+// keeps both strings off ANY button that is not on the toolbar.
 
 const LOCALES = ['en', 'es', 'ja', 'ko', 'zh-CN']
 
@@ -30,11 +31,12 @@ function loadLocale(locale: string) {
 }
 
 describe('ProvidersTab — empty-state copy references a real button', () => {
-  it('renders the toolbar with Sources / Create / Refresh / Advanced — no "Add provider" button', () => {
-    // Pin the actual toolbar surface so this test's premise (there is no Add
-    // provider button) stays true as the component evolves.
+  it('renders the toolbar with Sources / Refresh / Advanced — no "Add provider" or "Create" button', () => {
+    // Pin the actual toolbar surface so this test's premise stays true as the
+    // component evolves.
     expect(providersTabSource).toContain("t('machine.providers.sources')")
-    expect(providersTabSource).toContain("t('machine.providers.create')")
+    expect(providersTabSource).not.toContain("t('machine.providers.create')")
+    expect(providersTabSource).not.toContain('ProviderCloneModal')
     expect(providersTabSource).toContain("t('machine.providers.refresh')")
     expect(providersTabSource).toContain("t('machine.providers.advanced')")
     expect(providersTabSource).not.toMatch(/addProvider/)
@@ -62,9 +64,21 @@ describe('ProvidersTab — empty-state copy references a real button', () => {
     })
   }
 
-  it('en: noProviders and onboarding.intro both reference "Create", the real button label', () => {
+  it('en: noProviders and onboarding.intro no longer point at the removed "Create" button', () => {
     const dict = loadLocale('en')
-    expect(dict.machine.providers.noProviders).toContain('Create')
-    expect(dict.standalone.onboarding.intro).toContain('Create')
+    expect(dict.machine.providers.noProviders).not.toContain('Create')
+    expect(dict.standalone.onboarding.intro).not.toContain('Create')
+    // …and name buttons that do exist (Sources toolbar button, channel Install).
+    expect(dict.machine.providers.noProviders).toContain(dict.machine.providers.sources)
+    expect(dict.machine.providers.noProviders).toContain(dict.machine.providers.installNewType)
   })
+
+  for (const locale of LOCALES) {
+    it(`${locale}: the retired Create / clone copy is gone`, () => {
+      const dict = loadLocale(locale)
+      expect(dict?.machine?.providers?.create).toBeUndefined()
+      expect(dict?.machine?.providerClone).toBeUndefined()
+      expect(dict.machine.providers.noProviders).toContain(dict.machine.providers.sources)
+    })
+  }
 })

@@ -1,16 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
-    PROVIDER_CHANNEL_SYNC_COMMAND,
-    extraTypesForProviderChannelSync,
     interpretProviderChannelSyncResult,
     unwrapDaemonCommandBody,
 } from '../../src/utils/provider-channel-sync'
-
-describe('provider channel sync — command reuse', () => {
-    it('reuses the existing activate_provider_updates daemon command', () => {
-        expect(PROVIDER_CHANNEL_SYNC_COMMAND).toBe('activate_provider_updates')
-    })
-})
 
 describe('unwrapDaemonCommandBody', () => {
     it('accepts standalone raw bodies and cloud { result } envelopes', () => {
@@ -51,15 +43,5 @@ describe('interpretProviderChannelSyncResult', () => {
             activated: [],
             channelSync: { status: 'error', errors: [{ message: 'digest mismatch' }] },
         })).toEqual({ ok: false, error: 'digest mismatch' })
-    })
-})
-
-describe('extraTypesForProviderChannelSync', () => {
-    it('passes only never-installed newTypes (stale pins are already in the default target set)', () => {
-        expect(extraTypesForProviderChannelSync({
-            staleTypes: ['opencode'],
-            newTypes: ['kimi', ''],
-        })).toEqual(['kimi'])
-        expect(extraTypesForProviderChannelSync(null)).toEqual([])
     })
 })

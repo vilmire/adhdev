@@ -151,8 +151,14 @@ interface InstalledProviderRowProps {
      * This row is where that becomes visible.
      */
     pin?: ProviderPinInfo
-    /** Activate the newest channel objects (moves the pointer). */
-    onActivateUpdate?: () => Promise<void>
+    /**
+     * Activate the newest channel object for THIS provider only (moves its
+     * pointer). Rendered as an inline "Update" in the row header whenever the
+     * pin is stale — no confirm step: rollback is one click and local.
+     */
+    onUpdate?: () => Promise<void>
+    /** True while this provider's update is in flight. */
+    updating?: boolean
     /** Flip back to the previous pinned object — local, no network. */
     onRollbackUpdate?: () => Promise<void>
 }
@@ -184,16 +190,11 @@ export default function InstalledProviderRow({
     quotaEnabled,
     onQuotaToggle,
     pin,
-    onActivateUpdate,
+    onUpdate,
+    updating,
     onRollbackUpdate,
 }: InstalledProviderRowProps) {
-    const [pinBusy, setPinBusy] = useState<'activate' | 'rollback' | null>(null)
-    // Activating replaces what the daemon loads for every session started
-    // afterwards, so it asks first. Rollback does not: it returns to the object
-    // that was already running, is a purely local pointer flip, and is the
-    // action a user reaches for when an update just broke something — putting a
-    // dialog in front of that is friction at the worst moment.
-    const [confirmActivate, setConfirmActivate] = useState(false)
+    const [pinBusy, setPinBusy] = useState<'rollback' | null>(null)
     // Turning Claude's quota tracking ON installs a wrapper into the user's
     // ~/.claude/settings.json (the only quota path Claude Code offers), so it
     // asks first. Disabling, and codex/kimi in both directions, never confirm —
@@ -255,6 +256,35 @@ export default function InstalledProviderRow({
                     </span>
                 )}
                 <div className="ml-auto flex items-center gap-2">
+                    {/* Inline Update (owner feedback 2026-09-25): a newer
+                        provider profile is an action next to the provider,
+                        not a number badge on the tab. A span, not a button —
+                        this whole header is a <button> (see RowSwitch). */}
+                    {onUpdate && pin?.stale && pin.latestVersion && (
+                        <span
+                            role="button"
+                            tabIndex={0}
+                            aria-disabled={updating ? true : undefined}
+                            title={t('machine.providerRow.updateInlineHint', { latest: pin.latestVersion })}
+                            onClick={(e) => {
+                                e.stopPropagation()
+                                if (updating) return
+                                void onUpdate()
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key !== 'Enter' && e.key !== ' ') return
+                                e.preventDefault()
+                                e.stopPropagation()
+                                if (updating) return
+                                void onUpdate()
+                            }}
+                            className={`text-3xs font-semibold px-2 py-0.5 rounded-md border border-amber-500/30 text-amber-400 shrink-0 ${
+                                updating ? 'opacity-60 cursor-wait' : 'cursor-pointer hover:bg-amber-500/15'
+                            }`}
+                        >
+                            {updating ? t('machine.providerRow.specPinUpdating') : t('machine.providerRow.updateInline')}
+                        </span>
+                    )}
                     {/* Machine plan quota, inline (owner feedback 2026-08-10):
                         percent windows chip for quota providers, usage chip for
                         usage-shaped ones (opencode). */}
@@ -499,42 +529,16 @@ export default function InstalledProviderRow({
                                 >{t('machine.providerRow.resetCommand')}</button>
                             </>
                         )}
-                        {/* Pin actions. Update asks first (it changes what every
-                            later session loads); rollback does not (it returns to
-                            the object that was already running, locally). */}
-                        {onActivateUpdate && pin?.stale && !confirmActivate && (
-                            <button
-                                onClick={() => setConfirmActivate(true)}
-                                disabled={pinBusy !== null}
-                                className="machine-btn text-3xs px-2 py-0.5 text-amber-400 border-amber-500/25"
-                                title={t('machine.providerRow.specPinUpdateHint')}
-                            >{t('machine.providerRow.specPinUpdate')}</button>
-                        )}
-                        {onActivateUpdate && confirmActivate && (
-                            <>
-                                <button
-                                    onClick={() => {
-                                        setPinBusy('activate')
-                                        void onActivateUpdate()
-                                            .finally(() => { setPinBusy(null); setConfirmActivate(false) })
-                                    }}
-                                    disabled={pinBusy !== null}
-                                    className="machine-btn text-3xs px-2 py-0.5 text-amber-400 border-amber-500/25"
-                                >{pinBusy === 'activate' ? t('machine.providerRow.specPinUpdating') : t('machine.providerRow.specPinUpdateConfirm')}</button>
-                                <button
-                                    onClick={() => setConfirmActivate(false)}
-                                    disabled={pinBusy !== null}
-                                    className="machine-btn text-3xs px-2 py-0.5"
-                                >{t('machine.providerRow.specPinCancel')}</button>
-                            </>
-                        )}
+                        {/* Pin rollback — no confirm: it returns to the object
+                            that was already running, locally. (Update lives
+                            inline in the header.) */}
                         {onRollbackUpdate && pin?.previousVersion && (
                             <button
                                 onClick={() => {
                                     setPinBusy('rollback')
                                     void onRollbackUpdate().finally(() => setPinBusy(null))
                                 }}
-                                disabled={pinBusy !== null}
+                                disabled={pinBusy !== null || updating === true}
                                 className="machine-btn text-3xs px-2 py-0.5"
                                 title={t('machine.providerRow.specPinRollbackHint', { version: pin.previousVersion })}
                             >{pinBusy === 'rollback' ? t('machine.providerRow.specPinRollingBack') : t('machine.providerRow.specPinRollback')}</button>

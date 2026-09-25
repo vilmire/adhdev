@@ -30,6 +30,7 @@ import type { ProviderInstanceManager } from '../providers/provider-instance-man
 import type { DaemonCliManager } from '../commands/cli-manager.js';
 import type { SessionLifecycleBus } from '../sessions/lifecycle-bus.js';
 import { generateTemplate as genScaffoldTemplate, generateFiles as genScaffoldFiles } from './scaffold-template.js';
+import { buildCliProviderV1Scaffold, buildAcpProviderV1Scaffold } from '../providers/scaffold-v1.js';
 import { VersionArchive, detectAllVersions } from '../providers/version-archive.js';
 import { LOG } from '../logging/logger.js';
 import { findCdpManager } from '../status/builders.js';
@@ -924,25 +925,52 @@ export class DevServer implements DevServerContext {
     let targetDir: string;
     targetDir = this.providerLoader.getUserProviderDir(category, type);
 
-    const jsonPath = path.join(targetDir, 'provider.json');
+    // v1 categories (cli/acp) write provider.v1.json; legacy categories
+    // (ide/extension — still CDP-script-driven, engine still live) write
+    // provider.json. Check whichever this category would actually produce.
+    const isV1Category = category === 'cli' || category === 'acp';
+    const manifestFileName = isV1Category ? 'provider.v1.json' : 'provider.json';
+    const jsonPath = path.join(targetDir, manifestFileName);
     if (fs.existsSync(jsonPath)) {
       this.json(res, 409, { error: `Provider already exists at ${targetDir}`, path: targetDir });
       return;
     }
 
     try {
-      const result = genScaffoldFiles(type, name, category, { cdpPorts, cli, processName, installPath, binary, extensionId, version, osPaths, processNames });
+      const createdFiles: string[] = [];
       fs.mkdirSync(targetDir, { recursive: true });
-      fs.writeFileSync(jsonPath, result['provider.json'], 'utf-8');
-      const createdFiles = ['provider.json'];
 
-      // Write per-function script files (new structure)
-      if (result.files) {
-        for (const [relPath, content] of Object.entries(result.files)) {
-          const fullPath = path.join(targetDir, relPath);
-          fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-          fs.writeFileSync(fullPath, content, 'utf-8');
-          createdFiles.push(relPath);
+      if (category === 'cli') {
+        // FSM-spec-driven scaffold (provider.v1.json + specs/1.0.json) — the
+        // legacy scripts/0.1/*.js layout can never launch: the legacy CLI
+        // engine was deleted (providers/spec/route.ts formatNoResolvableSpecError).
+        const scaffold = buildCliProviderV1Scaffold({ type, name, binary });
+        fs.writeFileSync(jsonPath, JSON.stringify(scaffold.manifest, null, 2) + '\n', 'utf-8');
+        createdFiles.push(scaffold.manifestPath);
+        const specFullPath = path.join(targetDir, scaffold.specPath);
+        fs.mkdirSync(path.dirname(specFullPath), { recursive: true });
+        fs.writeFileSync(specFullPath, JSON.stringify(scaffold.spec, null, 2) + '\n', 'utf-8');
+        createdFiles.push(scaffold.specPath);
+      } else if (category === 'acp') {
+        // Declarative-only — single provider.v1.json, no FSM spec/scripts.
+        const scaffold = buildAcpProviderV1Scaffold({ type, name, binary });
+        fs.writeFileSync(jsonPath, JSON.stringify(scaffold.manifest, null, 2) + '\n', 'utf-8');
+        createdFiles.push(scaffold.manifestPath);
+      } else {
+        // ide/extension: legacy provider.json + scripts/<version>/*.js —
+        // still the live engine for CDP-driven providers.
+        const result = genScaffoldFiles(type, name, category, { cdpPorts, cli, processName, installPath, binary, extensionId, version, osPaths, processNames });
+        fs.writeFileSync(jsonPath, result['provider.json'], 'utf-8');
+        createdFiles.push('provider.json');
+
+        // Write per-function script files (new structure)
+        if (result.files) {
+          for (const [relPath, content] of Object.entries(result.files)) {
+            const fullPath = path.join(targetDir, relPath);
+            fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+            fs.writeFileSync(fullPath, content, 'utf-8');
+            createdFiles.push(relPath);
+          }
         }
       }
 

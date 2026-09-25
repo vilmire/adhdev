@@ -1,13 +1,10 @@
 /**
- * Dashboard recovery for a stale / spec-less provider channel.
- *
- * CLI `adhdev provider sync-channel` (packages/daemon-cloud/src/cli/provider-commands.ts)
- * calls `loader.syncVerifiedChannel()` with no extra args. The daemon already
- * exposes that same path as `activate_provider_updates` (handler.ts) — reuse it;
- * do not invent a second command.
+ * Interpreting the result of `activate_provider_updates` (daemon handler.ts)
+ * — the Providers tab's per-provider "Update" and "Update all" buttons.
+ * (The machine-page tab badge that used to trigger a full channel sync was
+ * replaced by a non-clickable dot on 2026-09-25; the command-name constant
+ * and the badge's extra-types helper went with it.)
  */
-
-export const PROVIDER_CHANNEL_SYNC_COMMAND = 'activate_provider_updates' as const
 
 export type ProviderChannelSyncOutcome =
     | { ok: true; activatedCount: number }
@@ -53,16 +50,4 @@ export function interpretProviderChannelSyncResult(raw: unknown): ProviderChanne
     }
     const activatedCount = Array.isArray(body.activated) ? body.activated.length : 0
     return { ok: true, activatedCount }
-}
-
-/** Never-installed channel types must be passed as extra targets (kimi class). */
-export function extraTypesForProviderChannelSync(snap: {
-    staleTypes?: string[]
-    newTypes?: string[]
-} | null | undefined): string[] {
-    const extra: string[] = []
-    for (const type of snap?.newTypes ?? []) {
-        if (typeof type === 'string' && type.trim()) extra.push(type.trim())
-    }
-    return extra
 }

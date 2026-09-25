@@ -24,7 +24,7 @@ import type { DaemonData } from '../types'
 import { isCliEntry, isAcpEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel, getProviderSummaryLine, getProviderSummaryValue } from '../utils/daemon-utils'
 import { getDashboardActiveTabHref, getDashboardActiveTabKeyForConversation } from '../utils/dashboard-route-paths'
 import { IconBarChart, IconMonitor, IconSettings, IconClipboard, IconServer } from '../components/Icons'
-import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { eventManager, type ToastConfig } from '../managers/EventManager'
 import ToastContainer from '../components/dashboard/ToastContainer'
 
@@ -58,12 +58,7 @@ import {
 } from '../utils/dashboard-launch-copy'
 import { DEFAULT_MACHINE_RUNTIME_REFRESH_MS } from '../utils/daemon-timing'
 import { buildDaemonUpgradePayload } from '../utils/daemon-update-policy'
-import {
-    PROVIDER_CHANNEL_SYNC_COMMAND,
-    extraTypesForProviderChannelSync,
-    interpretProviderChannelSyncResult,
-    unwrapDaemonCommandBody,
-} from '../utils/provider-channel-sync'
+import { unwrapDaemonCommandBody } from '../utils/provider-channel-sync'
 
 // ─── Component ───────────────────────────────────────
 interface MachineDetailProps {
@@ -92,13 +87,14 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const machineRetryStatus = machineId ? daemonCtx.connectionRetryStatuses?.[machineId] : undefined
     const isMachineBlocked = !!machineRetryStatus?.blocked
     const [activeTab, setActiveTab] = useState<TabId>('workspace')
-    // Provider-channel staleness badge on the Providers tab (owner decision
+    // Provider-channel staleness hint on the Providers tab (owner decision
     // 2026-08-10, option A): the daemon's 24h read-only probe caches a
     // snapshot; this surfaces it WITHOUT the user opening the tab. null until
-    // the daemon's first probe ran — no badge, never a wrong one.
+    // the daemon's first probe ran — no hint, never a wrong one.
+    // ★Rendered as a small non-clickable DOT, not a count (owner feedback
+    // 2026-09-25: a number looked strange). The action lives next to each
+    // provider as an inline "Update" button inside the tab.
     const [providerStaleness, setProviderStaleness] = useState<{ staleTypes: string[]; newTypes: string[] } | null>(null)
-    const [providerSyncBusy, setProviderSyncBusy] = useState(false)
-    const [providerSyncNonce, setProviderSyncNonce] = useState(0)
     const [gitDialogTarget, setGitDialogTarget] = useState<{ daemonId: string; workspace: string } | null>(null)
     const [, setWorkspaceCategoryHint] = useState<'ide' | 'cli' | 'acp'>('ide')
     const recentLaunchActionRef = useRef<(() => Promise<void>) | null>(null)
@@ -149,45 +145,6 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         })()
         return () => { cancelled = true }
     }, [applyProviderStalenessSnapshot, machineId, machineEntry?.id, sendDaemonCommand])
-
-    const handleProviderStaleBadgeClick = useCallback(async (event: ReactMouseEvent) => {
-        event.preventDefault()
-        event.stopPropagation()
-        if (!machineId || providerSyncBusy) return
-        setActiveTab('providers')
-        setProviderSyncBusy(true)
-        try {
-            const extra = extraTypesForProviderChannelSync(providerStaleness)
-            const res = await sendDaemonCommand(
-                machineId,
-                PROVIDER_CHANNEL_SYNC_COMMAND,
-                extra.length > 0 ? { types: extra } : {},
-            )
-            const outcome = interpretProviderChannelSyncResult(res)
-            if ('error' in outcome) {
-                eventManager.showToast(
-                    t('machine.detail.providerSyncFailed', { error: outcome.error }),
-                    'warning',
-                )
-            } else {
-                eventManager.showToast(
-                    outcome.activatedCount > 0
-                        ? t('machine.detail.providerSyncSuccess', { count: outcome.activatedCount })
-                        : t('machine.detail.providerSyncAlreadyCurrent'),
-                    'success',
-                )
-            }
-            setProviderSyncNonce((n) => n + 1)
-            try {
-                applyProviderStalenessSnapshot(await sendDaemonCommand(machineId, 'get_status_metadata'))
-            } catch { /* badge refresh is best-effort after the toast */ }
-        } catch (err) {
-            const message = err instanceof Error ? err.message : String(err)
-            eventManager.showToast(t('machine.detail.providerSyncFailed', { error: message }), 'warning')
-        } finally {
-            setProviderSyncBusy(false)
-        }
-    }, [applyProviderStalenessSnapshot, machineId, providerStaleness, providerSyncBusy, sendDaemonCommand, t])
 
     useEffect(() => {
         // Providers included (owner catch 2026-08-10): the per-row quota chips
@@ -543,16 +500,14 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         )
     }
 
+    const providerUpdatesAvailable = !!providerStaleness
+        && (providerStaleness.staleTypes.length + providerStaleness.newTypes.length) > 0
     const TABS: { id: TabId; label: string | ReactNode; count?: number }[] = [
         { id: 'workspace', label: <span className="flex items-center gap-1.5"><IconMonitor size={14} /> {t('machine.detail.tabWorkspace')}</span>, count: ideSessions.length + cliSessions.length + acpSessions.length },
         { id: 'session-host', label: <span className="flex items-center gap-1.5"><IconServer size={14} /> {t('machine.detail.tabHostedRuntimes')}</span> },
         {
             id: 'providers',
             label: <span className="flex items-center gap-1.5"><IconSettings size={14} /> {t('machine.detail.tabProviders')}</span>,
-            // Update badge: stale pins + never-installed channel types.
-            ...(providerStaleness && (providerStaleness.staleTypes.length + providerStaleness.newTypes.length) > 0
-                ? { count: providerStaleness.staleTypes.length + providerStaleness.newTypes.length }
-                : {}),
         },
         { id: 'overview', label: <span className="flex items-center gap-1.5"><IconBarChart size={14} /> {t('machine.detail.tabSystem')}</span> },
         { id: 'logs', label: <span className="flex items-center gap-1.5"><IconClipboard size={14} /> {t('machine.detail.tabLogs')}</span> },
@@ -636,20 +591,16 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                             }`}
                         >
                             {tab.label}
-                            {tab.count !== undefined && tab.id === 'providers' && providerStaleness ? (
+                            {tab.id === 'providers' && providerUpdatesAvailable ? (
+                                // Stale pins + never-installed channel types:
+                                // a hint only — the Update buttons are per
+                                // provider inside the tab.
                                 <span
-                                    role="button"
-                                    title={t('machine.detail.providerStaleBadgeHint')}
-                                    aria-label={t('machine.detail.providerStaleBadgeHint')}
-                                    onClick={handleProviderStaleBadgeClick}
-                                    className={`px-1.5 py-0.5 rounded-full text-3xs ml-1 cursor-pointer ${
-                                        providerSyncBusy
-                                            ? 'bg-amber-500/20 text-amber-300'
-                                            : 'bg-amber-500/15 text-amber-400 hover:bg-amber-500/30'
-                                    }`}
-                                >
-                                    {providerSyncBusy ? '…' : tab.count}
-                                </span>
+                                    title={t('machine.detail.providerUpdatesAvailable')}
+                                    aria-label={t('machine.detail.providerUpdatesAvailable')}
+                                    data-testid="providers-update-dot"
+                                    className="w-1.5 h-1.5 rounded-full bg-amber-400 ml-0.5 shrink-0"
+                                />
                             ) : tab.count !== undefined ? (
                                 <span className={`px-1.5 py-0.5 rounded-full text-3xs ml-1 ${
                                     activeTab === tab.id ? 'bg-accent-primary/20 text-accent-primary' : 'bg-bg-glass-hover text-text-muted'
@@ -706,7 +657,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 providers={providers}
                                 sendDaemonCommand={sendDaemonCommand}
                                 quota={machine.quota}
-                                refreshNonce={providerSyncNonce}
+                                onChannelStaleness={setProviderStaleness}
                             />
                         )}
 

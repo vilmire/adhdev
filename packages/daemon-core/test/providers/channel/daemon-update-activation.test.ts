@@ -295,4 +295,33 @@ describe('daemon-update activation + staleness probe', () => {
     expect(snap.error).toContain('registry down');
     expect(snap.staleTypes).toEqual(['alpha-cli']); // previous result preserved
   });
+
+  it('A6: onlyTargetTypes activates ONLY the named type and writes no activation stamp', async () => {
+    const bootstrap = newLoader('1.0.41');
+    await bootstrap.maybeFirstSyncVerifiedChannel();
+    expect(JSON.parse(readFileSync(stampPath(), 'utf-8')).daemonVersion).toBe('1.0.41');
+
+    // Both providers get a newer publish.
+    const alpha11: FixtureProviderSpec = { ...SPECS[0], version: '1.1.0' };
+    const beta11: FixtureProviderSpec = { ...SPECS[1], version: '1.1.0' };
+    buildRepoTree(repoRoot, [alpha11, beta11]);
+    metadata.rows = [alpha11, beta11].map((spec) => makeRegistryRow(spec, digestFor(repoRoot, spec.category, spec.dirname)));
+
+    // A NEW daemon version runs the restricted (per-provider) update.
+    const loader = newLoader('1.0.42');
+    const betaBefore = loader.listVerifiedChannelPins().get('beta-cli')?.active?.digest;
+    const report = await loader.syncVerifiedChannel({ onlyTargetTypes: ['alpha-cli'] });
+    expect(report.activated.map((a) => a.providerType)).toEqual(['alpha-cli']);
+    expect(loader.listVerifiedChannelPins().get('alpha-cli')?.active?.providerVersion).toBe('1.1.0');
+    // The other stale provider did NOT move — the union semantics of
+    // extraTargetTypes (A3/A4) are exactly what a per-row button must avoid.
+    expect(loader.listVerifiedChannelPins().get('beta-cli')?.active?.digest).toBe(betaBefore);
+    expect(loader.listVerifiedChannelPins().get('beta-cli')?.active?.providerVersion).toBe('1.0.0');
+
+    // Partial sync → no stamp: the daemon-update ride-along must still run
+    // for this version and pick up beta.
+    expect(JSON.parse(readFileSync(stampPath(), 'utf-8')).daemonVersion).toBe('1.0.41');
+    const rideAlong = await newLoader('1.0.42').maybeSyncVerifiedChannelOnDaemonUpdate();
+    expect(rideAlong?.activated.map((a) => a.providerType)).toContain('beta-cli');
+  });
 });

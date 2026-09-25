@@ -79,6 +79,11 @@ function supportsImageInput(messageInput: MessageInputSupport | undefined): bool
     return messageInput.mediaTypes.includes('image') && messageInput.multipart;
 }
 
+/** True when the text being composed is Korean (Hangul syllables or jamo). */
+function isHangulText(text: string): boolean {
+    return /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7A3]/.test(text);
+}
+
 const ChatInputBar = memo(function ChatInputBar({
     contextKey,
     panelLabel,
@@ -108,6 +113,18 @@ const ChatInputBar = memo(function ChatInputBar({
     // short window after it, in addition to the isComposing check.
     const compositionEndAtRef = useRef(0);
     const IME_SUBMIT_GUARD_MS = 50;
+    // Korean (Hangul) has no conversion step: an Enter pressed while the last
+    // syllable is still composing means "send", and macOS passes that Enter
+    // through to the textarea — so ignoring it without preventDefault inserted
+    // a newline and the user had to press Enter twice (owner report 2026-09-25).
+    // Japanese / Chinese IMEs use Enter to CONFIRM a conversion, so there a
+    // composing Enter must not send. We tell them apart by the text being
+    // composed, prevent the stray newline in both cases, and send the Hangul
+    // case once the composition has committed.
+    const lastCompositionTextRef = useRef('');
+    const pendingImeSubmitRef = useRef(false);
+    const pendingImeSubmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const IME_COMMIT_SETTLE_MS = 30;
     const { isVisible: areControlsVisible, toggleVisibility: toggleControlsVisibility } = useControlsBarVisibility();
 
     const canAttachImages = supportsImageInput(messageInput);
@@ -178,6 +195,23 @@ const ChatInputBar = memo(function ChatInputBar({
             submitLockRef.current = false;
         }
     }, [draftInput, attachments, isBusy, onSend]);
+    // The deferred Hangul submit runs after the composition commits and React
+    // re-renders with the committed text, so it must call the LATEST submitDraft.
+    const submitDraftRef = useRef(submitDraft);
+    submitDraftRef.current = submitDraft;
+    const flushPendingImeSubmit = useCallback(() => {
+        if (!pendingImeSubmitRef.current) return;
+        pendingImeSubmitRef.current = false;
+        if (pendingImeSubmitTimerRef.current) {
+            clearTimeout(pendingImeSubmitTimerRef.current);
+            pendingImeSubmitTimerRef.current = null;
+        }
+        // One tick so the committed text's input event has updated the draft.
+        setTimeout(() => { void submitDraftRef.current(); }, 0);
+    }, []);
+    useEffect(() => () => {
+        if (pendingImeSubmitTimerRef.current) clearTimeout(pendingImeSubmitTimerRef.current);
+    }, []);
 
     const handleDragOver = useCallback((e: React.DragEvent) => {
         if (!canAttachImages) return;
@@ -332,20 +366,36 @@ const ChatInputBar = memo(function ChatInputBar({
                                 el?.setSelectionRange(caret, caret);
                             });
                         }}
-                        onCompositionEnd={() => {
+                        onCompositionUpdate={e => {
+                            lastCompositionTextRef.current = e.data || '';
+                        }}
+                        onCompositionEnd={e => {
                             compositionEndAtRef.current = Date.now();
+                            if (e.data) lastCompositionTextRef.current = e.data;
+                            flushPendingImeSubmit();
                         }}
                         onKeyDown={e => {
                             if (e.key !== 'Enter') return;
-                            if (e.nativeEvent.isComposing) return;
+                            // Shift+Enter inserts a newline (textarea default).
+                            if (e.shiftKey) return;
                             // keyCode 229 = IME composing (legacy signal Safari still sets on
                             // the confirming keydown even though isComposing already flipped).
-                            if (e.keyCode === 229) return;
-                            if (Date.now() - compositionEndAtRef.current < IME_SUBMIT_GUARD_MS) return;
-                            // Shift+Enter inserts a newline (textarea default).
+                            const imeEnter = e.nativeEvent.isComposing
+                                || e.keyCode === 229
+                                || Date.now() - compositionEndAtRef.current < IME_SUBMIT_GUARD_MS;
+                            if (imeEnter) {
+                                // Never let an IME Enter leave a stray newline behind.
+                                e.preventDefault();
+                                if (isHangulText(lastCompositionTextRef.current) && !pendingImeSubmitRef.current) {
+                                    pendingImeSubmitRef.current = true;
+                                    // compositionend flushes it; this is the fallback for a
+                                    // browser that committed without firing it.
+                                    pendingImeSubmitTimerRef.current = setTimeout(flushPendingImeSubmit, IME_COMMIT_SETTLE_MS);
+                                }
+                                return;
+                            }
                             // Plain Enter submits. No "double-newline submits"
                             // heuristic — interior newlines are preserved verbatim.
-                            if (e.shiftKey) return;
                             e.preventDefault();
                             void submitDraft();
                         }}
