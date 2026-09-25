@@ -83,9 +83,11 @@ Direct supervision of agent sessions on one machine.
 
 The coordinator surface for [Repo Mesh](https://github.com/vilmire/adhdev/blob/main/docs/guides/REPO_MESH_GUIDE.md), where work is delegated across multiple machines and agents. Also exposes the coordinator system prompt as an MCP resource at `coordinator://system-prompt`.
 
-Broadly: mesh and node status (`mesh_status`, `mesh_list_nodes`, `mesh_route_preview`), task dispatch and queue management (`mesh_enqueue_task`, `mesh_enqueue_batch`, `mesh_send_task`, `mesh_view_queue`, `mesh_queue_cancel`), reading delegated sessions (`mesh_read_chat`, `mesh_read_terminal`, `mesh_read_node_logs`), approvals (`mesh_approve`, `mesh_answer_question`), node lifecycle (`mesh_clone_node`, `mesh_remove_node`), git convergence via the Refinery (`mesh_refine_node`, `mesh_fast_forward_node`), graph orchestration gates, missions, and the durable task ledger.
+Broadly: mesh and node status (`mesh_status`, `mesh_list_nodes`, `mesh_route_preview`), task dispatch and queue management (`mesh_enqueue_task`, `mesh_enqueue_batch`, `mesh_send_task`, `mesh_view_queue`, `mesh_queue_cancel`), reading delegated sessions (`mesh_read_chat`, `mesh_read_terminal`, `mesh_read_node_logs`), approvals (`mesh_approve`, `mesh_answer_question`), node lifecycle (`mesh_clone_node`, `mesh_remove_node`), git convergence via the Refinery (`mesh_refine_node`, `mesh_fast_forward_node`), graph orchestration gates (including `mesh_graph_node_patch`, which repairs and retries a node blocked on a materialization error), missions, and the durable task ledger.
 
 The mesh id also comes from `ADHDEV_MESH_ID`.
+
+When `ADHDEV_WORKER_MCP` is enabled on the target daemon (the default), the coordinator also gets a 61st tool, `mesh_notify_worker`, to drop an urgent memo into a busy delegated worker's mailbox — delivered on the worker's next MCP tool response rather than interrupting its turn.
 
 ### Worker (`--worker`) — 6 tools
 
