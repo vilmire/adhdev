@@ -56,6 +56,7 @@ A mesh is bound to one git repository and owns the moving parts you'd otherwise 
 | **Operating notes** | Lessons recorded at runtime (a provider quirk, a recovery procedure) are injected into every future coordinator prompt, so knowledge outlives the session that learned it. |
 | **Live-state prompt** | The coordinator's system prompt isn't static text — at launch it's a render of live mesh state (node health, active mission, recent failures, accumulated notes), and at runtime events are injected into its session instead of it polling. |
 | **Difficulty routing** | Map easy work to cheap models and hard work to expensive ones with deep thinking, per node capability — the token bill scales with difficulty, not with task count. |
+| **Graph orchestration** | Plan it as a graph, not a to-do list: submit a whole dependency graph at once — outputs flow between steps, `run_if` conditions decide branches, coordinator gates hold a stage until explicitly released. One atomic submission instead of the coordinator wiring up each `mesh_enqueue_task` call by hand. |
 
 <p align="center">
   <img src="docs/assets/readme/landing-mesh-observability.jpg" alt="ADHDev mesh observability board showing the ledger, task queue, active sessions, nodes, and refine jobs for a repo" width="100%" />
@@ -215,7 +216,6 @@ ADHDev talks to coding agents through four provider categories — `ide` (CDP), 
 | Hermes Agent | `cli/hermes-cli` |
 | Kimi Code | `cli/kimi` |
 | Opencode | `cli/opencode` |
-| Grok CLI | `cli/grok-cli` |
 
 **IDEs** (via Chrome DevTools Protocol): Cursor, Google Antigravity, VS Code, VSCodium, Kiro, Windsurf, Trae, PearAI.
 
