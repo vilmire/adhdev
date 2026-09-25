@@ -166,6 +166,9 @@ export function sweepMeshGraphStaleness(meshId: string, opts?: SweepOptions): Me
     // graph row) still deserve their own reminder; gates on stale graphs are
     // already named inside the graph reminder above — do not page them twice.
     for (const gate of graphStore.listGatesByMesh(meshId, STALE_GATE_STATES)) {
+        // A cancel_downstream / fail_graph expiry already applied its policy —
+        // nothing waits on it, so it is not a reminder candidate (only `hold` is).
+        if (gate.state === 'expired' && gate.onTimeout !== 'hold') continue;
         const updatedAtMs = parseIsoMs(gate.updatedAt) ?? parseIsoMs(gate.createdAt);
         if (updatedAtMs === null || nowMs - updatedAtMs < staleThresholdMs) continue;
         result.staleGates += 1;

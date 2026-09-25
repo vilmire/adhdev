@@ -108,6 +108,29 @@ export type { MachineProviderCheckResult, MachineProviderConfig, ProviderChannel
  */
 const CHANNEL_ACTIVATION_RECHECK_MS = 5_000;
 
+/** Shell interpreters a manifest may use as a launch wrapper around the real CLI. */
+const SHELL_WRAPPER_COMMANDS = new Set(['bash', 'sh', 'zsh', 'dash', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe']);
+
+/**
+ * The command install detection and model discovery should resolve for a CLI
+ * provider: the manifest's `binary` when `spawn.command` is only a shell wrapper
+ * around it, otherwise undefined (detect the spawn command as before). A
+ * machine-level executable override always wins upstream of this.
+ */
+/** True when `path` (a command or absolute path) names a shell interpreter. */
+export function isShellWrapperCommand(path: string | null | undefined): boolean {
+  if (!path) return false;
+  const base = path.trim().split(/[\\/]/).pop()?.toLowerCase() ?? '';
+  return SHELL_WRAPPER_COMMANDS.has(base);
+}
+
+export function resolveWrappedCliBinary(spawnCommand: string | undefined, binary: unknown): string | undefined {
+  if (typeof binary !== 'string' || !binary.trim() || !spawnCommand) return undefined;
+  if (!isShellWrapperCommand(spawnCommand)) return undefined;
+  if (binary.trim() === spawnCommand.trim()) return undefined;
+  return binary.trim();
+}
+
 export class ProviderLoader {
   private providers = new Map<string, ProviderModule>();
   private providerAvailability = new Map<string, ProviderAvailabilityState>();
@@ -1296,12 +1319,17 @@ export class ProviderLoader {
         const versionCommand = this.getPlatformVersionCommand(p.versionCommand);
         const command = this.getSpawnCommand(p.type, p.spawn.command);
         const args = this.getSpawnArgs(p.type, p.spawn.args || []);
+        // Only when no machine executable override is set (then `command` IS the override).
+        const wrappedBinary = command === p.spawn.command
+          ? resolveWrappedCliBinary(p.spawn.command, (p as { binary?: unknown }).binary)
+          : undefined;
         result.push({
           id: p.type,
           displayName: p.displayName || p.name,
           icon: p.icon || '🔧',
           command,
           ...(args.length > 0 ? { args } : {}),
+          ...(wrappedBinary ? { detectCommand: wrappedBinary } : {}),
           category: p.category,
           enabled,
           ...(typeof versionCommand === 'string' && versionCommand.trim()

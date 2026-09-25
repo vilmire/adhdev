@@ -207,6 +207,12 @@ export interface BlueprintTaskRow {
     waitingOn: string[]
     /** `waitingOn`, named — the row's "waiting on: <short id · title>" line. */
     waitingOnRefs: BlueprintDepRef[]
+    /**
+     * A dependency in `waitingOnRefs` ended failed/cancelled: under the default
+     * `block` policy this task will NOT start on its own — the line reads
+     * "blocked by failed/cancelled dependency", not plain waiting.
+     */
+    blockedByDeadDependency: boolean
     /** Referenced deps absent from the snapshot (warning badge). */
     missingDeps: string[]
     /** System hold text, when the daemon stamped one. */
@@ -369,6 +375,10 @@ export function buildBlueprintGroups(
             statusToken: activity?.generating ? 'generating' : task.status,
             waitingOn: node.waitingOn,
             waitingOnRefs: node.waitingOn.map(id => describeDepRef(id, taskById.get(id))),
+            blockedByDeadDependency: node.waitingOn.some(id => {
+                const dep = taskById.get(id)
+                return dep?.status === 'failed' || dep?.status === 'cancelled'
+            }),
             missingDeps: node.missingDeps,
             ...(blockedReason ? { blockedReason } : {}),
             dependencyFailureCount: task.dependencyFailures?.length ?? 0,

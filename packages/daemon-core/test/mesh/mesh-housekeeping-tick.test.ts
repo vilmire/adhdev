@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
     reap: vi.fn(async () => {}),
     gates: vi.fn(() => ({ expiredGateIds: [] as string[] })),
     staleness: vi.fn(),
+    stalls: vi.fn(),
     saga: vi.fn(async () => {}),
     trigger: vi.fn(async () => ({})),
     pendingCount: vi.fn(() => 0),
@@ -31,6 +32,7 @@ vi.mock('../../src/mesh/mesh-idle-session-reaper.js', () => ({ runIdleSessionRea
 vi.mock('../../src/mesh/mesh-retention-config.js', () => ({ resolveWorktreeNodeRetentionGraceMs: () => 0 }));
 vi.mock('../../src/mesh/mesh-graph-gates.js', () => ({ sweepMeshGraphGateTimeouts: mocks.gates }));
 vi.mock('../../src/mesh/mesh-graph-staleness.js', () => ({ sweepMeshGraphStaleness: mocks.staleness }));
+vi.mock('../../src/mesh/mesh-graph-stall.js', () => ({ sweepMeshGraphStalls: mocks.stalls }));
 vi.mock('../../src/mesh/mesh-graph-workspace-saga.js', () => ({ recoverExpiredWorkspaceSagas: mocks.saga }));
 vi.mock('../../src/mesh/mesh-graph-workspace-ports.js', () => ({ createDefaultWorkspaceSagaPorts: () => ({}) }));
 vi.mock('../../src/mesh/mesh-graph-provenance.js', () => ({ recordGraphGateExpired: vi.fn() }));
@@ -80,6 +82,9 @@ describe('mesh housekeeping tick', () => {
         expect((mocks.catchup.mock.calls[0] as any[])[1]).toMatchObject({ id: 'mesh-hosted' });
         expect(mocks.gates).toHaveBeenCalledWith('mesh-hosted');
         expect(mocks.staleness).toHaveBeenCalledWith('mesh-hosted');
+        // N(c): the stall sweep (graph active but nothing can move) runs on the same tick.
+        expect(mocks.stalls).toHaveBeenCalledWith('mesh-hosted');
+        expect(mocks.stalls).not.toHaveBeenCalledWith('mesh-foreign');
         expect(mocks.saga).toHaveBeenCalledWith('mesh-hosted', expect.anything());
         expect(mocks.gates).not.toHaveBeenCalledWith('mesh-foreign');
     });

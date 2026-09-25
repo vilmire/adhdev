@@ -342,27 +342,8 @@ describe('D3(a) — gate auto-close runs at the terminal choke point for every w
         // Idempotent: the next sweep closes nothing.
         expect(sweepMeshGraphGateTimeouts(mesh).autoClosedGateIds).toEqual([]);
     });
-
-    it('F2 is NOT covered: a never-opened gate whose upstream failed under `cancel` stays declared (its task is reached only via the gate edge)', () => {
-        // Documents the boundary of the downstream-all-terminal rule: the
-        // cancel cascade never walks a gate edge, so a task gated ONLY behind a
-        // gate whose upstream failed is not cancelled, and the gate guards a
-        // live task. A separate "upstream dead" rule would be needed.
-        const mesh = meshId('f2');
-        currentMesh = mesh;
-        const r = commitMeshGraphPlan({
-            meshId: mesh,
-            onDependencyFailure: 'cancel',
-            tasks: [
-                { ref: 'x', message: 'do x', taskMode: 'code_change', difficulty: 'medium' } as any,
-                { ref: 'd', message: 'do d', taskMode: 'code_change', difficulty: 'medium', gated_by: ['g1'] } as any,
-            ],
-            gates: [{ ref: 'g1', action: 'approval', depends_on: ['x'] }],
-        });
-        __writeTaskStatusForTests(mesh, r.tasks[0].id, 'failed');
-        expect(gs().getGate(r.gates[0].gateId)!.state).toBe('declared');
-        expect(gs().getNode(r.graphId, r.nodeIdByIndex[1])!.state).not.toBe('cancelled');
-    });
+    // F2 (a never-opened gate whose upstream failed under `cancel`) is covered in
+    // mesh-graph-stop-notices.test.ts since wave 25.
 });
 
 // ── D3(b) ─────────────────────────────────────────────────────────────────────

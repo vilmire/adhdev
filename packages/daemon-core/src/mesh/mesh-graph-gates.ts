@@ -60,6 +60,7 @@ import {
     abandonGateInTxn,
     autoAbandonGatesWithTerminalDownstreamInTxn,
     cancelGateDownstreamSubtree,
+    markGraphTerminalInTxn,
     insertGateOutbox,
     type MeshGraphGateAbandonInput,
     type MeshGraphGateAbandonResult,
@@ -474,7 +475,7 @@ export function releaseMeshGraphGate(input: MeshGraphGateReleaseInput): MeshGrap
         const graph = graphStore.getGraph(gate.graphId);
         let graphCompleted = false;
         if (graph && freshNodes.every(isTerminalEquivalent)) {
-            graphStore.updateGraphStatus(gate.graphId, 'completed', nowIso, true);
+            markGraphTerminalInTxn(store, gate.graphId, 'completed', nowIso);
             insertGateOutbox(graphStore, gate.meshId, gate.graphId, 'graph_completed', { graphId: gate.graphId }, nowIso);
             graphCompleted = true;
         } else if (graph?.status === 'waiting_gate') {
@@ -814,7 +815,9 @@ export function sweepMeshGraphGateTimeouts(meshId: string, nowMs?: number): Mesh
                 // with a non-hold policy, which the auto-close skips.)
                 if (cancelledNodeIds.length > 0) autoAbandonGatesWithTerminalDownstreamInTxn(store, gate.graphId, nowIso);
             } else if (gate.onTimeout === 'fail_graph') {
-                graphStore.updateGraphStatus(gate.graphId, 'failed', nowIso, true);
+                // Graph terminal ⇒ every other open gate in it closes too
+                // (reason graph_terminal); this expiry's own notice is the page.
+                markGraphTerminalInTxn(store, gate.graphId, 'failed', nowIso);
             }
             // `hold` deliberately does nothing else: downstream blocks are
             // RETAINED and an operator/later coordinator may reclaim (design :433-434).

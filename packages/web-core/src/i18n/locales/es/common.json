@@ -1076,6 +1076,7 @@
                 "blockedByGate": "bloqueado por: {{ref}}, {{age}}",
                 "waitingOn": "esperando a:",
                 "waitingOnMore": "+{{count}} más",
+                "blockedByDeadDependency": "bloqueada por una dependencia fallida/cancelada:",
                 "chainGroup": "Cadena: {{title}}"
             }
         },

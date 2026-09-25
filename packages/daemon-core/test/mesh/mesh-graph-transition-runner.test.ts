@@ -961,7 +961,11 @@ describe('structural pins — the choke point cannot be silently bypassed', () =
         // `entry.status = 'cancelled'` inline, which left the backing graph node
         // unsettled and the graph permanently `active` (so a cancelled branch's
         // workspace could never be collected). See mesh-cancel-graph-rollup.test.ts.
-        expect(delegations.length).toBe(3);
+        // F1 (wave 25) added the fourth: commitQueueTerminalThroughRunner, the ONE
+        // helper every queue-side policy terminal (retry cap, dispatch-failure cap,
+        // undeliverable, park retention, dependency cascade) now goes through.
+        expect(delegations.length).toBe(4);
+        expect(src).toMatch(/function commitQueueTerminalThroughRunner\(/);
     });
 
     it('no mesh source file flips a queue row to a literal terminal status outside the runner', () => {
@@ -975,11 +979,11 @@ describe('structural pins — the choke point cannot be silently bypassed', () =
             if (queueStatusAssign.test(read(file))) offenders.push(file);
         }
         // Permitted writers:
-        //   - mesh-work-queue.ts: the documented legacy failure/cancel writers
-        //     (dependency cascade, requeue-cap auto-fail, zombie sweep — NON-GOALS
-        //     with no completion envelope). NOTE: cancelTask is no longer among them;
-        //     it delegates to the choke point (CANCEL-GRAPH-ROLLUP), and the pin in
-        //     mesh-cancel-graph-rollup.test.ts keeps its inline write from regrowing.
+        //   - mesh-work-queue.ts is NO LONGER one (F1, wave 25): its former legacy
+        //     writers (dependency cascade, requeue-cap / dispatch-failure auto-fail,
+        //     park-retention fail) flipped only the row and left the graph node
+        //     live and the graph `active` forever. They now go through
+        //     commitQueueTerminalThroughRunner; an inline write regrowing there fails here.
         //   - mesh-graph-transition-runner.ts: phase C1's run_if SKIP path, which
         //     cancels a still-PENDING placeholder for a node whose condition was
         //     false (design :356-359). It is inside the choke point by definition.
@@ -988,7 +992,7 @@ describe('structural pins — the choke point cannot be silently bypassed', () =
         //     which cancels the still-PENDING placeholders of an expired gate's
         //     downstream subtree (design :431-432). A timeout can never write
         //     'completed' — it is never completion evidence.
-        expect(offenders.sort()).toEqual(['mesh-graph-gate-closure.ts', 'mesh-graph-transition-runner.ts', 'mesh-work-queue.ts']);
+        expect(offenders.sort()).toEqual(['mesh-graph-gate-closure.ts', 'mesh-graph-transition-runner.ts']);
         // ...and in none of them may a literal 'completed' write ever appear: every
         // genuine completion routes through the choke point's typed parameter.
         const completedWrite = /\b(entry|dependent|queueEntry|task)\.status\s*=\s*'completed'/;
@@ -1044,6 +1048,8 @@ describe('structural pins — the choke point cannot be silently bypassed', () =
 
     it('the queue wake handler is registered from event forwarding, never from dispatch code', () => {
         expect(read('mesh-event-forwarding.ts')).toContain('registerMeshGraphQueueWakeHandler(');
+        // N(a)/N(b): stopped-downstream notices page through the same seam.
+        expect(read('mesh-event-forwarding.ts')).toMatch(/registerMeshGraphStopNotifyHandler\([\s\S]*?renderGraphStopNotice\([\s\S]*?notifyMeshCoordinator\(/);
         // The runner must not import the dispatcher (design :92-96 — the graph engine
         // finishes by committing queue state and scheduling the ordinary trigger).
         const runnerImports = read('mesh-graph-transition-runner.ts')

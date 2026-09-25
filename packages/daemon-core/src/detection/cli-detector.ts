@@ -21,6 +21,8 @@ export interface CLIInfo {
     displayName: string;
     icon: string;
     command: string;
+    /** See CliDetectionEntry.detectCommand — the real CLI behind a shell-wrapper spawn. */
+    detectCommand?: string;
     versionCommand?: string;
     installed: boolean;
     version?: string;
@@ -159,7 +161,7 @@ export async function detectCLIs(
         cliList.map((cli, index) => ({ cli, index })),
         async ({ cli, index }) => {
             try {
-                const firstPath = await resolveDetectionPath(cli.command, whichCmd);
+                const firstPath = await resolveDetectionPath(cli.detectCommand || cli.command, whichCmd);
                 if (!firstPath) {
                     results[index] = { ...cli, installed: false };
                     return;
@@ -204,7 +206,7 @@ export async function detectCLI(
             const platform = os.platform();
             const whichCmd = platform === 'win32' ? 'where' : 'which';
             try {
-                const firstPath = await resolveDetectionPath(target.command, whichCmd);
+                const firstPath = await resolveDetectionPath(target.detectCommand || target.command, whichCmd);
                 if (!firstPath) return null;
                 let version: string | undefined;
                 if (options?.includeVersion !== false) {

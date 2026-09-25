@@ -226,14 +226,19 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
             {row.waitingOnRefs.length > 0 && (() => {
                 const shown = row.waitingOnRefs.slice(0, WAITING_ON_SHOWN)
                 const extra = row.waitingOnRefs.length - shown.length
-                const tone = meshTheme.isDark ? 'text-amber-300/90' : 'text-amber-700'
+                // A failed/cancelled dependency is not "waiting" — the task will
+                // not start on its own (block policy), so say so, in red.
+                const dead = row.blockedByDeadDependency
+                const tone = dead
+                    ? (meshTheme.isDark ? 'text-red-300/90' : 'text-red-700')
+                    : (meshTheme.isDark ? 'text-amber-300/90' : 'text-amber-700')
                 return (
                     <div
                         data-testid="blueprint-waiting-on"
                         className={`truncate pl-4 text-4xs ${tone}`}
                         title={row.waitingOnRefs.map(ref => `${ref.id}${ref.status ? ` [${ref.status}]` : ''}${ref.title ? ` — ${ref.title}` : ''}`).join('\n')}
                     >
-                        {t('mesh.blueprint.list.waitingOn')}{' '}
+                        {t(dead ? 'mesh.blueprint.list.blockedByDeadDependency' : 'mesh.blueprint.list.waitingOn')}{' '}
                         {shown.map((ref, index) => {
                             const label = ref.title ? `${ref.shortId} · ${ref.title}` : ref.shortId
                             return (

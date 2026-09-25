@@ -14,6 +14,8 @@ import { isTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inf
 // updateTaskStatus / updateSessionTaskStatus delegate every terminal flip to it.
 import {
     commitTaskTerminalAndAdvanceGraph,
+    drainMeshGraphOutbox,
+    type MeshTerminalCommitSource,
     type MeshTerminalCommitStatus,
     type MeshTerminalCompletionEnvelope,
 } from './mesh-graph-transition-runner.js';
@@ -473,6 +475,7 @@ export {
 // with the rest of the direct-dispatch surface at the bottom of this file.
 import { terminalizeSiblingDispatch } from './mesh-direct-dispatch.js';
 export { terminalizeSiblingDispatch };
+import { insertQueueDependencyNoticeInTxn } from './mesh-queue-dependency-notice.js';
 
 function withQueueLock<T>(_meshId: string, fn: () => T): T {
     return MeshRuntimeStore.getInstance().transaction(fn);
@@ -1080,10 +1083,15 @@ function resolveDependencyFailurePolicy(meshId: string): DependencyFailurePolicy
  * a *different* mission all-terminal. Under the 'block' policy nothing is mutated
  * (and nothing goes terminal), so the returned list is empty.
  */
-function propagateDependencyFailure(meshId: string, failedTaskId: string): MeshWorkQueueEntry[] {
+function propagateDependencyFailure(meshId: string, failedTaskId: string, machineReason?: string): MeshWorkQueueEntry[] {
     const policy = resolveDependencyFailurePolicy(meshId);
-    // C3 (design :522-529): `block` is derived. Do not mutate dependents.
-    if (policy !== 'cancel') return [];
+    // C3 (design :522-529): `block` is derived. Do not mutate dependents — but
+    // TELL the coordinator (queue chains have no graph notice): which task
+    // ended, which tasks now wait on it, what to do. Once per root terminal.
+    if (policy !== 'cancel') {
+        tellCoordinatorQueueDependency(meshId, failedTaskId, 'block', [], machineReason);
+        return [];
+    }
     const store = MeshRuntimeStore.getInstance();
     const cancelled: MeshWorkQueueEntry[] = [];
     const frontier = [failedTaskId];
@@ -1095,15 +1103,66 @@ function propagateDependencyFailure(meshId: string, failedTaskId: string): MeshW
         for (const dependent of dependents) {
             if (seen.has(dependent.id)) continue;
             seen.add(dependent.id);
-            dependent.status = 'cancelled';
             dependent.cancelledAt = new Date().toISOString();
             dependent.cancelReason = `dependency_failed:${currentId}`;
             store.updateQueueEntry(dependent);
-            cancelled.push(dependent);
+            // F1: through the runner, so a graph-backed dependent's node goes
+            // terminal with its row (it used to stay `blocked` under a cancelled row).
+            const committed = commitQueueTerminalThroughRunner(meshId, dependent.id, 'cancelled', 'cancellation', dependent.cancelReason);
+            cancelled.push(committed ?? dependent);
             frontier.push(dependent.id); // cascade to transitive dependents
         }
     }
+    tellCoordinatorQueueDependency(meshId, failedTaskId, 'cancel', cancelled, machineReason);
     return cancelled;
+}
+
+/**
+ * Queue-chain stopped-work notice (mesh-queue-dependency-notice.ts): the row
+ * joins this queue transaction, then the graph outbox is drained so it pages
+ * now rather than on the next graph event. Best-effort — a notice failure must
+ * never undo the terminal it describes.
+ */
+function tellCoordinatorQueueDependency(
+    meshId: string,
+    rootId: string,
+    policy: 'block' | 'cancel',
+    cancelled: MeshWorkQueueEntry[],
+    machineReason?: string,
+): void {
+    try {
+        if (insertQueueDependencyNoticeInTxn(meshId, rootId, policy, cancelled, machineReason)) {
+            drainMeshGraphOutbox(meshId);
+        }
+    } catch (e: any) {
+        LOG.warn('MeshQueue', `Queue dependency notice for ${rootId} failed (mesh ${meshId}): ${e?.message || e}`);
+    }
+}
+
+/**
+ * F1 — the ONE way a queue-side writer puts a row terminal: through the graph
+ * runner's terminal transition (commitTaskTerminalAndAdvanceGraph), exactly like
+ * the ledger path. The row flip, the graph node transition, the failure policy
+ * (graph cancel cascade + dead-upstream gate closure), the runner-end gate
+ * auto-close and the stopped-downstream notice all commit together — before
+ * this, retry-cap / dispatch-failure / park-retention failures and the queue
+ * dependency cascade flipped only the row, leaving the graph node live and the
+ * graph `active` forever.
+ *
+ * MUST run inside the caller's queue lock (the runner nests as a savepoint). The
+ * caller persists its own bookkeeping (cancelReason, counters) BEFORE calling:
+ * the runner re-reads the row. `reason` should lead with a machine code — it is
+ * the node's failureReason and the notice's reason code.
+ */
+function commitQueueTerminalThroughRunner(
+    meshId: string,
+    taskId: string,
+    status: 'failed' | 'cancelled',
+    source: MeshTerminalCommitSource,
+    reason: string,
+): MeshWorkQueueEntry | null {
+    const commit = commitTaskTerminalAndAdvanceGraph({ meshId, taskId, status, source, reason });
+    return commit.entry ?? MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
 }
 
 const DEPENDENCY_FAILURE_TERMINALS = new Set<MeshTaskStatus>(['failed', 'cancelled']);
@@ -1241,7 +1300,7 @@ function writeTaskStatusUnchecked(
                 reason: `task_status_terminal:${status}`,
                 envelope: opts?.envelope,
             });
-            const cascaded = DEPENDENCY_FAILURE_TERMINALS.has(status) ? propagateDependencyFailure(meshId, taskId) : [];
+            const cascaded = DEPENDENCY_FAILURE_TERMINALS.has(status) ? propagateDependencyFailure(meshId, taskId, `task_status_terminal:${status}`) : [];
             return { entry: commit.entry ?? entry, cascaded };
         }
         entry.status = status;
@@ -1536,13 +1595,13 @@ export function requeueTask(
         if (opts?.dispatchFailure && !opts?.force) {
             const dispatchFailures = (entry.dispatchFailureCount || 0) + 1;
             if (dispatchFailures > MAX_DISPATCH_FAILURES) {
-                entry.status = 'failed';
                 entry.cancelReason = `dispatch_never_started: ${dispatchFailures - 1} consecutive dispatch failure(s) before the worker started the task, limit is ${MAX_DISPATCH_FAILURES}`;
                 entry.dispatchFailureCount = dispatchFailures;
                 entry.updatedAt = new Date().toISOString();
                 MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+                const failed = commitQueueTerminalThroughRunner(meshId, taskId, 'failed', 'queue_policy', entry.cancelReason);
                 const cascaded = propagateDependencyFailure(meshId, taskId);
-                return { entry, cascaded, missionAffected: true };
+                return { entry: failed ?? entry, cascaded, missionAffected: true };
             }
             entry.status = 'pending';
             delete entry.blockedReason;
@@ -1583,13 +1642,14 @@ export function requeueTask(
         const maxRetries = opts?.maxRetries ?? entry.maxRetries ?? 1;
         if (!opts?.force && currentCount >= maxRetries) {
             // Auto-fail: cap exceeded without explicit force override.
-            entry.status = 'failed';
+            // (failTaskAsUndeliverable reaches this with maxRetries:0.)
             entry.cancelReason = `max_retries_exceeded: requeued ${currentCount} time(s), limit is ${maxRetries}`;
             entry.updatedAt = new Date().toISOString();
             MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+            const failed = commitQueueTerminalThroughRunner(meshId, taskId, 'failed', 'queue_policy', entry.cancelReason);
             const cascaded = propagateDependencyFailure(meshId, taskId);
             // Terminal (failed) → mission may now be all-terminal.
-            return { entry, cascaded, missionAffected: true };
+            return { entry: failed ?? entry, cascaded, missionAffected: true };
         }
         entry.status = 'pending';
         // Operator requeue clears a dependency-failure block — the operator is
@@ -1713,14 +1773,14 @@ export function failRetentionExpiredParkedTask(
         if (entry.status !== 'pending' || !taskIsParked(entry)) return null;
         if (!parkedTaskRetentionExpired(entry, Date.now(), opts?.retentionMs)) return null;
         const hours = Math.round((opts?.retentionMs ?? PARKED_TASK_RETENTION_MS) / 3_600_000);
-        entry.status = 'failed';
         entry.cancelReason = `${PARK_RETENTION_EXPIRED_REASON}: parked for over ${hours}h `
             + `(addressed to session ${entry.parked?.targetSessionId || 'unknown'}) with no coordinator decision`;
         entry.updatedAt = new Date().toISOString();
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+        const failed = commitQueueTerminalThroughRunner(meshId, taskId, 'failed', 'queue_policy', entry.cancelReason);
         const cascaded = propagateDependencyFailure(meshId, taskId);
         LOG.warn('MeshQueue', `PIN-PARKING retention: task ${taskId} (mesh ${meshId}) stayed parked past ${hours}h with no coordinator decision; failed it (dependents unblocked). This is reported to the coordinator, never a silent drop.`);
-        return { entry, cascaded, missionAffected: true };
+        return { entry: failed ?? entry, cascaded, missionAffected: true };
     });
     if (result?.missionAffected) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
     return result ? result.entry : null;
@@ -1895,8 +1955,8 @@ export function isTerminalQueueStatus(status: MeshTaskStatus): boolean {
 }
 
 /** Dependency cascade for a ledger-committed failed/cancelled task (same policy as updateTaskStatus). */
-export function propagateLedgerDependencyFailure(meshId: string, taskId: string, status: MeshTaskStatus): MeshWorkQueueEntry[] {
-    return DEPENDENCY_FAILURE_TERMINALS.has(status) ? withQueueLock(meshId, () => propagateDependencyFailure(meshId, taskId)) : [];
+export function propagateLedgerDependencyFailure(meshId: string, taskId: string, status: MeshTaskStatus, reason?: string): MeshWorkQueueEntry[] {
+    return DEPENDENCY_FAILURE_TERMINALS.has(status) ? withQueueLock(meshId, () => propagateDependencyFailure(meshId, taskId, reason)) : [];
 }
 
 /**

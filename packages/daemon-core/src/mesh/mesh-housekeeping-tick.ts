@@ -36,6 +36,7 @@ import { recoverExpiredWorkspaceSagas } from './mesh-graph-workspace-saga.js';
 import { createDefaultWorkspaceSagaPorts } from './mesh-graph-workspace-ports.js';
 import { sweepMeshGraphGateTimeouts } from './mesh-graph-gates.js';
 import { sweepMeshGraphStaleness } from './mesh-graph-staleness.js';
+import { sweepMeshGraphStalls } from './mesh-graph-stall.js';
 import { recordGraphGateExpired } from './mesh-graph-provenance.js';
 
 /** Disk/worktree retention: artifacts age in days and the fs/git walk is heavy — hourly. */
@@ -154,6 +155,12 @@ export async function runMeshHousekeepingTick(
                 sweepMeshGraphStaleness(mesh.id);
             } catch (e: any) {
                 LOG.warn('MeshHousekeeping', `Graph staleness sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
+            }
+            // N(c): an `active` graph where nothing can move pages once per stuck state.
+            try {
+                sweepMeshGraphStalls(mesh.id);
+            } catch (e: any) {
+                LOG.warn('MeshHousekeeping', `Graph stall sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
             }
         }
 

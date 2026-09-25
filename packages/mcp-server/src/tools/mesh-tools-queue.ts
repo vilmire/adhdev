@@ -781,7 +781,12 @@ export async function meshEnqueueBatch(
     // its own (design :984-986). See the note on buildGraphPlanShape.
     const batchIdArg = readString(args.batch_id) || readString(args.batchId) || undefined;
     const plan = buildGraphPlanShape(specs, rawGraphEntries, args.gates, args.workspaces, !!batchIdArg);
-    const useGraphPath = plan.useGraphPath;
+    // The static (compat) path has no place to carry a batch failure policy, so a
+    // plain depends_on batch with on_dependency_failure=cancel used to drop the
+    // policy while the response still echoed it (found 2026-09-25). `cancel` needs
+    // the graph runner's cascade, so it selects the graph path; `block` is the
+    // queue default and stays on the static path.
+    const useGraphPath = plan.useGraphPath || onDependencyFailure === 'cancel';
     // design :697-731 — the enqueue-decision record. Recorded for BOTH paths so
     // batch adoption is countable without transcript scraping.
     const decision = normalizeOrchestrationDecision(

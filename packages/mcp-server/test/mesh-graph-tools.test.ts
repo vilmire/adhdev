@@ -441,6 +441,35 @@ test('E-2: on_dependency_failure is PERSISTED on the graph row (C3 left this to 
     assert.equal(bad.code, 'invalid_on_dependency_failure');
 });
 
+test('2026-09-25: a plain depends_on batch with on_dependency_failure=cancel keeps the policy (graph path), block stays static', async () => {
+    // Found live: the static path has nowhere to carry the policy, so `cancel` was
+    // dropped while the response still echoed it — a failure then left dependents
+    // pending instead of cancelling them.
+    const meshId = nextMeshId();
+    const ctx = makeCtx(meshId, recordingLocalTransport());
+    const res = JSON.parse(await meshEnqueueBatch(ctx, {
+        tasks: [
+            { ref: 'root', message: 'root work', difficulty: 'easy' },
+            { ref: 'child', message: 'child work', depends_on: ['root'], difficulty: 'easy' },
+        ],
+        on_dependency_failure: 'cancel',
+    } as any));
+    assert.equal(res.success, true);
+    assert.ok(res.graphId, 'cancel policy must take the graph path so the policy is persisted');
+    const view = JSON.parse(await meshGraphView(ctx, { graph_id: res.graphId }));
+    assert.equal(view.graphs[0].onDependencyFailure, 'cancel');
+
+    const blockRes = JSON.parse(await meshEnqueueBatch(ctx, {
+        tasks: [
+            { ref: 'root', message: 'root work 2', difficulty: 'easy' },
+            { ref: 'child', message: 'child work 2', depends_on: ['root'], difficulty: 'easy' },
+        ],
+        on_dependency_failure: 'block',
+    } as any));
+    assert.equal(blockRes.success, true);
+    assert.equal(blockRes.graphId, undefined, 'block is the queue default and stays on the static path');
+});
+
 test('E-2: advanced tasks are held, static siblings are not', async () => {
     const meshId = nextMeshId();
     const ctx = makeCtx(meshId, recordingLocalTransport());

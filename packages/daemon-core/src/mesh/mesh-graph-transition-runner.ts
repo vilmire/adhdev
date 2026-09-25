@@ -105,7 +105,21 @@ import {
     classifyGraphRollup,
     projectGraphPublicPolicy,
 } from './mesh-graph-derived-failure.js';
-import { autoAbandonGatesWithTerminalDownstreamInTxn } from './mesh-graph-gate-closure.js';
+import {
+    abandonGatesWithDeadUpstreamInTxn,
+    autoAbandonGatesWithTerminalDownstreamInTxn,
+    markGraphTerminalInTxn,
+    MESH_GATE_AUTO_ABANDON_REASON,
+    MESH_GATE_UPSTREAM_FAILED_REASON,
+} from './mesh-graph-gate-closure.js';
+import {
+    GRAPH_STOP_OUTBOX_KINDS,
+    parseGraphStopOutbox,
+    reasonCodeOf,
+    type MeshGraphStopNodeRef,
+    type MeshGraphStopNotice,
+    type MeshGraphStopRoot,
+} from './mesh-graph-stop-notice.js';
 
 // ── Public contract ──────────────────────────────────────────────────────────
 
@@ -133,7 +147,13 @@ export type MeshTerminalCommitSource =
     | 'cancellation'
     | 'reassignment'
     /** WORKER-MCP report_completion — fenced on the turn ledger by worker-report.ts before it lands here. */
-    | 'worker_tool_report';
+    | 'worker_tool_report'
+    /**
+     * F1: a queue-side policy terminal (retry cap / dispatch-failure cap /
+     * undeliverable / park-retention expiry) — formerly an inline row flip that
+     * left the graph node behind.
+     */
+    | 'queue_policy';
 
 export interface MeshTerminalCommitInput {
     meshId: string;
@@ -262,9 +282,19 @@ export function registerMeshGraphGateNotifyHandler(handler: (notification: MeshG
     gateNotifyHandler = handler;
 }
 
+// Stopped-downstream notices (graph_dependency_blocked / graph_dependency_cancelled,
+// mesh-graph-stop-notice.ts). Same seam as the gate pages: the outbox row is
+// written in the terminal transaction and paged once on drain.
+let stopNotifyHandler: ((notice: MeshGraphStopNotice) => void) | undefined;
+
+export function registerMeshGraphStopNotifyHandler(handler: (notice: MeshGraphStopNotice) => void): void {
+    stopNotifyHandler = handler;
+}
+
 export function __resetMeshGraphTransitionRunnerForTests(): void {
     queueWakeHandler = undefined;
     gateNotifyHandler = undefined;
+    stopNotifyHandler = undefined;
 }
 
 /**
@@ -337,6 +367,11 @@ export function drainMeshGraphOutbox(meshId: string): number {
                 // No handler / unparsable payload: mark delivered anyway — the gate
                 // remains visible in mesh_graph_view (nextCoordinatorAction) and the
                 // reconcile deadline sweep still governs its timeout policy.
+            } else if ((GRAPH_STOP_OUTBOX_KINDS as readonly string[]).includes(event.kind)) {
+                const notice = parseGraphStopOutbox(event.kind, event.meshId, event.payload);
+                if (notice && stopNotifyHandler) stopNotifyHandler(notice);
+                // No handler / malformed: delivered anyway — the durable row stays
+                // readable, and the stall sweep still pages a graph that cannot move.
             }
             graphStore.markOutboxEventStatus(event.id, 'delivered', nowIso);
             drained += 1;
@@ -590,8 +625,14 @@ function advanceGraphForTerminalNode(
     const byId = new Map(nodes.map(n => [n.nodeId, n] as const));
     const graph = graphStore.getGraph(node.graphId);
     const failurePolicy = projectGraphPublicPolicy(graph?.policyJson).on_dependency_failure;
+    const isFailureTerminal = terminal.status === 'failed' || terminal.status === 'cancelled';
+    // Stopped-downstream bookkeeping for the coordinator notice (N): what this
+    // commit cancelled / abandoned / left blocked. Ids and refs only.
+    const stoppedNodeIds: string[] = [];
+    const abandonedGates: Array<{ gateId: string; ref?: string; reason: string }> = [];
+    let blockedDownstream: MeshTaskGraphNodeRow[] = [];
 
-    if ((terminal.status === 'failed' || terminal.status === 'cancelled') && failurePolicy === 'cancel') {
+    if (isFailureTerminal && failurePolicy === 'cancel') {
         const edges = graphStore.listEdges(node.graphId);
         const cascade = applyGraphCancelCascade(
             store,
@@ -624,7 +665,20 @@ function advanceGraphForTerminalNode(
                 },
             });
         }
-    } else if (terminal.status === 'failed' || terminal.status === 'cancelled') {
+        stoppedNodeIds.push(...cascade.cancelledNodeIds);
+        // F2 — the cascade above stops at gates by design (it never walks a
+        // `gate` edge). A gate whose upstream is now failed/cancelled can never
+        // open, so under `cancel` it is abandoned (reason upstream_failed) and
+        // the work it guards is cancelled, recursively. Savepoint + catch like
+        // the auto-close below: it must never undo the terminal itself.
+        try {
+            const dead = store.transaction(() => abandonGatesWithDeadUpstreamInTxn(store, node.graphId, nowIso));
+            stoppedNodeIds.push(...dead.cancelledNodeIds);
+            abandonedGates.push(...dead.abandonedGates.map(g => ({ ...g, reason: MESH_GATE_UPSTREAM_FAILED_REASON })));
+        } catch (e: any) {
+            LOG.warn('MeshGraph', `Dead-upstream gate closure after ${terminal.status} of ${terminal.taskId} failed (graph ${node.graphId}): ${e?.message || e}`);
+        }
+    } else if (isFailureTerminal) {
         // `block` (default): do not mutate dependents, do not strip dependsOn,
         // do not rewrite the failure as a skip. Views derive dependencyFailures.
         const dependents = graphStore.listEdges(node.graphId)
@@ -644,6 +698,14 @@ function advanceGraphForTerminalNode(
                 dependentTaskIds: dependents.map(d => d.queueTaskId).filter(Boolean),
             },
         });
+        // N(a): everything directly downstream that now waits on this failure —
+        // worker steps AND gates (a gate behind a failed step can never open).
+        if (terminal.status === 'failed') {
+            blockedDownstream = graphStore.listEdges(node.graphId)
+                .filter(e => e.fromNodeId === node.nodeId)
+                .map(e => byId.get(e.toNodeId))
+                .filter((n): n is MeshTaskGraphNodeRow => !!n && !isStoppedOrDoneNodeState(n.state));
+        }
     }
 
     const materialized: string[] = [];
@@ -714,8 +776,10 @@ function advanceGraphForTerminalNode(
     // cancelled. In-flight gates leave the graph unrolled (C2). Under `block`
     // a failed worker leaves dependents pending, so the graph stays `active`.
     const rolled = classifyGraphRollup(graphStore.listNodes(node.graphId));
-    if (rolled && graph?.status !== rolled) {
-        graphStore.updateGraphStatus(node.graphId, rolled, nowIso, true);
+    // Re-read: an F2 gate abandon above may already have rolled the graph.
+    const graphNow = graphStore.getGraph(node.graphId);
+    if (rolled && graphNow?.status !== rolled) {
+        markGraphTerminalInTxn(store, node.graphId, rolled, nowIso);
         const kind = rolled === 'completed' ? 'graph_completed'
             : rolled === 'failed' ? 'graph_failed'
             : 'graph_cancelled';
@@ -750,14 +814,110 @@ function advanceGraphForTerminalNode(
     // Savepoint + catch: an auto-close failure never undoes the terminal itself.
     // Placed after this commit's own rollup, which an open gate held at null,
     // so the abandon's rollup is the only one (no doubled graph_* rows).
-    if (terminal.status === 'failed' || terminal.status === 'cancelled') {
+    if (isFailureTerminal) {
         try {
-            store.transaction(() => autoAbandonGatesWithTerminalDownstreamInTxn(store, node.graphId, nowIso));
+            const closed = store.transaction(() => autoAbandonGatesWithTerminalDownstreamInTxn(store, node.graphId, nowIso));
+            for (const gateId of closed) {
+                abandonedGates.push({ gateId, ...(graphStore.getGate(gateId)?.ref ? { ref: graphStore.getGate(gateId)!.ref } : {}), reason: MESH_GATE_AUTO_ABANDON_REASON });
+            }
         } catch (e: any) {
             LOG.warn('MeshGraph', `Gate auto-close after ${terminal.status} of ${terminal.taskId} failed (graph ${node.graphId}): ${e?.message || e}`);
         }
+        insertStoppedDownstreamNotice(store, node, terminal, nowIso, failurePolicy, stoppedNodeIds, abandonedGates, blockedDownstream);
     }
     return materialized;
+}
+
+/** Node states after which a node can no longer be "waiting" on anything. */
+function isStoppedOrDoneNodeState(state: MeshGraphNodeState): boolean {
+    return state === 'completed' || state === 'failed' || state === 'cancelled'
+        || state === 'skipped' || state === 'released' || state === 'expired';
+}
+
+/**
+ * The reason CODE a notice may carry for this terminal — never free text. An
+ * operator cancel carries the operator's own wording, so it collapses to
+ * `operator_cancel` unless it is the dependency cascade's machine reason.
+ */
+function terminalReasonCode(terminal: MeshTerminalCommitInput): string {
+    const code = reasonCodeOf(terminal.reason ?? `task_${terminal.status}`);
+    if (terminal.source === 'cancellation' && code !== 'dependency_failed') return 'operator_cancel';
+    return code;
+}
+
+/**
+ * N(a)/N(b) — ONE outbox row per stopped-downstream event, in THIS transaction
+ * (so it commits or rolls back with the state it describes). The drain pages it
+ * once; its eventId is graph + root node + the root task's output version, so a
+ * replayed terminal (fenced before we get here anyway) never pages twice and a
+ * retried step that fails again pages again.
+ */
+function insertStoppedDownstreamNotice(
+    store: MeshRuntimeStore,
+    node: MeshTaskGraphNodeRow,
+    terminal: MeshTerminalCommitInput,
+    nowIso: string,
+    failurePolicy: string,
+    stoppedNodeIds: string[],
+    abandonedGates: Array<{ gateId: string; ref?: string; reason: string }>,
+    blockedDownstream: MeshTaskGraphNodeRow[],
+): void {
+    const graphStore = store.graphStore();
+    const kind = failurePolicy === 'cancel'
+        // A gate auto-closed only because its (already cancelled) work is gone is
+        // cleanup, not stopped work — it is listed when something WAS stopped.
+        ? (stoppedNodeIds.length > 0 || abandonedGates.some(g => g.reason === MESH_GATE_UPSTREAM_FAILED_REASON)
+            ? 'graph_dependency_cancelled' : null)
+        : (blockedDownstream.length > 0 ? 'graph_dependency_blocked' : null);
+    if (!kind) return;
+    const root: MeshGraphStopRoot = {
+        nodeId: node.nodeId,
+        ...(node.ref ? { ref: node.ref } : {}),
+        taskId: terminal.taskId,
+        outcome: terminal.status === 'cancelled' ? 'cancelled' : 'failed',
+        reasonCode: terminalReasonCode(terminal),
+    };
+    const describe = (n: MeshTaskGraphNodeRow): MeshGraphStopNodeRef => {
+        const gateId = n.kind === 'coordinator_gate' ? graphStore.findGateByNodeId(n.graphId, n.nodeId)?.gateId : undefined;
+        return {
+            nodeId: n.nodeId,
+            ...(n.ref ? { ref: n.ref } : {}),
+            kind: n.kind === 'coordinator_gate' ? 'coordinator_gate' : 'worker_task',
+            ...(n.queueTaskId ? { taskId: n.queueTaskId } : {}),
+            ...(gateId ? { gateId } : {}),
+        };
+    };
+    const generation = graphStore.getLatestOutput(terminal.taskId)?.version ?? 0;
+    let payload: Record<string, unknown>;
+    if (kind === 'graph_dependency_cancelled') {
+        const seen = new Set<string>();
+        const cancelled: MeshGraphStopNodeRef[] = [];
+        for (const id of stoppedNodeIds) {
+            if (seen.has(id)) continue;
+            seen.add(id);
+            const n = graphStore.getNode(node.graphId, id);
+            // Gate nodes are reported as abandoned gates, not as cancelled steps.
+            if (n && n.kind !== 'coordinator_gate') cancelled.push(describe(n));
+        }
+        const gateSeen = new Set<string>();
+        payload = {
+            graphId: node.graphId, generation, root, cancelled,
+            abandonedGates: abandonedGates.filter(g => !gateSeen.has(g.gateId) && gateSeen.add(g.gateId)),
+        };
+    } else {
+        payload = { graphId: node.graphId, generation, root, blocked: blockedDownstream.map(describe) };
+    }
+    graphStore.insertOutboxEvent({
+        id: newMeshGraphOutboxId(),
+        meshId: node.meshId,
+        graphId: node.graphId,
+        kind,
+        payload: JSON.stringify(payload),
+        status: 'pending',
+        attemptCount: 0,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+    });
 }
 
 /** Graph-level terminal equivalence for the rollup (design :357-359). */

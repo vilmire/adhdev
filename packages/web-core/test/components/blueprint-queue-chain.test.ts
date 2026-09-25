@@ -72,6 +72,19 @@ describe('waiting on — named dependencies', () => {
         expect(taskRow(groups, A).waitingOnRefs).toEqual([])
     })
 
+    it('D1b: a dep that ended failed/cancelled reads "blocked by failed/cancelled dependency", not plain waiting', () => {
+        const groups = buildBlueprintGroups([
+            task({ id: A, status: 'cancelled' }),
+            task({ id: B, status: 'pending', dependsOn: [A] }),
+            task({ id: C, status: 'assigned' }),
+            task({ id: D, status: 'pending', dependsOn: [C] }),
+        ], noStatus, [])
+        expect(taskRow(groups, B).blockedByDeadDependency).toBe(true)
+        expect(taskRow(groups, B).section).toBe('blocked')
+        // A live dependency is still plain waiting.
+        expect(taskRow(groups, D).blockedByDeadDependency).toBe(false)
+    })
+
     it('D2: a dep absent from the snapshot is named by short id only, not openable', () => {
         const groups = buildBlueprintGroups([task({ id: B, dependsOn: [D] })], noStatus, [])
         expect(taskRow(groups, B).waitingOnRefs).toEqual([{ id: D, shortId: 'dddddddd', present: false }])
