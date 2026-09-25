@@ -113106,6 +113106,14 @@ ${marker}`,
         pendingMissing = /* @__PURE__ */ new Set();
       }
     });
+    function ptyDirtyWindowMs(lastSnapshotBytes) {
+      const bytes = Number.isFinite(lastSnapshotBytes) ? lastSnapshotBytes : 0;
+      const extraMs = Math.max(0, bytes - TRANSCRIPT_PTY_DIRTY_SIZE_FREE_BYTES) / 1024;
+      return Math.min(
+        TRANSCRIPT_PTY_DIRTY_MAX_WINDOW_MS,
+        Math.max(TRANSCRIPT_PTY_DIRTY_THROTTLE_MS, TRANSCRIPT_PTY_DIRTY_THROTTLE_MS + extraMs)
+      );
+    }
     function freshCounters() {
       return {
         published: 0,
@@ -113138,6 +113146,8 @@ ${marker}`,
     var import_node_crypto3;
     var MAX_TRACKED_SESSIONS;
     var TRANSCRIPT_PTY_DIRTY_THROTTLE_MS;
+    var TRANSCRIPT_PTY_DIRTY_SIZE_FREE_BYTES;
+    var TRANSCRIPT_PTY_DIRTY_MAX_WINDOW_MS;
     var TRANSCRIPT_STAT_POLL_INTERVAL_MS;
     var TranscriptProjectionService;
     var activeService;
@@ -113155,12 +113165,20 @@ ${marker}`,
         init_transcript_parity();
         MAX_TRACKED_SESSIONS = 512;
         TRANSCRIPT_PTY_DIRTY_THROTTLE_MS = 350;
+        TRANSCRIPT_PTY_DIRTY_SIZE_FREE_BYTES = 64 * 1024;
+        TRANSCRIPT_PTY_DIRTY_MAX_WINDOW_MS = 3e3;
         TRANSCRIPT_STAT_POLL_INTERVAL_MS = 3e3;
         TranscriptProjectionService = class {
           deps;
           epoch;
           counters = freshCounters();
           sessionState = /* @__PURE__ */ new Map();
+          /**
+           * Size of each session's most recently encoded snapshot — including an
+           * oversized one, which is exactly the case that most needs a longer PTY
+           * window. Feeds `ptyDirtyWindowMs`; cleared by `forgetSession`.
+           */
+          lastSnapshotBytes = /* @__PURE__ */ new Map();
           // Per-session coalescing bookkeeping. `inFlight` gates concurrent work for
           // a session; `pendingObservation`/`pendingPull` hold "arrived while busy,
           // replace/reschedule" — never queued, always the latest wins.
@@ -113279,7 +113297,7 @@ ${marker}`,
               this.ptyDirtyTimers.delete(sessionId);
               this.armPtyDirtyTimer(sessionId);
               this.markDirty(sessionId, "pty_output");
-            }, TRANSCRIPT_PTY_DIRTY_THROTTLE_MS);
+            }, ptyDirtyWindowMs(this.lastSnapshotBytes.get(sessionId) ?? 0));
             timer.unref?.();
             this.ptyDirtyTimers.set(sessionId, timer);
           }
@@ -113312,6 +113330,7 @@ ${marker}`,
             if (!sessionId) return;
             this.stopPolling(sessionId);
             this.sessionState.delete(sessionId);
+            this.lastSnapshotBytes.delete(sessionId);
             this.pendingObservation.delete(sessionId);
             this.pendingPull.delete(sessionId);
             this.pendingContext.delete(sessionId);
@@ -113459,6 +113478,7 @@ ${marker}`,
             const candidate = stampTranscriptObservation(observation, identity, now());
             const snapshot = encodeTranscriptSnapshot(candidate);
             const encoded = encodeTranscriptRevision(snapshot, identity, now);
+            this.lastSnapshotBytes.set(sessionId, encoded.ok ? encoded.begin.snapshotBytes : encoded.snapshotBytes);
             if (!encoded.ok) {
               this.counters.oversized++;
               LOG.warn(
@@ -172898,31 +172918,50 @@ ${notice.notice}${supersededHint}`;
     init_topics2();
     init_transcript_revision_codec();
     var TRANSCRIPT_PARITY_SCAN_ROWS = SESSION_TRANSCRIPT_RING;
-    function readLocalTranscriptParityActual(node, rawSessionId, expectedWriterId) {
+    var TRANSCRIPT_PARITY_NARROW_SLACK_ROWS = 8;
+    function readLocalTranscriptParityActual(node, rawSessionId, expectedWriterId, options = {}) {
       const topic = sessionTranscriptTopic(rawSessionId);
-      let entries;
+      let contig;
       try {
         const writerVec = node.node.vectors()[topic]?.writers[expectedWriterId];
-        const contig = writerVec && "contig" in writerVec ? writerVec.contig : 0;
-        const fromSeq = Math.max(1, contig - TRANSCRIPT_PARITY_SCAN_ROWS + 1);
+        contig = writerVec && "contig" in writerVec ? writerVec.contig : 0;
+      } catch {
+        return { status: "missing" };
+      }
+      const expectedRows = options.expectedRows;
+      if (typeof expectedRows === "number" && Number.isFinite(expectedRows) && expectedRows > 0) {
+        const width = Math.floor(expectedRows) + TRANSCRIPT_PARITY_NARROW_SLACK_ROWS;
+        if (width < TRANSCRIPT_PARITY_SCAN_ROWS) {
+          const narrow = scanLatestComplete(node, topic, expectedWriterId, contig, width);
+          if (narrow === "failed") return { status: "missing" };
+          if (narrow) return { status: "found", snapshot: narrow.snapshot };
+        }
+      }
+      const full = scanLatestComplete(node, topic, expectedWriterId, contig, TRANSCRIPT_PARITY_SCAN_ROWS);
+      if (!full || full === "failed") return { status: "missing" };
+      return { status: "found", snapshot: full.snapshot };
+    }
+    function scanLatestComplete(node, topic, expectedWriterId, contig, width) {
+      let entries;
+      try {
+        const fromSeq = Math.max(1, contig - width + 1);
         const result = node.node.scanEntries(topic, {
           writer: expectedWriterId,
           fromSeq,
-          limit: TRANSCRIPT_PARITY_SCAN_ROWS
+          limit: width
         });
         entries = result.entries;
       } catch {
-        return { status: "missing" };
+        return "failed";
       }
       const assembler = new TranscriptRevisionAssembler(expectedWriterId);
       for (const entry of entries) {
         assembler.ingestRow(entry);
       }
-      const latest = assembler.getLatestComplete();
-      if (!latest) return { status: "missing" };
-      return { status: "found", snapshot: latest.snapshot };
+      return assembler.getLatestComplete();
     }
     init_transcript_parity();
+    init_transcript_publisher();
     init_transcript_revision_codec();
     function decodeOwnEnvelope(writerId, envelope) {
       const assembler = new TranscriptRevisionAssembler(writerId);
@@ -172937,7 +172976,47 @@ ${notice.notice}${supersededHint}`;
         payload: envelope.commit
       });
     }
+    var TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS = 1e4;
+    var TRANSCRIPT_PARITY_SAMPLE_EVERY_N = 50;
+    var TRANSCRIPT_PARITY_SAMPLE_IDLE_EVICT_MS = 60 * 60 * 1e3;
+    var TRANSCRIPT_PARITY_SAMPLE_MAX_SESSIONS = MAX_TRACKED_SESSIONS;
+    function resolveParitySampleIntervalMs(env2 = process.env) {
+      const raw = env2.ADHDEV_TRANSCRIPT_PARITY_SAMPLE_MS;
+      if (raw === void 0 || raw.trim() === "") return TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS;
+      const parsed = Number(raw);
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS;
+    }
+    function createParitySampler() {
+      const state = /* @__PURE__ */ new Map();
+      return (sessionId) => {
+        const intervalMs = resolveParitySampleIntervalMs();
+        const now = Date.now();
+        const row = state.get(sessionId);
+        if (row) state.delete(sessionId);
+        let readBack;
+        if (!row || intervalMs === 0) {
+          readBack = true;
+        } else {
+          const publishes = row.publishesSinceReadBack + 1;
+          readBack = now - row.lastReadBackAt >= intervalMs || publishes >= TRANSCRIPT_PARITY_SAMPLE_EVERY_N;
+        }
+        const next = readBack ? { lastReadBackAt: now, publishesSinceReadBack: 0, lastSeenAt: now } : { lastReadBackAt: row.lastReadBackAt, publishesSinceReadBack: row.publishesSinceReadBack + 1, lastSeenAt: now };
+        if (!row) {
+          for (const [id22, other] of state) {
+            if (now - other.lastSeenAt > TRANSCRIPT_PARITY_SAMPLE_IDLE_EVICT_MS) state.delete(id22);
+          }
+          while (state.size >= TRANSCRIPT_PARITY_SAMPLE_MAX_SESSIONS) {
+            const oldest = state.keys().next().value;
+            if (oldest === void 0) break;
+            state.delete(oldest);
+          }
+        }
+        state.set(sessionId, next);
+        return readBack;
+      };
+    }
     function createLiveTranscriptPublisher(node, claims, ownerDaemonId) {
+      const shouldReadBack = createParitySampler();
       return async (sessionId, envelope) => {
         const activation = ensureSessionTranscriptTopic(node, claims, sessionId, ownerDaemonId);
         if (!activation.ok) {
@@ -172963,7 +173042,10 @@ ${notice.notice}${supersededHint}`;
             );
             return;
           }
-          const actual = readLocalTranscriptParityActual(node, sessionId, node.writerId);
+          if (!shouldReadBack(sessionId)) return;
+          const actual = readLocalTranscriptParityActual(node, sessionId, node.writerId, {
+            expectedRows: envelope.chunks.length + 2
+          });
           compareTranscriptRevision(`${ownerDaemonId}:${sessionId}`, expected.snapshot, actual);
         } catch (error48) {
           LOG.warn(

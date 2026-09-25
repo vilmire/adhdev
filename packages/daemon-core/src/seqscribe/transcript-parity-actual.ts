@@ -45,6 +45,23 @@ import { SESSION_TRANSCRIPT_RING, sessionTranscriptTopic } from './topics.js';
  * silently.
  */
 const TRANSCRIPT_PARITY_SCAN_ROWS = SESSION_TRANSCRIPT_RING;
+
+/**
+ * Extra rows the narrow first-pass window reads beyond the caller's
+ * `expectedRows` hint — room for rows a concurrent in-flight append may have
+ * landed after the revision being verified (see the narrow-first note in
+ * `readLocalTranscriptParityActual`). Exported for tests.
+ */
+export const TRANSCRIPT_PARITY_NARROW_SLACK_ROWS = 8;
+
+export interface TranscriptParityReadOptions {
+    /**
+     * Rows the caller just appended for the revision it wants verified
+     * (`chunks.length + 2`: begin + chunks + commit). When present, a narrow
+     * head-anchored window is tried first; absent, only the full window runs.
+     */
+    expectedRows?: number;
+}
 import type { TranscriptParityActual } from './transcript-parity.js';
 import { TranscriptRevisionAssembler, type TranscriptRevisionRow } from './transcript-revision-codec.js';
 
@@ -61,10 +78,11 @@ export function readLocalTranscriptParityActual(
     node: SeqscribeNodeHandle,
     rawSessionId: string,
     expectedWriterId: string,
+    options: TranscriptParityReadOptions = {},
 ): TranscriptParityActual {
     const topic = sessionTranscriptTopic(rawSessionId);
 
-    let entries: readonly TranscriptRevisionRow[];
+    let contig: number;
     try {
         // ★ NO `headOrder` PIN HERE.
         //
@@ -127,17 +145,68 @@ export function readLocalTranscriptParityActual(
         // query that does not apply here. A writer with no entries yet (or a
         // retired one, which carries `finalSeq` rather than `contig`) simply
         // yields head 0 → `fromSeq: 1`, and the scan comes back empty.
+        //
+        // ★ Narrow-first (CPU fix, 2026-09-25). The full window is ~125
+        // revisions (~10 MB of chunk payload at live sizes), and every row in
+        // it is JSON-parsed and re-hashed (`sha256HexUtf8` via the assembler)
+        // just to surface the ONE newest complete revision. Measured on a
+        // preview daemon that was ~20% of a core at the 350 ms publish
+        // ceiling. When the caller knows how many rows it just appended
+        // (`expectedRows` = chunks + begin + commit), the newest revision
+        // sits in the last `expectedRows` seqs below `contig`, so a window of
+        // `expectedRows + TRANSCRIPT_PARITY_NARROW_SLACK_ROWS` anchored the
+        // same way (`contig - width + 1`, clamped to 1 — the SAME head-anchor
+        // rule as above, just a smaller width) is enough. The slack absorbs
+        // rows a concurrent in-flight append may have landed after ours; if
+        // those rows push our commit out of the narrow window (or the window
+        // otherwise yields no complete revision), the full 500-row window
+        // below runs exactly as before — the fallback preserves today's
+        // semantics, so the narrow pass can only ever save work, never change
+        // an answer from `found` to `missing`.
         const writerVec = node.node.vectors()[topic]?.writers[expectedWriterId];
-        const contig = writerVec && 'contig' in writerVec ? writerVec.contig : 0;
-        const fromSeq = Math.max(1, contig - TRANSCRIPT_PARITY_SCAN_ROWS + 1);
+        contig = writerVec && 'contig' in writerVec ? writerVec.contig : 0;
+    } catch {
+        return { status: 'missing' };
+    }
+
+    const expectedRows = options.expectedRows;
+    if (typeof expectedRows === 'number' && Number.isFinite(expectedRows) && expectedRows > 0) {
+        const width = Math.floor(expectedRows) + TRANSCRIPT_PARITY_NARROW_SLACK_ROWS;
+        if (width < TRANSCRIPT_PARITY_SCAN_ROWS) {
+            const narrow = scanLatestComplete(node, topic, expectedWriterId, contig, width);
+            if (narrow === 'failed') return { status: 'missing' };
+            if (narrow) return { status: 'found', snapshot: narrow.snapshot };
+        }
+    }
+
+    const full = scanLatestComplete(node, topic, expectedWriterId, contig, TRANSCRIPT_PARITY_SCAN_ROWS);
+    if (!full || full === 'failed') return { status: 'missing' };
+    return { status: 'found', snapshot: full.snapshot };
+}
+
+/**
+ * Scan the head-anchored seq window `[max(1, contig - width + 1), contig]`
+ * and return the newest complete revision the assembler can build from it,
+ * `null` if none, or `'failed'` if the scan itself threw.
+ */
+function scanLatestComplete(
+    node: SeqscribeNodeHandle,
+    topic: string,
+    expectedWriterId: string,
+    contig: number,
+    width: number,
+): ReturnType<TranscriptRevisionAssembler['getLatestComplete']> | 'failed' {
+    let entries: readonly TranscriptRevisionRow[];
+    try {
+        const fromSeq = Math.max(1, contig - width + 1);
         const result = node.node.scanEntries(topic, {
             writer: expectedWriterId,
             fromSeq,
-            limit: TRANSCRIPT_PARITY_SCAN_ROWS,
+            limit: width,
         });
         entries = result.entries as unknown as readonly TranscriptRevisionRow[];
     } catch {
-        return { status: 'missing' };
+        return 'failed';
     }
 
     const assembler = new TranscriptRevisionAssembler(expectedWriterId);
@@ -146,8 +215,5 @@ export function readLocalTranscriptParityActual(
         // default case without touching in-flight state — no pre-filter needed.
         assembler.ingestRow(entry);
     }
-
-    const latest = assembler.getLatestComplete();
-    if (!latest) return { status: 'missing' };
-    return { status: 'found', snapshot: latest.snapshot };
+    return assembler.getLatestComplete();
 }

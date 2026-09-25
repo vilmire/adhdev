@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+    TRANSCRIPT_PTY_DIRTY_THROTTLE_MS,
     TranscriptProjectionService,
     __resetTranscriptProjectionForTests,
+    ptyDirtyWindowMs,
     activeTranscriptProjectionService,
     configureTranscriptProjection,
     markTranscriptSessionDirty,
@@ -232,5 +234,71 @@ describe('module-level singleton — safe no-op until configured (design §8 uni
         await flush();
         expect(published).toEqual([]);
         __resetTranscriptProjectionForTests();
+    });
+});
+
+/**
+ * CPU fix (2026-09-25): the PTY-dirty trailing window stretches with the last
+ * encoded snapshot size — 1 ms per KiB above 64 KiB, clamped to [350, 3000].
+ */
+describe('ptyDirtyWindowMs — size-adaptive PTY trailing window', () => {
+    it.each([
+        [0, 350],
+        [64 * 1024, 350],
+        [64 * 1024 + 1024, 351],
+        [500 * 1024, 350 + 436],
+        [1024 * 1024, 350 + 960],
+        [(2650 + 64) * 1024, 3000],
+        [10 * 1024 * 1024, 3000],
+        [Number.NaN, 350],
+    ])('bytes=%d → %d ms', (bytes, expected) => {
+        expect(ptyDirtyWindowMs(bytes)).toBe(expected);
+    });
+
+    it('a large last snapshot arms a longer trailing timer than a small one', async () => {
+        vi.useFakeTimers();
+        try {
+            const pullsFor = async (content: string) => {
+                const pulls: number[] = [];
+                const { deps } = makeDeps({
+                    collectObservation: async () => {
+                        pulls.push(Date.now());
+                        // Distinct content per pull so dedup never short-circuits the encode.
+                        return { observation: obs({ messages: [{ role: 'assistant', kind: 'standard', content: `${content}${pulls.length}` }] }) };
+                    },
+                });
+                const service = new TranscriptProjectionService(deps);
+                vi.spyOn(service, 'mode').mockReturnValue('shadow');
+                const drain = async () => { for (let i = 0; i < 10; i += 1) await Promise.resolve(); };
+
+                // t=0 leading pull (size unknown yet → 350 ms window), then a trailing mark.
+                service.markPtyOutputActivity('sess-1');
+                await drain();
+                service.markPtyOutputActivity('sess-1');
+                // t=350: trailing pull; the re-armed window now uses the leading pull's size.
+                await vi.advanceTimersByTimeAsync(TRANSCRIPT_PTY_DIRTY_THROTTLE_MS);
+                await drain();
+                expect(pulls).toHaveLength(2);
+                service.markPtyOutputActivity('sess-1');
+                await vi.advanceTimersByTimeAsync(TRANSCRIPT_PTY_DIRTY_THROTTLE_MS);
+                await drain();
+                const afterBaseWindow = pulls.length;
+                await vi.advanceTimersByTimeAsync(3000);
+                await drain();
+                service.dispose();
+                return { afterBaseWindow, total: pulls.length };
+            };
+
+            const small = await pullsFor('hi');
+            expect(small).toEqual({ afterBaseWindow: 3, total: 3 });
+
+            const big = await pullsFor('x'.repeat(1024 * 1024));
+            // 1 MiB → ~1310 ms window: the third pull has NOT fired at +350 ms…
+            expect(big.afterBaseWindow).toBe(2);
+            // …but the mandatory trailing pull still lands within the window.
+            expect(big.total).toBe(3);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

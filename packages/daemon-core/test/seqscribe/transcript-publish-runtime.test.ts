@@ -1,8 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SeqscribeNodeHandle } from '../../src/seqscribe/node.js';
 import { sessionTranscriptTopic } from '../../src/seqscribe/topics.js';
 import { __resetTranscriptParityForTests, transcriptParityCounters } from '../../src/seqscribe/transcript-parity.js';
-import { createLiveTranscriptPublisher } from '../../src/seqscribe/transcript-publish-runtime.js';
+import {
+    TRANSCRIPT_PARITY_SAMPLE_EVERY_N,
+    TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS,
+    createLiveTranscriptPublisher,
+} from '../../src/seqscribe/transcript-publish-runtime.js';
 import { encodeTranscriptSnapshot, type TranscriptSnapshotCandidate } from '../../src/seqscribe/transcript-projection.js';
 import {
     TRANSCRIPT_REVISION_BEGIN_KIND,
@@ -152,5 +156,100 @@ describe('createLiveTranscriptPublisher — parity self-check (design §3.3/§5.
 
         const counters = transcriptParityCounters();
         expect(counters.missingCompleteRevision).toBe(1);
+    });
+});
+
+/**
+ * CPU fix (2026-09-25): the storage read-back half of the self-check is
+ * SAMPLED — first publish per session, then once per
+ * TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS or every TRANSCRIPT_PARITY_SAMPLE_EVERY_N
+ * publishes. `ADHDEV_TRANSCRIPT_PARITY_SAMPLE_MS=0` restores every-publish.
+ */
+describe('createLiveTranscriptPublisher — parity read-back sampling', () => {
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.unstubAllEnvs();
+    });
+
+    function setup() {
+        __resetTranscriptParityForTests();
+        const node = fakeNode();
+        const scanSpy = vi.spyOn(node.node, 'scanEntries');
+        const publish = createLiveTranscriptPublisher(node, new TranscriptTopicClaimRegistry(), IDENTITY.producerDaemonId);
+        return { publish, scanSpy };
+    }
+
+    it('reads back on the first publish, then not again within the interval', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-09-25T00:00:00.000Z'));
+        const { publish, scanSpy } = setup();
+
+        for (let i = 0; i < 10; i += 1) {
+            await publish(IDENTITY.sessionId, envelope());
+            vi.advanceTimersByTime(500); // 10 publishes over 5 s < 10 s interval
+        }
+
+        expect(scanSpy).toHaveBeenCalledTimes(1);
+        expect(transcriptParityCounters().compared).toBe(1);
+    });
+
+    it('reads back again once the interval has elapsed', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-09-25T00:00:00.000Z'));
+        const { publish, scanSpy } = setup();
+
+        await publish(IDENTITY.sessionId, envelope());
+        vi.advanceTimersByTime(TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS - 1);
+        await publish(IDENTITY.sessionId, envelope());
+        expect(scanSpy).toHaveBeenCalledTimes(1);
+
+        vi.advanceTimersByTime(1);
+        await publish(IDENTITY.sessionId, envelope());
+        expect(scanSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('reads back every Nth publish even inside the interval', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-09-25T00:00:00.000Z'));
+        const { publish, scanSpy } = setup();
+
+        // publish #1 reads back; #2..#(N) are skipped; #(N+1) is the Nth since.
+        for (let i = 0; i < TRANSCRIPT_PARITY_SAMPLE_EVERY_N; i += 1) {
+            await publish(IDENTITY.sessionId, envelope());
+        }
+        expect(scanSpy).toHaveBeenCalledTimes(1);
+        await publish(IDENTITY.sessionId, envelope());
+        expect(scanSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('tracks sessions independently — a new session always reads back first', async () => {
+        vi.useFakeTimers();
+        const { publish, scanSpy } = setup();
+        await publish(IDENTITY.sessionId, envelope());
+        await publish('sess-2', envelope());
+        expect(scanSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('ADHDEV_TRANSCRIPT_PARITY_SAMPLE_MS=0 reads back on every publish', async () => {
+        vi.stubEnv('ADHDEV_TRANSCRIPT_PARITY_SAMPLE_MS', '0');
+        vi.useFakeTimers();
+        const { publish, scanSpy } = setup();
+        for (let i = 0; i < 5; i += 1) await publish(IDENTITY.sessionId, envelope());
+        expect(scanSpy).toHaveBeenCalledTimes(5);
+        expect(transcriptParityCounters().compared).toBe(5);
+    });
+
+    it('passes the just-published row count as the narrow-window hint', async () => {
+        const node = fakeNode();
+        const scanSpy = vi.spyOn(node.node, 'scanEntries');
+        const publish = createLiveTranscriptPublisher(node, new TranscriptTopicClaimRegistry(), IDENTITY.producerDaemonId);
+        const env = envelope();
+        await publish(IDENTITY.sessionId, env);
+        // contig = rows appended = chunks + 2; width = that + 8 slack → fromSeq clamps to 1.
+        expect(scanSpy.mock.calls[0]![1]).toEqual({
+            writer: IDENTITY.producerWriterId,
+            fromSeq: 1,
+            limit: env.chunks.length + 2 + 8,
+        });
     });
 });
