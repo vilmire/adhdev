@@ -40,14 +40,10 @@ import {
  */
 const MESH_TASK_INPUT_SCHEMA = {
     type: 'object' as const,
-    description: 'Optional structured multipart input delivered alongside `message` — use to attach an image (e.g. a screenshot) to the task. '
-        + 'Shape: {parts: [{type: "text", text}, {type: "image", mimeType, data (base64) | uri}]}. '
-        + 'The target provider must declare image support (most CLI providers do; opencode and all ACP providers are text-only) — an unsupported target is refused with an explicit error, never silently stripped. '
-        + 'Large attachments are chunked automatically across the mesh transport. Omit entirely for ordinary text tasks.',
+    description: 'Multipart input, e.g. a screenshot: {parts:[{type:"text",text},{type:"image",mimeType,data(base64)|uri}]}. A text-only provider (opencode, ACP) refuses it explicitly.',
     properties: {
         parts: {
             type: 'array' as const,
-            description: 'Ordered content parts. A text part carries {type:"text", text}; an image part carries {type:"image", mimeType, and either base64 `data` or a `uri`}.',
             items: { type: 'object' as const },
         },
     },
@@ -65,21 +61,23 @@ const MESH_TASK_INPUT_SCHEMA = {
  * enqueue regardless (a schema is a hint to the model, never the boundary).
  *
  * Kept deliberately in step with `parseInputBindings`: same required fields,
- * same `as` pattern, same enums, same `max_bytes` ceiling.
+ * same `as` pattern, same enums, same `max_bytes` ceiling. Descriptions are
+ * terse on purpose (graph-orchestration-simplification D2: the batch schema is
+ * size-capped, see mesh-enqueue-schema-diet.test.ts).
  */
 const MESH_INPUT_BINDING_SCHEMA = {
     type: 'object' as const,
     properties: {
-        from: { type: 'string' as const, description: 'Ref of the predecessor task or gate IN THIS BATCH whose output is read. Must resolve to a declared ref — an unknown ref rejects the batch.' },
-        select: { type: 'string' as const, description: 'RFC-6901 JSON Pointer into that step\'s completion envelope, e.g. `/summary` or `/result/sha`. Empty string selects the whole envelope. No JSONPath, wildcards, filters or expressions exist in this grammar.' },
-        as: { type: 'string' as const, pattern: '^[A-Za-z][A-Za-z0-9_]{0,63}$', description: 'Name this value gets in the evidence envelope appended to your instruction. Must match [A-Za-z][A-Za-z0-9_]{0,63} and be unique within the task.' },
-        required: { type: 'boolean' as const, description: 'When true (default false), the task BLOCKS if the source produced nothing at that pointer, instead of running without the value.' },
-        format: { type: 'string' as const, enum: ['text', 'json'], description: 'How the selected value is rendered into the envelope. Default `text`.' },
+        from: { type: 'string' as const, description: 'Predecessor task/gate ref.' },
+        select: { type: 'string' as const, description: 'RFC-6901 JSON Pointer into its completion envelope, e.g. /summary ("" = all).' },
+        as: { type: 'string' as const, pattern: '^[A-Za-z][A-Za-z0-9_]{0,63}$', description: 'Unique binding name.' },
+        required: { type: 'boolean' as const, description: 'true = block when empty.' },
+        format: { type: 'string' as const, enum: ['text', 'json'] },
         // Snake_case ONLY — unlike the task-level fields, `parseInputBindings`
         // reads no camelCase alias for these, so advertising one would publish a
         // field the parser silently ignores.
-        max_bytes: { type: 'number' as const, description: 'Per-binding size cap after UTF-8 serialization. Default 16384, hard maximum 65536 — a larger value is rejected, never silently clamped.' },
-        overflow: { type: 'string' as const, enum: ['error', 'truncate'], description: 'What to do when the value exceeds max_bytes. Default `error` — so a silently half-complete instruction never ships.' },
+        max_bytes: { type: 'number' as const, description: 'Default 16384, max 65536.' },
+        overflow: { type: 'string' as const, enum: ['error', 'truncate'] },
     },
     required: ['from', 'select', 'as'],
 };
@@ -157,9 +155,12 @@ export const MESH_LIST_NODES_TOOL = {
  *     for "enqueue"/"delegate"/"task"/"graph"/"dependency" matches BOTH. Without the
  *     shared vocabulary a search for "enqueue" could match only the tool whose name
  *     contains it, which is exactly how the fallback got selected alone.
- *   `discoveryRank` — LOWER sorts first. Batch is 0 and task is 10 for the
+ *   `discoveryRank` — LOWER sorts first. Task is 0 and batch is 10 for the
  *     `enqueue`/`delegate` queries listed in `discoveryRankQueries`, so a ranked
- *     client returns batch as the first candidate.
+ *     client returns the incremental default (`mesh_enqueue_task` + `depends_on`)
+ *     as the first candidate. graph-orchestration-simplification D1 (2026-09-25)
+ *     reversed Phase F's batch-first ranking: batch is the settled-plan
+ *     exception, and the shared vocabulary below still surfaces it alongside.
  *   `toolGroup: 'mesh.enqueue'` + `toolGroupMembers` — providers that support tool
  *     groups expose the siblings together, so loading the fallback also exposes
  *     batch. The group is declared identically on both members.
@@ -168,12 +169,21 @@ export const MESH_LIST_NODES_TOOL = {
  * `batch_required` is not implemented (Phase F is warn-only by design).
  */
 const ENQUEUE_TOOL_GROUP = 'mesh.enqueue';
-const ENQUEUE_TOOL_GROUP_MEMBERS = ['mesh_enqueue_batch', 'mesh_enqueue_task'] as const;
+const ENQUEUE_TOOL_GROUP_MEMBERS = ['mesh_enqueue_task', 'mesh_enqueue_batch'] as const;
 const ENQUEUE_DISCOVERY_KEYWORDS = ['enqueue', 'delegate', 'task', 'graph', 'dependency'] as const;
-/** Queries for which batch must outrank the single-task fallback. */
+/** Queries for which the incremental default must outrank the settled-plan batch. */
 const ENQUEUE_RANK_QUERIES = ['enqueue', 'delegate'] as const;
 
 const ENQUEUE_BATCH_DISCOVERY_META = {
+    toolGroup: ENQUEUE_TOOL_GROUP,
+    toolGroupMembers: ENQUEUE_TOOL_GROUP_MEMBERS,
+    discoveryKeywords: ENQUEUE_DISCOVERY_KEYWORDS,
+    discoveryRankQueries: ENQUEUE_RANK_QUERIES,
+    discoveryRank: 10,
+    enqueueRole: 'settled_plan',
+} as const;
+
+const ENQUEUE_TASK_DISCOVERY_META = {
     toolGroup: ENQUEUE_TOOL_GROUP,
     toolGroupMembers: ENQUEUE_TOOL_GROUP_MEMBERS,
     discoveryKeywords: ENQUEUE_DISCOVERY_KEYWORDS,
@@ -182,70 +192,59 @@ const ENQUEUE_BATCH_DISCOVERY_META = {
     enqueueRole: 'default',
 } as const;
 
-const ENQUEUE_TASK_DISCOVERY_META = {
-    toolGroup: ENQUEUE_TOOL_GROUP,
-    toolGroupMembers: ENQUEUE_TOOL_GROUP_MEMBERS,
-    discoveryKeywords: ENQUEUE_DISCOVERY_KEYWORDS,
-    discoveryRankQueries: ENQUEUE_RANK_QUERIES,
-    discoveryRank: 10,
-    enqueueRole: 'single_task_fallback',
-} as const;
-
+/**
+ * graph-orchestration-simplification D2 (docs/design/2026-09-25-graph-orchestration-simplification.md)
+ * — the enqueue schema diet.
+ *
+ *  - ONE canonical snake_case name per field. The camelCase / alternate spellings
+ *    (dependsOn, missionId, targetNode, read_only, …) are NOT published any more, but
+ *    the pre-dispatch validator still ACCEPTS them silently — see
+ *    `MESH_ACCEPTED_ARG_ALIASES` in validate-tool-args.ts — and the handlers keep
+ *    reading both spellings, so existing coordinators do not break.
+ *  - `run_if` / `on_false` / `on_upstream_skip` are retired at the surface: the
+ *    validator REJECTS them with a pointer at depends_on + on_dependency_failure
+ *    (`MESH_RETIRED_ARGS`). The daemon engine keeps its evaluator for now.
+ *  - Descriptions are size-capped: task ≤ 4 KB, batch ≤ 6 KB of JSON
+ *    (mesh-enqueue-schema-diet.test.ts pins both ceilings).
+ */
 export const MESH_ENQUEUE_TASK_TOOL = {
     name: 'mesh_enqueue_task',
-    description: 'SINGLE-TASK FALLBACK. Use only when exactly one new worker task is currently known and no downstream graph step can yet be declared. If two or more steps are known—including steps that need outputs, worktree preparation, a condition, or a coordinator action—load and use mesh_enqueue_batch instead. Same-session continuation belongs in mesh_send_task. '
-        + 'Adds the task to the mesh work queue; idle nodes automatically pull and execute from it. Use this instead of mesh_send_task when you do not need to target a specific node. '
-        + 'Supports task-level priority (high tasks are pulled ahead of older normal/low tasks), not_before delayed execution (hold a task pending until a time), maxRetries (auto-fail after N requeues), and duplicate detection '
-        + '(by default warns in the response when an in-flight task with the same message+target already exists; pass block_duplicate=true to refuse instead, or allow_duplicate=true to silence the warning).',
+    description: 'Enqueue ONE worker task; an idle node claims it. The default way to delegate: when a step needs queued work to finish first, pass depends_on with those task ids — '
+        + 'grow the plan as results arrive. '
+        + 'Use mesh_enqueue_batch only for a settled plan of 3+ steps that needs coordinator gates or deferred worktrees. Same-session continuation belongs in mesh_send_task. '
+        + 'Warns when an in-flight task has the same message+target.',
     _meta: ENQUEUE_TASK_DISCOVERY_META,
     inputSchema: {
         type: 'object' as const,
         properties: {
-            message: { type: 'string', description: 'The task instruction for the agent.' },
+            message: { type: 'string', description: 'The task instruction.' },
             input: MESH_TASK_INPUT_SCHEMA,
-            task_mode: { ...enumOf(MESH_TASK_MODES), description: 'Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch — and in exchange runs without the one-active-per-node write isolation (N read-only tasks may run in parallel on one busy node, no worktree needed) under a separate, larger read-only concurrency cap. Prefer it for investigation/diagnosis: it is the cheaper mode to schedule, not just the restricted one.' },
-            taskMode: { ...enumOf(MESH_TASK_MODES), description: 'CamelCase alias for task_mode.' },
-            readonly: { type: 'boolean', description: 'Optional read-only axis (orthogonal to task_mode). When true the task runs without the one-active-per-node write isolation (N read-only tasks may run in parallel on one node), is counted under the read-only safety cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Equivalent to task_mode=live_debug_readonly but composable with any task_mode.' },
-            read_only: { type: 'boolean', description: 'Snake-case alias for readonly.' },
-            requiredTags: { type: 'array', items: { type: 'string' }, description: 'Optional capability tags that every eligible node must have, e.g. os=darwin, provider=codex-cli, gpu.' },
-            required_tags: { type: 'array', items: { type: 'string' }, description: 'Snake_case alias for requiredTags.' },
-            owned_paths: { type: 'array', items: { type: 'string' }, description: 'H1 (path ownership). Repo-relative files/dirs this code_change task will touch, e.g. ["src/foo.ts", "src/mesh/**"] (a trailing /** claims the whole subtree; a bare directory with no /** claims only that literal path, not its contents). Absolute paths and ".." segments are rejected. For code_change only: at claim time, a candidate whose owned_paths overlaps another in-flight code_change task\'s declared paths is refused (owned_paths_conflict) instead of silently racing it. Optional and opt-in — an omitted declaration performs no overlap check for this task. Your report_completion.touched_files is compared against this declaration afterward and any mismatch is surfaced back to you as evidence, never rejected.' },
-            ownedPaths: { type: 'array', items: { type: 'string' }, description: 'CamelCase alias for owned_paths.' },
-            target_node_id: { type: 'string', description: 'Optional HARD constraint: ONLY this node may claim the task. No other node (especially a different machine) will ever claim it — if the target node has no idle session the task stays pending until it does. Use to route a queued task to a specific (e.g. freshly cloned) worktree node instead of letting the first idle base node claim it. Takes priority over prefer_worktree. An unresolvable target id is rejected at enqueue (no silent unpin).' },
-            targetNodeId: { type: 'string', description: 'CamelCase alias for target_node_id.' },
-            target_node: { type: 'string', description: 'Alias for target_node_id.' },
-            targetNode: { type: 'string', description: 'CamelCase alias for target_node_id.' },
-            prefer_worktree: { type: 'boolean', description: 'Optional: when true, route this task to the most recently cloned idle worktree node (avoids the main/base workspace preemptively claiming an isolated task). No-op if no worktree node exists; resolves to a target_node_id when one does.' },
-            preferWorktree: { type: 'boolean', description: 'CamelCase alias for prefer_worktree.' },
-            depends_on: { type: 'array', items: { type: 'string' }, description: 'Task ids that must complete before this task becomes claimable. Cycles are rejected at enqueue.' },
-            dependsOn: { type: 'array', items: { type: 'string' }, description: 'CamelCase alias for depends_on.' },
-            mission_id: { type: 'string', description: 'Mission this task belongs to (mesh_mission record id, full/exact). An unresolvable id is REJECTED at enqueue (mission_not_found), never silently attached — use mesh_mission_list to get a valid full id.' },
-            missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
-            priority: { ...enumOf(MESH_TASK_PRIORITIES), description: 'G6 (task-level scheduling priority). Within the claim tier a high task is pulled ahead of an older normal/low task (created_at is the tie-break); low is pulled last. Defaults to normal. This is the TASK priority (which task a node pulls first) — distinct from a node\'s schedulingPriority (which node work goes to). Use high to jump an urgent fix ahead of a backlog without cancelling the queue.' },
-            model: { type: 'string', description: 'Optional model override for the agent that runs this task, e.g. opus, sonnet, haiku. Best-effort: applied at launch for providers that support a model flag (claude-cli --model, ACP setConfigOption); ignored by providers that cannot honor it. Use a cheaper model for simple tasks to save tokens, a stronger one for hard work. Blank = the provider default.' },
-            thinkingLevel: { ...enumOf(MESH_THINKING_LEVELS), description: 'Optional reasoning-effort level for this task. Best-effort: applied at launch for providers that support it (claude-cli --effort, codex-cli reasoning effort, ACP thought_level); ignored otherwise. Use low for simple tasks (fewer tokens), high for hard reasoning.' },
-            difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: 'REQUIRED task execution difficulty — a ROUTING HINT, not a model selector. It is matched against each node\'s capability slots so the task lands on a slot configured for that difficulty, and THAT SLOT\'s own model + thinkingLevel are what launch. It does not by itself mean a cheaper or stronger model: to change what a difficulty runs on, edit the node\'s slots (mesh_node_slots_set) rather than picking a different difficulty. Classify each task by how hard the work actually is. An explicit model/thinkingLevel above always wins.' },
-            not_before: { type: ['number', 'string'], description: 'G7 (delayed execution). Hold the task pending until this time — an absolute epoch-ms number, a small relative-ms offset from now, or an ISO-8601 timestamp string.' },
-            notBefore: { type: ['number', 'string'], description: 'CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string.' },
-            max_retries: { type: 'number', description: 'P3 (retry cap). Max automatic requeue attempts before the task auto-fails instead of returning to pending. When requeueCount reaches this, mesh_queue_requeue auto-fails the task unless force=true. Omit to use the mesh policy default (maxTaskRetries, typically 1).' },
-            maxRetries: { type: 'number', description: 'CamelCase alias for max_retries.' },
-            thinking_level: { ...enumOf(MESH_THINKING_LEVELS), description: 'Snake_case alias for thinkingLevel. Optional reasoning-effort level for this task. Best-effort: applied at launch for providers that support it (claude-cli --effort, codex-cli reasoning effort, ACP thought_level); ignored otherwise. Use low for simple tasks (fewer tokens), high for hard reasoning.' },
-            block_duplicate: { type: 'boolean', description: 'G4 (duplicate detection, block mode). Default false = warn-only: if an in-flight (pending/assigned) task with the same message (+ target node when pinned) already exists, the task is still enqueued but the response carries duplicateSuspect. Set true to REFUSE the enqueue with code duplicate_suspect instead (structural TASKBUBBLE-DUP defense — use when re-sending a task that a slow prior turn may have already enqueued).' },
-            blockDuplicate: { type: 'boolean', description: 'CamelCase alias for block_duplicate.' },
-            allow_duplicate: { type: 'boolean', description: 'G4. Set true to skip duplicate detection entirely (no warning, no block) for an intentional re-enqueue of the same instruction.' },
-            allowDuplicate: { type: 'boolean', description: 'CamelCase alias for allow_duplicate.' },
+            task_mode: { ...enumOf(MESH_TASK_MODES), description: 'live_debug_readonly rejects write/push/deploy instructions and may run in parallel on a busy node (cheap for investigation).' },
+            readonly: { type: 'boolean', description: 'Read-only, composable with task_mode: no write isolation; write instructions rejected.' },
+            required_tags: { type: 'array', items: { type: 'string' }, description: 'Capability tags every eligible node must have, e.g. os=darwin, provider=codex-cli.' },
+            owned_paths: { type: 'array', items: { type: 'string' }, description: 'code_change only: repo-relative files/dirs this task will touch (dir/** = subtree). A claim overlapping another in-flight code_change task\'s paths is refused (owned_paths_conflict).' },
+            target_node_id: { type: 'string', description: 'HARD pin: only this node may claim. Beats prefer_worktree; unresolvable id rejected.' },
+            prefer_worktree: { type: 'boolean', description: 'Route to the most recently cloned idle worktree node (no-op if none).' },
+            depends_on: { type: 'array', items: { type: 'string' }, description: 'Task ids that must complete first; their completion summaries are appended ("Upstream results"). Cycles rejected.' },
+            mission_id: { type: 'string', description: 'Mission id (full, exact); an unknown id is rejected (mission_not_found).' },
+            priority: { ...enumOf(MESH_TASK_PRIORITIES), description: 'high jumps older normal/low work; default normal.' },
+            model: { type: 'string', description: 'Model override, e.g. opus (best-effort).' },
+            thinking_level: { ...enumOf(MESH_THINKING_LEVELS), description: 'Reasoning effort (best-effort).' },
+            difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: 'REQUIRED routing hint matched to node capability slots (the slot\'s model launches). Classify by real difficulty.' },
+            not_before: { type: ['number', 'string'], description: 'Hold pending until: epoch-ms, relative ms, or ISO-8601.' },
+            max_retries: { type: 'number', description: 'Requeues before auto-fail.' },
+            block_duplicate: { type: 'boolean', description: 'Refuse (duplicate_suspect) instead of warning on a duplicate.' },
+            allow_duplicate: { type: 'boolean', description: 'Skip duplicate detection.' },
             // design :692 — "The single tool should require an orchestration_decision".
-            // OPTIONAL here on purpose: Phase F is warn-only (see the discovery-meta note
-            // above), and a required field would break legacy/external clients that
-            // predate it. An omitted record degrades to decision_missing, which is itself
-            // the signal — never an enqueue failure.
+            // OPTIONAL here on purpose (D1 of the simplification design): a required
+            // field would break legacy/external clients. An omitted record degrades to
+            // decision_missing, which is itself the signal — never an enqueue failure.
             orchestration_decision: {
                 type: 'object',
-                description: 'Record of your planning decision, for adoption measurement: {decision, ready_worker_tasks, known_graph_steps, single_reason, capability_blockers}. On this single-task surface, single_reason says why one task was right — one of only_one_step_known, future_step_not_specifiable, same_session_continuation, legacy_client, operator_override. '
-                    + 'output_needed / workspace_unresolved / coordinator_action_between are NOT blockers any more (mesh_enqueue_batch covers them via inputs_from, workspace_ref and coordinator gates); reporting one returns a batch_capability_available warning. '
-                    + 'Optional and never rejected: omitting it is recorded as decision_missing, and declaring known_graph_steps >= 2 here is recorded as a declared eligible single. Provenance only — it never changes execution.',
+                description: 'Optional provenance: {decision, known_graph_steps, single_reason, capability_blockers}. '
+                    + 'single_reason: only_one_step_known | future_step_not_specifiable | same_session_continuation | legacy_client | operator_override. '
+                    + 'output_needed / workspace_unresolved / coordinator_action_between are not blockers (batch covers them).',
             },
-            orchestrationDecision: { type: 'object', description: 'CamelCase alias for orchestration_decision.' },
         },
         required: ['message', 'difficulty'],
     },
@@ -253,88 +252,62 @@ export const MESH_ENQUEUE_TASK_TOOL = {
 
 export const MESH_ENQUEUE_BATCH_TOOL = {
     name: 'mesh_enqueue_batch',
-    description: 'DEFAULT enqueue surface for a plan with two or more known graph steps. Atomically persists the graph plan and worker queue entries. Supports batch-local refs, completion dependencies, selected predecessor outputs through `inputs_from`, declarative `run_if`, delayed `workspace_ref` preparation, and coordinator gates. Worker dispatch still requires the shared dependency predicate: all active worker dependencies completed and no system block. Git workspace preparation is a compensated saga and is reported separately from DB atomicity. '
-        + 'Atomicity in detail: either EVERY task in the batch is inserted or NONE is (a mid-batch error such as a dependency cycle, invalid difficulty, or guardrail violation rolls the whole batch back). '
-        + 'Give each task a batch-local `ref` label and name sibling refs in `depends_on` (forward references allowed — array order does not matter). '
-        + 'A depends_on value that is not a ref in this batch must be an EXISTING queue task id; anything else is rejected. Per-task fields are the same as mesh_enqueue_task. Top-level mission_id applies to every task that lacks its own. '
-        + '`inputs_from` binds selected predecessor outputs into a later task (no hand-copying worker text), `run_if` branches on those outputs, `gates` declare steps that stop for a coordinator action '
-        + '(Refinery landing, approval, CI wait, publish, deploy) with downstream tasks pointing at them via `gated_by`, and `workspaces` + `workspace_ref` prepare a worktree later for a task that needs one. '
-        + 'These are strictly additive: a batch using only message/depends_on behaves exactly as before. Only graph-using batches create a graph, inspectable with mesh_graph_view.',
+    description: 'Atomically enqueue a SETTLED plan. Use only when 3+ steps are already known AND they need coordinator gates or deferred worktrees (workspace_ref); otherwise chain mesh_enqueue_task with depends_on. Never invent steps to fill a batch. '
+        + 'All tasks insert or none do (any invalid entry rolls back the batch). Entries name each other by batch-local `ref` in depends_on (forward refs OK; a non-ref value must be an existing task id). '
+        + 'Worktree preparation is a compensated saga and is reported separately from DB atomicity. Inspect with mesh_graph_view.',
     _meta: ENQUEUE_BATCH_DISCOVERY_META,
     inputSchema: {
         type: 'object' as const,
         properties: {
             tasks: {
                 type: 'array',
-                description: 'The tasks to enqueue atomically (max 50). Each entry accepts the same fields as mesh_enqueue_task, plus an optional batch-local `ref`.',
+                description: 'Tasks (max 50). Fields mean the same as in mesh_enqueue_task.',
                 items: {
                     type: 'object',
                     properties: {
-                        ref: { type: 'string', description: 'Batch-local label other entries\' depends_on may name (e.g. "investigate", "fix", "verify"). Never persisted — resolved to the generated task id at insert.' },
-                        message: { type: 'string', description: 'The task instruction for the agent.' },
-                        input: MESH_TASK_INPUT_SCHEMA,
-                        task_mode: { ...enumOf(MESH_TASK_MODES), description: 'Optional task-mode contract (same semantics as mesh_enqueue_task).' },
-                        taskMode: { ...enumOf(MESH_TASK_MODES), description: 'CamelCase alias for task_mode.' },
-                        readonly: { type: 'boolean', description: 'Optional read-only axis (orthogonal to task_mode); same semantics as mesh_enqueue_task.' },
-                        read_only: { type: 'boolean', description: 'Snake-case alias for readonly.' },
-                        requiredTags: { type: 'array', items: { type: 'string' }, description: 'Optional capability tags every eligible node must have, e.g. os=darwin, provider=codex-cli, worktree=<branch>.' },
-                        required_tags: { type: 'array', items: { type: 'string' }, description: 'Snake_case alias for requiredTags.' },
-                        owned_paths: { type: 'array', items: { type: 'string' }, description: 'H1 (path ownership); same semantics as mesh_enqueue_task. Repo-relative files/dirs this code_change task will touch (a trailing /** claims the subtree). Optional and opt-in — for code_change only, an overlapping declaration against another in-flight code_change task is refused at claim time.' },
-                        ownedPaths: { type: 'array', items: { type: 'string' }, description: 'CamelCase alias for owned_paths.' },
-                        target_node_id: { type: 'string', description: 'Optional HARD pin: only this node may claim the task. An unresolvable id rejects the WHOLE batch (atomic).' },
-                        targetNodeId: { type: 'string', description: 'CamelCase alias for target_node_id.' },
-                        target_node: { type: 'string', description: 'Alias for target_node_id.' },
-                        targetNode: { type: 'string', description: 'CamelCase alias for target_node_id.' },
-                        prefer_worktree: { type: 'boolean', description: 'Route to the most recently cloned idle worktree node (no-op when none exists).' },
-                        preferWorktree: { type: 'boolean', description: 'CamelCase alias for prefer_worktree.' },
-                        depends_on: { type: 'array', items: { type: 'string' }, description: 'Refs of sibling entries in THIS batch (forward references allowed) and/or EXISTING queue task ids that must complete before this task becomes claimable. Cycles and unknown values reject the whole batch.' },
-                        dependsOn: { type: 'array', items: { type: 'string' }, description: 'CamelCase alias for depends_on.' },
-                        mission_id: { type: 'string', description: 'Per-task mission override (full/exact id); defaults to the top-level mission_id. An unresolvable id rejects the WHOLE batch (atomic).' },
-                        missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
-                        priority: { ...enumOf(MESH_TASK_PRIORITIES), description: 'G6 task-level scheduling priority (same semantics as mesh_enqueue_task).' },
-                        model: { type: 'string', description: 'Optional model override for the agent that runs this task (best-effort at launch).' },
-                        thinking_level: { ...enumOf(MESH_THINKING_LEVELS), description: 'Snake_case alias for thinkingLevel. Optional reasoning-effort level (best-effort at launch).' },
-                        thinkingLevel: { ...enumOf(MESH_THINKING_LEVELS), description: 'Optional reasoning-effort level (best-effort at launch).' },
-                        difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: 'REQUIRED per task — routing hint matched against node capability slots (same semantics as mesh_enqueue_task).' },
-                        not_before: { type: ['number', 'string'], description: 'G7 delayed execution: hold the task pending until this time (epoch-ms, relative-ms, or ISO string).' },
-                        notBefore: { type: ['number', 'string'], description: 'CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string.' },
-                        max_retries: { type: 'number', description: 'P3 retry cap (same semantics as mesh_enqueue_task).' },
-                        maxRetries: { type: 'number', description: 'CamelCase alias for max_retries.' },
-                        // ── batch v2 graph fields (design :568-570). All optional; a batch
-                        //    using none of them takes the unchanged compatibility path. ──
+                        ref: { type: 'string', description: 'Batch-local label for depends_on / inputs_from.' },
+                        message: { type: 'string' },
+                        input: { type: 'object' },
+                        task_mode: enumOf(MESH_TASK_MODES),
+                        readonly: { type: 'boolean' },
+                        required_tags: { type: 'array', items: { type: 'string' } },
+                        owned_paths: { type: 'array', items: { type: 'string' }, description: 'code_change path ownership, as in mesh_enqueue_task.' },
+                        target_node_id: { type: 'string', description: 'HARD pin; an unresolvable id rejects the batch.' },
+                        prefer_worktree: { type: 'boolean' },
+                        depends_on: { type: 'array', items: { type: 'string' }, description: 'Sibling refs and/or existing task ids that must complete first.' },
+                        mission_id: { type: 'string', description: 'Overrides the top-level mission_id.' },
+                        priority: enumOf(MESH_TASK_PRIORITIES),
+                        model: { type: 'string' },
+                        thinking_level: enumOf(MESH_THINKING_LEVELS),
+                        difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: 'REQUIRED routing hint.' },
+                        not_before: { type: ['number', 'string'] },
+                        max_retries: { type: 'number' },
+                        // ── graph fields (design :568-570). All optional; a batch using
+                        //    none of them takes the unchanged compatibility path. ──
                         inputs_from: {
                             type: 'array',
-                            description: 'Bind SELECTED outputs of predecessor steps into this task, instead of hand-copying a worker\'s text into the instruction. Each entry is {from: <ref of a predecessor task or gate IN THIS BATCH>, select: <RFC-6901 JSON Pointer into that step\'s completion envelope>, as: <binding name>, required?: bool}. Bound values are appended to your immutable instruction inside a clearly-marked untrusted-evidence envelope with provenance and a digest — they can never alter routing, permissions, task mode or model. Using this makes the task wait for the graph to bind it before it becomes claimable. The binding shape is validated when the batch is ACCEPTED, so a malformed entry rejects the whole batch immediately instead of failing later once the upstream work has already run.',
+                            description: 'Bind predecessor outputs (JSON Pointer) into this task as untrusted evidence; validated at acceptance. Only when an exact field is needed.',
                             items: MESH_INPUT_BINDING_SCHEMA,
                         },
-                        inputsFrom: { type: 'array', description: 'CamelCase alias for inputs_from.', items: MESH_INPUT_BINDING_SCHEMA },
-                        run_if: { type: 'object', description: 'Declarative condition deciding whether this task runs at all, evaluated against predecessor outputs and released gate outcomes (e.g. only run the deploy when the gate outcome was `passed`). A condition that is false SKIPS the task — skipped is terminal and, deliberately, is NOT treated as completed, so it never satisfies a downstream dependency. A malformed condition fails closed rather than defaulting to true.' },
-                        runIf: { type: 'object', description: 'CamelCase alias for run_if.' },
-                        on_false: { type: 'string', enum: ['skip'], description: 'What to do when run_if is false. Only `skip` is defined (and is the default).' },
-                        onFalse: { type: 'string', enum: ['skip'], description: 'CamelCase alias for on_false.' },
-                        on_upstream_skip: { type: 'string', enum: ['skip', 'omit_dependency'], description: 'What happens to this task when an upstream step is SKIPPED. `skip` (default) propagates the skip. `omit_dependency` drops that edge from this task\'s dependency projection so it can still run — the explicit way to say "run anyway if that branch was not taken".' },
-                        onUpstreamSkip: { type: 'string', enum: ['skip', 'omit_dependency'], description: 'CamelCase alias for on_upstream_skip.' },
-                        workspace_ref: { type: 'string', description: 'Run this task in a worktree declared in the top-level `workspaces` array, prepared LATER rather than before the batch is accepted. The task stays held until that worktree is ready, then it is pinned to it automatically. Worktree preparation is a compensated saga: it is reported separately as workspacePreparation and is never part of the batch\'s DB atomicity.' },
-                        workspaceRef: { type: 'string', description: 'CamelCase alias for workspace_ref.' },
-                        gated_by: { type: 'array', items: { type: 'string' }, description: 'Refs of gates in this batch\'s `gates` array that must be RELEASED before this task may run. This is how you say "do not start until I have landed/approved/deployed". Do NOT put a gate ref in depends_on — a gate is an intentional stop, not an ordinary queue dependency, and listing one there is rejected.' },
-                        gatedBy: { type: 'array', items: { type: 'string' }, description: 'CamelCase alias for gated_by.' },
+                        workspace_ref: { type: 'string', description: 'Run in a `workspaces` worktree prepared later; the task waits until it is ready, then is pinned to it.' },
+                        gated_by: { type: 'array', items: { type: 'string' }, description: 'Gate refs that must be RELEASED first. Never put a gate ref in depends_on (rejected).' },
                     },
                     required: ['message', 'difficulty'],
                 },
             },
             gates: {
                 type: 'array',
-                description: 'Coordinator GATES: graph steps that intentionally stop progress until YOU act (Refinery landing, approval, CI wait, publish, deploy). The daemon never performs the action and never auto-passes a gate — you claim it (mesh_graph_gate_claim), do the thing, then release it (mesh_graph_gate_release). Declare the gate here and point downstream tasks at it with gated_by, so the whole plan can be submitted at once instead of waiting to enqueue the later steps by hand. Gate refs share ONE namespace with task and workspace refs.',
+                description: 'Coordinator gates: stop until YOU claim (mesh_graph_gate_claim), act, and release (mesh_graph_gate_release); never auto-passed. Refs share one namespace with tasks/workspaces.',
                 items: {
                     type: 'object',
                     properties: {
-                        ref: { type: 'string', description: 'Label for this gate; downstream tasks name it in gated_by.' },
-                        action: { type: 'string', enum: ['refinery', 'approval', 'ci_wait', 'publish', 'deploy', 'custom'], description: 'What kind of action this gate is waiting for. A metadata label only — it tells you (and the view) what the gate means; the daemon never executes it.' },
-                        instructions: { type: 'string', description: 'What the coordinator must do at this gate, shown when the gate opens.' },
-                        depends_on: { type: 'array', items: { type: 'string' }, description: 'Refs of tasks/gates in this batch that must complete before this gate OPENS for a coordinator.' },
-                        on_timeout: { type: 'string', enum: ['hold', 'cancel_downstream', 'fail_graph'], description: 'What happens when the gate passes its deadline. `hold` (default) keeps downstream blocked for an explicit reclaim; `cancel_downstream` cancels the pending downstream branch; `fail_graph` fails the graph. There is deliberately NO auto-release option: a timeout is never treated as the action having succeeded.' },
-                        deadline_seconds: { type: 'number', description: 'Seconds from when the gate OPENS until its on_timeout policy fires.' },
-                        lease_seconds: { type: 'number', description: 'Default claim lease length for this gate (a claim may override it).' },
+                        ref: { type: 'string' },
+                        action: { type: 'string', enum: ['refinery', 'approval', 'ci_wait', 'publish', 'deploy', 'custom'], description: 'Label only; never executed.' },
+                        instructions: { type: 'string', description: 'What to do when the gate opens.' },
+                        depends_on: { type: 'array', items: { type: 'string' }, description: 'Refs that must complete before the gate opens.' },
+                        on_timeout: { type: 'string', enum: ['hold', 'cancel_downstream', 'fail_graph'], description: 'At the deadline. Default hold; never auto-releases.' },
+                        deadline_seconds: { type: 'number', description: 'Seconds after opening until on_timeout fires.' },
+                        lease_seconds: { type: 'number', description: 'Default claim lease.' },
                         eligible_coordinator_session_id: { type: 'string', description: 'Restrict claiming to one coordinator session.' },
                     },
                     required: ['ref'],
@@ -342,46 +315,29 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
             },
             workspaces: {
                 type: 'array',
-                description: 'Worktrees to prepare LATER for tasks that name them via workspace_ref — the way to plan "clone a worktree, then work in it" as one batch instead of enqueueing, waiting, and enqueueing again. Preparation is a compensated saga with owned-resource cleanup: it happens outside the batch transaction and is reported as workspacePreparation, so `atomic: true` never claims the git side effects happened.',
+                description: 'Worktrees prepared LATER for tasks naming them in workspace_ref (outside the DB transaction).',
                 items: {
                     type: 'object',
                     properties: {
-                        ref: { type: 'string', description: 'Label tasks use in workspace_ref. Shares one namespace with task and gate refs.' },
-                        source_node_id: { type: 'string', description: 'Node whose workspace the worktree is cloned from.' },
-                        sourceNodeId: { type: 'string', description: 'CamelCase alias for source_node_id.' },
-                        purpose: { type: 'string', description: 'Short label folded into the derived branch name.' },
-                        base_revision: { type: 'string', description: 'Base revision to prepare from.' },
-                        baseRevision: { type: 'string', description: 'CamelCase alias for base_revision.' },
-                        desired_path: { type: 'string', description: 'Optional explicit worktree path.' },
-                        desiredPath: { type: 'string', description: 'CamelCase alias for desired_path.' },
-                        cleanup_on_graph_failure: { type: 'boolean', description: 'Remove the worktree this graph created if the graph fails. Only ever removes a worktree the saga itself owns.' },
-                        cleanupOnGraphFailure: { type: 'boolean', description: 'CamelCase alias for cleanup_on_graph_failure.' },
+                        ref: { type: 'string' },
+                        source_node_id: { type: 'string', description: 'Node whose workspace is cloned.' },
+                        purpose: { type: 'string', description: 'Folded into the branch name.' },
+                        base_revision: { type: 'string' },
+                        desired_path: { type: 'string' },
+                        cleanup_on_graph_failure: { type: 'boolean', description: 'Remove the worktree this graph created if the graph fails.' },
                     },
                     required: ['ref'],
                 },
             },
-            batch_id: { type: 'string', description: 'Your own idempotency key for this batch. Re-sending the SAME batch_id with an identical plan replays and inserts nothing new; the same batch_id with a different plan is rejected (batch_id_conflict). Use it whenever a retry might duplicate work. Supplying it records the batch as a graph (so the key can be enforced), which is why the response then carries graphId — task behavior is unchanged.' },
-            batchId: { type: 'string', description: 'CamelCase alias for batch_id.' },
-            orchestration_decision: {
-                type: 'object',
-                description: 'Optional record of your planning decision, for adoption measurement: {decision, ready_worker_tasks, known_graph_steps, single_reason, capability_blockers}. It is stored as provenance with the graph and never changes execution.',
-            },
-            orchestrationDecision: { type: 'object', description: 'CamelCase alias for orchestration_decision.' },
-            mission_id: { type: 'string', description: 'Optional. Mission every task in this batch belongs to unless an entry overrides it (full/exact id). Recommended for multi-task work: create the mission first (mesh_mission_upsert) and pass it here. Omit entirely for a one-off batch that does not need mission tracking. An unresolvable id rejects the WHOLE batch (atomic) before anything is inserted.' },
-            missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
-            block_duplicate: { type: 'boolean', description: 'G4: when any entry matches an in-flight task with the same message+target, refuse the WHOLE batch (it is atomic) with code duplicate_suspect. Default false = warn-only via duplicateSuspects in the response.' },
-            blockDuplicate: { type: 'boolean', description: 'CamelCase alias for block_duplicate.' },
-            allow_duplicate: { type: 'boolean', description: 'G4: skip duplicate detection entirely for every entry (intentional re-enqueue).' },
-            allowDuplicate: { type: 'boolean', description: 'CamelCase alias for allow_duplicate.' },
+            batch_id: { type: 'string', description: 'Idempotency key: same id + same plan replays as a no-op; a different plan is rejected.' },
+            orchestration_decision: { type: 'object', description: 'Optional provenance record; never changes execution.' },
+            mission_id: { type: 'string', description: 'Mission for every entry without its own (full, exact); unknown id rejects the batch.' },
+            block_duplicate: { type: 'boolean', description: 'Refuse the whole batch on a duplicate instead of warning.' },
+            allow_duplicate: { type: 'boolean', description: 'Skip duplicate detection.' },
             on_dependency_failure: {
                 type: 'string',
                 enum: ['block', 'cancel'],
-                description: 'on_dependency_failure controls downstream tasks when a required worker task fails or is cancelled. `block` (default) keeps downstream pending and automatically recovers if the predecessor is retried and later completes. `cancel` terminally cancels the dependent branch; it is not revived by predecessor retry.',
-            },
-            onDependencyFailure: {
-                type: 'string',
-                enum: ['block', 'cancel'],
-                description: 'CamelCase alias for on_dependency_failure.',
+                description: 'On a failed/cancelled dependency: block (default; recovers if the predecessor is retried and completes) or cancel the dependent branch.',
             },
         },
         required: ['tasks'],
@@ -399,7 +355,8 @@ export const MESH_GRAPH_GATE_CLAIM_TOOL = {
         + 'Claim returns a monotonically increasing leaseGeneration and an opaque fencingToken — you MUST present both at release, so keep them. '
         + 'A gate whose lease has lapsed can be taken over by a new claim at a HIGHER generation; when that happens the response sets '
         + 'ambiguousExternalOutcome, meaning the previous owner may already have performed the external side effect — reconcile external evidence '
-        + '(did the merge/publish already land?) before doing it again. Use mesh_graph_view to find gates awaiting a coordinator.',
+        + '(did the merge/publish already land?) before doing it again. Use mesh_graph_view to find gates awaiting a coordinator. '
+        + 'EXTEND-ONLY mode: pass extend_seconds (with gate_id only) to push a gate\'s deadline out WITHOUT taking a lease — e.g. extend_seconds=86400 for a gate that expired under on_timeout=hold, or is about to, that you still intend to act on.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -409,6 +366,12 @@ export const MESH_GRAPH_GATE_CLAIM_TOOL = {
             leaseSeconds: { type: 'number', description: 'CamelCase alias for lease_seconds.' },
             extend_deadline_seconds: { type: 'number', description: 'Push the gate DEADLINE out by this many seconds from now. Distinct from the lease: the deadline is when the on_timeout policy (hold / cancel_downstream / fail_graph) fires. Reclaiming a gate that expired under on_timeout=hold does NOT refresh its deadline unless you pass this, so the next sweep would expire it again.' },
             extendDeadlineSeconds: { type: 'number', description: 'CamelCase alias for extend_deadline_seconds.' },
+            // graph-orchestration-simplification D3(c): the gate `extend` verb. An optional
+            // arg on claim rather than a 61st tool (ALL_MESH_TOOLS is pinned at 60 —
+            // scripts/verify-docs.mjs counts it). Dispatches to the daemon command
+            // `mesh_graph_gate_extend {mesh_id, gate_id, extend_seconds}` — the same
+            // command the dashboard's "Extend 24h" button calls — and takes NO lease.
+            extend_seconds: { type: 'number', description: 'Extend-only: push the gate deadline out by this many seconds and return — NO claim, NO lease (daemon command mesh_graph_gate_extend). Cannot be combined with lease_seconds / extend_deadline_seconds. Elapsed time is still never completion evidence: extending only delays on_timeout.' },
             coordinator_session_id: { type: 'string', description: 'Owner session for the lease. Defaults to this coordinator session; pass explicitly only when driving a gate on behalf of another session.' },
             coordinatorSessionId: { type: 'string', description: 'CamelCase alias for coordinator_session_id.' },
         },
@@ -1642,11 +1605,12 @@ export const ALL_MESH_TOOLS = [
     MESH_STATUS_TOOL,
     MESH_ROUTE_PREVIEW_TOOL,
     MESH_LIST_NODES_TOOL,
-    // GRAPH-ORCHESTRATION Phase F — batch BEFORE task. Registry order is what a
-    // client that lists tools without ranking sees first, so the default enqueue
-    // surface leads and the single-task fallback follows it.
-    MESH_ENQUEUE_BATCH_TOOL,
+    // graph-orchestration-simplification D1 — task BEFORE batch. Registry order
+    // is what a client that lists tools without ranking sees first, so the
+    // incremental default (`mesh_enqueue_task` + `depends_on`) leads and the
+    // settled-plan batch follows it (reversal of Phase F's batch-first order).
     MESH_ENQUEUE_TASK_TOOL,
+    MESH_ENQUEUE_BATCH_TOOL,
     MESH_VIEW_QUEUE_TOOL,
     // GRAPH-ORCHESTRATION Phase E — placed next to the queue/enqueue tools so a
     // coordinator that loaded the batch schema also discovers how to pass a gate.

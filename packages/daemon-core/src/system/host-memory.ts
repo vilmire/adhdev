@@ -56,6 +56,10 @@ async function updateDarwinMemoryCache(): Promise<void> {
             encoding: 'utf-8',
             timeout: 4000,
             maxBuffer: 256 * 1024,
+            // Inert here (this function returns above unless platform === 'darwin'),
+            // but windowsHide is a no-op on non-win32, so there's no reason to leave
+            // this call unhidden against a future loosening of that platform guard.
+            windowsHide: true,
         });
         const pageSizeMatch = stdout.match(/page size of (\d+)\s*bytes/i);
         const pageSize = pageSizeMatch ? parseInt(pageSizeMatch[1], 10) : 4096;

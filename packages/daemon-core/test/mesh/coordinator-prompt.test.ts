@@ -1277,27 +1277,23 @@ describe('Repo Mesh coordinator prompt', () => {
   })
 })
 
-describe('Repo Mesh coordinator prompt — batch-first orchestration (P4)', () => {
-  // GRAPH-ADOPTION P4. Observed, not hypothetical: a coordinator session with
-  // graph-shaped work in front of it called mesh_enqueue_batch ZERO times.
+describe('Repo Mesh coordinator prompt — incremental enqueue is the default (D1)', () => {
+  // GRAPH-ORCHESTRATION D1 (docs/design/2026-09-25-graph-orchestration-simplification.md).
+  // Measured 2026-09-02..09-24: 71% of graphs had 1-2 nodes, queue-level depends_on was
+  // used in only 1.2% of tasks, and coordinators had generated zero graphs in the prior
+  // 40h — the batch-first push (P4, below) never produced the batch-shaped usage it was
+  // meant to. Root cause per the design doc: work is discovered incrementally as results
+  // come back, but the batch-first interface demanded declaring the whole plan up front,
+  // and the old prompt spent ten rebuttal bullets trying to argue coordinators out of
+  // the natural incremental shape instead of just supporting it.
   //
-  // The measured asymmetry this addresses: in the Rules section, exactly two rules
-  // had a DEDICATED bullet whose whole subject was that rule plus an imperative
-  // back-reference ("Apply Workflow 3.b0" / "3.b1") — and both were followed 100%
-  // of the time. batch-first (3.a) had NO such bullet; it appeared only as a clause
-  // inside two rules about OTHER subjects, each listing batch and task as co-equal
-  // options, which flattens the preference instead of stating it.
-  //
-  // Two structural fixes are asserted here, and one is deliberately NOT made:
-  //   - the trigger is a BINARY, checkable question (like 3.b0's "does this verify a
-  //     physical environment, or only change code?") rather than a predicate about
-  //     the coordinator's own private momentary awareness ("the currently known plan
-  //     contains two or more steps"), which has no observable referent;
-  //   - batch-first gets the same dedicated-bullet + imperative-back-reference shape
-  //     as the two rules that are actually followed.
-  //   - ★ the anti-speculation guard STAYS. Inventing downstream steps to pad a batch
-  //     is a real harm, and the frontier case where a single genuinely is correct must
-  //     remain expressible.
+  // D1 flips the default: mesh_enqueue_task + depends_on chaining is now the everyday
+  // path, with an automatic "Upstream results" appendix replacing most inputs_from use.
+  // mesh_enqueue_batch is reserved for a settled 3+-step plan that needs a gate or a
+  // deferred worktree. All ten rebuttal sub-bullets from the old "Batch-first rule" are
+  // gone; orchestration_decision is optional; gates get a default 24h deadline and
+  // auto-close when every dependent goes terminal, so "if you cancel the tasks behind a
+  // gate, close the gate too" is retired along with it.
   const meshFixture = () => ({
     id: 'mesh_1',
     name: 'ADHDev',
@@ -1308,160 +1304,116 @@ describe('Repo Mesh coordinator prompt — batch-first orchestration (P4)', () =
   })
   const prompt = () => buildCoordinatorSystemPrompt({ mesh: meshFixture() as any, coordinatorCliType: 'claude-cli' })
 
-  it('P4-b: states the batch trigger as a binary question about a checkable fact, not about the coordinator\'s own awareness', () => {
+  it('D1: states the new default — mesh_enqueue_task, chained via depends_on, batch reserved for settled 3+-step plans', () => {
     const p = prompt()
 
-    // The question itself: will I read this result and then dispatch more work?
-    // Its referent is an intention the coordinator can actually check, unlike
-    // "the currently known plan contains two or more graph steps".
-    expect(p).toContain('will I read its result and then dispatch more work')
-
-    // Both answers must be spelled out, so the check terminates in an action.
-    expect(p).toContain('You will act on the result → `mesh_enqueue_batch`')
-    expect(p).toContain('The result goes to the user and nothing follows → `mesh_enqueue_task`')
-
-    // ★ The specific escape hatch the old wording licensed: "I need to see the result
-    // first" read as a reason to skip the graph, when it is precisely what inputs_from
-    // and gates encode. Every one of the observed misses was this case.
-    expect(p).toContain('is HOW a graph edge is expressed, not a reason to skip the graph')
-    expect(p).toContain('An investigation you plan to act on is, by this test, a declarable two-step plan')
-
-    // 3.b0 pre-refutes its own escape hatch ("A mesh with several nodes does not
-    // remove this requirement"); 3.a must do the same rather than supply one.
-    expect(p).toContain('A mesh with idle nodes or a short plan does not remove this requirement')
+    expect(p).toContain('**Incremental enqueue rule.** Default to `mesh_enqueue_task`')
+    expect(p).toContain('chain the new task to it with `depends_on`')
+    expect(p).toContain('the graph grows append-only')
+    expect(p).toContain('Use `mesh_enqueue_batch` only when three or more steps are already settled AND the plan needs a coordinator gate or a deferred worktree (`workspace_ref`)')
+    expect(p).toContain('Never invent speculative steps just to reach that threshold')
   })
 
-  it('P4-b/D1: pre-refutes the three self-justifications that actually produce a single, not just the trigger question', () => {
-    // ★ The binary question alone reproduces only HALF of 3.b0's mechanism. What makes
-    // b0 work is two layers: (1) a binary question over an observable property, and
-    // (2) a PRE-EMPTIVE refutation of its own escape hatch (":1159" — "A mesh with
-    // several nodes does not remove this requirement" / "idle base nodes are not a
-    // reason to skip cloning"). A rule that asks the question but leaves the excuses
-    // standing is answerable in the coordinator's favour every time.
+  it('D1: documents the automatic Upstream results appendix as the reason inputs_from is now rarely needed', () => {
     const p = prompt()
-
-    // (1) "The only thing I'm sure of is this one task." Refuted by pointing at the
-    // confusion it rests on: confidence is not step count. In the observed session TWO
-    // steps were settled simultaneously and it still went out as two separate singles.
-    expect(p).toContain('is not evidence of a single')
-    expect(p).toContain('That feeling is about your confidence, not about how many steps are settled')
-    expect(p).toContain('Count the steps you would actually dispatch')
-
-    // (2) "I can't pick the next step until I see the result." Refuted by turning the
-    // sentence on itself: deciding FROM a result presupposes the step exists; what is
-    // unknown is the branch, which is exactly what run_if/inputs_from/gates encode.
-    expect(p).toContain('states that the next step EXISTS')
-    expect(p).toContain('What the result decides is *which branch you take*, not *whether* there is a follow-up')
-
-    // (3) "A gate/batch is overhead." Refuted with the actual cost accounting, and the
-    // one true exception named so the refutation stays honest (a dependent-less gate IS
-    // waste — which is precisely what the P3 runtime advisory reports).
-    expect(p).toContain('is not overhead when something follows it')
-    expect(p).toContain('The only genuinely wasteful gate is one nothing depends on')
+    expect(p).toContain('automatically receives an "Upstream results" appendix summarizing its predecessors\' completions')
+    expect(p).toContain('so you rarely need `inputs_from` as well')
+    expect(p).toContain('reach for `inputs_from` only when a specific field must be bound exactly')
   })
 
-  it('P4/D1: draws the boundary between under-declaring and speculating, so the rebuttals cannot invert the anti-speculation guard', () => {
-    // ★ The hazard in pushing hard against "I'll just enqueue the next one later" is
-    // inducing the OPPOSITE error — padding batches with invented steps. Both failures
-    // must be nameable and mutually exclusive, or the strengthened rule trades one
-    // wrong behavior for another.
+  it('D1: orchestration_decision is optional, not a violation to omit', () => {
     const p = prompt()
-
-    expect(p).toContain('**The line between the two failures.**')
-    // The discriminator: does the step exist in the plan — not whether it is fully
-    // specified. This is what keeps "known but branch-dependent" on the batch side.
-    expect(p).toContain('the test is whether the step exists in your plan, not whether its details are settled')
-    expect(p).toContain('They never both apply to the same step')
-
-    // The tie-break must resolve to the HONEST answer with a recorded reason, rather
-    // than to either default — otherwise ambiguity silently favours one failure mode.
-    expect(p).toContain('enqueue the single and record `future_step_not_specifiable`')
-
-    // The original guard survives verbatim alongside the new boundary.
-    expect(p).toContain('Do not invent speculative downstream instructions merely to form a batch')
+    expect(p).toContain('`orchestration_decision` is optional')
+    expect(p).toContain('omitting it is not a violation')
+    // The old mandatory-declaration language must be gone.
+    expect(p).not.toContain('Omitting it is recorded as `decision_missing`')
   })
 
-  it('P4/D2: states the gate↔downstream pairing in the PROMPT, not only in the P3 runtime advisory', () => {
-    // ★ P3 explains materializedCount: 0 in the gate-release RESPONSE — i.e. after the
-    // coordinator has already spent the claim/release round-trip. The premise it rests
-    // on ("a gate pays off only when something depends on it") was never stated up
-    // front, so the lesson could only ever be learned by committing the mistake first.
-    // Same content, moved ahead of the action.
+  it('D1: gates get a default 24h deadline and auto-close, so manual gate-closing on cancel is retired', () => {
     const p = prompt()
-
-    expect(p).toContain('**A gate and its dependents are one unit**')
-    expect(p).toContain('a gate earns its keep only when some task names it in `gated_by`')
-    // The waste case is named in the same terms the runtime advisory uses, so the
-    // prompt sentence and the response message reinforce rather than compete.
-    expect(p).toContain('A gate nothing depends on opens nothing and is pure claim/release overhead')
+    expect(p).toContain('Gates get a default 24-hour deadline')
+    expect(p).toContain('closed automatically once every task behind them reaches a terminal state')
+    expect(p).toContain('you no longer need to close a gate by hand after cancelling its dependents')
+    expect(p).toContain('an `expired` gate notice still means the coordinator must act: release it, abandon it, or extend it')
   })
 
-  it('P4-a: batch-first has a dedicated Rules bullet with an imperative back-reference, like 3.b0 and 3.b1', () => {
+  it('D1: the retired batch-first rebuttal passages are gone from the prompt', () => {
     const p = prompt()
-    const rules = p.slice(p.indexOf('## Rules'))
+    const retired = [
+      'Batch-first',
+      'A mesh with idle nodes or a short plan does not remove this requirement',
+      'That feeling is about your confidence, not about how many steps are settled',
+      'states that the next step EXISTS',
+      'A gate or a batch is not overhead when something follows it',
+      'close the gate too',
+      'omitting it is a violation',
+      'The line between the two failures',
+    ]
+    for (const phrase of retired) expect(p).not.toContain(phrase)
 
-    // The shape that correlates with 100% compliance: a bullet whose subject IS the
-    // rule, naming the workflow step imperatively.
-    expect(rules).toContain('- **Batch is the default enqueue surface.** Apply Workflow 3.a:')
-
-    // The two rules this shape is copied from must still be present and unchanged in
-    // kind — this change adds a third, it does not replace them.
-    expect(rules).toContain('Apply Workflow 3.b0')
-    expect(rules).toContain('Apply Workflow 3.b1')
+    const present = [
+      'Incremental enqueue rule',
+      'Default to `mesh_enqueue_task`',
+      'the graph grows append-only',
+      '`orchestration_decision` is optional',
+      'closed automatically once every task behind them reaches a terminal state',
+    ]
+    for (const phrase of present) expect(p).toContain(phrase)
   })
 
-  it('P4-c: the sub-agent and front-load rules no longer present batch and task as co-equal options', () => {
+  it('D1: the tool table reflects the new default/exception roles', () => {
+    const p = prompt()
+    expect(p).toContain('**DEFAULT enqueue surface.**')
+    expect(p).toContain('For a **settled plan of three or more steps** that needs a coordinator gate or a deferred worktree')
+    expect(p).not.toContain('**DEFAULT enqueue surface** for a plan with two or more known graph steps')
+    expect(p).not.toContain('SINGLE-TASK FALLBACK')
+  })
+
+  it('D1: the Rules-section sub-agent and front-load bullets no longer name mesh_enqueue_batch as the default', () => {
     const p = prompt()
 
-    // Same subjects as before (delegate everything / front-load instructions), but
-    // the enqueue surfaces are now ordered rather than listed as a flat fork.
-    expect(p).toContain('must be delegated through `mesh_enqueue_batch` (the default — see Workflow 3.a), falling back to `mesh_enqueue_task` only for a terminal single step')
-    expect(p).toContain('in whichever dispatch surface Workflow 3.a selects')
+    expect(p).toContain('must be delegated through `mesh_enqueue_task` (the default — see Workflow 3.a)')
+    expect(p).toContain('escalating to `mesh_enqueue_batch` only for a settled multi-step plan needing gates or deferred worktrees')
+    expect(p).toContain('mesh_enqueue_task` by default, chained with `depends_on`; `mesh_enqueue_batch` for a settled multi-step plan')
 
-    // ★ The original subjects survive — this is a rewording, not a deletion.
+    // The original subjects survive — this is a rewording, not a deletion.
     expect(p).toContain('**Never use local sub-agents.**')
     expect(p).toContain('**Front-load immutable task instructions.**')
     expect(p).toContain('`mesh_magi_review`')
     expect(p).toContain('`inputs_from` bindings')
 
-    // The flattening phrasings themselves must be gone.
-    expect(p).not.toContain('`mesh_enqueue_batch` for a currently known multi-step graph, `mesh_enqueue_task` for one ready task')
-    expect(p).not.toContain('in `mesh_enqueue_batch` / `mesh_enqueue_task` / `mesh_send_task`')
+    // The old batch-first phrasing must be gone.
+    expect(p).not.toContain('must be delegated through `mesh_enqueue_batch` (the default — see Workflow 3.a), falling back to `mesh_enqueue_task` only for a terminal single step')
+    expect(p).not.toContain('- **Batch is the default enqueue surface.**')
   })
 
-  it('P4: the anti-speculation guard is PRESERVED — a genuine frontier single stays correct', () => {
+  it('D1: the Tool Exposure Preflight no longer mandates loading mesh_enqueue_batch by exact name', () => {
     const p = prompt()
+    const preflight = p.slice(p.indexOf('## Tool Exposure Preflight'), p.indexOf('## Tool Exposure Preflight') + 2000)
 
-    // ★ Over-forcing batches is its own harm: a fabricated downstream step is worse
-    // than a single enqueue. This guard must survive the batch-first push.
-    expect(p).toContain('Do not invent speculative downstream instructions merely to form a batch')
-    expect(p).toContain('is single-task enqueue correct')
+    // The batch-discovery mandate is gone.
+    expect(preflight).not.toContain('include `mesh_enqueue_batch` by exact name')
+    expect(preflight).not.toContain('never search for or load only `mesh_enqueue_task`')
+    expect(preflight).not.toContain('classify the whole currently known work frontier')
 
-    // But it must read as "check the three surfaces FIRST", not as a ready-made
-    // justification available before any check.
-    expect(p).toContain('check the three declaration surfaces before concluding a step is unstatable')
+    // The tool-availability check survives.
+    expect(preflight).toContain('confirm that the actual callable tool list includes `mesh_status`')
+    expect(preflight).toContain('MCP server/tool manifest is stale or not injected yet')
   })
 
-  it('P4: the single surface is told to declare WHY it was single', () => {
+  it('D1: the difficulty guidance names mesh_enqueue_task as the default, mesh_enqueue_batch for settled multi-step plans', () => {
     const p = prompt()
-    expect(p).toContain('`orchestration_decision`')
-    // The closed enum, so the coordinator can pick a legal value without guessing.
-    for (const reason of [
-      'only_one_step_known', 'future_step_not_specifiable', 'same_session_continuation',
-      'legacy_client', 'operator_override',
-    ]) {
-      expect(p).toContain(reason)
-    }
+    expect(p).toContain('Pass `difficulty` on `mesh_enqueue_task` (the default), or on every worker entry in `mesh_enqueue_batch` for a settled multi-step plan')
   })
 
-  it('P4: stays provider-neutral — no rule is written for one CLI', () => {
+  it('D1: stays provider-neutral — no rule is written for one CLI', () => {
     // The prompt is shared by claude / codex / hermes / antigravity coordinators.
     const p = prompt()
     const rules = p.slice(p.indexOf('## Rules'))
-    const batchBullet = rules.split('\n').find(l => l.includes('Batch is the default enqueue surface'))!
-    expect(batchBullet).toBeTruthy()
+    const enqueueBullet = rules.split('\n').find(l => l.includes('is the default enqueue surface'))!
+    expect(enqueueBullet).toBeTruthy()
     for (const provider of ['claude', 'codex', 'hermes', 'antigravity', 'Claude Code']) {
-      expect(batchBullet).not.toContain(provider)
+      expect(enqueueBullet).not.toContain(provider)
     }
   })
 })

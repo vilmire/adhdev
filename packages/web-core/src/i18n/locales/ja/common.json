@@ -1032,6 +1032,21 @@
             "schedUnpinnedTitle": "ピンなしで送った場合の仮想的な予測 — ノードにピン留めされたタスクはカードに個別の予測が表示されます",
             "schedPointInTime": "確定した割り当てではなく現時点の予測です — スロットが取得・解放されると空き状況はすぐに古くなります",
             "schedulingShort": "スケジュール",
+            "gate": {
+                "release": "リリース",
+                "abandon": "放棄",
+                "extend24h": "24時間延長",
+                "outcomePassed": "合格",
+                "outcomeFailed": "不合格",
+                "evidencePlaceholder": "根拠（任意）",
+                "reasonPlaceholder": "このゲートを放棄する理由",
+                "abandonReasonRequired": "ゲートを放棄するには理由が必要です。",
+                "submitRelease": "リリースを送信",
+                "submitAbandon": "放棄を送信",
+                "extendConfirmTitle": "「{{ref}}」を24時間延長しますか？",
+                "expiredBadge": "期限切れ · {{age}}前",
+                "commandUnavailable": "このコマンドを送信するデーモン接続がありません。"
+            },
             "list": {
                 "barActive": "実行 {{count}}",
                 "barBlocked": "ブロック {{count}}",
@@ -1052,7 +1067,11 @@
                 "noMission": "ミッションなし",
                 "loadMore_one": "さらに{{count}}件表示",
                 "loadMore_other": "さらに{{count}}件表示",
-                "emptyActive": "現在、実行中またはブロック中の作業はありません — 完了した作業は履歴にあります。"
+                "emptyActive": "現在、実行中またはブロック中の作業はありません — 完了した作業は履歴にあります。",
+                "blockedByGate": "ブロック要因: {{ref}}、{{age}}",
+                "waitingOn": "待機中:",
+                "waitingOnMore": "他 {{count}} 件",
+                "chainGroup": "チェーン: {{title}}"
             }
         },
         "page": {

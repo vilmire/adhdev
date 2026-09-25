@@ -382,15 +382,15 @@ test('rc.37#2: mesh_enqueue_task accepts not_before and thinking_level snake_cas
     assert.match(queueHandlerSrc, /readString\(args\.thinkingLevel\)\s*\|\|\s*readString\(args\.difficulty\)|thinkingLevel/);
 });
 
-test('rc.37#3: not_before / notBefore accept a string (ISO timestamp), not just number', () => {
+test('rc.37#3: not_before accepts a string (ISO timestamp), not just number (notBefore: accepted alias since D2)', () => {
     const taskProps = MESH_ENQUEUE_TASK_TOOL.inputSchema.properties as Record<string, any>;
-    for (const key of ['not_before', 'notBefore']) {
+    for (const key of ['not_before']) {
         const typeDecl = taskProps[key]?.type;
         assert.ok(Array.isArray(typeDecl) ? typeDecl.includes('string') && typeDecl.includes('number') : typeDecl === 'string',
             `mesh_enqueue_task.${key} must accept string (ISO) in addition to number, got ${JSON.stringify(typeDecl)}`);
     }
     const taskItemProps = (MESH_ENQUEUE_BATCH_TOOL.inputSchema.properties as any).tasks.items.properties as Record<string, any>;
-    for (const key of ['not_before', 'notBefore']) {
+    for (const key of ['not_before']) {
         const typeDecl = taskItemProps[key]?.type;
         assert.ok(Array.isArray(typeDecl) && typeDecl.includes('string') && typeDecl.includes('number'),
             `mesh_enqueue_batch tasks[].${key} must accept string (ISO) in addition to number, got ${JSON.stringify(typeDecl)}`);
@@ -399,13 +399,15 @@ test('rc.37#3: not_before / notBefore accept a string (ISO timestamp), not just 
     // rejected it here since the gate does not type-check values — but pin the
     // declared type itself above so a future value-level validator stays correct).
     assert.equal(rejectUnknownMeshToolArgs('mesh_enqueue_task', { message: 'm', difficulty: 'medium', not_before: new Date().toISOString() }), null);
+    assert.equal(rejectUnknownMeshToolArgs('mesh_enqueue_task', { message: 'm', difficulty: 'medium', notBefore: new Date().toISOString() }), null);
 });
 
-test('rc.37#1: mesh_enqueue_batch schema declares owned_paths/ownedPaths on tasks[] (handler copies it to specs)', () => {
+test('rc.37#1: mesh_enqueue_batch schema declares owned_paths on tasks[] and still accepts ownedPaths (handler copies it to specs)', () => {
     const taskItemProps = (MESH_ENQUEUE_BATCH_TOOL.inputSchema.properties as any).tasks.items.properties as Record<string, unknown>;
     assert.ok('owned_paths' in taskItemProps);
-    assert.ok('ownedPaths' in taskItemProps);
+    assert.equal('ownedPaths' in taskItemProps, false, 'D2: aliases are accepted, not published');
     assert.equal(rejectUnknownMeshToolArgs('mesh_enqueue_batch', { tasks: [{ message: 'm', difficulty: 'medium', owned_paths: ['src/foo.ts'] }] }), null);
+    assert.equal(rejectUnknownMeshToolArgs('mesh_enqueue_batch', { tasks: [{ message: 'm', difficulty: 'medium', ownedPaths: ['src/foo.ts'] }] }), null);
     // The BREAK-ONCE proof that the handler really copies v.ownedPaths onto the
     // pushed spec (not just that the schema accepts the key) lives in
     // mesh-enqueue-owned-paths-batch.test.ts, which reads the persisted queue row
@@ -443,17 +445,18 @@ test('rc.37#4: nested-array-item gate rejects a typo inside tasks[]/workspaces[]
     assert.match(badGate!, /gates\[0\]/);
 });
 
-test('rc.37#4: target_node / targetNode (undocumented-but-read alias) are declared on tasks[] before the nested gate could break them', () => {
-    const taskItemProps = (MESH_ENQUEUE_BATCH_TOOL.inputSchema.properties as any).tasks.items.properties as Record<string, unknown>;
-    assert.ok('target_node' in taskItemProps);
-    assert.ok('targetNode' in taskItemProps);
+test('rc.37#4: target_node / targetNode (read aliases of target_node_id) stay accepted on tasks[] by the nested gate', () => {
+    // D2: accepted via MESH_ACCEPTED_ARG_ALIASES instead of being published.
+    for (const key of ['target_node', 'targetNode', 'targetNodeId']) {
+        assert.equal(validateMeshToolArgs('mesh_enqueue_batch', { tasks: [{ message: 'm', difficulty: 'medium', [key]: 'node_x' }] }), null, key);
+    }
     assert.match(queueHandlerSrc, /readString\(args\.targetNode\)\s*\|\|\s*readString\(args\.target_node\)/);
 });
 
-test('rc.37#4: workspaces[] camelCase aliases (sourceNodeId/baseRevision/desiredPath/cleanupOnGraphFailure) are declared before the nested gate could break them', () => {
+test('rc.37#4: workspaces[] camelCase aliases (sourceNodeId/baseRevision/desiredPath/cleanupOnGraphFailure) stay accepted by the nested gate', () => {
     const workspaceItemProps = (MESH_ENQUEUE_BATCH_TOOL.inputSchema.properties as any).workspaces.items.properties as Record<string, unknown>;
     for (const key of ['sourceNodeId', 'baseRevision', 'desiredPath', 'cleanupOnGraphFailure']) {
-        assert.ok(key in workspaceItemProps, `workspaces[] schema must declare ${key}`);
+        assert.equal(key in workspaceItemProps, false, `D2: workspaces[] schema publishes only the snake_case form of ${key}`);
     }
     assert.match(graphHandlerSrc, /w\?\.source_node_id\s*\?\?\s*w\?\.sourceNodeId/);
     assert.match(graphHandlerSrc, /w\?\.base_revision\s*\?\?\s*w\?\.baseRevision/);

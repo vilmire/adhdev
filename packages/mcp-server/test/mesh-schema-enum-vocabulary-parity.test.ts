@@ -55,8 +55,12 @@ const EVERY_VOCABULARY = [
  * camelCase form, so the pre-dispatch unknown-key gate rejected the documented
  * snake_case spelling). Both use `enumOf(MESH_THINKING_LEVELS)` and are already
  * covered by the `thinking_level` entry in VOCABULARY_BY_PROPERTY above.
+ * graph-orchestration-simplification D2 dropped it 20→16: the enqueue schemas stopped
+ * publishing their camelCase aliases (`taskMode` + `thinkingLevel` on
+ * mesh_enqueue_task and on mesh_enqueue_batch tasks[]). The aliases are still
+ * accepted — and enum-checked as their canonical key — by validate-tool-args.ts.
  */
-const EXPECTED_VOCABULARY_PROPERTY_COUNT = 20;
+const EXPECTED_VOCABULARY_PROPERTY_COUNT = 16;
 
 interface EnumSite { tool: string; path: string; leaf: string; values: unknown }
 

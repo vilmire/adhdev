@@ -124,11 +124,17 @@ export class VersionArchive {
 
 // ─── Version Detection ──────────────────────────────
 
-import { exec } from 'child_process';
+// Bare `exec` used to be used here with no `windowsHide` (win32 console-flash
+// follow-up, 2026-09-25): boot/stages/providers.ts calls detectAllVersions()
+// on EVERY daemon boot, probing --version/-V/-v for every installed provider.
+// After any detached upgrade/restart the daemon has no console of its own, so
+// each probe allocated a fresh visible one — the confirmed root cause of the
+// reported post-upgrade window flashing. hiddenExec defaults windowsHide:true.
+import { hiddenExec } from '../process/hidden-spawn.js';
 
 async function runCommand(cmd: string, timeout = 10000): Promise<string | null> {
   return new Promise((resolve) => {
-    exec(cmd, {
+    hiddenExec(cmd, {
       encoding: 'utf-8',
       timeout,
     }, (error, stdout) => {

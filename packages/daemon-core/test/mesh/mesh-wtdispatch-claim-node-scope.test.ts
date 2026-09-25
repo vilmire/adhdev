@@ -44,6 +44,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 import { tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
+import { __drainTestTurnLedgersForTests } from './helpers/mesh-turn-ledger-fixture.js'
 
 const NODE_A = 'node_adede'
 const NODE_B = 'node_509d'
@@ -95,7 +96,13 @@ function statusOf(meshId: string, taskId: string) {
   return getQueue(meshId).find((t) => t.id === taskId)
 }
 
-function cleanup(meshId: string) {
+async function cleanup(meshId: string) {
+  // WTDISPATCH-LEDGER-DRAIN: a successful claim above fires an un-awaited
+  // ledger.observe() -> void flushPublish() (autoFlush). Await it before
+  // resetting the store, or the store's close() can race that still-pending
+  // publish continuation and surface as an unhandled "database connection is
+  // not open" rejection (mesh-turn-ledger-fixture.ts).
+  await __drainTestTurnLedgersForTests()
   __clearMeshQueueForTests(meshId)
   __resetMeshRuntimeStoreForTests()
   meshConfigMocks.getMesh.mockReset()
@@ -105,7 +112,7 @@ function cleanup(meshId: string) {
 describe('WTDISPATCH — sibling-worktree claim node scope (instanceManager-resolved path)', () => {
   afterEach(() => { vi.clearAllMocks() })
 
-  it('(i) ZERO cross-leak: sibling worktree sessions each claim only their own node task; no task vanishes', () => {
+  it('(i) ZERO cross-leak: sibling worktree sessions each claim only their own node task; no task vanishes', async () => {
     const meshId = `mesh_wtd_${randomUUID().slice(0, 8)}`
     try {
       setMesh(meshId, [node(NODE_A, WS_A, { isLocalWorktree: true }), node(NODE_B, WS_B, { isLocalWorktree: true })])
@@ -133,11 +140,11 @@ describe('WTDISPATCH — sibling-worktree claim node scope (instanceManager-reso
       expect(statusOf(meshId, taskA.id)?.assignedSessionId).toBe('sess-A')
       expect(statusOf(meshId, taskB.id)?.assignedSessionId).toBe('sess-B')
     } finally {
-      cleanup(meshId)
+      await cleanup(meshId)
     }
   })
 
-  it('(i-stamp) fail-closed on a stamped node identity mismatch even when workspaces are undeclared', () => {
+  it('(i-stamp) fail-closed on a stamped node identity mismatch even when workspaces are undeclared', async () => {
     const meshId = `mesh_wtd_stamp_${randomUUID().slice(0, 8)}`
     try {
       // Neither node declares a workspace — only the session's stamped meshNodeId can tell them apart.
@@ -153,11 +160,11 @@ describe('WTDISPATCH — sibling-worktree claim node scope (instanceManager-reso
       expect(tryAssignQueueTask(components, meshId, NODE_B, 'sess-A', 'claude-cli')).toBe(false)
       expect(statusOf(meshId, taskB.id)?.status).toBe('pending')
     } finally {
-      cleanup(meshId)
+      await cleanup(meshId)
     }
   })
 
-  it('(ii) target-node session absent: the task stays pending (not stolen, not vanished)', () => {
+  it('(ii) target-node session absent: the task stays pending (not stolen, not vanished)', async () => {
     const meshId = `mesh_wtd_pending_${randomUUID().slice(0, 8)}`
     try {
       setMesh(meshId, [node(NODE_A, WS_A, { isLocalWorktree: true }), node(NODE_B, WS_B, { isLocalWorktree: true })])
@@ -178,11 +185,11 @@ describe('WTDISPATCH — sibling-worktree claim node scope (instanceManager-reso
       expect(tryAssignQueueTask(components, meshId, NODE_B, 'sess-B', 'claude-cli')).toBe(true)
       expect(statusOf(meshId, taskB.id)?.assignedSessionId).toBe('sess-B')
     } finally {
-      cleanup(meshId)
+      await cleanup(meshId)
     }
   })
 
-  it('(iii) regression: single base node — a matching session claims its fresh-enqueued task', () => {
+  it('(iii) regression: single base node — a matching session claims its fresh-enqueued task', async () => {
     const meshId = `mesh_wtd_base_${randomUUID().slice(0, 8)}`
     try {
       setMesh(meshId, [node(BASE_NODE, WS_BASE)])
@@ -194,11 +201,11 @@ describe('WTDISPATCH — sibling-worktree claim node scope (instanceManager-reso
       expect(tryAssignQueueTask(components, meshId, BASE_NODE, 'sess-base', 'claude-cli')).toBe(true)
       expect(statusOf(meshId, task.id)?.assignedSessionId).toBe('sess-base')
     } finally {
-      cleanup(meshId)
+      await cleanup(meshId)
     }
   })
 
-  it('(iv) conservative: node declares no workspace and session carries no stamp → claim is NOT starved', () => {
+  it('(iv) conservative: node declares no workspace and session carries no stamp → claim is NOT starved', async () => {
     const meshId = `mesh_wtd_cons_${randomUUID().slice(0, 8)}`
     try {
       setMesh(meshId, [node(BASE_NODE)]) // no workspace declared
@@ -211,7 +218,7 @@ describe('WTDISPATCH — sibling-worktree claim node scope (instanceManager-reso
       expect(tryAssignQueueTask(components, meshId, BASE_NODE, 'sess-x', 'claude-cli')).toBe(true)
       expect(statusOf(meshId, task.id)?.assignedSessionId).toBe('sess-x')
     } finally {
-      cleanup(meshId)
+      await cleanup(meshId)
     }
   })
 })

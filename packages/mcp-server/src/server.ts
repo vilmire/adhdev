@@ -46,7 +46,7 @@ import {
 import type { MeshContext } from './tools/mesh-tools.js';
 import { resolveMeshToolHandler } from './tools/mesh-tool-dispatch.js';
 import { runMeshToolWithPendingEvents } from './tools/mesh-pending-events-attach.js';
-import { validateMeshToolArgs, unknownToolArgsError, enumValueError } from './tools/validate-tool-args.js';
+import { validateMeshToolArgs, unknownToolArgsError, enumValueError, canonicalizeMeshToolArgs } from './tools/validate-tool-args.js';
 import { annotateAll } from './tools/tool-annotations.js';
 import {
   resolveWorkerModeTools, readWorkerCredentials, reportCompletion, progressUpdate, peerContextPull, drainMailbox,
@@ -352,6 +352,18 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       // `session_ids` once deleted a live worker session).
       const unknownArgsError = validateMeshToolArgs(name, a);
       if (unknownArgsError) return { content: [{ type: 'text', text: unknownArgsError }], isError: true };
+      // ★CANONICAL-FIRST DISPATCH (2026-09-25): validation above already
+      // canonicalized `a` internally to check it, then discarded that copy —
+      // the handler used to receive the RAW args, both spellings intact when
+      // a caller sent both. That let a handler's own alias fallback
+      // (`args.dependsOn || args.depends_on`) pick the alias over the
+      // canonical value, the opposite of canonicalizeMeshToolArgs's
+      // "canonical already present wins" rule. Dispatching with the
+      // canonicalized object instead makes the validator's precedence the
+      // ONLY precedence. No-op for any tool without an alias table
+      // (MESH_ACCEPTED_ARG_ALIASES has no entry for it) — see
+      // validate-tool-args.ts's own doc comment on this gap.
+      const canonicalArgs = canonicalizeMeshToolArgs(name, a);
       // ★Dispatch via the type-enforced registry (mesh-tool-dispatch.ts), not a
       // hand-maintained switch. A canonical tool with no handler is now a
       // compile error rather than a published tool that answers
@@ -362,12 +374,12 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           // Flag-gated rather than alias-shaped: its behaviour depends on a
           // runtime env read, so it cannot be a fixed entry in either table.
           run = async () => isWorkerMcpEnabled()
-            ? await meshNotifyWorker(meshCtx, a as any)
+            ? await meshNotifyWorker(meshCtx, canonicalArgs as any)
             : JSON.stringify({ success: false, error: 'worker_mcp_disabled' });
         } else {
           const handler = resolveMeshToolHandler(name);
           if (!handler) return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
-          run = () => handler(meshCtx, a);
+          run = () => handler(meshCtx, canonicalArgs);
         }
         // Coordinator notices ride EVERY mesh tool response as
         // `pendingCoordinatorEvents` (a tool that drained itself is left as is).

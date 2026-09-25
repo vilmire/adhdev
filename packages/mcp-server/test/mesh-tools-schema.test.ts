@@ -36,9 +36,11 @@ test('mesh_fast_forward_node schema registers the safe direct fast-forward surfa
 
 test('mesh_enqueue_task schema exposes optional capability tag requirements', () => {
   assert.equal(MESH_ENQUEUE_TASK_TOOL.name, 'mesh_enqueue_task');
-  assert.equal(MESH_ENQUEUE_TASK_TOOL.inputSchema.properties.requiredTags.type, 'array');
+  // D2 schema diet: only the canonical snake_case key is published; `requiredTags`
+  // stays accepted by the validator (mesh-enqueue-schema-diet.test.ts).
   assert.equal(MESH_ENQUEUE_TASK_TOOL.inputSchema.properties.required_tags.type, 'array');
-  assert.match(MESH_ENQUEUE_TASK_TOOL.inputSchema.properties.requiredTags.description, /provider=codex-cli/);
+  assert.equal('requiredTags' in MESH_ENQUEUE_TASK_TOOL.inputSchema.properties, false);
+  assert.match(MESH_ENQUEUE_TASK_TOOL.inputSchema.properties.required_tags.description, /provider=codex-cli/);
 });
 
 test('mesh_launch_session schema maps providers, keeps type optional, and has no claude default', () => {
@@ -116,24 +118,22 @@ test('mesh session cleanup tools expose explicit manual cleanup and remove-node 
 // ─── H1 (path ownership) + H2 (mission brief) schema-only additions ───
 // (wiring-unification Phase H, docs/design/2026-09-23-wiring-unification.md §7c)
 
-test('mesh_enqueue_task schema exposes owned_paths and its camelCase alias, both optional', () => {
+test('mesh_enqueue_task schema exposes owned_paths (optional); the camelCase alias is accepted but unpublished (D2)', () => {
   const props = MESH_ENQUEUE_TASK_TOOL.inputSchema.properties as any;
   assert.equal(props.owned_paths.type, 'array');
   assert.equal(props.owned_paths.items.type, 'string');
-  assert.equal(props.ownedPaths.type, 'array');
-  assert.equal(props.ownedPaths.items.type, 'string');
+  assert.equal(props.ownedPaths, undefined);
   assert.equal(MESH_ENQUEUE_TASK_TOOL.inputSchema.required.includes('owned_paths'), false);
   assert.equal(MESH_ENQUEUE_TASK_TOOL.inputSchema.required.includes('ownedPaths'), false);
   assert.match(props.owned_paths.description, /code_change/);
   assert.match(props.owned_paths.description, /owned_paths_conflict/);
 });
 
-test('mesh_enqueue_batch per-task schema exposes owned_paths and its camelCase alias', () => {
+test('mesh_enqueue_batch per-task schema exposes owned_paths; the camelCase alias is accepted but unpublished (D2)', () => {
   const itemProps = (MESH_ENQUEUE_BATCH_TOOL.inputSchema.properties as any).tasks.items.properties;
   assert.equal(itemProps.owned_paths.type, 'array');
   assert.equal(itemProps.owned_paths.items.type, 'string');
-  assert.equal(itemProps.ownedPaths.type, 'array');
-  assert.equal(itemProps.ownedPaths.items.type, 'string');
+  assert.equal(itemProps.ownedPaths, undefined);
   // Per-task required list is unchanged (still message + difficulty only).
   assert.deepEqual(MESH_ENQUEUE_BATCH_TOOL.inputSchema.properties.tasks.items.required, ['message', 'difficulty']);
 });

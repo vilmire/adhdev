@@ -100,6 +100,32 @@ export function summarizePendingEventProtocolMetrics(
 }
 
 
+/**
+ * graph-orchestration-simplification D6 — `graphUsage` is COMPUTED IN THE DAEMON
+ * (graphsLast7d, nodesPerGraphP50, gatesExpired, gatesAutoAbandoned,
+ * depsChainedViaEnqueueTask); this surface only passes the first block it finds
+ * through, verbatim. Sources are tried in the caller's order — mesh_status passes
+ * `activeWork.summary` first (where daemon-core's active_work_query folds it: both
+ * are JSON-passthrough records, the wire slots a daemon can extend without a
+ * turn-ipc schema change), then the record summary, the response itself and the
+ * refreshed mesh snapshot. Anything
+ * that is not a plain object is ignored — never synthesized, never defaulted.
+ */
+export function pickDaemonGraphUsage(...sources: unknown[]): Record<string, unknown> | undefined {
+    for (const source of sources) {
+        if (!source || typeof source !== 'object') continue;
+        const block = (source as { graphUsage?: unknown }).graphUsage;
+        if (block && typeof block === 'object' && !Array.isArray(block)) return block as Record<string, unknown>;
+    }
+    return undefined;
+}
+
+/** Shallow copy of a summary record without its `graphUsage` key (same object when absent). */
+function withoutGraphUsage<T>(summary: T): T {
+    if (!summary || typeof summary !== 'object' || !('graphUsage' in (summary as object))) return summary;
+    const { graphUsage: _hoisted, ...rest } = summary as unknown as Record<string, unknown>;
+    return rest as unknown as T;
+}
 
 // ─── Tool Implementations ───────────────────────
 
@@ -440,6 +466,12 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     const ledgerEntries = activeWorkView.records;
 
     const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
+    // D6 graphUsage: daemon-computed (active_work_query folds it into
+    // activeWork.summary), passed through untouched — verbose only, as its own
+    // top-level block. Hoisted OUT of activeWorkSummary in both modes so the
+    // compact poll does not carry it and verbose does not carry it twice.
+    const graphUsage = pickDaemonGraphUsage(activeWorkEvidence.summary, runtimeView.summary, runtimeView, ctx.mesh);
+    const activeWorkSummaryForResponse = withoutGraphUsage(activeWorkEvidence.summary);
     const staleDirectWorkSummary = buildCompactStaleDirectWorkSummary(activeWorkEvidence.staleDirectWork, {
         note: activeWorkEvidence.staleDirectWorkNote,
         detailHint: 'Full stale direct entries are omitted from mesh_status by default. Call mesh_status with includeStaleDirectWorkDetails=true or inspect mesh_task_history for ledger detail.',
@@ -848,7 +880,7 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         ...(args.includeStaleDirectWorkDetails === true ? { staleDirectWork: activeWorkEvidence.staleDirectWork } : {}),
         // terminalDirectWork is historical (completed/failed direct dispatches) — opt-in only.
         ...(args.includeTerminalDirectWork === true ? { terminalDirectWork: activeWorkEvidence.terminalDirectWork } : {}),
-        activeWorkSummary: activeWorkEvidence.summary,
+        activeWorkSummary: activeWorkSummaryForResponse,
         ...(pollingGuidance ? { pollingGuidance } : {}),
         ...(rateResult.rateLimitExceeded ? { pollingRateAdvisory: { type: 'rate_limit_exceeded', tool: 'mesh_status', callsInWindow: rateResult.callsInWindow, message: rateResult.advisory } } : {}),
         branchConvergenceSummary: summarizeBranchConvergence(results, compact),
@@ -864,9 +896,11 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             : {}),
     };
 
+    if (!compact && graphUsage) response.graphUsage = graphUsage;
+
     // Include task ledger summary for coordinator context
     try {
-        response.ledgerSummary = ledgerSummary;
+        response.ledgerSummary = withoutGraphUsage(ledgerSummary);
     } catch { /* ledger read is best-effort */ }
 
     // Token/cost usage rollup. OPT-IN (includeUsage) rather than default-on:

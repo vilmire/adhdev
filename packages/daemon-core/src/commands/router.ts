@@ -55,6 +55,7 @@ import { meshRestartSpecs } from './med-family/mesh-restart.js';
 import { meshOnboardingSpecs } from './med-family/mesh-onboarding.js';
 import { meshWorktreeRetentionSpecs } from './med-family/mesh-worktree-retention.js';
 import { meshGraphCommandSpecs } from './med-family/mesh-graph-commands.js';
+import { meshGraphGateCommandSpecs } from './med-family/mesh-graph-gate-commands.js';
 import { meshEventsSpecs } from './high-family/mesh-events.js';
 import { meshCoordinatorLaunchSpecs } from './high-family/mesh-coordinator-launch.js';
 import { meshStatusSpecs } from './high-family/mesh-status.js';
@@ -343,6 +344,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...meshOnboardingSpecs,
             ...meshWorktreeRetentionSpecs,
             ...meshGraphCommandSpecs,
+            ...meshGraphGateCommandSpecs,
             ...meshEventsSpecs,
             ...meshCoordinatorLaunchSpecs,
             ...meshStatusSpecs,

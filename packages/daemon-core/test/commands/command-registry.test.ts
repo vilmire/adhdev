@@ -266,7 +266,17 @@ const LEGACY_MED_FAMILY_COMMANDS = [
     'cancel_mesh_queue_task', 'requeue_mesh_queue_task', 'trigger_mesh_queue', 'mesh_init',
     'plan_mesh_refine_node', 'fast_forward_mesh_node', 'refine_mesh_node', 'batch_refine_mesh_nodes',
     'restart_daemon_node', 'plan_mesh_onboarding', 'cleanup_worktree_nodes', 'mesh_route_preview',
-    'mesh_task_output', 'mesh_graph_overview', 'mesh_gate_claim', 'mesh_gate_release', 'mesh_gate_abandon',
+    'mesh_task_output', 'mesh_graph_overview',
+    // mesh_gate_claim/release/abandon (G5 MVP, 9c00d805) were REMOVED 2026-09-25
+    // (graph-orchestration-simplification D3(c)), not renamed — they had no
+    // `sources` restriction and no caller anywhere in the monorepo (dashboard UI
+    // was deliberately OBSERVE-ONLY; the MCP coordinator tools were always named
+    // mesh_graph_gate_* and dispatch over IPC, never these command names). See
+    // mesh-graph-commands.ts's header for the full caller sweep. NOT a
+    // legacy-table migration — the dashboard-callable gate verbs below
+    // (med-family/mesh-graph-gate-commands.ts), sources ipc · standalone · p2p,
+    // are a fresh addition pinned in test/commands/mesh-graph-gate-commands.test.ts.
+    'mesh_graph_gate_claim', 'mesh_graph_gate_release', 'mesh_graph_gate_abandon', 'mesh_graph_gate_extend',
 ];
 
 /** high-family/index.ts highFamilyRegistry keys. */

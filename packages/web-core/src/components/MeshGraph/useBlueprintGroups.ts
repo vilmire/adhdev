@@ -24,7 +24,8 @@
 import { useMemo } from 'react'
 import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
 import type { MeshTaskStatus } from '@adhdev/mesh-shared'
-import { buildTaskDag } from './taskDagViewModel'
+import { buildTaskDag, type TaskDagData, type TaskDagNode } from './taskDagViewModel'
+import { queueTaskDisplayText } from '../../utils/queue-task-label'
 
 /** Terminal queue statuses — nothing in them will advance again on its own. */
 const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'cancelled'])
@@ -87,6 +88,110 @@ export function deriveSessionActivity(
 
 export type BlueprintSection = 'running' | 'blocked' | 'recent' | 'history'
 
+/* ── Queue dependency chains (W24) ─────────────────────────────────────────
+ * `mesh_enqueue_task` + `depends_on` is the default way coordinators chain
+ * work (design 2026-09-25 D1), and such chains create NO persistent graph
+ * rows. Their dependsOn/missionId already ride the mesh_status queue
+ * snapshot, so the Blueprint names each unmet dependency and groups a chain
+ * as a view-time derivation — nothing is synthesized daemon-side. */
+
+/** One named dependency for the "waiting on:" line. */
+export interface BlueprintDepRef {
+    id: string
+    /** First 8 chars — queue ids are randomUUID(). */
+    shortId: string
+    /** First line of the dep's display text, ≤ BLUEPRINT_DEP_TITLE_MAX chars.
+     *  Absent when the dep is not in the snapshot — the short id alone shows. */
+    title?: string
+    /** Dep's queue status, when known (tooltip only). */
+    status?: string
+    /** False when the dep is absent from the snapshot (nothing to open). */
+    present: boolean
+}
+
+export const BLUEPRINT_DEP_TITLE_MAX = 60
+
+export function describeDepRef(id: string, dep: RepoMeshQueueTask | undefined): BlueprintDepRef {
+    const shortId = id.slice(0, 8)
+    if (!dep) return { id, shortId, present: false }
+    const firstLine = queueTaskDisplayText(dep.message).split('\n').map(line => line.trim()).find(Boolean) ?? ''
+    const title = firstLine.length > BLUEPRINT_DEP_TITLE_MAX
+        ? `${firstLine.slice(0, BLUEPRINT_DEP_TITLE_MAX).trimEnd()}…`
+        : firstLine
+    return { id, shortId, ...(title ? { title } : {}), status: dep.status, present: true }
+}
+
+/**
+ * A queue dependency chain: a connected component (size ≥ 2) of the
+ * dependsOn graph over the WHOLE snapshot — so a chain whose head already
+ * finished (and is hidden by the History scope) still groups its live tail.
+ */
+export interface BlueprintChainRef {
+    /** Stable group key: `chain:<anchorTaskId>`. */
+    key: string
+    /** The chain's root: a member with no in-snapshot deps, earliest createdAt, id tiebreak. */
+    anchorTaskId: string
+    anchorTitle: string
+    /**
+     * Set when exactly ONE distinct missionId appears among the members — the
+     * mission-less members then join that mission's group so the chain stays
+     * together. Undefined for 0 or ≥ 2 missions (no guessing between them).
+     */
+    inheritedMissionId?: string
+    size: number
+}
+
+export function buildQueueChainIndex(dag: TaskDagData): Map<string, BlueprintChainRef> {
+    const parent = new Map<string, string>()
+    const find = (id: string): string => {
+        let root = id
+        while (parent.get(root) !== root) root = parent.get(root)!
+        let current = id
+        while (parent.get(current) !== root) {
+            const next = parent.get(current)!
+            parent.set(current, root)
+            current = next
+        }
+        return root
+    }
+    for (const edge of dag.edges) {
+        for (const id of [edge.source, edge.target]) if (!parent.has(id)) parent.set(id, id)
+        const a = find(edge.source)
+        const b = find(edge.target)
+        if (a !== b) parent.set(a, b)
+    }
+    const nodeById = new Map(dag.nodes.map(node => [node.id, node]))
+    const components = new Map<string, TaskDagNode[]>()
+    for (const id of parent.keys()) {
+        const node = nodeById.get(id)
+        if (!node) continue
+        const root = find(id)
+        const bucket = components.get(root)
+        if (bucket) bucket.push(node)
+        else components.set(root, [node])
+    }
+    const index = new Map<string, BlueprintChainRef>()
+    for (const component of components.values()) {
+        if (component.length < 2) continue
+        const roots = component.filter(node => node.dependsOn.length === 0)
+        const anchor = [...(roots.length > 0 ? roots : component)].sort((a, b) =>
+            String(a.task.createdAt || '').localeCompare(String(b.task.createdAt || '')) || a.id.localeCompare(b.id))[0]
+        const missions = new Set<string>()
+        for (const node of component) {
+            if (typeof node.task.missionId === 'string' && node.task.missionId) missions.add(node.task.missionId)
+        }
+        const ref: BlueprintChainRef = {
+            key: `chain:${anchor.id}`,
+            anchorTaskId: anchor.id,
+            anchorTitle: describeDepRef(anchor.id, anchor.task).title ?? anchor.id.slice(0, 8),
+            ...(missions.size === 1 ? { inheritedMissionId: [...missions][0] } : {}),
+            size: component.length,
+        }
+        for (const node of component) index.set(node.id, ref)
+    }
+    return index
+}
+
 /** One queue task, classified for the list. */
 export interface BlueprintTaskRow {
     kind: 'task'
@@ -100,6 +205,8 @@ export interface BlueprintTaskRow {
     statusToken: 'generating' | MeshTaskStatus
     /** Unmet dependency ids (scheduler predicate — dep status !== completed). */
     waitingOn: string[]
+    /** `waitingOn`, named — the row's "waiting on: <short id · title>" line. */
+    waitingOnRefs: BlueprintDepRef[]
     /** Referenced deps absent from the snapshot (warning badge). */
     missingDeps: string[]
     /** System hold text, when the daemon stamped one. */
@@ -118,6 +225,12 @@ export interface BlueprintTaskRow {
     planSource?: 'graph' | 'queue'
     /** The owning graph, when planSource === 'graph'. */
     planGraphId?: string
+    /**
+     * Set when this task's graph node is held by a coordinator gate
+     * (`MeshGraphNodeView.blockedByGateId`) — the "blocked by" one-liner
+     * names the gate's ref/action and how long it has been holding.
+     */
+    blockedByGate?: { graph: MeshGraphView; gate: MeshGraphGateView; ref: string }
     /** Sort key: updatedAt || createdAt (ISO, lexicographic-safe). */
     timeKey: string
 }
@@ -158,6 +271,8 @@ export interface BlueprintGroups {
     /** Terminal rows beyond recent + the current history limit. */
     historyHiddenCount: number
     counts: BlueprintGroupCounts
+    /** taskId → its queue dependency chain (members of chains ≥ 2 only). */
+    chainByTaskId: Map<string, BlueprintChainRef>
 }
 
 function taskTimeKey(task: Pick<RepoMeshQueueTask, 'updatedAt' | 'createdAt'>): string {
@@ -177,6 +292,30 @@ export function buildPlanGraphIndex(graphs: ReadonlyArray<MeshGraphView> | null 
     return index
 }
 
+/**
+ * taskId → the coordinator gate currently holding it, via the graph node's
+ * `blockedByGateId` (set server-side when a `worker_task` node sits behind an
+ * unreleased gate — mesh-graph-view.ts). Used for the Blocked-section
+ * "blocked by: <gate>, <elapsed>" one-liner (D5).
+ */
+export function buildTaskBlockedByGateIndex(
+    graphs: ReadonlyArray<MeshGraphView> | null | undefined,
+): Map<string, { graph: MeshGraphView; gate: MeshGraphGateView; ref: string }> {
+    const index = new Map<string, { graph: MeshGraphView; gate: MeshGraphGateView; ref: string }>()
+    for (const graph of graphs ?? []) {
+        const gatesByNodeId = new Map(graph.gates?.map(gate => [gate.nodeId, gate]) ?? [])
+        for (const node of graph.nodes) {
+            if (!node.taskId || !node.blockedByGateId) continue
+            const gate = graph.gates?.find(candidate => candidate.gateId === node.blockedByGateId)
+                ?? gatesByNodeId.get(node.blockedByGateId)
+            if (!gate) continue
+            const gateNode = graph.nodes.find(candidate => candidate.nodeId === gate.nodeId)
+            index.set(node.taskId, { graph, gate, ref: gateNode?.ref || gate.ref || gate.nodeId.slice(0, 8) })
+        }
+    }
+    return index
+}
+
 export function buildBlueprintGroups(
     tasks: RepoMeshQueueTask[] | null | undefined,
     status: Pick<RepoMeshStatus, 'nodes'> | null | undefined,
@@ -187,6 +326,9 @@ export function buildBlueprintGroups(
     // (waitingOn / missingDeps / blocked) — no layout, no edges rendered here.
     const dag = buildTaskDag(tasks)
     const planGraphByTaskId = buildPlanGraphIndex(graphs)
+    const blockedByGateByTaskId = buildTaskBlockedByGateIndex(graphs)
+    const taskById = new Map(dag.nodes.map(node => [node.id, node.task]))
+    const chainByTaskId = buildQueueChainIndex(dag)
     // Tasks touched by at least one renderable dependency edge can draw a
     // queue-scoped plan even without a persistent graph.
     const edgeTouched = new Set<string>()
@@ -210,13 +352,15 @@ export function buildBlueprintGroups(
         const blockedReason = typeof task.blockedReason === 'string' && task.blockedReason ? task.blockedReason : undefined
         const awaitingApproval = Boolean(activity?.awaitingApproval)
         const awaitingChoice = Boolean(activity?.awaitingChoice && !activity?.awaitingApproval)
+        const blockedByGate = blockedByGateByTaskId.get(task.id)
         // Blocked means "will not advance without a human or an upstream
         // change": a live approval/choice hold, a system block, failed
-        // upstream, or unmet deps. Terminal rows are never blocked — whatever
-        // held them is history now.
+        // upstream, unmet deps, or a coordinator gate holding this node.
+        // Terminal rows are never blocked — whatever held them is history now.
         const isBlocked = !isTerminal && (
             awaitingApproval || awaitingChoice || Boolean(blockedReason)
             || node.waitingOn.length > 0 || (task.dependencyFailures?.length ?? 0) > 0
+            || Boolean(blockedByGate)
         )
         const row: BlueprintTaskRow = {
             kind: 'task',
@@ -224,6 +368,7 @@ export function buildBlueprintGroups(
             task,
             statusToken: activity?.generating ? 'generating' : task.status,
             waitingOn: node.waitingOn,
+            waitingOnRefs: node.waitingOn.map(id => describeDepRef(id, taskById.get(id))),
             missingDeps: node.missingDeps,
             ...(blockedReason ? { blockedReason } : {}),
             dependencyFailureCount: task.dependencyFailures?.length ?? 0,
@@ -232,6 +377,7 @@ export function buildBlueprintGroups(
             ...(activity?.note ? { sessionNote: activity.note } : {}),
             ...(planSource ? { planSource } : {}),
             ...(planGraph ? { planGraphId: planGraph.graphId } : {}),
+            ...(blockedByGate ? { blockedByGate } : {}),
             timeKey: taskTimeKey(task),
         }
         if (isTerminal) terminal.push(row)
@@ -305,15 +451,24 @@ export function buildBlueprintGroups(
             history: olderTerminal.length,
             missions: missionIds.size,
         },
+        chainByTaskId,
     }
 }
 
 /* ── By-mission regrouping (P1 scope: group headers, nothing more) ───────── */
 
+const ADHOC_GROUP_KEY = '(ad-hoc)'
+
 export interface BlueprintMissionGroup {
-    /** Mission id, or null for the ad-hoc bucket (rows without a mission). */
+    /** Render key: missionId | `chain:<anchorTaskId>` | '(ad-hoc)'. */
+    key: string
+    kind: 'mission' | 'chain' | 'adhoc'
+    /** Mission id, or null for chain groups and the ad-hoc bucket. */
     missionId: string | null
+    /** Mission title, or — for a chain group — the anchor task's title. */
     title: string | null
+    /** Chain groups only: the chain's root task (the header opens it). */
+    anchorTaskId?: string
     rows: BlueprintRow[]
     /** Latest timeKey in the group — groups order by activity. */
     lastActivityAt: string
@@ -325,23 +480,42 @@ export interface BlueprintMissionGroup {
  * Regroup the visible rows by mission. The section model survives INSIDE each
  * group as row order (running → blocked → recent → history), so flipping "By
  * mission" reorders the list without changing what is visible.
+ *
+ * With `chainByTaskId` (W24), a mission-less task linked by queue dependsOn
+ * joins its chain's single mission when there is exactly one, else a
+ * per-chain group keyed on the chain anchor — instead of the shared ad-hoc
+ * bucket where a `mesh_enqueue_task` + `depends_on` chain used to dissolve.
  */
 export function buildBlueprintMissionGroups(
     rows: ReadonlyArray<BlueprintRow>,
     missionTitles: Readonly<Record<string, string>> | undefined,
+    chainByTaskId?: ReadonlyMap<string, BlueprintChainRef>,
 ): BlueprintMissionGroup[] {
     const sectionRank: Record<BlueprintSection, number> = { running: 0, blocked: 1, recent: 2, history: 3 }
-    const byMission = new Map<string | null, BlueprintRow[]>()
+    type GroupHead = Pick<BlueprintMissionGroup, 'key' | 'kind' | 'missionId' | 'title' | 'anchorTaskId'>
+    const missionHead = (missionId: string): GroupHead => ({
+        key: missionId, kind: 'mission', missionId, title: missionTitles?.[missionId] ?? null,
+    })
+    const headOf = (row: BlueprintRow): GroupHead => {
+        const ownMission = row.kind === 'task' ? row.task.missionId : row.graph.missionId
+        if (typeof ownMission === 'string' && ownMission) return missionHead(ownMission)
+        const chain = row.kind === 'task' ? chainByTaskId?.get(row.task.id) : undefined
+        if (chain?.inheritedMissionId) return missionHead(chain.inheritedMissionId)
+        if (chain) return { key: chain.key, kind: 'chain', missionId: null, title: chain.anchorTitle, anchorTaskId: chain.anchorTaskId }
+        return { key: ADHOC_GROUP_KEY, kind: 'adhoc', missionId: null, title: null }
+    }
+    // Internal map key is namespaced so a mission id can never collide with a
+    // chain key or the ad-hoc sentinel.
+    const byKey = new Map<string, { head: GroupHead; rows: BlueprintRow[] }>()
     for (const row of rows) {
-        const missionId = row.kind === 'task'
-            ? (typeof row.task.missionId === 'string' && row.task.missionId ? row.task.missionId : null)
-            : (typeof row.graph.missionId === 'string' && row.graph.missionId ? row.graph.missionId : null)
-        const bucket = byMission.get(missionId)
-        if (bucket) bucket.push(row)
-        else byMission.set(missionId, [row])
+        const head = headOf(row)
+        const mapKey = `${head.kind}:${head.key}`
+        const bucket = byKey.get(mapKey)
+        if (bucket) bucket.rows.push(row)
+        else byKey.set(mapKey, { head, rows: [row] })
     }
     const groups: BlueprintMissionGroup[] = []
-    for (const [missionId, groupRows] of byMission) {
+    for (const { head, rows: groupRows } of byKey.values()) {
         const ordered = [...groupRows].sort((a, b) => {
             const rank = sectionRank[a.section] - sectionRank[b.section]
             if (rank !== 0) return rank
@@ -354,8 +528,7 @@ export function buildBlueprintMissionGroups(
             if (row.section === 'running' || row.section === 'blocked') hasLiveWork = true
         }
         groups.push({
-            missionId,
-            title: missionId ? missionTitles?.[missionId] ?? null : null,
+            ...head,
             rows: ordered,
             lastActivityAt,
             hasLiveWork,

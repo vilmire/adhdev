@@ -25,6 +25,16 @@
  * its declared camelCase alias (task_id / taskId). The schema is the table;
  * mesh-schema-handler-parity.test.ts asserts every handler that dereferences
  * node_id / session_id / task_id has that key declared required.
+ *
+ * Accepted-but-unpublished aliases + retired keys (graph-orchestration-
+ * simplification D2, docs/design/2026-09-25-graph-orchestration-simplification.md):
+ * the enqueue schemas publish ONE canonical snake_case name per field. The old
+ * camelCase / alternate spellings are mapped to their canonical key by
+ * {@link MESH_ACCEPTED_ARG_ALIASES} BEFORE the unknown-key gate runs, so an existing
+ * coordinator that still sends `dependsOn` keeps working — silently, and the
+ * "Unknown parameter" allow-list never lists an alias. Keys in
+ * {@link MESH_RETIRED_ARGS} (`run_if` & co.) are rejected FIRST with a message that
+ * names their replacement, instead of the generic unknown-key text.
  */
 
 import { ALL_MESH_TOOLS, MESH_CHANGE_IMPACT_CONFIG_TOOL, MESH_NOTIFY_WORKER_TOOL, MESH_REFINE_CONFIG_TOOL } from './mesh-tool-schemas.js';
@@ -208,6 +218,240 @@ export function nestedArrayItemArgsError(toolName: string, properties: Record<st
     return null;
 }
 
+/**
+ * Reject a nested batch-item field whose schema type is `array` when the caller
+ * sent something that is neither an array nor a string (number, boolean, object).
+ *
+ * Why: the handlers read these with `Array.isArray(...)` and silently DROP any
+ * other shape, so a mistyped field changed the submitted plan without an error
+ * (measured live 2026-09-25: `gated_by: "g1"` produced a gate with no edge, and
+ * the gate then had nothing downstream to auto-close). Strings are deliberately
+ * NOT rejected here: several handlers coerce a single string into a one-element
+ * list, and `gated_by` now does too (mesh-tools-graph.ts readGraphTaskFields).
+ */
+export function nestedArrayItemArrayTypeError(toolName: string, properties: Record<string, unknown> | undefined, args: Record<string, unknown>): string | null {
+    if (!properties) return null;
+    for (const [propName, propSchema] of Object.entries(properties)) {
+        if (!isArrayOfObjectsProperty(propSchema)) continue;
+        const rawItems = args[propName];
+        if (!Array.isArray(rawItems)) continue;
+        const itemProperties = propSchema.items!.properties as Record<string, unknown>;
+        for (let i = 0; i < rawItems.length; i++) {
+            const item = rawItems[i];
+            if (!isPlainObject(item)) continue;
+            for (const [key, value] of Object.entries(item)) {
+                const fieldSchema = itemProperties[key] as { type?: unknown } | undefined;
+                if (!fieldSchema || fieldSchema.type !== 'array') continue;
+                if (value === undefined || value === null || Array.isArray(value) || typeof value === 'string') continue;
+                return `Invalid type for ${toolName} ${itemLabel(propName, i, item)} "${key}": expected an array of strings, got ${typeof value}.`;
+            }
+        }
+    }
+    return null;
+}
+
+/**
+ * Per-task alias → canonical map shared by `mesh_enqueue_task` (top level) and
+ * `mesh_enqueue_batch` `tasks[]`. Every left-hand key was a published schema
+ * property before D2 and is still read by `normalizeEnqueueTaskArgs`
+ * (mesh-tools-queue.ts); the right-hand key is the one the schema publishes now.
+ * `target_node` is NOT a distinct field — the handler folds it into the same
+ * `explicitTargetRaw` as `target_node_id` — so it is an alias too.
+ */
+const ENQUEUE_TASK_FIELD_ALIASES: Readonly<Record<string, string>> = {
+    taskMode: 'task_mode',
+    read_only: 'readonly',
+    requiredTags: 'required_tags',
+    ownedPaths: 'owned_paths',
+    targetNodeId: 'target_node_id',
+    target_node: 'target_node_id',
+    targetNode: 'target_node_id',
+    preferWorktree: 'prefer_worktree',
+    dependsOn: 'depends_on',
+    missionId: 'mission_id',
+    thinkingLevel: 'thinking_level',
+    notBefore: 'not_before',
+    maxRetries: 'max_retries',
+};
+
+/** Scope key for a tool's top-level arguments in the alias / retired tables. */
+export const TOP_LEVEL_SCOPE = '';
+
+/**
+ * Accepted-but-unpublished argument aliases: tool → scope → alias → canonical.
+ * Scope {@link TOP_LEVEL_SCOPE} is the tool's own arguments; any other scope is the
+ * name of an array-of-objects property whose ITEMS accept the aliases (`tasks`,
+ * `workspaces`). Applied before every other check, so an alias is validated
+ * (enum values, required keys) exactly as its canonical key would be.
+ */
+export const MESH_ACCEPTED_ARG_ALIASES: Readonly<Record<string, Readonly<Record<string, Readonly<Record<string, string>>>>>> = {
+    mesh_enqueue_task: {
+        [TOP_LEVEL_SCOPE]: {
+            ...ENQUEUE_TASK_FIELD_ALIASES,
+            blockDuplicate: 'block_duplicate',
+            allowDuplicate: 'allow_duplicate',
+            orchestrationDecision: 'orchestration_decision',
+        },
+    },
+    mesh_enqueue_batch: {
+        [TOP_LEVEL_SCOPE]: {
+            missionId: 'mission_id',
+            blockDuplicate: 'block_duplicate',
+            allowDuplicate: 'allow_duplicate',
+            batchId: 'batch_id',
+            orchestrationDecision: 'orchestration_decision',
+            onDependencyFailure: 'on_dependency_failure',
+        },
+        tasks: {
+            ...ENQUEUE_TASK_FIELD_ALIASES,
+            inputsFrom: 'inputs_from',
+            workspaceRef: 'workspace_ref',
+            gatedBy: 'gated_by',
+        },
+        workspaces: {
+            sourceNodeId: 'source_node_id',
+            baseRevision: 'base_revision',
+            desiredPath: 'desired_path',
+            cleanupOnGraphFailure: 'cleanup_on_graph_failure',
+        },
+    },
+};
+
+const RETIRED_CONDITIONAL_KEYS = ['run_if', 'runIf', 'on_false', 'onFalse', 'on_upstream_skip', 'onUpstreamSkip'] as const;
+const RETIRED_CONDITIONAL_REASON = 'Conditional branching (run_if / on_false / on_upstream_skip) was retired from the enqueue surface. '
+    + 'Order steps with depends_on, and choose what happens to downstream work when a dependency fails with on_dependency_failure '
+    + '(block | cancel — mesh_enqueue_batch top level). If the next step depends on a result, enqueue it once that result is known '
+    + '(mesh_enqueue_task with depends_on) instead of declaring a branch up front.';
+
+/**
+ * Retired argument keys: tool → scope → { keys, reason }. Rejected before the
+ * unknown-key gate so the caller learns the REPLACEMENT, not just "unknown".
+ */
+export const MESH_RETIRED_ARGS: Readonly<Record<string, Readonly<Record<string, { keys: readonly string[]; reason: string }>>>> = {
+    mesh_enqueue_task: { [TOP_LEVEL_SCOPE]: { keys: RETIRED_CONDITIONAL_KEYS, reason: RETIRED_CONDITIONAL_REASON } },
+    mesh_enqueue_batch: { tasks: { keys: RETIRED_CONDITIONAL_KEYS, reason: RETIRED_CONDITIONAL_REASON } },
+};
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function itemLabel(scope: string, index: number, item: Record<string, unknown>): string {
+    return typeof item.ref === 'string' && item.ref ? `${scope}[${index}] (ref '${item.ref}')` : `${scope}[${index}]`;
+}
+
+/** Rename alias keys to their canonical key; a canonical key already present wins. */
+function canonicalizeObject(obj: Record<string, unknown>, aliases: Readonly<Record<string, string>> | undefined): Record<string, unknown> {
+    if (!aliases) return obj;
+    let changed = false;
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj)) {
+        const canonical = Object.prototype.hasOwnProperty.call(aliases, key) ? aliases[key] : undefined;
+        if (canonical === undefined) {
+            if (!(key in out)) out[key] = value;
+            continue;
+        }
+        changed = true;
+        if (!Object.prototype.hasOwnProperty.call(obj, canonical) && !(canonical in out)) out[canonical] = value;
+    }
+    return changed ? out : obj;
+}
+
+/**
+ * Returns a copy of `args` with every accepted alias (top level and inside the
+ * aliased array-of-objects scopes) renamed to its canonical key. Pure: `args` is
+ * never mutated. Tools without an alias table get `args` back unchanged.
+ */
+export function canonicalizeMeshToolArgs(name: string, args: Record<string, unknown>): Record<string, unknown> {
+    const table = MESH_ACCEPTED_ARG_ALIASES[name];
+    if (!table) return args;
+    let out = canonicalizeObject(args, table[TOP_LEVEL_SCOPE]);
+    for (const [scope, aliases] of Object.entries(table)) {
+        if (scope === TOP_LEVEL_SCOPE) continue;
+        const items = out[scope];
+        if (!Array.isArray(items)) continue;
+        const mapped = items.map(item => (isPlainObject(item) ? canonicalizeObject(item, aliases) : item));
+        if (mapped.some((item, i) => item !== items[i])) {
+            if (out === args) out = { ...args };
+            out[scope] = mapped;
+        }
+    }
+    return out;
+}
+
+/**
+ * ★CANONICAL-FIRST DISPATCH GAP (2026-09-25). `canonicalizeMeshToolArgs` above
+ * has always been correct, but until now its output was used ONLY for
+ * validation (`validateMeshToolArgs`/`rejectUnknownMeshToolArgs`), then
+ * thrown away — `server.ts`'s `CallToolRequestSchema` handler validated the
+ * canonicalized copy but dispatched the RAW args to the handler. So every
+ * enqueue handler had to resolve aliases itself, and several read the
+ * camelCase spelling before the canonical snake_case one
+ * (`args.dependsOn || args.depends_on`, `args.missionId || args.mission_id`,
+ * etc., in `mesh-tools-queue.ts`'s `normalizeEnqueueTaskArgs` and
+ * `meshEnqueueBatch`'s top level) — the OPPOSITE of
+ * {@link canonicalizeObject}'s "canonical already present wins" rule. A
+ * caller sending both spellings with DIFFERENT values got the alias, not the
+ * canonical value the validator implied would win.
+ *
+ * `server.ts` now dispatches with `canonicalizeMeshToolArgs`'s result
+ * instead of the raw args (defense in depth for every mesh tool — a no-op
+ * for tools with no alias table). This export is the SAME canonicalization,
+ * scoped to exactly one task entry's fields
+ * ({@link ENQUEUE_TASK_FIELD_ALIASES}), for `normalizeEnqueueTaskArgs`
+ * (mesh-tools-queue.ts) to call directly on its `args` parameter. It exists
+ * because `canonicalizeMeshToolArgs('mesh_enqueue_batch', entry)` would be
+ * the WRONG call here: that reads scope `tasks` (a batch's task ARRAY), not
+ * one task object, so it would incorrectly apply the top-level batch scope's
+ * aliases (which overlap in confusing ways — e.g. `blockDuplicate` means
+ * something different at batch-top-level vs per task) to a single task
+ * entry. This keeps `normalizeEnqueueTaskArgs` correct regardless of caller —
+ * production dispatch (already canonicalized by server.ts) OR a test that
+ * calls it directly with raw camelCase/snake_case-mixed args (canonicalizing
+ * twice is idempotent: the second pass is a no-op once the alias key is
+ * gone).
+ */
+export function canonicalizeEnqueueTaskEntry(entry: Record<string, unknown>): Record<string, unknown> {
+    return canonicalizeObject(entry, ENQUEUE_TASK_FIELD_ALIASES);
+}
+
+/**
+ * Same idea as {@link canonicalizeEnqueueTaskEntry}, for the TOP-LEVEL scope
+ * of `mesh_enqueue_task` or `mesh_enqueue_batch` (their own arguments, not a
+ * task entry inside `tasks[]`) — `missionId`/`mission_id` at the batch's own
+ * level (mesh-tools-queue.ts `meshEnqueueBatch`'s `batchMissionId`), and the
+ * `allowDuplicate`/`blockDuplicate`/`orchestrationDecision` flags both tools
+ * read at their own top level.
+ */
+export function canonicalizeMeshTopLevelArgs(name: 'mesh_enqueue_task' | 'mesh_enqueue_batch', args: Record<string, unknown>): Record<string, unknown> {
+    const table = MESH_ACCEPTED_ARG_ALIASES[name];
+    return canonicalizeObject(args, table?.[TOP_LEVEL_SCOPE]);
+}
+
+/** Error text when `args` uses a retired key (top level or inside a scoped array), else null. */
+export function retiredMeshToolArgsError(name: string, args: Record<string, unknown>): string | null {
+    const table = MESH_RETIRED_ARGS[name];
+    if (!table) return null;
+    for (const [scope, { keys, reason }] of Object.entries(table)) {
+        if (scope === TOP_LEVEL_SCOPE) {
+            const hit = keys.filter(key => Object.prototype.hasOwnProperty.call(args, key));
+            if (hit.length > 0) return `Retired parameter(s) for ${name}: ${hit.map(k => `"${k}"`).join(', ')}. ${reason}`;
+            continue;
+        }
+        const items = args[scope];
+        if (!Array.isArray(items)) continue;
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            if (!isPlainObject(item)) continue;
+            const hit = keys.filter(key => Object.prototype.hasOwnProperty.call(item, key));
+            if (hit.length > 0) {
+                return `Retired parameter(s) for ${name} ${itemLabel(scope, i, item)}: ${hit.map(k => `"${k}"`).join(', ')}. ${reason}`;
+            }
+        }
+    }
+    return null;
+}
+
 const MESH_TOOL_BY_NAME = new Map<string, ToolSchemaLike>(
     (ALL_MESH_TOOLS as ToolSchemaLike[]).map(tool => [tool.name, tool]),
 );
@@ -250,12 +494,16 @@ function resolveMeshTool(name: string): { schema: ToolSchemaLike; injected: read
  * `workspaces[]`, `gates[]`) — else null. Unknown tool names return null and
  * fall through to the dispatcher's existing "Unknown tool" response.
  */
-export function rejectUnknownMeshToolArgs(name: string, args: Record<string, unknown>): string | null {
+export function rejectUnknownMeshToolArgs(name: string, rawArgs: Record<string, unknown>): string | null {
     const tool = resolveMeshTool(name);
     if (!tool) return null;
+    const retired = retiredMeshToolArgsError(name, rawArgs);
+    if (retired) return retired;
+    const args = canonicalizeMeshToolArgs(name, rawArgs);
     const properties = tool.schema.inputSchema?.properties;
     return unknownToolArgsError(name, properties, args)
         ?? nestedArrayItemArgsError(name, properties, args)
+        ?? nestedArrayItemArrayTypeError(name, properties, args)
         ?? enumValueError(name, properties, args)
         ?? nestedArrayItemEnumValueError(name, properties, args);
 }
@@ -293,17 +541,23 @@ export function missingRequiredToolArgsError(
 }
 
 /**
- * Mesh-mode gate: unknown-key rejection (top-level, then nested array items)
- * followed by required-key rejection. Unknown keys are reported first so a
+ * Mesh-mode gate: retired-key rejection, alias canonicalization, unknown-key
+ * rejection (top-level, then nested array items) followed by required-key rejection. Unknown keys are reported first so a
  * typo'd required key ("nod_id") gets the did-you-mean suggestion rather than
  * a bare "missing node_id".
  */
-export function validateMeshToolArgs(name: string, args: Record<string, unknown>): string | null {
+export function validateMeshToolArgs(name: string, rawArgs: Record<string, unknown>): string | null {
     const tool = resolveMeshTool(name);
     if (!tool) return null;
+    const retired = retiredMeshToolArgsError(name, rawArgs);
+    if (retired) return retired;
+    // Accepted aliases are renamed BEFORE the unknown-key gate: an alias is never
+    // "unknown", and it is enum/required-checked exactly like its canonical key.
+    const args = canonicalizeMeshToolArgs(name, rawArgs);
     const properties = tool.schema.inputSchema?.properties;
     return unknownToolArgsError(name, properties, args)
         ?? nestedArrayItemArgsError(name, properties, args)
+        ?? nestedArrayItemArrayTypeError(name, properties, args)
         ?? enumValueError(name, properties, args)
         ?? nestedArrayItemEnumValueError(name, properties, args)
         ?? missingRequiredToolArgsError(name, tool.schema.inputSchema, args, tool.injected);

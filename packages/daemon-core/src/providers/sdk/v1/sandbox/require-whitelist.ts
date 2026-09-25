@@ -155,9 +155,15 @@ function shimmedExecFileSync(
         if (typeof o.input === 'string' || o.input instanceof Buffer) {
             safeOpts.input = o.input as any;
         }
-        // shell / env / uid / gid / detached / windowsHide / killSignal — all dropped.
+        // shell / env / uid / gid / detached / killSignal — all dropped.
     }
-    return nodeChildProcess.execFileSync(file, safeArgs, safeOpts as any);
+    // windowsHide is force-set below (not caller-overridable, unlike the
+    // hidden* wrappers elsewhere in this codebase): a provider script has no
+    // legitimate reason to want a visible console on win32, and since every
+    // other option here is already narrowed/dropped for sandbox safety, this
+    // is one more thing a provider script cannot opt out of rather than one
+    // more flag it could forget to set.
+    return nodeChildProcess.execFileSync(file, safeArgs, { ...safeOpts, windowsHide: true } as any);
 }
 
 const CHILD_PROCESS_SHIM = Object.freeze({

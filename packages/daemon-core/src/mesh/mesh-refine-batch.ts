@@ -21,7 +21,7 @@ async function execChangeAreaGit(
     inputs: Record<string, unknown>,
 ) {
     try {
-        return await execFileAsync(GIT, gitArgs, { cwd, encoding: 'utf8' });
+        return await execFileAsync(GIT, gitArgs, { cwd, encoding: 'utf8', windowsHide: true });
     } catch (error: any) {
         LOG.warn('Mesh', `[Refinery] Change-area git call failed: ${JSON.stringify({
             callSite,

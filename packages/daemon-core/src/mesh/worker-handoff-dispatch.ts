@@ -35,6 +35,7 @@ import { isWorkerMcpEnabled } from './worker-mcp-isolation.js';
 import { composeTaskDispatchBody } from './worker-handoff-notes.js';
 import { isTaskReadonly } from './mesh-work-queue.js';
 import { getMeshMission } from './mesh-missions.js';
+import { buildUpstreamResultsAppendix } from './mesh-upstream-results.js';
 
 function readNonEmpty(value: unknown): string | undefined {
     return typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -54,15 +55,20 @@ export interface DispatchableTask {
     missionId?: string;
     /** Files the task is expected to touch, when known — drives handoff-note relevance. */
     touchedFiles?: unknown;
+    /** Queue-level predecessors — drives the D4 "Upstream results" appendix. */
+    dependsOn?: unknown;
 }
 
 /**
  * The body to actually send for this task:
  *
  *   1. `task.message` — the coordinator's authored text, verbatim;
- *   2. the handoff-note block, when the worker-MCP gate is on and any earlier
+ *   2. the "Upstream results" appendix (D4, mesh-upstream-results.ts), when
+ *      the task has predecessors (queue `dependsOn` or graph `requires`) —
+ *      their accepted completion summaries in untrusted-evidence envelopes;
+ *   3. the handoff-note block, when the worker-MCP gate is on and any earlier
  *      work is relevant (see worker-handoff-notes.ts);
- *   3. the worker protocol footer — ALWAYS, carrying the task's id, mode,
+ *   4. the worker protocol footer — ALWAYS, carrying the task's id, mode,
  *      difficulty and read-only axis so the worker learns the protocol from
  *      the task itself.
  *
@@ -92,14 +98,25 @@ export function resolveDispatchMessage(
         return task.message;
     }
 
-    let body = task.message;
+    // D4: authored message → Upstream results. Independent of the worker-MCP
+    // gate (it is dependency plumbing, not a worker-tool feature). Best-effort:
+    // a lookup failure dispatches the authored message without the appendix.
+    let messageWithUpstream = task.message;
+    try {
+        const upstream = buildUpstreamResultsAppendix(meshId, task);
+        if (upstream) messageWithUpstream = `${task.message}\n\n---\n\n${upstream}`;
+    } catch (e: any) {
+        LOG.warn('UpstreamResults', `Failed to build upstream results for ${task.id}: ${e?.message || e}`);
+    }
+
+    let body = messageWithUpstream;
     let enclosedHandoffNotes = 0;
 
     if (isWorkerMcpEnabled()) {
         try {
             const touchedFiles = task.touchedFiles;
             const branch = readNonEmpty((node as { worktreeBranch?: unknown } | null)?.worktreeBranch);
-            const composed = composeTaskDispatchBody(task.message, {
+            const composed = composeTaskDispatchBody(messageWithUpstream, {
                 meshId,
                 taskId: task.id,
                 ...(Array.isArray(touchedFiles) ? { touchedFiles: touchedFiles as string[] } : {}),
@@ -123,7 +140,7 @@ export function resolveDispatchMessage(
             enclosedHandoffNotes = composed.enclosedNotes;
         } catch (e: any) {
             LOG.warn('HandoffNotes', `Failed to compose dispatch body for ${task.id}: ${e?.message || e}`);
-            body = task.message;
+            body = messageWithUpstream;
             enclosedHandoffNotes = 0;
         }
     }

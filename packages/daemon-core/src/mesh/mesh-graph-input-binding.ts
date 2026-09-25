@@ -715,6 +715,53 @@ export function renderMaterializedMessage(
     };
 }
 
+/** One untrusted-evidence block for {@link renderUntrustedEvidenceEnvelopes}. */
+export interface MeshUntrustedEvidenceBlock {
+    /** Provenance attributes (identifiers / counters only). `trust="untrusted"` is always prepended. */
+    attributes: Record<string, string | number | boolean>;
+    /** Worker-authored text. Redacted, control-stripped and defanged here — callers pass it raw. */
+    text: string;
+}
+
+/**
+ * The SAME untrusted-evidence framing {@link renderMaterializedMessage} uses for
+ * `inputs_from`, exported for other appendices that carry worker-authored text
+ * (D4 "Upstream results", docs/design/2026-09-25-graph-orchestration-simplification.md):
+ * the fixed {@link MESH_UPSTREAM_DATA_PREAMBLE}, then one
+ * `<mesh_upstream_data_<nonce> trust="untrusted" ...>` envelope per block, the
+ * value secret-redacted, control-stripped and unable to close its own envelope.
+ *
+ * ★ Returns a string for the caller to place in ONE appendix after the authored
+ * instruction — nothing here can write any other task field. The nonce is
+ * derived from `nonceSeed` + the block digests, so a re-render is byte-stable.
+ */
+export function renderUntrustedEvidenceEnvelopes(
+    blocks: readonly MeshUntrustedEvidenceBlock[],
+    nonceSeed: unknown,
+): { text: string; nonce: string; preamble: string; envelopes: string[] } {
+    const cleaned = blocks.map(b => ({
+        attributes: b.attributes,
+        text: defangEnvelopeMarkers(stripControlCharacters(redactLogLine(b.text))),
+    }));
+    const nonce = sha256Hex(canonicalJson({
+        seed: nonceSeed ?? null,
+        blocks: cleaned.map(b => sha256Hex(b.text)),
+    })).slice(0, 8);
+    const tag = `${ENVELOPE_TAG}_${nonce}`;
+    const rendered = cleaned.map(b => {
+        const attrs = ['trust="untrusted"', ...Object.entries(b.attributes)
+            .filter(([key]) => key !== 'trust')
+            .map(([key, value]) => `${key.replace(/[^A-Za-z0-9_]/g, '_')}="${escapeAttribute(String(value))}"`)].join(' ');
+        return `<${tag} ${attrs}>\n${b.text}\n</${tag}>`;
+    });
+    return {
+        text: `${MESH_UPSTREAM_DATA_PREAMBLE}\n\n${rendered.join('\n\n')}`,
+        nonce,
+        preamble: MESH_UPSTREAM_DATA_PREAMBLE,
+        envelopes: rendered,
+    };
+}
+
 /**
  * Binding-aware final-delivery guard (design :305-309).
  *

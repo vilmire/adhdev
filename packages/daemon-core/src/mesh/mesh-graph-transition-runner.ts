@@ -63,6 +63,13 @@
  * propagation IS implemented here (C1) because it is the other half of
  * condition evaluation — a condition that can only ever block is not a
  * condition.
+ *
+ * D3(a) gate auto-close (docs/design/2026-09-25-graph-orchestration-simplification.md)
+ * also runs inside this choke point, at the end of a failed/cancelled advance.
+ * The runner may import mesh-graph-gate-closure.ts (it imports nothing of the
+ * runner/gates/queue and uses no import at module top level) but NEVER
+ * mesh-graph-gates.ts, which imports this module and evaluates its bindings at
+ * module top level (`MESH_GATE_RELEASE_PATCH_KEYS`).
  */
 
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -90,6 +97,7 @@ import {
     type MeshUpstreamOutput,
 } from './mesh-graph-input-binding.js';
 import { mergeWorktreeAffinityTag, resolveWorkspaceRefForMaterialize } from './mesh-graph-workspace-bind.js';
+import { resolveDefaultGateDeadlineSeconds } from './mesh-graph-gate-defaults.js';
 import { expireWorkerTaskTokensForTask } from './worker-mcp-isolation.js';
 import { discardWorkerMailboxForTask } from './worker-mailbox.js';
 import {
@@ -97,6 +105,7 @@ import {
     classifyGraphRollup,
     projectGraphPublicPolicy,
 } from './mesh-graph-derived-failure.js';
+import { autoAbandonGatesWithTerminalDownstreamInTxn } from './mesh-graph-gate-closure.js';
 
 // ── Public contract ──────────────────────────────────────────────────────────
 
@@ -225,7 +234,7 @@ export function registerMeshGraphQueueWakeHandler(handler: (meshId: string) => v
  * Payload fields come straight from the outbox row's JSON payload.
  */
 export interface MeshGraphGateNotification {
-    kind: 'graph_gate_awaiting' | 'graph_gate_lease_expired';
+    kind: 'graph_gate_awaiting' | 'graph_gate_lease_expired' | 'graph_gate_deadline_expired';
     meshId: string;
     graphId: string;
     gateId: string;
@@ -233,6 +242,12 @@ export interface MeshGraphGateNotification {
     action?: string;
     instructions?: string;
     deadlineAt?: string;
+    /** graph_gate_deadline_expired only: the gate's node id. */
+    nodeId?: string;
+    /** graph_gate_deadline_expired only: the on_timeout policy that fired. */
+    policy?: string;
+    /** graph_gate_deadline_expired only: ms the gate had been open when it expired. */
+    ageMs?: number;
 }
 
 // Same seam as the queue-wake handler: an opened/lapsed gate previously wrote a
@@ -252,10 +267,21 @@ export function __resetMeshGraphTransitionRunnerForTests(): void {
     gateNotifyHandler = undefined;
 }
 
-const GATE_NOTIFY_OUTBOX_KINDS = new Set(['graph_gate_awaiting', 'graph_gate_lease_expired']);
+/**
+ * Outbox kind → coordinator notice kind. `graph_gate_expired` is written ONLY by
+ * the deadline sweep (a lease lapse never writes it), so paging on it is exactly
+ * the D3(b) "deadline expired" notice — once per expiry, because a drained row
+ * is marked delivered and an expired gate is not re-swept until reclaimed.
+ */
+const GATE_NOTIFY_OUTBOX_KINDS = new Map<string, MeshGraphGateNotification['kind']>([
+    ['graph_gate_awaiting', 'graph_gate_awaiting'],
+    ['graph_gate_lease_expired', 'graph_gate_lease_expired'],
+    ['graph_gate_expired', 'graph_gate_deadline_expired'],
+]);
 
 function toGateNotification(kind: string, meshId: string, rawPayload: string | null | undefined): MeshGraphGateNotification | null {
-    if (!GATE_NOTIFY_OUTBOX_KINDS.has(kind)) return null;
+    const noticeKind = GATE_NOTIFY_OUTBOX_KINDS.get(kind);
+    if (!noticeKind) return null;
     let payload: Record<string, unknown> = {};
     try {
         const parsed = rawPayload ? JSON.parse(rawPayload) : {};
@@ -265,8 +291,9 @@ function toGateNotification(kind: string, meshId: string, rawPayload: string | n
     const gateId = str(payload.gateId);
     const graphId = str(payload.graphId);
     if (!gateId || !graphId) return null;
+    const ageMs = typeof payload.ageMs === 'number' && Number.isFinite(payload.ageMs) ? payload.ageMs : undefined;
     return {
-        kind: kind as MeshGraphGateNotification['kind'],
+        kind: noticeKind,
         meshId,
         graphId,
         gateId,
@@ -274,6 +301,11 @@ function toGateNotification(kind: string, meshId: string, rawPayload: string | n
         action: str(payload.action),
         instructions: str(payload.instructions),
         deadlineAt: str(payload.deadlineAt),
+        ...(noticeKind === 'graph_gate_deadline_expired' ? {
+            ...(str(payload.nodeId) ? { nodeId: str(payload.nodeId) } : {}),
+            ...(str(payload.policy) ? { policy: str(payload.policy) } : {}),
+            ...(ageMs !== undefined ? { ageMs } : {}),
+        } : {}),
     };
 }
 
@@ -708,6 +740,23 @@ function advanceGraphForTerminalNode(
             updatedAt: nowIso,
         });
     }
+
+    // D3(a) (docs/design/2026-09-25-graph-orchestration-simplification.md): a
+    // failed/cancelled terminal — directly, or through the `cancel` cascade
+    // above — can leave a gate's downstream all terminal. Close such gates HERE,
+    // in the choke point's transaction, so every terminal writer (turn-ledger
+    // commit incl. stranded-dispatch reclaim exhaustion, cancelTask, session
+    // status) gets it; the caller's post-commit drain delivers the abandon rows.
+    // Savepoint + catch: an auto-close failure never undoes the terminal itself.
+    // Placed after this commit's own rollup, which an open gate held at null,
+    // so the abandon's rollup is the only one (no doubled graph_* rows).
+    if (terminal.status === 'failed' || terminal.status === 'cancelled') {
+        try {
+            store.transaction(() => autoAbandonGatesWithTerminalDownstreamInTxn(store, node.graphId, nowIso));
+        } catch (e: any) {
+            LOG.warn('MeshGraph', `Gate auto-close after ${terminal.status} of ${terminal.taskId} failed (graph ${node.graphId}): ${e?.message || e}`);
+        }
+    }
     return materialized;
 }
 
@@ -753,11 +802,18 @@ export function maybeOpenCoordinatorGate(
     if (!satisfied) return false;
 
     const spec = safeParseJson(gateNode.baseSpecJson) as Record<string, unknown> | undefined;
-    const deadlineSeconds = typeof spec?.deadline_seconds === 'number' ? spec.deadline_seconds : undefined;
+    const specDeadlineSeconds = typeof spec?.deadline_seconds === 'number' && spec.deadline_seconds > 0
+        ? spec.deadline_seconds
+        : undefined;
+    // D3(b) (docs/design/2026-09-25-graph-orchestration-simplification.md): a gate
+    // declared WITHOUT `deadline_seconds` gets the default deadline (24 h, env
+    // ADHDEV_GRAPH_GATE_DEFAULT_DEADLINE_S, 0 disables) — unless a deadline was
+    // already pre-stamped, which an explicit spec value alone may overwrite.
+    const deadlineSeconds = specDeadlineSeconds
+        ?? (gate.deadlineAt ? undefined : resolveDefaultGateDeadlineSeconds() ?? undefined);
     const deadlineAt = deadlineSeconds && deadlineSeconds > 0
         ? new Date(Date.parse(nowIso) + deadlineSeconds * 1000).toISOString()
         : undefined;
-    // No `deadline_seconds` in the spec leaves any pre-stamped deadline untouched.
     graphStore.patchGate(gate.gateId, {
         state: 'awaiting_coordinator',
         ...(deadlineAt ? { deadlineAt } : {}),

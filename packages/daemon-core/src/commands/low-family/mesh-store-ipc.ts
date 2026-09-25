@@ -82,6 +82,7 @@ import {
 import { commitMeshGraphPlan, MeshGraphPlanError, type MeshGraphPlanRequest } from '../../mesh/mesh-graph-plan.js';
 import { listMeshMissionsForTool, type MeshMissionStatus } from '../../mesh/mesh-missions.js';
 import { buildMeshActiveWork } from '../../mesh/mesh-active-work.js';
+import { computeMeshGraphUsage, listMeshBlockedGates } from '../../mesh/mesh-graph-usage.js';
 import { buildMeshSchedulingRuntime } from '../../mesh/mesh-scheduling-runtime.js';
 import { resolveMeshHostStatus } from '../../mesh/mesh-host-ownership.js';
 import type { RepoMeshDaemonRole } from '../../repo-mesh-types.js';
@@ -448,6 +449,30 @@ const graphAuditRecord: LowFamilyHandler = async (_ctx: LowFamilyContext, args: 
 
 // ─── active_work_query ──────────────────────────────────────────────────────
 
+/**
+ * D3(b) + D6 (docs/design/2026-09-25-graph-orchestration-simplification.md):
+ * fold the open-gate listing (expired gates included, with state + age) and the
+ * graph usage counters into `activeWork.summary`, which mesh_status passes
+ * through verbatim as `activeWorkSummary`. Identifiers/enums/counters only.
+ * Best-effort: a graph-store fault leaves the summary exactly as it was.
+ */
+function withGraphGateSummary<T extends { summary: object }>(meshId: string, activeWork: T): T {
+    try {
+        const gates = listMeshBlockedGates(meshId);
+        const graphUsage = computeMeshGraphUsage(meshId);
+        return {
+            ...activeWork,
+            summary: {
+                ...activeWork.summary,
+                ...(gates.blockedGatesTotal > 0 ? gates : {}),
+                graphUsage,
+            },
+        };
+    } catch {
+        return activeWork;
+    }
+}
+
 const DEFAULT_ACTIVE_WORK_RECORD_TAIL = 200;
 
 const activeWorkQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) => {
@@ -460,14 +485,14 @@ const activeWorkQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: a
         const queue = (req.queue ? [...req.queue] : liveQueue) as unknown as MeshWorkQueueEntry[];
         const response: ActiveWorkQueryResponse = {
             ...(req.compute !== false ? {
-                activeWork: buildMeshActiveWork({
+                activeWork: withGraphGateSummary(req.meshId, buildMeshActiveWork({
                     meshId: req.meshId,
                     queue,
                     ledgerEntries: records,
                     directDispatches,
                     nodes: req.nodes ? [...req.nodes] : [],
                     ...(req.includeTerminalDirect ? { includeTerminalDirect: true } : {}),
-                }) as unknown as Record<string, unknown>,
+                })) as unknown as Record<string, unknown>,
             } : {}),
             ...(req.includeInputs ? {
                 records: records as unknown as Record<string, unknown>[],

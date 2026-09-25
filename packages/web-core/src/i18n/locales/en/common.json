@@ -1032,6 +1032,21 @@
             "schedUnpinnedTitle": "Hypothetical dispatch with no target pin — tasks pinned to a node show their own forecast on their cards",
             "schedPointInTime": "Point-in-time prediction, not a settled assignment: slot capacity can go stale as soon as a slot is claimed or released",
             "schedulingShort": "Scheduling",
+            "gate": {
+                "release": "Release",
+                "abandon": "Abandon",
+                "extend24h": "Extend 24h",
+                "outcomePassed": "Passed",
+                "outcomeFailed": "Failed",
+                "evidencePlaceholder": "Evidence (optional)",
+                "reasonPlaceholder": "Reason for abandoning this gate",
+                "abandonReasonRequired": "A reason is required to abandon a gate.",
+                "submitRelease": "Submit release",
+                "submitAbandon": "Submit abandon",
+                "extendConfirmTitle": "Extend \"{{ref}}\" by 24 hours?",
+                "expiredBadge": "Expired · {{age}} ago",
+                "commandUnavailable": "No daemon connection to send this command."
+            },
             "list": {
                 "barActive": "Active {{count}}",
                 "barBlocked": "Blocked {{count}}",
@@ -1052,7 +1067,11 @@
                 "noMission": "No mission",
                 "loadMore_one": "Show {{count}} more",
                 "loadMore_other": "Show {{count}} more",
-                "emptyActive": "Nothing is running or blocked right now — finished work is under History."
+                "emptyActive": "Nothing is running or blocked right now — finished work is under History.",
+                "blockedByGate": "blocked by: {{ref}}, {{age}}",
+                "waitingOn": "waiting on:",
+                "waitingOnMore": "+{{count}} more",
+                "chainGroup": "Chain: {{title}}"
             }
         },
         "page": {

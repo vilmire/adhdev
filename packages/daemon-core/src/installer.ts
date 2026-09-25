@@ -5,7 +5,13 @@
  * Supports installing user-selected AI extensions.
  */
 
-import { execSync, exec } from 'child_process';
+import { execSync } from 'child_process';
+// win32 console-flash follow-up (2026-09-25): these calls are currently dead
+// code (installExtensions/launchIDE have no callers outside the index.ts
+// barrel re-export — grepped 0 hits in daemon-cloud/daemon-standalone/web-*),
+// but "dead today" isn't a guarantee, and the gate should not have a hole here
+// either way. hiddenExec defaults windowsHide:true.
+import { hiddenExec } from './process/hidden-spawn.js';
 import { IDEInfo } from './detection/ide-detector.js';
 
 export interface ExtensionInfo {
@@ -123,6 +129,14 @@ export interface InstallResult {
  * Check if an extension is already installed
  */
 import { promisify } from 'util';
+// util.promisify special-cases child_process.exec by function identity (its
+// resolved value is {stdout, stderr}, not a single positional arg like a
+// generic promisify(fn) would give — see custom-promisify symbol in Node's
+// child_process module), so this needs the REAL `exec` from child_process,
+// not the hiddenExec wrapper (promisify(hiddenExec) loses that special case
+// and resolves to a bare stdout string, breaking the `{ stdout }` destructure
+// below). windowsHide is set explicitly at the one call site instead.
+import { exec } from 'child_process';
 const execAsync = promisify(exec);
 
 export async function isExtensionInstalled(
@@ -192,7 +206,7 @@ export async function installExtension(
  // Install VSIX
                 return new Promise((resolve) => {
                     const cmd = `"${ide.cliCommand}" --install-extension "${vsixPath}" --force`;
-                    exec(cmd, { timeout: 60000 }, (error, _stdout, stderr) => {
+                    hiddenExec(cmd, { timeout: 60000 }, (error, _stdout, stderr) => {
                         resolve({
                             extensionId: extension.id,
                             marketplaceId: extension.marketplaceId,
@@ -213,7 +227,7 @@ export async function installExtension(
     return new Promise((resolve) => {
         const cmd = `"${ide.cliCommand}" --install-extension ${extension.marketplaceId} --force`;
 
-        exec(cmd, { timeout: 60000 }, (error, stdout, stderr) => {
+        hiddenExec(cmd, { timeout: 60000 }, (error, stdout, stderr) => {
             if (error) {
                 resolve({
                     extensionId: extension.id,
@@ -271,7 +285,7 @@ export function launchIDE(ide: IDEInfo, workspacePath?: string): boolean {
 
     try {
         const args = workspacePath ? `"${workspacePath}"` : '';
-        exec(`"${ide.cliCommand}" ${args}`, { timeout: 10000 });
+        hiddenExec(`"${ide.cliCommand}" ${args}`, { timeout: 10000 });
         return true;
     } catch {
         return false;

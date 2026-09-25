@@ -1032,6 +1032,21 @@
             "schedUnpinnedTitle": "未固定节点时的假设性预测 — 固定到节点的任务会在卡片上显示各自的预测",
             "schedPointInTime": "这是当前时点的预测，而非已确定的分配 — 槽位被占用或释放后，容量信息可能立即过时",
             "schedulingShort": "调度",
+            "gate": {
+                "release": "释放",
+                "abandon": "放弃",
+                "extend24h": "延长24小时",
+                "outcomePassed": "通过",
+                "outcomeFailed": "失败",
+                "evidencePlaceholder": "证据（可选）",
+                "reasonPlaceholder": "放弃此闸门的原因",
+                "abandonReasonRequired": "放弃闸门需要填写原因。",
+                "submitRelease": "提交释放",
+                "submitAbandon": "提交放弃",
+                "extendConfirmTitle": "将「{{ref}}」延长24小时？",
+                "expiredBadge": "已过期 · {{age}}前",
+                "commandUnavailable": "没有可发送此命令的守护进程连接。"
+            },
             "list": {
                 "barActive": "运行 {{count}}",
                 "barBlocked": "阻塞 {{count}}",
@@ -1052,7 +1067,11 @@
                 "noMission": "无任务组",
                 "loadMore_one": "再显示 {{count}} 条",
                 "loadMore_other": "再显示 {{count}} 条",
-                "emptyActive": "当前没有运行中或被阻塞的工作 — 已完成的工作在“历史”中。"
+                "emptyActive": "当前没有运行中或被阻塞的工作 — 已完成的工作在“历史”中。",
+                "blockedByGate": "阻塞原因：{{ref}}，{{age}}",
+                "waitingOn": "等待：",
+                "waitingOnMore": "另外 {{count}} 个",
+                "chainGroup": "依赖链：{{title}}"
             }
         },
         "page": {
