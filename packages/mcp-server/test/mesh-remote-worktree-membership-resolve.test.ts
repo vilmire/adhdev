@@ -17,11 +17,19 @@
 // the remote clone, so the node is erased from the coordinator's own snapshot
 // and the subsequent .find() throws.
 //
-// Fix: refreshMeshFromDaemon() union-merges (never drops locally-known nodes
-// the local daemon simply doesn't own), and findNodeWithRefresh() falls back to
-// asking the OWNING daemon via the existing mesh_relay_command path before
-// declaring a non-membership — distinguishing "not a member" from "owner
-// unreachable".
+// Fix (2026-08-08): refreshMeshFromDaemon() union-merges (never drops
+// locally-known nodes the local daemon simply doesn't own). The owner-daemon
+// fallback added at the same time has since been removed (see below).
+//
+// Contract since the coordinator-only pass (2026-09-27): the coordinator daemon
+// is the roster authority. A node it knows resolves from ONE local get_mesh with
+// zero member calls, and a node it does not know is a membership verdict — the
+// member fan-out (mesh-node-membership-fallback.ts) was deleted once the
+// coordinator stopped losing member-hosted worktrees: remote clones are
+// persisted to its mesh config (REMOTE-CLONE-DURABLE) and members re-report the
+// worktree nodes they own once per coordinator boot (MEMBER-WORKTREE-RECONCILE,
+// daemon-core mesh-remote-worktree-membership.ts). Every case below therefore
+// also pins zero `meshCommand` (member) calls.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -93,6 +101,7 @@ test('resolves a REMOTE worktree node instead of throwing "is not a member of me
 
     assert.equal(node.id, 'node-remote-wt');
     assert.equal((node as any).daemonId, 'daemon-remote');
+    assert.equal(calls.filter(c => c.daemonId).length, 0, 'resolved from the coordinator alone');
 });
 
 test('refreshMeshFromDaemon does not drop nodes the local daemon does not own', async () => {
@@ -173,25 +182,40 @@ test('a genuinely unknown node still reports non-membership', async () => {
     );
 });
 
-test('an unreachable owning daemon is reported as unreachable, NOT as non-membership', async () => {
+test('a node the coordinator does not hold is NOT looked up on member daemons (coordinator-only)', async () => {
     const calls: Call[] = [];
-    // The node is absent from the coordinator snapshot entirely (e.g. a fresh MCP
-    // process), so resolution must go ask the owning daemon — which is offline.
+    // The node is absent from the snapshot AND from the coordinator's get_mesh — e.g.
+    // a fresh MCP process. Resolution never leaves the coordinator daemon.
+    const ctx = makeCtx({ localGetMeshNodes: LOCAL_ONLY_NODES, remoteGetMeshNodes: [
+        { id: 'node-remote-wt', daemonId: 'daemon-remote', workspace: '/remote/wt', isLocalWorktree: true },
+    ], calls });
+    ctx.mesh.nodes = ctx.mesh.nodes.filter((n: any) => n.id !== 'node-remote-wt');
+
+    await assert.rejects(
+        () => findNodeWithRefresh(ctx, 'node-remote-wt'),
+        /is not a member of mesh/,
+    );
+    assert.equal(calls.filter(c => c.daemonId).length, 0, 'no member daemon call');
+});
+
+test('a failed coordinator read is a transport error, never a membership verdict or a member fan-out', async () => {
+    const calls: Call[] = [];
     const ctx = makeCtx({ localGetMeshNodes: LOCAL_ONLY_NODES, calls });
     ctx.mesh.nodes = ctx.mesh.nodes.filter((n: any) => n.id !== 'node-remote-wt');
-    ctx.transport.meshCommand = async () => {
-        throw new Error('Target daemon is offline or not connected to signaling.');
+    ctx.transport.command = async (verb: string, args: any) => {
+        calls.push({ verb, args });
+        throw new Error('ipc down');
     };
 
     await assert.rejects(
         () => findNodeWithRefresh(ctx, 'node-remote-wt'),
         (e: any) => {
-            assert.equal(e.code, 'mesh_node_owner_unreachable');
-            assert.match(e.message, /unreachable/);
+            assert.equal(e.code, 'mesh_coordinator_membership_unavailable');
             assert.doesNotMatch(e.message, /is not a member of mesh/);
             return true;
         },
     );
+    assert.equal(calls.filter(c => c.daemonId).length, 0, 'no member daemon call');
 });
 
 test('findOptionalNodeWithRefresh returns the remote worktree rather than null', async () => {

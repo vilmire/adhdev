@@ -3,8 +3,9 @@
  *
  * mesh_status: the coordinator's aggregate mesh render — resolves membership,
  * gates the memory cache against pending coordinator events / explicit refresh,
- * optionally fans out a direct peer-truth probe, then renders per-node health
- * (live session records, local/remote/inline git truth, branch convergence) and
+ * then renders per-node health from what the coordinator HOLDS (its own local
+ * git reads + the member-pushed node state; never a live fan-out to a member),
+ * branch convergence, and
  * folds in queue/ledger/missions/async-refine/historical-session/active-refine
  * state. get_mesh_review_inbox: derives review-inbox items from node statuses +
  * ledger and annotates each with a worktree git-diff summary. Extracted verbatim
@@ -72,7 +73,6 @@ import {
     buildInlineMeshTransitGitStatus,
     deriveMeshNodeHealthFromGit,
     buildLivePeerGitConnection,
-    probeRemoteMeshGitStatusWithRetry,
     recordInlineMeshDirectGitTruth,
     persistNodeReporterPlatform,
     applyCachedInlineMeshNodeStatus,
@@ -84,12 +84,10 @@ import {
     MESH_NODE_LIVE_TRUTH_MARKER,
     logRepoMeshStatusDebug,
     summarizeRepoMeshStatusDebug,
-    MESH_DIRECT_PROBE_TIMEOUT_MS,
-    MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS,
 } from '../router.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 import {
-    hydrateMeshNodesFromGitState,
+    buildHeldRenderMesh,
     kickMeshNodeGitRefreshes,
     overlayMeshNodeGitObservations,
 } from './mesh-status-node-state.js';
@@ -106,44 +104,52 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                 const startedAtMs = Date.now();
                 try {
                     const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-                    const mesh = meshRecord?.mesh;
-                    if (!mesh) return { success: false, error: 'Mesh not found' };
+                    const recordMesh = meshRecord?.mesh;
+                    if (!recordMesh) return { success: false, error: 'Mesh not found' };
                     // Pass the evaluating daemon's id so a host mesh whose
                     // hostDaemonId was never persisted (HOST-MISSEED-FIRSTSETUP) gets
                     // pinned to THIS daemon — the dashboard then renders M4 as host
                     // instead of falling back to 'no host yet'.
-                    const meshHost = resolveMeshHostStatus(mesh, { localDaemonId: ctx.deps.statusInstanceId });
+                    const meshHost = resolveMeshHostStatus(recordMesh, { localDaemonId: ctx.deps.statusInstanceId });
 
                     const refreshRequested = args?.refresh === true || args?.forceRefresh === true;
-                    // COORDINATOR-HELD NODE STATE: the request path never waits on a
-                    // remote peer. Remote nodes render from the coordinator's last-known
-                    // git state (member pushes + its own background probes, see
-                    // mesh/mesh-node-git-state.ts); a missing/stale node — or any node on
-                    // an explicit refresh — gets a background probe kicked here whose
-                    // completion publishes a mesh-state revision. Only an internal caller
-                    // that explicitly opts in (`awaitLiveProbes: true`) keeps the old
-                    // blocking peer fan-out; the dashboard never sends it.
-                    const awaitLiveProbes = args?.awaitLiveProbes === true;
+                    // Internal re-render (the SWR background rebuild, the review inbox):
+                    // skip the memory cache and rebuild from what is held — without the
+                    // explicit-refresh nudge to every member.
+                    const rebuildFromHeld = args?.rebuildFromHeld === true;
+                    // COORDINATOR-HELD NODE STATE: the request path never contacts a
+                    // remote peer. A node served by another daemon renders from the
+                    // coordinator-held store only (member pushes; the background
+                    // handshake probe only (re-)subscribes a member that is not
+                    // pushing) — see mesh/mesh-node-git-state.ts. An explicit refresh
+                    // nudges subscribed members to push now; nothing here is awaited.
+                    // Without a mesh transport (standalone) nothing is held for other
+                    // daemons and the legacy inline view stays.
+                    const heldOnly = !!ctx.deps.dispatchMeshCommand;
                     const nodeStateLocality = { localMachineId: getMachineId() || '', localDaemonId: ctx.deps.statusInstanceId };
-                    hydrateMeshNodesFromGitState({ meshId, mesh, store: ctx.meshNodeGitState, locality: nodeStateLocality });
-                    // No mesh transport (standalone): nothing to probe — never record a
-                    // phantom "unreachable" for a node this daemon cannot reach anyway.
-                    if (!awaitLiveProbes && ctx.deps.dispatchMeshCommand) {
+                    const mesh = buildHeldRenderMesh({ meshId, mesh: recordMesh, store: ctx.meshNodeGitState, locality: nodeStateLocality, heldOnly });
+                    if (heldOnly) {
                         kickMeshNodeGitRefreshes({
                             meshId,
-                            mesh,
+                            mesh: recordMesh,
                             store: ctx.meshNodeGitState,
                             refresher: ctx.meshNodeGitRefresher,
                             locality: nodeStateLocality,
                             refresh: refreshRequested,
                         });
                     }
+                    const coordinatorNodeId = readStringValue(
+                        recordMesh.coordinator?.preferredNodeId,
+                        normalizeMeshNodeId(recordMesh.nodes?.[0] as any),
+                    );
                     const withNodeObservations = <T,>(snapshot: T): T => {
                         overlayMeshNodeGitObservations(snapshot, {
                             meshId,
                             store: ctx.meshNodeGitState,
                             refresher: ctx.meshNodeGitRefresher,
                             locality: nodeStateLocality,
+                            heldSessions: heldOnly,
+                            ...(coordinatorNodeId ? { coordinatorNodeId } : {}),
                         });
                         return snapshot;
                     };
@@ -230,7 +236,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     // Strict serve requires a fully fresh snapshot AND no undrained
                     // coordinator events — a coordinator that has events waiting gets at
                     // least the SWR path below, which re-attaches them fresh.
-                    if (!refreshRequested && !verboseMissions && pendingCoordinatorEventCount === 0) {
+                    if (!refreshRequested && !rebuildFromHeld && !verboseMissions && pendingCoordinatorEventCount === 0) {
                         const cachedStatus = ctx.getCachedAggregateMeshStatus(meshId, mesh, { requireDirectPeerTruth: args?.requireDirectPeerTruth === true });
                         if (cachedStatus) {
                             const returned = await attachLiveOnlyExtras(cachedStatus);
@@ -259,7 +265,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     // allowStalePending relaxes ONLY the pending-git freshness gate;
                     // getCachedAggregateMeshStatus still enforces the queueRevision
                     // guard, so a genuine queue mutation is never stale-served.
-                    if (!refreshRequested && !verboseMissions) {
+                    if (!refreshRequested && !rebuildFromHeld && !verboseMissions) {
                         const staleStatus = ctx.getCachedAggregateMeshStatus(meshId, mesh, {
                             requireDirectPeerTruth: args?.requireDirectPeerTruth === true,
                             allowStalePending: true,
@@ -267,16 +273,17 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         if (staleStatus) {
                             if (!ctx.swrRefreshInFlight.has(meshId)) {
                                 ctx.swrRefreshInFlight.add(meshId);
-                                // Fire-and-forget: a full refresh (peer fan-out) that
-                                // rewrites the aggregate cache. Errors are swallowed —
-                                // the stale snapshot was already returned to the caller.
+                                // Fire-and-forget: re-render from the held state and
+                                // rewrite the aggregate cache. NOT an explicit refresh —
+                                // a stale serve must not nudge every member. Errors are
+                                // swallowed — the stale snapshot was already returned.
                                 void Promise.resolve()
                                     .then(() => ctx.execute('mesh_status', {
                                         meshId,
                                         inlineMesh: args?.inlineMesh,
                                         coordinatorDaemonId: args?.coordinatorDaemonId,
                                         requireDirectPeerTruth: args?.requireDirectPeerTruth === true,
-                                        refresh: true,
+                                        rebuildFromHeld: true,
                                     }, 'mesh_status_swr_freshen'))
                                     .catch(() => {})
                                     .finally(() => { ctx.swrRefreshInFlight.delete(meshId); });
@@ -295,6 +302,8 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     }
                     const refreshReason = refreshRequested
                         ? 'explicit_refresh'
+                        : rebuildFromHeld
+                            ? 'held_state_rebuild'
                         : pendingCoordinatorEventCount > 0
                             ? 'pending_coordinator_events'
                         : hadAggregateCache
@@ -344,23 +353,22 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         return typeof nick === 'string' && nick.trim() ? nick.trim() : '';
                     })();
                     const requireDirectPeerTruth = args?.requireDirectPeerTruth === true;
-                    // Shared probe gate for this mesh_status call: the bootstrap
-                    // hydrate below and the per-node render loop further down both
-                    // probe the same peers — route both through this cache so they
-                    // dedup within the call and reuse recent results across calls.
+                    // Shared LOCAL git read gate for this call: the direct-truth
+                    // classification below and the per-node render loop both read the
+                    // same local workspaces — dedup them within the call.
                     const meshGitProbeCache = ctx.meshGitProbeCache;
+                    // Direct-truth accounting (a requireDirectPeerTruth caller reads
+                    // sourceOfTruth.directPeerTruth). Local nodes are read here; remote
+                    // nodes count from what the coordinator HOLDS. No remote peer is
+                    // ever probed on this path, so an explicit refresh can no longer
+                    // hard-fail with mesh_direct_peer_truth_unavailable: held truth (or
+                    // "pending") is always the answer, and freshness arrives by push.
                     const directTruth = requireDirectPeerTruth
                         ? await hydrateInlineMeshDirectTruth({
                             mesh,
                             meshSource: meshRecord.source,
-                            dispatchMeshCommand: ctx.deps.dispatchMeshCommand,
-                            getMeshPeerConnectionStatus: ctx.deps.getMeshPeerConnectionStatus,
                             statusInstanceId: ctx.deps.statusInstanceId,
                             localMachineId,
-                            // Standing-state model: the request path never fans out a
-                            // blocking peer git probe (background refresh does). Only
-                            // an internal awaitLiveProbes caller keeps the old fan-out.
-                            probeRemotePeers: refreshRequested && awaitLiveProbes,
                             probeCache: meshGitProbeCache,
                         })
                         : {
@@ -372,62 +380,11 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                             unavailableNodeIds: [] as string[],
                             deadNodeIds: [] as string[],
                         };
-                    // Default/cached loads may not attempt a remote peer probe yet; do not surface that as
-                    // a direct mesh truth failure until an explicit probe attempt actually fails.
-                    const passivePeerTruthNotAttempted = requireDirectPeerTruth
-                        && !refreshRequested
-                        && directTruth.directEvidenceCount > 0
-                        && directTruth.peerAttemptedCount === 0;
-                    const effectiveDirectTruth = passivePeerTruthNotAttempted
+                    // A remote node without held truth yet is pending, not unavailable,
+                    // once any direct evidence exists.
+                    const effectiveDirectTruth = requireDirectPeerTruth && directTruth.directEvidenceCount > 0
                         ? { ...directTruth, unavailableNodeIds: [] as string[] }
                         : directTruth;
-                    const unavailableDirectTruthNodeIds = new Set(effectiveDirectTruth.unavailableNodeIds);
-                    const unavailableNodesAreOnlyRemovedWorktrees = unavailableDirectTruthNodeIds.size > 0
-                        && Array.isArray(mesh.nodes)
-                        && mesh.nodes
-                            .filter((node: any) => unavailableDirectTruthNodeIds.has(normalizeMeshNodeId(node) ?? ''))
-                            .every((node: any) => node?.isLocalWorktree === true);
-                    // Default (non-refresh) loads never hard-fail: held
-                    // standing-state truth is returned and the graph renders
-                    // immediately. The hard mesh_direct_peer_truth_unavailable
-                    // failure is reserved for an explicit refresh that actually
-                    // attempted a peer probe and could not confirm any evidence.
-                    const directTruthSatisfied = !requireDirectPeerTruth
-                        || !refreshRequested
-                        || (effectiveDirectTruth.directEvidenceCount > 0 && (effectiveDirectTruth.unavailableNodeIds.length === 0 || unavailableNodesAreOnlyRemovedWorktrees));
-                    if (requireDirectPeerTruth && refreshRequested && !directTruthSatisfied) {
-                        const failureResult = {
-                            success: false,
-                            code: 'mesh_direct_peer_truth_unavailable',
-                            error: 'Selected coordinator could not confirm direct mesh truth yet. Bootstrap inventory stays unavailable until direct mesh_status probes succeed.',
-                            sourceOfTruth: {
-                                membership: meshRecord.source === 'inline_cache'
-                                    ? 'coordinator_inline_mesh_cache'
-                                    : meshRecord.source === 'local_config'
-                                        ? 'local_mesh_config'
-                                        : 'inline_bootstrap_snapshot',
-                                coordinatorOwnsLiveTruth: false,
-                                currentStatus: 'direct_peer_truth_unavailable',
-                                directPeerTruth: {
-                                    required: true,
-                                    satisfied: false,
-                                    directEvidenceCount: directTruth.directEvidenceCount,
-                                    localConfirmedCount: directTruth.localConfirmedCount,
-                                    peerAttemptedCount: directTruth.peerAttemptedCount,
-                                    peerConfirmedCount: directTruth.peerConfirmedCount,
-                                    unavailableNodeIds: directTruth.unavailableNodeIds,
-                                },
-                            },
-                        };
-                        logRepoMeshStatusDebug('direct_truth_unavailable', {
-                            meshId,
-                            command: 'mesh_status',
-                            refreshRequested,
-                            meshSource: meshRecord.source,
-                            directTruth,
-                        });
-                        return failureResult;
-                    }
                     const directTruthUnavailableNodeIds = new Set(effectiveDirectTruth.unavailableNodeIds);
                     const coordinatorHostname = osHostname();
                     const selectedCoordinatorNodeId = readStringValue(
@@ -619,9 +576,10 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         }
                         if (workspace) {
                             if (!fs.existsSync(workspace)) {
-                                // Workspace not local — prefer direct live inline truth, then attempt a P2P git probe.
+                                // Workspace not local — render the held truth (for a node served
+                                // by another daemon: the coordinator-held store only). Never a
+                                // live probe of the member on the request path.
                                 const inlineTransitGit = buildInlineMeshTransitGitStatus(node);
-                                let remoteProbeApplied = false;
                                 if (inlineTransitGit) {
                                     status.git = inlineTransitGit;
                                     status.health = inlineTransitGit.isGitRepo
@@ -633,57 +591,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                     if (!connectionReported || connectionState === 'unknown') {
                                         status.connection = buildLivePeerGitConnection(connection, refreshedAt);
                                     }
-                                    remoteProbeApplied = true;
-                                } else if (refreshRequested && awaitLiveProbes && !isSelfNode && daemonId && ctx.deps.dispatchMeshCommand && !directTruthUnavailableNodeIds.has(nodeId)) {
-                                    // Only an explicit refresh fans out a blocking
-                                    // per-node git probe. On the default load a peer
-                                    // with no held truth falls through to
-                                    // gitProbePending below — the graph still renders.
-                                    // Bounded retry (shared with the bootstrap hydrate
-                                    // path), gated on the peer staying connected, so a
-                                    // slow TURN-relayed peer is recovered rather than
-                                    // dropped after a single timeout.
-                                    const runNodeProbe = () => probeRemoteMeshGitStatusWithRetry({
-                                        dispatchMeshCommand: ctx.deps.dispatchMeshCommand,
-                                        daemonId,
-                                        workspace,
-                                        timeoutMs: MESH_DIRECT_PROBE_TIMEOUT_MS,
-                                        retryTimeoutMs: MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS,
-                                        getConnection: ctx.deps.getMeshPeerConnectionStatus,
-                                        onConnection: connection => { status.connection = connection; },
-                                    });
-                                    // Same shared cache as the bootstrap hydrate path: within one
-                                    // mesh_status call this dedups the bootstrap probe against this
-                                    // per-node probe for the same peer, and across calls it reuses a
-                                    // recent result so the dashboard auto-retry loop can't restart a
-                                    // fresh refreshUpstream probe seconds apart.
-                                    const remoteGit = await meshGitProbeCache.probe(daemonId, workspace, runNodeProbe);
-                                    if (remoteGit) {
-                                        status.git = remoteGit;
-                                        status[MESH_NODE_LIVE_TRUTH_MARKER] = true;
-                                        status.health = remoteGit.isGitRepo
-                                            ? deriveMeshNodeHealthFromGit(remoteGit as unknown as Record<string, unknown>)
-                                            : 'degraded';
-                                        const connection = readObjectRecord(status.connection);
-                                        const connectionState = readStringValue(connection.state);
-                                        const connectionReported = readBooleanValue(connection.reported) ?? false;
-                                        if (!connectionReported || connectionState === 'unknown') {
-                                            status.connection = buildLivePeerGitConnection(connection, refreshedAt);
-                                        }
-                                        const reporter = recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
-                                        persistNodeReporterPlatform(meshRecord.source, mesh, nodeId, reporter);
-                                        ctx.meshNodeGitState.recordObservation({
-                                            meshId,
-                                            nodeId,
-                                            workspace,
-                                            git: remoteGit,
-                                            source: 'coordinator_probe',
-                                            observedAt: typeof remoteGit.lastCheckedAt === 'number' ? remoteGit.lastCheckedAt : undefined,
-                                        });
-                                        remoteProbeApplied = true;
-                                    }
-                                }
-                                if (!remoteProbeApplied) {
+                                } else {
                                     const connectionState = readStringValue((status.connection as any)?.state);
                                     const pendingPeerGitProbe = !inlineTransitGit
                                         && !isSelfNode
@@ -883,7 +791,8 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                 : meshRecord?.source === 'local_config'
                                     ? 'local_mesh_config'
                                     : 'inline_bootstrap_snapshot',
-                            coordinatorOwnsLiveTruth: directTruthSatisfied,
+                            // Held truth is the coordinator's answer (never a failed peer probe).
+                            coordinatorOwnsLiveTruth: true,
                             meshHost: {
                                 owner: 'mesh_host_daemon',
                                 localRole: meshHost.role,
@@ -892,10 +801,10 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                 hostAddress: meshHost.hostAddress,
                             },
                             ...(requireDirectPeerTruth ? {
-                                currentStatus: directTruthSatisfied ? 'live_git_and_session_probes' : 'direct_peer_truth_unavailable',
+                                currentStatus: 'live_git_and_session_probes',
                                 directPeerTruth: {
                                     required: true,
-                                    satisfied: directTruthSatisfied,
+                                    satisfied: true,
                                     directEvidenceCount: effectiveDirectTruth.directEvidenceCount,
                                     localConfirmedCount: effectiveDirectTruth.localConfirmedCount,
                                     peerAttemptedCount: effectiveDirectTruth.peerAttemptedCount,
@@ -924,7 +833,9 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         },
                         queue: { tasks: queue, summary: queueSummary },
                         ledger: { entries: ledgerEntries, summary: ledgerSummary },
-                        ...(missions.length > 0 ? { missions } : {}),
+                        // Always present (possibly empty): the dashboard reads a missing field as
+                        // "this daemon predates missions" and tells the user to update it.
+                        missions,
                         // Compact (default): bounded folded groups + a status-count summary.
                         // Verbose: the full reconstructed activity list. Mirrors the MCP tool.
                         ...(magiActivity.length > 0
@@ -1008,10 +919,11 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         : null;
                     let cachedStatus = !inlineNodes ? ctx.getCachedAggregateMeshStatus(meshId, mesh, {}) : null;
                     if (!cachedStatus && !inlineNodes) {
+                        // A held-state rebuild — never an explicit refresh (no member nudge).
                         const freshStatus = await ctx.execute('mesh_status', {
                             meshId,
                             inlineMesh: args?.inlineMesh,
-                            refresh: true,
+                            rebuildFromHeld: true,
                         }, 'get_mesh_review_inbox');
                         cachedStatus = (freshStatus?.success !== false) ? freshStatus : null;
                     }

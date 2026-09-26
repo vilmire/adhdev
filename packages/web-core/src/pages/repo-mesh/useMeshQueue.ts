@@ -1,105 +1,34 @@
 /**
- * useMeshQueue — mesh task queue state and actions
+ * useMeshQueue — the mesh task queue, read from the coordinator's mesh_status.
  *
- * Handles both standalone (direct sendCommand) and cloud
- * (resolveCommandTarget + unwrapResult) queue loading.
+ * The coordinator's `mesh_status` already carries the queue (`queue.tasks`),
+ * so the page never asks a separate daemon for it — in particular never an
+ * arbitrary connected daemon (`daemons[0]`), which on cloud is just whichever
+ * peer connected first. The queue refreshes whenever the coordinator status
+ * does (revision push / backstop / manual refresh).
  */
-import { useState, useCallback } from 'react'
-import type { RepoMeshContextValue } from '../../context/RepoMeshContext'
-import type { MeshEntry, MeshQueueEntry, MeshQueueSummary } from './types'
+import { useMemo } from 'react'
+import type { RepoMeshStatus } from '@adhdev/daemon-core'
+import type { MeshQueueEntry } from './types'
+
+/** Stable empty result so consumers depending on `meshQueue` identity don't re-run. */
+const EMPTY_QUEUE: MeshQueueEntry[] = []
+
+export function readMeshQueueFromStatus(status: RepoMeshStatus | null | undefined): MeshQueueEntry[] {
+    const queue = (status as { queue?: unknown } | null | undefined)?.queue
+    const tasks = queue && typeof queue === 'object' && !Array.isArray(queue)
+        ? (queue as { tasks?: unknown }).tasks
+        : queue
+    if (!Array.isArray(tasks)) return EMPTY_QUEUE
+    return tasks.filter((task): task is MeshQueueEntry => !!task && typeof task === 'object' && typeof (task as MeshQueueEntry).id === 'string')
+}
 
 interface UseMeshQueueOptions {
-    primaryDaemonId: string
-    activeDaemonId: string
-    sendCommand: RepoMeshContextValue['sendCommand']
-    unwrapResult: RepoMeshContextValue['unwrapResult']
-    loadLiveMesh?: RepoMeshContextValue['loadLiveMesh']
-    resolveCommandTarget: RepoMeshContextValue['resolveCommandTarget']
+    /** The selected mesh's coordinator status (null while not loaded). */
+    status: RepoMeshStatus | null
 }
 
-function buildQueueSummary(queue: MeshQueueEntry[]): MeshQueueSummary {
-    const active = queue.filter(t => t.status === 'pending' || t.status === 'assigned')
-    const historical = queue.filter(t => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled')
-    return {
-        active: active.length,
-        historical: historical.length,
-        activeCounts: {
-            pending: active.filter(t => t.status === 'pending').length,
-            assigned: active.filter(t => t.status === 'assigned').length,
-        },
-        historicalCounts: {
-            completed: historical.filter(t => t.status === 'completed').length,
-            failed: historical.filter(t => t.status === 'failed').length,
-        },
-        counts: {
-            pending: queue.filter(t => t.status === 'pending').length,
-            assigned: queue.filter(t => t.status === 'assigned').length,
-            completed: queue.filter(t => t.status === 'completed').length,
-            failed: queue.filter(t => t.status === 'failed').length,
-        },
-        staleAssignedCount: queue.filter(t => t.staleAssigned).length,
-        recent: queue.slice(0, 20),
-    }
-}
-
-export function useMeshQueue({
-    primaryDaemonId,
-    activeDaemonId,
-    sendCommand,
-    unwrapResult,
-    loadLiveMesh,
-    resolveCommandTarget,
-}: UseMeshQueueOptions) {
-    const [meshQueue, setMeshQueue] = useState<MeshQueueEntry[]>([])
-    const [queueSummary, setQueueSummary] = useState<MeshQueueSummary | null>(null)
-    const [queueLoading, setQueueLoading] = useState(false)
-    const [queueError, setQueueError] = useState<string | null>(null)
-
-    /**
-     * Standalone path: simple direct load, sets meshQueue.
-     */
-    const loadQueue = useCallback(async (meshId: string | null) => {
-        if (!primaryDaemonId || !meshId) { setMeshQueue([]); return }
-        try {
-            const res: any = await sendCommand(primaryDaemonId, 'get_mesh_queue', { meshId })
-            setMeshQueue(res?.success ? (Array.isArray(res.queue) ? res.queue : []) : [])
-        } catch { setMeshQueue([]) }
-    }, [primaryDaemonId, sendCommand])
-
-    /**
-     * Cloud (on-demand) path: resolves command target, builds summary.
-     */
-    async function handleLoadQueue(selectedMesh: MeshEntry | null) {
-        if (!selectedMesh) return
-        setQueueLoading(true)
-        setQueueError(null)
-        try {
-            const liveMesh = loadLiveMesh
-                ? await loadLiveMesh(activeDaemonId, selectedMesh.id, selectedMesh)
-                : null
-            const target = resolveCommandTarget(activeDaemonId, selectedMesh.id, selectedMesh, selectedMesh.nodes || [], liveMesh)
-            if ('error' in target) throw new Error(target.error)
-            const raw = await sendCommand(target.targetDaemonId, 'get_mesh_queue', { meshId: selectedMesh.id })
-            const result = unwrapResult(raw)
-            if (result?.success === false) throw new Error(result.error || 'Queue load failed')
-            const queue: MeshQueueEntry[] = Array.isArray(result?.result?.rows ?? result?.rows ?? result?.queue)
-                ? (result?.result?.rows ?? result?.rows ?? result?.queue)
-                : []
-            setQueueSummary(buildQueueSummary(queue))
-        } catch (e: any) {
-            setQueueError(e?.message || 'Queue load failed')
-        } finally {
-            setQueueLoading(false)
-        }
-    }
-
-    return {
-        meshQueue,
-        setMeshQueue,
-        queueSummary,
-        queueLoading,
-        queueError,
-        loadQueue,
-        handleLoadQueue,
-    }
+export function useMeshQueue({ status }: UseMeshQueueOptions) {
+    const meshQueue = useMemo(() => readMeshQueueFromStatus(status), [status])
+    return { meshQueue }
 }

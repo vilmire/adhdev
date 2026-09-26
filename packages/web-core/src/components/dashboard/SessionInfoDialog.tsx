@@ -17,12 +17,14 @@ import { useTransport } from '../../context/TransportContext'
 import { useDashboardMeshOverrides } from '../../context/DashboardMeshContext'
 import {
     joinMeshNodeForSession,
+    resolveSessionMeshCoordinatorDaemonId,
     resolveSessionMeshId,
     resolveSessionMeshNodeId,
     type JoinedMeshNode,
     type SessionInfoConversation,
 } from './session-info-data'
 import Dialog from '../ui/Dialog'
+import { getCoordinatorMeshStatusSnapshot, loadCoordinatorMeshStatus } from '../../utils/coordinator-mesh-status-store'
 import { requestOpenSessionChat } from '../../utils/session-nav'
 import {
     bindQuotaDisplayModel,
@@ -184,26 +186,44 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
 
     useEffect(() => { void load() }, [load])
 
-    // Join the live mesh node this session belongs to. Best-effort: a session that
-    // isn't a mesh member (no meshId), a daemon with no loadMeshStatus override, or a
-    // failed/empty mesh_status all leave the Mesh node section hidden rather than
-    // blocking the whole panel.
+    // The mesh's COORDINATOR — never this session's own (member) daemon — answers
+    // for its node: the coordinator holds every node's latest state.
+    const coordinatorDaemonId = useMemo(() => resolveSessionMeshCoordinatorDaemonId({
+        conv,
+        sessionDaemonId: daemonId,
+        heldCoordinatorDaemonId: meshId ? getCoordinatorMeshStatusSnapshot(meshId)?.daemonId : null,
+        reportedCoordinatorDaemonId: data?.meshWorker?.coordinatorDaemonId,
+    }), [conv, daemonId, meshId, data?.meshWorker?.coordinatorDaemonId])
+
+    // Join the live mesh node this session belongs to, from the SHARED coordinator
+    // status (utils/coordinator-mesh-status-store — the same answer the /mesh page
+    // and the graph dialog hold). Best-effort: a session that isn't a mesh member,
+    // no known coordinator, or a failed/empty mesh_status all leave the Mesh node
+    // section hidden rather than blocking the whole panel.
     const loadMeshNode = useCallback(async () => {
         setMeshNode(null)
         setMeshNodeError(null)
-        if (!meshId || !meshNodeId || !meshOverrides?.loadMeshStatus) return
-        try {
-            const raw = await meshOverrides.loadMeshStatus(daemonId, meshId, { refresh: false })
-            const node = joinMeshNodeForSession(raw, meshNodeId)
-            if (!node) {
-                setMeshNodeError(t('sessionInfo.stampedToNode'))
-                return
-            }
-            setMeshNode(node)
-        } catch (e: any) {
-            setMeshNodeError(e?.message || 'Failed to load mesh node info')
+        if (!meshId || !meshNodeId || !coordinatorDaemonId) return
+        const held = getCoordinatorMeshStatusSnapshot(meshId)?.status ?? null
+        const status = held ?? await loadCoordinatorMeshStatus({
+            meshId,
+            daemonId: coordinatorDaemonId,
+            refresh: false,
+            load: (targetDaemonId, targetMeshId, options) => (meshOverrides?.loadMeshStatus
+                ? meshOverrides.loadMeshStatus(targetDaemonId, targetMeshId, { refresh: options.refresh })
+                : sendCommand(targetDaemonId, 'mesh_status', { meshId: targetMeshId })),
+        })
+        if (!status) {
+            setMeshNodeError(getCoordinatorMeshStatusSnapshot(meshId)?.error || 'Failed to load mesh node info')
+            return
         }
-    }, [meshOverrides, daemonId, meshId, meshNodeId])
+        const node = joinMeshNodeForSession(status, meshNodeId)
+        if (!node) {
+            setMeshNodeError(t('sessionInfo.stampedToNode'))
+            return
+        }
+        setMeshNode(node)
+    }, [meshOverrides, sendCommand, coordinatorDaemonId, meshId, meshNodeId])
 
     useEffect(() => { void loadMeshNode() }, [loadMeshNode])
 
@@ -258,7 +278,7 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                                 chrome the mesh Status tab uses: those only carry
                                 meaning when comparing machines side by side, and this
                                 dialog is a label/value list about one session. */}
-                            {collectQuotaEntries(data.quota).map(({ provider, quota }) => {
+                            {collectQuotaEntries(meshNode?.quota ?? data.quota).map(({ provider, quota }) => {
                                 // Content assembly (cue, buckets-replace-axes,
                                 // monthly, usage fallback, ok-without-windows vs
                                 // failure) is the shared view-model's job; this

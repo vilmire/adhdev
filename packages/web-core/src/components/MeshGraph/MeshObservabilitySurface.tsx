@@ -328,7 +328,8 @@ export default function MeshObservabilitySurface({
     const selectedHeadSummary = summarizeSelectedHead(selectedNodeStatus, selectedGitHistory?.entries ?? [])
     // Heal goes to the selected COORDINATOR, which forwards fast_forward_mesh_node to
     // the node's own daemon — the dashboard never addresses a remote node directly.
-    const selectedHealDaemonId = daemonId ?? selectedGraphNode?.daemonId ?? selectedNodeStatus?.daemonId ?? null
+    // Without a coordinator there is no heal (never the node's own daemon).
+    const selectedHealDaemonId = daemonId || null
     const canHealSelectedNode = !!(
         selectedGraphNode
         && sendDaemonCommand
@@ -423,6 +424,7 @@ export default function MeshObservabilitySurface({
         if (!selectedGitRequest || !sendDaemonCommand) return
         const { daemonId: targetDaemonId, workspace, nodeId: gitNodeId } = selectedGitRequest
         const meshIdForGitLog = canonicalStatus.meshId
+        if (!meshIdForGitLog) return
         const existing = gitHistoryByWorkspace[workspace]
         if (existing?.loading || (existing && (existing.entries.length > 0 || existing.error))) return
 
@@ -438,9 +440,7 @@ export default function MeshObservabilitySurface({
 
         // Through the coordinator: mesh_node_git_log serves a local node itself and
         // forwards a remote node's read over the mesh channel.
-        void (gitNodeId && meshIdForGitLog
-            ? sendDaemonCommand(targetDaemonId, 'mesh_node_git_log', { meshId: meshIdForGitLog, nodeId: gitNodeId, limit: 5 })
-            : sendDaemonCommand(targetDaemonId, 'git_log', { workspace, limit: 5 }))
+        void sendDaemonCommand(targetDaemonId, 'mesh_node_git_log', { meshId: meshIdForGitLog, nodeId: gitNodeId, limit: 5 })
             .then(response => {
                 if (cancelled) return
                 setGitHistoryByWorkspace(current => ({

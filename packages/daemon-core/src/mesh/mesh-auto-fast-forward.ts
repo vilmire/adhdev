@@ -418,8 +418,9 @@ const AUTO_FF_GIT_PRECHECK_MAX_AGE_MS = 15 * 60_000; // 15m
 
 /**
  * Cheap "has the tracked ref moved?" precheck using data the daemon ALREADY has —
- * the peer's last-reported git status carried on the mesh node object. Reads
- * `node.git` first, falling back to `node.cachedStatus.git` — the SAME precedence
+ * the coordinator-held git of the node (member-pushed, mesh-node-git-state.ts)
+ * when present, else the peer's last-reported git status carried on the mesh
+ * node object: `node.git` first, falling back to `node.cachedStatus.git` — the SAME precedence
  * `resolveEffectiveNodeGit` in mesh-node-identity.ts uses for node health, so this
  * precheck agrees with the rest of the mesh layer about which telemetry is "the
  * node's git status right now". No network call.
@@ -434,8 +435,11 @@ const AUTO_FF_GIT_PRECHECK_MAX_AGE_MS = 15 * 60_000; // 15m
  * positive "go ahead and ff" decision, so a false-negative here just costs one
  * extra (now-backed-off, not per-tick) dry-run rather than a missed fast-forward.
  */
-function cachedGitStatusShowsNoMovement(node: any, nowMs: number): boolean {
-    const directGit = readObjectRecord(node?.git);
+function cachedGitStatusShowsNoMovement(node: any, nowMs: number, heldGit?: Record<string, unknown> | null): boolean {
+    // The coordinator-HELD git (member pushes: upstream re-fetched every push
+    // heartbeat) first — remote node records rarely carry git of their own, which
+    // used to send every scan to a live P2P dry-run.
+    const directGit = heldGit ? readObjectRecord(heldGit) : readObjectRecord(node?.git);
     const git = Object.keys(directGit).length > 0
         ? directGit
         : readObjectRecord(readObjectRecord(node?.cachedStatus).git);
@@ -532,7 +536,9 @@ export async function runContinuousAutoFastForwardScan(components: DaemonCompone
         if (isAutoFastForwardScanBackedOff(cooldownKey, now)) continue;
         // Cheap precheck FIRST — no network call, no backoff-map write races with a
         // concurrent scan of the same key (there is none; this loop is sequential).
-        if (cachedGitStatusShowsNoMovement(node, now)) {
+        const heldEntry = components.router?.meshNodeGitState?.get(meshId, nodeId);
+        const heldGit = heldEntry?.git && heldEntry.unreachableSince === null ? heldEntry.git : null;
+        if (cachedGitStatusShowsNoMovement(node, now, heldGit)) {
             noteAutoFastForwardScanResult(cooldownKey, 'precheck_skip', now);
             LOG.debug('MeshFastForward', `Continuous auto-ff precheck: ${nodeId} cached git status shows no movement — skipping dry-run`);
             continue;

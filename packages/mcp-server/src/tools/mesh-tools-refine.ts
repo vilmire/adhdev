@@ -14,9 +14,10 @@ import type {
     MeshContext,
 } from './mesh-tools-internal.js';
 
+// The config SCHEMAS are static daemon-core data, identical on every node — they
+// are read from the local coordinator daemon, never relayed to a member.
 export async function meshRefineConfigSchema(ctx: MeshContext): Promise<string> {
-    const node = resolveRefineConfigNode(ctx);
-    const result = await commandForNode(ctx, node, 'get_mesh_refine_config_schema', {});
+    const result = await ctx.transport.command('get_mesh_refine_config_schema', {});
     return JSON.stringify(result, null, 2);
 }
 
@@ -73,8 +74,7 @@ export async function meshRefineConfig(
 }
 
 export async function meshChangeImpactConfigSchema(ctx: MeshContext): Promise<string> {
-    const node = resolveRefineConfigNode(ctx);
-    const result = await commandForNode(ctx, node, 'get_mesh_change_impact_config_schema', {});
+    const result = await ctx.transport.command('get_mesh_change_impact_config_schema', {});
     return JSON.stringify(result, null, 2);
 }
 

@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import { normalizeSessionStatus } from '@adhdev/mesh-shared'
 import { getConversationTitle } from './conversation-presenters'
 import type { ActiveConversation } from './types'
@@ -15,11 +14,13 @@ import {
     useMeshGraphMetadataSubscription,
     type MeshGraphLiveSessionStatus,
 } from '../../hooks/useMeshGraphMetadataSubscription'
-import { extractRepoMeshStatus } from '../../utils/repo-mesh-status'
 import { getMeshGraphTheme } from '../MeshGraph/meshGraphTheme'
-import { hasPendingDashboardMeshRefresh, nextDashboardMeshRefreshDelayMs } from '../../utils/dashboard-mesh-live-refresh'
-import { useMeshStateRevisionRefresh } from '../../hooks/useMeshStateRevisionRefresh'
+import { useCoordinatorMeshStatus } from '../../hooks/useCoordinatorMeshStatus'
+import type { CoordinatorMeshStatusLoader } from '../../utils/coordinator-mesh-status-store'
 import { classifyDashboardMeshLoadFailure } from './dashboard-mesh-load-failure'
+
+/** Slow backstop re-read (refresh:false) in case a revision push was missed. */
+const DASHBOARD_MESH_STATUS_BACKSTOP_MS = 60_000
 
 export {
     collectMeshGraphLiveSessionStatuses as collectDashboardLiveMeshSessionStatuses,
@@ -31,13 +32,6 @@ interface DashboardMeshGraphDialogProps {
     activeConv: ActiveConversation
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
     onClose: () => void
-}
-
-const dashboardMeshGraphStatusCache = new Map<string, RepoMeshStatus>()
-
-function dashboardMeshGraphStatusCacheKey(daemonId: string | null, meshId: string | null): string | null {
-    if (!daemonId || !meshId) return null
-    return `${daemonId}::${meshId}`
 }
 
 function buildActiveConversationLiveSessionStatus(activeConv: ActiveConversation, meshId: string | null): MeshGraphLiveSessionStatus | null {
@@ -65,8 +59,6 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     const meshId = activeConv.coordinator?.meshId
         ?? (typeof activeConv.settings?.meshCoordinatorFor === 'string' ? activeConv.settings.meshCoordinatorFor : null)
     const daemonId = activeConv.daemonId ?? null
-    const cacheKey = dashboardMeshGraphStatusCacheKey(daemonId, meshId)
-    const initialMeshStatus = cacheKey ? dashboardMeshGraphStatusCache.get(cacheKey) ?? null : null
     const { t } = useTranslation('common')
     const meshOverrides = useDashboardMeshOverrides()
     const { sendData } = useTransport()
@@ -90,9 +82,6 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
             meshId,
         ],
     )
-    const [meshStatus, setMeshStatus] = useState<RepoMeshStatus | null>(initialMeshStatus)
-    const [loading, setLoading] = useState(false)
-    const [refreshing, setRefreshing] = useState(false)
     // On mobile the header otherwise stacks 5 rows (title, repo path, tabs,
     // status chips, Refresh) and pushes the Missions/Ledger content far down.
     // Collapse the secondary metadata (repo path + status chips) behind a
@@ -100,157 +89,48 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     // stay pinned in the sticky header. Desktop ignores this and always
     // shows everything (md: utilities below).
     const [showHeaderMeta, setShowHeaderMeta] = useState(false)
-    const [error, setError] = useState<string | null>(null)
-    // A BACKGROUND refresh that failed while a graph is already on screen: shown as
-    // a quiet subtitle hint, never the page-level banner (the graph and its
-    // per-node age/unreachable markers are still the coordinator's last answer).
-    const [quietRefreshError, setQuietRefreshError] = useState<string | null>(null)
-    const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(initialMeshStatus?.refreshedAt ?? null)
-    const hasUsableGraphRef = useRef(initialMeshStatus !== null)
-    const loadInFlightRef = useRef(false)
-    const pendingRefreshRef = useRef(false)
-    const mountedRef = useRef(true)
-    const pendingGitRetryAttemptRef = useRef(0)
-    const pendingGitRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-    useEffect(() => {
-        hasUsableGraphRef.current = meshStatus !== null
-    }, [meshStatus])
-
-    const cancelPendingGitRetry = useCallback(() => {
-        if (pendingGitRetryTimerRef.current !== null) {
-            clearTimeout(pendingGitRetryTimerRef.current)
-            pendingGitRetryTimerRef.current = null
-        }
-    }, [])
-
-    useEffect(() => {
-        cancelPendingGitRetry()
-        pendingGitRetryAttemptRef.current = 0
-        const cachedStatus = cacheKey ? dashboardMeshGraphStatusCache.get(cacheKey) ?? null : null
-        setMeshStatus(cachedStatus)
-        setLastLoadedAt(cachedStatus?.refreshedAt ?? null)
-        hasUsableGraphRef.current = cachedStatus !== null
-        pendingRefreshRef.current = false
-        setRefreshing(false)
-        setError(null)
-        setQuietRefreshError(null)
-    }, [cacheKey, cancelPendingGitRetry])
-
-    const loadGraph = useCallback(async (refresh = false, isAutoRetry = false) => {
-        if (!daemonId || !meshId) {
-            setError(t('mesh.dialog.errorNoMeshId'))
-            setMeshStatus(null)
-            return
-        }
-
-        if (loadInFlightRef.current) {
-            if (refresh) pendingRefreshRef.current = true
-            return
-        }
-
-        if (!isAutoRetry) {
-            cancelPendingGitRetry()
-            pendingGitRetryAttemptRef.current = 0
-        }
-
-        loadInFlightRef.current = true
-        const showInitialLoader = !hasUsableGraphRef.current
-        setLoading(showInitialLoader)
-        setRefreshing(refresh && hasUsableGraphRef.current)
-        setError(null)
-        try {
-            const response = meshOverrides?.loadMeshStatus
-                ? await meshOverrides.loadMeshStatus(daemonId, meshId, {
-                    refresh,
-                    // The automatic on-open retry loop must NOT run the full
-                    // blocking peer-git probe window — a single slow (TURN-relayed)
-                    // peer would make every auto-retry a 25s blocking fan-out and
-                    // the loop would never quiesce. The 'interactive' profile caps
-                    // the loader-level retry budget so the slow peer simply stays
-                    // "git probe pending" in the rendered graph (held-state design).
-                    // Only the user-driven manual Refresh keeps the full 'settled'
-                    // probe window.
-                    retryProfile: isAutoRetry ? 'interactive' : 'settled',
-                })
-                : await sendDaemonCommand(daemonId, 'mesh_status', { meshId, refresh })
-            const status = extractRepoMeshStatus(response)
-            if (!status) {
-                setError(t('mesh.dialog.errorUnexpectedPayload'))
-                return
-            }
-            if (cacheKey) dashboardMeshGraphStatusCache.set(cacheKey, status)
-            setQuietRefreshError(null)
-            setMeshStatus(status)
-            hasUsableGraphRef.current = true
-            setLastLoadedAt(status.refreshedAt || new Date().toISOString())
-
-            if (hasPendingDashboardMeshRefresh(status.nodes)) {
-                const delay = nextDashboardMeshRefreshDelayMs(pendingGitRetryAttemptRef.current)
-                if (delay !== null && mountedRef.current) {
-                    pendingGitRetryAttemptRef.current += 1
-                    pendingGitRetryTimerRef.current = setTimeout(() => {
-                        if (mountedRef.current) void loadGraph(true, true)
-                    }, delay)
-                }
-            } else {
-                pendingGitRetryAttemptRef.current = 0
-            }
-        } catch (err) {
-            const message = err instanceof Error ? err.message : 'Failed to load live mesh status'
-            if (classifyDashboardMeshLoadFailure({ background: isAutoRetry, hasGraph: hasUsableGraphRef.current }) === 'quiet') {
-                setQuietRefreshError(message)
-            } else {
-                setError(message)
-            }
-        } finally {
-            loadInFlightRef.current = false
-            setLoading(false)
-            setRefreshing(false)
-            if (pendingRefreshRef.current && mountedRef.current) {
-                pendingRefreshRef.current = false
-                window.setTimeout(() => {
-                    if (mountedRef.current) void loadGraph(true)
-                }, 0)
-            }
-        }
-    }, [cacheKey, cancelPendingGitRetry, daemonId, meshId, meshOverrides, sendDaemonCommand])
-
-    useEffect(() => {
-        mountedRef.current = true
-        pendingGitRetryAttemptRef.current = 0
-        // Open with held-state truth so the graph paints immediately: a default
-        // (non-refresh) mesh_status returns the daemon's inlineMeshCache without
-        // a blocking remote git_status fan-out, so one slow peer can't gate the
-        // dialog. The await below does not block the first paint — it runs after
-        // mount. Then kick a single non-blocking background refresh to pull fresh
-        // remote truth (stale-while-revalidate); since hasUsableGraphRef is set
-        // by the first load, the refresh shows the small refreshing indicator
-        // rather than the full "Loading live mesh status…" loader.
-        //
-        // BOTH the cold-open paint AND the background kick use the lighter
-        // 'interactive' probe profile (isAutoRetry=true). The cold-open must be
-        // interactive too: a `settled` cold-open whose held snapshot is a cached
-        // aggregate would self-escalate to a blocking refresh:true fan-out inside
-        // the loader (getCanonicalRetryReason → cached_aggregate_requires_live_refresh)
-        // and wait 25s on the slowest/offline peer behind the "Loading…" loader —
-        // exactly the cold-open stall we are removing. Interactive paints the held
-        // state immediately and never self-fires refresh; only the user-driven
-        // manual Refresh button (settled) runs the full peer-git probe window.
-        void (async () => {
-            await loadGraph(false, true)
-            if (!mountedRef.current) return
-            // Don't double up with the hasPendingDashboardMeshRefresh auto-retry
-            // loop (it already schedules loadGraph(true) when nodes are pending).
-            if (pendingGitRetryTimerRef.current === null && !loadInFlightRef.current) {
-                void loadGraph(true, true)
-            }
-        })()
-        return () => {
-            mountedRef.current = false
-            cancelPendingGitRetry()
-        }
-    }, [loadGraph, cancelPendingGitRetry])
+    // ONE shared coordinator status per mesh (utils/coordinator-mesh-status-store):
+    // the /mesh page, this dialog and the session info dialog read the same held
+    // answer. Triggers: open → refresh:false, coordinator revision advance →
+    // refresh:false, slow backstop → refresh:false, the Refresh button → refresh:true.
+    // No pending-git retry loop — each node reports its own freshness
+    // (gitObservation / heldRuntime: age, refreshing, unreachable).
+    const loadStatus = useCallback<CoordinatorMeshStatusLoader>((targetDaemonId, targetMeshId, options) => (
+        meshOverrides?.loadMeshStatus
+            ? meshOverrides.loadMeshStatus(targetDaemonId, targetMeshId, { refresh: options.refresh })
+            : sendDaemonCommand(targetDaemonId, 'mesh_status', { meshId: targetMeshId, refresh: options.refresh })
+    ), [meshOverrides, sendDaemonCommand])
+    const {
+        status: meshStatus,
+        loading: storeLoading,
+        refreshing,
+        error: loadError,
+        loadedAt,
+        refresh: refreshMeshStatus,
+    } = useCoordinatorMeshStatus({
+        meshId,
+        daemonId,
+        load: daemonId && meshId ? loadStatus : null,
+        sendData,
+        backstopMs: DASHBOARD_MESH_STATUS_BACKSTOP_MS,
+    })
+    const loading = storeLoading && !meshStatus
+    // A read the user explicitly asked for (Refresh) that fails is the page-level
+    // banner. A background read failing while a graph is on screen is a quiet
+    // subtitle hint — the graph and its per-node age/unreachable markers are still
+    // the coordinator's last answer (classifyDashboardMeshLoadFailure).
+    const [manualRefreshFailed, setManualRefreshFailed] = useState(false)
+    const loadGraph = useCallback(() => {
+        setManualRefreshFailed(false)
+        void refreshMeshStatus().then(result => { if (!result) setManualRefreshFailed(true) })
+    }, [refreshMeshStatus])
+    const failureSurface = classifyDashboardMeshLoadFailure({ background: !manualRefreshFailed, hasGraph: meshStatus !== null })
+    const error = !daemonId || !meshId
+        ? t('mesh.dialog.errorNoMeshId')
+        : (loadError && failureSurface === 'banner' ? loadError : null)
+    const quietRefreshError = loadError && failureSurface === 'quiet' ? loadError : null
+    const lastLoadedAt = meshStatus?.refreshedAt || (loadedAt ? new Date(loadedAt).toISOString() : null)
 
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
@@ -260,43 +140,13 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
         return () => window.removeEventListener('keydown', handleKeyDown)
     }, [onClose])
 
-    // Periodic refresh while the dialog stays open: the mesh keeps moving
-    // (tasks complete, sessions launch) but the dialog only loaded on open +
-    // manual Refresh, so watching an in-flight mission meant hammering the
-    // button. Every tick runs the LIGHT path (isAutoRetry=true → 'interactive'
-    // probe profile, held-state truth, no blocking peer-git fan-out) and skips
-    // entirely while the tab is hidden or a load is already in flight.
-    useEffect(() => {
-        const AUTO_REFRESH_MS = 45_000
-        const timer = window.setInterval(() => {
-            if (document.hidden) return
-            if (loadInFlightRef.current) return
-            // refresh=false: the coordinator answers from its held node state and
-            // decides itself which nodes are stale enough to re-probe in the
-            // background; completions arrive via the mesh-state revision below.
-            void loadGraph(false, true)
-        }, AUTO_REFRESH_MS)
-        return () => window.clearInterval(timer)
-    }, [loadGraph])
-
     const detailLabel = meshStatus?.meshName || meshId || 'Repo Mesh'
+    // The active conversation's own live state is merged only because it is the
+    // coordinator's own session (meshId above comes from its coordinator stamp).
     const extraLiveSessions = useMemo(
-        () => activeConversationLiveSession ? [activeConversationLiveSession] : [],
+        () => activeConversationLiveSession?.isSelfCoordinator ? [activeConversationLiveSession] : [],
         [activeConversationLiveSession],
     )
-    // Coordinator-held node state: when a background node refresh (or a member's
-    // pushed git state) lands, the coordinator bumps this mesh's revision on its
-    // daemon.metadata push — re-read its (instant) answer in place.
-    useMeshStateRevisionRefresh({
-        daemonIds: useMemo(() => (daemonId ? [daemonId] : []), [daemonId]),
-        meshId,
-        sendData,
-        onRevisionAdvance: () => {
-            if (typeof document !== 'undefined' && document.hidden) return
-            if (loadInFlightRef.current) return
-            void loadGraph(false, true)
-        },
-    })
     const displayedMeshStatus = useMeshGraphMetadataSubscription({
         status: meshStatus,
         daemonId,
@@ -349,7 +199,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                         </button>
                         <button
                             type="button"
-                            onClick={() => { void loadGraph(true) }}
+                            onClick={loadGraph}
                             disabled={loading || refreshing}
                             className={meshTheme.dialogCloseButtonClass}
                             aria-label={t('mesh.dialog.refreshTitle')}
@@ -443,7 +293,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             helpOpen={helpOpen}
                             onHelpOpenChange={setHelpOpen}
                             hideControls
-                            onRequestRefresh={() => { void loadGraph(true) }}
+                            onRequestRefresh={loadGraph}
                         />
                     ) : (
                         <div className={meshTheme.dialogEmptyClass}>

@@ -37,6 +37,7 @@ import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from '../command-a
 import { rosterEvidenceExtra } from '../mesh-sender.js';
 import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
 import { defineCommandSpecs } from '../command-registry.js';
+import { hydrateMeshNodesFromGitState } from '../high-family/mesh-status-node-state.js';
 
 /**
  * Decision for syncing a freshly-cloned worktree's `oss` submodule to its clone
@@ -221,17 +222,23 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         if (!meshRecord?.mesh) return { success: false, error: 'Mesh not found' };
 
         const requireDirectPeerTruth = args?.requireDirectPeerTruth === true;
-        // Only an explicit refresh fans out a blocking peer probe.
-        // Default loads are satisfied from held standing-state git truth.
-        const probeRemotePeers = args?.refresh === true || args?.forceRefresh === true;
+        const localMachineId = getMachineId() || '';
+        // Remote nodes carry the coordinator-HELD git (member pushes), never a live
+        // fan-out: `refresh` / `forceRefresh` no longer probe peers here — a member
+        // pushes its state to the coordinator, which answers from the store.
+        if (ctx.deps.dispatchMeshCommand && ctx.meshNodeGitState) {
+            hydrateMeshNodesFromGitState({
+                meshId,
+                mesh: meshRecord.mesh,
+                store: ctx.meshNodeGitState,
+                locality: { localMachineId, localDaemonId: ctx.deps.statusInstanceId },
+            });
+        }
         const directTruth = await hydrateInlineMeshDirectTruth({
             mesh: meshRecord.mesh,
             meshSource: meshRecord.source,
-            dispatchMeshCommand: ctx.deps.dispatchMeshCommand,
-            getMeshPeerConnectionStatus: ctx.deps.getMeshPeerConnectionStatus,
             statusInstanceId: ctx.deps.statusInstanceId,
-            localMachineId: getMachineId() || '',
-            probeRemotePeers,
+            localMachineId,
             probeCache: ctx.meshGitProbeCache,
         });
         const directTruthSatisfied = meshRecord.source !== 'inline_bootstrap' || directTruth.directEvidenceCount > 0;
@@ -1346,6 +1353,10 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 if (removed) {
                     const cachedMesh = ctx.getCachedInlineMesh(meshId);
                     if (cachedMesh) ctx.removeInlineMeshNode(meshId, cachedMesh, nodeId);
+                    // Tombstone even with no warmed inline cache: a late clone reply or a
+                    // stale member worktree report (MEMBER-WORKTREE-RECONCILE) racing this
+                    // removal must not re-register the node in either view.
+                    ctx.tombstoneRemovedMeshNode(meshId, nodeId);
                 }
             }
 
@@ -1569,7 +1580,15 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 // correctly gated (see its doc comment for the ordering argument).
                 const forwardedNode = forwarded.success ? (forwarded as { node?: unknown }).node : undefined;
                 const forwardedNodeId = normalizeMeshNodeId(forwardedNode as any);
-                if (forwardedNode && forwardedNodeId) ctx.seedRemoteClonedWorktreeNode(meshId, forwardedNode);
+                if (forwardedNode && forwardedNodeId) {
+                    ctx.seedRemoteClonedWorktreeNode(meshId, forwardedNode);
+                    // REMOTE-CLONE-DURABLE: the seed above is in-memory only. Also write the
+                    // node into this coordinator's meshes.json (same shape as a local clone)
+                    // so a coordinator restart does not leave it known only to the member.
+                    try {
+                        await ctx.persistRemoteClonedWorktreeNode(meshId, forwardedNode);
+                    } catch { /* best-effort: member reconciliation re-reports it after a restart */ }
+                }
                 // FALSE-BLOCKER-CLONE-QUEUE: also open the transient grace window. The seed above
                 // makes the node addressable, but its bootstrap may still be 'running' on the
                 // remote machine, so a task pinned to it can still transiently defer — that skip

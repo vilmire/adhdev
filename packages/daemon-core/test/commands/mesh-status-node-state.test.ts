@@ -19,6 +19,7 @@ import {
   ensureMeshNodeGitStateSchema,
 } from '../../src/mesh/mesh-node-git-state'
 import { MeshNodeStatePusher } from '../../src/mesh/mesh-node-state-pusher'
+import { MeshNodeGitRefresher } from '../../src/mesh/mesh-node-git-refresher'
 import { applyInlineMeshBranchConvergence } from '../../src/mesh/mesh-branch-convergence'
 import { MESH_SENDER_DAEMON_ID_ARG } from '../../src/commands/mesh-sender'
 import { createDefaultGitCommandServices } from '../../src/git/git-commands'
@@ -582,19 +583,24 @@ describe('member push subscription', () => {
 
     now += 60_000
     await pusher.tick()
-    expect(dispatch).not.toHaveBeenCalled() // unchanged since the probe answer
+    // The first tick after registering confirms the subscription with one push
+    // (the coordinator's held state becomes member-pushed and it stops probing).
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    now += 60_000
+    await pusher.tick()
+    expect(dispatch).toHaveBeenCalledTimes(1) // unchanged since that push
 
     git = remoteGit({ headCommit: 'moved' })
     now += 60_000
     await pusher.tick()
-    expect(dispatch).toHaveBeenCalledTimes(1)
-    expect(dispatch.mock.calls[0]).toEqual(['coord', 'mesh_node_git_report', expect.objectContaining({
+    expect(dispatch).toHaveBeenCalledTimes(2)
+    expect(dispatch.mock.calls[1]).toEqual(['coord', 'mesh_node_git_report', expect.objectContaining({
       meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, git: expect.objectContaining({ headCommit: 'moved' }),
     })])
 
     now += 300_000
     await pusher.tick()
-    expect(dispatch).toHaveBeenCalledTimes(2) // heartbeat
+    expect(dispatch).toHaveBeenCalledTimes(3) // heartbeat
 
     dispatch.mockResolvedValueOnce({ success: false, code: 'mesh_sender_not_node_owner' } as any)
     git = remoteGit({ headCommit: 'again' })
@@ -638,5 +644,204 @@ describe('node state persistence', () => {
     expect(entry.git).not.toHaveProperty('reporterPlatform')
     expect(after.get(MESH_ID, 'node_other')).toMatchObject({ unreachableSince: 456, lastFailureReason: 'P2P timeout' })
     db.close()
+  })
+})
+
+// ★Regression (audit item 1): the member's push heartbeat (300 s) used to be
+// LONGER than the coordinator's stale threshold (180 s), and every coordinator
+// probe re-registered the subscription and reset the member's lastPushedAt — so
+// a quiet node was re-probed (git_status + upstream fetch + get_status_metadata)
+// on every mesh_status, forever, and each probe republished a revision.
+describe('held-state freshness — a quiet subscribed member is never re-probed', () => {
+  it('member heartbeats keep the held observation under the stale threshold across 20 minutes of silence', async () => {
+    let now = 1_000_000
+    const store = new MeshNodeGitStateStore(null, () => now)
+    const refresher = new MeshNodeGitRefresher({ store, probe: vi.fn(), onSettled: vi.fn(), now: () => now })
+    const pusher = new MeshNodeStatePusher({
+      // The coordinator side of mesh_node_git_report, reduced to the store write.
+      dispatch: async (_coordinator, _cmd, args: any) => {
+        if (args.git) store.recordObservation({ meshId: args.meshId, nodeId: args.nodeId, workspace: args.workspace, git: args.git, source: 'member_push', observedAt: args.observedAt })
+        return { success: true, accepted: true }
+      },
+      readGit: async () => ({ ...remoteGit(), lastCheckedAt: now }),
+      now: () => now,
+      startTimer: () => ({ stop() {} }),
+    })
+    // The handshake: the coordinator's probe answer is held, the member registers.
+    store.recordObservation({ meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, git: remoteGit(), source: 'coordinator_probe', observedAt: now })
+    pusher.register({ coordinatorDaemonId: 'coord', meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, git: remoteGit() })
+    for (let minute = 1; minute <= 20; minute += 1) {
+      now += 60_000
+      await pusher.tick()
+      expect(refresher.shouldRefresh(MESH_ID, REMOTE_NODE), `minute ${minute}`).toBe(false)
+    }
+    expect(store.get(MESH_ID, REMOTE_NODE)?.source).toBe('member_push')
+    pusher.stop()
+  })
+
+  it('a repeated coordinator probe (re-registration) never postpones the member heartbeat', async () => {
+    let now = 1_000_000
+    const dispatch = vi.fn(async () => ({ success: true, accepted: true }))
+    const pusher = new MeshNodeStatePusher({ dispatch, readGit: async () => remoteGit(), now: () => now, startTimer: () => ({ stop() {} }) })
+    pusher.register({ coordinatorDaemonId: 'coord', meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, git: remoteGit() })
+    now += 60_000
+    await pusher.tick()
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    // 4 minutes later the coordinator probes again (e.g. it restarted): the next
+    // tick confirms with a push instead of treating the probe as "just pushed".
+    now += 240_000
+    pusher.register({ coordinatorDaemonId: 'coord', meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, git: remoteGit() })
+    now += 60_000
+    await pusher.tick()
+    expect(dispatch).toHaveBeenCalledTimes(2)
+    pusher.stop()
+  })
+
+  it('a member-pushed observation older than the legacy 180 s is not stale; a probe-only one is', () => {
+    const now = 5_000_000
+    const store = new MeshNodeGitStateStore(null, () => now)
+    const refresher = new MeshNodeGitRefresher({ store, probe: vi.fn(), onSettled: vi.fn(), now: () => now })
+    store.recordObservation({ meshId: MESH_ID, nodeId: 'pushed', workspace: '/a', git: remoteGit(), source: 'member_push', observedAt: now - 200_000 })
+    store.recordObservation({ meshId: MESH_ID, nodeId: 'legacy', workspace: '/b', git: remoteGit(), source: 'coordinator_probe', observedAt: now - 200_000 })
+    expect(refresher.shouldRefresh(MESH_ID, 'pushed')).toBe(false)
+    expect(refresher.shouldRefresh(MESH_ID, 'legacy')).toBe(true)
+  })
+
+  it('a probe that re-confirms the same state publishes no revision; content changes and unreachable transitions do', async () => {
+    let now = 9_000_000
+    const store = new MeshNodeGitStateStore(null, () => now)
+    const onSettled = vi.fn()
+    let answer: Record<string, unknown> | null = remoteGit()
+    const refresher = new MeshNodeGitRefresher({
+      store,
+      probe: async () => (answer ? { ...answer, lastCheckedAt: now } : null),
+      onSettled,
+      now: () => now,
+    })
+    const target = { meshId: MESH_ID, nodeId: REMOTE_NODE, daemonId: REMOTE_DAEMON, workspace: REMOTE_WORKSPACE }
+    store.recordObservation({ ...target, git: remoteGit(), source: 'coordinator_probe', observedAt: now - 3_600_000 })
+
+    expect(refresher.kick(target)).toBe(true)
+    await refresher.whenIdle()
+    expect(onSettled).not.toHaveBeenCalled() // same content — only the age moved
+    expect(store.get(MESH_ID, REMOTE_NODE)?.observedAt).toBe(now)
+
+    now += 3_600_000
+    answer = remoteGit({ headCommit: 'moved' })
+    refresher.kick(target)
+    await refresher.whenIdle()
+    expect(onSettled).toHaveBeenCalledTimes(1)
+
+    now += 3_600_000
+    answer = null
+    refresher.kick(target)
+    await refresher.whenIdle()
+    expect(onSettled).toHaveBeenCalledTimes(2) // into unreachable
+    now += 3_600_000
+    refresher.kick(target)
+    await refresher.whenIdle()
+    expect(onSettled).toHaveBeenCalledTimes(2) // still unreachable — no news
+  })
+})
+
+// ★Regression (audit item 5): a node served by another daemon rendered its
+// active sessions / git from the dashboard-echoed inline `cachedStatus`. The
+// coordinator-held runtime (member push) is the only source now.
+describe('foreign-daemon node — sessions / facts from the held runtime only', () => {
+  function echoingMesh(localRepo: string) {
+    const mesh: any = inlineMesh(localRepo)
+    mesh.nodes[1] = {
+      ...mesh.nodes[1],
+      cachedStatus: {
+        machineStatus: 'online',
+        health: 'online',
+        activeSession: { id: 'echo-sess', providerType: 'claude-cli', status: 'generating' },
+        git: { isGitRepo: true, branch: 'echo-branch', headCommit: 'e0e0e0e0' },
+      },
+    }
+    return mesh
+  }
+
+  it('renders activeSessions / details, version chips and the provider catalog from the member push, never the echo', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('node-state-held-sessions-')
+    try {
+      const now = Date.now()
+      const store = new MeshNodeGitStateStore()
+      store.recordObservation({ meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, git: remoteGit(), source: 'member_push', observedAt: now })
+      store.recordRuntimeObservation({
+        meshId: MESH_ID,
+        nodeId: REMOTE_NODE,
+        workspace: REMOTE_WORKSPACE,
+        source: 'member_push',
+        observedAt: now,
+        runtime: {
+          sessions: [
+            { id: 'held-sess', providerType: 'codex-cli', status: 'generating', turn: { attemptId: 'att-1', stage: 'generating' }, settings: { meshNodeFor: MESH_ID, meshNodeId: REMOTE_NODE } },
+            { id: 'unrelated-sess', providerType: 'codex-cli', status: 'idle' },
+          ],
+          nodeFacts: { schemaVersion: 1, reportedAt: now, providerVersions: { 'codex-cli': '0.55.0' }, daemonBuild: { version: '1.0.61-rc.9' }, platform: 'linux' },
+          providers: [{ type: 'codex-cli', category: 'cli', installed: true, enabled: true, version: '0.55.0', autoApproveModes: { default: 'ask', modes: [{ id: 'ask', label: 'Ask', strategy: 'none', risk: 'low' }, { id: 'yolo', label: 'Full auto', strategy: 'launch_args', risk: 'high', launchArgs: ['--yolo'] }] } }],
+        },
+      })
+      const dispatchMeshCommand = vi.fn(async () => ({ success: true }))
+      const router = createRouter({ dispatchMeshCommand, store })
+
+      const result: any = await router.execute('mesh_status', { meshId: MESH_ID, inlineMesh: echoingMesh(repoRoot) })
+      const remote = remoteNodeOf(result)
+      expect(remote.activeSessions).toEqual(['held-sess'])
+      expect(remote.activeSessionDetails).toEqual([expect.objectContaining({ sessionId: 'held-sess', providerType: 'codex-cli', state: 'generating', attemptId: 'att-1', isCached: true })])
+      expect(JSON.stringify(remote.activeSessionDetails)).not.toContain('echo-sess')
+      expect(remote.git).toMatchObject({ branch: 'main', headCommit: 'abc12345' })
+      expect(remote.providerVersions).toEqual({ 'codex-cli': '0.55.0' })
+      expect(remote.daemonBuildVersion).toBe('1.0.61-rc.9')
+      expect(remote.heldRuntime.providers).toEqual([expect.objectContaining({ type: 'codex-cli', installed: true, version: '0.55.0', autoApproveModes: { default: 'ask', modes: [expect.objectContaining({ id: 'ask' }), expect.objectContaining({ id: 'yolo', risk: 'high' })] } })])
+      // Launch args are not part of the held catalog.
+      expect(JSON.stringify(remote.heldRuntime.providers)).not.toContain('--yolo')
+      expect(dispatchMeshCommand).not.toHaveBeenCalled()
+    } finally {
+      await cleanupTempDir(dir)
+    }
+  })
+
+  it('with nothing held, an echoed session / git is NOT rendered as truth (sessions unknown, git pending)', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('node-state-no-held-')
+    try {
+      const router = createRouter({ dispatchMeshCommand: vi.fn(() => new Promise<unknown>(() => {})) })
+      const result: any = await router.execute('mesh_status', { meshId: MESH_ID, inlineMesh: echoingMesh(repoRoot) })
+      const remote = remoteNodeOf(result)
+      expect(remote.activeSessions).toEqual([])
+      expect(remote.activeSessionDetails).toEqual([])
+      expect(remote.heldRuntime).toMatchObject({ source: 'none', sessions: [] })
+      expect(remote.git?.branch).not.toBe('echo-branch')
+      expect(remote.gitProbePending).toBe(true)
+    } finally {
+      await cleanupTempDir(dir)
+    }
+  })
+})
+
+describe('held runtime — owner resolution and the requeue guard', () => {
+  it('resolves a remote session owner from the held runtime alone (no aggregate snapshot, no echoed session)', async () => {
+    const store = new MeshNodeGitStateStore()
+    store.recordRuntimeObservation({
+      meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, source: 'member_push', observedAt: Date.now(), daemonId: REMOTE_DAEMON,
+      runtime: { sessions: [{ id: 'held-only-sess', providerType: 'codex-cli', status: 'generating' }] },
+    })
+    const router = createRouter({ dispatchMeshCommand: vi.fn(async () => ({ success: true })), store })
+    await router.execute('get_mesh', { meshId: MESH_ID, inlineMesh: inlineMesh('/tmp/adhdev-node-state-no-local') })
+    expect(router.resolveRemoteMeshSessionOwnerDaemonId('held-only-sess')).toBe(REMOTE_DAEMON)
+    expect(router.resolveRemoteMeshSessionOwnerDaemonId('unknown-sess')).toBeUndefined()
+  })
+
+  it('isHeldRemoteSessionGenerating trusts a live member push only', async () => {
+    const { isHeldRemoteSessionGenerating } = await import('../../src/mesh/mesh-candidacy-predicates')
+    const now = 7_000_000
+    const store = new MeshNodeGitStateStore(null, () => now)
+    store.recordRuntimeObservation({ meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, source: 'member_push', observedAt: now - 30_000, runtime: { sessions: [{ id: 'busy', status: 'generating' }, { id: 'idle', status: 'idle' }] } })
+    store.recordRuntimeObservation({ meshId: MESH_ID, nodeId: 'node_probe_only', workspace: '/w', source: 'coordinator_probe', observedAt: now - 1_000, runtime: { sessions: [{ id: 'probed-busy', status: 'generating' }] } })
+    expect(isHeldRemoteSessionGenerating(store, MESH_ID, 'busy', now)).toBe(true)
+    expect(isHeldRemoteSessionGenerating(store, MESH_ID, 'idle', now)).toBe(false)
+    expect(isHeldRemoteSessionGenerating(store, MESH_ID, 'probed-busy', now)).toBe(false)
+    expect(isHeldRemoteSessionGenerating(store, 'other_mesh', 'busy', now)).toBe(false)
   })
 })

@@ -30,7 +30,9 @@ export interface RepoMeshDaemonEntry {
 // ─── Mesh status load options ────────────────────────────────────
 
 export interface LoadMeshStatusOptions {
+    /** true only for an explicit user refresh; every automatic read passes false. */
     refresh?: boolean
+    /** @deprecated ignored — mesh_status is read once, never retried/escalated. */
     retryProfile?: 'interactive' | 'settled'
 }
 
@@ -158,15 +160,6 @@ export interface RepoMeshContextValue {
     ) => { targetDaemonId: string; inlineMesh?: any; coordinatorNodeId?: string } | { error: string }
 
     features: RepoMeshFeatures
-
-    /**
-     * Cloud-only opt-in: when true, the graph loader gates structurally-incomplete
-     * snapshots (a peer git/submodule report still pending) by retaining the last
-     * complete graph and scheduling a settled background reload, instead of flashing
-     * a sparse graph. Undefined (standalone default) keeps the original commit-always
-     * behavior — a single local daemon's snapshot is always complete.
-     */
-    gateIncompleteGraph?: boolean
 }
 
 // ─── Defaults (standalone) ───────────────────────────────────────

@@ -5,6 +5,8 @@
  * and daemon-picker state used during mesh creation.
  */
 import { useState, useCallback, useMemo, useEffect } from 'react'
+import i18next from 'i18next'
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared'
 import {
     defaultProviderPriorityFromInventory,
     normalizeAvailableCliProviders,
@@ -12,6 +14,37 @@ import {
 } from '../../utils/provider-priority'
 import type { RepoMeshContextValue, RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import type { MeshEntry } from './types'
+import { resolveMeshHostDaemonId } from './host-seed'
+
+/**
+ * Merge the per-daemon `list_meshes` answers into one entry per mesh.
+ *
+ * The fan-out only DISCOVERS which meshes exist. When several daemons return the
+ * same mesh (members hold a copy), the record shown — config, nodes, policy — is
+ * the one answered by the mesh's host/coordinator daemon; a member's copy is
+ * used only when the host's answer is missing. First-answer-wins (P2P arrival
+ * order) is exactly what let a stale member copy stand in for the mesh.
+ */
+export function mergeMeshListAnswers(
+    answers: Array<{ daemonId: string; meshes: MeshEntry[] }>,
+    daemons: RepoMeshDaemonEntry[],
+): MeshEntry[] {
+    const order: string[] = []
+    const byId = new Map<string, Array<{ daemonId: string; mesh: MeshEntry }>>()
+    for (const answer of answers) {
+        for (const mesh of answer.meshes) {
+            if (!mesh?.id) continue
+            if (!byId.has(mesh.id)) { byId.set(mesh.id, []); order.push(mesh.id) }
+            byId.get(mesh.id)!.push({ daemonId: answer.daemonId, mesh })
+        }
+    }
+    return order.map(id => {
+        const copies = byId.get(id)!
+        const hostDaemonId = copies.map(copy => resolveMeshHostDaemonId(copy.mesh as any, daemons)).find(Boolean) || ''
+        const hostCopy = hostDaemonId ? copies.find(copy => daemonIdsEquivalent(copy.daemonId, hostDaemonId)) : undefined
+        return (hostCopy ?? copies[0]).mesh
+    })
+}
 
 // Module-level mesh-list cache, keyed by the sorted daemon-id set the list was
 // built from. Survives unmount/remount so re-entering the /mesh route (cloud)
@@ -322,21 +355,22 @@ export function useMeshList({
         setLoading(prev => (hasDisplayable ? prev : true))
         try {
             if (features.createDaemonPicker) {
+                // Fan-out = discovery of which meshes exist; each mesh's record
+                // comes from its host/coordinator's answer (mergeMeshListAnswers).
                 const results = await Promise.allSettled(daemons.map(async daemon => {
-                    if (!daemon.id) return []
+                    if (!daemon.id) return { daemonId: '', meshes: [] as MeshEntry[] }
                     const raw = await sendCommand(daemon.id, 'list_meshes', {})
                     const result = unwrapResult(raw)
                     if (result?.success === false) throw new Error(result.error || 'Failed to load meshes')
-                    return (Array.isArray(result?.meshes) ? result.meshes : [])
+                    const meshes: MeshEntry[] = (Array.isArray(result?.meshes) ? result.meshes : [])
                         .map((m: any) => normalizeMesh(m, daemon.id))
                         .filter((m: any) => m.id)
+                    return { daemonId: daemon.id, meshes }
                 }))
-                const byId = new Map<string, MeshEntry>()
-                for (const r of results) {
-                    if (r.status !== 'fulfilled') continue
-                    for (const m of r.value) { if (!byId.has(m.id)) byId.set(m.id, m) }
-                }
-                const next = Array.from(byId.values())
+                const next = mergeMeshListAnswers(
+                    results.flatMap(r => (r.status === 'fulfilled' ? [r.value] : [])),
+                    daemons,
+                )
                 setMeshes(prev => (meshesEqual(prev, next) ? prev : next))
                 meshListCache.set(daemonIdsKey, next)
                 setError(null)
@@ -431,7 +465,11 @@ export function useMeshList({
             })
             : confirm('Delete this mesh? This cannot be undone.')
         if (!confirmed) return
-        const targetDaemonId = (meshes.find(m => m.id === meshId) as any)?.__sourceDaemonId || primaryDaemonId
+        // Delete goes to the mesh's host/coordinator — never to whichever daemon
+        // happened to list it.
+        const targetDaemonId = resolveMeshHostDaemonId(meshes.find(m => m.id === meshId) as any, daemons)
+            || (features.createDaemonPicker ? '' : primaryDaemonId)
+        if (!targetDaemonId) { setError(i18next.t('mesh.host.noCommandTarget')); return }
         try {
             const raw = await sendCommand(targetDaemonId, 'delete_mesh', { meshId })
             const result = unwrapResult(raw)

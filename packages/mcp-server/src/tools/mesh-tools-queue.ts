@@ -16,7 +16,6 @@ import {
     buildQueueStatusSummary,
     buildMissionInactiveWarning,
     buildQueueTriggerGuidance,
-    collectMeshViewQueueNodesWithLiveSessionsVerified,
     compactActiveWorkRecords,
     compactQueueRow,
     compactQueueRows,
@@ -37,7 +36,6 @@ import {
     prioritizeActiveQueueRows,
     readString,
     readTaskInput,
-    reconcileDirectDispatchesFromTranscriptEvidence,
     readActiveWorkFromDaemon,
     readQueueFromDaemon,
     recordMeshCoordinatorToolCall,
@@ -48,6 +46,14 @@ import {
     triggerMeshQueueAndReport,
     unwrapCommandPayload,
 } from './mesh-tools-internal.js';
+// COORDINATOR-HELD NODE STATE (audit fix): mesh_view_queue's node/session
+// decoration now answers from the coordinator daemon's held runtime first (no
+// per-daemon get_status_metadata round trip for a node another daemon owns);
+// the direct-dispatch transcript reconcile — a WRITE-side nudge, not something
+// the response needs (see mesh-status-background.ts) — moved off the request
+// path the same way mesh_status already runs it.
+import { collectMeshViewQueueNodesHeldOrLive } from './mesh-status-held-git.js';
+import { scheduleBackgroundDirectReconcile } from './mesh-status-background.js';
 // MESH-IMAGE-DISPATCH: view-surface projection — not (yet) re-exported through mesh-tools-internal.ts,
 // imported directly from the package like the other daemon-core symbols
 // mesh-tools-internal.ts itself imports.
@@ -958,15 +964,18 @@ export async function meshViewQueue(
             const depState = describeTaskDependencyState(task, statusById, depMetaById);
             return { ...task, ...depState };
         });
-        // Live-probe nodes BEFORE judging staleness so the staleness check can be
-        // corroborated by verified-live evidence instead of only the (possibly stale
-        // itself) persisted mesh snapshot — see annotateQueueStaleness's
-        // liveVerifiedNodes param. Probe failures never count as evidence of absence
-        // (queueAssignmentStaleReason only trusts nodes the probe actually verified).
-        // The verified variant's node shape is a superset of the plain one (adds
-        // __liveProbeVerified; sessions merge identically), so it's reused below for
-        // dispatch reconciliation / active-work evidence instead of probing twice.
-        const liveNodes = await collectMeshViewQueueNodesWithLiveSessionsVerified(ctx, probeOpts);
+        // COORDINATOR-HELD NODE STATE (owner principle 2026-09-26): node/session
+        // decoration answers from the coordinator daemon's held runtime first — no
+        // per-daemon get_status_metadata round trip for a node another daemon
+        // owns (falls back to a live probe only when the daemon predates the held
+        // marker or nothing is held for that node yet). See
+        // annotateQueueStaleness's liveVerifiedNodes param for why a failed probe
+        // must never count as evidence of absence: __liveProbeVerified stays false
+        // whenever neither held state nor a live probe could confirm anything.
+        // The node shape is a superset of the plain one (adds __liveProbeVerified;
+        // sessions merge identically), so it's reused below for the active-work
+        // evidence instead of probing twice.
+        const liveNodes = await collectMeshViewQueueNodesHeldOrLive(ctx, probeOpts);
         const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(withDependencies, ctx.mesh, liveNodes));
         const queue = filterQueueForView(fullQueue, view, statusFilter);
         const summary = buildQueueStatusSummary(fullQueue);
@@ -974,13 +983,12 @@ export async function meshViewQueue(
         const maintenance = buildQueueMaintenanceReport(fullQueue);
         // C-W9a: active work is computed in the daemon over the open direct dispatches
         // (mesh_direct attempts) and its records (+ turn outcomes), for THIS view's
-        // annotated queue; the inputs come back for the transcript-reconcile pass and
-        // the dispatch-failure list below.
-        let activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: liveNodes, queue: fullQueue, recordTail: 200, includeInputs: true });
-        const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, activeWorkView.directDispatches, activeWorkView.records);
-        if (directReconciliation.reconciled > 0) {
-            activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: liveNodes, queue: fullQueue, recordTail: 200, includeInputs: true });
-        }
+        // annotated queue; the inputs come back for the dispatch-failure list below.
+        // The direct-dispatch transcript reconcile is a WRITE-side nudge the response
+        // does not need (see mesh-status-background.ts) — kicked in the background,
+        // same as mesh_status, instead of blocking this read on a live read_chat.
+        const activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: liveNodes, queue: fullQueue, recordTail: 200, includeInputs: true });
+        scheduleBackgroundDirectReconcile(ctx, liveNodes, activeWorkView.directDispatches, activeWorkView.records);
         const ledgerEntries = activeWorkView.records;
         const activeWorkEvidence = activeWorkView.activeWork!;
         const recentDispatchFailures = ledgerEntries

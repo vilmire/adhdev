@@ -16,7 +16,9 @@ import {
     type AvailableCliProviderOption,
 } from '../../utils/provider-priority'
 import { IconPlus } from './icons'
-import { buildProvidersByDaemonId } from './node-providers'
+import { buildProvidersByDaemonId, findStatusNodeForNode } from './node-providers'
+import { readCoordinatorNodeMachineFacts, readCoordinatorNodeMachineStatus } from './node-runtime'
+import type { RepoMeshNodeStatus } from '@adhdev/daemon-core'
 import { shortMachineKey } from '../../components/MeshGraph/MeshObservabilitySurface/meshSurfaceHelpers'
 import { MeshMachineNodeGroup } from './MeshMachineNodeGroup'
 import type { MeshNode, MeshNodeListFeatures, MeshQueueEntry, NodeCapabilitySlot } from './types'
@@ -86,8 +88,10 @@ interface MachineGroup {
 }
 
 /** Group nodes by owning machine (daemon_id), in first-seen order. Nodes with no
- *  machine binding (standalone) collapse into a single '' group. */
-function groupNodesByMachine(nodes: MeshNode[], daemons: RepoMeshDaemonEntry[]): MachineGroup[] {
+ *  machine binding (standalone) collapse into a single '' group. Online state and
+ *  the machine name come from the COORDINATOR's view of the group's nodes; the
+ *  connected daemon entry is only a fallback when the coordinator has no answer. */
+export function groupNodesByMachine(nodes: MeshNode[], daemons: RepoMeshDaemonEntry[], statusNodes?: RepoMeshNodeStatus[] | null): MachineGroup[] {
     const daemonsById = new Map(daemons.map(d => [d.id, d]))
     const order: string[] = []
     const byKey = new Map<string, MeshNode[]>()
@@ -100,10 +104,21 @@ function groupNodesByMachine(nodes: MeshNode[], daemons: RepoMeshDaemonEntry[]):
         const groupNodes = byKey.get(key)!
         const daemon = key ? daemonsById.get(key) : undefined
         const firstNode = groupNodes[0] as any
+        const groupStatusNodes = groupNodes
+            .map(node => findStatusNodeForNode(node, statusNodes))
+            .filter((node): node is RepoMeshNodeStatus => !!node)
+        const coordinatorNickname = groupStatusNodes
+            .map(node => readCoordinatorNodeMachineFacts(node).machineNickname)
+            .find(Boolean)
         const label = key
-            ? (daemon ? daemonLabel(daemon) : (firstNode?.machine_label || firstNode?.machine_nickname || firstNode?.hostname || key))
+            ? (coordinatorNickname || (daemon ? daemonLabel(daemon) : (firstNode?.machine_label || firstNode?.machine_nickname || firstNode?.hostname || key)))
             : daemonLabel(daemon)
-        const online = daemon?.status === 'online'
+        const coordinatorStatuses = groupStatusNodes
+            .map(node => readCoordinatorNodeMachineStatus(node))
+            .filter((status): status is string => !!status)
+        const online = coordinatorStatuses.length > 0
+            ? coordinatorStatuses.includes('online')
+            : daemon?.status === 'online'
         const slotCount = groupNodes.reduce((sum, n) => sum + (Array.isArray(n.policy?.slots) ? n.policy!.slots!.length : 0), 0)
         return { key, label, online, nodes: groupNodes, slotCount }
     })
@@ -142,6 +157,8 @@ function MachineTabBar({ groups, activeKey, onChange }: { groups: MachineGroup[]
 
 interface Props {
     nodes: MeshNode[]
+    /** The coordinator's mesh_status nodes (live sessions / reachability / providers per node). */
+    statusNodes?: RepoMeshNodeStatus[] | null
     meshQueue: MeshQueueEntry[]
     activeDaemon: RepoMeshDaemonEntry | undefined
     daemons: RepoMeshDaemonEntry[]
@@ -194,6 +211,7 @@ interface Props {
 
 export function MeshNodeList({
     nodes,
+    statusNodes,
     meshQueue,
     activeDaemon,
     daemons,
@@ -245,8 +263,8 @@ export function MeshNodeList({
     // collapse into a single group and never show a tab bar). With one machine or
     // fewer, a tab bar is pure noise, so it is only rendered for 2+ groups.
     const machineGroups = useMemo(
-        () => features.addNodeDaemonPicker ? groupNodesByMachine(machineNodes, daemons) : [],
-        [features.addNodeDaemonPicker, machineNodes, daemons],
+        () => features.addNodeDaemonPicker ? groupNodesByMachine(machineNodes, daemons, statusNodes) : [],
+        [features.addNodeDaemonPicker, machineNodes, daemons, statusNodes],
     )
     const [activeMachineKey, setActiveMachineKey] = useState<string | null>(null)
     const resolvedActiveMachineKey = machineGroups.some(g => g.key === activeMachineKey)
@@ -430,8 +448,8 @@ export function MeshNodeList({
                     )}
                     <MeshMachineNodeGroup
                         nodes={machineGroups.find(g => g.key === resolvedActiveMachineKey)?.nodes || machineNodes}
+                        statusNodes={statusNodes}
                         meshQueue={meshQueue}
-                        activeDaemon={activeDaemon}
                         daemons={daemons}
                         userName={userName}
                         features={features}
@@ -454,8 +472,8 @@ export function MeshNodeList({
                 // nothing to group by — render the flat list exactly as before.
                 <MeshMachineNodeGroup
                     nodes={machineNodes}
+                    statusNodes={statusNodes}
                     meshQueue={meshQueue}
-                    activeDaemon={activeDaemon}
                     daemons={daemons}
                     userName={userName}
                     features={features}

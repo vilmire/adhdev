@@ -40,6 +40,7 @@ import { claimPendingQueues, startMeshHousekeeping } from '../../mesh/mesh-house
 import { resolveTurnPolicy } from '../../mesh/turn-ledger/policy.js';
 import { createComponentsProbeReader, type TranscriptAnalyzer, type TranscriptObservation } from '../../mesh/turn-ledger/probe.js';
 import { resolveProbeLocation } from '../../mesh/turn-ledger/targets.js';
+import { readLiveHeldRuntime } from '../../mesh/mesh-node-git-refresher.js';
 import { startTurnScheduler } from '../../mesh/turn-ledger/scheduler.js';
 import { reconcileOrphanedPlainAttemptsOnBoot } from './mesh-runtime.js';
 
@@ -156,7 +157,15 @@ export function startTurnLoops(components: TurnWiredComponents, env: NodeJS.Proc
     const ledger = components.turnLedger ?? null;
     if (ledger) {
         const selfDaemonId = ledger.selfDaemonId;
-        const reader = createComponentsProbeReader(components, { analyzer: analyzeProbeTranscript });
+        const reader = createComponentsProbeReader(components, {
+            analyzer: analyzeProbeTranscript,
+            // Remote presence / status from the coordinator-held runtime (member push)
+            // when live; the per-daemon get_status_metadata stays the fallback.
+            readHeldSessions: (attempt, daemonId) => {
+                const held = readLiveHeldRuntime(components.router?.meshNodeGitState, { meshId: attempt.meshId, nodeId: attempt.nodeId, daemonId });
+                return held ? { sessions: held.runtime.sessions, observedAt: held.observedAt, ...(held.runtime.sessionsTruncated ? { truncated: true } : {}) } : null;
+            },
+        });
         components.turnScheduler = startTurnScheduler({
             ledger,
             policy,

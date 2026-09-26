@@ -529,6 +529,66 @@ export function recordInlineMeshDirectGitTruth(
 }
 
 /**
+ * Self-heal a node record from the facts bundle its member PUSHED (held runtime,
+ * mesh-node-runtime-summary.ts) — the push-path counterpart of the probe-envelope
+ * self-heal in recordInlineMeshDirectGitTruth. Stamps platform / arch into
+ * userOverrides only when absent (an operator override wins), and the reported*
+ * mirror fields + nodeFacts. Returns the reporter fields for
+ * persistNodeReporterPlatform, or null when nothing a config record carries
+ * changed (quota / timestamps alone never rewrite meshes.json).
+ */
+export function recordReportedNodeFacts(node: any, rawFacts: unknown): {
+    reporterPlatform: string | null;
+    reporterArch: string | null;
+    reporterMachineNickname: string | null;
+    reporterProviderVersions: Record<string, string> | null;
+    reporterDaemonBuildVersion: string | null;
+    reportedMemberState: MeshReportedMemberState | null;
+    nodeFacts: import('@adhdev/mesh-shared').MeshNodeFacts | null;
+} | null {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return null;
+    const facts = normalizeMeshNodeFacts(rawFacts);
+    if (!facts) return null;
+    const platform = readStringValue(facts.platform) ?? null;
+    const arch = readStringValue(facts.arch) ?? null;
+    const nickname = readStringValue(facts.machineNickname) ?? null;
+    const providerVersions = readProviderVersionsRecord(facts.providerVersions);
+    const buildVersion = readStringValue(readObjectRecord(facts.daemonBuild).version) ?? null;
+    const buildCommit = readStringValue(readObjectRecord(facts.daemonBuild).commit) ?? null;
+    const previousCommit = readStringValue(readObjectRecord(readObjectRecord(node.nodeFacts).daemonBuild).commit) ?? null;
+    const configChanged = (platform && platform !== readStringValue(node.reportedPlatform))
+        || (arch && arch !== readStringValue(node.reportedArch))
+        || (nickname && nickname !== readStringValue(node.machineNickname))
+        || (buildVersion && buildVersion !== readStringValue(node.reportedDaemonBuildVersion))
+        || (buildCommit && buildCommit !== previousCommit)
+        || (providerVersions && JSON.stringify(providerVersions) !== JSON.stringify(readProviderVersionsRecord(node.reportedProviderVersions)));
+    stampNodeReporterPlatform(node, platform, arch);
+    if (platform) node.reportedPlatform = platform;
+    if (arch) node.reportedArch = arch;
+    if (nickname) node.machineNickname = nickname;
+    if (providerVersions) node.reportedProviderVersions = providerVersions;
+    if (buildVersion) node.reportedDaemonBuildVersion = buildVersion;
+    if (providerVersions || buildVersion) {
+        node.reportedMemberState = {
+            ...(providerVersions ? { providerVersions } : {}),
+            ...(buildVersion ? { daemonBuildVersion: buildVersion } : {}),
+            lastReportedAt: facts.reportedAt,
+        };
+    }
+    node.nodeFacts = facts;
+    if (!configChanged) return null;
+    return {
+        reporterPlatform: platform,
+        reporterArch: arch,
+        reporterMachineNickname: nickname,
+        reporterProviderVersions: providerVersions,
+        reporterDaemonBuildVersion: buildVersion,
+        reportedMemberState: (node.reportedMemberState ?? null) as MeshReportedMemberState | null,
+        nodeFacts: facts,
+    };
+}
+
+/**
  * Coerce an unknown git-envelope `reporterMemberState` into a clean
  * {@link MeshReportedMemberState}. Reuses readProviderVersionsRecord for the version
  * map. Carries the per-machine RUNTIME facts (provider versions + daemon build) only
@@ -1570,30 +1630,28 @@ export const MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS = readMeshTimeoutEnvMs('MESH_DIR
 // probe path and the coordinator's remote task-dispatch path share ONE
 // env-overridable connect budget instead of silently diverging when the env is set.
 export const MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS = MESH_CONNECT_TIMEOUT_MS;
-// How long a successful per-peer git_status probe stays fresh enough to be
-// reused instead of issuing another blocking `refreshUpstream:true` fan-out.
-// A slow (TURN-relayed) peer's probe can take 9-23s, and the dashboard's
-// auto-retry loop re-fires every few seconds; without this gate every retry
-// would start a brand new probe storm to the same peer. Within this window the
-// last successful result is reused so a refresh quiesces instead of looping.
-// Min-clamped to 1s by readMeshTimeoutEnvMs; raise via env for very slow peers.
+// How long a successful LOCAL git_status read stays reusable by a later
+// mesh_status / get_mesh call (the dashboard's retry loop and the MCP poll hit
+// the same local workspaces seconds apart). Min-clamped to 1s by
+// readMeshTimeoutEnvMs. Remote nodes are never probed on a request path — their
+// state is held by the coordinator (mesh-node-git-state.ts).
 export const MESH_DIRECT_PROBE_REUSE_MS = readMeshTimeoutEnvMs('MESH_DIRECT_PROBE_REUSE_MS', 12_000);
 
 /**
- * De-duplicates and rate-limits per-peer git_status probes so a single mesh
- * refresh — or a burst of refreshes from the dashboard auto-retry loop — cannot
- * launch a storm of concurrent/back-to-back `refreshUpstream:true` commands to
- * the same slow peer.
+ * De-duplicates LOCAL (same-machine) git_status reads. The direct-truth
+ * classification and the per-node render loop both call
+ * getGitRepoStatus(refreshUpstream:true) for the same local workspace within
+ * one mesh_status call; each read fans out ~13-15 git subprocesses, and the two
+ * passes routinely straddle the getGitRepoStatus 1.5s TTL. Routing both through
+ * this cache collapses them to one read per workspace, reused across the reuse
+ * window so a retry burst cannot restart a fresh local read seconds apart.
  *
- * Two gates, both keyed by `daemonId::workspace`:
- *  - In-flight dedup: a second probe for a key with a probe already running
- *    shares (awaits) the in-flight promise instead of issuing a second command.
- *  - Recently-probed reuse: a successful probe younger than `reuseMs` is reused
- *    verbatim instead of issuing a fresh probe. Failures are NOT cached (so a
- *    transient timeout doesn't pin a peer to "no truth" for the whole window).
+ *  - In-flight dedup: a second read of a workspace with one already running
+ *    shares (awaits) the in-flight promise.
+ *  - Recently-read reuse: a successful read younger than `reuseMs` is reused.
+ *    Failures are NOT cached.
  *
- * Lives on the router instance so the gate spans separate mesh_status calls,
- * which is exactly where the refresh storm happens.
+ * Lives on the router instance so the gate spans separate calls.
  */
 export class MeshGitProbeCache {
     private inflight = new Map<string, Promise<Record<string, unknown> | null>>();
@@ -1601,43 +1659,11 @@ export class MeshGitProbeCache {
 
     constructor(private readonly reuseMs: number, private readonly now: () => number = Date.now) {}
 
-    private key(daemonId: string, workspace: string): string {
-        return `${daemonId}::${workspace}`;
-    }
-
-    /**
-     * Local (same-machine) git_status dedup. The bootstrap direct-truth hydrate
-     * and the per-node render loop both call getGitRepoStatus(refreshUpstream:true)
-     * for the same local workspace within one mesh_status call. Each such probe
-     * fans out ~13-15 git subprocesses, and because the two passes are separated by
-     * the render/hydrate work of every OTHER node they routinely straddle the
-     * getGitRepoStatus 1.5s TTL, so the second pass re-shells the whole ~14-process
-     * collection. Routing both through this cache (namespaced under a reserved
-     * daemon id so it never collides with a remote-peer key) collapses them to one
-     * collection per workspace per request, and reuses it across the reuse window
-     * so the dashboard auto-retry loop can't restart a fresh local probe seconds
-     * apart either.
-     */
-    private static readonly LOCAL_PROBE_DAEMON_ID = '__local_git__';
-
     async probeLocal(
         workspace: string,
         probe: () => Promise<Record<string, unknown> | null>,
     ): Promise<Record<string, unknown> | null> {
-        return this.probe(MeshGitProbeCache.LOCAL_PROBE_DAEMON_ID, workspace, probe);
-    }
-
-    /**
-     * Run `probe` for this peer, but reuse a fresh recent result or an in-flight
-     * probe for the same key when one is available. `probe` is only invoked when
-     * neither gate is satisfied.
-     */
-    async probe(
-        daemonId: string,
-        workspace: string,
-        probe: () => Promise<Record<string, unknown> | null>,
-    ): Promise<Record<string, unknown> | null> {
-        const key = this.key(daemonId, workspace);
+        const key = workspace;
         const cached = this.recent.get(key);
         if (cached && this.now() - cached.at < this.reuseMs) {
             return cached.value;
@@ -1789,8 +1815,8 @@ function isMeshConnectionDefinitivelyDown(
  * the peer is reported `connected`. A single slow (often TURN-relayed) peer can
  * exceed one probe window; retrying — with the connection re-checked before each
  * attempt so we abandon a peer that dropped — recovers it without blocking the
- * mesh forever. Shared by the bootstrap hydrate path and the per-node render
- * path so both treat a connected-but-slow peer identically.
+ * mesh forever. Used ONLY by the coordinator's background handshake probe
+ * (mesh-node-git-refresher.ts) — never by a request path.
  *
  * Returns the git status on success, or null if every attempt failed/timed out
  * (caller decides how to classify). `getConnection` is consulted before each
@@ -1852,25 +1878,22 @@ export async function probeRemoteMeshGitStatusWithRetry(args: {
     return null;
 }
 
+/**
+ * Direct-truth accounting for a requireDirectPeerTruth caller: read the LOCAL
+ * nodes' git (this machine) and count the remote nodes' HELD standing truth
+ * (the coordinator store, hydrated onto node.lastGit by the caller). A remote
+ * peer is never probed here — the coordinator answers from what members pushed —
+ * so `peerAttemptedCount` / `peerConfirmedCount` stay 0 (kept for response-shape
+ * compatibility) and a remote node without held truth is simply not counted
+ * (pending), never unavailable.
+ */
 export async function hydrateInlineMeshDirectTruth(args: {
     mesh: any;
     meshSource: 'inline_cache' | 'inline_bootstrap' | 'local_config';
-    dispatchMeshCommand?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
-    getMeshPeerConnectionStatus?: (daemonId: string) => Record<string, unknown> | null;
     statusInstanceId?: string;
     localMachineId?: string;
-    // Standing-state model: the default (non-refresh) bootstrap load must NOT
-    // fan out a blocking git_status probe to every peer — a single slow
-    // (TURN-relayed) peer would time out and mark the whole mesh unavailable,
-    // blocking the graph. When false, a non-local node is satisfied from its
-    // held standing git truth (lastGit / cachedStatus reflected via mesh
-    // events) and is never pushed to unavailableNodeIds merely because no live
-    // probe was attempted. Only an explicit refresh (probeRemotePeers=true)
-    // performs the fan-out and classifies an unreachable peer as unavailable.
-    probeRemotePeers: boolean;
-    // Optional shared probe cache: dedups concurrent probes and reuses a
-    // recently-probed peer's result instead of re-issuing a blocking
-    // refreshUpstream probe within the reuse window.
+    // Optional shared local-read cache: dedups the local git reads of one call
+    // against the render loop's, and reuses a recent read.
     probeCache?: MeshGitProbeCache;
 }): Promise<{
     directEvidenceCount: number;
@@ -1901,28 +1924,18 @@ export async function hydrateInlineMeshDirectTruth(args: {
     );
 
     let localConfirmedCount = 0;
-    let peerAttemptedCount = 0;
-    let peerConfirmedCount = 0;
     let standingEvidenceCount = 0;
     const unavailableNodeIds: string[] = [];
     const deadNodeIds: string[] = [];
 
-    // Each node's classification (local git probe, standing truth, or the remote
-    // P2P fan-out) is independent, so probing them serially stacked one slow
-    // (often TURN-relayed) peer's latency onto every other node — the 3×25s serial
-    // stall. Classify all nodes concurrently via Promise.allSettled; each node has
-    // its own bounded per-peer timeout + definitively-down fast-fail inside
-    // probeRemoteMeshGitStatusWithRetry, so a hung peer degrades to `unavailable`
-    // for THAT node only and never blocks the aggregate. The counters and
-    // unavailable/dead node lists are folded from the settled results afterward so
-    // no shared mutable state is touched concurrently.
+    // Each node's classification (local git read or held standing truth) is
+    // independent; classify all nodes concurrently via Promise.allSettled and fold
+    // the counters afterward so no shared mutable state is touched concurrently.
     type NodeTruthResult =
         | { kind: 'dead'; nodeId: string }
         | { kind: 'unavailable'; nodeId: string; attempted?: boolean }
         | { kind: 'local' }
         | { kind: 'standing' }
-        | { kind: 'peerConfirmed' }
-        | { kind: 'peerUnavailable'; nodeId: string }
         | { kind: 'skip' };
 
     const classifyNode = async (nodeIndex: number, node: any): Promise<NodeTruthResult> => {
@@ -1974,59 +1987,17 @@ export async function hydrateInlineMeshDirectTruth(args: {
             }
         }
 
-        // Standing-state first: a non-local peer's held git truth (reflected
-        // from its self-emitted mesh events into node.lastGit / cachedStatus)
-        // counts as direct evidence without any probe. On the default load this
-        // is the ONLY thing we consult — no fan-out, so one slow peer can't
-        // block the bootstrap.
+        // A non-local node's HELD git truth (the coordinator store, hydrated onto
+        // node.lastGit by the caller) counts as direct evidence — no probe.
         const standingGit = buildInlineMeshTransitGitStatus(node);
         if (standingGit) {
             return { kind: 'standing' };
         }
 
-        if (!args.probeRemotePeers) {
-            // Default (non-refresh) load: a peer with no held truth yet is left
-            // pending (the per-node loop marks it gitProbePending and the graph
-            // shows setup inventory for it). It is NOT unavailable — the graph
-            // must still render. An explicit refresh will fan out and freshen it.
-            return { kind: 'skip' };
-        }
-
-        if (!daemonId || !args.dispatchMeshCommand) {
-            return !isSelfNode ? { kind: 'unavailable', nodeId } : { kind: 'skip' };
-        }
-
-        // Bounded retry, gated on the peer staying `connected`: a slow
-        // (TURN-relayed) peer that just exceeds one probe window is recovered
-        // instead of being hard-failed. The connection is re-checked before each
-        // retry so a peer that actually dropped is abandoned promptly. Routed
-        // through the shared probe cache so a refresh burst reuses a recent
-        // result / shares an in-flight probe instead of storming the peer.
-        const runProbe = () => probeRemoteMeshGitStatusWithRetry({
-            dispatchMeshCommand: args.dispatchMeshCommand,
-            daemonId,
-            workspace,
-            timeoutMs: MESH_DIRECT_PROBE_TIMEOUT_MS,
-            retryTimeoutMs: MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS,
-            connectTimeoutMs: MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS,
-            getConnection: args.getMeshPeerConnectionStatus,
-        });
-        const remoteGit = args.probeCache
-            ? await args.probeCache.probe(daemonId, workspace, runProbe)
-            : await runProbe();
-        if (remoteGit) {
-            const reporter = recordInlineMeshDirectGitTruth(node, remoteGit, 'selected_coordinator_mesh_p2p_git');
-            persistNodeReporterPlatform(args.meshSource, args.mesh, nodeId, reporter);
-            return { kind: 'peerConfirmed' };
-        }
-
-        // Invariant: a connected peer that still holds standing git truth is
-        // never classified unavailable (standingGit short-circuited above, so by
-        // here there is no held truth). Only push to unavailable when the peer is
-        // not currently connected, or it is connected but every bounded probe
-        // failed — that is the genuine "connected, no truth, retries exhausted"
-        // case that drives the explicit-refresh hard-fail.
-        return { kind: 'peerUnavailable', nodeId };
+        // No held truth yet: pending (the render loop marks it gitProbePending),
+        // never unavailable — the member's push (or the coordinator's background
+        // handshake probe) fills the store.
+        return { kind: 'skip' };
     };
 
     const nodeEntries = [...nodes.entries()];
@@ -2063,14 +2034,6 @@ export async function hydrateInlineMeshDirectTruth(args: {
             case 'standing':
                 standingEvidenceCount += 1;
                 break;
-            case 'peerConfirmed':
-                peerAttemptedCount += 1;
-                peerConfirmedCount += 1;
-                break;
-            case 'peerUnavailable':
-                peerAttemptedCount += 1;
-                unavailableNodeIds.push(result.nodeId);
-                break;
             case 'skip':
             default:
                 break;
@@ -2078,10 +2041,11 @@ export async function hydrateInlineMeshDirectTruth(args: {
     });
 
     return {
-        directEvidenceCount: localConfirmedCount + peerConfirmedCount + standingEvidenceCount,
+        directEvidenceCount: localConfirmedCount + standingEvidenceCount,
         localConfirmedCount,
-        peerAttemptedCount,
-        peerConfirmedCount,
+        // No remote peer is probed on this path (see the doc comment above).
+        peerAttemptedCount: 0,
+        peerConfirmedCount: 0,
         standingEvidenceCount,
         unavailableNodeIds,
         deadNodeIds,

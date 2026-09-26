@@ -107,3 +107,31 @@ export function resolveFirstSetupSeedDaemonId(
     // prompts the operator to launch the coordinator to fix the host.
     return ''
 }
+
+/**
+ * The daemon that answers for a mesh's record and takes its writes — its
+ * COORDINATOR/host — resolved from the mesh record alone (list entry): the
+ * authoritative host pin (persisted hostDaemonId, else the pinned host node's
+ * daemon, else a node the daemon declared role:'host'), mapped onto a connected
+ * daemon id when one is equivalent.
+ *
+ * With exactly one daemon connected (standalone) that daemon is the only
+ * possible coordinator. Otherwise an unresolved host returns '' — callers must
+ * refuse the write rather than guess (never the daemon that happened to list
+ * the mesh, never `daemons[0]`).
+ */
+export function resolveMeshHostDaemonId(
+    mesh: { meshHost?: ResolvedMeshHostPayload; nodes?: MeshNode[] } | null | undefined,
+    daemons: RepoMeshDaemonEntry[],
+): string {
+    if (daemons.length === 1 && daemons[0]?.id) return daemons[0].id
+    if (!mesh) return ''
+    const pin = readAuthoritativeMeshHostPin(mesh.meshHost)
+    const nodes = Array.isArray(mesh.nodes) ? mesh.nodes : []
+    const hostNode = (pin.hostNodeId ? nodes.find(n => String(n.id) === pin.hostNodeId) : undefined)
+        ?? nodes.find(n => (n as any).role === 'host')
+    const candidate = pin.hostDaemonId || String((hostNode as any)?.daemon_id || (hostNode as any)?.daemonId || '')
+    if (!candidate) return ''
+    const connected = daemons.find(d => daemonIdsEquivalent(d.id, candidate))
+    return connected ? connected.id : candidate
+}

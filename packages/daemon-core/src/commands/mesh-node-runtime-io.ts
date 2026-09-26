@@ -4,8 +4,9 @@
  *     dispatch, no command log line) for mesh-node-state-pusher.ts, and wake the
  *     pusher on session lifecycle facts;
  *   - coordinator side: the background runtime probe of a member that does not
- *     push it (older daemon) — used by mesh-node-git-refresher.ts, never by a
- *     request path.
+ *     push it (older daemon), and the explicit-refresh nudge that makes a
+ *     subscribed member push now — used by mesh-node-git-refresher.ts, never
+ *     awaited by a request path.
  */
 import { getMachineId, getMachineNickname } from '../config/config.js';
 import { getCachedProviderVersions } from '../detection/cli-detector.js';
@@ -14,8 +15,9 @@ import { TRACK } from '../track-identity.js';
 import { buildSessionEntries } from '../status/builders.js';
 import { readUpgradeFailureNotice } from './upgrade-helper.js';
 import { buildLocalNodeFacts } from '../mesh/node-facts.js';
-import { buildMeshNodeRuntimeSummary, type MeshNodeRuntimeSummary } from '../mesh/mesh-node-runtime-summary.js';
+import { buildMeshNodeRuntimeProviders, buildMeshNodeRuntimeSummary, type MeshNodeRuntimeSummary } from '../mesh/mesh-node-runtime-summary.js';
 import type { MeshNodeStatePusher } from '../mesh/mesh-node-state-pusher.js';
+import { MESH_NODE_STATE_NUDGE_COMMAND, type MeshNodeGitRefreshTarget } from '../mesh/mesh-node-git-refresher.js';
 import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus.js';
 import { unwrapMeshRelayResult } from './mesh-relay-result.js';
 import type { CommandRouterDeps } from './router.js';
@@ -36,8 +38,16 @@ export function readLocalMeshNodeRuntime(deps: Pick<CommandRouterDeps, 'instance
         upgradeFailure: readUpgradeFailureNotice(),
     };
     let nodeFacts: unknown;
+    let providers: unknown;
     try {
         const providerVersions = deps.providerLoader ? getCachedProviderVersions(deps.providerLoader) : {};
+        // Provider catalog (installed / enabled / versions / auto-approve modes) —
+        // in-memory loader state + the cached version map, no detection run here.
+        try {
+            const loader = deps.providerLoader as unknown as { getAvailableProviderInfos?: () => unknown[]; getAll?: () => unknown[] } | undefined;
+            const rows = loader?.getAvailableProviderInfos?.() ?? loader?.getAll?.();
+            providers = buildMeshNodeRuntimeProviders(rows, providerVersions);
+        } catch { providers = undefined; }
         let machineNickname: string | null = null;
         try {
             const nick = getMachineNickname();
@@ -49,7 +59,7 @@ export function readLocalMeshNodeRuntime(deps: Pick<CommandRouterDeps, 'instance
     } catch {
         nodeFacts = undefined;
     }
-    return buildMeshNodeRuntimeSummary(core, nodeFacts);
+    return buildMeshNodeRuntimeSummary(core, nodeFacts, providers);
 }
 
 /** Lifecycle facts that change what the runtime summary shows. */
@@ -82,6 +92,37 @@ export async function probeRemoteMeshNodeRuntime(
         const result = unwrapMeshRelayResult(raw, { command: 'get_status_metadata', peerDaemonId: daemonId }) as Record<string, unknown>;
         if (result && result.success === false) return null;
         return buildMeshNodeRuntimeSummary(result);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
+/** Budget for a nudge round trip (it only registers intent; the push follows separately). */
+export const MESH_NODE_STATE_NUDGE_TIMEOUT_MS = 10_000;
+
+/**
+ * Ask a member to push its node state now. Resolves true when the member holds a
+ * push subscription for this node, false when it does not — or does not know
+ * the command (a member too old to push): the refresher then falls back to its
+ * handshake probe. Rejects when the member is unreachable.
+ */
+export async function nudgeMeshNodeStatePush(
+    dispatchMeshCommand: CommandRouterDeps['dispatchMeshCommand'],
+    target: MeshNodeGitRefreshTarget,
+    timeoutMs: number,
+): Promise<boolean> {
+    if (!dispatchMeshCommand) return false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+        const raw = await Promise.race([
+            dispatchMeshCommand(target.daemonId, MESH_NODE_STATE_NUDGE_COMMAND, { meshId: target.meshId, nodeId: target.nodeId }),
+            new Promise<never>((_, reject) => {
+                timer = setTimeout(() => reject(new Error('mesh_node_state_nudge_timeout')), timeoutMs);
+                (timer as { unref?: () => void }).unref?.();
+            }),
+        ]);
+        const result = unwrapMeshRelayResult(raw, { command: MESH_NODE_STATE_NUDGE_COMMAND, peerDaemonId: target.daemonId }) as Record<string, unknown> | null;
+        return !!result && result.success !== false && result.subscribed === true;
     } finally {
         if (timer) clearTimeout(timer);
     }

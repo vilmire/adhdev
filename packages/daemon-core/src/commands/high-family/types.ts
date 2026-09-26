@@ -24,7 +24,9 @@ import type {
 import type { ResolvedMeshForCommand } from '../med-family/types.js';
 import type { DaemonComponentsAccessor } from '../daemon-components-port.js';
 import type { MeshNodeGitStateStore } from '../../mesh/mesh-node-git-state.js';
+import type { MeshNodeStatePusher } from '../../mesh/mesh-node-state-pusher.js';
 import type { MeshNodeGitRefresher } from '../../mesh/mesh-node-git-refresher.js';
+import type { MemberWorktreeAdoptionResult } from '../../mesh/mesh-remote-worktree-membership.js';
 
 /**
  * Router-private collaborators injected at dispatch. Each is a bound method or
@@ -116,6 +118,27 @@ export interface HighFamilyContext {
 
     /** Coordinator background freshness probes for remote nodes (never awaited by mesh_status). */
     meshNodeGitRefresher: MeshNodeGitRefresher;
+
+    /** Member side: this daemon's push subscriptions to coordinators (answers a coordinator's nudge). */
+    meshNodeStatePusher?: MeshNodeStatePusher;
+
+    /** Per-process coordinator boot id returned on member push acks (member worktree reconciliation). */
+    meshCoordinatorBootId?: string;
+
+    /**
+     * Adopt worktree nodes a member reports it owns that this coordinator does not
+     * hold (owner-gated; see DaemonCommandRouter.adoptMemberWorktreeNodes).
+     */
+    adoptMemberWorktreeNodes?: (
+        meshId: string,
+        input: { reported: unknown; senderDaemonId: string; ownerDaemonId: string },
+    ) => Promise<MemberWorktreeAdoptionResult>;
+
+    /**
+     * Self-heal a node's config record (platform / arch / nickname / versions /
+     * facts) from the facts bundle a member pushed (best-effort, fire-and-forget).
+     */
+    selfHealNodeFromFacts?: (meshId: string, nodeId: string, nodeFacts: unknown) => void;
 
     /** Drop the aggregate snapshot and publish a mesh-state revision (dashboard refetch nudge). */
     invalidateAggregateMeshStatus: (meshId: string) => void;

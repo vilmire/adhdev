@@ -30,8 +30,9 @@ export function StandaloneRepoMeshProvider({ children }: { children: ReactNode }
         daemons,
         userName: undefined,
 
-        loadMeshStatus: async (daemonId, meshId) => {
-            return sendCommand(daemonId, 'mesh_status', { meshId })
+        // One read of the local coordinator; refresh only on an explicit user click.
+        loadMeshStatus: async (daemonId, meshId, opts) => {
+            return sendCommand(daemonId, 'mesh_status', opts?.refresh === true ? { meshId, refresh: true } : { meshId })
         },
 
         launchCoordinator: async (daemonId, params) => {

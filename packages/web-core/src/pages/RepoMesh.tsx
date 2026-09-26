@@ -29,7 +29,7 @@ import { MeshDetailView } from './repo-mesh/MeshDetailView'
 import { useMeshList } from './repo-mesh/useMeshList'
 import { useMeshNodeActions } from './repo-mesh/useMeshNodeActions'
 import { useMeshQueue } from './repo-mesh/useMeshQueue'
-import { useMeshGraph, getCachedMeshGraphStatus } from './repo-mesh/useMeshGraph'
+import { useMeshGraph } from './repo-mesh/useMeshGraph'
 import { resolveFirstSetupSeedDaemonId, readAuthoritativeMeshHostPin } from './repo-mesh/host-seed'
 import {
     createGraphPollBackoffState,
@@ -94,7 +94,6 @@ export default function RepoMesh() {
         loadMeshStatus, launchCoordinator, loadLiveMesh,
         extractStatus, unwrapResult, normalizeMesh, normalizeNode,
         resolveCommandTarget, features,
-        gateIncompleteGraph,
     } = ctx
 
     // Held-first background freshen for daemon metadata (workspaces/providers),
@@ -161,10 +160,10 @@ export default function RepoMesh() {
     // ─── Graph ───
 
     const {
-        meshGraphStatus, setMeshGraphStatus,
+        meshGraphStatus,
         graphLoading, graphError, setGraphError,
         loadGraph,
-    } = useMeshGraph({ selectedMeshId, loadMeshStatus, extractStatus, normalizeNode, gateIncompleteGraph })
+    } = useMeshGraph({ selectedMeshId, loadMeshStatus, extractStatus, normalizeNode })
 
     // ─── Coordinator daemon (cloud) ───
     // The host is a fixed 1:1 pin per mesh — there is no UI picker for it. This
@@ -196,22 +195,17 @@ export default function RepoMesh() {
         : primaryDaemonId
 
     // ─── Queue ───
-    // The dedicated Queue settings section was removed (runtime telemetry, not config).
-    // meshQueue is still loaded because per-node "active assignments" diagnostics in the
-    // node list and the scheduler in useMeshNodeActions consume it; the standalone path
-    // auto-loads it below.
+    // The queue is part of the coordinator's mesh_status (`queue.tasks`) — no
+    // separate per-daemon read. It feeds the per-node "active assignments"
+    // diagnostics in the node list.
+    const { meshQueue } = useMeshQueue({ status: meshGraphStatus })
 
-    const {
-        meshQueue,
-        loadQueue,
-    } = useMeshQueue({
-        primaryDaemonId,
-        activeDaemonId: resolvedActiveDaemonId,
-        sendCommand,
-        unwrapResult,
-        loadLiveMesh,
-        resolveCommandTarget,
-    })
+    // Re-read the coordinator's held answer after a mesh write (refresh:false —
+    // the coordinator already knows about the write it just performed).
+    const reloadMeshStatus = async () => {
+        if (!selectedMeshId || !resolvedActiveDaemonId) return
+        await loadGraph(resolvedActiveDaemonId, selectedMeshId, false)
+    }
 
     // ─── Node actions ───
 
@@ -240,7 +234,6 @@ export default function RepoMesh() {
         confirmAction,
         selectedMesh,
         selectedMeshId,
-        primaryDaemonId,
         activeDaemonId: resolvedActiveDaemonId,
         daemons,
         availableCliProviders,
@@ -251,7 +244,7 @@ export default function RepoMesh() {
         launchCoordinator,
         features: { addNodeDaemonPicker: features.addNodeDaemonPicker },
         loadMeshes,
-        loadQueue,
+        reloadMeshStatus,
         setError,
     })
 
@@ -394,19 +387,13 @@ export default function RepoMesh() {
         return persistedHostDaemonId
     }, [features.meshHostDaemonSection, persistedHostInfo.pinned, hostOnline, hostRebindDaemonId, daemons, persistedHostDaemonId])
 
-    const meshNodeDaemonIds = useMemo(() => {
-        if (!meshGraphStatus) return []
-        return [...new Set(
-            (meshGraphStatus.nodes ?? [])
-                .map((n: any) => String(n.daemonId || n.daemon_id || ''))
-                .filter(Boolean)
-        )]
-    }, [meshGraphStatus])
-
+    // Sessions of every node come from the coordinator's mesh_status (remote nodes
+    // via `heldRuntime`). Only the COORDINATOR daemon is subscribed — its own
+    // sessions' live state and the mesh revision signal. Member daemons are never
+    // subscribed from this page.
     const displayedMeshStatus = useMeshGraphMetadataSubscription({
         status: meshGraphStatus,
         daemonId: resolvedActiveDaemonId || null,
-        extraDaemonIds: meshNodeDaemonIds,
         meshId: selectedMeshId,
         sendData,
     })
@@ -526,13 +513,11 @@ export default function RepoMesh() {
 
     // Load graph on mesh or coordinator daemon selection.
     //
-    // SWR: only a genuine MESH switch clears the held graph — that prior graph is a
-    // different mesh's topology and showing it would be wrong, so a first-paint
-    // (spinner) load is correct there. A same-mesh command-daemon change (host
-    // rebind while staying on this mesh) must NOT clear: the existing nodes are
-    // still valid, so we keep them on screen and freshen in the background
-    // (refresh=true → no spinner, no white flash). This is the flicker the operator
-    // saw when the coordinator's own activity nudged resolvedActiveDaemonId.
+    // The shared coordinator status store is keyed by mesh, so a mesh switch shows
+    // that mesh's last-held answer (if any) at once and a same-mesh command-daemon
+    // change keeps the current nodes on screen. Every automatic read is
+    // refresh=false: the coordinator answers from the state it holds and refreshes
+    // stale nodes in the background itself; refresh=true is the manual button only.
     const graphLoadedForMeshRef = useRef<string | null>(null)
     // Poll-rate backoff state (repo-mesh/graph-poll-backoff.ts). A mesh switch is
     // exactly the "operator just acted, watch closely" moment, so it also resets
@@ -555,18 +540,9 @@ export default function RepoMesh() {
         if (meshChanged) {
             resetGraphPollBackoff(pollBackoffRef.current)
             setPollIntervalMs(fastPollIntervalMs)
-            // Seed from the last-good module cache for THIS mesh (if any) instead of
-            // blanking to null — a previously-viewed mesh paints instantly and
-            // freshens in the background (refresh=true). Only a never-seen mesh with
-            // no cache entry does a spinner first-paint.
-            const cached = getCachedMeshGraphStatus(selectedMeshId)
-            setMeshGraphStatus(cached)
-            setGraphError(null)
-            void loadGraph(resolvedActiveDaemonId, selectedMeshId, cached !== null)
-        } else {
-            setGraphError(null)
-            void loadGraph(resolvedActiveDaemonId, selectedMeshId, true)
         }
+        setGraphError(null)
+        void loadGraph(resolvedActiveDaemonId, selectedMeshId, false)
     }, [selectedMeshId, resolvedActiveDaemonId])
 
     // Visibility-gated automatic graph revalidation (SWR-style).
@@ -591,9 +567,10 @@ export default function RepoMesh() {
         if (autoRevalidateInFlight.current) return
         if (!selectedMeshId || !resolvedActiveDaemonId) return
         autoRevalidateInFlight.current = true
-        // refresh=true → SWR semantics: keep the current graph on screen (no
-        // loading spinner) and commit the fresh snapshot when it arrives.
-        void Promise.resolve(loadGraphRef.current(resolvedActiveDaemonId, selectedMeshId, true))
+        // refresh=false: re-read the coordinator's HELD answer (the current graph
+        // stays on screen). Automatic reads never ask the coordinator to re-probe
+        // peers — that is what made every revision push trigger another push.
+        void Promise.resolve(loadGraphRef.current(resolvedActiveDaemonId, selectedMeshId, false))
             .finally(() => { autoRevalidateInFlight.current = false })
     }
 
@@ -615,14 +592,14 @@ export default function RepoMesh() {
         lastPushObservedAtRef.current = null
     }, [selectedMeshId, resolvedActiveDaemonId])
 
-    // Event-driven refresh: re-fetch mesh_status the moment the daemon reports the
-    // viewed mesh's state advanced, instead of waiting out the poll interval. No-op
-    // on standalone (revision counters absent → hook never fires) and harmless when
-    // the tab is hidden (loadGraph is cheap and the git probe is peer-gated).
+    // Event-driven refresh: re-read mesh_status the moment the COORDINATOR reports
+    // the viewed mesh's state advanced, instead of waiting out the poll interval.
+    // Only the coordinator is watched — it is the one holding every node's state.
+    // No-op on standalone (revision counters absent → hook never fires).
     useMeshStateRevisionRefresh({
         daemonIds: useMemo(
-            () => [resolvedActiveDaemonId, ...meshNodeDaemonIds].filter(Boolean),
-            [resolvedActiveDaemonId, meshNodeDaemonIds],
+            () => [resolvedActiveDaemonId].filter(Boolean),
+            [resolvedActiveDaemonId],
         ),
         meshId: selectedMeshId,
         sendData,
@@ -689,14 +666,6 @@ export default function RepoMesh() {
             document.removeEventListener('visibilitychange', onVisibilityChange)
         }
     }, [selectedMeshId, resolvedActiveDaemonId, pollIntervalMs, features.meshStatePushRefresh])
-
-    // Auto-load queue on mesh selection (both platforms). The dedicated Queue
-    // settings section is gone, but meshQueue still feeds per-node assignment
-    // diagnostics (MeshMachineNodeGroup) and the scheduler in
-    // useMeshNodeActions, so both platforms need it loaded.
-    useEffect(() => {
-        void loadQueue(selectedMeshId)
-    }, [selectedMeshId, loadQueue])
 
     // Mesh list load. The first mount (no meshes held yet) does a plain load that
     // shows the 'Loading meshes...' state; every subsequent re-fire — triggered
@@ -770,7 +739,7 @@ export default function RepoMesh() {
             selectedMesh={selectedMesh}
             error={error}
             onDismissError={() => setError(null)}
-            onBack={() => { setSelectedMeshId(null); setMeshGraphStatus(null) }}
+            onBack={() => { setSelectedMeshId(null) }}
             onDelete={handleDelete}
             displayedMeshStatus={displayedMeshStatus}
             graphLoading={graphLoading}

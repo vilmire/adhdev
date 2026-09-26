@@ -285,8 +285,9 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     'mesh_status', 'get_mesh_review_inbox',
     // Coordinator-held node state (high-family/mesh-node-state.ts): the member
     // push ingest and the coordinator-routed node git log. Fresh additions, not
-    // a legacy-table migration.
-    'mesh_node_git_report', 'mesh_node_git_log',
+    // a legacy-table migration. mesh_node_state_nudge: the coordinator's
+    // explicit-refresh "push now" request to a subscribed member.
+    'mesh_node_git_report', 'mesh_node_git_log', 'mesh_node_state_nudge',
 ];
 
 // ─── Helpers ───────────────────────────────────────────────────────────────

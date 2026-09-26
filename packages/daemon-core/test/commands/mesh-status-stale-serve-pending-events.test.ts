@@ -149,7 +149,10 @@ describe('mesh_status serves the stale aggregate while coordinator events are pe
       // background freshen was kicked, so the next poll gets fresh node health.
       expect(freshenCalls).toHaveLength(1)
       expect(freshenCalls[0][0]).toBe('mesh_status')
-      expect(freshenCalls[0][1]?.refresh).toBe(true)
+      // A held-state rebuild, NOT an explicit refresh: a stale serve must not
+      // nudge every member daemon to push.
+      expect(freshenCalls[0][1]?.refresh).toBeUndefined()
+      expect(freshenCalls[0][1]?.rebuildFromHeld).toBe(true)
       expect(freshenCalls[0][2]).toBe('mesh_status_swr_freshen')
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR

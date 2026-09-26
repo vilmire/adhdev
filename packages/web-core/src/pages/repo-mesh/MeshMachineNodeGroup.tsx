@@ -6,7 +6,9 @@ import { IconFolder } from '../../components/Icons'
 import NodeSlotEditor from './NodeSlotEditor'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import { IconTrash, NodeHealthBadge } from './icons'
-import { resolveNodeAvailableProviders } from './node-providers'
+import { findStatusNodeForNode, resolveNodeAvailableProviders } from './node-providers'
+import { getCoordinatorNodeSessions, readCoordinatorNodeMachineStatus } from './node-runtime'
+import type { RepoMeshNodeStatus } from '@adhdev/daemon-core'
 import NodeTagEditor from './NodeTagEditor'
 import type { AvailableCliProviderOption } from '../../utils/provider-priority'
 import {
@@ -16,21 +18,6 @@ import {
 } from './MeshNodeList'
 import type { MeshNode, MeshNodeListFeatures, MeshQueueEntry } from './types'
 
-function getNodeActiveSessions(node: MeshNode, daemon: RepoMeshDaemonEntry | undefined): Array<{ id: string; provider: string; status: string }> {
-    const d = daemon as any
-    const buckets = [
-        ...(Array.isArray(d?.cliSessions) ? d.cliSessions : []),
-        ...(Array.isArray(d?.acpSessions) ? d.acpSessions : []),
-        ...(Array.isArray(d?.sessions) ? d.sessions : []),
-    ]
-    return buckets
-        .filter((s: any) => s?.settings?.meshNodeId === node.id || s?.workspace === node.workspace)
-        .map((s: any) => ({
-            id: s.sessionId || s.id || s.instanceId || 'unknown',
-            provider: s.providerType || s.cliType || s.acpType || s.type || 'unknown',
-            status: s.status || s.activeChat?.status || 'unknown',
-        }))
-}
 
 function daemonOwnerLabel(daemon: RepoMeshDaemonEntry | undefined, fallback?: string): string {
     return (daemon as any)?.ownerName || (daemon as any)?.userName || (daemon as any)?.user?.name || fallback || 'You'
@@ -38,8 +25,13 @@ function daemonOwnerLabel(daemon: RepoMeshDaemonEntry | undefined, fallback?: st
 
 interface Props {
     nodes: MeshNode[]
+    /**
+     * The coordinator's mesh_status nodes. Each node's live sessions and machine
+     * reachability come from here (remote nodes via the coordinator's held
+     * runtime) — never from the connected daemons' own session lists.
+     */
+    statusNodes?: RepoMeshNodeStatus[] | null
     meshQueue: MeshQueueEntry[]
-    activeDaemon: RepoMeshDaemonEntry | undefined
     daemons: RepoMeshDaemonEntry[]
     userName?: string
     features: MeshNodeListFeatures
@@ -71,8 +63,8 @@ interface Props {
  */
 export function MeshMachineNodeGroup({
     nodes,
+    statusNodes,
     meshQueue,
-    activeDaemon,
     daemons,
     userName,
     features,
@@ -100,9 +92,14 @@ export function MeshMachineNodeGroup({
             {nodes.map(node => {
                 const priorityStatus = describeNodeProviderPriority(node)
                 const activeAssignments = getNodeActiveAssignments(node, meshQueue)
-                const activeSessions = getNodeActiveSessions(node, activeDaemon)
+                const statusNode = findStatusNodeForNode(node, statusNodes)
+                const activeSessions = getCoordinatorNodeSessions(statusNode)
                 const isSelected = selectedNodeId === node.id
-                const health = (node as any).status || (node as any).machine_status || (activeAssignments.length > 0 || activeSessions.length > 0 ? 'active' : 'enabled')
+                // Reachability as the coordinator sees it; the config record's own
+                // status only when the coordinator has no answer for this node yet.
+                const health = readCoordinatorNodeMachineStatus(statusNode)
+                    || (node as any).status
+                    || (activeAssignments.length > 0 || activeSessions.length > 0 ? 'active' : 'enabled')
 
                 return (
                     <div key={node.id}
@@ -157,7 +154,7 @@ export function MeshMachineNodeGroup({
                                         hint={t('mesh.nodeList.slotsHint')}>
                                         <NodeSlotEditor
                                             slots={Array.isArray(node.policy?.slots) ? node.policy!.slots : []}
-                                            availableProviders={resolveNodeAvailableProviders(node, providersByDaemonId)}
+                                            availableProviders={resolveNodeAvailableProviders(node, providersByDaemonId, statusNode)}
                                             saving={savingNodeSlotsId === node.id}
                                             onSave={slots => onUpdateNodeSlots(node, slots)}
                                         />
