@@ -4,7 +4,7 @@ import test from 'node:test';
 import { meshNodeSlotsSet, meshNodeSlotsList } from '../src/tools/mesh-tools.js';
 
 /**
- * mesh_node_slots_set — the orchestrator's propose→approve surface for node
+ * mesh_node_slots action=set — the orchestrator's propose→approve surface for node
  * capability slots (node capability slots design, 2026-07-09 §5). These assert the approval
  * gate: dry-run by default (no mutation), and write=true routes an
  * update_mesh_node({ policy: { slots } }) to the node's daemon.

@@ -27,7 +27,7 @@ import { MESH_GRAPH_NODE_PATCH_TOOL } from '../src/tools/mesh-tool-schemas.js';
 // PASSING regression test. But that function had NO production caller and no MCP
 // tool wrapping it, so the only way to reach the recovery was a unit test that
 // imported it DIRECTLY. Live, the contract was unreachable: the sole patch
-// surface was `mesh_graph_gate_release`, which demands a claimed gate and a
+// surface was the gate release (`mesh_graph_gate` action=release), which demands a claimed gate and a
 // direct gate edge, so a plain `inputs_from` node with no gate could not be
 // patched at all. The graph's own re-settle loop does retry such a node on later
 // upstream terminals, but it re-reads the SAME baked spec and so fails

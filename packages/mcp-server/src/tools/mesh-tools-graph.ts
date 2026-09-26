@@ -8,13 +8,16 @@
  * sweep — but deliberately exposed NONE of it over MCP ("NOT HERE (by design):
  * MCP/JSON-RPC tool exposure (phase E)"). Until these tools existed, a gate could
  * be declared and opened but a coordinator had no way to pass it, so a graph with
- * a gate was un-advanceable. These three tools are that missing surface.
+ * a gate was un-advanceable. These tools are that missing surface.
  *
  * ── What is exposed, and what is deliberately NOT ────────────────────────────
- *  - `mesh_graph_gate_claim`   → claimMeshGraphGate   (design :407-408)
- *  - `mesh_graph_gate_release` → releaseMeshGraphGate (design :409-421)
- *  - `mesh_graph_gate_abandon` → abandonMeshGraphGate (design :399)
- *  - `mesh_graph_view`         → buildMeshGraphViews  (design :759-775)
+ * One `mesh_graph_gate` tool, selected by `action` (2026-09-26 tool
+ * consolidation — it was three tools plus an extend-only flag on claim):
+ *  - action=claim   → claimMeshGraphGate   (design :407-408)
+ *  - action=release → releaseMeshGraphGate (design :409-421)
+ *  - action=abandon → abandonMeshGraphGate (design :399)
+ *  - action=extend  → daemon command mesh_graph_gate_extend (D3(c))
+ *  - `mesh_graph_view` → buildMeshGraphViews (design :759-775)
  *
  * C-W9c (wiring-unification, 2026-09-24 19:00 stamp): every one of those cores
  * — plus `patchGraphNodeAndRetry` and `collectGateConvergenceEvidence` — now
@@ -32,7 +35,7 @@
  * exact M-TERMINAL-ADMISSION-GATE defect class the gate contract exists to
  * prevent — do not add one.
  *
- * ★ `mesh_graph_gate_abandon` is NOT that force-release, and the distinction is
+ * ★ The abandon action is NOT that force-release, and the distinction is
  * the whole reason it is safe to expose. A force-release would GRANT passage
  * without the evidence a release requires — that is the forbidden class. Abandon
  * DENIES passage permanently: it settles the gate `cancelled` (the design's own
@@ -222,7 +225,7 @@ function resolveGateSession(ctx: MeshContext, explicit?: unknown): string | unde
 }
 
 /**
- * `mesh_graph_gate_claim` (design :407-408, :425-439).
+ * `mesh_graph_gate` action=claim (design :407-408, :425-439).
  *
  * Takes the lease on a gate that is awaiting a coordinator, returning the
  * monotonically increasing `leaseGeneration` and the opaque `fencingToken` that
@@ -235,23 +238,17 @@ export async function meshGraphGateClaim(
         gate_id?: string; gateId?: string;
         lease_seconds?: number; leaseSeconds?: number;
         extend_deadline_seconds?: number; extendDeadlineSeconds?: number;
-        extend_seconds?: number;
         coordinator_session_id?: string; coordinatorSessionId?: string;
     },
 ): Promise<string> {
-    await recordMeshCoordinatorToolCall(ctx, 'mesh_graph_gate_claim');
+    await recordMeshCoordinatorToolCall(ctx, 'mesh_graph_gate');
     const gateId = readString(args.gate_id) || readString(args.gateId);
     if (!gateId) {
         return JSON.stringify({
             success: false,
             code: 'missing_gate_id',
-            error: 'mesh_graph_gate_claim requires gate_id. Use mesh_graph_view to list gates awaiting a coordinator.',
+            error: 'mesh_graph_gate action=claim requires gate_id. Use mesh_graph_view to list gates awaiting a coordinator.',
         });
-    }
-    // D3(c) extend verb — see meshGraphGateExtend. Decided BEFORE the coordinator-
-    // session check: extending a deadline takes no lease, so it needs no owner.
-    if (args.extend_seconds !== undefined) {
-        return meshGraphGateExtend(ctx, gateId, args);
     }
     const coordinatorSessionId = resolveGateSession(ctx, args.coordinator_session_id ?? args.coordinatorSessionId);
     if (!coordinatorSessionId) {
@@ -298,7 +295,7 @@ export async function meshGraphGateClaim(
             ...(gateField(result.gate, 'ref') ? { ref: gateField(result.gate, 'ref') } : {}),
             action: gateField(result.gate, 'action'),
             ...(gateField(result.gate, 'instructions') ? { instructions: gateField(result.gate, 'instructions') } : {}),
-            // ★ Both values are REQUIRED by mesh_graph_gate_release. Losing them
+            // ★ Both values are REQUIRED by the release action. Losing them
             // means the lease must lapse before anyone can act on the gate again.
             leaseGeneration: result.leaseGeneration,
             fencingToken: result.fencingToken,
@@ -315,7 +312,7 @@ export async function meshGraphGateClaim(
                         + 'action already landed — BEFORE performing it again, then release with the real outcome.',
                 }
                 : {}),
-            nextStep: 'Perform the gate action yourself, then call mesh_graph_gate_release with this leaseGeneration + fencingToken '
+            nextStep: 'Perform the gate action yourself, then call mesh_graph_gate with action="release", this leaseGeneration + fencingToken '
                 + 'and an idempotency_key. The daemon never performs a gate action and never auto-releases: the gate stays shut '
                 + 'until you release it (a deadline can only EXPIRE it, never pass it).',
         });
@@ -329,13 +326,13 @@ export async function meshGraphGateClaim(
 export const MESH_GRAPH_GATE_EXTEND_COMMAND = 'mesh_graph_gate_extend';
 
 /**
- * `mesh_graph_gate_claim` with `extend_seconds` — the gate EXTEND verb
- * (the 2026-09-25 graph orchestration simplification D3(c)).
+ * `mesh_graph_gate` action=extend — the gate EXTEND verb (the 2026-09-25 graph
+ * orchestration simplification D3(c)).
  *
- * Exposed as an optional argument on claim rather than a separate tool because
- * the published tool count is pinned at 60 (scripts/verify-docs.mjs). It is a
- * different verb, not a claim variant: it takes NO lease and returns no fencing
- * token — it only pushes the deadline so the gate's on_timeout policy fires later.
+ * It rode on claim as an extend-only `extend_seconds` flag until the 2026-09-26
+ * tool consolidation gave the gate tool an explicit `action`. It is a different
+ * verb, not a claim variant: it takes NO lease and returns no fencing token — it
+ * only pushes the deadline so the gate's on_timeout policy fires later.
  * The daemon command is the one the dashboard's "Extend 24h" button calls, with
  * the design's snake_case wire args `{mesh_id, gate_id, extend_seconds}`.
  *
@@ -343,7 +340,7 @@ export const MESH_GRAPH_GATE_EXTEND_COMMAND = 'mesh_graph_gate_extend';
  * that passes lease_seconds too believes it is taking a lease, and silently
  * returning without one would leave it acting on a gate it does not hold.
  */
-async function meshGraphGateExtend(
+export async function meshGraphGateExtend(
     ctx: MeshContext,
     gateId: string,
     args: { extend_seconds?: unknown; lease_seconds?: unknown; leaseSeconds?: unknown; extend_deadline_seconds?: unknown; extendDeadlineSeconds?: unknown },
@@ -413,7 +410,7 @@ async function meshGraphGateExtend(
         gateId,
         extendSeconds,
         ...rest,
-        note: 'Deadline extended; no lease was taken. Claim the gate (mesh_graph_gate_claim) when you are ready to act on it.',
+        note: 'Deadline extended; no lease was taken. Claim the gate (mesh_graph_gate action="claim") when you are ready to act on it.',
     });
 }
 
@@ -441,7 +438,7 @@ function describeClaimRefusal(reason: string | undefined, state?: string): strin
 }
 
 /**
- * `mesh_graph_gate_release` (design :409-421).
+ * `mesh_graph_gate` action=release (design :409-421).
  *
  * The ONLY way through a gate. Validates the fence, re-checks the gate's own
  * predecessors, applies any permitted downstream patches, materializes what the
@@ -464,7 +461,7 @@ export async function meshGraphGateRelease(
         }>;
     },
 ): Promise<string> {
-    await recordMeshCoordinatorToolCall(ctx, 'mesh_graph_gate_release');
+    await recordMeshCoordinatorToolCall(ctx, 'mesh_graph_gate');
     const gateId = readString(args.gate_id) || readString(args.gateId);
     const fencingToken = readString(args.fencing_token) || readString(args.fencingToken);
     const leaseGeneration = readNumber(args.lease_generation ?? args.leaseGeneration);
@@ -483,8 +480,8 @@ export async function meshGraphGateRelease(
             success: false,
             code: 'missing_release_fields',
             missing,
-            error: `mesh_graph_gate_release requires ${missing.join(', ')}. `
-                + 'fencing_token and lease_generation come from the mesh_graph_gate_claim response; idempotency_key is yours to '
+            error: `mesh_graph_gate action=release requires ${missing.join(', ')}. `
+                + 'fencing_token and lease_generation come from the claim response; idempotency_key is yours to '
                 + 'choose and makes a retried release a no-op instead of a double release.',
         });
     }
@@ -509,7 +506,7 @@ export async function meshGraphGateRelease(
         return JSON.stringify({
             success: false,
             code: 'unresolvable_patch_node',
-            error: `mesh_graph_gate_release patches[${unresolvedPatchIndices.join(', ')}] name no resolvable node — `
+            error: `mesh_graph_gate action=release patches[${unresolvedPatchIndices.join(', ')}] name no resolvable node — `
                 + 'each entry needs one of node, node_id, nodeId or ref. Refusing the release rather than silently dropping '
                 + 'the patch and committing the unpatched spec, since a released gate can never be re-released.',
             unresolvedPatchIndices,
@@ -606,7 +603,7 @@ export async function meshGraphGateRelease(
 }
 
 /**
- * `mesh_graph_gate_abandon` (design :399 — the `awaiting_coordinator -> cancelled` edge).
+ * `mesh_graph_gate` action=abandon (design :399 — the `awaiting_coordinator -> cancelled` edge).
  *
  * ★ THE ONE THING THIS TOOL IS NOT: a way past a gate. It exists because a gate
  * whose work was cancelled is otherwise UNCLOSEABLE — the cancel cascade skips
@@ -618,7 +615,7 @@ export async function meshGraphGateRelease(
  * strictly destructive: it materializes nothing, produces no outcome/evidence for
  * downstream bindings, and CANCELS every downstream node the gate was holding. A
  * coordinator that wants downstream to run still has exactly one option —
- * `mesh_graph_gate_release`. This is not the "force release" the C2 header
+ * the release action. This is not the "force release" the C2 header
  * forbids: that tool would GRANT passage on no evidence, which is the
  * M-TERMINAL-ADMISSION-GATE defect class. This one denies passage permanently.
  */
@@ -631,7 +628,7 @@ export async function meshGraphGateAbandon(
         coordinator_session_id?: string; coordinatorSessionId?: string;
     },
 ): Promise<string> {
-    await recordMeshCoordinatorToolCall(ctx, 'mesh_graph_gate_abandon');
+    await recordMeshCoordinatorToolCall(ctx, 'mesh_graph_gate');
     const gateId = readString(args.gate_id) || readString(args.gateId);
     const reason = readString(args.reason);
     const missing = [
@@ -643,7 +640,7 @@ export async function meshGraphGateAbandon(
             success: false,
             code: 'missing_abandon_fields',
             missing,
-            error: `mesh_graph_gate_abandon requires ${missing.join(', ')}. `
+            error: `mesh_graph_gate action=abandon requires ${missing.join(', ')}. `
                 + 'The reason is recorded on the gate, on every cancelled downstream row, and in the provenance ledger — '
                 + 'an abandon with no stated reason is indistinguishable from a mistake when someone reads it back later.',
         });
@@ -729,7 +726,7 @@ function describeAbandonRefusal(reason: string | undefined, state?: string): str
  * fails identically every time — it cannot self-heal, because nothing has
  * changed. daemon-core documented the patch-and-retry recovery and implemented
  * it, but nothing exposed it: the only patch surface was
- * `mesh_graph_gate_release`, which needs a CLAIMED GATE and a direct gate edge,
+ * `mesh_graph_gate` action=release, which needs a CLAIMED GATE and a direct gate edge,
  * so a plain binding node with no gate was unrecoverable. This is that missing
  * surface.
  *

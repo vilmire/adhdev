@@ -2022,11 +2022,21 @@
             "terminalDescription": "Terminal transcript cards and tool/command rows in chat mode.",
             "livePreview": "Live preview",
             "resolvedStack": "Resolved stack:",
-            "defaults": "Defaults:",
             "saveFontSettings": "Save font settings",
             "revertToSaved": "Revert to saved",
             "resetToDefaults": "Reset to defaults",
-            "saving": "Saving…"
+            "saving": "Saving…",
+            "customFamilyPlaceholder": "e.g. \"Pretendard\", \"Noto Sans KR\", sans-serif",
+            "previewSummary": "Chat: {{chat}} · Code: {{code}} · Terminal: {{terminal}}",
+            "defaultsSummary": "Defaults: {{chat}} / {{code}}",
+            "previewNow": "now",
+            "previewProse": "Readable prose, <strong>bold text</strong>, and <code>inline code</code> should all follow your standalone font choices.",
+            "presets": {
+                "default": "Default",
+                "defaultMono": "Default mono",
+                "custom": "Custom…",
+                "serif": "Serif"
+            }
         }
     },
     "cloud": {

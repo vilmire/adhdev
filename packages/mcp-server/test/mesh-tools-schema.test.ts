@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT } from '@adhdev/daemon-core';
-import { ALL_MESH_TOOLS, MESH_ADD_NODE_TOOL, MESH_CLEANUP_SESSIONS_TOOL, MESH_CREATE_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_PLAN_ONBOARDING_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_REMOVE_NODE_TOOL, MESH_SEND_TASK_TOOL, MESH_STATUS_TOOL, MESH_VIEW_QUEUE_TOOL, MESH_MISSION_UPSERT_TOOL } from '../src/tools/mesh-tools.js';
+import { ALL_MESH_TOOLS, MESH_ADD_NODE_TOOL, MESH_CLEANUP_SESSIONS_TOOL, MESH_CREATE_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_REMOVE_NODE_TOOL, MESH_SEND_TASK_TOOL, MESH_STATUS_TOOL, MESH_VIEW_QUEUE_TOOL, MESH_MISSION_UPSERT_TOOL } from '../src/tools/mesh-tools.js';
 import { MESH_ENQUEUE_BATCH_TOOL } from '../src/tools/mesh-tool-schemas.js';
+import { MESH_TOOL_ACTIONS } from '../src/tools/validate-tool-args.js';
 
 test('ALL_MESH_TOOLS is exactly the canonical mesh tool registry (6-6 consistency)', () => {
   const published = ALL_MESH_TOOLS.map(tool => tool.name).sort();
@@ -77,7 +78,10 @@ test('mesh_create / mesh_add_node bootstrap tools are published for MCP-only mes
 
   // mesh_create: requires name, accepts either repo identity source.
   assert.equal(MESH_CREATE_TOOL.name, 'mesh_create');
-  assert.deepEqual(MESH_CREATE_TOOL.inputSchema.required, ['name']);
+  // name is required for mode=create only (mode=plan takes workspace instead), so the
+  // per-mode table carries it rather than the union schema.
+  assert.equal((MESH_CREATE_TOOL.inputSchema as any).required, undefined);
+  assert.deepEqual(MESH_TOOL_ACTIONS.mesh_create.actions.create.required, ['name']);
   assert.equal((MESH_CREATE_TOOL.inputSchema.properties as any).repo_remote_url.type, 'string');
   assert.equal((MESH_CREATE_TOOL.inputSchema.properties as any).repo_identity.type, 'string');
   assert.equal((MESH_CREATE_TOOL.inputSchema.properties as any).add_current.type, 'boolean');
@@ -90,18 +94,17 @@ test('mesh_create / mesh_add_node bootstrap tools are published for MCP-only mes
   assert.equal((MESH_ADD_NODE_TOOL.inputSchema.properties as any).provider_priority.type, 'array');
 });
 
-test('mesh_plan_onboarding is a read-only Git-aware preflight shared by bootstrap tools', () => {
-  assert.equal(MESH_PLAN_ONBOARDING_TOOL.name, 'mesh_plan_onboarding');
-  assert.equal(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_plan_onboarding'), true);
-  assert.equal(CANONICAL_MESH_TOOL_NAMES.includes('mesh_plan_onboarding' as any), true);
-  assert.deepEqual(MESH_PLAN_ONBOARDING_TOOL.inputSchema.required, ['workspace']);
-  assert.deepEqual((MESH_PLAN_ONBOARDING_TOOL.inputSchema.properties as any).operation.enum, [
+test('mesh_create mode=plan (was mesh_plan_onboarding) is a read-only Git-aware preflight shared by bootstrap tools', () => {
+  assert.equal(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_plan_onboarding'), false);
+  assert.equal(CANONICAL_MESH_TOOL_NAMES.includes('mesh_plan_onboarding' as any), false);
+  assert.deepEqual(MESH_TOOL_ACTIONS.mesh_create.actions.plan.required, ['workspace']);
+  assert.deepEqual((MESH_CREATE_TOOL.inputSchema.properties as any).operation.enum, [
     'auto',
     'add_existing',
     'clone_worktree',
     'create_mesh',
   ]);
-  assert.match(MESH_PLAN_ONBOARDING_TOOL.description, /never fetches, writes config, creates/i);
+  assert.match(MESH_CREATE_TOOL.description, /never fetches, writes config, or creates/i);
 });
 
 test('mesh session cleanup tools expose explicit manual cleanup and remove-node policy override', () => {

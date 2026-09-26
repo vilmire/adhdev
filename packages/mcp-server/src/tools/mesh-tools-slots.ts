@@ -9,7 +9,7 @@
  * profile change — "add an opus slot to node X so difficult tasks route there" —
  * and apply it, but ONLY behind an explicit user-approval gate.
  *
- * The gate reuses the mesh_magi_kind_panel_set precedent exactly: default to a
+ * The gate reuses the mesh_magi_kind_panel action=set precedent exactly: default to a
  * dry-run (write=false) that returns the current-vs-proposed slot lists so the
  * coordinator can present the diff for approval, and only mutate on an explicit
  * write=true re-call. No new pending/approval storage is needed — the coordinator
@@ -108,7 +108,7 @@ export async function meshNodeSlotsSet(
         // Coordinator-side sync (mirror clone_mesh_node / remove_mesh_node above): the
         // write landed on the node's home-daemon and its inline cache, but the
         // coordinator's in-memory ctx.mesh — the view slot-fitness routing reads — still
-        // holds the OLD slots, and mesh_node_slots_list resolves off ctx.mesh too. Fold
+        // holds the OLD slots, and the list action resolves off ctx.mesh too. Fold
         // the new slots back into ctx.mesh and push the refreshed snapshot to the
         // coordinator daemon's inline cache via syncCoordinatorDaemonMeshCache so the
         // next queue drain (and an immediate list) sees them. Without this the remote
@@ -133,7 +133,7 @@ export async function meshNodeSlotsSet(
             replacement: true,
             previousSlots: current,
             slots: proposed,
-            nextAction: 'Verify with mesh_node_slots_list. Slot-fitness routing picks these up on the next queue drain.',
+            nextAction: 'Verify with mesh_node_slots (action "list"). Slot-fitness routing picks these up on the next queue drain.',
         }, null, 2);
     } catch (e: any) {
         return JSON.stringify({ success: false, error: e?.message || String(e) });

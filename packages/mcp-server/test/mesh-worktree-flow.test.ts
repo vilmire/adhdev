@@ -6,6 +6,7 @@ import { writeFileSync, readFileSync, unlinkSync } from 'node:fs';
 import { IpcTransport } from '../src/transports/ipc.js';
 import { hasWorkerProtocolFooter, stripWorkerProtocolFooter } from '@adhdev/mesh-shared';
 import { meshApprove, meshCheckpoint, meshCloneNode, meshFastForwardNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshViewQueue, meshQueueCancel, meshQueueRequeue, meshTaskHistory, meshRefineConfig, meshChangeImpactConfig, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
+import { resolveMeshToolHandler } from '../src/tools/mesh-tool-dispatch.js';
 import { CANONICAL_MESH_TOOL_COUNT, claimNextTask, enqueueTask, getLedgerDir, getQueue, requeueTask } from '@adhdev/daemon-core';
 import { __clearMeshPendingEventsForTests as clearPendingMeshCoordinatorEvents } from './helpers/pending-notices.js';
 import { makeFakeTurnIpcTransport } from './fake-turn-ipc-transport.js';
@@ -4174,7 +4175,7 @@ test('mesh tool registry documents the exposed mesh tools including queue cancel
   // test in mesh-tools-schema.test.ts set-compares against) instead of a hardcoded
   // number, so tool additions/removals can no longer silently drift this assertion.
   assert.equal(ALL_MESH_TOOLS.length, CANONICAL_MESH_TOOL_COUNT);
-  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_record_note'));
+  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_note'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_reconcile_ledger'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_init'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_restart_daemon'));
@@ -4188,22 +4189,20 @@ test('mesh tool registry documents the exposed mesh tools including queue cancel
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_remove_node'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_node'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_batch'));
-  // Part 8-4: the three refine-config tools are consolidated into one mode-dispatched tool.
-  const refineConfigTool = ALL_MESH_TOOLS.find(tool => tool.name === 'mesh_refine_config');
-  assert.ok(refineConfigTool);
-  assert.deepEqual((refineConfigTool!.inputSchema.properties as any).mode.enum, ['schema', 'validate', 'suggest']);
-  assert.deepEqual(refineConfigTool!.inputSchema.required, ['mode']);
+  // Part 8-4 consolidated the three refine-config tools into one mode-dispatched tool, and
+  // the 2026-09-26 consolidation folded it (with change-impact + mesh.json) into mesh_config.
+  const configTool = ALL_MESH_TOOLS.find(tool => tool.name === 'mesh_config');
+  assert.ok(configTool);
+  assert.deepEqual((configTool!.inputSchema.properties as any).kind.enum, ['refine', 'change_impact', 'mesh_json']);
+  assert.deepEqual((configTool!.inputSchema.properties as any).mode.enum, ['schema', 'validate', 'suggest']);
+  assert.deepEqual(configTool!.inputSchema.required, ['kind']);
+  assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_config'));
+  assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_change_impact_config'));
   // The former standalone names are no longer published in the manifest (they survive only
   // as hidden dispatch aliases).
   assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_config_schema'));
   assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_validate_refine_config'));
   assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_suggest_refine_config'));
-  // Symmetric to Part 8-4: the three change-impact-config tools are consolidated into one
-  // mode-dispatched tool.
-  const changeImpactConfigTool = ALL_MESH_TOOLS.find(tool => tool.name === 'mesh_change_impact_config');
-  assert.ok(changeImpactConfigTool);
-  assert.deepEqual((changeImpactConfigTool!.inputSchema.properties as any).mode.enum, ['schema', 'validate', 'suggest']);
-  assert.deepEqual(changeImpactConfigTool!.inputSchema.required, ['mode']);
   // The former standalone names are no longer published in the manifest (they survive only
   // as hidden dispatch aliases).
   assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_change_impact_config_schema'));
@@ -4211,12 +4210,13 @@ test('mesh tool registry documents the exposed mesh tools including queue cancel
   assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_suggest_change_impact_config'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_plan'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_cleanup_sessions'));
-  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_prune_stale_direct'));
+  assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_prune_stale_direct'));
+  assert.ok(((ALL_MESH_TOOLS.find(tool => tool.name === 'mesh_cleanup_sessions')!.inputSchema.properties as any).mode.enum as string[]).includes('prune_stale_direct'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_queue_cancel'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_queue_requeue'));
 });
 
-test('mesh_refine_config dispatches each mode to the matching daemon-core refine-config command', async () => {
+test('mesh_config kind=refine dispatches each mode to the matching daemon-core refine-config command', async () => {
   // Part 8-4: the unified tool must route mode=schema|validate|suggest to the same
   // low-family commands the former standalone tools called — internal command API unchanged.
   const transport = new IpcTransport() as IpcTransport & {
@@ -4269,7 +4269,7 @@ test('mesh_refine_config dispatches each mode to the matching daemon-core refine
 
 test('hidden refine-config aliases forward to the unified handler with the correct mode', async () => {
   // Part 8-4: mesh_refine_config_schema / _validate / _suggest are dropped from the manifest
-  // but remain dispatchable for one release, forwarding to mesh_refine_config with a fixed mode.
+  // but remain dispatchable, forwarding to mesh_config (kind=refine) with a fixed mode.
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -4303,10 +4303,10 @@ test('hidden refine-config aliases forward to the unified handler with the corre
     transport,
   };
 
-  // Simulate the server.ts alias dispatch: each old name forwards with its fixed mode.
-  await meshRefineConfig(ctx as any, { mode: 'schema' });
-  await meshRefineConfig(ctx as any, { mode: 'validate', config: { commands: {} } });
-  await meshRefineConfig(ctx as any, { mode: 'suggest' });
+  // Through the real alias dispatch table: each old name forwards to mesh_config with its fixed kind + mode.
+  await resolveMeshToolHandler('mesh_refine_config_schema')!(ctx as any, {});
+  await resolveMeshToolHandler('mesh_validate_refine_config')!(ctx as any, { config: { commands: {} } });
+  await resolveMeshToolHandler('mesh_suggest_refine_config')!(ctx as any, {});
 
   assert.deepEqual(issued, [
     'get_mesh_refine_config_schema',
@@ -4315,7 +4315,7 @@ test('hidden refine-config aliases forward to the unified handler with the corre
   ]);
 });
 
-test('mesh_change_impact_config dispatches each mode to the matching daemon-core change-impact command', async () => {
+test('mesh_config kind=change_impact dispatches each mode to the matching daemon-core change-impact command', async () => {
   // Symmetric to Part 8-4: the unified tool must route mode=schema|validate|suggest to the same
   // low-family commands the former standalone tools called — internal command API unchanged.
   const transport = new IpcTransport() as IpcTransport & {
@@ -4368,8 +4368,8 @@ test('mesh_change_impact_config dispatches each mode to the matching daemon-core
 
 test('hidden change-impact-config aliases forward to the unified handler with the correct mode', async () => {
   // Symmetric to Part 8-4: mesh_change_impact_config_schema / _validate / _suggest are dropped
-  // from the manifest but remain dispatchable for one release, forwarding to
-  // mesh_change_impact_config with a fixed mode.
+  // from the manifest but remain dispatchable, forwarding to mesh_config
+  // (kind=change_impact) with a fixed mode.
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -4403,16 +4403,58 @@ test('hidden change-impact-config aliases forward to the unified handler with th
     transport,
   };
 
-  // Simulate the server.ts alias dispatch: each old name forwards with its fixed mode.
-  await meshChangeImpactConfig(ctx as any, { mode: 'schema' });
-  await meshChangeImpactConfig(ctx as any, { mode: 'validate', config: { rules: [] } });
-  await meshChangeImpactConfig(ctx as any, { mode: 'suggest' });
+  // Through the real alias dispatch table: each old name forwards to mesh_config with its fixed kind + mode.
+  await resolveMeshToolHandler('mesh_change_impact_config_schema')!(ctx as any, {});
+  await resolveMeshToolHandler('mesh_validate_change_impact_config')!(ctx as any, { config: { rules: [] } });
+  await resolveMeshToolHandler('mesh_suggest_change_impact_config')!(ctx as any, {});
 
   assert.deepEqual(issued, [
     'get_mesh_change_impact_config_schema',
     'validate_mesh_change_impact_config',
     'suggest_mesh_change_impact_config',
   ]);
+});
+
+// 2026-09-26 tool consolidation: refine / change_impact / mesh_json are one
+// published tool. Drive all three kinds end-to-end through the real dispatch table
+// and confirm each reaches the same daemon command its pre-merge tool issued.
+test('mesh_config through dispatch routes every kind to its pre-merge daemon command', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const issued: Array<{ command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
+    issued.push({ command, args });
+    return { success: true };
+  };
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: `mesh-config-merged-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      name: 'Merged Config Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{ id: 'node-local', workspace: '/repo-local', repoRoot: '/repo-local', daemonId: 'daemon-coordinator', userOverrides: {}, policy: {} }],
+    },
+    transport,
+  };
+  const handler = resolveMeshToolHandler('mesh_config')!;
+  await handler(ctx as any, { kind: 'refine', mode: 'validate' });
+  await handler(ctx as any, { kind: 'change_impact', mode: 'suggest' });
+  await handler(ctx as any, { kind: 'mesh_json', write: false });
+  assert.deepEqual(issued.map(c => c.command), [
+    'validate_mesh_refine_config',
+    'suggest_mesh_change_impact_config',
+    'write_mesh_json_config',
+  ]);
+  // The discriminator is consumed by the dispatcher, never forwarded to the daemon.
+  assert.equal(issued.some(c => 'kind' in c.args), false);
+  assert.equal(issued[2].args.write, false);
 });
 
 test('mesh_status marks coordinator sessions for this mesh as self so the calling coordinator can identify them', async () => {

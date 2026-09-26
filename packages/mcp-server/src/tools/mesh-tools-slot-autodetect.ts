@@ -1,16 +1,16 @@
 /**
- * mesh_node_slots_propose — detect a node's installed CLI providers and draft a
+ * mesh_node_slots action=propose — detect a node's installed CLI providers and draft a
  * capability-slot / MAGI-panel profile from them.
  *
  * This closes the one gap between two pieces that already existed: per-node CLI
  * detection (the status snapshot's `availableProviders`) and slot application
- * (`mesh_node_slots_set`, dry-run by default). Nothing previously turned the
+ * (`mesh_node_slots` action=set, dry-run by default). Nothing previously turned the
  * former into a draft of the latter — filling a node's slots was 100% manual.
  *
  * ─── Read-only by construction ───────────────────────────────────────────────
  *
  * This tool NEVER writes. It probes, drafts, and returns — deliberately stopping
- * one step short of `mesh_node_slots_set`, whose existing dry-run → approve →
+ * one step short of `mesh_node_slots` action=set, whose existing dry-run → approve →
  * write=true flow remains the ONLY path that mutates a node profile. No new
  * approval gate was added, because adding a second gate for the same decision is
  * how gates get bypassed. The response carries a ready-to-paste `slots` payload
@@ -81,7 +81,7 @@ export function extractInstalledCliProviders(raw: unknown): DetectedCliProvider[
 /**
  * Detect installed CLI providers on a node and return a proposed capability-slot
  * profile (and, optionally, a MAGI panel draft). READ-ONLY — apply via
- * `mesh_node_slots_set` / `mesh_magi_kind_panel_set`.
+ * `mesh_node_slots` action=set / `mesh_magi_kind_panel` action=set.
  */
 export async function meshNodeSlotsPropose(
     ctx: MeshContext,
@@ -105,7 +105,7 @@ export async function meshNodeSlotsPropose(
                 nodeId: node.id,
                 code: 'detection_unavailable',
                 error: `Could not probe node for installed providers: ${e?.message || String(e)}`,
-                nextAction: 'Node may be offline. Retry when it is online, or set slots manually with mesh_node_slots_set.',
+                nextAction: 'Node may be offline. Retry when it is online, or set slots manually with mesh_node_slots (action "set").',
             }, null, 2);
         }
 
@@ -126,7 +126,7 @@ export async function meshNodeSlotsPropose(
                     + 'wipe the existing profile. Left unchanged.',
                 nextAction: currentSlots.length
                     ? 'Node keeps its current slots. If detection is wrong, check the daemon\'s provider list (older daemons may not report `installed`).'
-                    : 'Install a CLI agent on the node, or configure slots manually with mesh_node_slots_set.',
+                    : 'Install a CLI agent on the node, or configure slots manually with mesh_node_slots (action "set").',
             }, null, 2);
         }
 
@@ -138,7 +138,7 @@ export async function meshNodeSlotsPropose(
             warnings.push(
                 `DESTRUCTIVE: applying this proposal would REMOVE ${proposal.droppedSlots.length} existing slot(s)`
                 + `${proposal.droppedProviders.length ? `, dropping provider(s) entirely: ${proposal.droppedProviders.join(', ')}` : ''}`
-                + '. mesh_node_slots_set replaces the slot list wholesale — hand-tuned slots (capability tags, tuned '
+                + '. mesh_node_slots action "set" replaces the slot list wholesale — hand-tuned slots (capability tags, tuned '
                 + 'maxParallel, providers not currently on PATH) are NOT preserved. Review droppedSlots before approving.',
             );
         }
@@ -185,13 +185,13 @@ export async function meshNodeSlotsPropose(
                             + 'one panel of distinct installed providers. Nothing in a provider manifest grades a provider '
                             + 'for rca vs design vs claim_audit, so no per-kind split is proposed — you choose the task_kind '
                             + 'to bind this to. Models are intentionally left unpinned.',
-                        nextAction: 'Bind with mesh_magi_kind_panel_set({ task_kind, slots }) — dry-run first, then write=true after approval.',
+                        nextAction: 'Bind with mesh_magi_kind_panel({ action: "set", task_kind, slots }) — dry-run first, then write=true after approval.',
                     },
                 }
                 : {}),
             note: 'PROPOSAL ONLY — nothing was written. This tool never mutates node config.',
             nextAction: 'Present this diff to the user. On approval, apply with '
-                + 'mesh_node_slots_set({ node_id, slots: proposedSlots, write: true }). '
+                + 'mesh_node_slots({ action: "set", node_id, slots: proposedSlots, write: true }). '
                 + 'Its own dry-run (write omitted) will restate the same current-vs-proposed diff.',
         }, null, 2);
     } catch (e: any) {

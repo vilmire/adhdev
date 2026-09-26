@@ -15,7 +15,10 @@ export interface StandaloneFontPreferences {
 
 export interface StandaloneFontPresetOption {
   id: string
+  /** English fallback label — used verbatim when labelKey is null (proper font names stay untranslated). */
   label: string
+  /** i18n key (common namespace) for generic labels like "Default" / "Custom…"; null for proper names (Inter, Pretendard, …). */
+  labelKey: string | null
   family: string
   description: string
 }
@@ -29,22 +32,22 @@ export const DEFAULT_STANDALONE_FONT_PREFERENCES: StandaloneFontPreferences = {
 }
 
 export const CHAT_FONT_PRESET_OPTIONS: StandaloneFontPresetOption[] = [
-  { id: 'default', label: 'Default', family: 'var(--font-sans)', description: 'Current dashboard sans stack' },
-  { id: 'system-ui', label: 'System UI', family: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', description: 'Use the browser/OS default UI font' },
-  { id: 'inter', label: 'Inter', family: '"Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', description: 'Match the current product default explicitly' },
-  { id: 'pretendard', label: 'Pretendard', family: '"Pretendard", "Noto Sans KR", system-ui, sans-serif', description: 'Crisp Korean-first sans fallback stack' },
-  { id: 'noto-sans-kr', label: 'Noto Sans KR', family: '"Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", sans-serif', description: 'Wide CJK coverage with neutral metrics' },
-  { id: 'serif', label: 'Serif', family: '"Iowan Old Style", "Apple Garamond", "Times New Roman", serif', description: 'Reading-focused serif stack for long replies' },
-  { id: 'custom', label: 'Custom…', family: '', description: 'Enter any CSS font-family stack' },
+  { id: 'default', label: 'Default', labelKey: 'standalone.fonts.presets.default', family: 'var(--font-sans)', description: 'Current dashboard sans stack' },
+  { id: 'system-ui', label: 'System UI', labelKey: null, family: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', description: 'Use the browser/OS default UI font' },
+  { id: 'inter', label: 'Inter', labelKey: null, family: '"Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', description: 'Match the current product default explicitly' },
+  { id: 'pretendard', label: 'Pretendard', labelKey: null, family: '"Pretendard", "Noto Sans KR", system-ui, sans-serif', description: 'Crisp Korean-first sans fallback stack' },
+  { id: 'noto-sans-kr', label: 'Noto Sans KR', labelKey: null, family: '"Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", sans-serif', description: 'Wide CJK coverage with neutral metrics' },
+  { id: 'serif', label: 'Serif', labelKey: 'standalone.fonts.presets.serif', family: '"Iowan Old Style", "Apple Garamond", "Times New Roman", serif', description: 'Reading-focused serif stack for long replies' },
+  { id: 'custom', label: 'Custom…', labelKey: 'standalone.fonts.presets.custom', family: '', description: 'Enter any CSS font-family stack' },
 ]
 
 export const MONO_FONT_PRESET_OPTIONS: StandaloneFontPresetOption[] = [
-  { id: 'default', label: 'Default mono', family: 'ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace', description: 'Current monospace stack' },
-  { id: 'jetbrains-mono', label: 'JetBrains Mono', family: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace', description: 'Readable coding font with strong punctuation' },
-  { id: 'fira-code', label: 'Fira Code', family: '"Fira Code", ui-monospace, "SF Mono", Menlo, Consolas, monospace', description: 'Popular ligature-friendly code font' },
-  { id: 'cascadia-code', label: 'Cascadia Code', family: '"Cascadia Code", "Cascadia Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace', description: 'Windows-friendly modern coding font' },
-  { id: 'berkeley-mono', label: 'Berkeley Mono', family: '"Berkeley Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace', description: 'Editorial-feeling mono stack if installed' },
-  { id: 'custom', label: 'Custom…', family: '', description: 'Enter any CSS monospace stack' },
+  { id: 'default', label: 'Default mono', labelKey: 'standalone.fonts.presets.defaultMono', family: 'ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace', description: 'Current monospace stack' },
+  { id: 'jetbrains-mono', label: 'JetBrains Mono', labelKey: null, family: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace', description: 'Readable coding font with strong punctuation' },
+  { id: 'fira-code', label: 'Fira Code', labelKey: null, family: '"Fira Code", ui-monospace, "SF Mono", Menlo, Consolas, monospace', description: 'Popular ligature-friendly code font' },
+  { id: 'cascadia-code', label: 'Cascadia Code', labelKey: null, family: '"Cascadia Code", "Cascadia Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace', description: 'Windows-friendly modern coding font' },
+  { id: 'berkeley-mono', label: 'Berkeley Mono', labelKey: null, family: '"Berkeley Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace', description: 'Editorial-feeling mono stack if installed' },
+  { id: 'custom', label: 'Custom…', labelKey: 'standalone.fonts.presets.custom', family: '', description: 'Enter any CSS monospace stack' },
 ]
 
 const VALID_CHAT_PRESETS = new Set<StandaloneChatFontPreset>(CHAT_FONT_PRESET_OPTIONS.map(option => option.id as StandaloneChatFontPreset))
@@ -134,7 +137,20 @@ export function initStandaloneFontPreferences(): StandaloneFontPreferences {
   return applyStandaloneFontPreferences(getCachedStandaloneFontPreferences())
 }
 
-export function getStandaloneFontPreferenceLabel(surface: StandaloneFontSurface, preset: string): string {
+/**
+ * Resolves a preset's display label. Generic labels ("Default", "Custom…") route
+ * through i18n via `labelKey`; proper font names (Inter, Pretendard, …) render
+ * their English `label` verbatim in every locale — pass a translator `t` (e.g.
+ * from `useTranslation('common')`) to localize the generic ones, or omit it to
+ * get the raw English fallback (used by non-React callers/tests).
+ */
+export function getStandaloneFontPreferenceLabel(
+  surface: StandaloneFontSurface,
+  preset: string,
+  t?: (key: string, defaultValue: string) => string,
+): string {
   const options = surface === 'chat' ? CHAT_FONT_PRESET_OPTIONS : MONO_FONT_PRESET_OPTIONS
-  return options.find(option => option.id === preset)?.label || options[0].label
+  const option = options.find(opt => opt.id === preset) || options[0]
+  if (option.labelKey && t) return t(option.labelKey, option.label)
+  return option.label
 }

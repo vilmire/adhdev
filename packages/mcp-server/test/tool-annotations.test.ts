@@ -131,9 +131,7 @@ test('read-only mesh inspection tools are marked read-only and non-destructive',
     'mesh_status', 'mesh_list_nodes', 'mesh_route_preview', 'mesh_view_queue',
     'mesh_graph_view', 'mesh_read_chat', 'mesh_read_terminal', 'mesh_read_node_logs',
     'mesh_git_status', 'mesh_task_history', 'mesh_ledger_query', 'mesh_mission_list',
-    'mesh_review_inbox', 'mesh_list_pending_approvals', 'mesh_node_slots_list',
-    'mesh_refine_config', 'mesh_change_impact_config', 'mesh_plan_onboarding',
-    'mesh_refine_plan', 'mesh_coordinator_prompt_append_get', 'mesh_magi_kind_panel_list',
+    'mesh_review_inbox', 'mesh_list_pending_approvals', 'mesh_refine_plan',
   ];
   for (const name of readOnly) {
     const annotations = TOOL_ANNOTATIONS[name];
@@ -147,7 +145,7 @@ test('destructive tools are marked destructive even when they default to dry-run
   // The point of the hint is capability, not default. Each of these returns a
   // plan unless given execute/dry_run:false — and then merges, pushes, deletes
   // or restarts for real.
-  const dryRunByDefault = ['mesh_refine_node', 'mesh_refine_batch', 'mesh_fast_forward_node', 'mesh_prune_stale_direct'];
+  const dryRunByDefault = ['mesh_refine_node', 'mesh_refine_batch', 'mesh_fast_forward_node', 'mesh_cleanup_sessions', 'mesh_config', 'mesh_init'];
   for (const name of dryRunByDefault) {
     const annotations = TOOL_ANNOTATIONS[name];
     assert.ok(annotations, `${name} missing from TOOL_ANNOTATIONS`);
@@ -159,8 +157,8 @@ test('destructive tools are marked destructive even when they default to dry-run
 test('state-removing tools are marked destructive', () => {
   const destructive = [
     'mesh_queue_cancel', 'mesh_remove_node', 'mesh_cleanup_worktree_nodes',
-    'mesh_cleanup_sessions', 'mesh_restart_daemon', 'mesh_forget_note',
-    'mesh_graph_gate_abandon', 'mesh_reinit', 'mesh_write_mesh_json_config',
+    'mesh_cleanup_sessions', 'mesh_restart_daemon', 'mesh_note',
+    'mesh_graph_gate', 'mesh_init', 'mesh_config',
     'stop_session', 'git_push',
   ];
   for (const name of destructive) {
@@ -197,7 +195,7 @@ test('purely local reads are not marked open-world', () => {
 test('additive writes explicitly opt out of the destructive default', () => {
   // MCP defaults destructiveHint to true for a non-read-only tool, so these
   // must state false rather than omit it.
-  for (const name of ['mesh_mission_upsert', 'mesh_reconcile_ledger', 'mesh_record_note', 'mesh_node_slots_set', 'git_checkpoint']) {
+  for (const name of ['mesh_mission_upsert', 'mesh_reconcile_ledger', 'mesh_node_slots', 'mesh_magi_kind_panel', 'mesh_coordinator_prompt_append', 'mesh_create', 'git_checkpoint']) {
     const annotations = TOOL_ANNOTATIONS[name];
     assert.ok(annotations, `${name} missing from TOOL_ANNOTATIONS`);
     assert.equal(annotations.readOnlyHint, false, `${name} writes`);
@@ -224,4 +222,16 @@ test('no classification exists for a tool that is not published anywhere', () =>
   ]);
   const orphans = Object.keys(TOOL_ANNOTATIONS).filter(name => !published.has(name));
   assert.deepEqual(orphans, [], 'TOOL_ANNOTATIONS has entries for tools nothing publishes');
+});
+
+test('a merged tool is classified by its most capable action (2026-09-26 consolidation)', () => {
+  // One tool carries one annotation block, so a read-only action beside a
+  // writing one must not make the tool look read-only (rule 1: capability, not default).
+  for (const name of ['mesh_graph_gate', 'mesh_node_slots', 'mesh_magi_kind_panel', 'mesh_coordinator_prompt_append', 'mesh_note', 'mesh_config', 'mesh_init', 'mesh_create', 'mesh_cleanup_sessions']) {
+    const annotations = TOOL_ANNOTATIONS[name];
+    assert.ok(annotations, `${name} missing from TOOL_ANNOTATIONS`);
+    assert.equal(annotations.readOnlyHint, false, `${name} has a writing action, so it is not read-only`);
+  }
+  // node_slots action=propose probes a (possibly remote) node's installed CLIs.
+  assert.equal(TOOL_ANNOTATIONS.mesh_node_slots.openWorldHint, true);
 });

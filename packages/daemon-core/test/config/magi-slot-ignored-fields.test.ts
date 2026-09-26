@@ -43,7 +43,7 @@ describe('collectIgnoredMagiSlotFields — reports dropped keys without rejectin
         ])
         expect(ignored).toHaveLength(1)
         expect(ignored[0]).toMatchObject({ slot: 0, field: 'thinkingLevel' })
-        expect(ignored[0].reason).toMatch(/mesh_node_slots_set/)
+        expect(ignored[0].reason).toMatch(/mesh_node_slots action 'set'/)
     })
 
     it('stays silent for a fully-recognized slot — a clean write reports nothing', () => {
@@ -135,7 +135,7 @@ describe('magi_kind_panel_set handler — surfaces ignoredFields and still write
 
         expect(res.success).toBe(true)
         expect(res.ignoredFields).toEqual([
-            { slot: 0, field: 'thinkingLevel', reason: expect.stringContaining('mesh_node_slots_set') },
+            { slot: 0, field: 'thinkingLevel', reason: expect.stringContaining("mesh_node_slots action 'set'") },
         ])
         // The write still happened, with the dropped key absent — reported, not rejected.
         expect(res.slots).toEqual([

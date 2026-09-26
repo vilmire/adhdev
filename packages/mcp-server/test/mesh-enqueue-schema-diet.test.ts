@@ -5,7 +5,7 @@ import {
     ALL_MESH_TOOLS,
     MESH_ENQUEUE_BATCH_TOOL,
     MESH_ENQUEUE_TASK_TOOL,
-    MESH_GRAPH_GATE_CLAIM_TOOL,
+    MESH_GRAPH_GATE_TOOL,
 } from '../src/tools/mesh-tool-schemas.js';
 import {
     MESH_ACCEPTED_ARG_ALIASES,
@@ -14,7 +14,8 @@ import {
     canonicalizeMeshToolArgs,
     validateMeshToolArgs,
 } from '../src/tools/validate-tool-args.js';
-import { MESH_GRAPH_GATE_EXTEND_COMMAND, meshGraphGateClaim } from '../src/tools/mesh-tools-graph.js';
+import { MESH_GRAPH_GATE_EXTEND_COMMAND } from '../src/tools/mesh-tools-graph.js';
+import { resolveMeshToolHandler } from '../src/tools/mesh-tool-dispatch.js';
 import { meshStatus, pickDaemonGraphUsage } from '../src/tools/mesh-tools-status.js';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
@@ -29,8 +30,9 @@ import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
  *     by the validator, silently, so existing coordinators keep working.
  *  2. run_if / on_false / on_upstream_skip are retired at the surface: rejected with
  *     a message that names depends_on + on_dependency_failure.
- *  3. The gate EXTEND verb rides on mesh_graph_gate_claim (tool count is pinned at 60)
- *     and dispatches the daemon command `mesh_graph_gate_extend`.
+ *  3. The gate EXTEND verb (since the 2026-09-26 tool consolidation: mesh_graph_gate
+ *     action=extend; before it, an extend_seconds flag on the claim tool) dispatches the
+ *     daemon command `mesh_graph_gate_extend`.
  *  4. mesh_status verbose passes the daemon's graphUsage through untouched.
  */
 
@@ -56,9 +58,9 @@ test('D2: mesh_enqueue_batch schema JSON stays within 6 KB', () => {
     assert.ok(bytes <= BATCH_SCHEMA_MAX_BYTES, `mesh_enqueue_batch schema is ${bytes} bytes (ceiling ${BATCH_SCHEMA_MAX_BYTES}) — compress prose instead of raising the ceiling`);
 });
 
-test('D2: the published tool count is unchanged at 60 (scripts/verify-docs.mjs counts it)', () => {
-    assert.equal(ALL_MESH_TOOLS.length, 60);
-    assert.equal(ALL_MESH_TOOLS.some(t => t.name === 'mesh_graph_gate_extend'), false, 'extend rides on claim, not a 61st tool');
+test('the gate extend verb is an action of mesh_graph_gate, not a tool of its own', () => {
+    assert.equal(ALL_MESH_TOOLS.some(t => t.name === 'mesh_graph_gate_extend'), false, 'extend is an action, not a tool');
+    assert.ok(((MESH_GRAPH_GATE_TOOL.inputSchema.properties as any).action.enum as string[]).includes('extend'));
 });
 
 // ── 2. one canonical name per field ─────────────────────────────────────────
@@ -266,7 +268,9 @@ function recordingCtx(reply: (command: string, args: Record<string, unknown>) =>
     return { ctx, calls };
 }
 
-test('D3(c): claim with extend_seconds dispatches mesh_graph_gate_extend {mesh_id, gate_id, extend_seconds} and takes no lease', async () => {
+const gate = (ctx: any, args: Record<string, unknown>) => resolveMeshToolHandler('mesh_graph_gate')!(ctx, args);
+
+test('D3(c): mesh_graph_gate action=extend dispatches mesh_graph_gate_extend {mesh_id, gate_id, extend_seconds} and takes no lease', async () => {
     assert.equal(MESH_GRAPH_GATE_EXTEND_COMMAND, 'mesh_graph_gate_extend');
     const { ctx, calls } = recordingCtx(command => {
         if (command === 'mesh_graph_gate_extend') {
@@ -274,7 +278,7 @@ test('D3(c): claim with extend_seconds dispatches mesh_graph_gate_extend {mesh_i
         }
         return { success: true };
     });
-    const res = JSON.parse(await meshGraphGateClaim(ctx, { gate_id: 'gate_1', extend_seconds: 86400 }));
+    const res = JSON.parse(await gate(ctx, { action: 'extend', gate_id: 'gate_1', extend_seconds: 86400 }));
     const dispatched = calls.filter(c => c.command !== 'tool_call_record' && c.command !== 'mesh_record');
     assert.deepEqual(dispatched.map(c => c.command), ['mesh_graph_gate_extend'], 'extend must not claim (no graph_gate_claim call)');
     assert.deepEqual(dispatched[0].args, { mesh_id: 'mesh_ext', gate_id: 'gate_1', extend_seconds: 86400 });
@@ -289,29 +293,37 @@ test('D3(c): a daemon refusal comes back as a typed failure', async () => {
     const { ctx } = recordingCtx(command => command === 'mesh_graph_gate_extend'
         ? { success: false, code: 'gate_terminal:released', error: 'gate not extendable (gate_terminal:released)', extended: false, gateState: 'released' }
         : { success: true });
-    const res = JSON.parse(await meshGraphGateClaim(ctx, { gate_id: 'gate_1', extend_seconds: 3600 }));
+    const res = JSON.parse(await gate(ctx, { action: 'extend', gate_id: 'gate_1', extend_seconds: 3600 }));
     assert.equal(res.success, false);
     assert.equal(res.extended, false);
     assert.equal(res.code, 'gate_terminal:released');
     assert.equal(res.gateState, 'released');
 });
 
-test('D3(c): extend_seconds is refused (without a daemon call) when mixed with claim args or non-positive', async () => {
+test('D3(c): extend is refused (without a daemon call) when mixed with claim args or non-positive', async () => {
     const { ctx, calls } = recordingCtx(() => ({ success: true }));
-    const mixed = JSON.parse(await meshGraphGateClaim(ctx, { gate_id: 'gate_1', extend_seconds: 60, lease_seconds: 600 }));
+    // The MCP gate refuses the mix before dispatch; the handler refuses it again
+    // for a direct caller that bypasses validation.
+    assert.match(validateMeshToolArgs('mesh_graph_gate', { action: 'extend', gate_id: 'g', extend_seconds: 60, lease_seconds: 600 }) ?? '',
+        /"lease_seconds" \(belongs to action=claim\)/);
+    const mixed = JSON.parse(await gate(ctx, { action: 'extend', gate_id: 'gate_1', extend_seconds: 60, lease_seconds: 600 }));
     assert.equal(mixed.success, false);
     assert.equal(mixed.code, 'extend_with_claim_args');
     assert.deepEqual(mixed.conflicting, ['lease_seconds']);
-    const zero = JSON.parse(await meshGraphGateClaim(ctx, { gate_id: 'gate_1', extend_seconds: 0 }));
+    const zero = JSON.parse(await gate(ctx, { action: 'extend', gate_id: 'gate_1', extend_seconds: 0 }));
     assert.equal(zero.code, 'invalid_extend_seconds');
     assert.equal(calls.some(c => c.command === 'mesh_graph_gate_extend' || c.command === 'graph_gate_claim'), false);
 });
 
-test('D3(c): the claim schema declares extend_seconds and the validator accepts it', () => {
-    const props = MESH_GRAPH_GATE_CLAIM_TOOL.inputSchema.properties as Props;
+test('D3(c): the gate schema declares extend_seconds; the validator accepts it on extend and refuses it on claim', () => {
+    const props = MESH_GRAPH_GATE_TOOL.inputSchema.properties as Props;
     assert.ok('extend_seconds' in props);
-    assert.match(MESH_GRAPH_GATE_CLAIM_TOOL.description, /extend_seconds/);
-    assert.equal(validateMeshToolArgs('mesh_graph_gate_claim', { gate_id: 'g', extend_seconds: 86400 }), null);
+    assert.match(MESH_GRAPH_GATE_TOOL.description, /extend_seconds/);
+    assert.equal(validateMeshToolArgs('mesh_graph_gate', { action: 'extend', gate_id: 'g', extend_seconds: 86400 }), null);
+    assert.match(validateMeshToolArgs('mesh_graph_gate', { action: 'claim', gate_id: 'g', extend_seconds: 86400 }) ?? '',
+        /"extend_seconds" \(belongs to action=extend\)/);
+    assert.match(validateMeshToolArgs('mesh_graph_gate', { action: 'extend', gate_id: 'g' }) ?? '',
+        /Missing required parameter\(s\) for mesh_graph_gate action="extend": "extend_seconds"/);
 });
 
 // ── 6. mesh_status verbose graphUsage passthrough (D6) ───────────────────────

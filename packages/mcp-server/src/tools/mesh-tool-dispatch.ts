@@ -11,7 +11,7 @@
  * at runtime — with no compile error and no failing test.
  *
  * Measured (2026-09-18) before this change: deleting the `mesh_record_note`
- * case from the switch left `tsc --noEmit` clean and all 786 mcp-server tests
+ * (now `mesh_note`) case from the switch left `tsc --noEmit` clean and all 786 mcp-server tests
  * green, while the tool stayed published. That is the silent-omission class
  * this table closes.
  *
@@ -37,21 +37,18 @@ import type { MeshContext } from './mesh-tools.js';
 import {
     meshStatus, meshRoutePreview, meshListNodes, meshSendTask, meshReadChat,
     meshEnqueueTask, meshEnqueueBatch, meshViewQueue, meshQueueCancel, meshQueueRequeue,
-    meshGraphView, meshGraphGateClaim, meshGraphGateRelease, meshGraphGateAbandon, meshGraphNodePatch,
+    meshGraphView, meshGraphGate, meshGraphNodePatch,
     meshReadDebug, meshReadTerminal, meshSendKeys,
     meshLaunchSession, meshGitStatus, meshReadNodeLogs, meshFastForwardNode, meshRestartDaemon,
     meshCheckpoint, meshApprove, meshAnswerQuestion, meshListPendingApprovals,
-    meshPlanOnboarding, meshCreate, meshAddNode,
+    meshCreateOrPlan, meshAddNode,
     meshCloneNode, meshRemoveNode, meshCleanupWorktreeNodes, meshRefineNode,
-    meshRefineConfig, meshInit, meshReinit, meshRefinePlan, meshRefineBatch,
-    meshChangeImpactConfig,
-    meshCleanupSessions, meshPruneStaleDirect, meshTaskHistory, meshLedgerQuery,
-    meshRecordNote, meshForgetNote, meshReconcileLedger,
+    meshConfig, meshInitOrReinit, meshRefinePlan, meshRefineBatch,
+    meshCleanupSessionsOrPrune, meshTaskHistory, meshLedgerQuery,
+    meshNote, meshReconcileLedger,
     meshMissionUpsert, meshMissionList, meshReviewInbox,
     meshMagiReview, meshMagiCollect,
-    meshMagiKindPanelSet, meshMagiKindPanelList, meshWriteMeshJsonConfig,
-    meshNodeSlotsSet, meshNodeSlotsList, meshNodeSlotsPropose,
-    meshCoordinatorPromptAppendGet, meshCoordinatorPromptAppendSet,
+    meshMagiKindPanel, meshNodeSlots, meshCoordinatorPromptAppend,
 } from './mesh-tools.js';
 
 /**
@@ -74,9 +71,7 @@ export const MESH_TOOL_DISPATCH: Readonly<Record<CanonicalMeshToolName, MeshTool
     mesh_enqueue_batch: (ctx, a) => meshEnqueueBatch(ctx, a as any),
     mesh_view_queue: (ctx, a) => meshViewQueue(ctx, a as any),
     mesh_graph_view: (ctx, a) => meshGraphView(ctx, a as any),
-    mesh_graph_gate_claim: (ctx, a) => meshGraphGateClaim(ctx, a as any),
-    mesh_graph_gate_release: (ctx, a) => meshGraphGateRelease(ctx, a as any),
-    mesh_graph_gate_abandon: (ctx, a) => meshGraphGateAbandon(ctx, a as any),
+    mesh_graph_gate: (ctx, a) => meshGraphGate(ctx, a),
     mesh_graph_node_patch: (ctx, a) => meshGraphNodePatch(ctx, a as any),
     mesh_queue_cancel: (ctx, a) => meshQueueCancel(ctx, a as any),
     mesh_queue_requeue: (ctx, a) => meshQueueRequeue(ctx, a as any),
@@ -94,43 +89,34 @@ export const MESH_TOOL_DISPATCH: Readonly<Record<CanonicalMeshToolName, MeshTool
     mesh_approve: (ctx, a) => meshApprove(ctx, a as any),
     mesh_answer_question: (ctx, a) => meshAnswerQuestion(ctx, a as any),
     mesh_list_pending_approvals: (ctx, a) => meshListPendingApprovals(ctx, a as any),
-    mesh_plan_onboarding: (ctx, a) => meshPlanOnboarding(ctx.transport, a as any, ctx.mesh.id),
-    mesh_create: (ctx, a) => meshCreate(ctx.transport, a as any),
+    mesh_create: (ctx, a) => meshCreateOrPlan(ctx.transport, a, ctx.mesh.id),
     mesh_add_node: (ctx, a) => meshAddNode(ctx.transport, { ...a, inline_mesh: ctx.mesh } as any, ctx.mesh.id),
     mesh_clone_node: (ctx, a) => meshCloneNode(ctx, a as any),
     mesh_remove_node: (ctx, a) => meshRemoveNode(ctx, a as any),
     mesh_cleanup_worktree_nodes: (ctx, a) => meshCleanupWorktreeNodes(ctx, a as any),
     mesh_refine_node: (ctx, a) => meshRefineNode(ctx, a as any),
     mesh_refine_batch: (ctx, a) => meshRefineBatch(ctx, a as any),
-    mesh_refine_config: (ctx, a) => meshRefineConfig(ctx, a as any),
-    mesh_change_impact_config: (ctx, a) => meshChangeImpactConfig(ctx, a as any),
-    mesh_init: (ctx, a) => meshInit(ctx, a as any),
-    mesh_reinit: (ctx, a) => meshReinit(ctx, a as any),
-    mesh_write_mesh_json_config: (ctx, a) => meshWriteMeshJsonConfig(ctx, a as any),
+    mesh_config: (ctx, a) => meshConfig(ctx, a),
+    mesh_init: (ctx, a) => meshInitOrReinit(ctx, a),
     mesh_refine_plan: (ctx, a) => meshRefinePlan(ctx, a as any),
-    mesh_cleanup_sessions: (ctx, a) => meshCleanupSessions(ctx, a as any),
-    mesh_prune_stale_direct: (ctx, a) => meshPruneStaleDirect(ctx, a as any),
+    mesh_cleanup_sessions: (ctx, a) => meshCleanupSessionsOrPrune(ctx, a),
     mesh_task_history: (ctx, a) => meshTaskHistory(ctx, a as any),
     mesh_ledger_query: (ctx, a) => meshLedgerQuery(ctx, a as any),
-    mesh_record_note: (ctx, a) => meshRecordNote(ctx, a as any),
-    mesh_forget_note: (ctx, a) => meshForgetNote(ctx, a as any),
+    mesh_note: (ctx, a) => meshNote(ctx, a),
     mesh_reconcile_ledger: (ctx, a) => meshReconcileLedger(ctx, a as any),
     mesh_mission_upsert: (ctx, a) => meshMissionUpsert(ctx, a as any),
     mesh_mission_list: (ctx, a) => meshMissionList(ctx, a as any),
     mesh_review_inbox: (ctx, a) => meshReviewInbox(ctx, a as any),
     mesh_magi_review: (ctx, a) => meshMagiReview(ctx, a as any),
     mesh_magi_collect: (ctx, a) => meshMagiCollect(ctx, a as any),
-    mesh_magi_kind_panel_set: (ctx, a) => meshMagiKindPanelSet(ctx, a as any),
-    mesh_magi_kind_panel_list: (ctx, a) => meshMagiKindPanelList(ctx, a as any),
-    mesh_node_slots_set: (ctx, a) => meshNodeSlotsSet(ctx, a as any),
-    mesh_node_slots_list: (ctx, a) => meshNodeSlotsList(ctx, a as any),
-    mesh_node_slots_propose: (ctx, a) => meshNodeSlotsPropose(ctx, a as any),
-    mesh_coordinator_prompt_append_get: (ctx, a) => meshCoordinatorPromptAppendGet(ctx, a as any),
-    mesh_coordinator_prompt_append_set: (ctx, a) => meshCoordinatorPromptAppendSet(ctx, a as any),};
+    mesh_magi_kind_panel: (ctx, a) => meshMagiKindPanel(ctx, a),
+    mesh_node_slots: (ctx, a) => meshNodeSlots(ctx, a),
+    mesh_coordinator_prompt_append: (ctx, a) => meshCoordinatorPromptAppend(ctx, a),
+};
 
 /**
- * Hidden 1-release aliases (Part 8-4 and its change-impact symmetric) plus the
- * flag-gated `mesh_notify_worker`.
+ * Hidden aliases (Part 8-4 and its change-impact symmetric) plus the flag-gated
+ * `mesh_notify_worker`.
  *
  * ★These are kept OUT of MESH_TOOL_DISPATCH on purpose, and the separation is
  * load-bearing rather than stylistic: they are exactly the names that are
@@ -140,18 +126,22 @@ export const MESH_TOOL_DISPATCH: Readonly<Record<CanonicalMeshToolName, MeshTool
  * self-checking. Keeping them separate lets the canonical table stay exact
  * while these stay callable.
  *
- * Aliases forward to the unified handler with `mode` injected, so a
- * pre-consolidation caller keeps working. `mesh_notify_worker` is not an alias
- * — it is handled in server.ts because its behaviour depends on a runtime flag
- * read, not on a fixed argument rewrite.
+ * Aliases forward to the merged mesh_config handler with `kind` + `mode`
+ * injected, so a pre-consolidation caller keeps working. `mesh_notify_worker` is
+ * not an alias — it is handled in server.ts because its behaviour depends on a
+ * runtime flag read, not on a fixed argument rewrite.
+ *
+ * ★The names retired by the 2026-09-26 consolidation (mesh-shared
+ * RETIRED_MESH_TOOLS) are deliberately NOT here: they answer with an error that
+ * names the replacement (validate-tool-args.ts), never a silent forward.
  */
 export const MESH_ALIAS_DISPATCH: Readonly<Record<string, MeshToolHandler>> = {
-    mesh_refine_config_schema: (ctx, a) => meshRefineConfig(ctx, { ...(a as any), mode: 'schema' }),
-    mesh_validate_refine_config: (ctx, a) => meshRefineConfig(ctx, { ...(a as any), mode: 'validate' }),
-    mesh_suggest_refine_config: (ctx, a) => meshRefineConfig(ctx, { ...(a as any), mode: 'suggest' }),
-    mesh_change_impact_config_schema: (ctx, a) => meshChangeImpactConfig(ctx, { ...(a as any), mode: 'schema' }),
-    mesh_validate_change_impact_config: (ctx, a) => meshChangeImpactConfig(ctx, { ...(a as any), mode: 'validate' }),
-    mesh_suggest_change_impact_config: (ctx, a) => meshChangeImpactConfig(ctx, { ...(a as any), mode: 'suggest' }),
+    mesh_refine_config_schema: (ctx, a) => meshConfig(ctx, { ...a, kind: 'refine', mode: 'schema' }),
+    mesh_validate_refine_config: (ctx, a) => meshConfig(ctx, { ...a, kind: 'refine', mode: 'validate' }),
+    mesh_suggest_refine_config: (ctx, a) => meshConfig(ctx, { ...a, kind: 'refine', mode: 'suggest' }),
+    mesh_change_impact_config_schema: (ctx, a) => meshConfig(ctx, { ...a, kind: 'change_impact', mode: 'schema' }),
+    mesh_validate_change_impact_config: (ctx, a) => meshConfig(ctx, { ...a, kind: 'change_impact', mode: 'validate' }),
+    mesh_suggest_change_impact_config: (ctx, a) => meshConfig(ctx, { ...a, kind: 'change_impact', mode: 'suggest' }),
 };
 
 /** Resolve a CallTool name to its handler, or undefined for an unknown tool. */

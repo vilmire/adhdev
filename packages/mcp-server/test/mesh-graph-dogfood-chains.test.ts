@@ -26,8 +26,8 @@ import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 //                runs in PARALLEL with the graph; binding a target is not passage.
 //
 // Every chain is driven end-to-end through the REAL MCP tool functions
-// (mesh_enqueue_batch with v2 graph blocks → mesh_graph_gate_claim →
-// mesh_graph_gate_release → mesh_graph_view), with worker completions injected
+// (mesh_enqueue_batch with v2 graph blocks → mesh_graph_gate claim →
+// mesh_graph_gate release → mesh_graph_view), with worker completions injected
 // through daemon-core's in-process store API — exactly like the phase-E harness
 // in mesh-graph-tools.test.ts. The claim under test is the design's "4/4": any
 // divergence is reported as a DEFECT, not patched over.

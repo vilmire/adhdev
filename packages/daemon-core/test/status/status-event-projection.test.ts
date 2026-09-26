@@ -348,6 +348,58 @@ describe('turn-sourced status_event — restored non-content fields', () => {
         expect(wire).not.toContain('full assistant transcript');
     });
 
+    /**
+     * REGRESSION (createInstanceHideMuteResolver): an IDE extension session is a
+     * child of its IDE instance, not in the instance manager's own map. Before
+     * this fix, `createInstanceHideMuteResolver` only looked sessions up in that
+     * map directly, so an extension session's turn-sourced completion never
+     * carried surfaceHidden/muted (silently omitted, forcing the server to fall
+     * back to its snapshot join). It must resolve through the session registry's
+     * `parentSessionId`, exactly as `createInstanceSessionMetaResolver` already
+     * does for providerType/workspaceName, reading the flags off the
+     * EXTENSION's own settings — not the parent IDE's.
+     */
+    it('createStatusEventEmitter stamps surfaceHidden+muted on an extension session\'s turn-sourced completion, via the parent IDE lookup', () => {
+        const ide = {
+            type: 'cursor',
+            category: 'ide',
+            instanceId: 'ide-1',
+            workspace: '/w/app',
+            settings: {},
+            status: 'idle',
+            extensions: [
+                {
+                    type: 'cline',
+                    category: 'extension',
+                    instanceId: 'ext-1',
+                    providerSessionId: 'chat-9',
+                    status: 'idle',
+                    settings: { userHidden: true, userMuted: true },
+                },
+            ],
+        };
+        const instanceManager = { getInstance: (id: string) => (id === 'ide-1' ? { getState: () => ide as any } : undefined) };
+        const sessionRegistry = { get: (id: string) => (id === 'ext-1' ? { parentSessionId: 'ide-1' } : undefined) };
+        const bus = createSessionLifecycleBus();
+        const server: any[] = [];
+        createStatusEventEmitter(bus, {
+            instanceManager,
+            sessionRegistry,
+            sendDashboard: () => {},
+            sendServer: (p) => server.push(p),
+        });
+        bus.emit({ kind: 'turn', at: 10_000, phase: 'started', sessionId: 'ext-1', attemptId: 'a1', generation: 0 } as any);
+        bus.emit({ kind: 'turn', at: 20_000, phase: 'committed', sessionId: 'ext-1', attemptId: 'a1', generation: 0, outcome: 'completed', strength: 'genuine' } as any);
+        expect(server).toHaveLength(1);
+        expect(server[0]).toMatchObject({
+            event: 'agent:generating_completed',
+            targetSessionId: 'ext-1',
+            providerType: 'cline',
+            surfaceHidden: true,
+            muted: true,
+        });
+    });
+
     it('a terminated session drops its open turn start (no stale duration on a later commit with the same attempt id)', () => {
         const bus = createSessionLifecycleBus();
         const server: any[] = [];

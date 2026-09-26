@@ -192,7 +192,7 @@ function queueGraphReminder(
     const deadWorkspaces = deadWorkspaceSummaries(graphStore, graph.graphId);
     const age = staleHoursLabel(nowMs, updatedAtMs);
     const gatePart = gates.length > 0
-        ? ` Awaiting gates: ${gates.map(gateSummary).join('; ')} — claim with mesh_graph_gate_claim, then release with evidence or abandon.`
+        ? ` Awaiting gates: ${gates.map(gateSummary).join('; ')} — use mesh_graph_gate: action "claim", then "release" with evidence, or "abandon".`
         : '';
     // A dead workspace is the most actionable thing a stale graph can carry, so
     // it is named BEFORE the generic advice — and with the remediation for its
@@ -232,7 +232,7 @@ function queueGateReminder(gate: MeshGraphGateRow, nowMs: number, updatedAtMs: n
     const coordinatorMessage =
         `Coordinator gate ${gateSummary(gate)} on graph ${gate.graphId} has been waiting for ${age}. `
         + `${gate.instructions ? `Instructions: ${gate.instructions} ` : ''}`
-        + `Claim it with mesh_graph_gate_claim (gateId: ${gate.gateId}) and release with evidence, or abandon it if the work is obsolete. Downstream tasks stay blocked until then.`;
+        + `Claim it with mesh_graph_gate (action: "claim", gate_id: ${gate.gateId}) and release with evidence (action "release"), or abandon it (action "abandon") if the work is obsolete. Downstream tasks stay blocked until then.`;
     return notifyMeshCoordinator({
         event: 'mesh:graph_gate_stale',
         meshId: gate.meshId,

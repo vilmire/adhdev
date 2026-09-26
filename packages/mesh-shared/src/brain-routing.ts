@@ -66,7 +66,7 @@ export function isMeshTaskDifficulty(value: unknown): value is MeshTaskDifficult
  *      a value that should never have been stamped provider-blind.
  *
  *   2. IT FOUGHT THE SLOTS. Operators express model choice per node via
- *      capability slots (`mesh_node_slots_set`), which know the provider. A
+ *      capability slots (`mesh_node_slots` action "set"), which know the provider. A
  *      mesh-wide preset that also picks a model duplicated that decision from a
  *      position with strictly less information, and needed the modelSource
  *      ('explicit' vs 'preset') precedence machinery plus a fail-closed

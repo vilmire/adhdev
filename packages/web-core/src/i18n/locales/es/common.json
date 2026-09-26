@@ -2027,11 +2027,21 @@
             "terminalDescription": "Tarjetas de transcripción del terminal y filas de herramientas/comandos en el modo chat.",
             "livePreview": "Vista previa en vivo",
             "resolvedStack": "Pila resuelta:",
-            "defaults": "Valores predeterminados:",
             "saveFontSettings": "Guardar configuración de fuentes",
             "revertToSaved": "Revertir a lo guardado",
             "resetToDefaults": "Restablecer valores predeterminados",
-            "saving": "Guardando…"
+            "saving": "Guardando…",
+            "customFamilyPlaceholder": "p. ej. \"Pretendard\", \"Noto Sans KR\", sans-serif",
+            "previewSummary": "Chat: {{chat}} · Código: {{code}} · Terminal: {{terminal}}",
+            "defaultsSummary": "Predeterminados: {{chat}} / {{code}}",
+            "previewNow": "ahora",
+            "previewProse": "El texto legible, el <strong>texto en negrita</strong> y el <code>código en línea</code> deben seguir tus preferencias de fuente de standalone.",
+            "presets": {
+                "default": "Predeterminada",
+                "defaultMono": "Monoespaciada predeterminada",
+                "custom": "Personalizada…",
+                "serif": "Serif"
+            }
         }
     },
     "cloud": {

@@ -51,7 +51,8 @@ export async function meshSuggestRefineConfig(
  * over its daemon-core low-family refine-config command — internal command API unchanged,
  * zero behavior loss. The former standalone tools (mesh_refine_config_schema /
  * mesh_validate_refine_config / mesh_suggest_refine_config) remain dispatchable as
- * 1-release hidden aliases that forward here with the corresponding mode (see server.ts).
+ * hidden aliases that forward here with the corresponding mode (mesh-tool-dispatch.ts).
+ * Published as `mesh_config` kind=refine since the 2026-09-26 tool consolidation.
  */
 export async function meshRefineConfig(
     ctx: MeshContext,
@@ -66,7 +67,7 @@ export async function meshRefineConfig(
             return meshSuggestRefineConfig(ctx, args);
         default:
             throw new Error(
-                `mesh_refine_config: invalid or missing 'mode' (${JSON.stringify(args.mode)}). Expected one of: 'schema' | 'validate' | 'suggest'.`,
+                `mesh_config kind=refine: invalid or missing 'mode' (${JSON.stringify(args.mode)}). Expected one of: 'schema' | 'validate' | 'suggest'.`,
             );
     }
 }
@@ -106,7 +107,8 @@ export async function meshSuggestChangeImpactConfig(
  * wrapper over its daemon-core low-family change-impact command — internal command API
  * unchanged, zero behavior loss. The former standalone tools (mesh_change_impact_config_schema /
  * mesh_validate_change_impact_config / mesh_suggest_change_impact_config) remain dispatchable as
- * 1-release hidden aliases that forward here with the corresponding mode (see server.ts).
+ * hidden aliases that forward here with the corresponding mode (mesh-tool-dispatch.ts).
+ * Published as `mesh_config` kind=change_impact since the 2026-09-26 tool consolidation.
  */
 export async function meshChangeImpactConfig(
     ctx: MeshContext,
@@ -121,7 +123,7 @@ export async function meshChangeImpactConfig(
             return meshSuggestChangeImpactConfig(ctx, args);
         default:
             throw new Error(
-                `mesh_change_impact_config: invalid or missing 'mode' (${JSON.stringify(args.mode)}). Expected one of: 'schema' | 'validate' | 'suggest'.`,
+                `mesh_config kind=change_impact: invalid or missing 'mode' (${JSON.stringify(args.mode)}). Expected one of: 'schema' | 'validate' | 'suggest'.`,
             );
     }
 }

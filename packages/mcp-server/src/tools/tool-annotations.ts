@@ -24,7 +24,7 @@
  *
  * ─── Why one central map instead of inline literals ─────────────────────
  *
- * Tool definitions live in 19 files, and `mesh-tool-schemas.ts` alone holds 61
+ * Tool definitions live in 19 files, and `mesh-tool-schemas.ts` alone holds most
  * of them. Inlining an `annotations` object in each definition would put the
  * safety classification 1,500 lines away from the next one, where nobody can
  * diff "everything we call destructive" in one read. Worse, it makes OMISSION
@@ -39,7 +39,7 @@
  * classifications below apply consistently:
  *
  * 1. DRY-RUN DEFAULTS DO NOT MAKE A TOOL READ-ONLY. `mesh_refine_node`,
- *    `mesh_prune_stale_direct` and `mesh_fast_forward_node` all default to a
+ *    `mesh_cleanup_sessions` (mode=prune_stale_direct) and `mesh_fast_forward_node` all default to a
  *    plan-only response, but each takes an `execute`/`dry_run` flag that
  *    merges, deletes or pushes for real. The hint describes what the tool CAN
  *    do when called, and a client deciding "may I auto-run this?" must see the
@@ -197,18 +197,8 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   mesh_ledger_query: READ_LOCAL,
   mesh_mission_list: READ_LOCAL,
   mesh_review_inbox: READ_LOCAL,
-  mesh_node_slots_list: READ_LOCAL,
-  mesh_magi_kind_panel_list: READ_LOCAL,
-  mesh_coordinator_prompt_append_get: READ_LOCAL,
-  // Read-only config helpers (all three modes — schema/validate/suggest —
-  // return a draft; neither writes the config file).
-  mesh_refine_config: READ_LOCAL,
-  mesh_change_impact_config: READ_LOCAL,
-  // Documented read-only discovery/planning.
-  mesh_plan_onboarding: READ_LOCAL,
+  // Documented read-only planning.
   mesh_refine_plan: READ_LOCAL,
-  // Read-only, but probes the node's installed CLIs to draft a profile.
-  mesh_node_slots_propose: READ_REMOTE,
   // Reads that cross to a (possibly remote) node.
   mesh_read_chat: READ_REMOTE,
   mesh_read_debug: READ_REMOTE,
@@ -247,12 +237,14 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   // Restores held events back to pending. Explicitly documented as lossless.
 
   // ── Mesh: graph gates ────────────────────────────────────────────────
-  // Takes/releases a lease. Lease-guarded and convergent, not destructive.
-  mesh_graph_gate_claim: WRITE_LOCAL_SAFE,
-  mesh_graph_gate_release: WRITE_LOCAL_SAFE,
-  // Gives up on a gate so the graph reaches a TERMINAL state — the work behind
-  // it is abandoned, which is not recoverable by releasing it later.
-  mesh_graph_gate_abandon: DESTRUCTIVE_LOCAL,
+  // ★MERGED TOOLS ARE CLASSIFIED BY THEIR MOST CAPABLE ACTION (2026-09-26
+  // consolidation). One tool carries one annotation block, and a client deciding
+  // "may I auto-run this?" must see what the tool CAN do (rule 1), so a merged
+  // tool whose read-only action sits beside a destructive one is destructive.
+  // claim / release / extend are lease-guarded and convergent; abandon gives up
+  // on a gate so the graph reaches a TERMINAL state — the work behind it is
+  // abandoned, which is not recoverable by releasing it later.
+  mesh_graph_gate: DESTRUCTIVE_LOCAL,
   // Overwrites keys on a node's otherwise-IMMUTABLE base spec: the replaced
   // run_if/inputs_from is not recoverable, so it is destructive in the same
   // sense as mesh_queue_requeue's instruction overwrite — even though its
@@ -261,6 +253,7 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
 
   // ── Mesh: lifecycle / bootstrap ──────────────────────────────────────
   // Creates new mesh/node records. Additive; a repeat creates another.
+  // (mode="plan" is the read-only onboarding planner — see the merged-tool rule above.)
   mesh_create: WRITE_LOCAL_ACCUMULATING,
   mesh_add_node: WRITE_LOCAL_ACCUMULATING,
   // Creates a git WORKTREE on disk for a (possibly remote) node.
@@ -269,10 +262,10 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   mesh_remove_node: DESTRUCTIVE_LOCAL,
   // Removes worktree nodes — deletes on-disk worktrees on the target machine.
   mesh_cleanup_worktree_nodes: DESTRUCTIVE_REMOTE,
-  // Deletes delegated session records (reviewable history is discarded).
+  // Deletes delegated session records (reviewable history is discarded), and
+  // with mode=prune_stale_direct + execute=true deletes orphaned dispatch
+  // records (see rule 1 above).
   mesh_cleanup_sessions: DESTRUCTIVE_LOCAL,
-  // Deletes orphaned dispatch records when execute=true (see rule 1 above).
-  mesh_prune_stale_direct: DESTRUCTIVE_LOCAL,
   // Restarts a daemon process: in-flight sessions on that daemon go away.
   mesh_restart_daemon: DESTRUCTIVE_REMOTE,
 
@@ -288,24 +281,24 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   mesh_checkpoint: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 
   // ── Mesh: config writes ──────────────────────────────────────────────
-  // Writes the repo `.adhdev/*` config families. `mesh_init` is the
-  // first-time path; `mesh_reinit` is documented as OVERWRITE semantics on an
+  // Writes the repo `.adhdev/*` config families. mode=init is the first-time
+  // path; mode=reinit is documented as OVERWRITE semantics on an
   // already-initialized repo, so it can replace a config the user edited.
-  mesh_init: WRITE_LOCAL_SAFE,
-  mesh_reinit: DESTRUCTIVE_LOCAL,
-  // Writes `.adhdev/mesh.json` from the machine-local entry — overwrites the
-  // committed file.
-  mesh_write_mesh_json_config: DESTRUCTIVE_LOCAL,
-  // Sets one named value, replacing only that value.
-  mesh_node_slots_set: WRITE_LOCAL_SAFE,
-  mesh_magi_kind_panel_set: WRITE_LOCAL_SAFE,
-  mesh_coordinator_prompt_append_set: WRITE_LOCAL_SAFE,
+  mesh_init: DESTRUCTIVE_LOCAL,
+  // kind=refine / change_impact are read-only helpers; kind=mesh_json writes
+  // `.adhdev/mesh.json` from the machine-local entry — overwrites the committed file.
+  mesh_config: DESTRUCTIVE_LOCAL,
+  // Sets one named value, replacing only that value (action=set); list/get read.
+  mesh_magi_kind_panel: WRITE_LOCAL_SAFE,
+  mesh_coordinator_prompt_append: WRITE_LOCAL_SAFE,
+  // action=set replaces one node's slot list; action=propose probes the node's
+  // installed CLIs (open-world read), so the merged tool is open-world.
+  mesh_node_slots: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 
   // ── Mesh: notes / missions / ledger ──────────────────────────────────
-  // Appends a durable note; each call records another.
-  mesh_record_note: WRITE_LOCAL_ACCUMULATING,
-  // Retracts a note — the note stops being inherited by future coordinators.
-  mesh_forget_note: DESTRUCTIVE_LOCAL,
+  // action=record appends a durable note (each call records another);
+  // action=forget retracts one — it stops being inherited by future coordinators.
+  mesh_note: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   // Upsert: creates or updates one mission by id, converging on the given value.
   mesh_mission_upsert: WRITE_LOCAL_SAFE,
   // Imports MISSING ledger entries from peers — additive by construction.

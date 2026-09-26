@@ -36,17 +36,19 @@ import { LAUNCH_SESSION_TOOL, launchSession } from './tools/launch-session.js';
 import { STOP_SESSION_TOOL, stopSession } from './tools/stop-session.js';
 import { CHECK_PENDING_TOOL, checkPending } from './tools/check-pending.js';
 import {
-  ALL_MESH_TOOLS, MESH_PLAN_ONBOARDING_TOOL, MESH_CREATE_TOOL, MESH_ADD_NODE_TOOL, MESH_NOTIFY_WORKER_TOOL,
-  // Standard mode publishes these three mesh-bootstrap tools outside mesh mode,
+  ALL_MESH_TOOLS, MESH_CREATE_TOOL, MESH_ADD_NODE_TOOL, MESH_NOTIFY_WORKER_TOOL,
+  // Standard mode publishes these two mesh-bootstrap tools outside mesh mode
+  // (mesh_create also carries the read-only onboarding planner as mode="plan"),
   // so it dispatches them directly rather than through the mesh registry.
-  meshPlanOnboarding, meshCreate, meshAddNode,
+  meshCreateOrPlan, meshAddNode,
   // Flag-gated, so it is not an entry in either dispatch table — see below.
   meshNotifyWorker,
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
 import { resolveMeshToolHandler } from './tools/mesh-tool-dispatch.js';
 import { runMeshToolWithPendingEvents } from './tools/mesh-pending-events-attach.js';
-import { validateMeshToolArgs, unknownToolArgsError, enumValueError, canonicalizeMeshToolArgs } from './tools/validate-tool-args.js';
+import { validateMeshToolArgs, unknownToolArgsError, enumValueError, canonicalizeMeshToolArgs, meshToolActionArgsError } from './tools/validate-tool-args.js';
+import { retiredMeshToolError } from '@adhdev/mesh-shared';
 import { annotateAll } from './tools/tool-annotations.js';
 import {
   resolveWorkerModeTools, readWorkerCredentials, reportCompletion, progressUpdate, peerContextPull, drainMailbox,
@@ -420,7 +422,6 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     // Mesh bootstrap: create a mesh + register its first node from an MCP-only agent.
     // Exposed in standard mode precisely because this is the no-mesh-yet context —
     // mesh mode refuses to boot without an existing meshId (see the mesh-mode block above).
-    MESH_PLAN_ONBOARDING_TOOL,
     MESH_CREATE_TOOL,
     MESH_ADD_NODE_TOOL,
     ...(isLocal ? [SCREENSHOT_TOOL] : []),
@@ -441,12 +442,19 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     const { name, arguments: args } = req.params;
     const a = (args ?? {}) as Record<string, any>;
 
-    // Same unknown-parameter + enum-value gate as mesh mode (see validate-tool-args.ts).
+    // Same unknown-parameter + enum-value gate as mesh mode (see validate-tool-args.ts),
+    // plus the per-mode argument check for mesh_create (create vs plan).
     const standardTool = standardToolByName.get(name);
     if (standardTool) {
       const unknownArgsError = unknownToolArgsError(name, standardTool.inputSchema?.properties, a)
-        ?? enumValueError(name, standardTool.inputSchema?.properties, a);
+        ?? enumValueError(name, standardTool.inputSchema?.properties, a)
+        ?? meshToolActionArgsError(name, a, { checkRequired: true, schema: standardTool.inputSchema as any });
       if (unknownArgsError) return { content: [{ type: 'text', text: unknownArgsError }], isError: true };
+    } else {
+      // A tool retired by the 2026-09-26 consolidation (e.g. mesh_plan_onboarding)
+      // answers with its replacement rather than a bare "Unknown tool".
+      const retired = retiredMeshToolError(name);
+      if (retired) return { content: [{ type: 'text', text: retired }], isError: true };
     }
 
     try {
@@ -529,11 +537,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           return { content: [{ type: 'text', text }] };
         }
         case 'mesh_create': {
-          const text = await meshCreate(transport, a as any);
-          return { content: [{ type: 'text', text }] };
-        }
-        case 'mesh_plan_onboarding': {
-          const text = await meshPlanOnboarding(transport, a as any);
+          const text = await meshCreateOrPlan(transport, a);
           return { content: [{ type: 'text', text }] };
         }
         case 'mesh_add_node': {

@@ -84,22 +84,46 @@ export function toDaemonStatusEventName(value: unknown): DaemonStatusEventPayloa
  * `buildSessionEntries` uses for the snapshot path (builders.ts), so an event
  * and a snapshot emitted for the same session always agree.
  *
+ * An IDE extension session is a child of its IDE instance and is not in the
+ * instance manager's own map (same shape `createInstanceSessionMetaResolver`
+ * above resolves), so it is found through the registry's `parentSessionId` and
+ * the parent state's `extensions` list. Its hide/mute state is read from the
+ * EXTENSION's own `settings` / `status` — builders.ts's `buildExtensionAgentSession`
+ * stamps `settings: ext.settings` on the session entry (its own per-conversation
+ * hide/mute, not inherited from the parent IDE — the parent IDE row and each of
+ * its extension tabs can be hidden/muted independently), so this mirrors that.
+ *
  * Returns undefined when the session has no local instance (a genuinely remote
  * mesh worker hosted by a different daemon, or an event with no targetSessionId).
  * The event then omits the flags and the server falls back to its snapshot join.
  */
 export function createInstanceHideMuteResolver(
-    instanceManager: { getInstance?(sessionId: string): { getState?(): ProviderState | undefined } | undefined } | null | undefined,
+    instanceManager: StatusEventInstanceManager,
+    sessionRegistry?: StatusEventSessionRegistry,
 ): ResolveStatusEventHideMute {
-    return (sessionId) => {
-        if (!sessionId) return undefined;
+    const readState = (sessionId: string): ProviderState | undefined => {
         const getInstance = instanceManager?.getInstance;
         if (typeof getInstance !== 'function') return undefined;
-        let state: ProviderState | undefined;
         try {
-            state = getInstance.call(instanceManager, sessionId)?.getState?.();
+            return getInstance.call(instanceManager, sessionId)?.getState?.();
         } catch {
             return undefined;
+        }
+    };
+    return (sessionId) => {
+        if (!sessionId) return undefined;
+        let state = readState(sessionId);
+        if (!state) {
+            let parentId: string | undefined;
+            try {
+                parentId = nonEmpty(sessionRegistry?.get(sessionId)?.parentSessionId);
+            } catch {
+                parentId = undefined;
+            }
+            const parent = parentId ? readState(parentId) : undefined;
+            const children = parent && parent.category === 'ide' && Array.isArray(parent.extensions) ? parent.extensions : [];
+            state = children.find((child) => child?.instanceId === sessionId);
+            if (!state) return undefined;
         }
         const settings = (state as { settings?: Record<string, any> } | undefined)?.settings;
         if (!settings) return undefined;
@@ -423,7 +447,7 @@ export interface StatusEventEmitterDeps {
  * never swallows the other.
  */
 export function createStatusEventEmitter(bus: Pick<SessionLifecycleBus, 'on'>, deps: StatusEventEmitterDeps): Unsubscribe {
-    const resolveHideMute = createInstanceHideMuteResolver(deps.instanceManager);
+    const resolveHideMute = createInstanceHideMuteResolver(deps.instanceManager, deps.sessionRegistry);
     const resolveSessionMeta = createInstanceSessionMetaResolver(deps.instanceManager, deps.sessionRegistry);
     const durations = createTurnDurationTracker();
     const unsubProviderEvent = bus.on('provider_event', (e) => {

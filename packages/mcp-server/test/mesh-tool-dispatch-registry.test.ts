@@ -19,7 +19,7 @@ import {
  * coordinator and answered `Unknown tool: <name>` when called.
  *
  * Measured before the change (2026-09-18): deleting the `mesh_record_note`
- * case left `tsc --noEmit` clean and all 786 mcp-server tests green.
+ * (now `mesh_note`) case left `tsc --noEmit` clean and all 786 mcp-server tests green.
  *
  * `MESH_TOOL_DISPATCH` is now a `Record<CanonicalMeshToolName, …>`, so the
  * compiler rejects a missing handler (TS2741) and an unknown key (TS2353).
@@ -128,11 +128,11 @@ test('each tool name dispatches to a distinct, correctly-wired implementation', 
 });
 
 /**
- * Regression pin for the exact defect measured above. `mesh_record_note` is an
- * arbitrary representative — it is the tool whose case deletion was shown to be
- * invisible to both the compiler and the suite.
+ * Regression pin for the exact defect measured above. `mesh_record_note` was the
+ * tool whose case deletion was shown to be invisible to both the compiler and the
+ * suite; since the 2026-09-26 consolidation it is `mesh_note` action=record.
  */
-test('mesh_record_note — the tool whose silent omission was measured — is dispatchable', () => {
-  assert.equal(typeof resolveMeshToolHandler('mesh_record_note'), 'function');
-  assert.equal(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_record_note'), true);
+test('mesh_note (was mesh_record_note — the tool whose silent omission was measured) is dispatchable', () => {
+  assert.equal(typeof resolveMeshToolHandler('mesh_note'), 'function');
+  assert.equal(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_note'), true);
 });

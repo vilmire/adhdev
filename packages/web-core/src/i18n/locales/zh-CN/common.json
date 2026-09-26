@@ -2022,11 +2022,21 @@
             "terminalDescription": "终端记录卡片，以及聊天模式下的工具/命令行。",
             "livePreview": "实时预览",
             "resolvedStack": "解析后的字体栈：",
-            "defaults": "默认值：",
             "saveFontSettings": "保存字体设置",
             "revertToSaved": "还原为已保存",
             "resetToDefaults": "重置为默认值",
-            "saving": "正在保存…"
+            "saving": "正在保存…",
+            "customFamilyPlaceholder": "例如 \"Pretendard\"、\"Noto Sans KR\"、sans-serif",
+            "previewSummary": "聊天：{{chat}} · 代码：{{code}} · 终端：{{terminal}}",
+            "defaultsSummary": "默认值：{{chat}} / {{code}}",
+            "previewNow": "刚刚",
+            "previewProse": "易读的正文、<strong>粗体文本</strong>和<code>行内代码</code>都会遵循你的 standalone 字体设置。",
+            "presets": {
+                "default": "默认",
+                "defaultMono": "默认等宽",
+                "custom": "自定义…",
+                "serif": "衬线"
+            }
         }
     },
     "cloud": {

@@ -3,7 +3,7 @@
  *
  * Detection of installed CLI providers already exists per node (the status
  * snapshot's `availableProviders`), and applying a slot profile already exists
- * (`mesh_node_slots_set`, dry-run by default). What was missing is the bit in
+ * (`mesh_node_slots` action "set", dry-run by default). What was missing is the bit in
  * between: turning "these CLIs are installed on this node" into a concrete
  * `NodeCapabilitySlot[]` draft the operator can review. This module is that
  * bridge, and nothing more — it is a PURE proposal generator. It never writes;

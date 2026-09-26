@@ -302,7 +302,7 @@ export async function meshPruneStaleDirect(
             code: 'dry_run_false_requires_execute',
             executed: false,
             error: 'dry_run:false alone does not execute — it only declines to veto. Pass execute:true to actually prune.',
-            nextAction: 'Re-run mesh_prune_stale_direct(execute: true) to prune, or omit dry_run to preview.',
+            nextAction: 'Re-run mesh_cleanup_sessions(mode: "prune_stale_direct", execute: true) to prune, or omit dry_run to preview.',
         }, null, 2);
     }
     // execute must be explicit; dry_run is the default unless execute===true.
@@ -1906,7 +1906,7 @@ export async function meshLaunchSession(
                 return JSON.stringify({
                     success: false,
                     code: 'mesh_provider_type_unsupported',
-                    error: `Node '${args.node_id}' does not support provider '${requestedType}'. Its capability slots (policy.slots) declare: ${slotProviders.join(', ')}. Configure a slot for '${requestedType}' via mesh_node_slots_set, or launch with one of the supported types.`,
+                    error: `Node '${args.node_id}' does not support provider '${requestedType}'. Its capability slots (policy.slots) declare: ${slotProviders.join(', ')}. Configure a slot for '${requestedType}' via mesh_node_slots (action "set"), or launch with one of the supported types.`,
                     nodeId: args.node_id,
                     requestedType,
                     supportedProviders: slotProviders,

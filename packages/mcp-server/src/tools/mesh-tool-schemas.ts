@@ -297,7 +297,7 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
             },
             gates: {
                 type: 'array',
-                description: 'Coordinator gates: stop until YOU claim (mesh_graph_gate_claim), act, and release (mesh_graph_gate_release); never auto-passed. Refs share one namespace with tasks/workspaces.',
+                description: 'Coordinator gates: stop until YOU claim (mesh_graph_gate action=claim), act, and release (action=release); never auto-passed. Refs share one namespace with tasks/workspaces.',
                 items: {
                     type: 'object',
                     properties: {
@@ -347,63 +347,52 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
 // ── GRAPH-ORCHESTRATION Phase E: the coordinator gate + graph view surface ──
 // design :759-763 (view), :407-421 (claim/release), :425-439 (timeout policy).
 
-export const MESH_GRAPH_GATE_CLAIM_TOOL = {
-    name: 'mesh_graph_gate_claim',
-    description: 'Take the lease on a coordinator GATE that is awaiting a coordinator. A gate is a graph step that intentionally STOPS progress '
-        + 'until a human/coordinator does something the daemon must not do itself — a Refinery landing, an approval, waiting on CI, a publish, a deploy. '
-        + 'The daemon NEVER performs a gate action and NEVER auto-passes a gate: the only way through is your own mesh_graph_gate_release. '
-        + 'Claim returns a monotonically increasing leaseGeneration and an opaque fencingToken — you MUST present both at release, so keep them. '
-        + 'A gate whose lease has lapsed can be taken over by a new claim at a HIGHER generation; when that happens the response sets '
-        + 'ambiguousExternalOutcome, meaning the previous owner may already have performed the external side effect — reconcile external evidence '
-        + '(did the merge/publish already land?) before doing it again. Use mesh_graph_view to find gates awaiting a coordinator. '
-        + 'EXTEND-ONLY mode: pass extend_seconds (with gate_id only) to push a gate\'s deadline out WITHOUT taking a lease — e.g. extend_seconds=86400 for a gate that expired under on_timeout=hold, or is about to, that you still intend to act on.',
+// 2026-09-26 tool consolidation: claim / release / abandon / extend were four
+// verbs on one object (a coordinator gate) spread over three tools plus an
+// extend-only flag on claim. They are one tool now, selected by `action`; the
+// per-action argument sets are enforced by validate-tool-args.ts
+// (MESH_TOOL_ACTIONS), so an argument that belongs to another action is refused
+// with a message naming the action it belongs to instead of being ignored.
+export const MESH_GRAPH_GATE_TOOL = {
+    name: 'mesh_graph_gate',
+    description: 'Drive a coordinator GATE — a graph step that intentionally STOPS progress until you do something the daemon must not do itself (a Refinery landing, an approval, waiting on CI, a publish, a deploy). '
+        + 'The daemon NEVER performs a gate action and NEVER auto-passes a gate. Use it when a gate notice arrives or mesh_graph_view shows a gate blocking downstream work. Select the verb with `action` (REQUIRED):\n'
+        + '• claim — take the lease on a gate awaiting a coordinator. Returns a monotonically increasing leaseGeneration and an opaque fencingToken: keep both, release needs them. '
+        + 'A lapsed lease can be taken over at a HIGHER generation; the response then sets ambiguousExternalOutcome — the previous owner may already have performed the side effect, so reconcile external evidence (did the merge/publish land?) before doing it again. '
+        + 'Args: gate_id, lease_seconds, extend_deadline_seconds, coordinator_session_id.\n'
+        + '• release — pass a gate you hold: the ONLY way a gate lets downstream run. Needs lease_generation + fencing_token from claim (stale generation / wrong token → stale_fence; an EXPIRED lease never releases — re-claim and reconcile first) and your own idempotency_key '
+        + '(identical re-send = no-op success; same key, different payload = conflict). `outcome` and any `result`/`evidence` are readable downstream through run_if and inputs_from. A validation failure rolls the WHOLE release back. '
+        + 'Args: gate_id, fencing_token, lease_generation, idempotency_key, outcome, result, evidence, patches.\n'
+        + '• abandon — give up on a gate that can never open (the work behind it was cancelled) so its graph can go terminal. NOT a pass: it materializes nothing and CANCELS every downstream task the gate held. '
+        + 'Needs no fencing token, but a LIVE lease held by another coordinator is refused unless force=true. Re-abandoning is a no-op; a RELEASED gate can never be abandoned. Args: gate_id, reason, force, coordinator_session_id.\n'
+        + '• extend — push the gate DEADLINE out without taking a lease (e.g. extend_seconds=86400 for a gate that expired, or is about to, under on_timeout=hold, that you still intend to act on). Args: gate_id, extend_seconds.',
     inputSchema: {
         type: 'object' as const,
         properties: {
-            gate_id: { type: 'string', description: 'The gate to claim (from mesh_graph_view or the mesh_enqueue_batch response).' },
+            action: {
+                type: 'string',
+                enum: ['claim', 'release', 'abandon', 'extend'],
+                description: 'Which gate verb to run (required). Each action accepts only its own arguments — see the tool description.',
+            },
+            gate_id: { type: 'string', description: 'The gate (from mesh_graph_view, a gate notice, or the mesh_enqueue_batch response). All actions.' },
             gateId: { type: 'string', description: 'CamelCase alias for gate_id.' },
-            lease_seconds: { type: 'number', description: 'How long to hold the lease before it lapses. Defaults to the gate spec\'s lease_seconds, then 900s. Pick a duration that covers the real action — a lapsed lease cannot release (elapsed time is never completion evidence).' },
+            lease_seconds: { type: 'number', description: 'claim: how long to hold the lease. Defaults to the gate spec\'s lease_seconds, then 900s. Cover the real action — a lapsed lease cannot release (elapsed time is never completion evidence).' },
             leaseSeconds: { type: 'number', description: 'CamelCase alias for lease_seconds.' },
-            extend_deadline_seconds: { type: 'number', description: 'Push the gate DEADLINE out by this many seconds from now. Distinct from the lease: the deadline is when the on_timeout policy (hold / cancel_downstream / fail_graph) fires. Reclaiming a gate that expired under on_timeout=hold does NOT refresh its deadline unless you pass this, so the next sweep would expire it again.' },
+            extend_deadline_seconds: { type: 'number', description: 'claim: also push the gate DEADLINE out by this many seconds from now. The deadline is when on_timeout (hold / cancel_downstream / fail_graph) fires; reclaiming a gate that expired under hold does NOT refresh it unless you pass this.' },
             extendDeadlineSeconds: { type: 'number', description: 'CamelCase alias for extend_deadline_seconds.' },
-            // graph-orchestration-simplification D3(c): the gate `extend` verb. An optional
-            // arg on claim rather than a 61st tool (ALL_MESH_TOOLS is pinned at 60 —
-            // scripts/verify-docs.mjs counts it). Dispatches to the daemon command
-            // `mesh_graph_gate_extend {mesh_id, gate_id, extend_seconds}` — the same
-            // command the dashboard's "Extend 24h" button calls — and takes NO lease.
-            extend_seconds: { type: 'number', description: 'Extend-only: push the gate deadline out by this many seconds and return — NO claim, NO lease (daemon command mesh_graph_gate_extend). Cannot be combined with lease_seconds / extend_deadline_seconds. Elapsed time is still never completion evidence: extending only delays on_timeout.' },
-            coordinator_session_id: { type: 'string', description: 'Owner session for the lease. Defaults to this coordinator session; pass explicitly only when driving a gate on behalf of another session.' },
-            coordinatorSessionId: { type: 'string', description: 'CamelCase alias for coordinator_session_id.' },
-        },
-        required: ['gate_id'],
-    },
-};
-
-export const MESH_GRAPH_GATE_RELEASE_TOOL = {
-    name: 'mesh_graph_gate_release',
-    description: 'Release a coordinator gate you hold the lease on — the ONLY way a gate lets its downstream work run. Requires the leaseGeneration + fencingToken '
-        + 'from your mesh_graph_gate_claim: a stale generation or wrong token is refused (stale_fence), and an EXPIRED lease can never release (re-claim first, '
-        + 'and reconcile whether the external action already happened). Pass an idempotency_key of your choosing: re-sending the identical release with the same key '
-        + 'is a safe no-op success, while the same key with a DIFFERENT payload is rejected as a conflict. `outcome` (passed / failed / rejected, or an action-specific label) '
-        + 'and any structured `result` / `evidence` become readable by downstream tasks through run_if and inputs_from, so a gate decision can steer the rest of the graph. '
-        + 'Validation failures roll the WHOLE release back: the gate stays claimed and downstream stays blocked.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            gate_id: { type: 'string', description: 'The gate being released.' },
-            gateId: { type: 'string', description: 'CamelCase alias for gate_id.' },
-            fencing_token: { type: 'string', description: 'The opaque token returned by mesh_graph_gate_claim. Required.' },
+            extend_seconds: { type: 'number', description: 'extend: push the deadline out by this many seconds (positive). Takes NO lease. Extending only delays on_timeout; it is never completion evidence.' },
+            fencing_token: { type: 'string', description: 'release: the opaque token returned by claim. Required for release.' },
             fencingToken: { type: 'string', description: 'CamelCase alias for fencing_token.' },
-            lease_generation: { type: 'number', description: 'The leaseGeneration returned by mesh_graph_gate_claim. Required — a stale generation is refused.' },
+            lease_generation: { type: 'number', description: 'release: the leaseGeneration returned by claim. Required for release — a stale generation is refused.' },
             leaseGeneration: { type: 'number', description: 'CamelCase alias for lease_generation.' },
-            idempotency_key: { type: 'string', description: 'Your own key for this release. Re-sending the identical release with the same key is a no-op success; the same key with a different payload is a conflict. Required.' },
+            idempotency_key: { type: 'string', description: 'release: your own key for this release. Required for release.' },
             idempotencyKey: { type: 'string', description: 'CamelCase alias for idempotency_key.' },
-            outcome: { type: 'string', description: 'The gate outcome: passed | failed | rejected, or an action-specific structured label. Downstream run_if conditions read it as /gate_outcome.' },
-            result: { type: 'object', description: 'Optional action-specific structured result, exposed to downstream bindings as /result/... (e.g. the merged commit sha).' },
-            evidence: { type: 'object', description: 'Optional evidence references/digests, exposed to downstream bindings as /evidence/... .' },
+            outcome: { type: 'string', description: 'release: passed | failed | rejected, or an action-specific label. Downstream run_if reads it as /gate_outcome. Required for release.' },
+            result: { type: 'object', description: 'release: optional action-specific structured result, exposed downstream as /result/... (e.g. the merged commit sha).' },
+            evidence: { type: 'object', description: 'release: optional evidence references/digests, exposed downstream as /evidence/... .' },
             patches: {
                 type: 'array',
-                description: 'Optional pre-assignment patches to DIRECT downstream nodes. Only run_if, on_false, inputs_from and workspace_ref may be patched — message, routing, permissions, task mode and model are immutable by policy, and a task that is already claimed cannot be patched at all.',
+                description: 'release: optional pre-assignment patches to DIRECT downstream nodes. Only run_if, on_false, inputs_from and workspace_ref may be patched — message, routing, permissions, task mode and model are immutable, and a claimed task cannot be patched.',
                 items: {
                     type: 'object',
                     properties: {
@@ -417,33 +406,16 @@ export const MESH_GRAPH_GATE_RELEASE_TOOL = {
                     required: ['node'],
                 },
             },
+            reason: { type: 'string', description: 'abandon: why the gate is given up — recorded on the gate, every cancelled downstream row, and the provenance ledger. Required for abandon.' },
+            force: { type: 'boolean', description: 'abandon: abandon even though another coordinator holds a LIVE lease. Only when you know that holder is dead.' },
+            coordinator_session_id: { type: 'string', description: 'claim / abandon: owner (claim) or recorded abandoner. Defaults to this coordinator session.' },
+            coordinatorSessionId: { type: 'string', description: 'CamelCase alias for coordinator_session_id.' },
         },
-        required: ['gate_id', 'fencing_token', 'lease_generation', 'idempotency_key', 'outcome'],
+        required: ['action', 'gate_id'],
     },
 };
 
-export const MESH_GRAPH_GATE_ABANDON_TOOL = {
-    name: 'mesh_graph_gate_abandon',
-    description: 'Give up on a coordinator gate that can never be opened, so its graph can reach a terminal state. Use this when the work behind a gate was cancelled or is no longer wanted — '
-        + 'e.g. you cancelled the implementation tasks and the refinery/land gate is now stranded with nothing to land. Without it that gate stays awaiting_coordinator forever and the graph can '
-        + 'reach NO terminal state at all, not even cancelled. '
-        + '★ ABANDON IS NOT A PASS. It materializes NOTHING: every downstream task this gate was holding is CANCELLED, not opened, and no outcome/result/evidence is produced for downstream run_if or inputs_from. '
-        + 'If you actually want the downstream work to run, use mesh_graph_gate_release instead — that is the only way through a gate, and this tool is deliberately not a shortcut around it. '
-        + 'Needs no fencing token (it grants no passage), but a gate whose lease is still LIVE under another coordinator is refused unless you pass force=true — that holder may be mid-action on a real '
-        + 'external side effect (a merge, a publish, a deploy). Abandoning an already-abandoned gate is a safe no-op; a RELEASED gate can never be abandoned, because its downstream already ran.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            gate_id: { type: 'string', description: 'The gate to abandon (from mesh_graph_view).' },
-            gateId: { type: 'string', description: 'CamelCase alias for gate_id.' },
-            reason: { type: 'string', description: 'Why this gate is being given up — recorded on the gate node, on every cancelled downstream row, and in the provenance ledger. Required: an abandon with no stated reason is indistinguishable from a mistake later.' },
-            force: { type: 'boolean', description: 'Abandon even though another coordinator holds a LIVE lease. Only when you know that holder is dead — otherwise you may strand an external side effect it is mid-way through.' },
-            coordinator_session_id: { type: 'string', description: 'Recorded as who abandoned the gate. Defaults to this coordinator session.' },
-            coordinatorSessionId: { type: 'string', description: 'CamelCase alias for coordinator_session_id.' },
-        },
-        required: ['gate_id', 'reason'],
-    },
-};
+
 
 export const MESH_GRAPH_NODE_PATCH_TOOL = {
     name: 'mesh_graph_node_patch',
@@ -967,54 +939,44 @@ export const MESH_LIST_PENDING_APPROVALS_TOOL = {
 
 export const MESH_CREATE_TOOL = {
     name: 'mesh_create',
-    description: 'Bootstrap a brand-new mesh for a Git repository — the first step for an MCP-only agent that has no mesh yet. '
-        + 'Mirrors `adhdev mesh create <name>`. A mesh groups one repo\'s workspaces/nodes so the coordinator can delegate work across them. '
-        + 'Pass workspace to auto-detect Git identity/branch/worktree metadata through the read-only planner, or explicitly pass repo_remote_url / repo_identity for backward compatibility. '
-        + 'This is a persistent write: call mesh_plan_onboarding first and obtain explicit user approval before invoking it. Set add_current:true to also register a node in the same call (uses workspace if given, else the daemon\'s current working directory). '
-        + 'BOOT-GATE / WHEN CALLABLE: this tool is reachable in STANDARD mode (adhdev mcp, no --repo-mesh) — the bootstrap context where no mesh exists — and also in mesh mode (where it creates a SEPARATE additional mesh). It is NOT reachable before any mesh exists via mesh mode, because `adhdev mcp --repo-mesh <id>` refuses to start without an existing meshId. So the intended flow is: run standard-mode MCP → mesh_create → mesh_add_node → then relaunch as `adhdev mcp --repo-mesh <returned mesh_id>`. '
-        + 'Returns mesh_id (and node_id when add_current is used); use mesh_id for the follow-up mesh_add_node call and to launch mesh mode.',
+    description: 'Bootstrap a brand-new mesh for a Git repository, or (mode="plan") dry-run the onboarding plan first. Mirrors `adhdev mesh create <name>`. A mesh groups one repo\'s workspaces/nodes so the coordinator can delegate work across them.\n'
+        + '• mode="plan" — READ-ONLY Git-aware discovery + dry-run plan for a workspace path: Git root, normalized remotes/repo identity, current/default branch, main checkout vs linked worktree, dirty/conflict state, existing mesh/node membership. '
+        + 'Returns a typed create+onboarding, add-existing-workspace, or clone-new-worktree plan with suggested .adhdev configs. Never fetches, writes config, or creates a mesh/node/branch/worktree. Run it before creating a mesh, adding a node (mesh_add_node) or cloning a worktree (mesh_clone_node). Args: workspace (required), mesh_id, operation, branch.\n'
+        + '• mode="create" (default) — a persistent write: run mode="plan" first and obtain explicit user approval. Pass workspace to auto-detect Git identity/branch/worktree through the read-only planner, or pass repo_remote_url / repo_identity explicitly. add_current:true also registers a node in the same call (workspace if given, else the daemon\'s cwd). '
+        + 'Returns mesh_id (and node_id with add_current). Args: name (required), repo_remote_url, repo_identity, default_branch, add_current, workspace.\n'
+        + 'BOOT-GATE: reachable in STANDARD mode (adhdev mcp, no --repo-mesh) — the no-mesh-yet bootstrap context — and in mesh mode (where create makes a SEPARATE additional mesh). `adhdev mcp --repo-mesh <id>` refuses to start without an existing meshId, so the flow is: standard-mode MCP → mesh_create → mesh_add_node → relaunch as `adhdev mcp --repo-mesh <returned mesh_id>`.',
     inputSchema: {
         type: 'object' as const,
         properties: {
-            name: { type: 'string', description: 'Human-readable mesh name (e.g. "adhdev-main"). Trimmed, max 100 chars.' },
-            repo_remote_url: { type: 'string', description: 'Optional explicit Git remote URL. When omitted with repo_identity, identity is read-only auto-detected from workspace.' },
-            repo_identity: { type: 'string', description: 'Optional explicit normalized repo identity. Wins over repo_remote_url; when both are omitted, workspace is auto-detected.' },
-            default_branch: { type: 'string', description: 'Default branch for the repo (e.g. "main"). Optional; used as the merge/convergence target.' },
-            add_current: { type: 'boolean', description: 'Also register a node in this same call (parity with CLI --add-current). Uses `workspace` if provided, otherwise the daemon\'s current working directory.' },
-            workspace: { type: 'string', description: 'Absolute workspace path used for Git auto-detection and, when add_current:true, node registration. Defaults to the daemon cwd.' },
-        },
-        required: ['name'],
-    },
-};
-
-export const MESH_PLAN_ONBOARDING_TOOL = {
-    name: 'mesh_plan_onboarding',
-    description: 'Read-only Git-aware Repo Mesh discovery and dry-run planning for a workspace path. '
-        + 'Detects the Git root, normalized remotes/repo identity, current/default branch, main checkout vs linked worktree/common-dir metadata, dirty/conflict state, and existing mesh/node membership. '
-        + 'Returns a typed create+onboarding, add-existing-workspace, or clone-new-worktree plan with suggested .adhdev configs. It never fetches, writes config, creates a mesh/node/branch/worktree, or otherwise mutates state. '
-        + 'Use this before mesh_create, mesh_add_node, or mesh_clone_node; execute write steps only after explicit user approval.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            workspace: { type: 'string', description: 'Absolute path on the daemon that owns the Git checkout.' },
-            mesh_id: { type: 'string', description: 'Optional existing mesh to validate against. In mesh mode defaults to the active mesh.' },
+            mode: {
+                type: 'string',
+                enum: ['create', 'plan'],
+                description: 'create (default) = create the mesh; plan = read-only onboarding discovery/dry-run plan. Each mode accepts only its own arguments — see the tool description.',
+            },
+            name: { type: 'string', description: 'create: human-readable mesh name (e.g. "adhdev-main"). Trimmed, max 100 chars. Required for create.' },
+            repo_remote_url: { type: 'string', description: 'create: optional explicit Git remote URL. When omitted with repo_identity, identity is read-only auto-detected from workspace.' },
+            repo_identity: { type: 'string', description: 'create: optional explicit normalized repo identity. Wins over repo_remote_url; when both are omitted, workspace is auto-detected.' },
+            default_branch: { type: 'string', description: 'create: default branch for the repo (e.g. "main"). Optional; used as the merge/convergence target.' },
+            add_current: { type: 'boolean', description: 'create: also register a node in this same call (parity with CLI --add-current). Uses `workspace` if provided, otherwise the daemon\'s current working directory.' },
+            workspace: { type: 'string', description: 'Absolute workspace path on the daemon. plan: the checkout to inspect (required). create: used for Git auto-detection and, with add_current:true, node registration; defaults to the daemon cwd.' },
+            mesh_id: { type: 'string', description: 'plan: optional existing mesh to validate against. In mesh mode defaults to the active mesh.' },
             operation: {
                 type: 'string',
                 enum: ['auto', 'add_existing', 'clone_worktree', 'create_mesh'],
-                description: 'Planning intent. auto chooses create+onboard when no compatible mesh exists, otherwise add existing. clone_worktree requires branch and a clean source.',
+                description: 'plan: planning intent. auto chooses create+onboard when no compatible mesh exists, otherwise add existing. clone_worktree requires branch and a clean source.',
             },
-            branch: { type: 'string', description: 'New branch name when operation=clone_worktree.' },
+            branch: { type: 'string', description: 'plan: new branch name when operation=clone_worktree.' },
         },
-        required: ['workspace'],
     },
 };
+
 
 export const MESH_ADD_NODE_TOOL = {
     name: 'mesh_add_node',
     description: 'Register a workspace as a node in an EXISTING mesh — the second bootstrap step after mesh_create (or to add more nodes later). '
         + 'Mirrors `adhdev mesh add-node <mesh_id>` with --workspace / --read-only / --provider-priority. A node is a repo checkout on a daemon that the coordinator can launch agents on and delegate tasks to. '
         + 'mesh_id is REQUIRED in standard mode (pass the id returned by mesh_create); in mesh mode it defaults to the active mesh. workspace is the absolute path to the repo checkout ON THE DAEMON that owns it — the local base node is added by the daemon that created the mesh. '
-        + 'This is a persistent mesh write: call mesh_plan_onboarding first and obtain explicit user approval. The implementation re-runs that preflight before writing. NOTE: this registers an EXISTING directory as a node (including auto-detected linked worktrees). To CREATE a fresh git worktree + branch for isolated parallel work, use mesh_clone_node instead — that runs the actual `git worktree add`. '
+        + 'This is a persistent mesh write: call mesh_create with mode="plan" first and obtain explicit user approval. The implementation re-runs that preflight before writing. NOTE: this registers an EXISTING directory as a node (including auto-detected linked worktrees). To CREATE a fresh git worktree + branch for isolated parallel work, use mesh_clone_node instead — that runs the actual `git worktree add`. '
         + 'Returns node_id + workspace so you can immediately target the node with mesh_launch_session / mesh_send_task / mesh_enqueue_task. '
         + 'That immediate-targeting path is right when the node is the only thing you were waiting on; when the work behind it is a multi-step plan, prefer declaring the whole plan in one mesh_enqueue_batch instead of registering, then enqueueing step by step.',
     inputSchema: {
@@ -1037,7 +999,7 @@ export const MESH_ADD_NODE_TOOL = {
 export const MESH_CLONE_NODE_TOOL = {
     name: 'mesh_clone_node',
     description: 'Create a new worktree-based node from an existing node for isolated parallel work. '
-        + 'Creates a git worktree on a new branch so multiple tasks can run on separate branches simultaneously. This writes a branch, worktree and mesh node: call mesh_plan_onboarding with operation=clone_worktree and obtain explicit user approval first; the implementation re-runs the clean/source preflight. '
+        + 'Creates a git worktree on a new branch so multiple tasks can run on separate branches simultaneously. This writes a branch, worktree and mesh node: call mesh_create with mode="plan", operation=clone_worktree and obtain explicit user approval first; the implementation re-runs the clean/source preflight. '
         + 'Call this directly when you need the worktree NOW and will target it right away. When the worktree only exists to host a plan you already know, that plan can be submitted as one mesh_enqueue_batch: declare the worktree in the top-level `workspaces` array and point its tasks at it with `workspace_ref`, so preparation happens as part of the graph instead of a manual clone followed by step-by-step enqueues.',
     inputSchema: {
         type: 'object' as const,
@@ -1082,23 +1044,30 @@ export const MESH_CLEANUP_WORKTREE_NODES_TOOL = {
 
 export const MESH_CLEANUP_SESSIONS_TOOL = {
     name: 'mesh_cleanup_sessions',
-    description: 'Manually clean up delegated session records for a mesh node without removing the node. Defaults should preserve reviewable history unless the caller chooses a mode explicitly.',
+    description: 'Clean up delegated-session bookkeeping without removing nodes. Two families, selected by `mode` (REQUIRED):\n'
+        + '• preserve / stop / delete_stopped / stop_and_delete — a node\'s delegated session records (needs node_id). Use when a node is cluttered with finished or stuck worker sessions. Defaults should preserve reviewable history unless you choose a mode explicitly. Args: node_id, session_ids, dry_run.\n'
+        + '• prune_stale_direct — mesh-wide: orphaned staleDirect dispatch records (direct task dispatches whose original node/session is gone from the live mesh). Use when mesh_status keeps listing stale direct dispatches. '
+        + 'Dry-run by default; execute=true deletes. Active/pending/assigned/generating work and fresh unacknowledged dispatch failures (node/session still live) are always preserved, and the append-only ledger history is kept. Args: execute, dry_run, include_terminal.',
     inputSchema: {
         type: 'object' as const,
         properties: {
-            node_id: { type: 'string', description: 'Node ID whose delegated sessions should be considered for cleanup.' },
             mode: {
-                ...enumOf(MESH_SESSION_CLEANUP_MODES),
-                description: 'preserve = no-op; stop = release process occupancy by stopping live runtimes; delete_stopped = remove completed/stopped records while leaving live runtimes alone; stop_and_delete = stop live runtimes and delete records.',
+                type: 'string',
+                enum: [...MESH_SESSION_CLEANUP_MODES, 'prune_stale_direct'],
+                description: 'preserve = no-op; stop = release process occupancy by stopping live runtimes; delete_stopped = remove completed/stopped records while leaving live runtimes alone; stop_and_delete = stop live runtimes and delete records; '
+                    + 'prune_stale_direct = prune orphaned staleDirect dispatch records mesh-wide (dry-run unless execute=true).',
             },
+            node_id: { type: 'string', description: 'Node ID whose delegated sessions should be considered for cleanup. Required for every mode except prune_stale_direct (which is mesh-wide and does not take it).' },
             session_ids: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Optional explicit session IDs to limit cleanup to. When omitted, sessions are matched by node/workspace metadata.',
+                description: 'Session modes: optional explicit session IDs to limit cleanup to. When omitted, sessions are matched by node/workspace metadata.',
             },
-            dry_run: { type: 'boolean', description: 'Preview matched/stopped/deleted/skipped session IDs without mutating session-host state.' },
+            dry_run: { type: 'boolean', description: 'Preview without mutating. Session modes: report matched/stopped/deleted/skipped session IDs. prune_stale_direct: forces a preview even with execute=true; dry_run=false alone is NOT an execute trigger (rejected with dry_run_false_requires_execute).' },
+            execute: { type: 'boolean', description: 'prune_stale_direct: when true, actually delete the orphaned records. Defaults false (dry run). Ignored when dry_run=true.' },
+            include_terminal: { type: 'boolean', description: 'prune_stale_direct: also prune terminal (completed/failed) direct dispatch store rows in addition to orphans. Defaults false.' },
         },
-        required: ['node_id', 'mode'],
+        required: ['mode'],
     },
 };
 
@@ -1130,62 +1099,57 @@ export const MESH_LEDGER_QUERY_TOOL = {
     },
 };
 
-export const MESH_RECORD_NOTE_TOOL = {
-    name: 'mesh_record_note',
-    description: 'Record a durable operating note for this mesh — a runtime-accumulated lesson that future coordinators inherit. '
-        + 'Unlike Claude-only memory/CLAUDE.md, this is provider-neutral: it persists in the mesh ledger and is injected into every coordinator\'s system prompt at launch (codex, hermes, antigravity, claude alike). '
-        + 'Use it when you learn something durable: a provider quirk, a pattern to avoid, or a recovery lesson. Keep each note to one concrete, reusable fact. Not for transient task status — use missions/checkpoints for that.',
+// 2026-09-26 tool consolidation: record / forget operating notes as one tool.
+export const MESH_NOTE_TOOL = {
+    name: 'mesh_note',
+    description: 'Record or retract a durable operating note for this mesh — a runtime-accumulated lesson every future coordinator inherits. '
+        + 'Provider-neutral: it persists in the mesh ledger and is injected into every coordinator\'s system prompt at launch (codex, hermes, antigravity, claude alike). Select with `action` (REQUIRED):\n'
+        + '• record — when you learn something durable (a provider quirk, a pattern to avoid, a recovery lesson), and before closing a mission that taught one. Keep each note to one concrete, reusable fact; not for transient task status (use missions/checkpoints). '
+        + 'Args: text (required), category, pinned, ttl_days, expiresAt, supersedes, subject_key.\n'
+        + '• forget — when an injected note is stale or wrong. Appends a tombstone so the note(s) stop riding into future prompts; history is preserved (append-only). Target by note_id (exact) or by exact text; provide at least one. Args: note_id, text, reason.',
     inputSchema: {
         type: 'object' as const,
         properties: {
-            text: { type: 'string', description: 'The note — one concrete, reusable operating fact/lesson. Phrase it so a future coordinator can act on it without this conversation\'s context.' },
+            action: {
+                type: 'string',
+                enum: ['record', 'forget'],
+                description: 'record = add a note; forget = retract one. Required. Each action accepts only its own arguments — see the tool description.',
+            },
+            text: { type: 'string', description: 'record: the note — one concrete, reusable operating fact, phrased so a future coordinator can act on it without this conversation (required for record). forget: retract every note whose trimmed text exactly matches this string (use when you do not have the id).' },
             category: {
                 type: 'string',
                 enum: ['provider_quirk', 'pattern_to_avoid', 'recovery_lesson'],
-                description: 'Optional classification: provider_quirk (a provider/runtime behaves unexpectedly), pattern_to_avoid (an approach that caused problems), recovery_lesson (how a failure was recovered). Category also governs default read-side retention: recovery_lesson ages out of the injected prompt after ~14 days, pattern_to_avoid after ~30, provider_quirk and uncategorized are durable (never age out). The ledger entry is always kept for audit regardless.',
+                description: 'record: optional classification. Also governs default read-side retention: recovery_lesson ages out of the injected prompt after ~14 days, pattern_to_avoid after ~30, provider_quirk and uncategorized never age out. The ledger entry is always kept for audit.',
             },
             pinned: {
                 type: 'boolean',
-                description: 'Pin this note so it ALWAYS rides into every coordinator prompt: never dropped by TTL expiry and kept ahead of unpinned notes when the injection cap is hit. Use for durable, high-value operating knowledge you never want to lose from the prompt.',
+                description: 'record: pin so it ALWAYS rides into every coordinator prompt — never dropped by TTL expiry and kept ahead of unpinned notes when the injection cap is hit.',
             },
             ttl_days: {
                 type: 'number',
-                description: 'Optional explicit read-side lifespan in days. Resolved to an absolute expiry at record time; after it passes an UNPINNED note is hidden from the injected prompt (but retained in the ledger for audit). Overrides the category default TTL. Ignored when pinned is true.',
+                description: 'record: optional read-side lifespan in days, resolved to an absolute expiry at record time; after it an UNPINNED note is hidden from the prompt (kept in the ledger). Overrides the category default. Ignored when pinned.',
             },
             expiresAt: {
                 type: 'string',
-                description: 'Optional explicit ISO-8601 expiry timestamp, as an alternative to ttl_days when you know the exact cutoff rather than a day count. Takes precedence over ttl_days when both are given. Ignored when pinned is true.',
+                description: 'record: optional explicit ISO-8601 expiry, an alternative to ttl_days. Wins over ttl_days. Ignored when pinned.',
             },
             expires_at: { type: 'string', description: 'Snake_case alias for expiresAt.' },
             supersedes: {
                 type: 'string',
-                description: 'Optional version-supersede: the note_id of an earlier note this one replaces, OR a subject_key shared with earlier notes. At injection any earlier LIVE note matching this id/subject is hidden from the prompt (its ledger entry is retained for audit). Use when you record an updated lesson that makes a prior one obsolete. Pinned notes are never hidden by supersede.',
+                description: 'record: optional version-supersede — the note_id of an earlier note this one replaces, OR a subject_key shared with earlier notes. Matching earlier LIVE notes are hidden from the prompt (ledger kept). Pinned notes are never hidden by supersede.',
             },
             subject_key: {
                 type: 'string',
-                description: 'Optional stable subject key grouping notes about the same subject. Drives version-supersede targeting and read-side same-class folding (multiple live notes with the same category AND subject_key collapse to one injected entry, newest kept, older ids listed). When omitted, folding falls back to a leading [tag] bracket in the text.',
+                description: 'record: optional stable subject key grouping notes about the same subject. Drives supersede targeting and read-side folding (same category AND subject_key collapse to one injected entry, newest kept). When omitted, folding falls back to a leading [tag] bracket in the text.',
             },
+            note_id: { type: 'string', description: 'forget: the ledger note id to retract (full/exact — no prefix matching). Returned by record as noteId, or visible in mesh_task_history. An id that matches no live note returns success:false, code:note_not_found — do not guess/truncate an id.' },
+            noteId: { type: 'string', description: 'CamelCase alias for note_id.' },
+            reason: { type: 'string', description: 'forget: optional short reason, recorded on the tombstone for audit.' },
         },
-        required: ['text'],
+        required: ['action'],
     },
 };
 
-export const MESH_FORGET_NOTE_TOOL = {
-    name: 'mesh_forget_note',
-    description: 'Retract a stale or wrong operating note recorded via mesh_record_note. '
-        + 'Appends a tombstone to the mesh ledger so the targeted note(s) stop riding into future coordinators\' system prompts and drop out of the operating-notes list. '
-        + 'History is preserved (append-only) — this suppresses, it does not rewrite. '
-        + 'Target by note_id (from mesh_record_note / mesh_task_history) for an exact match, or by text to retract every note with that exact wording. Provide at least one.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            note_id: { type: 'string', description: 'The ledger note id to retract (full/exact — no prefix matching). Returned by mesh_record_note as noteId, or visible in mesh_task_history entries. An id that does not match a live note returns success:false, code:note_not_found (the tombstone is still recorded, but nothing was actually retracted) — do not guess/truncate an id.' },
-            noteId: { type: 'string', description: 'CamelCase alias for note_id.' },
-            text: { type: 'string', description: 'Retract every operating note whose trimmed text exactly matches this string. Use when you do not have the note id.' },
-            reason: { type: 'string', description: 'Optional short reason for the retraction, recorded on the tombstone for audit.' },
-        },
-    },
-};
 
 export const MESH_RECONCILE_LEDGER_TOOL = {
     name: 'mesh_reconcile_ledger',
@@ -1202,18 +1166,6 @@ export const MESH_RECONCILE_LEDGER_TOOL = {
     },
 };
 
-export const MESH_PRUNE_STALE_DIRECT_TOOL = {
-    name: 'mesh_prune_stale_direct',
-    description: 'Prune orphaned staleDirect dispatch records — direct task dispatches whose original node/session is no longer present in the live mesh. dry_run (default) reports exactly which records would be pruned without mutating anything; pass execute=true to delete them. Active/pending/assigned/generating work and fresh unacknowledged dispatch failures (node/session still live) are always preserved. The append-only mesh ledger audit history is left intact.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            execute: { type: 'boolean', description: 'When true, actually delete the orphaned records. Defaults false (dry run). Ignored when dry_run=true.' },
-            dry_run: { type: 'boolean', description: 'Force a preview without mutation even if execute=true. Defaults to dry-run behavior when execute is not set. dry_run=false is NOT an execute trigger — passing it alone is rejected with dry_run_false_requires_execute rather than silently previewing. Use execute=true to prune.' },
-            include_terminal: { type: 'boolean', description: 'Also prune terminal (completed/failed) direct dispatch store rows in addition to orphans. Defaults false.' },
-        },
-    },
-};
 
 export const MESH_REFINE_NODE_TOOL = {
     name: 'mesh_refine_node',
@@ -1255,86 +1207,64 @@ export const MESH_REFINE_BATCH_TOOL = {
     },
 };
 
-// Unified read-only Refinery config helper. Consolidates the former
-// mesh_refine_config_schema / mesh_validate_refine_config / mesh_suggest_refine_config
-// tools into a single `mode`-dispatched tool (MESH-COMPLEXITY-AUDIT Part 8-4). The old
-// three names remain dispatchable as 1-release hidden aliases (see server.ts), but only
-// this unified tool is published in ALL_MESH_TOOLS. These are read-only helpers — they
-// never run validation commands or git merges (that is mesh_refine_node / mesh_refine_plan).
-export const MESH_REFINE_CONFIG_TOOL = {
-    name: 'mesh_refine_config',
-    description: 'Repo Mesh Refinery config helper — unified read-only entry for the three refine-config operations. Select the operation with `mode` (REQUIRED). '
-        + 'mode=\'schema\': return the Refinery config JSON schema and supported repo-local config locations (the validation source of truth; heuristic command detection is suggestions-only) — takes no other parameters. '
-        + 'mode=\'validate\': validate the repo mesh/refine config for a node/workspace without running validation commands or merging — accepts optional `node_id` (defaults to the first mesh node) and an optional inline `config` object (validated instead of loading from the repo). '
-        + 'mode=\'suggest\': suggest a refine config scaffold from project context/package scripts (never executed until saved) — accepts optional `node_id`. '
-        + 'Does NOT run validation commands or git merges — use mesh_refine_node / mesh_refine_plan for execution.',
+// 2026-09-26 tool consolidation: the Refinery config helper, the Change Impact
+// config helper and the `.adhdev/mesh.json` gated write are one tool, selected
+// by `kind`. refine / change_impact keep their read-only `mode`
+// (schema/validate/suggest); mesh_json keeps its write/overwrite dry-run contract.
+// The pre-2026-09 per-mode names (mesh_refine_config_schema & co.) stay
+// dispatchable as hidden aliases with kind + mode injected (mesh-tool-dispatch.ts).
+export const MESH_CONFIG_TOOL = {
+    name: 'mesh_config',
+    description: 'Repo Mesh repo-config helper. Select the config family with `kind` (REQUIRED):\n'
+        + '• kind="refine" — the Refinery config (read-only). Use when a refine run reports a config error or you need to know which validation commands will run. `mode` (REQUIRED): '
+        + 'schema = the config JSON schema and supported repo-local locations (the validation authority; heuristic command detection is suggestions-only), no other args; validate = validate a node/workspace config without running validation or merging (optional node_id, optional inline `config`); suggest = scaffold a config from project context/package scripts (never executed until saved; optional node_id). '
+        + 'Never runs validation or merges — that is mesh_refine_node / mesh_refine_plan.\n'
+        + '• kind="change_impact" — the Change Impact config (read-only, declarative, never executed): which package/file changes between the live daemon build and workspace HEAD need a daemon rebuild/restart vs a web-only redeploy vs nothing. Use when deciding whether a landed change needs a daemon restart. '
+        + 'Same `mode` values: schema; validate (loads .adhdev/change-impact.{json,yaml,yml} or repo-mesh-change-impact.* unless inline `config`); suggest (web-* → web-only, others → daemon-runtime, docs/license markers → non-runtime; review and save before it takes effect).\n'
+        + '• kind="mesh_json" — gated WRITE of `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Use when the user wants the coordinator prompt/config committed to the repo. '
+        + 'Dry-run by default (write=false), never clobbers an existing file unless overwrite=true, validates before writing. Overwrite silently replaces the file: present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope. Args: node_id, workspace, write, overwrite (no `mode`).',
     inputSchema: {
         type: 'object' as const,
         properties: {
+            kind: {
+                type: 'string',
+                enum: ['refine', 'change_impact', 'mesh_json'],
+                description: 'Which config family (required). Each kind accepts only its own arguments — see the tool description.',
+            },
             mode: {
                 type: 'string',
                 enum: ['schema', 'validate', 'suggest'],
-                description: 'Which config operation to run (required). schema: return the config JSON schema (no other params). validate: validate a node/workspace refine config (optional node_id, optional inline config). suggest: scaffold a config from project context (optional node_id).',
+                description: 'refine / change_impact only (required for them): schema (no other params), validate (optional node_id, optional inline config), suggest (optional node_id).',
             },
-            node_id: { type: 'string', description: 'Optional node/workspace. Used by mode=validate (config to load) and mode=suggest (context source); defaults to the first mesh node. Ignored by mode=schema.' },
-            config: { type: 'object', description: 'Optional inline config object to validate instead of loading from the repo. Only used by mode=validate.' },
+            node_id: { type: 'string', description: 'Optional node/workspace; defaults to the first mesh node. refine / change_impact: the config to load (validate) or context source (suggest), ignored by schema. mesh_json: whose workspace .adhdev/mesh.json is written (`workspace` wins when both are given).' },
+            config: { type: 'object', description: 'refine / change_impact, mode=validate only: inline config object to validate instead of loading from the repo.' },
+            write: { type: 'boolean', description: 'mesh_json: when true, persist .adhdev/mesh.json to the repo (commit target). Defaults false (dry-run preview).' },
+            overwrite: { type: 'boolean', description: 'mesh_json: when true, replace an existing .adhdev/mesh.json. Defaults false (never clobber an existing repo mesh.json).' },
+            workspace: { type: 'string', description: 'mesh_json: optional workspace path whose .adhdev/mesh.json is written. Defaults to the resolved node_id node\'s workspace.' },
         },
-        required: ['mode'],
+        required: ['kind'],
     },
 };
 
-// Unified read-only Change Impact config helper. Consolidates the former
-// mesh_change_impact_config_schema / mesh_validate_change_impact_config /
-// mesh_suggest_change_impact_config tools into a single `mode`-dispatched tool
-// (MESH-COMPLEXITY-AUDIT, symmetric to the Part 8-4 refine-config consolidation). The old
-// three names remain dispatchable as 1-release hidden aliases (see server.ts), but only this
-// unified tool is published in ALL_MESH_TOOLS. These are read-only helpers — Change Impact
-// config is declarative and parsed, never executed.
-export const MESH_CHANGE_IMPACT_CONFIG_TOOL = {
-    name: 'mesh_change_impact_config',
-    description: 'Repo Mesh Change Impact config helper — unified read-only entry for the three change-impact config operations. '
-        + 'Change Impact config declaratively classifies which package/file changes between the live daemon build and workspace HEAD require a daemon rebuild/restart vs. a web-only redeploy vs. nothing (parsed, never executed). Select the operation with `mode` (REQUIRED). '
-        + 'mode=\'schema\': return the Change Impact config JSON schema and supported repo-local config locations — takes no other parameters. '
-        + 'mode=\'validate\': validate a Change Impact config for a node/workspace and report valid/errors — loads .adhdev/change-impact.{json,yaml,yml} (or repo-mesh-change-impact.* alias) unless an inline `config` object is provided; accepts optional `node_id` (defaults to the first mesh node). '
-        + 'mode=\'suggest\': suggest a Change Impact config scaffold from the repo package layout (web-* → web-only, others → daemon-runtime, plus docs/license markers as non-runtime) — the draft must be reviewed and saved before it takes effect; accepts optional `node_id`. '
-        + 'Declarative only — nothing is executed.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            mode: {
-                type: 'string',
-                enum: ['schema', 'validate', 'suggest'],
-                description: 'Which config operation to run (required). schema: return the config JSON schema (no other params). validate: validate a node/workspace change-impact config (optional node_id, optional inline config). suggest: scaffold a config from the repo package layout (optional node_id).',
-            },
-            node_id: { type: 'string', description: 'Optional node/workspace. Used by mode=validate (config to load) and mode=suggest (context source); defaults to the first mesh node. Ignored by mode=schema.' },
-            config: { type: 'object', description: 'Optional inline config object to validate instead of loading from the repo. Only used by mode=validate.' },
-        },
-        required: ['mode'],
-    },
-};
 
 export const MESH_INIT_TOOL = {
     name: 'mesh_init',
-    description: 'One-click mesh onboarding for an existing git project. Detects installed CLI providers, suggests all three repo `.adhdev/*` config families — Refinery (.adhdev/refine.json), worktree bootstrap (.adhdev/worktree_bootstrap.json) AND change-impact (.adhdev/change-impact.json) — optionally writes them to disk, and recommends a node providerPriority from the detected providers. Also returns `currentConfig`: the currently-saved config per domain (repo files + machine-local magiKindPanels) so you can present a current-vs-suggested diff before overwriting. Suggestions are scaffold only and never execute until saved; providerPriority is a recommendation to apply to node policy, not auto-applied. Defaults to dry-run (no files written) and never overwrites an existing config unless overwrite=true. For an already-onboarded repo that needs refreshing, use mesh_reinit (overwrite semantics + enforced diff).',
+    description: 'Mesh onboarding for a git project: detects installed CLI providers, suggests all three repo `.adhdev/*` config families — Refinery (.adhdev/refine.json), worktree bootstrap (.adhdev/worktree_bootstrap.json) AND change-impact (.adhdev/change-impact.json) — optionally writes them, and recommends a node providerPriority. '
+        + 'Also returns `currentConfig` (the saved config per domain: repo files + machine-local magiKindPanels) so you can present a current-vs-suggested diff. Suggestions never execute until saved; providerPriority is a recommendation, not auto-applied. Always dry-run unless write=true. Select with `mode`:\n'
+        + '• mode="init" (default) — a fresh, never-onboarded repo. Never overwrites an existing config unless overwrite=true.\n'
+        + '• mode="reinit" — re-onboard an ALREADY-initialized repo whose config needs refreshing: same suggest→validate→gated-write engine with overwrite defaulting to TRUE and a reinit contract in the response. '
+        + 'Overwrite is a WHOLESALE replacement, so it must NOT silently drop operator hand-edits: the first call (write=false) is a DRY-RUN — present the per-section current-vs-suggested diff, get EXPLICIT per-section approval, then re-invoke with write=true.',
     inputSchema: {
         type: 'object' as const,
         properties: {
+            mode: {
+                type: 'string',
+                enum: ['init', 'reinit'],
+                description: 'init (default) = first-time onboarding, existing config wins; reinit = refresh an onboarded repo, overwrite defaults to true.',
+            },
             node_id: { type: 'string', description: 'Optional node/workspace to onboard. Defaults to the first mesh node with a workspace.' },
-            write: { type: 'boolean', description: 'When true, persist the suggested configs to disk. Defaults false (dry-run preview only).' },
-            overwrite: { type: 'boolean', description: 'When true, overwrite an existing config file. Defaults false (never clobber an existing refine/bootstrap config).' },
-        },
-    },
-};
-
-export const MESH_REINIT_TOOL = {
-    name: 'mesh_reinit',
-    description: 'Re-onboard an ALREADY-initialized repo: re-suggest the repo `.adhdev/*` configs (refine / worktree_bootstrap / change-impact) with OVERWRITE semantics and return a current-vs-suggested diff so you can replace stale config. This is NOT a new write engine — it reuses mesh_init\'s suggest→validate→gated-write with overwrite=true (default) plus the current-config echo (`currentConfig`). CONTRACT: overwrite is a WHOLESALE replacement, so it must NOT silently drop operator hand-edits — the first call (write=false, the default) is a DRY-RUN preview that surfaces the per-section diff; you MUST present that current-vs-suggested diff and get EXPLICIT per-section user approval, then re-invoke with write=true. Use mesh_init (not reinit) for a fresh, never-onboarded repo.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            node_id: { type: 'string', description: 'Optional node/workspace to re-onboard. Defaults to the first mesh node with a workspace.' },
-            write: { type: 'boolean', description: 'When true, persist the overwritten configs. Defaults false (dry-run preview surfacing the current-vs-suggested diff — approve per-section first).' },
-            overwrite: { type: 'boolean', description: 'Defaults true (reinit replaces existing config). Pass false to fall back to existing-wins (equivalent to mesh_init).' },
+            write: { type: 'boolean', description: 'When true, persist the suggested configs to disk. Defaults false (dry-run preview only — for reinit, the preview surfaces the current-vs-suggested diff; approve per-section first).' },
+            overwrite: { type: 'boolean', description: 'Replace an existing config file. Defaults false for mode=init (never clobber) and true for mode=reinit; pass false with reinit to fall back to existing-wins.' },
         },
     },
 };
@@ -1415,16 +1345,26 @@ export const MESH_MAGI_COLLECT_TOOL = {
     },
 };
 
-export const MESH_MAGI_KIND_PANEL_SET_TOOL = {
-    name: 'mesh_magi_kind_panel_set',
-    description: 'Bind a task_kind to its MAGI kind-panel slot list for THIS mesh (machine-local ~/.adhdev/meshes.json → `meshes[].magiKindPanels`). This binding is what a `mesh_magi_review({ task_kind })` resolves to — it is the SOLE panel-resolution path (there is no named-panel or inline-members alternative). SCOPE: PER MESH, stored machine-locally (NOT a repo-committed file). The write targets the calling coordinator\'s mesh only; another mesh on the same machine keeps its own independent binding for the same task_kind. IMPORTANT — WHOLESALE REPLACEMENT: a task_kind has exactly one binding per mesh, so the `slots` you pass become the COMPLETE new slot set and any prior slots for that kind are dropped (not merged). Because it silently replaces the current binding, get EXPLICIT user approval before writing and present the current-vs-new slot lists (the dry-run returns `currentSlots`). Defaults to dry-run (write=false). A slot\'s `nodeId`, when given, MUST name a node of this mesh — a foreign or unknown node id is rejected (invalid_magi_kind_panel).',
+// 2026-09-26 tool consolidation: the MAGI kind-panel set/list pair as one tool.
+export const MESH_MAGI_KIND_PANEL_TOOL = {
+    name: 'mesh_magi_kind_panel',
+    description: 'Read or bind the MAGI kind→panel slot lists for THIS mesh (machine-local ~/.adhdev/meshes.json → `meshes[].magiKindPanels`). The binding is what `mesh_magi_review({ task_kind })` resolves to — the SOLE panel-resolution path. '
+        + 'Use it when mesh_magi_review fails with magi_kind_not_configured, or to confirm what a task_kind resolves to before a review. SCOPE: PER MESH, machine-local (NOT repo-committed); another mesh on this machine keeps its own bindings. Select with `action` (REQUIRED):\n'
+        + '• list — read-only: every configured kind binding, or just `task_kind`\'s. The response `scope` names the mesh. Args: task_kind.\n'
+        + '• set — bind `task_kind` to `slots`. WHOLESALE REPLACEMENT: the slots become the kind\'s COMPLETE set (prior slots dropped, not merged), so present the current-vs-new lists (the dry-run returns `currentSlots`) and get EXPLICIT user approval before write=true. Defaults to dry-run. '
+        + 'A slot\'s `nodeId`, when given, MUST name a node of this mesh — a foreign/unknown id is rejected (invalid_magi_kind_panel). Args: task_kind, slots, write.',
     inputSchema: {
         type: 'object' as const,
         properties: {
-            task_kind: { type: 'string', description: 'The task_kind key to bind, e.g. claim_audit / rca / design / freeform.' },
+            action: {
+                type: 'string',
+                enum: ['list', 'set'],
+                description: 'Which panel operation to run (required). Each action accepts only its own arguments — see the tool description.',
+            },
+            task_kind: { type: 'string', description: 'The task_kind key, e.g. claim_audit / rca / design / freeform. Required for set; list: optional filter (omit to list all).' },
             slots: {
                 type: 'array',
-                description: 'The COMPLETE desired slot list for this kind (wholesale replacement). Each slot: { provider (REQUIRED), nodeId?, model?, capabilityTags?, n? }.',
+                description: 'set: the COMPLETE desired slot list for this kind (wholesale replacement). Each slot: { provider (REQUIRED), nodeId?, model?, capabilityTags?, n? }. Required for set.',
                 items: {
                     type: 'object',
                     properties: {
@@ -1437,34 +1377,37 @@ export const MESH_MAGI_KIND_PANEL_SET_TOOL = {
                     required: ['provider'],
                 },
             },
-            write: { type: 'boolean', description: 'When true, persist the slot list (wholesale replacement) to meshes.json. Defaults false (dry-run preview of the normalized slots + currentSlots).' },
+            write: { type: 'boolean', description: 'set: when true, persist the slot list (wholesale replacement) to meshes.json. Defaults false (dry-run preview of the normalized slots + currentSlots).' },
         },
-        required: ['task_kind', 'slots'],
+        required: ['action'],
     },
 };
 
-export const MESH_MAGI_KIND_PANEL_LIST_TOOL = {
-    name: 'mesh_magi_kind_panel_list',
-    description: 'List the MAGI kind→panel slot bindings configured for THIS mesh (machine-local, per mesh). Read-only. The response `scope` names the mesh the bindings belong to — panels are per mesh, so another mesh on this machine has its own independent set. Use to confirm what a `task_kind` resolves to before mesh_magi_review, and to diff current-vs-new before an overwrite via mesh_magi_kind_panel_set.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            task_kind: { type: 'string', description: 'Optional — show only this task_kind\'s binding. Omit to list all configured kind bindings.' },
-        },
-    },
-};
 
-export const MESH_NODE_SLOTS_SET_TOOL = {
-    name: 'mesh_node_slots_set',
-    description: 'PROPOSE (dry-run) or APPLY a mesh node\'s capability-slot list (policy.slots) — the orchestrator\'s surface for autonomously adjusting a node\'s AI-tool profile mid-run. A node\'s slots drive task→node fitness routing and MAGI fan-out, so changing them changes how work is distributed. IMPORTANT — WHOLESALE REPLACEMENT: the `slots` you pass become the node\'s COMPLETE new slot list; any prior slot not in the list is dropped (not merged). Because it silently replaces the profile, get EXPLICIT user approval before writing: the default dry-run (write=false) returns `currentSlots` vs `proposedSlots` for you to present as a diff — re-run with write=true ONLY after the user approves. Apply goes through update_mesh_node (machine-local node policy).',
+// 2026-09-26 tool consolidation: set / list / propose on a node's capability
+// slots are one tool, selected by `action` (per-action argument sets enforced in
+// validate-tool-args.ts MESH_TOOL_ACTIONS).
+export const MESH_NODE_SLOTS_TOOL = {
+    name: 'mesh_node_slots',
+    description: 'Read, draft, or change a mesh node\'s capability slots (policy.slots) — the provider/model/thinking + difficulty + capability-tag profile that task→node fitness routing and MAGI fan-out match against. '
+        + 'Use it when routing keeps landing work on a poor-fit node, when a node has no slots, or after CLI agents were installed on a node. Select with `action` (REQUIRED):\n'
+        + '• list — read-only: the node\'s current slots. Args: node_id.\n'
+        + '• propose — read-only AUTO-DETECT: probes the node\'s installed CLI agents (get_status_metadata → availableProviders, category=cli + installed=true), maps each through a seeded provider→(model/thinkingLevel/difficulty/maxParallel) table, and returns `proposedSlots` with per-slot rationale plus `droppedSlots` / `droppedProviders` / `destructive` '
+        + '(hand-tuned slots, tuned maxParallel, providers not on PATH are NOT preserved by the draft — present those before approving). Detects nothing → proposes nothing. Never writes. Args: node_id, include_magi.\n'
+        + '• set — PROPOSE (dry-run, default) or APPLY (write=true) a slot list. WHOLESALE REPLACEMENT: the `slots` you pass become the COMPLETE new list; any prior slot not in it is dropped. The dry-run returns `currentSlots` vs `proposedSlots` — present the diff and get EXPLICIT user approval before write=true. Apply goes through update_mesh_node (machine-local node policy). Args: node_id, slots, reason, write.',
     inputSchema: {
         type: 'object' as const,
         properties: {
-            node_id: { type: 'string', description: 'REQUIRED — the mesh node id whose capability slots to set.' },
+            action: {
+                type: 'string',
+                enum: ['list', 'propose', 'set'],
+                description: 'Which slot operation to run (required). Each action accepts only its own arguments — see the tool description.',
+            },
+            node_id: { type: 'string', description: 'REQUIRED — the mesh node id. All actions.' },
             nodeId: { type: 'string', description: 'CamelCase alias for node_id.' },
             slots: {
                 type: 'array',
-                description: 'The COMPLETE desired capability-slot list for this node (wholesale replacement). Each slot: { provider (REQUIRED), model?, thinkingLevel?, difficulty?, capability?, maxParallel? }.',
+                description: 'set: the COMPLETE desired capability-slot list (wholesale replacement). Each slot: { provider (REQUIRED), model?, thinkingLevel?, difficulty?, capability?, maxParallel? }. Required for set.',
                 items: {
                     type: 'object',
                     properties: {
@@ -1478,81 +1421,41 @@ export const MESH_NODE_SLOTS_SET_TOOL = {
                     required: ['provider'],
                 },
             },
-            reason: { type: 'string', description: 'Optional — a short rationale for the proposal, echoed in the dry-run so the user sees WHY the change is suggested.' },
-            write: { type: 'boolean', description: 'When true, apply the slot list (wholesale replacement) to the node. Defaults false (dry-run preview of proposedSlots + currentSlots).' },
-        },
-        required: ['node_id', 'slots'],
-    },
-};
-
-export const MESH_NODE_SLOTS_LIST_TOOL = {
-    name: 'mesh_node_slots_list',
-    description: 'List a mesh node\'s capability slots (policy.slots). Read-only. Use to confirm the current AI-tool profile of a node and to diff current-vs-proposed before a mesh_node_slots_set overwrite.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            node_id: { type: 'string', description: 'REQUIRED — the mesh node id whose capability slots to list.' },
-            nodeId: { type: 'string', description: 'CamelCase alias for node_id.' },
-        },
-        required: ['node_id'],
-    },
-};
-
-export const MESH_NODE_SLOTS_PROPOSE_TOOL = {
-    name: 'mesh_node_slots_propose',
-    description: 'AUTO-DETECT a node\'s installed CLI agents and DRAFT a capability-slot profile from them — the "just allow it and it figures out the slots" path. READ-ONLY: it probes the node (get_status_metadata → availableProviders, filtered to category=cli + installed=true), maps each detected CLI through a seeded provider→(model/thinkingLevel/difficulty/maxParallel) table, and returns `proposedSlots` plus per-slot rationale. It NEVER writes — apply the draft with mesh_node_slots_set({ node_id, slots: proposedSlots, write: true }) after user approval. CRITICAL: slot writes are WHOLESALE replacements, so the response computes `droppedSlots` / `droppedProviders` / `destructive` — existing hand-tuned slots (capability tags, tuned maxParallel, providers not currently on PATH) are NOT preserved by the draft. Present those before approving. Detects nothing → proposes nothing (it will NOT propose an empty list that would wipe the profile). Optional include_magi drafts one cross-provider MAGI panel of the detected providers.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            node_id: { type: 'string', description: 'REQUIRED — the mesh node id to detect installed CLI agents on and draft slots for.' },
-            nodeId: { type: 'string', description: 'CamelCase alias for node_id.' },
-            include_magi: { type: 'boolean', description: 'When true, also draft a MAGI panel (one slot per detected provider, pinned to this node, models unpinned) for binding via mesh_magi_kind_panel_set. Defaults false. Deliberately NOT a per-task_kind assignment — provider manifests carry no rca/design/claim_audit suitability data.' },
+            reason: { type: 'string', description: 'set: optional short rationale, echoed in the dry-run so the user sees WHY the change is suggested.' },
+            write: { type: 'boolean', description: 'set: when true, apply the slot list (wholesale replacement). Defaults false (dry-run preview of proposedSlots + currentSlots).' },
+            include_magi: { type: 'boolean', description: 'propose: also draft a MAGI panel (one slot per detected provider, pinned to this node, models unpinned) for binding via mesh_magi_kind_panel action "set". Defaults false. Deliberately NOT a per-task_kind assignment — provider manifests carry no rca/design/claim_audit suitability data.' },
             includeMagi: { type: 'boolean', description: 'CamelCase alias for include_magi.' },
         },
-        required: ['node_id'],
+        required: ['action', 'node_id'],
     },
 };
 
-export const MESH_WRITE_MESH_JSON_CONFIG_TOOL = {
-    name: 'mesh_write_mesh_json_config',
-    description: 'Write `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Gated WRITE sibling of the draft-only export_mesh_json_config. Follows the mesh_init write/overwrite/dry-run precedent: defaults to dry-run (write=false), never clobbers an existing repo mesh.json unless overwrite=true, and validates before writing. Overwrite silently replaces the file, so present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope (commit target) — distinct from the machine-local MAGI kind-panel writes. Targets the first mesh node unless `node_id` (or an explicit `workspace`) names another.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            // Declared because the handler ROUTES on it (resolveRefineConfigNode(ctx, args.node_id)),
-            // exactly like its read-only sibling mesh_refine_config. It was omitted here while the
-            // sibling declared it, so the unknown-arg gate rejected every {node_id} call and the
-            // repo-committed write could only ever target the coordinator's default node.
-            node_id: { type: 'string', description: 'Optional node whose workspace .adhdev/mesh.json is written; defaults to the first mesh node. `workspace` (below) still wins when both are given.' },
-            write: { type: 'boolean', description: 'When true, persist .adhdev/mesh.json to the repo (commit target). Defaults false (dry-run preview).' },
-            overwrite: { type: 'boolean', description: 'When true, replace an existing .adhdev/mesh.json. Defaults false (never clobber an existing repo mesh.json).' },
-            workspace: { type: 'string', description: 'Optional workspace path whose .adhdev/mesh.json is written. Defaults to the resolved node_id node\'s workspace.' },
-        },
-    },
-};
 
-export const MESH_COORDINATOR_PROMPT_APPEND_GET_TOOL = {
-    name: 'mesh_coordinator_prompt_append_get',
-    description: 'Read the current user-level coordinator prompt APPEND text for a CLI type — the per-machine file at ~/.adhdev/coordinator-prompts/<cli>.append.md on this MCP server\'s daemon. Read this before mesh_coordinator_prompt_append_set so you know what you would be replacing. APPEND ONLY: this always stacks AFTER whichever base prompt wins (daemon default, or a mesh-level / user-level override) — there is no tool to read or write the OVERRIDE (base-replacing) file via MCP; that stays a dashboard-only, human-gated action by design.',
+
+
+// 2026-09-26 tool consolidation: the coordinator prompt APPEND get/set pair as one tool.
+export const MESH_COORDINATOR_PROMPT_APPEND_TOOL = {
+    name: 'mesh_coordinator_prompt_append',
+    description: 'Read or write the user-level coordinator prompt APPEND text for a CLI type — the per-machine file ~/.adhdev/coordinator-prompts/<cli>.append.md on this MCP server\'s daemon, applied to every mesh this daemon coordinates. '
+        + 'Use it only when the user asks to add a standing instruction to every coordinator on this machine. Select with `action` (REQUIRED):\n'
+        + '• get — read the current append text. Read it before `set` so you know what you would replace. Args: cli_type.\n'
+        + '• set — write (or, with empty/omitted content, clear) the append file. WHOLESALE REPLACE of the whole file, not an incremental add. Args: cli_type, content.\n'
+        + 'APPEND ONLY (a safety boundary, not a missing feature): this always stacks AFTER whichever base prompt wins; it can NEVER replace the daemon\'s base coordinator prompt (the OVERRIDE file) — that stays a dashboard-only, human-gated action, so a coordinator cannot erase its own core operating rules.',
     inputSchema: {
         type: 'object' as const,
         properties: {
+            action: {
+                type: 'string',
+                enum: ['get', 'set'],
+                description: 'get = read the append text; set = replace (or clear) it. Required.',
+            },
             cli_type: { type: 'string', description: 'CLI type key, e.g. "claude-cli", "codex-cli". Defaults to "default" (applies to every CLI type without its own file).' },
+            content: { type: 'string', description: 'set: the full append text to write. Omit or pass an empty string to clear (delete the file, falling back to no append at this layer).' },
         },
+        required: ['action'],
     },
 };
 
-export const MESH_COORDINATOR_PROMPT_APPEND_SET_TOOL = {
-    name: 'mesh_coordinator_prompt_append_set',
-    description: 'Write (or clear) the user-level coordinator prompt APPEND text for a CLI type — the per-machine file at ~/.adhdev/coordinator-prompts/<cli>.append.md on this MCP server\'s daemon. Applies to every mesh this daemon coordinates. Empty/omitted content deletes the file (reset to no append). WHOLESALE REPLACE: this replaces the entire append file, not an incremental add — read the current value first with mesh_coordinator_prompt_append_get if you want to preserve existing text. APPEND ONLY (safety boundary, not a missing feature): this can only ever add text after the base prompt; it can NEVER replace the daemon\'s base coordinator prompt (the OVERRIDE file), so a coordinator using this tool cannot erase its own core operating rules. There is no override parameter and none will be added.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            cli_type: { type: 'string', description: 'CLI type key, e.g. "claude-cli", "codex-cli". Defaults to "default".' },
-            content: { type: 'string', description: 'The full append text to write. Omit or pass an empty string to clear (delete the file, falling back to no append at this layer).' },
-        },
-    },
-};
 
 /**
  * E-T0 (design §7.1) — deposit an urgent memo into a delegated worker's
@@ -1615,9 +1518,7 @@ export const ALL_MESH_TOOLS = [
     // GRAPH-ORCHESTRATION Phase E — placed next to the queue/enqueue tools so a
     // coordinator that loaded the batch schema also discovers how to pass a gate.
     MESH_GRAPH_VIEW_TOOL,
-    MESH_GRAPH_GATE_CLAIM_TOOL,
-    MESH_GRAPH_GATE_RELEASE_TOOL,
-    MESH_GRAPH_GATE_ABANDON_TOOL,
+    MESH_GRAPH_GATE_TOOL,
     MESH_GRAPH_NODE_PATCH_TOOL,
     MESH_QUEUE_CANCEL_TOOL,
     MESH_QUEUE_REQUEUE_TOOL,
@@ -1635,7 +1536,6 @@ export const ALL_MESH_TOOLS = [
     MESH_APPROVE_TOOL,
     MESH_ANSWER_QUESTION_TOOL,
     MESH_LIST_PENDING_APPROVALS_TOOL,
-    MESH_PLAN_ONBOARDING_TOOL,
     MESH_CREATE_TOOL,
     MESH_ADD_NODE_TOOL,
     MESH_CLONE_NODE_TOOL,
@@ -1643,31 +1543,22 @@ export const ALL_MESH_TOOLS = [
     MESH_CLEANUP_WORKTREE_NODES_TOOL,
     MESH_REFINE_NODE_TOOL,
     MESH_REFINE_BATCH_TOOL,
-    MESH_REFINE_CONFIG_TOOL,
-    MESH_CHANGE_IMPACT_CONFIG_TOOL,
+    MESH_CONFIG_TOOL,
     MESH_INIT_TOOL,
-    MESH_REINIT_TOOL,
-    MESH_WRITE_MESH_JSON_CONFIG_TOOL,
     MESH_REFINE_PLAN_TOOL,
     MESH_CLEANUP_SESSIONS_TOOL,
-    MESH_PRUNE_STALE_DIRECT_TOOL,
     MESH_TASK_HISTORY_TOOL,
     MESH_LEDGER_QUERY_TOOL,
-    MESH_RECORD_NOTE_TOOL,
-    MESH_FORGET_NOTE_TOOL,
+    MESH_NOTE_TOOL,
     MESH_RECONCILE_LEDGER_TOOL,
     MESH_MISSION_UPSERT_TOOL,
     MESH_MISSION_LIST_TOOL,
     MESH_REVIEW_INBOX_TOOL,
     MESH_MAGI_REVIEW_TOOL,
     MESH_MAGI_COLLECT_TOOL,
-    MESH_MAGI_KIND_PANEL_SET_TOOL,
-    MESH_MAGI_KIND_PANEL_LIST_TOOL,
-    MESH_NODE_SLOTS_SET_TOOL,
-    MESH_NODE_SLOTS_LIST_TOOL,
-    MESH_NODE_SLOTS_PROPOSE_TOOL,
-    MESH_COORDINATOR_PROMPT_APPEND_GET_TOOL,
-    MESH_COORDINATOR_PROMPT_APPEND_SET_TOOL,
+    MESH_MAGI_KIND_PANEL_TOOL,
+    MESH_NODE_SLOTS_TOOL,
+    MESH_COORDINATOR_PROMPT_APPEND_TOOL,
 ];
 
 // Replace each slot with an annotated copy. Does not mutate the `*_TOOL`

@@ -277,7 +277,7 @@ function byteLength(s: string): number {
  */
 function appendTruncationNotice(prompt: string, shed: string[]): string {
     if (shed.length === 0) return prompt;
-    return `${prompt}\n\n_Prompt exceeded the ${Math.floor(PROMPT_SOFT_CAP_BYTES / 1024)}KB soft cap; omitted to fit: ${shed.join(', ')}. Full detail remains in the ledger (\`mesh_task_history\` / \`mesh_record_note\`)._`;
+    return `${prompt}\n\n_Prompt exceeded the ${Math.floor(PROMPT_SOFT_CAP_BYTES / 1024)}KB soft cap; omitted to fit: ${shed.join(', ')}. Full detail remains in the ledger (\`mesh_task_history\` / \`mesh_note\`)._`;
 }
 
 function assembleCoordinatorPrompt(ctx: CoordinatorPromptContext, drop: DefaultPromptDropFlags): string {
@@ -932,14 +932,14 @@ function buildOperatingNotesSection(notes?: CoordinatorOperatingNote[], now: num
     if (shown.length === 0) return '';
 
     const lines: string[] = ['## Operating Notes', ''];
-    lines.push('Lessons earlier coordinators on this mesh recorded via `mesh_record_note`. Treat them as accumulated operating knowledge — apply them. When you learn a durable lesson (a provider quirk, a pattern to avoid, a recovery lesson), record it with `mesh_record_note` so future coordinators inherit it.');
+    lines.push('Lessons earlier coordinators on this mesh recorded via `mesh_note` (action "record"). Treat them as accumulated operating knowledge — apply them. When you learn a durable lesson (a provider quirk, a pattern to avoid, a recovery lesson), record it with `mesh_note` (action "record") so future coordinators inherit it.');
     lines.push('');
     for (const entry of shown) {
         lines.push(renderOperatingNoteLine(entry));
     }
     if (omittedCount > 0) {
         lines.push('');
-        lines.push(`_${omittedCount} lower-priority note${omittedCount === 1 ? '' : 's'} omitted to fit the injection cap/byte-budget (kept in ledger; expired, superseded, and same-subject-folded notes are also hidden from this list but retained for audit; prune with \`mesh_forget_note\`)._`);
+        lines.push(`_${omittedCount} lower-priority note${omittedCount === 1 ? '' : 's'} omitted to fit the injection cap/byte-budget (kept in ledger; expired, superseded, and same-subject-folded notes are also hidden from this list but retained for audit; prune with \`mesh_note\` action "forget")._`);
     }
     return lines.join('\n');
 }
@@ -977,7 +977,7 @@ function buildBrainPresetsSection(): string {
         '',
         'Pass `difficulty` on `mesh_enqueue_task` (the default), or on every worker entry in `mesh_enqueue_batch` for a settled multi-step plan. The values (`easy` / `medium` / `difficult` / `freeform`) describe how hard the work is. It is a ROUTING HINT: it is matched against each node\'s capability slots, so a task goes to a slot configured for that difficulty.',
         '',
-        '**The slot decides the model and thinking level — not the difficulty.** `difficulty: "difficult"` does not mean "use opus"; it means "route to a slot that handles difficult work", and that slot\'s own model/thinking is what launches. So classify honestly by how hard the task is, and change what a difficulty RUNS ON by editing the node\'s slots (`mesh_node_slots_set`), never by picking a different difficulty. Passing an explicit `model`/`thinkingLevel` still overrides everything for one task.',
+        '**The slot decides the model and thinking level — not the difficulty.** `difficulty: "difficult"` does not mean "use opus"; it means "route to a slot that handles difficult work", and that slot\'s own model/thinking is what launches. So classify honestly by how hard the task is, and change what a difficulty RUNS ON by editing the node\'s slots (`mesh_node_slots` action "set"), never by picking a different difficulty. Passing an explicit `model`/`thinkingLevel` still overrides everything for one task.',
     ];
 
     const configured = MESH_TASK_DIFFICULTIES
@@ -1036,7 +1036,7 @@ export function buildMagiKindPanelsSection(panels: MagiKindPanelMap | undefined 
     }
 
     lines.push('');
-    lines.push('Use these via `mesh_magi_review` (the `task_kind` is REQUIRED — it selects BOTH the output schema and the panel). The live authoritative slot list is `mesh_magi_kind_panel_list`. MAGI worker replicas are read-only and typically do NOT have mesh MCP tools exposed, so for live timing / tool-behavior claims you MUST gather the primary evidence yourself and use MAGI only for independent source-level corroboration.');
+    lines.push('Use these via `mesh_magi_review` (the `task_kind` is REQUIRED — it selects BOTH the output schema and the panel). The live authoritative slot list is `mesh_magi_kind_panel` (action "list"). MAGI worker replicas are read-only and typically do NOT have mesh MCP tools exposed, so for live timing / tool-behavior claims you MUST gather the primary evidence yourself and use MAGI only for independent source-level corroboration.');
 
     return lines.join('\n');
 }
@@ -1096,10 +1096,8 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_enqueue_task\` | **DEFAULT enqueue surface.** One task; chain a known follow-up onto it with \`depends_on\` as it becomes known — the graph grows append-only. A task with \`depends_on\` automatically receives an "Upstream results" appendix summarizing its predecessors' completions. Idle nodes auto-claim |
 | \`mesh_view_queue\` | Queue status — pending/assigned/completed/failed/cancelled |
 | \`mesh_graph_view\` | Inspect orchestration graphs — node states, gates awaiting you, workspace sagas, why something is blocked |
-| \`mesh_graph_gate_claim\` | Take the lease on a gate awaiting a coordinator; returns the fencing token + generation a release needs |
-| \`mesh_graph_gate_release\` | Pass a gate you hold — the ONLY way through one (no timeout ever passes a gate). **A gate and its dependents are one unit**: a gate earns its keep only when some task names it in \`gated_by\`, because releasing it is what dispatches that task. A gate nothing depends on opens nothing and is pure claim/release overhead — declare the follower in the same batch, or skip the gate |
-| \`mesh_graph_gate_abandon\` | Give up on a gate that can never be opened, so its graph can go terminal. **Not a pass**: it CANCELS everything the gate was holding and produces no gate outcome. Use it when you cancelled the work behind a gate — otherwise that gate stays awaiting forever and the graph reaches no terminal state, not even cancelled |
-| \`mesh_graph_node_patch\` | Repair a node the graph could NOT materialize (task blocked on \`materialization_error:*\`) and retry it in one call. A \`inputs_from\`/\`run_if\` spec is baked in at enqueue but only resolved once every predecessor COMPLETES, so the failure strands the one step meant to consume all that finished work — and the automatic retry re-reads the same spec, so it can never self-heal. Patches only \`run_if\`/\`on_false\`/\`inputs_from\`/\`workspace_ref\`; message/routing/mode/model stay immutable and a claimed task cannot be patched. Not a re-tasking tool |
+| \`mesh_graph_gate\` | **When a gate notice arrives, or a gate blocks downstream work in \`mesh_graph_view\`.** \`action\`: \`claim\` (take the lease; returns the fencing token + generation release needs) → do the gated action yourself → \`release\` (the ONLY way through a gate — no timeout ever passes one); \`extend\` (push the deadline, no lease); \`abandon\` (give up on a gate that can never open so its graph can go terminal — **not a pass**: it CANCELS everything the gate held and produces no outcome; use it when you cancelled the work behind the gate). **A gate and its dependents are one unit**: a gate earns its keep only when some task names it in \`gated_by\`, because releasing it is what dispatches that task — a gate nothing depends on is pure claim/release overhead, so declare the follower in the same batch or skip the gate |
+| \`mesh_graph_node_patch\` | **When a graph node is blocked on \`materialization_error:*\` (a bad \`inputs_from\`/\`run_if\`).** Repair a node the graph could NOT materialize (task blocked on \`materialization_error:*\`) and retry it in one call. A \`inputs_from\`/\`run_if\` spec is baked in at enqueue but only resolved once every predecessor COMPLETES, so the failure strands the one step meant to consume all that finished work — and the automatic retry re-reads the same spec, so it can never self-heal. Patches only \`run_if\`/\`on_false\`/\`inputs_from\`/\`workspace_ref\`; message/routing/mode/model stay immutable and a claimed task cannot be patched. Not a re-tasking tool |
 | \`mesh_queue_cancel\` | Cancel a queue task (audit history kept) |
 | \`mesh_queue_requeue\` | Return a task to pending for retry |
 | \`mesh_send_task\` | Push a task straight to a specific node/session |
@@ -1115,8 +1113,7 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_ledger_query\` | Ledger query by kind/since/node/tail (kind/time/node axes) |
 | \`mesh_reconcile_ledger\` | Import missing ledger entries from remote nodes over P2P |
 | \`mesh_review_inbox\` | Local worktree nodes needing human review, with evidence/diff summaries |
-| \`mesh_record_note\` | Record a durable operating note (quirk / pattern to avoid / recovery lesson) for future coordinators |
-| \`mesh_forget_note\` | Retract a stale note by id or exact text (tombstone; history kept) |
+| \`mesh_note\` | **When you learn a durable lesson (always before closing a mission that taught one), or an injected note turns out stale/wrong.** \`action\`: \`record\` (quirk / pattern to avoid / recovery lesson, inherited by every future coordinator) or \`forget\` (retract by id or exact text; tombstone, history kept) |
 | \`mesh_git_status\` | Git status on a specific node |
 | \`mesh_read_node_logs\` | Remote node's daemon log tail over P2P (grep/since; secrets redacted) |
 | \`mesh_fast_forward_node\` | Dry-run / execute an obvious clean fast-forward without an agent session |
@@ -1125,31 +1122,22 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_approve\` | Approve/reject a pending yes/no tool-consent modal |
 | \`mesh_answer_question\` | Answer a session's multi-choice QUESTION (promptId from agent:waiting_choice; one answer per question) — never \`mesh_approve\` for questions |
 | \`mesh_list_pending_approvals\` | Approval inbox: every session awaiting a decision (read-only) |
-| \`mesh_plan_onboarding\` | Read-only discovery/dry-run plan before mesh_create/add_node/clone_node |
-| \`mesh_create\` | Bootstrap a NEW mesh for a repo |
+| \`mesh_create\` | **When the user asks to set up Repo Mesh for a repo with no mesh yet, or before adding/cloning a node.** \`mode\`: \`plan\` (read-only Git-aware discovery + dry-run plan for create / add existing / clone worktree — run it first) or \`create\` (default; bootstrap a NEW mesh after approval) |
 | \`mesh_add_node\` | Register an existing checkout as a node (worktrees: use \`mesh_clone_node\`) |
 | \`mesh_clone_node\` | Create a worktree node for isolated branch work (auto-launches its session) |
 | \`mesh_refine_node\` | Validate + merge a completed worktree node into its base branch |
 | \`mesh_refine_batch\` | Converge multiple sibling worktrees in one conflict-aware sequential pipeline |
 | \`mesh_refine_plan\` | Dry-run Refinery plan (config source, validation, merge intent) |
-| \`mesh_refine_config\` | Refinery config helper (read-only; mode=schema/validate/suggest) |
-| \`mesh_change_impact_config\` | Change Impact config helper (read-only; mode=schema/validate/suggest) |
+| \`mesh_config\` | **When a refine run reports a config error, when deciding whether a landed change needs a daemon restart, or when the user wants the coordinator prompt committed to the repo.** \`kind\`: \`refine\` / \`change_impact\` (read-only; \`mode\` = schema / validate / suggest) or \`mesh_json\` (gated write of \`.adhdev/mesh.json\`; dry-run default) |
 | \`mesh_remove_node\` | Remove a node (cleans up its worktree) |
 | \`mesh_cleanup_worktree_nodes\` | Plan/execute safe removal of CONVERGED worktree nodes (dry-run default) |
-| \`mesh_cleanup_sessions\` | Clean up delegated session records for a node |
-| \`mesh_prune_stale_direct\` | Prune orphaned staleDirect dispatch records (dry-run default) |
-| \`mesh_init\` | Guided onboarding for a fresh repo (dry-run suggest → gated write) |
-| \`mesh_reinit\` | Re-onboard a configured repo (diff preview → per-section approved overwrite) |
-| \`mesh_write_mesh_json_config\` | Gated write of \`.adhdev/mesh.json\` (coordinator-prompt config) |
+| \`mesh_cleanup_sessions\` | **When a node is cluttered with finished/stuck worker sessions, or \`mesh_status\` keeps listing stale direct dispatches.** \`mode\`: preserve / stop / delete_stopped / stop_and_delete (a node's session records) or \`prune_stale_direct\` (mesh-wide orphaned direct-dispatch records; dry-run unless \`execute=true\`) |
+| \`mesh_init\` | **When the user asks to onboard (or re-configure) this repo for Repo Mesh.** \`mode\`: \`init\` (default; fresh repo, existing config wins) or \`reinit\` (onboarded repo; overwrite semantics — present the per-section diff and get approval before \`write=true\`). Dry-run unless \`write=true\` |
 | \`mesh_magi_review\` | Cross-verify a read-only investigation across an independent agent panel |
 | \`mesh_magi_collect\` | Collect + synthesize a dispatched MAGI fan-out by consensus group id |
-| \`mesh_magi_kind_panel_set\` | Bind task_kind → MAGI panel slots (machine-local; wholesale replace — approve diff first) |
-| \`mesh_magi_kind_panel_list\` | List task_kind → MAGI panel bindings (read-only) |
-| \`mesh_node_slots_list\` | List a node's capability slots (provider/model/thinking + difficulty + tags) |
-| \`mesh_node_slots_set\` | Propose (dry-run) or apply a node's slots — wholesale replace, approve diff before write=true |
-| \`mesh_node_slots_propose\` | Auto-detect installed CLIs and draft a slot profile (read-only; reports droppedSlots) |
-| \`mesh_coordinator_prompt_append_get\` | Read this daemon's per-machine coordinator prompt APPEND for a CLI type |
-| \`mesh_coordinator_prompt_append_set\` | Write/clear that APPEND (append-only; base prompt is not replaceable) |`;
+| \`mesh_magi_kind_panel\` | **When \`mesh_magi_review\` fails with \`magi_kind_not_configured\`, or before a review to confirm what a task_kind resolves to.** \`action\`: \`list\` (read-only) or \`set\` (bind task_kind → panel slots; machine-local, wholesale replace — approve the diff first) |
+| \`mesh_node_slots\` | **When routing keeps landing work on a poor-fit node, a node has no slots, or CLI agents were installed on a node.** \`action\`: \`list\` (provider/model/thinking + difficulty + tags), \`propose\` (auto-detect installed CLIs and draft a profile; read-only, reports droppedSlots) or \`set\` (dry-run, then apply with \`write=true\` — wholesale replace, approve the diff first) |
+| \`mesh_coordinator_prompt_append\` | **Only when the user asks for a standing instruction on every coordinator this machine runs.** \`action\`: \`get\` (read this daemon's per-machine APPEND for a CLI type) or \`set\` (write/clear it; append-only — the base prompt is not replaceable) |`;
 
 // WIRING-UNIFICATION F1: the coordinator half of the worker protocol, rendered
 // by mesh-shared next to the footer every dispatched task carries so the two
@@ -1207,12 +1195,12 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
 2. **Present drafts** — For each domain, show the user the suggested config with its **save scope label** (repo-file vs machine-local). When \`currentConfig\` already has a saved value for a domain (init on a partially-onboarded repo, or any reinit), present a **current-vs-suggested diff**, not just the suggestion.
 3. **Approve → gated write** — Only after the user approves, call the matching gated-write tool:
    - repo \`.adhdev/*\` config files → \`mesh_init\` with \`write=true\` (and \`overwrite=true\` ONLY for domains the user approved replacing).
-   - \`.adhdev/mesh.json\` (coordinator prompt / operating notes) → \`mesh_write_mesh_json_config\` (write=true, overwrite only if approved).
-   - machine-local MAGI kind→panel slots → \`mesh_magi_kind_panel_set\` (write=true). NOTE: a kind binding is a **wholesale replacement** of that kind's slot list — present the current-vs-new slots first. providerPriority → apply via node policy update.
+   - \`.adhdev/mesh.json\` (coordinator prompt / operating notes) → \`mesh_config\` with \`kind="mesh_json"\` (write=true, overwrite only if approved).
+   - machine-local MAGI kind→panel slots → \`mesh_magi_kind_panel\` with \`action="set"\` (write=true). NOTE: a kind binding is a **wholesale replacement** of that kind's slot list — present the current-vs-new slots first. providerPriority → apply via node policy update.
 
 **init vs reinit:**
-- **\`mesh_init\`** — for a fresh, never-onboarded repo. Existing config files are kept (existing-wins) unless the user explicitly approves overwrite. Use for first-time setup.
-- **\`mesh_reinit\`** — for a repo that is already onboarded and needs its config refreshed. It re-suggests with OVERWRITE semantics and returns the current-vs-suggested \`currentConfig\` echo. Its first call is a DRY-RUN preview: you MUST present the per-section current-vs-suggested diff and get EXPLICIT per-section approval before re-invoking with write=true. Overwrite is a wholesale replacement, so it silently drops operator hand-edits if you skip the diff — never do that.
+- **\`mesh_init\`** (\`mode="init"\`, the default) — for a fresh, never-onboarded repo. Existing config files are kept (existing-wins) unless the user explicitly approves overwrite. Use for first-time setup.
+- **\`mesh_init\` with \`mode="reinit"\`** — for a repo that is already onboarded and needs its config refreshed. It re-suggests with OVERWRITE semantics and returns the current-vs-suggested \`currentConfig\` echo. Its first call is a DRY-RUN preview: you MUST present the per-section current-vs-suggested diff and get EXPLICIT per-section approval before re-invoking with write=true. Overwrite is a wholesale replacement, so it silently drops operator hand-edits if you skip the diff — never do that.
 
 `;
 

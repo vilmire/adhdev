@@ -35,7 +35,7 @@ adhdev mesh plan /absolute/path/to/repo --mesh mesh_... --operation clone_worktr
 ```
 
 The same daemon command (`plan_mesh_onboarding`) backs the CLI, the
-`mesh_plan_onboarding` MCP tool, and dashboard create/add previews. It detects the
+`mesh_create` MCP tool's `mode: "plan"`, and dashboard create/add previews. It detects the
 canonical Git root and repo identity, branch/default branch, common-dir and
 main-vs-linked-worktree metadata, dirty/conflict state, and existing mesh/node
 membership. It returns typed failures for unsafe or ambiguous cases.
@@ -43,7 +43,8 @@ membership. It returns typed failures for unsafe or ambiguous cases.
 Planning never fetches, writes config, creates mesh records/nodes, or creates a
 branch/worktree. Its returned `create_mesh`, `add_mesh_node`,
 `clone_mesh_node`, and config-write steps remain separate explicit operations
-that require operator approval. `mesh_init`/`mesh_reinit` likewise remain dry-run
+that require operator approval. `mesh_init` (both `mode: "init"` and
+`mode: "reinit"`) likewise remains dry-run
 unless their write flag is explicitly enabled.
 
 ## Code structure
@@ -101,7 +102,7 @@ session starts. `resolveMeshCoordinatorSetup()` returns one of `auto_import`
 by domain across `mesh-tools-{status,queue,mission,session,git,refine,crud,
 graph,slots,magi,...}.ts`, with shared helpers/types/state in
 `mesh-tools-internal.ts`. The authoritative tool list and count live in
-`mesh-tool-schemas.ts`'s `ALL_MESH_TOOLS` array — currently **60 tools**
+`mesh-tool-schemas.ts`'s `ALL_MESH_TOOLS` array — currently **48 tools**
 (kept in sync with the coordinator-prompt TOOLS table by a consistency test in
 `coordinator-prompt.test.ts`). Highlights:
 
@@ -113,12 +114,18 @@ graph,slots,magi,...}.ts`, with shared helpers/types/state in
 - **Missions** — `mesh_mission_upsert`, `mesh_mission_list`
 - **Git / convergence** — `mesh_checkpoint`, `mesh_fast_forward_node`,
   `mesh_refine_node`, `mesh_refine_batch`, `mesh_refine_plan`,
-  `mesh_refine_config` (unified read-only `mode`-dispatched helper —
-  `mode=schema|validate|suggest` — replacing the former separate
-  `mesh_refine_config_schema` / `mesh_validate_refine_config` /
-  `mesh_suggest_refine_config` tools)
+  `mesh_config` (`kind=refine|change_impact` are read-only helpers with
+  `mode=schema|validate|suggest`; `kind=mesh_json` is the gated
+  `.adhdev/mesh.json` write)
 - **Topology / housekeeping** — `mesh_clone_node`, `mesh_remove_node`,
-  `mesh_cleanup_sessions`, `mesh_reconcile_ledger`, `mesh_prune_stale_direct`
+  `mesh_cleanup_sessions` (session modes, plus `mode=prune_stale_direct`),
+  `mesh_reconcile_ledger`
+
+Tools that act on one object are merged behind a discriminator argument
+(`action` / `kind` / `mode`); per-action argument sets live in
+`validate-tool-args.ts` `MESH_TOOL_ACTIONS`, and the names retired by that
+2026-09-26 consolidation (mesh-shared `RETIRED_MESH_TOOLS`) answer with an
+error that names the replacement.
 
 Most read tools accept `compact` (default `true`) to bound token output.
 

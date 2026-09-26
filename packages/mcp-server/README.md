@@ -77,17 +77,19 @@ Direct supervision of agent sessions on one machine.
 - **Inspect** — `list_daemons`, `list_sessions`, `check_pending`, `read_chat`, `read_chat_debug`, `spec_debug`, `screenshot` (local mode only)
 - **Control** — `launch_session`, `stop_session`, `send_chat`, `approve`
 - **Git** — `git_status`, `git_log`, `git_diff`, `git_checkpoint`, `git_push`
-- **Mesh bootstrap** — `mesh_plan_onboarding`, `mesh_create`, `mesh_add_node`. Exposed here precisely because this is the no-mesh-yet context: mesh mode refuses to start without an existing mesh id.
+- **Mesh bootstrap** — `mesh_create` (its `mode: "plan"` is the read-only onboarding planner) and `mesh_add_node`. Exposed here precisely because this is the no-mesh-yet context: mesh mode refuses to start without an existing mesh id.
 
-### Repo Mesh (`--repo-mesh <id>`) — 60 tools
+### Repo Mesh (`--repo-mesh <id>`) — 48 tools
 
 The coordinator surface for [Repo Mesh](https://github.com/vilmire/adhdev/blob/main/docs/guides/REPO_MESH_GUIDE.md), where work is delegated across multiple machines and agents. Also exposes the coordinator system prompt as an MCP resource at `coordinator://system-prompt`.
 
-Broadly: mesh and node status (`mesh_status`, `mesh_list_nodes`, `mesh_route_preview`), task dispatch and queue management (`mesh_enqueue_task`, `mesh_enqueue_batch`, `mesh_send_task`, `mesh_view_queue`, `mesh_queue_cancel`), reading delegated sessions (`mesh_read_chat`, `mesh_read_terminal`, `mesh_read_node_logs`), approvals (`mesh_approve`, `mesh_answer_question`), node lifecycle (`mesh_clone_node`, `mesh_remove_node`), git convergence via the Refinery (`mesh_refine_node`, `mesh_fast_forward_node`), graph orchestration gates (including `mesh_graph_node_patch`, which repairs and retries a node blocked on a materialization error), missions, and the durable task ledger.
+Broadly: mesh and node status (`mesh_status`, `mesh_list_nodes`, `mesh_route_preview`), task dispatch and queue management (`mesh_enqueue_task`, `mesh_enqueue_batch`, `mesh_send_task`, `mesh_view_queue`, `mesh_queue_cancel`), reading delegated sessions (`mesh_read_chat`, `mesh_read_terminal`, `mesh_read_node_logs`), approvals (`mesh_approve`, `mesh_answer_question`), node lifecycle (`mesh_clone_node`, `mesh_remove_node`), git convergence via the Refinery (`mesh_refine_node`, `mesh_fast_forward_node`), graph orchestration gates (`mesh_graph_gate`, plus `mesh_graph_node_patch`, which repairs and retries a node blocked on a materialization error), missions, and the durable task ledger.
+
+Tools that act on the same object are one tool selected by an argument — `mesh_graph_gate` (`action`: claim / release / abandon / extend), `mesh_node_slots` (`action`: list / propose / set), `mesh_magi_kind_panel` and `mesh_coordinator_prompt_append` (`action`), `mesh_note` (`action`: record / forget), `mesh_config` (`kind`: refine / change_impact / mesh_json), `mesh_init` (`mode`: init / reinit), `mesh_create` (`mode`: create / plan) and `mesh_cleanup_sessions` (`mode`, including `prune_stale_direct`). Each action accepts only its own arguments. The names these replaced on 2026-09-26 (`mesh_graph_gate_claim`, `mesh_record_note`, `mesh_plan_onboarding`, …) answer with an error naming the replacement tool and argument.
 
 The mesh id also comes from `ADHDEV_MESH_ID`.
 
-When `ADHDEV_WORKER_MCP` is enabled on the target daemon (the default), the coordinator also gets a 61st tool, `mesh_notify_worker`, to drop an urgent memo into a busy delegated worker's mailbox — delivered on the worker's next MCP tool response rather than interrupting its turn.
+When `ADHDEV_WORKER_MCP` is enabled on the target daemon (the default), the coordinator also gets a 49th tool, `mesh_notify_worker`, to drop an urgent memo into a busy delegated worker's mailbox — delivered on the worker's next MCP tool response rather than interrupting its turn.
 
 ### Worker (`--worker`) — 6 tools
 
@@ -101,7 +103,7 @@ Worker mode requires a daemon-issued credential (`ADHDEV_WORKER_SESSION_BIND` or
 
 Every published tool carries the four MCP behavior hints — `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` — so a client can decide what to auto-run and what to confirm first.
 
-They describe what a tool *can* do, not what it does by default. Several tools (`mesh_refine_node`, `mesh_fast_forward_node`, `mesh_prune_stale_direct`) return a plan unless explicitly told to execute, and are still annotated destructive: a hint that described only the safe default would be the kind of hint that gets someone hurt.
+They describe what a tool *can* do, not what it does by default. Several tools (`mesh_refine_node`, `mesh_fast_forward_node`, `mesh_cleanup_sessions` with `mode: "prune_stale_direct"`) return a plan unless explicitly told to execute, and are still annotated destructive: a hint that described only the safe default would be the kind of hint that gets someone hurt.
 
 The hints are advisory. Actual enforcement stays in the daemon — dry-run defaults, explicit `execute` flags, and ownership checks.
 

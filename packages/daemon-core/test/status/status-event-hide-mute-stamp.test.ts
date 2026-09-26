@@ -113,6 +113,89 @@ describe('status_event visibility stamping', () => {
         expect(payload.muted).toBeUndefined()
     })
 
+    /**
+     * An IDE extension session (e.g. a Cline/Roo webview tab) is a child of its
+     * IDE instance and is NOT in the instance manager's own map —
+     * `createInstanceHideMuteResolver` must resolve it through the session
+     * registry's `parentSessionId`, exactly as `createInstanceSessionMetaResolver`
+     * already does for providerType/workspaceName. Its hide/mute comes from its
+     * OWN settings (builders.ts stamps `settings: ext.settings` on the entry),
+     * never inherited from the parent IDE.
+     */
+    it('stamps surfaceHidden+muted for an IDE extension session from its OWN settings, via the parent IDE lookup', () => {
+        const ide = {
+            type: 'cursor',
+            category: 'ide',
+            instanceId: 'ide-1',
+            settings: {},
+            status: 'idle',
+            extensions: [
+                { type: 'cline', category: 'extension', instanceId: 'ext-1', status: 'waiting_choice', settings: COORDINATOR_SPAWNED_HIDDEN },
+            ],
+        }
+        const instanceManager = {
+            getInstance: (sessionId: string) => (sessionId === 'ide-1' ? { getState: () => ide as any } : undefined),
+        }
+        const sessionRegistry = { get: (id: string) => (id === 'ext-1' ? { parentSessionId: 'ide-1' } : undefined) }
+        const resolveHideMute = createInstanceHideMuteResolver(instanceManager, sessionRegistry)
+
+        const payload = projectServerStatusEvent({
+            event: 'agent:waiting_choice',
+            targetSessionId: 'ext-1',
+            providerType: 'cline',
+            modalMessage: 'Which approach?',
+            modalButtons: ['A', 'B'],
+        }, resolveHideMute)!
+
+        expect(payload.surfaceHidden).toBe(true)
+        expect(payload.muted).toBe(true)
+    })
+
+    it('an extension session visible/unmuted on its own settings is not affected by an unrelated parent IDE state', () => {
+        const ide = {
+            type: 'cursor',
+            category: 'ide',
+            instanceId: 'ide-2',
+            // Parent IDE itself has no hide/mute-relevant settings — must not leak onto the child.
+            settings: {},
+            status: 'idle',
+            extensions: [
+                { type: 'cline', category: 'extension', instanceId: 'ext-2', status: 'waiting_approval', settings: {} },
+            ],
+        }
+        const instanceManager = {
+            getInstance: (sessionId: string) => (sessionId === 'ide-2' ? { getState: () => ide as any } : undefined),
+        }
+        const sessionRegistry = { get: (id: string) => (id === 'ext-2' ? { parentSessionId: 'ide-2' } : undefined) }
+        const resolveHideMute = createInstanceHideMuteResolver(instanceManager, sessionRegistry)
+
+        const payload = projectServerStatusEvent({
+            event: 'agent:waiting_approval',
+            targetSessionId: 'ext-2',
+            providerType: 'cline',
+            modalMessage: 'rm -rf build/',
+            modalButtons: ['Approve', 'Deny'],
+        }, resolveHideMute)!
+
+        expect(payload.surfaceHidden).toBe(false)
+        expect(payload.muted).toBe(false)
+    })
+
+    it('omits the flags for an extension session whose parent IDE has no local instance', () => {
+        const instanceManager = { getInstance: () => undefined }
+        const sessionRegistry = { get: (id: string) => (id === 'ext-3' ? { parentSessionId: 'ide-missing' } : undefined) }
+        const resolveHideMute = createInstanceHideMuteResolver(instanceManager, sessionRegistry)
+
+        const payload = projectServerStatusEvent({
+            event: 'agent:waiting_approval',
+            targetSessionId: 'ext-3',
+            providerType: 'cline',
+        }, resolveHideMute)!
+
+        expect(payload.surfaceHidden).toBeUndefined()
+        expect(payload.muted).toBeUndefined()
+    })
+
     it('still builds the event for P2P delivery to the coordinator when hidden', () => {
         // Muting hides the event from the OWNER; it must never kill the event,
         // or the coordinator never answers and the worker waits forever. The

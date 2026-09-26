@@ -759,7 +759,7 @@ export async function meshMagiKindPanelSet(
         // write. Never fatal — the slots still normalize and persist exactly as before.
         const ignoredFields = collectIgnoredMagiSlotFields(args.slots);
         const ignoredNote = ignoredFields.length
-            ? { ignoredFields, ignoredFieldsNote: 'These keys are not part of the MAGI slot schema and were DROPPED (the panel was still saved without them). A MAGI panel decides WHO answers independently; per-slot routing axes like thinkingLevel/difficulty/maxParallel belong on the node capability slots (mesh_node_slots_set).' }
+            ? { ignoredFields, ignoredFieldsNote: 'These keys are not part of the MAGI slot schema and were DROPPED (the panel was still saved without them). A MAGI panel decides WHO answers independently; per-slot routing axes like thinkingLevel/difficulty/maxParallel belong on the node capability slots (mesh_node_slots action "set").' }
             : {};
         if (!write) {
             // Dry-run: normalize + validate WITHOUT persisting (same normalizer AND the
@@ -788,7 +788,7 @@ export async function meshMagiKindPanelSet(
             previousSlots: current,
             slots,
             ...ignoredNote,
-            nextAction: 'Verify with mesh_magi_kind_panel_list, then mesh_magi_review({ task_kind }) resolves this binding.',
+            nextAction: 'Verify with mesh_magi_kind_panel (action "list"), then mesh_magi_review({ task_kind }) resolves this binding.',
         }, null, 2);
     } catch (e: any) {
         const message = e?.message || String(e);
@@ -870,7 +870,7 @@ export async function meshMagiReview(
             code: 'task_kind_required',
             error: 'task_kind is required and selects both the output schema and the configured kind-panel slots. Pass one of: claim_audit / rca / design / freeform.',
             validTaskKinds: VALID_TASK_KINDS,
-            hint: 'Configure the kind-panel slots for this task_kind in mesh settings (magiKindPanels) or via mesh_magi_kind_panel_set, then call mesh_magi_review({ question, task_kind }).',
+            hint: 'Configure the kind-panel slots for this task_kind in mesh settings (magiKindPanels) or via mesh_magi_kind_panel (action "set"), then call mesh_magi_review({ question, task_kind }).',
         }, null, 2);
     }
     // B: warn (do NOT block) if the coordinator embedded an output schema in the question —
@@ -907,7 +907,7 @@ export async function meshMagiReview(
             taskKind,
             meshId: ctx.mesh.id,
             configuredKinds: Object.keys(listMagiKindPanels(ctx.mesh.id)),
-            hint: 'Configure this kind in mesh settings (MagiKindPanelEditor), or set it with mesh_magi_kind_panel_set, then retry.',
+            hint: 'Configure this kind in mesh settings (MagiKindPanelEditor), or set it with mesh_magi_kind_panel (action "set"), then retry.',
         }, null, 2);
     }
     // Slots are already normalized at write time (setMagiKindPanel → normalizeMagiSlots),
@@ -945,7 +945,7 @@ export async function meshMagiReview(
                 taskKind,
                 meshId: ctx.mesh.id,
                 danglingSlots,
-                hint: 'Re-bind this kind to nodes of THIS mesh with mesh_magi_kind_panel_set (or in mesh settings). Check mesh_status for the current node list.',
+                hint: 'Re-bind this kind to nodes of THIS mesh with mesh_magi_kind_panel action "set" (or in mesh settings). Check mesh_status for the current node list.',
             }, null, 2);
         }
     }
@@ -978,7 +978,7 @@ export async function meshMagiReview(
             ? 'Bring the degraded node(s) back online (check P2P/git health via mesh_status), or configure additional healthy (machine + provider) slots for this kind-panel, then retry.'
             : droppedByStale
                 ? 'Bring the stale node(s) to the reference commit, or pass include_stale=true to mesh_magi_review to fan out to them anyway (results will be git-skewed).'
-                : 'Fix the kind-panel slots with mesh_magi_kind_panel_set (or in mesh settings), and use mesh_status to confirm nodes/providers are online.';
+                : 'Fix the kind-panel slots with mesh_magi_kind_panel action "set" (or in mesh settings), and use mesh_status to confirm nodes/providers are online.';
         return JSON.stringify({
             success: false,
             code,

@@ -3,7 +3,9 @@ import test from 'node:test';
 
 import { extractInstalledCliProviders, meshNodeSlotsPropose } from '../src/tools/mesh-tools-slot-autodetect.js';
 import { ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
-import { MESH_NODE_SLOTS_PROPOSE_TOOL } from '../src/tools/mesh-tool-schemas.js';
+import { MESH_NODE_SLOTS_TOOL } from '../src/tools/mesh-tool-schemas.js';
+import { resolveMeshToolHandler } from '../src/tools/mesh-tool-dispatch.js';
+import { validateMeshToolArgs } from '../src/tools/validate-tool-args.js';
 
 /** A get_status_metadata-shaped response with the given availableProviders. */
 const statusPayload = (availableProviders: unknown[]) => ({ status: { availableProviders } });
@@ -77,13 +79,15 @@ test('reads availableProviders from a top-level payload shape too', () => {
 
 // ─── tool registration ───────────────────────────────────────────────────────
 
-test('mesh_node_slots_propose is published in the tool registry', () => {
-  assert.equal(MESH_NODE_SLOTS_PROPOSE_TOOL.name, 'mesh_node_slots_propose');
-  assert.equal(ALL_MESH_TOOLS.some(t => t.name === 'mesh_node_slots_propose'), true);
-  const props = MESH_NODE_SLOTS_PROPOSE_TOOL.inputSchema.properties as any;
+test('mesh_node_slots (action=propose) is published in the tool registry', () => {
+  assert.equal(MESH_NODE_SLOTS_TOOL.name, 'mesh_node_slots');
+  assert.equal(ALL_MESH_TOOLS.some(t => t.name === 'mesh_node_slots'), true);
+  assert.equal(ALL_MESH_TOOLS.some(t => t.name === 'mesh_node_slots_propose'), false);
+  const props = MESH_NODE_SLOTS_TOOL.inputSchema.properties as any;
+  assert.deepEqual(props.action.enum, ['list', 'propose', 'set']);
   assert.equal(props.node_id.type, 'string');
   assert.equal(props.include_magi.type, 'boolean');
-  assert.deepEqual(MESH_NODE_SLOTS_PROPOSE_TOOL.inputSchema.required, ['node_id']);
+  assert.deepEqual(MESH_NODE_SLOTS_TOOL.inputSchema.required, ['action', 'node_id']);
 });
 
 // ─── tool behavior (stubbed transport) ───────────────────────────────────────
@@ -188,4 +192,24 @@ test('reports detection_unavailable when the node probe fails', async () => {
   assert.equal(out.success, false);
   assert.equal(out.code, 'detection_unavailable');
   assert.match(out.error, /node offline/);
+});
+
+// 2026-09-26 tool consolidation: list / propose / set are one published tool.
+// Drive the merged tool end-to-end through the real dispatch table.
+test('mesh_node_slots through dispatch: action=propose drafts, action=list reads', async () => {
+  const existing = [{ provider: 'gemini-cli', model: 'flash' }];
+  const ctx = ctxWith(nodeWith(existing), statusPayload([cli('claude-cli')]));
+  const handler = resolveMeshToolHandler('mesh_node_slots')!;
+
+  assert.equal(validateMeshToolArgs('mesh_node_slots', { action: 'propose', node_id: 'node_1', include_magi: true }), null);
+  const proposed = JSON.parse(await handler(ctx, { action: 'propose', node_id: 'node_1' }));
+  assert.equal(proposed.success, true);
+  assert.equal(proposed.dryRun, true);
+  assert.deepEqual(proposed.droppedProviders, ['gemini-cli']);
+
+  const listed = JSON.parse(await handler(ctx, { action: 'list', node_id: 'node_1' }));
+  assert.equal(listed.success, true);
+  assert.equal(listed.nodeId, 'node_1');
+  assert.equal(listed.slots.length, 1);
+  assert.equal(listed.slots[0].provider, 'gemini-cli');
 });

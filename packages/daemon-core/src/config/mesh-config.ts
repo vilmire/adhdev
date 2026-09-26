@@ -199,7 +199,7 @@ function migrateLoadedMeshConfig(config: LocalMeshConfig): boolean {
     // Fold the legacy config-root scoped settings FIRST, so the per-node slot
     // derivation below already sees each mesh's own difficultyBrains rather than a
     // root map that is about to be moved or dropped.
-    if (foldLegacyTopLevelMeshSetting(config, 'magiKindPanels', 'mesh_magi_kind_panel_set({ meshId, task_kind, slots })')) changed = true;
+    if (foldLegacyTopLevelMeshSetting(config, 'magiKindPanels', 'mesh_magi_kind_panel({ action: "set", task_kind, slots })')) changed = true;
     if (foldLegacyTopLevelMeshSetting(config, 'difficultyBrains', 'difficulty_brains_set({ meshId, difficultyBrains })')) changed = true;
     for (const mesh of config.meshes) {
         if (!mesh || !Array.isArray(mesh.nodes)) continue;
@@ -1258,7 +1258,7 @@ const MAGI_SLOT_KNOWN_KEYS: readonly string[] = ['provider', 'nodeId', 'model', 
  * THAT something was ignored. A key with no entry gets a generic message.
  */
 const MAGI_SLOT_IGNORED_FIELD_REASONS: Readonly<Record<string, string>> = Object.freeze({
-    thinkingLevel: "not part of a MAGI slot — a panel selects WHO answers independently, not how hard each replica thinks. Set thinkingLevel on the node's capability slots (mesh_node_slots_set), which is the routing axis.",
+    thinkingLevel: "not part of a MAGI slot — a panel selects WHO answers independently, not how hard each replica thinks. Set thinkingLevel on the node's capability slots (mesh_node_slots action 'set'), which is the routing axis.",
     difficulty: "not part of a MAGI slot — MAGI always enqueues its replicas with the fixed 'freeform' difficulty sentinel because the panel has already chosen the (node, provider) target. Set difficulty on the node's capability slots instead.",
     maxParallel: "not part of a MAGI slot — per-slot concurrency is a node capability-slot axis. Use the per-slot `n` replica count to control MAGI fan-out width.",
     capability: 'not a MAGI slot key — did you mean `capabilityTags`?',
