@@ -18,6 +18,8 @@ import { getCachedProviderVersions } from '../../detection/cli-detector.js';
 import { buildLocalSeqscribeStats } from '../../seqscribe/local-stats.js';
 import { toBeaconDiagnosticsSummary } from '../../seqscribe/beacon-diagnostics.js';
 import { meshNoticeRuntime } from '../../mesh/turn-ledger/deliver.js';
+import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
+import { MeshNodeGitStateStore, createDbMeshNodeGitStatePersistence } from '../../mesh/mesh-node-git-state.js';
 import type { CommandPlaneStage, SeqscribeNodeStage } from './types.js';
 
 /**
@@ -106,6 +108,10 @@ export function bootCommandPlane(s4: SeqscribeNodeStage): CommandPlaneStage {
         statusVersion: cfg.statusVersion,
         getMeshPeerConnectionStatus: cfg.mesh?.getMeshPeerConnectionStatus,
         dispatchMeshCommand: cfg.mesh?.dispatchMeshCommand,
+        // Coordinator-held node git state survives a restart (mesh-runtime.db).
+        meshNodeGitStateStore: new MeshNodeGitStateStore(
+            createDbMeshNodeGitStatePersistence(() => MeshRuntimeStore.getInstance().db),
+        ),
         updateLocalMeshOwnedSession: cfg.mesh?.mirrorMeshWorkerEvent,
         getCdpLogFn: (ideType: string) => LOG.forComponent(`CDP:${ideType}`).asLogFn(),
         // Local replication-health read surface (get_status_metadata).

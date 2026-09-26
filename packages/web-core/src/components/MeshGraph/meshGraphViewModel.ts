@@ -83,3 +83,34 @@ export function shouldShowMeshGraphCallout(node: MeshGraphNode): boolean {
     if (node.dirty) return true
     return false
 }
+
+/** Observation ages below this read as current — no hint on the card. */
+export const MESH_GRAPH_OBSERVATION_AGED_MS = 60_000
+
+export type MeshGraphObservationHint =
+    | { kind: 'fetching' }
+    | { kind: 'refreshing'; observedAt: number }
+    | { kind: 'aged'; observedAt: number }
+    | { kind: 'unreachable'; observedAt: number | null; unreachableSince: number }
+
+/**
+ * Per-node freshness hint for a coordinator-held (remote) observation: how old
+ * the shown state is, whether the coordinator is refreshing it, or whether the
+ * node is unreachable and the card shows its last-known state. Returns null for
+ * the coordinator's own / local checkouts and for fresh remote state, so a
+ * healthy mesh stays quiet. A node's slowness is surfaced HERE, never as a
+ * page-level banner.
+ */
+export function getMeshGraphObservationHint(node: MeshGraphNode, nowMs: number = Date.now()): MeshGraphObservationHint | null {
+    const observation = node.gitObservation
+    if (!observation || observation.source === 'self' || observation.source === 'local') return null
+    if (observation.unreachableSince !== null && observation.unreachableSince !== undefined) {
+        return { kind: 'unreachable', observedAt: observation.observedAt ?? null, unreachableSince: observation.unreachableSince }
+    }
+    if (observation.observedAt === null || observation.observedAt === undefined) {
+        return observation.refreshing ? { kind: 'fetching' } : null
+    }
+    if (observation.refreshing) return { kind: 'refreshing', observedAt: observation.observedAt }
+    if (nowMs - observation.observedAt >= MESH_GRAPH_OBSERVATION_AGED_MS) return { kind: 'aged', observedAt: observation.observedAt }
+    return null
+}

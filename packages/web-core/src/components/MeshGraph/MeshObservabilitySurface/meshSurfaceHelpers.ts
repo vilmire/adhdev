@@ -572,26 +572,28 @@ export function extractGitLogEntries(response: any): GitLogEntry[] {
     return Array.isArray(log?.entries) ? log.entries : []
 }
 
+/**
+ * Recent-commits read for the node detail. ALWAYS addressed to the selected
+ * coordinator daemon (the dashboard never talks to a remote node's daemon): with
+ * a nodeId the coordinator serves `mesh_node_git_log` locally or forwards it to
+ * the node's daemon. The node's own daemon is used only when no coordinator is
+ * known (a surface rendered without one).
+ */
 export function resolveGitLogRequest(args: {
     coordinatorDaemonId: string | null
     selectedNodeStatus: RepoMeshNodeStatus | null
     selectedSessionEntry: SessionListEntry | null
     selectedGraphNode: MeshGraphNode | null
-}): { daemonId: string; workspace: string } | null {
+}): { daemonId: string; workspace: string; nodeId: string | null } | null {
     const workspace = args.selectedSessionEntry?.session.workspace
         || args.selectedSessionEntry?.workspace
         || args.selectedNodeStatus?.git?.workspace
         || args.selectedNodeStatus?.workspace
         || null
-    if (workspace && args.selectedSessionEntry) {
-        const daemonId = args.selectedNodeStatus?.daemonId || args.coordinatorDaemonId
-        return daemonId ? { daemonId, workspace } : null
-    }
-    if (workspace && args.selectedNodeStatus) {
-        const daemonId = args.selectedNodeStatus.daemonId || args.coordinatorDaemonId
-        return daemonId ? { daemonId, workspace } : null
-    }
-    return null
+    if (!workspace || (!args.selectedSessionEntry && !args.selectedNodeStatus)) return null
+    const nodeId = args.selectedNodeStatus?.nodeId || args.selectedSessionEntry?.nodeId || null
+    const daemonId = args.coordinatorDaemonId || args.selectedNodeStatus?.daemonId || null
+    return daemonId ? { daemonId, workspace, nodeId } : null
 }
 
 export function describeProviders(node: RepoMeshNodeStatus): string {

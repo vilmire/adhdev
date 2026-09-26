@@ -221,6 +221,27 @@ function mergeRepoMeshNodeStatus(existing: RepoMeshNodeStatus, incoming: RepoMes
     return merged
 }
 
+const GIT_OBSERVATION_SOURCES = new Set(['self', 'local', 'member_push', 'coordinator_probe', 'none'])
+
+function readNullableNumber(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/** Validate the coordinator's per-node `gitObservation` (unknown source → dropped). */
+export function normalizeGitObservation(value: unknown): NonNullable<RepoMeshNodeStatus['gitObservation']> | null {
+    const record = readRecord(value)
+    const source = readString(record.source)
+    if (!source || !GIT_OBSERVATION_SOURCES.has(source)) return null
+    const lastRefreshError = readString(record.lastRefreshError)
+    return {
+        source: source as NonNullable<RepoMeshNodeStatus['gitObservation']>['source'],
+        observedAt: readNullableNumber(record.observedAt),
+        refreshing: record.refreshing === true,
+        unreachableSince: readNullableNumber(record.unreachableSince),
+        ...(lastRefreshError ? { lastRefreshError } : {}),
+    }
+}
+
 function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
     const record = readRecord(node)
     const nodeId = readString(record.nodeId, record.id)
@@ -311,6 +332,8 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
         // this reassembler.
         ...(record.nodeFacts && typeof record.nodeFacts === 'object' && !Array.isArray(record.nodeFacts)
             ? { nodeFacts: record.nodeFacts as RepoMeshNodeStatus['nodeFacts'] } : {}),
+        // Coordinator-held observation metadata (age / refreshing / unreachable).
+        ...(normalizeGitObservation(record.gitObservation) ? { gitObservation: normalizeGitObservation(record.gitObservation)! } : {}),
         ...(error ? { error } : {}),
     }
 }

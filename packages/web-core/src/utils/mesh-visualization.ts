@@ -5,6 +5,7 @@
 
 import type {
     GitRepoStatus,
+    RepoMeshNodeGitObservation,
     RepoMeshNodeHealth,
     RepoMeshNodeStatus,
     RepoMeshPeerConnectionState,
@@ -120,6 +121,12 @@ export interface MeshGraphNode {
     refineJobId?: string | null
     refineJobBranch?: string | null
     refineJobInto?: string | null
+    /**
+     * Coordinator-held observation metadata (age / refreshing / unreachable) for
+     * this node's git state; submodule cards inherit their parent's. Null when
+     * the coordinator predates the field.
+     */
+    gitObservation?: RepoMeshNodeGitObservation | null
     source: MeshGraphNodeSource
 }
 
@@ -599,6 +606,15 @@ function readProvidedBranchConvergence(node: RepoMeshNodeStatus, defaultBranchHi
     const status = provided.status
     if (!status || !['merged_to_main', 'pushed_feature_branch_needs_merge', 'blocked_review', 'cleanup_candidate', 'not_mergeable'].includes(status)) return null
     const git = node.git
+    // Unknown ≠ blocked: an older coordinator classified "no git data yet" as
+    // blocked_review/git_status_unavailable and a skeletal git (no branch, no HEAD)
+    // as blocked_review/branch_unknown. Those are absences of data, not verdicts —
+    // render them as unknown unless the git actually proves the verdict (a real
+    // isGitRepo:false observation / a known detached HEAD commit).
+    if (status === 'blocked_review') {
+        if (provided.reason === 'git_status_unavailable' && git?.isGitRepo !== false) return null
+        if (provided.reason === 'branch_unknown' && !git?.headCommit) return null
+    }
     const dirty = isDirty(git) || hasDirtySubmodules(git)
     const hasConflicts = Boolean(git?.hasConflicts) || hasOutOfSyncSubmodules(git)
     const ahead = git?.ahead ?? 0
@@ -823,6 +839,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             refineJobId: dominantRefineJob?.jobId ?? null,
             refineJobBranch: dominantRefineJob?.branch ?? null,
             refineJobInto: dominantRefineJob?.into ?? null,
+            gitObservation: nodeStatus.gitObservation ?? null,
             source: nodeStatus,
         }
         nodes.push(graphNode)
@@ -878,6 +895,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                 snapshotCompleteness: 'complete',
                 snapshotWarnings: [],
                 branchConvergence: null,
+                gitObservation: graphNode.gitObservation ?? null,
                 source: {
                     kind: 'synthetic-submodule',
                     parentNodeId: graphNode.id,

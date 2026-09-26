@@ -457,7 +457,12 @@
     "mesh": {
         "graph": {
             "remoteBadge": "远程",
-            "activeSessionAria": "活动会话"
+            "activeSessionAria": "活动会话",
+            "observationAsOf": "{{age}}前的状态",
+            "observationRefreshing": "{{age}}前的状态 · 刷新中",
+            "observationFetching": "正在获取状态…",
+            "observationUnreachable": "无法连接 · 最后状态 {{age}}前",
+            "observationUnreachableNoState": "无法连接 · 暂无状态"
         },
         "statusTab": {
             "v2ScopeHint": "按范围划分的待处理事件",
@@ -1044,6 +1049,7 @@
             "refreshedAt": "已于 {{time}} 刷新",
             "liveMetadata": "实时守护进程元数据",
             "metadataUnavailable": "元数据订阅不可用",
+            "refreshFailedQuiet": "刷新失败 · 显示上次加载的状态",
             "refreshTitle": "刷新实时网格图谱",
             "refresh": "刷新",
             "refreshing": "正在刷新…",

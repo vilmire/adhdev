@@ -31,8 +31,11 @@ import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from './types'
 import {
     getMeshGraphAttentionBadge,
     getMeshGraphCalloutText,
+    getMeshGraphObservationHint,
     shouldShowMeshGraphCallout,
+    type MeshGraphObservationHint,
 } from './meshGraphViewModel'
+import { formatRelativeTime } from '../../utils/time'
 import {
     getMeshGraphInitialFocusNodeIds,
     getMeshGraphLayoutKey,
@@ -388,6 +391,23 @@ const ATTENTION_LABEL_KEYS: Record<string, string> = {
     'offline': 'mesh.attention.offline',
 }
 
+/** Localized per-node freshness hint (coordinator-held state age / refresh / unreachable). */
+function formatObservationHint(hint: MeshGraphObservationHint, t: (key: string, opts?: Record<string, unknown>) => string): string {
+    const age = (at: number) => formatRelativeTime(at, { nowLabel: '<1m' })
+    switch (hint.kind) {
+        case 'fetching':
+            return t('mesh.graph.observationFetching')
+        case 'refreshing':
+            return t('mesh.graph.observationRefreshing', { age: age(hint.observedAt) })
+        case 'aged':
+            return t('mesh.graph.observationAsOf', { age: age(hint.observedAt) })
+        case 'unreachable':
+            return hint.observedAt === null
+                ? t('mesh.graph.observationUnreachableNoState')
+                : t('mesh.graph.observationUnreachable', { age: age(hint.observedAt) })
+    }
+}
+
 function translateAttentionLabel(label: string, node: MeshGraphNode, t: (key: string, opts?: Record<string, unknown>) => string): string {
     const key = ATTENTION_LABEL_KEYS[label]
     if (key) return t(key)
@@ -404,7 +424,8 @@ function formatWorkspaceTail(workspace: string | null | undefined): string {
     return segments.slice(-2).join('/')
 }
 
-function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
+/** Exported for render tests (card content: badges, per-node freshness hint). */
+export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const { t } = useTranslation('common')
     const meshTheme = useContext(MeshGraphThemeContext)
     const compact = useContext(MeshGraphCompactContext)
@@ -423,6 +444,13 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
         ? (machineContext || workspaceTail || node.workspace)
         : (workspaceTail || machineContext || node.workspace)
     const shortCommit = node.submoduleCommit ? node.submoduleCommit.slice(0, 7) : null
+    const observationHint = getMeshGraphObservationHint(node)
+    const observationLabel = observationHint ? formatObservationHint(observationHint, t) : null
+    const observationPillClass = observationHint?.kind === 'unreachable'
+        ? getBadgeClasses('dirty', meshTheme.isDark)
+        : getBadgeClasses('meta', meshTheme.isDark)
+    // "fetching" duplicates the card's own "connecting" pill for a never-observed node.
+    const showObservationPill = !!observationLabel && !(observationHint?.kind === 'fetching' && node.health === 'unknown')
 
     // ── Default-branch anchor: a compact branch pill, not a machine-like card.
     //    A full card here read as "another machine named main" — the anchor is a
@@ -474,6 +502,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     node.submodulePath && node.submodulePath !== node.label ? node.submodulePath : null,
                     node.nextStepHint || null,
                     shortCommit ? `@ ${shortCommit}` : null,
+                    observationLabel,
                 ].filter(Boolean).join('\n')}
             >
                 <Handle type="target" position={direction === 'TB' ? Position.Top : Position.Left} isConnectable={false} style={{ opacity: 0, pointerEvents: 'none' }} />
@@ -567,6 +596,11 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                         <span className="truncate">{attentionLabel}</span>
                     </div>
                 )}
+                {showObservationPill && (
+                    <div className={`mt-1 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-4xs ${observationPillClass}`} title={observationLabel ?? undefined}>
+                        <span className="truncate">{observationLabel}</span>
+                    </div>
+                )}
                 {!attentionBadge && node.branch && !isSubmoduleNode && node.health !== 'unknown' && (
                     <div className={`mt-1 min-w-0 max-w-full truncate text-3xs ${getBadgeClasses('meta', meshTheme.isDark)} rounded-full border px-1.5 py-px inline-block`} title={node.branch}>
                         {node.branch}
@@ -635,6 +669,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
         node.outOfSync ? t('mesh.panel.tooltipOutOfSync') : null,
         !isSubmoduleNode && node.upstream && node.upstreamStatus !== 'fresh' ? t('mesh.panel.tooltipUpstreamUnverified') : null,
         node.isOrphan ? t('mesh.panel.tooltipNeedsFollowUp') : null,
+        observationLabel,
         shouldShowCallout && calloutText ? `${t('mesh.panel.tooltipPrefixNote')} ${calloutText}` : null,
         ...sessionTooltipLines,
     ].filter(Boolean).join('\n')
@@ -708,6 +743,11 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     {node.locality === 'remote' && (
                         <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('meta', meshTheme.isDark)}`}>
                             {t('mesh.graph.remoteBadge')}
+                        </span>
+                    )}
+                    {showObservationPill && (
+                        <span className={`rounded-full border px-1.5 py-px ${observationPillClass}`}>
+                            {observationLabel}
                         </span>
                     )}
                     {(connectionTransport || connectionRtt) && (

@@ -1956,7 +1956,32 @@ export interface RepoMeshNodeStatus {
      * the deploy-lag anchor the dashboard renders.
      */
     nodeFacts?: import('@adhdev/mesh-shared').MeshNodeFacts;
+    /**
+     * Where this node's git state came from and how old it is, as held by the
+     * coordinator (mesh-node-git-state.ts). Stamped at serve time, so a cached
+     * aggregate snapshot still reports the current refresh/unreachable state.
+     * Absent from daemons predating the coordinator-held node state.
+     */
+    gitObservation?: RepoMeshNodeGitObservation;
     error?: string;
+}
+
+/** Coordinator-held git observation metadata for one mesh node. */
+export interface RepoMeshNodeGitObservation {
+    /**
+     * 'self' / 'local' = read on the coordinator's own machine this render;
+     * 'member_push' / 'coordinator_probe' = last-known remote state held by the
+     * coordinator; 'none' = the coordinator has never observed this node's git.
+     */
+    source: 'self' | 'local' | 'member_push' | 'coordinator_probe' | 'none';
+    /** Epoch ms of the observation (null when never observed). */
+    observedAt: number | null;
+    /** A background refresh for this node is in flight on the coordinator. */
+    refreshing: boolean;
+    /** Epoch ms since which refreshes have failed (null when reachable / unknown). */
+    unreachableSince: number | null;
+    /** Short reason of the last failed refresh, when unreachable. */
+    lastRefreshError?: string | null;
 }
 
 /** Queue task status on the status wire — the ONE vocabulary from @adhdev/mesh-shared (MESH_TASK_STATUSES). */

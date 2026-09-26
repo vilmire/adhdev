@@ -37,6 +37,7 @@ export const GIT_HEAVY_SUITES: string[] = [
   'test/commands/mesh-refine-validation.test.ts',
   'test/commands/mesh-session-cleanup.test.ts',
   'test/commands/mesh-status.test.ts',
+  'test/commands/mesh-status-node-state.test.ts',
   'test/commands/mesh-worktree-bootstrap.test.ts',
   'test/commands/refine-base-cas-fetch-undeterminable.test.ts',
   'test/commands/refine-diverged-gitlink-converge.test.ts',

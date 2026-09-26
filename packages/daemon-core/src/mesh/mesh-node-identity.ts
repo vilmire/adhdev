@@ -1679,6 +1679,8 @@ async function probeRemoteMeshGitStatus(args: {
     // combined connect+response window) rather than silently assuming "always warm"
     // — see resolveWarmupDeadlineOpts.
     getConnection?: (daemonId: string) => Record<string, unknown> | null;
+    /** Extra git_status args (e.g. the coordinator's meshStateSubscription). */
+    extraArgs?: Record<string, unknown>;
 }): Promise<Record<string, unknown> | null> {
     if (!args.dispatchMeshCommand) return null;
     // Fire the dispatch first — this is what drives the mesh manager to ensure /
@@ -1694,7 +1696,7 @@ async function probeRemoteMeshGitStatus(args: {
     const dispatch = args.dispatchMeshCommand(
         args.daemonId,
         'git_status',
-        withStatusProbeMarker({ workspace: args.workspace, refreshUpstream: true }),
+        withStatusProbeMarker({ ...(args.extraArgs ?? {}), workspace: args.workspace, refreshUpstream: true }),
     );
     // A missing connection getter no longer silently becomes `() => true`
     // ("always warm") — that charged a still-opening channel against the response
@@ -1806,6 +1808,8 @@ export async function probeRemoteMeshGitStatusWithRetry(args: {
     connectTimeoutMs?: number;
     getConnection?: (daemonId: string) => Record<string, unknown> | null;
     onConnection?: (connection: Record<string, unknown>) => void;
+    /** Extra git_status args forwarded on every attempt. */
+    extraArgs?: Record<string, unknown>;
 }): Promise<Record<string, unknown> | null> {
     // Fast-fail an offline / dropped peer BEFORE the first attempt. Previously the
     // liveness re-check only ran *between* attempts, so a powered-off node still ate
@@ -1838,6 +1842,7 @@ export async function probeRemoteMeshGitStatusWithRetry(args: {
                 responseTimeoutMs: attempt === 0 ? args.timeoutMs : (args.retryTimeoutMs ?? args.timeoutMs),
                 connectTimeoutMs: args.connectTimeoutMs ?? MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS,
                 getConnection: args.getConnection,
+                extraArgs: args.extraArgs,
             });
             if (remoteGit) return remoteGit;
         } catch {

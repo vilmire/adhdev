@@ -18,6 +18,8 @@ import { MESH_SENDER_CLASSES } from '../../src/commands/mesh-sender.js';
 const EXPECTED_CLASSES: Record<string, string> = {
     // worker → owner
     mesh_forward_event: 'node_owner',
+    // member → coordinator: its own node's git state (coordinator-held node state)
+    mesh_node_git_report: 'node_owner',
     worker_report_forwarded: 'roster',
     worker_progress_forwarded: 'roster',
     // owner → worker, session-scoped

@@ -23,6 +23,8 @@ import type {
 } from '../router.js';
 import type { ResolvedMeshForCommand } from '../med-family/types.js';
 import type { DaemonComponentsAccessor } from '../daemon-components-port.js';
+import type { MeshNodeGitStateStore } from '../../mesh/mesh-node-git-state.js';
+import type { MeshNodeGitRefresher } from '../../mesh/mesh-node-git-refresher.js';
 
 /**
  * Router-private collaborators injected at dispatch. Each is a bound method or
@@ -108,6 +110,15 @@ export interface HighFamilyContext {
 
     /** Router's mesh git-probe cache (shared probe dedup for mesh_status). */
     meshGitProbeCache: MeshGitProbeCache;
+
+    /** Coordinator-held last-known git state per mesh node (mesh/mesh-node-git-state.ts). */
+    meshNodeGitState: MeshNodeGitStateStore;
+
+    /** Coordinator background freshness probes for remote nodes (never awaited by mesh_status). */
+    meshNodeGitRefresher: MeshNodeGitRefresher;
+
+    /** Drop the aggregate snapshot and publish a mesh-state revision (dashboard refetch nudge). */
+    invalidateAggregateMeshStatus: (meshId: string) => void;
 }
 
 export type HighFamilyHandler = (ctx: HighFamilyContext, args: any) => Promise<CommandRouterResult>;

@@ -582,7 +582,7 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
       meshId: 'mesh_browser_payload',
       inlineMesh,
       requireDirectPeerTruth: true,
-      refresh: true,
+      refresh: true, awaitLiveProbes: true,
     })
 
     expect(dispatchMeshCommand).toHaveBeenCalledWith('daemon-remote', 'git_status', withStatusProbeMarker({
@@ -715,7 +715,7 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
       meshId: 'mesh_reuse',
       inlineMesh,
       requireDirectPeerTruth: true,
-      refresh: true,
+      refresh: true, awaitLiveProbes: true,
     })
     expect(first.success).toBe(true)
     expect(probeCount).toBe(1)
@@ -727,7 +727,7 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
       meshId: 'mesh_reuse',
       inlineMesh,
       requireDirectPeerTruth: true,
-      refresh: true,
+      refresh: true, awaitLiveProbes: true,
     })
     expect(second.success).toBe(true)
     expect(probeCount).toBe(1)
@@ -764,7 +764,7 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
         ],
       },
       requireDirectPeerTruth: true,
-      refresh: true,
+      refresh: true, awaitLiveProbes: true,
     })
 
     expect(result.success).toBe(true)
@@ -799,7 +799,7 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
         ],
       },
       requireDirectPeerTruth: true,
-      refresh: true,
+      refresh: true, awaitLiveProbes: true,
     })
 
     // No probe ran at all (definitively-down peer is skipped before the first
@@ -836,7 +836,7 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
         ],
       },
       requireDirectPeerTruth: true,
-      refresh: true,
+      refresh: true, awaitLiveProbes: true,
     })
 
     expect(dispatchMeshCommand.mock.calls.length).toBe(0)
