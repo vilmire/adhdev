@@ -70,7 +70,7 @@ function summarizeCompactSubmodules(submodules: any): Record<string, unknown> | 
 // was silently dropped by the allowlist-based minimal stub, so it read null on
 // exactly the quiet nodes a coordinator most needs the marker for. Add a new marker
 // field HERE once and both fold paths preserve it; never hand-list it in two places.
-const MESH_COMPACT_PRESERVED_MARKER_FIELDS = ['dataFreshness', 'quota', 'isLocalWorktree'] as const;
+const MESH_COMPACT_PRESERVED_MARKER_FIELDS = ['dataFreshness', 'gitObservation', 'quota', 'isLocalWorktree'] as const;
 
 /** Age of a quota snapshot's own reading in ms; null when updatedAt is absent. */
 export function quotaSnapshotAgeMs(snapshot: any, now: number = Date.now()): number | null {

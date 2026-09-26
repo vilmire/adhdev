@@ -40428,7 +40428,7 @@ var require_dist3 = __commonJS({
       readEnvelopeFields: () => readEnvelopeFields,
       readGitSubmodules: () => readGitSubmodules,
       readNumber: () => readNumber2,
-      readRecord: () => readRecord,
+      readRecord: () => readRecord2,
       readString: () => readString22,
       readStringArray: () => readStringArray2,
       renderCoordinatorWorkerSection: () => renderCoordinatorWorkerSection,
@@ -40449,7 +40449,7 @@ var require_dist3 = __commonJS({
       touchedFilesOutsideOwnership: () => touchedFilesOutsideOwnership,
       withStatusProbeMarker: () => withStatusProbeMarker2
     });
-    function readRecord(value) {
+    function readRecord2(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : {};
     }
     function readString22(...values) {
@@ -40477,12 +40477,12 @@ var require_dist3 = __commonJS({
     }
     function parseJsonRecord(value) {
       if (!value) return {};
-      if (typeof value === "object") return readRecord(value);
+      if (typeof value === "object") return readRecord2(value);
       if (typeof value !== "string") return {};
       const trimmed2 = value.trim();
       if (!trimmed2) return {};
       try {
-        return readRecord(JSON.parse(trimmed2));
+        return readRecord2(JSON.parse(trimmed2));
       } catch {
         return {};
       }
@@ -40515,7 +40515,7 @@ var require_dist3 = __commonJS({
     function readGitSubmodules(value, parentRepoRoot) {
       if (!Array.isArray(value)) return void 0;
       const submodules = value.map((entry) => {
-        const submodule = readRecord(entry);
+        const submodule = readRecord2(entry);
         const path75 = readString22(submodule.path);
         const commit2 = readString22(submodule.commit);
         const repoPath = readString22(submodule.repoPath, submodule.repo_root) ?? joinRepoPath(parentRepoRoot, path75);
@@ -40616,15 +40616,15 @@ var require_dist3 = __commonJS({
       return score;
     }
     function pickBestTransitGitStatus(node, options) {
-      const rawGit = readRecord(node.lastGit ?? node.last_git);
-      const gitResult = readRecord(rawGit.result);
-      const directStatus = readRecord(rawGit.status);
-      const nestedStatus = readRecord(gitResult.status);
-      const rawProbe = readRecord(node.lastProbe ?? node.last_probe);
-      const probeGit = readRecord(rawProbe.git);
-      const probeGitResult = readRecord(probeGit.result);
-      const probeDirectStatus = readRecord(probeGit.status);
-      const probeNestedStatus = readRecord(probeGitResult.status);
+      const rawGit = readRecord2(node.lastGit ?? node.last_git);
+      const gitResult = readRecord2(rawGit.result);
+      const directStatus = readRecord2(rawGit.status);
+      const nestedStatus = readRecord2(gitResult.status);
+      const rawProbe = readRecord2(node.lastProbe ?? node.last_probe);
+      const probeGit = readRecord2(rawProbe.git);
+      const probeGitResult = readRecord2(probeGit.result);
+      const probeDirectStatus = readRecord2(probeGit.status);
+      const probeNestedStatus = readRecord2(probeGitResult.status);
       let best = null;
       for (const status of [directStatus, nestedStatus, probeDirectStatus, probeNestedStatus]) {
         const normalized = normalizeGitStatus(status, node, options);
@@ -40654,7 +40654,7 @@ var require_dist3 = __commonJS({
       return idA === idB;
     }
     function normalizeMeshSessionRecord(entry) {
-      const record22 = readRecord(entry);
+      const record22 = readRecord2(entry);
       const sessionId = readString22(record22.sessionId, record22.session_id, record22.id) ?? deriveSyntheticSessionId(record22);
       if (!sessionId) return null;
       return {
@@ -40769,10 +40769,10 @@ var require_dist3 = __commonJS({
       return out;
     }
     function summarizeGitShape(status) {
-      const record22 = readRecord(status);
+      const record22 = readRecord2(status);
       if (!Object.keys(record22).length) return null;
       const submodules = Array.isArray(record22.submodules) ? record22.submodules.map((entry) => {
-        const sub = readRecord(entry);
+        const sub = readRecord2(entry);
         return {
           path: readString22(sub.path) ?? null,
           commit: readString22(sub.commit)?.slice(0, 12) ?? null,
@@ -58023,7 +58023,7 @@ ${lines.join("\n")}
     function readNonEmptyString(value) {
       return typeof value === "string" && value.trim() ? value.trim() : "";
     }
-    function readRecord2(value) {
+    function readRecord22(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : void 0;
     }
     function buildMeshWorkerRelayStamp(currentSettings, meshContext) {
@@ -58051,17 +58051,17 @@ ${lines.join("\n")}
       return readNonEmptyString(event.targetSessionId) || readNonEmptyString(event.sessionId) || readNonEmptyString(event.instanceId) || readNonEmptyString(fallback);
     }
     function readRefineJobId(event) {
-      const metadata = readRecord2(event.metadataEvent) || event;
-      const result = readRecord2(metadata.result);
-      const refineJob = readRecord2(result?.refineJob);
+      const metadata = readRecord22(event.metadataEvent) || event;
+      const result = readRecord22(metadata.result);
+      const refineJob = readRecord22(result?.refineJob);
       return readNonEmptyString(metadata.jobId) || readNonEmptyString(refineJob?.jobId);
     }
     function readWorkerResultMetadata(event) {
-      return readRecord2(event.workerResult) || readRecord2(event.meshWorkerResult) || readRecord2(event.structuredResult);
+      return readRecord22(event.workerResult) || readRecord22(event.meshWorkerResult) || readRecord22(event.structuredResult);
     }
     function readMeshCompletionSummary(metadataEvent) {
       const workerResult = readWorkerResultMetadata(metadataEvent);
-      const resultRecord = readRecord2(metadataEvent.result);
+      const resultRecord = readRecord22(metadataEvent.result);
       return readNonEmptyString(metadataEvent.finalSummary) || readNonEmptyString(workerResult?.summary) || readNonEmptyString(workerResult?.finalSummary) || readNonEmptyString(resultRecord?.summary) || readNonEmptyString(resultRecord?.finalSummary);
     }
     function truncateSurfacedPreview(text) {
@@ -58099,7 +58099,7 @@ ${lines.join("\n")}
       return 0;
     }
     function isMissingFinalAssistantDiagnostic(record22) {
-      const diag = readRecord2(record22?.completionDiagnostic);
+      const diag = readRecord22(record22?.completionDiagnostic);
       return diag?.finalAssistantPresent === false || diag?.transcriptFinalAssistantPresent === false || diag?.blockReason === "missing_final_assistant";
     }
     function isFalseIdleCompletion(record22) {
@@ -58139,7 +58139,7 @@ ${lines.join("\n")}
           return `[System] ${args.nodeLabel} already has completion evidence${metadata}. The no-progress monitor reconciled the terminal handoff and marked the session complete; wait for the queued completion event/status refresh before doing any manual transcript check.`;
         }
         const reviewRecommended = args.metadataEvent.reviewRecommended === true;
-        const hollowCompletion = readRecord2(args.metadataEvent.hollowCompletion) || readRecord2(readRecord2(args.metadataEvent.completionDiagnostic)?.hollowCompletion);
+        const hollowCompletion = readRecord22(args.metadataEvent.hollowCompletion) || readRecord22(readRecord22(args.metadataEvent.completionDiagnostic)?.hollowCompletion);
         if (hollowCompletion?.detected === true) {
           const requeueCount = typeof hollowCompletion.requeueCount === "number" ? hollowCompletion.requeueCount : 0;
           const maxRetries = typeof hollowCompletion.maxRetries === "number" ? hollowCompletion.maxRetries : 1;
@@ -58209,7 +58209,7 @@ Answer with mesh_answer_question(node_id, session_id${promptId ? `, promptId: "$
         return lines.join("\n");
       }
       if (args.event === "agent:stopped") {
-        const failureDiagnostic = readRecord2(args.metadataEvent.completionDiagnostic);
+        const failureDiagnostic = readRecord22(args.metadataEvent.completionDiagnostic);
         const providerFailureReason = readNonEmptyString(failureDiagnostic?.reason) || readNonEmptyString(args.metadataEvent.errorReason);
         if (providerFailureReason === "auth_failed" || providerFailureReason === "billing_failed") {
           const kind = providerFailureReason === "billing_failed" ? "billing/subscription" : "authentication";
@@ -58279,10 +58279,10 @@ Do NOT retry on this node. Consider reassigning to a different node or asking th
       }
       if (args.event === "refine:completed") {
         const jobId = readRefineJobId({ metadataEvent: args.metadataEvent });
-        const result = readRecord2(args.metadataEvent.result);
-        const validationSummary = readRecord2(result?.validationSummary);
-        const patchEquivalence = readRecord2(result?.patchEquivalence);
-        const finalConvergence = readRecord2(result?.finalBranchConvergenceState);
+        const result = readRecord22(args.metadataEvent.result);
+        const validationSummary = readRecord22(result?.validationSummary);
+        const patchEquivalence = readRecord22(result?.patchEquivalence);
+        const finalConvergence = readRecord22(result?.finalBranchConvergenceState);
         const validationStatus = readNonEmptyString(validationSummary?.status);
         const patchStatus = readNonEmptyString(patchEquivalence?.status) || (patchEquivalence?.equivalent === true ? "passed" : "");
         const into = readNonEmptyString(result?.into);
@@ -58303,10 +58303,10 @@ Next step: ${nextStep}`;
       }
       if (args.event === "refine:failed") {
         const jobId = readRefineJobId({ metadataEvent: args.metadataEvent });
-        const result = readRecord2(args.metadataEvent.result);
-        const validationSummary = readRecord2(result?.validationSummary);
-        const patchEquivalence = readRecord2(result?.patchEquivalence);
-        const finalConvergence = readRecord2(result?.finalBranchConvergenceState);
+        const result = readRecord22(args.metadataEvent.result);
+        const validationSummary = readRecord22(result?.validationSummary);
+        const patchEquivalence = readRecord22(result?.patchEquivalence);
+        const finalConvergence = readRecord22(result?.finalBranchConvergenceState);
         const code = readNonEmptyString(result?.code);
         const error48 = readNonEmptyString(result?.error);
         const validationStatus = readNonEmptyString(validationSummary?.status);
@@ -181318,11 +181318,11 @@ var MESH_INPUT_BINDING_SCHEMA = {
 };
 var MESH_STATUS_TOOL = {
   name: "mesh_status",
-  description: `Get the current status of all nodes in the repo mesh \u2014 health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures. Also reports the running daemon build per daemonId under top-level daemonBuilds ({commit, commitShort, version, track}); track is stable/preview when explicitly reported by that daemon and unknown for legacy peers \u2014 it is never inferred from an rc version suffix. When a live daemon was built from a commit BEHIND its workspace HEAD it adds staleDaemonBuilds[] + staleDaemonBuildWarning \u2014 meaning a just-merged refinery/mesh-tool fix is NOT yet live on that daemon (awaiting deploy/restart; a local dist rebuild does not update a cloud daemon). When a daemon has a durable failed-upgrade notice on record it adds daemonUpgradeFailures{daemonId \u2192 {summary, recordedAt, ageLabel, targetVersion, noticePath, logPath}} + daemonUpgradeFailureWarning \u2014 meaning that daemon's LAST upgrade attempt failed and was rolled back, so it is still on the PREVIOUS version (an upgrade/restart response only ever reports "scheduled", never success). Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.`,
+  description: `Get the current status of all nodes in the repo mesh \u2014 health, git state, active sessions, recovery hints, and recommended next steps. Node git is the coordinator daemon's held state (never a live remote probe); the per-node gitObservation {source, observedAt, refreshing, unreachableSince} and dataFreshness say how old it is. Use this to decide which node to send work to or how to recover from failures. Also reports the running daemon build per daemonId under top-level daemonBuilds ({commit, commitShort, version, track}); track is stable/preview when explicitly reported by that daemon and unknown for legacy peers \u2014 it is never inferred from an rc version suffix. When a live daemon was built from a commit BEHIND its workspace HEAD it adds staleDaemonBuilds[] + staleDaemonBuildWarning \u2014 meaning a just-merged refinery/mesh-tool fix is NOT yet live on that daemon (awaiting deploy/restart; a local dist rebuild does not update a cloud daemon). When a daemon has a durable failed-upgrade notice on record it adds daemonUpgradeFailures{daemonId \u2192 {summary, recordedAt, ageLabel, targetVersion, noticePath, logPath}} + daemonUpgradeFailureWarning \u2014 meaning that daemon's LAST upgrade attempt failed and was rolled back, so it is still on the PREVIOUS version (an upgrade/restart response only ever reports "scheduled", never success). Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.`,
   inputSchema: {
     type: "object",
     properties: {
-      refresh: { type: "boolean", description: "Bypass the shared get_status_metadata probe cache (one probe per daemon, 5 s TTL \u2014 mesh-tools-internal.ts probeStatusMetadataForNode) and force a fresh probe. Default false." },
+      refresh: { type: "boolean", description: "Ask the coordinator daemon to refresh node git in the background (returns immediately; refreshing nodes show gitObservation.refreshing, results appear on a later call) and bypass the 5 s session-probe cache. Default false." },
       _gemini_compat: { type: "string", description: "Dummy property for Gemini compatibility. Ignore this." },
       includeStaleDirectWorkDetails: { type: "boolean", description: "Opt in to the full staleDirectWork array. Defaults false; normal status returns compact staleDirectWorkSummary only." },
       includeTerminalDirectWork: { type: "boolean", description: "Include historical completed/failed direct dispatches (terminalDirectWork) in the response. Defaults false." },
@@ -182526,7 +182526,7 @@ function summarizeCompactSubmodules(submodules) {
     ...outOfSync.length > 0 ? { outOfSyncPaths: outOfSync } : {}
   };
 }
-var MESH_COMPACT_PRESERVED_MARKER_FIELDS = ["dataFreshness", "quota", "isLocalWorktree"];
+var MESH_COMPACT_PRESERVED_MARKER_FIELDS = ["dataFreshness", "gitObservation", "quota", "isLocalWorktree"];
 function quotaSnapshotAgeMs(snapshot, now = Date.now()) {
   const updatedAt = typeof snapshot?.updatedAt === "number" ? snapshot.updatedAt : NaN;
   if (!Number.isFinite(updatedAt)) return null;
@@ -183192,13 +183192,6 @@ function extractSubmodules(value, ignorePaths) {
   if (ignorePaths.length === 0) return subs;
   const ignoreSet = new Set(ignorePaths);
   return subs.filter((s) => s?.path && !ignoreSet.has(s.path));
-}
-function extractReporterNodeFactsQuota(value) {
-  const payload = unwrapCommandPayload(value);
-  const facts = payload?.reporterNodeFacts ?? value?.reporterNodeFacts;
-  const quota = facts?.quota;
-  if (!quota || typeof quota !== "object" || Array.isArray(quota)) return void 0;
-  return Object.keys(quota).length > 0 ? quota : void 0;
 }
 function assignFullGitSnapshot(entry, status) {
   if (!status || typeof status !== "object" || Array.isArray(status)) return;
@@ -184577,9 +184570,17 @@ async function resolveMeshSessionProviderMetadata(ctx, nodeId, runtimeSessionId)
   if (fromLedger) rememberMeshSessionProviderMetadata(nodeId, runtimeSessionId, fromLedger);
   return fromLedger;
 }
-async function collectRelatedRepoStatuses(ctx, node) {
+async function collectRelatedRepoStatuses(ctx, node, opts) {
   const relatedRepos = readRelatedRepos(node);
   if (!relatedRepos.length) return [];
+  if (opts?.localOnly === true && node.daemonId && !isLocalControlPlaneNode(ctx, node)) {
+    return relatedRepos.map((repo) => ({
+      label: repo.label,
+      workspace: repo.workspace,
+      statusHeld: false,
+      note: "Remote related-repo git is not held by the coordinator; mesh_git_status(node_id) reads it live."
+    }));
+  }
   const results = [];
   for (const repo of relatedRepos) {
     try {
@@ -184816,6 +184817,164 @@ function resolveRefineConfigNode(ctx, nodeId) {
   return node;
 }
 
+// src/tools/mesh-status-held-git.ts
+function readRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+async function readCoordinatorHeldNodeState(ctx, opts = {}) {
+  const byNodeId = /* @__PURE__ */ new Map();
+  let raw;
+  try {
+    raw = await ctx.transport.command("mesh_status", {
+      meshId: ctx.mesh.id,
+      ...opts.refresh === true ? { refresh: true } : {}
+    });
+  } catch (error48) {
+    return { byNodeId, error: error48?.message || "coordinator mesh_status read failed" };
+  }
+  const payload = unwrapCommandPayload(raw);
+  const record2 = readRecord(payload) ?? readRecord(raw);
+  if (!record2 || record2.success === false) {
+    return { byNodeId, error: typeof record2?.error === "string" ? record2.error : "coordinator mesh_status returned no node state" };
+  }
+  const nodes = Array.isArray(record2.nodes) ? record2.nodes : [];
+  for (const node of nodes) {
+    const status = readRecord(node);
+    const nodeId = typeof status?.nodeId === "string" ? status.nodeId : "";
+    if (status && nodeId) byNodeId.set(nodeId, status);
+  }
+  return { byNodeId };
+}
+function findHeldNodeStatus(state, node) {
+  const exact = state.byNodeId.get(node.id);
+  if (exact) return exact;
+  for (const [nodeId, status] of state.byNodeId) {
+    if ((0, import_daemon_core10.meshNodeIdMatches)(node, nodeId)) return status;
+  }
+  return void 0;
+}
+function readHeldNodeGitObservation(held) {
+  const obs = readRecord(held?.gitObservation);
+  const source = obs?.source;
+  const numberOrNull = (value) => typeof value === "number" && Number.isFinite(value) ? value : null;
+  return {
+    source: source === "self" || source === "local" || source === "member_push" || source === "coordinator_probe" ? source : "none",
+    observedAt: numberOrNull(obs?.observedAt),
+    refreshing: obs?.refreshing === true,
+    unreachableSince: numberOrNull(obs?.unreachableSince),
+    ...typeof obs?.lastRefreshError === "string" ? { lastRefreshError: obs.lastRefreshError } : {}
+  };
+}
+var FRESH_MS = 3e4;
+var RECENT_MS = 3e5;
+function classifyStaleness(dataSource, ageMs) {
+  if (dataSource === "self" || dataSource === "live") return "fresh";
+  if (ageMs === null) return "unknown";
+  if (ageMs < FRESH_MS) return "fresh";
+  if (ageMs < RECENT_MS) return "recent";
+  return "stale";
+}
+function deriveDataFreshnessFromObservation(args) {
+  const { observation, hasGit, isSelfNode, daemonId } = args;
+  const daemon = readRecord(args.daemonFreshness);
+  const now = args.now ?? Date.now();
+  const unreachable = observation.unreachableSince !== null;
+  let dataSource;
+  let reachable;
+  if (observation.source === "self" || isSelfNode && observation.source === "none" && hasGit) {
+    dataSource = "self";
+    reachable = true;
+  } else if (observation.source === "local") {
+    dataSource = "live";
+    reachable = true;
+  } else if (hasGit && (observation.source === "member_push" || observation.source === "coordinator_probe" || observation.observedAt !== null)) {
+    dataSource = "cached";
+    reachable = unreachable ? false : typeof daemon?.reachable === "boolean" ? daemon.reachable : null;
+  } else if (!daemonId) {
+    dataSource = "unconfigured";
+    reachable = null;
+  } else if (unreachable) {
+    dataSource = "unreachable";
+    reachable = false;
+  } else {
+    dataSource = "pending";
+    reachable = typeof daemon?.reachable === "boolean" ? daemon.reachable : null;
+  }
+  const probeOk = dataSource === "self" || dataSource === "live";
+  const lastProbeAt = observation.observedAt !== null ? new Date(observation.observedAt).toISOString() : typeof daemon?.lastProbeAt === "string" ? daemon.lastProbeAt : null;
+  const lastProbeMs = lastProbeAt ? Date.parse(lastProbeAt) : NaN;
+  const ageMs = Number.isFinite(lastProbeMs) ? Math.max(0, now - lastProbeMs) : null;
+  return {
+    dataSource,
+    probeOk,
+    reachable,
+    directPeerTruthSatisfied: probeOk,
+    projection: dataSource === "cached" ? "cached" : "live_or_absent",
+    lastProbeAt,
+    ageMs,
+    staleness: classifyStaleness(dataSource, ageMs)
+  };
+}
+function applyHeldNodeGitToEntry(entry, args) {
+  const { mesh, node, held } = args;
+  const observation = readHeldNodeGitObservation(held);
+  const status = readRecord(held?.git);
+  const hasGit = !!status && (typeof status.isGitRepo === "boolean" || typeof status.branch === "string");
+  if (hasGit && status) {
+    const uncommittedChanges = countUncommittedChanges(status);
+    const dirty = isGitStatusDirty(status);
+    entry.health = status.isGitRepo ? dirty ? "dirty" : "online" : "degraded";
+    assignFullGitSnapshot(entry, status);
+    entry.branch = status.branch;
+    entry.isDirty = dirty;
+    entry.uncommittedChanges = uncommittedChanges;
+    entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
+    const buildBehind = readRecord(status.daemonBuildBehind) ?? readRecord(held?.staleDaemonBuild);
+    if (buildBehind) entry.staleDaemonBuild = buildBehind;
+    const policy = node.policy ?? {};
+    const submodules = policy.autoDiscoverSubmodules === false ? void 0 : extractSubmodules({ status }, policy.submoduleIgnorePaths || []);
+    if (submodules && submodules.some((s) => s?.outOfSync)) {
+      entry.submoduleWarning = "One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.";
+      entry.outOfSyncSubmodules = submodules.filter((s) => s?.outOfSync).map((s) => s.path);
+    }
+  } else if (args.heldStateError) {
+    entry.health = "unknown";
+    entry.degradedReason = "coordinator_state_unavailable";
+    entry.error = `Coordinator daemon node state unavailable: ${args.heldStateError}`;
+  } else if (observation.unreachableSince !== null) {
+    entry.health = "degraded";
+    entry.degradedReason = "node_unreachable";
+    entry.error = `No git state held for this node; the coordinator's background refresh has failed since ${new Date(observation.unreachableSince).toISOString()}${observation.lastRefreshError ? ` (${observation.lastRefreshError})` : ""}.`;
+  } else {
+    entry.health = "unknown";
+    entry.gitProbePending = true;
+    if (typeof held?.error === "string" && held.error) entry.error = held.error;
+  }
+  const quota = readRecord(readRecord(held?.nodeFacts)?.quota);
+  if (quota && Object.keys(quota).length > 0) entry.quota = quota;
+  entry.gitObservation = observation;
+  entry.dataFreshness = deriveDataFreshnessFromObservation({
+    observation,
+    daemonFreshness: readRecord(held?.dataFreshness),
+    hasGit,
+    isSelfNode: entry.machine?.sameMachine === true,
+    daemonId: readNodeDaemonId(node),
+    now: args.now
+  });
+}
+function buildNodeGitStateSummary(entries, error48, refreshRequested) {
+  const refreshingNodeIds = entries.filter((entry) => entry?.gitObservation?.refreshing === true).map((entry) => String(entry.nodeId));
+  return {
+    nodeGitState: {
+      source: "coordinator_held",
+      ...error48 ? { error: error48 } : {},
+      ...refreshRequested ? { refreshRequested: true } : {},
+      refreshing: refreshingNodeIds.length > 0,
+      ...refreshingNodeIds.length > 0 ? { refreshingNodeIds } : {}
+    }
+  };
+}
+
 // src/tools/mesh-tools-status.ts
 var MESH_PROTOCOL_VERSION_V2_WIRE = "2.0";
 function summarizePendingEventProtocolMetrics(pendingEvents) {
@@ -184868,6 +185027,7 @@ async function meshStatus(ctx, args = {}) {
   let ledgerSummary = runtimeView.summary;
   const schedulingRuntime = runtimeView.schedulingRuntime;
   const schedulingByNode = new Map(schedulingRuntime.nodes.map((n) => [n.nodeId, n]));
+  const heldNodeState = await readCoordinatorHeldNodeState(ctx, { refresh: args.refresh === true });
   const results = await Promise.all(mesh.nodes.map(async (node) => {
     const entry = {
       nodeId: node.id,
@@ -184891,59 +185051,11 @@ async function meshStatus(ctx, args = {}) {
     if (lastQuotaRanking) {
       entry.scheduling = { ...entry.scheduling ?? {}, lastQuotaRanking };
     }
-    let liveTruthProbed = false;
-    try {
-      const autoDiscover = node.policy?.autoDiscoverSubmodules !== false;
-      const statusResult = await commandForNode(ctx, node, "git_status", {
-        workspace: node.workspace,
-        refreshUpstream: true,
-        includeSubmodules: autoDiscover,
-        submoduleIgnorePaths: node.policy?.submoduleIgnorePaths || void 0
-      }, { statusProbe: true });
-      liveTruthProbed = true;
-      const status = extractGitStatus(statusResult);
-      const uncommittedChanges = countUncommittedChanges(status);
-      const dirty = isGitStatusDirty(status);
-      entry.health = status?.isGitRepo ? dirty ? "dirty" : "online" : "degraded";
-      assignFullGitSnapshot(entry, status);
-      entry.branch = status?.branch;
-      entry.isDirty = dirty;
-      entry.uncommittedChanges = uncommittedChanges;
-      entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
-      if (status?.daemonBuildBehind && typeof status.daemonBuildBehind === "object") {
-        entry.staleDaemonBuild = status.daemonBuildBehind;
-      }
-      const reportedQuota = extractReporterNodeFactsQuota(statusResult);
-      if (reportedQuota) entry.quota = reportedQuota;
-      const submodules = extractSubmodules(statusResult, node.policy?.submoduleIgnorePaths || []);
-      if (submodules && submodules.some((s) => s?.outOfSync)) {
-        entry.submoduleWarning = "One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.";
-        entry.outOfSyncSubmodules = submodules.filter((s) => s?.outOfSync).map((s) => s.path);
-      }
-    } catch (e) {
-      const failure = buildCoordinatorP2pRelayFailure(e, {
-        command: "git_status",
-        targetDaemonId: node.daemonId,
-        nodeId: node.id
-      });
-      entry.health = "degraded";
-      entry.error = failure.error;
-      entry.degradedReason = failure.recoverable ? "p2p_relay_failure" : "git_status_unavailable";
-      Object.assign(entry, {
-        code: failure.code,
-        transport: failure.transport,
-        recoverable: failure.recoverable,
-        retryRecommended: failure.retryRecommended,
-        nextAction: failure.nextAction,
-        noFallbackReason: failure.noFallbackReason
-      });
-    }
-    entry.dataFreshness = (0, import_daemon_core10.buildMeshNodeProbeFreshness)({
-      git: entry.git,
-      liveTruthProbed,
-      isSelfNode: entry.machine?.sameMachine === true,
-      daemonId: readNodeDaemonId(node),
-      node
+    applyHeldNodeGitToEntry(entry, {
+      mesh,
+      node,
+      held: findHeldNodeStatus(heldNodeState, node),
+      heldStateError: heldNodeState.error
     });
     const recoveryContext = await recoveryContextQuery(transport, { meshId: mesh.id, nodeId: node.id }).then((r) => r.context).catch(() => ({ consecutiveNodeFailures: 0 }));
     if (recoveryContext.consecutiveNodeFailures > 0) {
@@ -184987,7 +185099,7 @@ async function meshStatus(ctx, args = {}) {
     if (nextStepHints.length > 0) {
       entry.nextStepHints = nextStepHints;
     }
-    const relatedRepos = await collectRelatedRepoStatuses(ctx, node);
+    const relatedRepos = await collectRelatedRepoStatuses(ctx, node, { localOnly: true });
     if (relatedRepos.length) entry.relatedRepos = relatedRepos;
     const statusProbe = await collectLiveStatusProbe(ctx, node, probeOpts);
     const liveSessions = statusProbe.sessions;
@@ -185262,10 +185374,14 @@ async function meshStatus(ctx, args = {}) {
     refreshedAt: (/* @__PURE__ */ new Date()).toISOString(),
     sourceOfTruth: {
       membership: "coordinator_daemon_live_mesh",
-      currentStatus: "live_git_and_session_probes",
+      // Git truth is the coordinator daemon's held node state (member pushes +
+      // background refresh; per-node gitObservation says how old). Sessions are
+      // still a per-daemon get_status_metadata probe (5 s cache).
+      currentStatus: "coordinator_held_git_and_live_session_probes",
       activeWork: "mesh_queue_file_and_local_ledger",
       historicalEvidenceOnly: ["recoveryHints", "ledgerSummary"]
     },
+    ...buildNodeGitStateSummary(results, heldNodeState.error, args.refresh === true),
     nodes: nodesForResponse,
     ...compact && stubbedNodeCount > 0 ? {
       stubbedNodesNote: `${stubbedNodeCount} node(s) in the array above are reduced to a minimal stub (marked folded:true) in compact mode \u2014 healthy/clean nodes plus any beyond the detail byte-budget. They remain addressable by node_id; use verbose=true for their full detail.`

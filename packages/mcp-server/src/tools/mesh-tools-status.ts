@@ -8,36 +8,26 @@ import {
     COMPACT_MISSIONS_BYTE_BUDGET,
     COMPACT_NODES_TOTAL_BYTE_BUDGET,
     annotateQuotaSnapshotFreshness,
-    assignFullGitSnapshot,
     buildActiveWorkPollingGuidance,
-    buildBranchConvergence,
     buildCompactStaleDirectWorkSummary,
-    buildCoordinatorP2pRelayFailure,
     buildMeshAsyncRefineJobs,
     buildMeshMagiActivity,
     compactMagiActivityGroup,
     summarizeMeshMagiActivity,
-    buildMeshNodeProbeFreshness,
     getLastQuotaRanking,
     buildNodeCapabilityExposure,
     buildNodeMachineIdentity,
     collectLiveStatusProbe,
     collectRelatedRepoStatuses,
-    commandForNode,
     compactActiveWorkRecords,
     compactMeshStatusNode,
     compactNodeSeverity,
-    countUncommittedChanges,
     drainCoordinatorPendingEvents,
-    extractGitStatus,
-    extractReporterNodeFactsQuota,
-    extractSubmodules,
     getLatestActiveLaunchFailure,
     summarizeMeshUsage,
     getMeshStatusMissionSummaries,
     getMeshStatusMissionsCompact,
     getNodeLaunchReadiness,
-    isGitStatusDirty,
     isNoteworthyCompactNode,
     pinnedRepresentativeNodeIds,
     minimalCompactNode,
@@ -60,6 +50,7 @@ import type {
 // daemon-core symbols mesh-tools-internal.ts itself imports.
 import type { MeshLedgerSummary as MeshLedgerSummaryView, MeshSchedulingRuntime, SessionRecoveryContext } from '@adhdev/daemon-core';
 import { activeWorkQuery, recoveryContextQuery, taskStatsQuery } from '../ipc/turn-commands.js';
+import { applyHeldNodeGitToEntry, buildNodeGitStateSummary, findHeldNodeStatus, readCoordinatorHeldNodeState } from './mesh-status-held-git.js';
 
 // The v2 protocol version literal (mirrors MESH_PROTOCOL_VERSION_V2 in
 // daemon-core mesh/contracts.ts). Kept as a local literal so this MCP-side
@@ -162,7 +153,12 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     const schedulingRuntime = runtimeView.schedulingRuntime as unknown as MeshSchedulingRuntime;
     const schedulingByNode = new Map(schedulingRuntime.nodes.map(n => [n.nodeId, n]));
 
-    // Probe all nodes in parallel — git_status + session collection per node are independent.
+    // ONE local read of the coordinator daemon's held node state (git, submodules,
+    // gitObservation, freshness). Never waits on a remote peer; `refresh` only
+    // kicks the daemon's background refresh (see mesh-status-held-git.ts).
+    const heldNodeState = await readCoordinatorHeldNodeState(ctx, { refresh: args.refresh === true });
+
+    // Assemble all nodes in parallel — held git (above) + session collection per node.
     //
     // Dual-surface note (mesh-status-dual-surface): this coordinator-side node object
     // is assembled here independently of the daemon-core finalize path
@@ -235,90 +231,16 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             entry.scheduling = { ...(entry.scheduling ?? {}), lastQuotaRanking };
         }
 
-        // Tracks whether THIS call obtained live truth from a fresh git_status probe.
-        // The coordinator-facing mesh_status always probes each node fresh, so a probe
-        // that returns is live truth and a probe that throws is an unreachable peer —
-        // consumed below to stamp the additive `dataFreshness` marker.
-        let liveTruthProbed = false;
-        try {
-            const autoDiscover = (node.policy as any)?.autoDiscoverSubmodules !== false;
-            // OFFLINE-NODE-STATUS-REFRESH: this is the mesh_status per-node git_status probe
-            // (first awaited in the sequence, so it blocks earliest). Mark it status-origin so
-            // an offline peer's relay gives up on the SHORT connect-wait budget instead of
-            // sinking the whole explicit_refresh into the 90s connect deadline.
-            const statusResult = await commandForNode(ctx, node, 'git_status', {
-                workspace: node.workspace,
-                refreshUpstream: true,
-                includeSubmodules: autoDiscover,
-                submoduleIgnorePaths: (node.policy as any)?.submoduleIgnorePaths || undefined,
-            }, { statusProbe: true });
-            liveTruthProbed = true;
-            const status = extractGitStatus(statusResult);
-            const uncommittedChanges = countUncommittedChanges(status);
-            const dirty = isGitStatusDirty(status);
-            entry.health = status?.isGitRepo ? (dirty ? 'dirty' : 'online') : 'degraded';
-            assignFullGitSnapshot(entry, status);
-            entry.branch = status?.branch;
-            entry.isDirty = dirty;
-            entry.uncommittedChanges = uncommittedChanges;
-            entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
-            // Stale-daemon-build warning: the live daemon's build commit is a
-            // strict ancestor of this workspace HEAD (or its oss submodule),
-            // meaning merged code is not yet live (awaiting deploy/restart).
-            // Computed git-correctly on the daemon side (git_status →
-            // daemonBuildBehind); surfaced here as a top-level node field.
-            if (status?.daemonBuildBehind && typeof status.daemonBuildBehind === 'object') {
-                entry.staleDaemonBuild = status.daemonBuildBehind;
-            }
-            // Provider quota, as reported by the node that owns the credentials.
-            // Rides the same git_status envelope as the rest of the node-facts
-            // bundle — the daemon fills it from a cached snapshot on its own
-            // refresh timer, so reading it here costs this probe nothing extra.
-            // This surface is the observation copy; the ROUTING consumer
-            // (daemon-core mesh-quota-routing.ts gate/spread) reads the same
-            // bundle on the coordinator side, so keep the shape intact.
-            const reportedQuota = extractReporterNodeFactsQuota(statusResult);
-            if (reportedQuota) entry.quota = reportedQuota;
-            // Submodule out-of-sync warning
-            const submodules = extractSubmodules(statusResult, (node.policy as any)?.submoduleIgnorePaths || []);
-            if (submodules && submodules.some((s: any) => s?.outOfSync)) {
-                entry.submoduleWarning = 'One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.';
-                entry.outOfSyncSubmodules = submodules.filter((s: any) => s?.outOfSync).map((s: any) => s.path);
-            }
-        } catch (e: any) {
-            const failure = buildCoordinatorP2pRelayFailure(e, {
-                command: 'git_status',
-                targetDaemonId: node.daemonId,
-                nodeId: node.id,
-            });
-            entry.health = 'degraded';
-            entry.error = failure.error;
-            entry.degradedReason = failure.recoverable ? 'p2p_relay_failure' : 'git_status_unavailable';
-            Object.assign(entry, {
-                code: failure.code,
-                transport: failure.transport,
-                recoverable: failure.recoverable,
-                retryRecommended: failure.retryRecommended,
-                nextAction: failure.nextAction,
-                noFallbackReason: failure.noFallbackReason,
-            });
-        }
-
-        // Additive freshness/reachability marker. Without this, the coordinator's
-        // mesh_status could not tell a node whose live probe just succeeded from one
-        // it could not reach — both rendered as `health` + git scalars only. Derived
-        // through the SINGLE canonical daemon-core live-probe adapter
-        // (buildMeshNodeProbeFreshness) rather than rebuilding the freshness input
-        // here, so the dataSource/staleness wiring cannot drift between this
-        // coordinator surface and the daemon aggregate (the rc.371 regression where
-        // dataFreshness was wired on the daemon surface but null on every coordinator
-        // node because this site re-derived its own input).
-        entry.dataFreshness = buildMeshNodeProbeFreshness({
-            git: entry.git,
-            liveTruthProbed,
-            isSelfNode: (entry.machine as any)?.sameMachine === true,
-            daemonId: readNodeDaemonId(node),
+        // COORDINATOR-HELD NODE GIT (owner principle 2026-09-26): this tool no longer
+        // probes each node's git_status over P2P on the request path. Git, submodules,
+        // quota facts and freshness come from the coordinator daemon's held node
+        // state (ONE local `mesh_status` read above — member pushes + the daemon's
+        // own background refresh), the same view the dashboard renders.
+        applyHeldNodeGitToEntry(entry, {
+            mesh,
             node,
+            held: findHeldNodeStatus(heldNodeState, node),
+            heldStateError: heldNodeState.error,
         });
 
         // Recovery Hints & Next-step reporting
@@ -374,7 +296,9 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             entry.nextStepHints = nextStepHints;
         }
 
-        const relatedRepos = await collectRelatedRepoStatuses(ctx, node);
+        // Related repos are not part of the coordinator-held state: a remote node's
+        // related repo is listed without a live probe (mesh_git_status reads it live).
+        const relatedRepos = await collectRelatedRepoStatuses(ctx, node, { localOnly: true });
         if (relatedRepos.length) entry.relatedRepos = relatedRepos;
 
         const statusProbe = await collectLiveStatusProbe(ctx, node, probeOpts);
@@ -828,10 +752,14 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         refreshedAt: new Date().toISOString(),
         sourceOfTruth: {
             membership: 'coordinator_daemon_live_mesh',
-            currentStatus: 'live_git_and_session_probes',
+            // Git truth is the coordinator daemon's held node state (member pushes +
+            // background refresh; per-node gitObservation says how old). Sessions are
+            // still a per-daemon get_status_metadata probe (5 s cache).
+            currentStatus: 'coordinator_held_git_and_live_session_probes',
             activeWork: 'mesh_queue_file_and_local_ledger',
             historicalEvidenceOnly: ['recoveryHints', 'ledgerSummary'],
         },
+        ...buildNodeGitStateSummary(results, heldNodeState.error, args.refresh === true),
         nodes: nodesForResponse,
         ...(compact && stubbedNodeCount > 0
             ? {

@@ -11,6 +11,7 @@ import { __clearLocalRecordsForTests } from '@adhdev/daemon-core';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { heldMeshStatusFromResponder } from './helpers/held-node-state.js';
 // Budget the compact (LLM-facing) payload must stay under regardless of how many
 // worktree nodes / sessions / queued tasks a mesh has. The live regression that
 // motivated this was mesh_status ~76KB and mesh_view_queue ~73KB exceeding the MCP
@@ -73,8 +74,11 @@ function buildManyNodeCtx(meshId: string, nodeCount: number) {
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), nodes,
   };
   const transport = new IpcTransport() as any;
-  const responder = (command: string) => {
+  const responder = (command: string): any => {
     if (command === 'get_mesh') return { success: true, mesh };
+    // Fixed observation time: the held node state is a stored observation, so a
+    // repeated read returns the same observedAt (the verbose-stability test relies on it).
+    if (command === 'mesh_status') return heldMeshStatusFromResponder(mesh, responder, { localDaemonId: 'daemon-A', observedAt: 1_790_000_000_000 });
     if (command === 'get_pending_mesh_events') return { events: [] };
     if (command === 'mesh_forward_event') return { success: true, forwarded: 0 };
     if (command === 'git_status') {
@@ -141,7 +145,8 @@ function buildMachinesAndWorktreesCtx(meshId: string) {
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), nodes,
   };
   const transport = new IpcTransport() as any;
-  const responder = (command: string, payload?: any) => {
+  const responder = (command: string, payload?: any): any => {
+    if (command === 'mesh_status') return heldMeshStatusFromResponder(mesh, responder, { localDaemonId: 'daemon-A' });
     // Only worktrees are dirty — machine nodes stay quiet, which is exactly the
     // condition under which severity ranking used to fold them out first.
     const isWorktree = String(payload?.workspace ?? '').includes('worktrees');
@@ -424,6 +429,9 @@ test('mesh_status compact node fold preserves dashboard-grade verbose output byt
     const v2 = JSON.parse(await meshStatus(ctx as any, { verbose: true }));
     // Strip the intentionally non-deterministic timestamp.
     delete v1.refreshedAt; delete v2.refreshedAt;
+    // dataFreshness.ageMs is "now - observedAt" of the held observation — time-based
+    // by definition, like refreshedAt. Everything else must be byte-stable.
+    for (const node of [...v1.nodes, ...v2.nodes]) if (node?.dataFreshness) delete node.dataFreshness.ageMs;
     assert.deepEqual(v1.nodes, v2.nodes, 'verbose node array must be stable for a fixed input');
     // Verbose nodes carry the full machine.identityEvidence and branchConvergence.nextStep
     // that compact strips — prove they survive in verbose.
