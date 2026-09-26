@@ -52,7 +52,8 @@ export function getMeshGraphAttentionBadge(node: MeshGraphNode): { label: string
         return { label: node.hasConflicts ? 'conflicts present' : 'dirty workspace', tone: 'danger' }
     }
     if (convergence?.status === 'blocked_review') {
-        if (convergence.reason === 'upstream_unverified') return { label: 'upstream unverified', tone: 'warn' }
+        // The daemon emits default_branch_upstream_unverified / feature_branch_upstream_unverified.
+        if (convergence.reason === 'upstream_unverified' || convergence.reason.endsWith('_upstream_unverified')) return { label: 'upstream unverified', tone: 'warn' }
         const drift = formatMeshGraphAheadBehind(node)
         if (drift) return { label: drift, tone: 'danger' }
         if (!node.upstream && node.branch && node.branch !== convergence.defaultBranch) return { label: 'push branch', tone: 'warn' }

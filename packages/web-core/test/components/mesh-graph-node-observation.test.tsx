@@ -146,6 +146,17 @@ describe('topology — coordinator-held remote node state', () => {
     })
 })
 
+describe('attention badge — daemon upstream-unverified reasons', () => {
+    it('maps default_branch_upstream_unverified to the upstream warning, not BLOCKED REVIEW', () => {
+        const status = remoteStatus({
+            git: { isGitRepo: true, workspace: 'C:/work/adhdev', branch: 'main', headCommit: 'bbb', upstream: 'origin/main', upstreamStatus: 'unchecked', ahead: 0, behind: 0 },
+            branchConvergence: { status: 'blocked_review', needsConvergence: true, reason: 'default_branch_upstream_unverified', nextStep: 'Refresh main upstream' },
+        })
+        const node = buildMeshGraph(canonicalizeRepoMeshStatus(status as any)).nodes.find(n => n.id === 'node_mainpc')!
+        expect(getMeshGraphAttentionBadge(node)).toEqual({ label: 'upstream unverified', tone: 'warn' })
+    })
+})
+
 describe('mesh graph dialog — where a failed load is surfaced', () => {
     it('a background refresh failing with a graph on screen is quiet; a first load or manual refresh failure is the banner', () => {
         expect(classifyDashboardMeshLoadFailure({ background: true, hasGraph: true })).toBe('quiet')

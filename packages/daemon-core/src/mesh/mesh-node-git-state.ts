@@ -92,6 +92,36 @@ export function computeMeshNodeGitSignature(git: Record<string, unknown> | null 
     return JSON.stringify([head, submodules]);
 }
 
+/**
+ * A pushed/probed snapshot read WITHOUT an upstream fetch reports
+ * `upstreamStatus: 'unchecked'` even though the remote-tracking ref was fetched
+ * minutes ago. Read raw, that flips a clean `main` to blocked_review
+ * (default_branch_upstream_unverified) between upstream refreshes, and churns
+ * the signature fresh↔unchecked. Carry the previous verified freshness forward
+ * while it is recent and names the same upstream; ahead/behind in `next` are
+ * already computed against that same local tracking ref.
+ */
+export const UPSTREAM_FRESHNESS_CARRY_MAX_AGE_MS = 10 * 60_000;
+
+export function carryUpstreamFreshness(
+    prev: Record<string, unknown> | null | undefined,
+    next: Record<string, unknown>,
+    now: number,
+    maxAgeMs: number = UPSTREAM_FRESHNESS_CARRY_MAX_AGE_MS,
+): Record<string, unknown> {
+    if (next.upstreamStatus !== 'unchecked' || !prev || !next.upstream) return next;
+    if (prev.upstream !== next.upstream) return next;
+    if (prev.upstreamStatus !== 'fresh' && prev.upstreamStatus !== 'stale') return next;
+    const fetchedAt = typeof prev.upstreamFetchedAt === 'number' ? prev.upstreamFetchedAt : null;
+    if (fetchedAt === null || now - fetchedAt > maxAgeMs) return next;
+    return {
+        ...next,
+        upstreamStatus: prev.upstreamStatus,
+        upstreamFetchedAt: fetchedAt,
+        ...(prev.upstreamStatus === 'stale' && typeof prev.upstreamFetchError === 'string' ? { upstreamFetchError: prev.upstreamFetchError } : {}),
+    };
+}
+
 function emptyEntry(meshId: string, nodeId: string, workspace: string): MeshNodeGitStateEntry {
     return {
         meshId,
@@ -176,9 +206,11 @@ export class MeshNodeGitStateStore {
         source: MeshNodeGitObservationSource;
         observedAt?: number;
     }): { changed: boolean; entry: MeshNodeGitStateEntry | null } {
-        const git = sanitizeObservedGit(args.git);
-        if (!args.meshId || !args.nodeId || !git) return { changed: false, entry: null };
+        const rawGit = sanitizeObservedGit(args.git);
+        if (!args.meshId || !args.nodeId || !rawGit) return { changed: false, entry: null };
         const entry = this.upsertBase(args.meshId, args.nodeId, args.workspace);
+        // Older members push un-fetched reads ('unchecked'): keep the verified freshness.
+        const git = carryUpstreamFreshness(entry.git, rawGit, this.now());
         const signature = computeMeshNodeGitSignature(git);
         const recovered = entry.unreachableSince !== null;
         const changed = signature !== entry.signature || recovered;
