@@ -25,6 +25,12 @@
  */
 import type { Database as DatabaseHandle } from 'better-sqlite3';
 import { LOG } from '../logging/logger.js';
+import {
+    computeMeshNodeFactsSignature,
+    computeMeshNodeRuntimeSignature,
+    sanitizeMeshNodeRuntimeSummary,
+    type MeshNodeRuntimeSummary,
+} from './mesh-node-runtime-summary.js';
 
 export type MeshNodeGitObservationSource = 'member_push' | 'coordinator_probe';
 
@@ -45,6 +51,19 @@ export interface MeshNodeGitStateEntry {
     unreachableSince: number | null;
     lastFailureAt: number | null;
     lastFailureReason: string | null;
+    /**
+     * Content-free runtime summary (sessions / build / upgrade marker / facts incl.
+     * quota — mesh-node-runtime-summary.ts), held beside the git state so
+     * mesh_status answers it without a per-daemon get_status_metadata call.
+     */
+    runtime: MeshNodeRuntimeSummary | null;
+    runtimeObservedAt: number | null;
+    runtimeSource: MeshNodeGitObservationSource | null;
+    runtimeSignature: string | null;
+    /** Epoch ms the coordinator last started a background runtime probe (not persisted). */
+    runtimeLastAttemptAt: number | null;
+    /** Epoch ms of the last failed background runtime probe (not persisted). */
+    runtimeLastFailureAt: number | null;
 }
 
 export interface MeshNodeGitStatePersistence {
@@ -135,6 +154,12 @@ function emptyEntry(meshId: string, nodeId: string, workspace: string): MeshNode
         unreachableSince: null,
         lastFailureAt: null,
         lastFailureReason: null,
+        runtime: null,
+        runtimeObservedAt: null,
+        runtimeSource: null,
+        runtimeSignature: null,
+        runtimeLastAttemptAt: null,
+        runtimeLastFailureAt: null,
     };
 }
 
@@ -250,6 +275,52 @@ export class MeshNodeGitStateStore {
         return { changed };
     }
 
+    /**
+     * Record an observed runtime summary (member push or the coordinator's
+     * background get_status_metadata probe). Re-sanitized here: the allow-list is
+     * enforced at ingest, whatever the sender did. `changed` = visible content
+     * changed; `factsChanged` = the facts bundle (quota / build) changed — the
+     * part the dashboard renders, so only that publishes a mesh-state revision.
+     */
+    recordRuntimeObservation(args: {
+        meshId: string;
+        nodeId: string;
+        workspace: string;
+        runtime: unknown;
+        source: MeshNodeGitObservationSource;
+        observedAt?: number;
+    }): { changed: boolean; factsChanged: boolean; entry: MeshNodeGitStateEntry | null } {
+        const runtime = sanitizeMeshNodeRuntimeSummary(args.runtime);
+        if (!args.meshId || !args.nodeId || !runtime) return { changed: false, factsChanged: false, entry: null };
+        const entry = this.upsertBase(args.meshId, args.nodeId, args.workspace);
+        const observedAt = typeof args.observedAt === 'number' && Number.isFinite(args.observedAt)
+            ? Math.min(args.observedAt, this.now())
+            : this.now();
+        if (entry.runtimeObservedAt !== null && observedAt < entry.runtimeObservedAt) {
+            return { changed: false, factsChanged: false, entry };
+        }
+        const signature = computeMeshNodeRuntimeSignature(runtime);
+        const changed = signature !== entry.runtimeSignature;
+        const factsChanged = computeMeshNodeFactsSignature(runtime) !== computeMeshNodeFactsSignature(entry.runtime);
+        entry.runtime = runtime;
+        entry.runtimeObservedAt = observedAt;
+        entry.runtimeSource = args.source;
+        entry.runtimeSignature = signature;
+        entry.runtimeLastFailureAt = null;
+        this.persist(entry);
+        return { changed, factsChanged, entry };
+    }
+
+    recordRuntimeProbeAttempt(meshId: string, nodeId: string, workspace: string, at: number = this.now()): void {
+        if (!meshId || !nodeId) return;
+        this.upsertBase(meshId, nodeId, workspace).runtimeLastAttemptAt = at;
+    }
+
+    recordRuntimeProbeFailure(meshId: string, nodeId: string, workspace: string, at: number = this.now()): void {
+        if (!meshId || !nodeId) return;
+        this.upsertBase(meshId, nodeId, workspace).runtimeLastFailureAt = at;
+    }
+
     /** Test/diagnostic helper. */
     size(): number {
         return this.entries.size;
@@ -273,9 +344,19 @@ export function ensureMeshNodeGitStateSchema(db: DatabaseHandle): void {
             unreachable_since INTEGER,
             last_failure_at INTEGER,
             last_failure_reason TEXT,
+            runtime_json TEXT,
+            runtime_observed_at INTEGER,
+            runtime_source TEXT,
+            runtime_signature TEXT,
             PRIMARY KEY (mesh_id, node_id)
         );
     `);
+    // Runtime columns were added after the table shipped (git-only rows exist on
+    // coordinators that ran the earlier build) — add them in place when missing.
+    const columns = new Set((db.prepare('PRAGMA table_info(mesh_node_git_state)').all() as Array<{ name: string }>).map((c) => c.name));
+    for (const [name, type] of [['runtime_json', 'TEXT'], ['runtime_observed_at', 'INTEGER'], ['runtime_source', 'TEXT'], ['runtime_signature', 'TEXT']] as const) {
+        if (!columns.has(name)) db.exec(`ALTER TABLE mesh_node_git_state ADD COLUMN ${name} ${type}`);
+    }
 }
 
 function readNullableNumber(value: unknown): number | null {
@@ -286,12 +367,15 @@ export function createDbMeshNodeGitStatePersistence(getDb: () => DatabaseHandle)
     return {
         load(meshId) {
             const rows = getDb().prepare(
-                'SELECT mesh_id, node_id, workspace, git_json, observed_at, source, signature, unreachable_since, last_failure_at, last_failure_reason FROM mesh_node_git_state WHERE mesh_id = ?',
+                'SELECT mesh_id, node_id, workspace, git_json, observed_at, source, signature, unreachable_since, last_failure_at, last_failure_reason, runtime_json, runtime_observed_at, runtime_source, runtime_signature FROM mesh_node_git_state WHERE mesh_id = ?',
             ).all(meshId) as Array<Record<string, unknown>>;
             return rows.map((row) => {
                 let git: Record<string, unknown> | null = null;
                 try { git = readRecord(JSON.parse(String(row.git_json ?? 'null'))); } catch { git = null; }
                 const source = row.source === 'member_push' || row.source === 'coordinator_probe' ? row.source : null;
+                let runtime: MeshNodeRuntimeSummary | null = null;
+                try { runtime = sanitizeMeshNodeRuntimeSummary(JSON.parse(String(row.runtime_json ?? 'null'))); } catch { runtime = null; }
+                const runtimeSource = row.runtime_source === 'member_push' || row.runtime_source === 'coordinator_probe' ? row.runtime_source : null;
                 return {
                     meshId: String(row.mesh_id),
                     nodeId: String(row.node_id),
@@ -304,14 +388,21 @@ export function createDbMeshNodeGitStatePersistence(getDb: () => DatabaseHandle)
                     unreachableSince: readNullableNumber(row.unreachable_since),
                     lastFailureAt: readNullableNumber(row.last_failure_at),
                     lastFailureReason: typeof row.last_failure_reason === 'string' ? row.last_failure_reason : null,
+                    runtime,
+                    runtimeObservedAt: runtime ? readNullableNumber(row.runtime_observed_at) : null,
+                    runtimeSource: runtime ? runtimeSource : null,
+                    runtimeSignature: runtime ? (typeof row.runtime_signature === 'string' ? row.runtime_signature : computeMeshNodeRuntimeSignature(runtime)) : null,
+                    runtimeLastAttemptAt: null,
+                    runtimeLastFailureAt: null,
                 };
             });
         },
         save(entry) {
             getDb().prepare(`
                 INSERT OR REPLACE INTO mesh_node_git_state
-                    (mesh_id, node_id, workspace, git_json, observed_at, source, signature, unreachable_since, last_failure_at, last_failure_reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (mesh_id, node_id, workspace, git_json, observed_at, source, signature, unreachable_since, last_failure_at, last_failure_reason,
+                     runtime_json, runtime_observed_at, runtime_source, runtime_signature)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 entry.meshId,
                 entry.nodeId,
@@ -323,6 +414,10 @@ export function createDbMeshNodeGitStatePersistence(getDb: () => DatabaseHandle)
                 entry.unreachableSince,
                 entry.lastFailureAt,
                 entry.lastFailureReason,
+                entry.runtime ? JSON.stringify(entry.runtime) : null,
+                entry.runtimeObservedAt,
+                entry.runtimeSource,
+                entry.runtimeSignature,
             );
         },
     };

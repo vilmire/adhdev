@@ -12,6 +12,15 @@
 //
 // `refresh: true` is forwarded to the daemon, which KICKS its background refresh
 // and returns immediately; the kicked nodes report `gitObservation.refreshing`.
+//
+// RUNTIME (sessions / daemon build / upgrade marker / quota facts) of nodes served
+// by ANOTHER daemon comes from the same read: members push a content-free runtime
+// summary to the coordinator (daemon-core mesh/mesh-node-runtime-summary.ts), which
+// stamps it as `heldRuntime` and marks the response `nodeRuntimeHeld: true`. With
+// that marker this tool makes NO per-daemon get_status_metadata call for remote
+// nodes; the coordinator's own nodes are still read directly (one local IPC call).
+// A coordinator daemon without the marker (older build) keeps the legacy per-daemon
+// probe — the only case a remote read remains, and it disappears with the daemon.
 // Write paths that must see live git (refine, fast-forward, clone advisory,
 // mesh_git_status detail read) are NOT routed through here.
 
@@ -25,7 +34,9 @@ import {
     readNodeDaemonId,
     unwrapCommandPayload,
 } from './mesh-tools-internal.js';
-import type { LocalMeshNodeEntry, MeshContext } from './mesh-tools-internal.js';
+import type { LocalMeshNodeEntry, MeshContext, MeshUpgradeFailureSummary } from './mesh-tools-internal.js';
+import { extractDaemonBuildInfo, isLocalControlPlaneNode } from './mesh-tools-internal.js';
+import { IpcTransport } from '../transports/ipc.js';
 
 /** Mirror of daemon-core `RepoMeshNodeGitObservation` (wire contract). */
 export interface HeldNodeGitObservation {
@@ -41,6 +52,24 @@ export interface CoordinatorHeldNodeState {
     byNodeId: Map<string, Record<string, any>>;
     /** Set when the coordinator daemon could not answer (IPC failure / error result). */
     error?: string;
+    /** The daemon answered with held runtime for foreign-daemon nodes (`nodeRuntimeHeld`). */
+    runtimeHeld?: boolean;
+}
+
+/** Where a node's sessions / build came from on this call. */
+export interface HeldNodeRuntimeObservation {
+    /** 'local_read' = the coordinator's own daemon, read directly; 'none' = nothing held yet (sessions unknown, not zero). */
+    source: 'local_read' | 'member_push' | 'coordinator_probe' | 'none';
+    observedAt: number | null;
+    refreshing: boolean;
+}
+
+/** Same shape as collectLiveStatusProbe's result. */
+export interface NodeStatusProbe {
+    sessions: any[];
+    daemonId?: string;
+    daemonBuild?: { commit: string; commitShort: string; version: string; builtAt?: string; track: 'stable' | 'preview' | 'unknown' };
+    upgradeFailure?: MeshUpgradeFailureSummary;
 }
 
 function readRecord(value: unknown): Record<string, any> | null {
@@ -78,7 +107,58 @@ export async function readCoordinatorHeldNodeState(
         const nodeId = typeof status?.nodeId === 'string' ? status.nodeId : '';
         if (status && nodeId) byNodeId.set(nodeId, status);
     }
-    return { byNodeId };
+    return { byNodeId, ...(record.nodeRuntimeHeld === true ? { runtimeHeld: true } : {}) };
+}
+
+/**
+ * Whether this node's runtime is answered from the coordinator-held state: the
+ * daemon holds runtime (marker) and the node is served by another daemon — the
+ * exact case in which the legacy path made a P2P get_status_metadata round trip
+ * (commandForNode's remote branch).
+ */
+export function usesHeldNodeRuntime(ctx: MeshContext, node: LocalMeshNodeEntry, state: CoordinatorHeldNodeState): boolean {
+    if (state.runtimeHeld !== true) return false;
+    if (!(ctx.transport instanceof IpcTransport) || !node.daemonId) return false;
+    return !isLocalControlPlaneNode(ctx, node);
+}
+
+/**
+ * The held runtime as a status probe result — no transport call. A node with no
+ * held runtime yet returns no sessions and `source: 'none'` (unknown, the
+ * daemon's background refresh is kicked), never a live read.
+ */
+export function heldNodeStatusProbe(held: Record<string, any> | undefined): { probe: NodeStatusProbe; observation: HeldNodeRuntimeObservation } {
+    const runtime = readRecord(held?.heldRuntime);
+    const numberOrNull = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null;
+    const source = runtime?.source === 'member_push' || runtime?.source === 'coordinator_probe' ? runtime.source : 'none';
+    const observation: HeldNodeRuntimeObservation = {
+        source,
+        observedAt: source === 'none' ? null : numberOrNull(runtime?.observedAt),
+        refreshing: runtime?.refreshing === true,
+    };
+    if (!runtime || source === 'none') return { probe: { sessions: [] }, observation };
+    const daemonBuild = extractDaemonBuildInfo({ daemonBuild: runtime.daemonBuild });
+    const failure = readRecord(runtime.upgradeFailure);
+    const targetVersion = typeof failure?.targetVersion === 'string' ? failure.targetVersion : undefined;
+    const upgradeFailure: MeshUpgradeFailureSummary | undefined = failure
+        ? {
+            // The notice prose stays on the node (content-free push); the structured facts travel.
+            summary: `Daemon upgrade${targetVersion ? ` to ${targetVersion}` : ''} failed on this node (rolled back); the full notice is on that node.`,
+            ...(typeof failure.recordedAt === 'string' ? { recordedAt: failure.recordedAt } : {}),
+            ...(targetVersion ? { targetVersion } : {}),
+            noticePath: typeof failure.noticePath === 'string' ? failure.noticePath : '',
+            logPath: typeof failure.logPath === 'string' ? failure.logPath : '',
+        }
+        : undefined;
+    return {
+        probe: {
+            sessions: Array.isArray(runtime.sessions) ? runtime.sessions : [],
+            ...(typeof runtime.daemonId === 'string' && runtime.daemonId ? { daemonId: runtime.daemonId } : {}),
+            ...(daemonBuild ? { daemonBuild } : {}),
+            ...(upgradeFailure ? { upgradeFailure } : {}),
+        },
+        observation,
+    };
 }
 
 /** The daemon-rendered status for `node` (exact id, then canonical id-form match). */

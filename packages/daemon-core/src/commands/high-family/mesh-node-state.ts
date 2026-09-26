@@ -6,7 +6,12 @@
  *   node-state store and, when the visible content changed, invalidates the
  *   aggregate snapshot + publishes a mesh-state revision so dashboards refetch.
  *   Sender gate `node_owner`: only the daemon that owns the node on this
- *   coordinator's roster may report it.
+ *   coordinator's roster may report it. The report may also carry (or, between
+ *   git ticks, carry ONLY) the member's content-free runtime summary — sessions,
+ *   build, upgrade marker, facts incl. quota (mesh/mesh-node-runtime-summary.ts,
+ *   re-sanitized at ingest). A runtime change is served by the per-call overlay;
+ *   only a facts (quota/build) change publishes a revision, so session status
+ *   churn does not make every dashboard refetch.
  *
  * mesh_node_git_log: the node detail's "recent commits" read, routed THROUGH the
  *   coordinator (the dashboard never talks to a remote node's daemon itself):
@@ -51,7 +56,9 @@ export const meshNodeStateHandlers: Record<string, HighFamilyHandler> = {
         const nodeId = readString(args?.nodeId);
         if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
         const git = readRecord(args?.git);
-        if (!git || typeof git.isGitRepo !== 'boolean') return { success: false, error: 'git status required' };
+        const runtime = readRecord(args?.runtime);
+        const hasGit = !!git && typeof git.isGitRepo === 'boolean';
+        if (!hasGit && !runtime) return { success: false, error: 'git status required' };
         const resolved = await resolveMeshNode(ctx, meshId, nodeId);
         if (!resolved.ok) return resolved.result;
         const nodeWorkspace = readString(resolved.node.workspace);
@@ -61,16 +68,38 @@ export const meshNodeStateHandlers: Record<string, HighFamilyHandler> = {
             return { success: false, code: 'mesh_node_unknown', error: 'workspace does not match the node on this roster', accepted: false };
         }
         const observedAt = typeof args?.observedAt === 'number' && Number.isFinite(args.observedAt) ? args.observedAt : undefined;
-        const { changed } = ctx.meshNodeGitState.recordObservation({
-            meshId,
-            nodeId,
-            workspace: nodeWorkspace || reportedWorkspace,
-            git,
-            source: 'member_push',
-            observedAt,
-        });
+        const workspace = nodeWorkspace || reportedWorkspace;
+        const changed = hasGit
+            ? ctx.meshNodeGitState.recordObservation({ meshId, nodeId, workspace, git, source: 'member_push', observedAt }).changed
+            : false;
+        let runtimeChanged = false;
+        let factsChanged = false;
+        if (runtime) {
+            const runtimeObservedAt = typeof args?.runtimeObservedAt === 'number' && Number.isFinite(args.runtimeObservedAt)
+                ? args.runtimeObservedAt
+                : undefined;
+            const recorded = ctx.meshNodeGitState.recordRuntimeObservation({
+                meshId, nodeId, workspace, runtime, source: 'member_push', observedAt: runtimeObservedAt,
+            });
+            runtimeChanged = recorded.changed;
+            factsChanged = recorded.factsChanged;
+            // Runtime is DAEMON-wide: the same summary is the truth for every node this
+            // daemon serves on the mesh (worktrees), not only the subscribed one.
+            const ownerDaemonId = readMeshNodeDaemonId(resolved.node) ?? '';
+            for (const sibling of Array.isArray(resolved.mesh.nodes) ? resolved.mesh.nodes : []) {
+                if (!sibling || sibling === resolved.node || meshNodeIdMatches(sibling, nodeId)) continue;
+                const siblingDaemonId = readMeshNodeDaemonId(sibling) ?? '';
+                const siblingId = readString(sibling.id);
+                if (!ownerDaemonId || !siblingId || !siblingDaemonId || !daemonIdsEquivalent(siblingDaemonId, ownerDaemonId)) continue;
+                const siblingRecorded = ctx.meshNodeGitState.recordRuntimeObservation({
+                    meshId, nodeId: siblingId, workspace: readString(sibling.workspace), runtime, source: 'member_push', observedAt: runtimeObservedAt,
+                });
+                factsChanged = factsChanged || siblingRecorded.factsChanged;
+            }
+        }
         if (changed) ctx.invalidateAggregateMeshStatus(meshId);
-        return { success: true, accepted: true, changed };
+        else if (factsChanged) ctx.deps.onMeshStateChange?.(meshId);
+        return { success: true, accepted: true, changed, ...(runtime ? { runtimeChanged } : {}) };
     },
 
     mesh_node_git_log: async (ctx: HighFamilyContext, args: any) => {

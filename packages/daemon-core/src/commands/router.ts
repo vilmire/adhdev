@@ -63,6 +63,7 @@ import { meshNodeStateSpecs } from './high-family/mesh-node-state.js';
 import { MeshNodeGitStateStore } from '../mesh/mesh-node-git-state.js';
 import { MeshNodeGitRefresher } from '../mesh/mesh-node-git-refresher.js';
 import { MeshNodeStatePusher, readMeshStateSubscription } from '../mesh/mesh-node-state-pusher.js';
+import { probeRemoteMeshNodeRuntime, readLocalMeshNodeRuntime, subscribeMeshNodeRuntimePush } from './mesh-node-runtime-io.js';
 import { getGitRepoStatus } from '../git/git-status.js';
 import { DaemonCliManager } from './cli-manager.js';
 import type { ProviderLoader } from '../providers/provider-loader.js';
@@ -562,11 +563,16 @@ export class DaemonCommandRouter {
             }),
             onSettled: (meshId) => this.invalidateAggregateMeshStatus(meshId),
             onObserved: (target, git) => { void this.selfHealNodeFromProbe(target.meshId, target.nodeId, git); },
+            // Runtime (sessions / build) of a member that does not push it yet — background only.
+            probeRuntime: (daemonId) => probeRemoteMeshNodeRuntime(this.deps.dispatchMeshCommand, daemonId, MESH_DIRECT_PROBE_TIMEOUT_MS) as Promise<Record<string, unknown> | null>,
         });
         this.meshNodeStatePusher = new MeshNodeStatePusher({
             dispatch: deps.dispatchMeshCommand,
             readGit: (workspace, opts) => getGitRepoStatus(workspace, { refreshUpstream: opts.refreshUpstream }) as unknown as Promise<Record<string, unknown> | null>,
+            readRuntime: async () => readLocalMeshNodeRuntime(this.deps),
         });
+        // Session lifecycle facts wake the (debounced) runtime push to subscribed coordinators.
+        subscribeMeshNodeRuntimePush(deps.bus, this.meshNodeStatePusher);
     }
 
     /** Platform / versions / facts self-heal from a background probe (was the blocking refresh path's side effect). */

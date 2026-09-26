@@ -14,6 +14,13 @@
  * `onSettled(meshId)` — the router invalidates the aggregate snapshot and emits
  * the mesh-state revision the dashboard already listens to, so the view updates
  * in place without polling.
+ *
+ * Runtime half (`kickRuntime`): a node whose held runtime summary (sessions /
+ * build / quota, mesh-node-runtime-summary.ts) is missing or stale — a member
+ * too old to push it, or one that has not subscribed yet — gets ONE background
+ * `get_status_metadata` per DAEMON (runtime is daemon-wide), recorded into every
+ * node of that daemon. Same bounds as the git probe; only a facts change settles
+ * with a revision.
  */
 import { LOG } from '../logging/logger.js';
 import { readMeshTimeoutEnvMs } from '../runtime-defaults.js';
@@ -41,6 +48,8 @@ export interface MeshNodeGitRefresherOptions {
     onSettled: (meshId: string) => void;
     /** Called with a successful probe's raw result (platform / facts self-heal). */
     onObserved?: (target: MeshNodeGitRefreshTarget, git: Record<string, unknown>) => void;
+    /** Background runtime probe of one daemon (content-free summary, or null when it could not answer). */
+    probeRuntime?: (daemonId: string) => Promise<Record<string, unknown> | null>;
     now?: () => number;
     staleMs?: number;
     failureBackoffMs?: number;
@@ -48,6 +57,7 @@ export interface MeshNodeGitRefresherOptions {
 
 export class MeshNodeGitRefresher {
     private readonly inflight = new Map<string, Promise<void>>();
+    private readonly runtimeInflight = new Map<string, Promise<void>>();
     private readonly now: () => number;
     private readonly staleMs: number;
     private readonly failureBackoffMs: number;
@@ -130,10 +140,73 @@ export class MeshNodeGitRefresher {
         return true;
     }
 
+    isRuntimeRefreshing(meshId: string, daemonId: string): boolean {
+        return this.runtimeInflight.has(this.key(meshId, daemonId));
+    }
+
+    private runtimeNeedsRefresh(meshId: string, nodeId: string, force: boolean): boolean {
+        const entry = this.options.store.get(meshId, nodeId);
+        const now = this.now();
+        if (entry?.runtimeLastAttemptAt != null && now - entry.runtimeLastAttemptAt < MESH_NODE_STATE_FORCE_MIN_INTERVAL_MS) return false;
+        if (force) return true;
+        if (entry?.runtimeLastFailureAt != null && now - entry.runtimeLastFailureAt < this.failureBackoffMs) return false;
+        if (!entry || entry.runtimeObservedAt === null) return true;
+        return now - entry.runtimeObservedAt >= this.staleMs;
+    }
+
+    /**
+     * Start ONE background runtime probe for a daemon when any of its nodes'
+     * held runtime is missing/stale (or `force`, for an explicit refresh of a
+     * node older than the caller's threshold). Never awaited by the request path.
+     */
+    kickRuntime(meshId: string, daemonId: string, targets: Array<{ nodeId: string; workspace: string; force?: boolean }>): boolean {
+        const probeRuntime = this.options.probeRuntime;
+        if (!probeRuntime || !meshId || !daemonId || targets.length === 0) return false;
+        const key = this.key(meshId, daemonId);
+        if (this.runtimeInflight.has(key)) return false;
+        if (!targets.some((t) => this.runtimeNeedsRefresh(meshId, t.nodeId, t.force === true))) return false;
+        const { store } = this.options;
+        const startedAt = this.now();
+        for (const t of targets) store.recordRuntimeProbeAttempt(meshId, t.nodeId, t.workspace, startedAt);
+        const run = (async () => {
+            let runtime: Record<string, unknown> | null = null;
+            try {
+                runtime = await probeRuntime(daemonId);
+            } catch {
+                runtime = null;
+            }
+            let factsChanged = false;
+            for (const t of targets) {
+                if (runtime) {
+                    const recorded = store.recordRuntimeObservation({
+                        meshId, nodeId: t.nodeId, workspace: t.workspace, runtime, source: 'coordinator_probe', observedAt: this.now(),
+                    });
+                    if (!recorded.entry) store.recordRuntimeProbeFailure(meshId, t.nodeId, t.workspace, this.now());
+                    factsChanged = factsChanged || recorded.factsChanged;
+                } else {
+                    store.recordRuntimeProbeFailure(meshId, t.nodeId, t.workspace, this.now());
+                }
+            }
+            return factsChanged;
+        })()
+            .catch((error: any) => {
+                LOG.warn('MeshNodeGitState', `background runtime refresh for ${daemonId} failed: ${error?.message || error}`);
+                return false;
+            })
+            .then((factsChanged) => {
+                if (this.runtimeInflight.get(key) === run) this.runtimeInflight.delete(key);
+                if (factsChanged) {
+                    try { this.options.onSettled(meshId); } catch { /* best-effort */ }
+                }
+            });
+        this.runtimeInflight.set(key, run);
+        return true;
+    }
+
     /** Resolves once every probe in flight has settled (tests / shutdown). */
     async whenIdle(): Promise<void> {
-        while (this.inflight.size > 0) {
-            await Promise.allSettled([...this.inflight.values()]);
+        while (this.inflight.size > 0 || this.runtimeInflight.size > 0) {
+            await Promise.allSettled([...this.inflight.values(), ...this.runtimeInflight.values()]);
         }
     }
 }

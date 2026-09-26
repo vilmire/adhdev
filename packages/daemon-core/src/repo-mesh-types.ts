@@ -1963,7 +1963,28 @@ export interface RepoMeshNodeStatus {
      * Absent from daemons predating the coordinator-held node state.
      */
     gitObservation?: RepoMeshNodeGitObservation;
+    /**
+     * Coordinator-held content-free runtime summary of a REMOTE node's daemon
+     * (sessions / build / upgrade marker — mesh/mesh-node-runtime-summary.ts),
+     * pushed by the member or refreshed in the background. Absent for self/local
+     * nodes (read directly) and from daemons predating the held runtime.
+     */
+    heldRuntime?: RepoMeshNodeHeldRuntime;
     error?: string;
+}
+
+/** Held runtime of one remote mesh node, stamped per call like gitObservation. */
+export interface RepoMeshNodeHeldRuntime {
+    /** 'none' = the coordinator holds no runtime for this node yet (sessions unknown, not zero). */
+    source: 'member_push' | 'coordinator_probe' | 'none';
+    observedAt: number | null;
+    /** A background runtime refresh for this node's daemon is in flight. */
+    refreshing: boolean;
+    sessions: import('./mesh/mesh-node-runtime-summary.js').MeshNodeRuntimeSession[];
+    daemonId?: string;
+    daemonBuild?: import('./mesh/mesh-node-runtime-summary.js').MeshNodeRuntimeDaemonBuild;
+    upgradeFailure?: import('./mesh/mesh-node-runtime-summary.js').MeshNodeRuntimeUpgradeFailure;
+    sessionsTruncated?: boolean;
 }
 
 /** Coordinator-held git observation metadata for one mesh node. */

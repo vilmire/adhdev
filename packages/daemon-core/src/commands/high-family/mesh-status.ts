@@ -143,6 +143,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                             meshId,
                             store: ctx.meshNodeGitState,
                             refresher: ctx.meshNodeGitRefresher,
+                            locality: nodeStateLocality,
                         });
                         return snapshot;
                     };

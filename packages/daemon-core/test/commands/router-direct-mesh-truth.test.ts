@@ -510,7 +510,9 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
     })
 
     expect(status.success).toBe(true)
-    expect(dispatchMeshCommand).not.toHaveBeenCalled()
+    // No git probe (live truth is held); the only call allowed is the background
+    // runtime probe (sessions / build) of the peer daemon, never awaited.
+    expect((dispatchMeshCommand.mock.calls as any[]).filter((call) => call[1] !== 'get_status_metadata')).toEqual([])
     const remoteNode = status.nodes.find((node: any) => node.nodeId === 'node_303')
     expect(remoteNode.git).toMatchObject({
       branch: 'main',

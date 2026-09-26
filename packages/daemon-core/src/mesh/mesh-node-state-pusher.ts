@@ -11,6 +11,13 @@
  * existing daemon↔daemon mesh command channel when the visible state changed,
  * plus a heartbeat so the coordinator's observation age stays honest.
  *
+ * Runtime half: the same report carries this daemon's content-free RUNTIME
+ * summary (sessions / build / upgrade marker / facts incl. quota —
+ * mesh-node-runtime-summary.ts) so the coordinator answers those from held
+ * state too. It is re-read on every check tick and, between ticks, a session
+ * lifecycle change (`noteRuntimeChanged`, wired to the lifecycle bus) schedules
+ * a debounced runtime-only push. Unchanged runtime stays quiet until the heartbeat.
+ *
  * Lifetime: the coordinator's ack renews the subscription; an explicit refusal
  * (node no longer on its roster, sender gate) drops it; an unreachable
  * coordinator lets it lapse after the TTL — the coordinator's own stale-state
@@ -22,6 +29,7 @@
 import { LOG } from '../logging/logger.js';
 import { readMeshTimeoutEnvMs } from '../runtime-defaults.js';
 import { carryUpstreamFreshness, computeMeshNodeGitSignature, sanitizeObservedGit } from './mesh-node-git-state.js';
+import { computeMeshNodeRuntimeSignature, sanitizeMeshNodeRuntimeSummary, type MeshNodeRuntimeSummary } from './mesh-node-runtime-summary.js';
 
 export const MESH_NODE_STATE_REPORT_COMMAND = 'mesh_node_git_report';
 /** How often a subscribed workspace's git is re-read. */
@@ -30,6 +38,8 @@ export const MESH_NODE_STATE_PUSH_CHECK_MS = readMeshTimeoutEnvMs('MESH_NODE_STA
 export const MESH_NODE_STATE_PUSH_HEARTBEAT_MS = 300_000;
 /** A subscription the coordinator has not acked for this long is dropped. */
 export const MESH_NODE_STATE_PUSH_TTL_MS = 30 * 60_000;
+/** A burst of session lifecycle changes is coalesced into one runtime push after this quiet period. */
+export const MESH_NODE_RUNTIME_PUSH_DEBOUNCE_MS = readMeshTimeoutEnvMs('MESH_NODE_RUNTIME_PUSH_DEBOUNCE_MS', 1_500);
 
 export interface MeshNodeStatePushSubscription {
     coordinatorDaemonId: string;
@@ -42,11 +52,18 @@ export interface MeshNodeStatePushSubscription {
     lastUpstreamRefreshAt: number | null;
     /** Last read that verified the upstream (the registering probe, or a refresh tick). */
     lastUpstreamGit: Record<string, unknown> | null;
+    /** Signature of the runtime summary the coordinator last acked (null = never sent). */
+    lastRuntimeSignature: string | null;
 }
 
 export interface MeshNodeStatePusherOptions {
     dispatch?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
     readGit: (workspace: string, opts: { refreshUpstream: boolean }) => Promise<Record<string, unknown> | null>;
+    /** This daemon's content-free runtime summary (absent = git-only pusher, e.g. older wiring/tests). */
+    readRuntime?: () => Promise<MeshNodeRuntimeSummary | Record<string, unknown> | null>;
+    runtimeDebounceMs?: number;
+    /** Injected for tests; defaults to an unref'd setTimeout. */
+    startDebounce?: (fn: () => void, ms: number) => { stop(): void };
     now?: () => number;
     checkIntervalMs?: number;
     heartbeatMs?: number;
@@ -94,12 +111,17 @@ export class MeshNodeStatePusher {
     private readonly ttlMs: number;
     private timer: { stop(): void } | null = null;
     private ticking = false;
+    private readonly runtimeDebounceMs: number;
+    private runtimeDebounce: { stop(): void } | null = null;
+    private runtimePushing: Promise<void> | null = null;
+    private runtimeDirtyWhilePushing = false;
 
     constructor(private readonly options: MeshNodeStatePusherOptions) {
         this.now = options.now ?? Date.now;
         this.checkIntervalMs = options.checkIntervalMs ?? MESH_NODE_STATE_PUSH_CHECK_MS;
         this.heartbeatMs = options.heartbeatMs ?? MESH_NODE_STATE_PUSH_HEARTBEAT_MS;
         this.ttlMs = options.ttlMs ?? MESH_NODE_STATE_PUSH_TTL_MS;
+        this.runtimeDebounceMs = options.runtimeDebounceMs ?? MESH_NODE_RUNTIME_PUSH_DEBOUNCE_MS;
     }
 
     private key(coordinatorDaemonId: string, meshId: string, nodeId: string): string {
@@ -134,12 +156,94 @@ export class MeshNodeStatePusher {
             // The probe that registered us refreshed the upstream already.
             lastUpstreamRefreshAt: now,
             lastUpstreamGit: git ?? existing?.lastUpstreamGit ?? null,
+            lastRuntimeSignature: existing?.lastRuntimeSignature ?? null,
         });
         if (!existing) {
             LOG.info('MeshNodeState', `pushing git state of node ${args.nodeId} (mesh ${args.meshId}) to coordinator ${coordinatorDaemonId.slice(0, 12)}`);
+            // Land the runtime half now instead of on the next check tick.
+            this.noteRuntimeChanged();
         }
         this.ensureTimer();
         return true;
+    }
+
+    /**
+     * A session lifecycle fact changed on this daemon (registered / status /
+     * terminated / …). Debounced: a burst becomes ONE runtime-only push to every
+     * subscribed coordinator whose held runtime differs.
+     */
+    noteRuntimeChanged(): void {
+        if (!this.options.readRuntime || !this.options.dispatch || this.subscriptions.size === 0) return;
+        if (this.runtimePushing) {
+            this.runtimeDirtyWhilePushing = true;
+            return;
+        }
+        if (this.runtimeDebounce) return;
+        const start = this.options.startDebounce ?? ((fn: () => void, ms: number) => {
+            const handle = setTimeout(fn, ms);
+            handle.unref?.();
+            return { stop: () => clearTimeout(handle) };
+        });
+        this.runtimeDebounce = start(() => {
+            this.runtimeDebounce = null;
+            void this.pushRuntimeChanges();
+        }, this.runtimeDebounceMs);
+    }
+
+    private async readRuntimeSummary(): Promise<MeshNodeRuntimeSummary | null> {
+        if (!this.options.readRuntime) return null;
+        try {
+            return sanitizeMeshNodeRuntimeSummary(await this.options.readRuntime());
+        } catch (error: any) {
+            LOG.debug('MeshNodeState', `runtime read failed: ${error?.message || error}`);
+            return null;
+        }
+    }
+
+    /** Runtime-only push to every subscription whose acked runtime differs. Exposed for tests. */
+    async pushRuntimeChanges(): Promise<void> {
+        if (this.runtimePushing) {
+            this.runtimeDirtyWhilePushing = true;
+            return this.runtimePushing;
+        }
+        const run = (async () => {
+            const runtime = await this.readRuntimeSummary();
+            if (!runtime) return;
+            const signature = computeMeshNodeRuntimeSignature(runtime);
+            const observedAt = this.now();
+            for (const [key, sub] of [...this.subscriptions.entries()]) {
+                if (sub.lastRuntimeSignature === signature) continue;
+                let response: unknown;
+                try {
+                    response = await this.options.dispatch!(sub.coordinatorDaemonId, MESH_NODE_STATE_REPORT_COMMAND, {
+                        meshId: sub.meshId,
+                        nodeId: sub.nodeId,
+                        workspace: sub.workspace,
+                        runtime,
+                        runtimeObservedAt: observedAt,
+                    });
+                } catch {
+                    continue; // unreachable — the next tick retries (subscription kept until its TTL)
+                }
+                const ack = readAck(response);
+                if (ack === false) {
+                    this.subscriptions.delete(key);
+                    continue;
+                }
+                if (ack === true) {
+                    sub.lastRuntimeSignature = signature;
+                    sub.expiresAt = this.now() + this.ttlMs;
+                }
+            }
+        })().finally(() => {
+            this.runtimePushing = null;
+            if (this.runtimeDirtyWhilePushing) {
+                this.runtimeDirtyWhilePushing = false;
+                this.noteRuntimeChanged();
+            }
+        });
+        this.runtimePushing = run;
+        return run;
     }
 
     private ensureTimer(): void {
@@ -155,6 +259,8 @@ export class MeshNodeStatePusher {
     stop(): void {
         this.timer?.stop();
         this.timer = null;
+        this.runtimeDebounce?.stop();
+        this.runtimeDebounce = null;
     }
 
     /** One check pass over every subscription. Exposed for tests. */
@@ -162,6 +268,12 @@ export class MeshNodeStatePusher {
         if (this.ticking) return;
         this.ticking = true;
         try {
+            // Runtime is per DAEMON: read once per pass, shared by every subscription.
+            let runtime: MeshNodeRuntimeSummary | null | undefined;
+            const readRuntimeOnce = async () => {
+                if (runtime === undefined) runtime = await this.readRuntimeSummary();
+                return runtime;
+            };
             for (const [key, sub] of [...this.subscriptions.entries()]) {
                 const now = this.now();
                 if (now >= sub.expiresAt) {
@@ -169,7 +281,7 @@ export class MeshNodeStatePusher {
                     LOG.info('MeshNodeState', `push subscription for node ${sub.nodeId} (mesh ${sub.meshId}) lapsed — coordinator did not ack within the TTL`);
                     continue;
                 }
-                await this.checkOne(key, sub);
+                await this.checkOne(key, sub, readRuntimeOnce);
             }
         } finally {
             this.ticking = false;
@@ -177,7 +289,11 @@ export class MeshNodeStatePusher {
         }
     }
 
-    private async checkOne(key: string, sub: MeshNodeStatePushSubscription): Promise<void> {
+    private async checkOne(
+        key: string,
+        sub: MeshNodeStatePushSubscription,
+        readRuntime: () => Promise<MeshNodeRuntimeSummary | null>,
+    ): Promise<void> {
         const now = this.now();
         const heartbeatDue = sub.lastPushedAt === null || now - sub.lastPushedAt >= this.heartbeatMs;
         const refreshUpstream = sub.lastUpstreamRefreshAt === null || now - sub.lastUpstreamRefreshAt >= this.heartbeatMs;
@@ -198,7 +314,10 @@ export class MeshNodeStatePusher {
             git = carryUpstreamFreshness(sub.lastUpstreamGit, git, now);
         }
         const signature = computeMeshNodeGitSignature(git);
-        if (signature === sub.lastSignature && !heartbeatDue) return;
+        const runtime = await readRuntime();
+        const runtimeSignature = runtime ? computeMeshNodeRuntimeSignature(runtime) : null;
+        const runtimeChanged = runtimeSignature !== null && runtimeSignature !== sub.lastRuntimeSignature;
+        if (signature === sub.lastSignature && !heartbeatDue && !runtimeChanged) return;
         const observedAt = typeof git.lastCheckedAt === 'number' ? git.lastCheckedAt : now;
         let response: unknown;
         try {
@@ -208,6 +327,7 @@ export class MeshNodeStatePusher {
                 workspace: sub.workspace,
                 git,
                 observedAt,
+                ...(runtime ? { runtime, runtimeObservedAt: now } : {}),
             });
         } catch {
             // Coordinator unreachable right now — keep the subscription until its TTL.
@@ -223,6 +343,7 @@ export class MeshNodeStatePusher {
             sub.lastSignature = signature;
             sub.lastPushedAt = now;
             sub.expiresAt = now + this.ttlMs;
+            if (runtimeSignature !== null) sub.lastRuntimeSignature = runtimeSignature;
         }
     }
 }

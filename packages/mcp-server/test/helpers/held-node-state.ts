@@ -17,6 +17,12 @@ export interface HeldMeshStatusOptions {
     observedAt?: number;
     /** Node ids reported as refreshing (a background refresh in flight). */
     refreshingNodeIds?: string[];
+    /**
+     * Held runtime per node (sessions / build / upgrade marker), as the daemon's
+     * overlay stamps it on nodes served by another daemon. When given, the
+     * response carries `nodeRuntimeHeld: true` (a daemon that holds runtime).
+     */
+    runtimeFor?: (node: AnyRecord) => AnyRecord | undefined;
 }
 
 export async function heldMeshStatusResponse(
@@ -29,6 +35,8 @@ export async function heldMeshStatusResponse(
     for (const node of mesh.nodes) {
         const isSelf = !!opts.localDaemonId && node.daemonId === opts.localDaemonId;
         const refreshing = (opts.refreshingNodeIds ?? []).includes(node.id);
+        const heldRuntime = !isSelf && opts.runtimeFor ? opts.runtimeFor(node) : undefined;
+        const runtimeStamp = heldRuntime ? { heldRuntime } : {};
         let answer: any;
         let failed: string | null = null;
         try {
@@ -41,6 +49,7 @@ export async function heldMeshStatusResponse(
         if (failed || !git || typeof git !== 'object') {
             nodes.push({
                 nodeId: node.id,
+                ...runtimeStamp,
                 gitObservation: {
                     source: 'none',
                     observedAt: null,
@@ -53,6 +62,7 @@ export async function heldMeshStatusResponse(
         }
         nodes.push({
             nodeId: node.id,
+            ...runtimeStamp,
             git: { lastCheckedAt: observedAt, ...git },
             ...(facts ? { nodeFacts: facts } : {}),
             gitObservation: {
@@ -63,7 +73,7 @@ export async function heldMeshStatusResponse(
             },
         });
     }
-    return { success: true, meshId: (mesh as AnyRecord).id, nodes };
+    return { success: true, meshId: (mesh as AnyRecord).id, nodes, ...(opts.runtimeFor ? { nodeRuntimeHeld: true } : {}) };
 }
 
 /**
