@@ -481,6 +481,11 @@ test('mesh_view_queue reports transcript-backed idle direct dispatch evidence th
     await seedDirectTranscriptDispatch(meshId, taskId);
 
     await meshViewQueue(ctx as any, { view: 'active', verbose: true });
+    // AUDIT FIX (owner principle 2026-09-26): the direct-dispatch transcript
+    // reconcile is now BACKGROUND work for mesh_view_queue too (same as
+    // mesh_status — mesh-status-background.ts): the response never waits on a
+    // (possibly remote) read_chat.
+    await awaitMeshStatusBackgroundWork(ctx as any);
     const observed = turnObserveCalls(calls);
     assert.equal(observed.length, 1);
     assert.equal(observed[0].kind, 'transcript_final');

@@ -159,9 +159,13 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
             // group-tagged tasks from this guard; the exemption hook belongs here.
             if (args?.force !== true) {
                 const { isSessionActivelyGenerating } = await import('../../mesh/mesh-events.js');
+                const { isHeldRemoteSessionGenerating } = await import('../../mesh/mesh-candidacy-predicates.js');
                 const existing = getQueueEntryById(meshId, taskId) as { status?: string; assignedSessionId?: string } | null;
+                // Local instance OR — for a worker on another daemon — the coordinator-held
+                // (member-pushed) session status.
                 if (existing?.status === 'assigned' && existing.assignedSessionId
-                    && isSessionActivelyGenerating(ctx.deps, existing.assignedSessionId)) {
+                    && (isSessionActivelyGenerating(ctx.deps, existing.assignedSessionId)
+                        || isHeldRemoteSessionGenerating(ctx.meshNodeGitState, meshId, existing.assignedSessionId))) {
                     return {
                         success: false,
                         error: `Task '${taskId}' is actively dispatched/generating (live session ${existing.assignedSessionId}); requeue refused to avoid a duplicate second dispatch. Pass force:true to override, or cancel and re-enqueue.`,

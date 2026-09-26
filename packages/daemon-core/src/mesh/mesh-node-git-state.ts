@@ -24,6 +24,7 @@
  * status_report allow-list (RoutingSessionEntry) does not carry it.
  */
 import type { Database as DatabaseHandle } from 'better-sqlite3';
+import { daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import {
     computeMeshNodeFactsSignature,
@@ -64,6 +65,24 @@ export interface MeshNodeGitStateEntry {
     runtimeLastAttemptAt: number | null;
     /** Epoch ms of the last failed background runtime probe (not persisted). */
     runtimeLastFailureAt: number | null;
+    /**
+     * The node's roster daemon id (the id the coordinator dispatches to), learned
+     * from the runtime observation that landed the summary. Not persisted — after
+     * a coordinator restart `runtime.daemonId` (the member's own status id) is the
+     * fallback until the next push.
+     */
+    daemonId: string | null;
+}
+
+/** One session found in a held runtime summary, with where/when it was observed. */
+export interface MeshNodeHeldSessionMatch {
+    meshId: string;
+    nodeId: string;
+    /** Roster daemon id when known, else the member's own status id. */
+    daemonId: string | null;
+    session: MeshNodeRuntimeSummary['sessions'][number];
+    observedAt: number | null;
+    source: MeshNodeGitObservationSource | null;
 }
 
 export interface MeshNodeGitStatePersistence {
@@ -160,6 +179,7 @@ function emptyEntry(meshId: string, nodeId: string, workspace: string): MeshNode
         runtimeSignature: null,
         runtimeLastAttemptAt: null,
         runtimeLastFailureAt: null,
+        daemonId: null,
     };
 }
 
@@ -289,26 +309,31 @@ export class MeshNodeGitStateStore {
         runtime: unknown;
         source: MeshNodeGitObservationSource;
         observedAt?: number;
-    }): { changed: boolean; factsChanged: boolean; entry: MeshNodeGitStateEntry | null } {
+        /** The node's roster daemon id (dispatch target), when the caller knows it. */
+        daemonId?: string | null;
+    }): { changed: boolean; factsChanged: boolean; sessionsChanged: boolean; entry: MeshNodeGitStateEntry | null } {
         const runtime = sanitizeMeshNodeRuntimeSummary(args.runtime);
-        if (!args.meshId || !args.nodeId || !runtime) return { changed: false, factsChanged: false, entry: null };
+        if (!args.meshId || !args.nodeId || !runtime) return { changed: false, factsChanged: false, sessionsChanged: false, entry: null };
         const entry = this.upsertBase(args.meshId, args.nodeId, args.workspace);
+        const rosterDaemonId = typeof args.daemonId === 'string' && args.daemonId.trim() ? args.daemonId.trim() : null;
+        if (rosterDaemonId) entry.daemonId = rosterDaemonId;
         const observedAt = typeof args.observedAt === 'number' && Number.isFinite(args.observedAt)
             ? Math.min(args.observedAt, this.now())
             : this.now();
         if (entry.runtimeObservedAt !== null && observedAt < entry.runtimeObservedAt) {
-            return { changed: false, factsChanged: false, entry };
+            return { changed: false, factsChanged: false, sessionsChanged: false, entry };
         }
         const signature = computeMeshNodeRuntimeSignature(runtime);
         const changed = signature !== entry.runtimeSignature;
         const factsChanged = computeMeshNodeFactsSignature(runtime) !== computeMeshNodeFactsSignature(entry.runtime);
+        const sessionsChanged = computeMeshNodeSessionSetSignature(runtime) !== computeMeshNodeSessionSetSignature(entry.runtime);
         entry.runtime = runtime;
         entry.runtimeObservedAt = observedAt;
         entry.runtimeSource = args.source;
         entry.runtimeSignature = signature;
         entry.runtimeLastFailureAt = null;
         this.persist(entry);
-        return { changed, factsChanged, entry };
+        return { changed, factsChanged, sessionsChanged, entry };
     }
 
     recordRuntimeProbeAttempt(meshId: string, nodeId: string, workspace: string, at: number = this.now()): void {
@@ -321,10 +346,53 @@ export class MeshNodeGitStateStore {
         this.upsertBase(meshId, nodeId, workspace).runtimeLastFailureAt = at;
     }
 
+    /**
+     * Every held session matching `sessionId` (id-form tolerant), newest
+     * observation first. `meshId` narrows (and lazily loads) one mesh; without
+     * it only already-loaded meshes are searched.
+     */
+    findRuntimeSessions(sessionId: string, opts?: { meshId?: string }): MeshNodeHeldSessionMatch[] {
+        const wanted = typeof sessionId === 'string' ? sessionId.trim() : '';
+        if (!wanted) return [];
+        if (opts?.meshId) this.ensureLoaded(opts.meshId);
+        const matches: MeshNodeHeldSessionMatch[] = [];
+        for (const entry of this.entries.values()) {
+            if (opts?.meshId && entry.meshId !== opts.meshId) continue;
+            const runtime = entry.runtime;
+            if (!runtime) continue;
+            const session = runtime.sessions.find((s) => [s.id, s.instanceId, s.sessionId]
+                .some((id) => typeof id === 'string' && sessionIdsEquivalent(id, wanted)));
+            if (!session) continue;
+            matches.push({
+                meshId: entry.meshId,
+                nodeId: entry.nodeId,
+                daemonId: entry.daemonId ?? runtime.daemonId ?? null,
+                session,
+                observedAt: entry.runtimeObservedAt,
+                source: entry.runtimeSource,
+            });
+        }
+        return matches.sort((a, b) => (b.observedAt ?? 0) - (a.observedAt ?? 0));
+    }
+
+    /** Whether a held entry's runtime belongs to `daemonId` (roster id or the member's own id). */
+    static runtimeBelongsToDaemon(entry: MeshNodeGitStateEntry, daemonId: string): boolean {
+        if (!daemonId) return false;
+        if (entry.daemonId && daemonIdsEquivalent(entry.daemonId, daemonId)) return true;
+        return !!entry.runtime?.daemonId && daemonIdsEquivalent(entry.runtime.daemonId, daemonId);
+    }
+
     /** Test/diagnostic helper. */
     size(): number {
         return this.entries.size;
     }
+}
+
+/** Signature of which sessions exist (ids only) — a launch/terminate, not status churn. */
+function computeMeshNodeSessionSetSignature(summary: MeshNodeRuntimeSummary | null | undefined): string {
+    // Unknown → an empty list is not a launch/terminate a viewer needs a refetch for.
+    if (!summary) return '[]';
+    return JSON.stringify(summary.sessions.map((s) => s.id).sort());
 }
 
 // ─── mesh-runtime.db persistence ─────────────────────────────────────────────
@@ -394,6 +462,7 @@ export function createDbMeshNodeGitStatePersistence(getDb: () => DatabaseHandle)
                     runtimeSignature: runtime ? (typeof row.runtime_signature === 'string' ? row.runtime_signature : computeMeshNodeRuntimeSignature(runtime)) : null,
                     runtimeLastAttemptAt: null,
                     runtimeLastFailureAt: null,
+                    daemonId: null,
                 };
             });
         },

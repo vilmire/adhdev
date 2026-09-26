@@ -138,9 +138,15 @@ describe('member push — runtime half', () => {
     expect(first.runtime.sessions[0]).toMatchObject({ id: 'sess-1', status: 'generating' })
     expect(JSON.stringify(first)).not.toContain('secret key rotation')
 
+    // The first tick after a (re-)registration pushes once — the coordinator's
+    // held state becomes member-pushed, so it stops probing this node.
     now += 60_000
     await pusher.tick()
-    expect(dispatch).toHaveBeenCalledTimes(1) // git unchanged since the probe, runtime unchanged since the push
+    expect(dispatch).toHaveBeenCalledTimes(2)
+    expect((dispatch.mock.calls[1] as any)[2].git).toMatchObject({ headCommit: 'h1' })
+    now += 60_000
+    await pusher.tick()
+    expect(dispatch).toHaveBeenCalledTimes(2) // git and runtime unchanged since the last push
 
     // A lifecycle change: one debounced runtime-only push.
     runtime = buildMeshNodeRuntimeSummary(statusMetadata({ sessions: [{ id: 'sess-1', providerType: 'claude-cli', status: 'idle' }] }), FACTS)
@@ -149,15 +155,15 @@ describe('member push — runtime half', () => {
     expect(debounced).toHaveLength(1)
     debounced.shift()!()
     await pusher.pushRuntimeChanges()
-    expect(dispatch).toHaveBeenCalledTimes(2)
-    expect((dispatch.mock.calls[1] as any)[2].runtime.sessions[0].status).toBe('idle')
+    expect(dispatch).toHaveBeenCalledTimes(3)
+    expect((dispatch.mock.calls[2] as any)[2].runtime.sessions[0].status).toBe('idle')
 
     // Quota moved (picked up by the next check tick, alongside git).
     runtime = buildMeshNodeRuntimeSummary(statusMetadata({ sessions: [{ id: 'sess-1', providerType: 'claude-cli', status: 'idle' }] }), { ...FACTS, quota: { 'claude-cli': { status: 'ok', windows: [{ usedPercent: 90 }] } } })
     now += 60_000
     await pusher.tick()
-    expect(dispatch).toHaveBeenCalledTimes(3)
-    const third = (dispatch.mock.calls[2] as any)[2]
+    expect(dispatch).toHaveBeenCalledTimes(4)
+    const third = (dispatch.mock.calls[3] as any)[2]
     expect(third.git).toMatchObject({ headCommit: 'h1' })
     expect(third.runtime.nodeFacts.quota['claude-cli'].windows[0].usedPercent).toBe(90)
     pusher.stop()

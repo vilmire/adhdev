@@ -13,6 +13,20 @@
  *   only a facts (quota/build) change publishes a revision, so session status
  *   churn does not make every dashboard refetch.
  *
+ *   The pushed facts bundle also self-heals the node's config record (platform /
+ *   arch / nickname / provider + build versions) — the held runtime, not a probe
+ *   envelope, is where those come from now.
+ *
+ *   Member worktree reconciliation: every ack carries this daemon's per-process
+ *   `coordinatorBootId`; once per boot id the member adds `memberWorktreeNodes`
+ *   (the worktree nodes it owns on the mesh) and the coordinator adopts any its
+ *   roster lost (mesh/mesh-remote-worktree-membership.ts), so no client ever has
+ *   to ask a member which nodes exist.
+ *
+ * mesh_node_state_nudge: member side. A coordinator asks this daemon to push a
+ *   node's state NOW (explicit refresh). Answers whether a push subscription
+ *   from that coordinator exists; the push itself runs in the background.
+ *
  * mesh_node_git_log: the node detail's "recent commits" read, routed THROUGH the
  *   coordinator (the dashboard never talks to a remote node's daemon itself):
  *   local node → git_log here; remote node → forwarded to its daemon over the
@@ -24,6 +38,7 @@ import { readMeshNodeDaemonId } from '../../mesh/mesh-node-identity.js';
 import { defineCommandSpecs } from '../command-registry.js';
 import { withMeshDirectDispatch } from '../command-args.js';
 import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
+import { readMeshSender } from '../mesh-sender.js';
 import type { CommandRouterResult } from '../router.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 
@@ -74,32 +89,79 @@ export const meshNodeStateHandlers: Record<string, HighFamilyHandler> = {
             : false;
         let runtimeChanged = false;
         let factsChanged = false;
+        let sessionsChanged = false;
         if (runtime) {
             const runtimeObservedAt = typeof args?.runtimeObservedAt === 'number' && Number.isFinite(args.runtimeObservedAt)
                 ? args.runtimeObservedAt
                 : undefined;
+            const ownerDaemonId = readMeshNodeDaemonId(resolved.node) ?? '';
             const recorded = ctx.meshNodeGitState.recordRuntimeObservation({
-                meshId, nodeId, workspace, runtime, source: 'member_push', observedAt: runtimeObservedAt,
+                meshId, nodeId, workspace, runtime, source: 'member_push', observedAt: runtimeObservedAt, daemonId: ownerDaemonId,
             });
             runtimeChanged = recorded.changed;
             factsChanged = recorded.factsChanged;
+            sessionsChanged = recorded.sessionsChanged;
+            const heal = (healNodeId: string, facts: unknown) => {
+                try { ctx.selfHealNodeFromFacts?.(meshId, healNodeId, facts); } catch { /* best-effort */ }
+            };
+            if (recorded.factsChanged && recorded.entry?.runtime?.nodeFacts) heal(nodeId, recorded.entry.runtime.nodeFacts);
             // Runtime is DAEMON-wide: the same summary is the truth for every node this
             // daemon serves on the mesh (worktrees), not only the subscribed one.
-            const ownerDaemonId = readMeshNodeDaemonId(resolved.node) ?? '';
             for (const sibling of Array.isArray(resolved.mesh.nodes) ? resolved.mesh.nodes : []) {
                 if (!sibling || sibling === resolved.node || meshNodeIdMatches(sibling, nodeId)) continue;
                 const siblingDaemonId = readMeshNodeDaemonId(sibling) ?? '';
                 const siblingId = readString(sibling.id);
                 if (!ownerDaemonId || !siblingId || !siblingDaemonId || !daemonIdsEquivalent(siblingDaemonId, ownerDaemonId)) continue;
                 const siblingRecorded = ctx.meshNodeGitState.recordRuntimeObservation({
-                    meshId, nodeId: siblingId, workspace: readString(sibling.workspace), runtime, source: 'member_push', observedAt: runtimeObservedAt,
+                    meshId, nodeId: siblingId, workspace: readString(sibling.workspace), runtime, source: 'member_push', observedAt: runtimeObservedAt, daemonId: siblingDaemonId,
                 });
                 factsChanged = factsChanged || siblingRecorded.factsChanged;
+                sessionsChanged = sessionsChanged || siblingRecorded.sessionsChanged;
+                if (siblingRecorded.factsChanged && siblingRecorded.entry?.runtime?.nodeFacts) heal(siblingId, siblingRecorded.entry.runtime.nodeFacts);
             }
         }
+        // MEMBER-WORKTREE-RECONCILE: once per coordinator boot the member also lists the
+        // worktree nodes it owns on this mesh; adopt the ones this roster lost
+        // (owner-gated inside adoptMemberWorktreeNodes). Never fails the push itself.
+        let reconciliation: Record<string, unknown> | undefined;
+        if (Array.isArray(args?.memberWorktreeNodes) && ctx.adoptMemberWorktreeNodes) {
+            try {
+                const adopted = await ctx.adoptMemberWorktreeNodes(meshId, {
+                    reported: args.memberWorktreeNodes,
+                    senderDaemonId: readMeshSender(args),
+                    ownerDaemonId: readMeshNodeDaemonId(resolved.node) ?? '',
+                });
+                reconciliation = {
+                    worktreeNodesReconciled: true,
+                    ...(adopted.adopted.length > 0 ? { adoptedNodeIds: adopted.adopted } : {}),
+                    ...(adopted.healed.length > 0 ? { bootstrapHealedNodeIds: adopted.healed } : {}),
+                };
+            } catch { /* best-effort: the member re-reports after the next coordinator boot */ }
+        }
+        // A revision only for what a viewer sees change: git content, the facts
+        // bundle / provider catalog, or a session launched / terminated (the
+        // node's active sessions render from this held runtime). Session STATUS
+        // churn is served by the per-call overlay without a refetch nudge.
         if (changed) ctx.invalidateAggregateMeshStatus(meshId);
-        else if (factsChanged) ctx.deps.onMeshStateChange?.(meshId);
-        return { success: true, accepted: true, changed, ...(runtime ? { runtimeChanged } : {}) };
+        else if (factsChanged || sessionsChanged) ctx.deps.onMeshStateChange?.(meshId);
+        return {
+            success: true,
+            accepted: true,
+            changed,
+            ...(runtime ? { runtimeChanged } : {}),
+            ...(ctx.meshCoordinatorBootId ? { coordinatorBootId: ctx.meshCoordinatorBootId } : {}),
+            ...(reconciliation ?? {}),
+        };
+    },
+
+    mesh_node_state_nudge: async (ctx: HighFamilyContext, args: any) => {
+        const meshId = readString(args?.meshId);
+        const nodeId = readString(args?.nodeId);
+        if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
+        const coordinatorDaemonId = readMeshSender(args);
+        // Keyed by the SENDER: a peer can only nudge the subscriptions it owns.
+        const subscribed = !!coordinatorDaemonId && ctx.meshNodeStatePusher?.nudge(coordinatorDaemonId, meshId, nodeId) === true;
+        return { success: true, subscribed };
     },
 
     mesh_node_git_log: async (ctx: HighFamilyContext, args: any) => {
@@ -140,4 +202,7 @@ export const meshNodeStateSpecs = defineCommandSpecs('high', meshNodeStateHandle
     // A member daemon reporting its OWN node: the sender must own the node the
     // payload names on this coordinator's roster.
     mesh_node_git_report: { meshSender: 'node_owner' },
+    // Coordinator → member: a worker daemon may hold no roster to check the sender
+    // against; the pusher answers only for subscriptions THIS sender registered.
+    mesh_node_state_nudge: { meshSender: 'authenticated_peer' },
 }, { meshSender: 'authenticated_peer' });

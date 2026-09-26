@@ -138,6 +138,7 @@ import {
     resolvePreferredWorktreeNodeId,
     isLocalControlPlaneNode,
 } from './mesh-node-identity.js';
+import { isHeldDispatchPickDecisive, readHeldDispatchSessions } from './mesh-held-node-state.js';
 
 // Re-exported so the public `./tools/mesh-tools.js` path still exposes it.
 export { resolveCoordinatorDaemonId } from './mesh-node-identity.js';
@@ -592,9 +593,9 @@ export const DUPLICATE_DISPATCH_WINDOW_MS = 60_000;
  * worktree still disappears, so callers correctly fall back to removed-node
  * recovery) while no longer discarding remote-owned membership.
  *
- * Cross-daemon removals stay correct through the paths that actually observe
- * them: the explicit remove path splices the node out directly, and the
- * owner-daemon fallback below re-checks with the owner on a real cache miss.
+ * Cross-daemon removals stay correct through the path that actually observes
+ * them: the explicit remove path splices the node out directly (the coordinator
+ * daemon removes a remote worktree only after its owner confirmed the removal).
  */
 /**
  * Ownership guard for the settled-removal verdict in refreshMeshFromDaemon:
@@ -616,13 +617,13 @@ function hasDefinitivelyRemoteIdentity(ctx: MeshContext, node: LocalMeshNodeEntr
     );
 }
 
-export async function refreshMeshFromDaemon(ctx: MeshContext): Promise<{ settledNodeIds: Set<string> }> {
+export async function refreshMeshFromDaemon(ctx: MeshContext): Promise<{ settledNodeIds: Set<string>; ok: boolean }> {
     // Node ids the local daemon is authoritative about and did NOT report — their
     // removal is settled, so callers must not escalate to the owning daemon.
     const settledNodeIds = new Set<string>();
     try {
         const result = await ctx.transport.command('get_mesh', { meshId: ctx.mesh.id }) as any;
-        if (!result?.success || !Array.isArray(result.mesh?.nodes)) return { settledNodeIds };
+        if (!result?.success || !Array.isArray(result.mesh?.nodes)) return { settledNodeIds, ok: false };
         const refreshedNodes = result.mesh.nodes
             .filter((n: any) => n?.id)
             .map((n: any) => n as LocalMeshNodeEntry);
@@ -649,8 +650,9 @@ export async function refreshMeshFromDaemon(ctx: MeshContext): Promise<{ settled
             // another daemon that the local daemon never tracked. A node carrying
             // explicit NON-LOCAL daemon/machine identity is remote-owned: the
             // local daemon's silence about it is not evidence of removal, so it
-            // is preserved (the owner-daemon fallback in findNodeWithRefresh
-            // remains the path that confirms it). Genuine local removals are
+            // is preserved (the coordinator daemon's roster — kept complete by
+            // persisted remote clones + member worktree reconciliation — is the
+            // authority that confirms it). Genuine local removals are
             // unaffected: a locally-owned worktree carries LOCAL identity, so the
             // guard is false and the settled verdict still fires.
             if (hasDefinitivelyRemoteIdentity(ctx, existing)) {
@@ -671,8 +673,8 @@ export async function refreshMeshFromDaemon(ctx: MeshContext): Promise<{ settled
 
         (ctx.mesh.nodes as LocalMeshNodeEntry[]).splice(0, ctx.mesh.nodes.length, ...merged);
         ctx.mesh.updatedAt = result.mesh.updatedAt ?? ctx.mesh.updatedAt;
-    } catch { /* refresh is best-effort; callers still report their original status/errors */ }
-    return { settledNodeIds };
+    } catch { return { settledNodeIds, ok: false }; /* best-effort; callers keep their original status/errors */ }
+    return { settledNodeIds, ok: true };
 }
 
 export async function syncCoordinatorDaemonMeshCache(ctx: MeshContext): Promise<void> {
@@ -688,119 +690,46 @@ export async function syncCoordinatorDaemonMeshCache(ctx: MeshContext): Promise<
 }
 
 /**
- * REMOTE-WORKTREE-MEMBERSHIP-RESOLVE: last-resort membership resolution for a
- * node the local daemon does not know about.
- *
- * There is no surface that enumerates the daemons participating in a mesh
- * without a node object (node ids are opaque UUIDs and LocalMeshEntry carries
- * no participant list), so this cannot fan out blindly. Instead it asks the
- * OWNING daemons we can actually name — the distinct daemonIds already present
- * in the snapshot, plus the pinned mesh host — reusing the existing
- * `mesh_relay_command` path (transport.meshCommand, the same one commandForNode
- * uses). This only runs on a genuine cache miss, and the winning payload is
- * merged back into ctx.mesh so repeat lookups hit cache instead of re-querying.
- *
- * Returns the resolved node, or a marker distinguishing "no owner reachable"
- * from "definitively not a member".
+ * Coordinator-only node resolution (owner principle 2026-09-26): the MCP
+ * snapshot, then ONE local get_mesh refresh of the coordinator daemon. Member
+ * daemons are never asked. The coordinator daemon holds every node: local and
+ * forwarded clones are persisted to its mesh config (REMOTE-CLONE-DURABLE,
+ * daemon-core mesh-crud.ts), and a member reports the worktree nodes it owns on
+ * its state push once per coordinator boot so the coordinator adopts any its
+ * roster lost (MEMBER-WORKTREE-RECONCILE, daemon-core
+ * mesh-remote-worktree-membership.ts). So "the coordinator answered and does not
+ * have it" is a membership verdict.
  */
-async function resolveNodeFromOwningDaemons(
-    ctx: MeshContext,
-    nodeId: string,
-): Promise<{ node: LocalMeshNodeEntry | null; ownerUnreachable: boolean }> {
-    const transport = ctx.transport as any;
-    if (typeof transport?.meshCommand !== 'function') return { node: null, ownerUnreachable: false };
+async function resolveNodeCoordinatorFirst(ctx: MeshContext, nodeId: string): Promise<
+    { node: LocalMeshNodeEntry } | { node: null; reason: 'not_member' | 'coordinator_unavailable' }
+> {
+    const hit = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, nodeId));
+    if (hit && !hit.isLocalWorktree) return { node: hit };
 
-    const localDaemonId = (ctx as any).localDaemonId;
-    const candidates: string[] = [];
-    const pushCandidate = (id: unknown) => {
-        if (typeof id !== 'string' || !id.trim()) return;
-        // Compare under canonical machine-core form (daemonIdsEquivalent), NOT a raw
-        // `===`: ctx.localDaemonId is the daemon's status instanceId (standalone form
-        // `standalone_mach_X`) while a node's daemonId carries the config form
-        // `daemon_mach_X`. A raw match misses that equivalence and re-asks the local
-        // daemon over meshCommand — the same form mismatch the local refresh already
-        // covered.
-        if (localDaemonId && daemonIdsEquivalent(id, localDaemonId)) return; // already asked via the local refresh
-        if (!candidates.includes(id)) candidates.push(id);
-    };
-    for (const node of ctx.mesh.nodes as any[]) pushCandidate(node?.daemonId);
-    pushCandidate((ctx.mesh as any)?.meshHost?.hostDaemonId);
-
-    if (candidates.length === 0) return { node: null, ownerUnreachable: false };
-
-    let ownerUnreachable = false;
-    for (const daemonId of candidates) {
-        let result: any;
-        try {
-            result = await transport.meshCommand(daemonId, 'get_mesh', { meshId: ctx.mesh.id });
-        } catch {
-            // The owner may simply be offline — that is NOT evidence of non-membership.
-            ownerUnreachable = true;
-            continue;
-        }
-        const nodes = result?.mesh?.nodes ?? result?.result?.mesh?.nodes;
-        if (!result?.success || !Array.isArray(nodes)) {
-            if (result && result.success === false) ownerUnreachable = true;
-            continue;
-        }
-        const found = nodes.find((n: any) => n?.id && meshNodeIdMatches(n as any, nodeId));
-        if (!found) continue;
-
-        // Cache the resolution so subsequent lookups short-circuit locally.
-        const existingIndex = ctx.mesh.nodes.findIndex(n => meshNodeIdMatches(n as any, nodeId));
-        if (existingIndex >= 0) (ctx.mesh.nodes as any[])[existingIndex] = found;
-        else (ctx.mesh.nodes as any[]).push(found);
-        return { node: found as LocalMeshNodeEntry, ownerUnreachable: false };
-    }
-    return { node: null, ownerUnreachable };
+    const { ok } = await refreshMeshFromDaemon(ctx);
+    const refreshed = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, nodeId));
+    if (refreshed) return { node: refreshed };
+    // The coordinator could not answer: not a membership verdict.
+    if (!ok) return { node: null, reason: 'coordinator_unavailable' };
+    return { node: null, reason: 'not_member' };
 }
 
 export async function findNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<LocalMeshNodeEntry> {
-    const hit = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, nodeId));
-    if (hit && !hit.isLocalWorktree) return hit;
-
-    const { settledNodeIds } = await refreshMeshFromDaemon(ctx);
-
-    const refreshed = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, nodeId));
-    if (refreshed) return refreshed;
-
-    // The local daemon was authoritative and dropped it — a settled removal, so do
-    // not escalate to the owning daemon (that would turn a known removal into a
-    // spurious "owner unreachable" and add a pointless remote round-trip).
-    if (settledNodeIds.has(nodeId)) {
+    const resolved = await resolveNodeCoordinatorFirst(ctx, nodeId);
+    if (resolved.node) return resolved.node;
+    if (resolved.reason === 'not_member') {
         throw new Error(`Node '${nodeId}' is not a member of mesh '${ctx.mesh.name}'`);
     }
-
-    const owned = await resolveNodeFromOwningDaemons(ctx, nodeId);
-    if (owned.node) return owned.node;
-    if (owned.ownerUnreachable) {
-        // "Owner unreachable" is a transport condition, not a membership verdict —
-        // callers must not treat it as proof the node is gone (and must not clean
-        // up on the strength of it).
-        const err = new Error(
-            `Node '${nodeId}' could not be resolved: the daemon that owns it is unreachable. `
-            + `This is NOT proof of non-membership — retry once the owning daemon is online.`,
-        ) as Error & { code?: string };
-        err.code = 'mesh_node_owner_unreachable';
-        throw err;
-    }
-    throw new Error(`Node '${nodeId}' is not a member of mesh '${ctx.mesh.name}'`);
+    // A transport condition, not a membership verdict — callers must not treat it as
+    // proof the node is gone (and must not clean up on the strength of it).
+    const err = new Error(`Node '${nodeId}' could not be resolved: the coordinator daemon's mesh membership read failed. `
+        + `This is NOT proof of non-membership — retry once the coordinator daemon answers.`) as Error & { code?: string };
+    err.code = 'mesh_coordinator_membership_unavailable';
+    throw err;
 }
 
 export async function findOptionalNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<LocalMeshNodeEntry | null> {
-    const hit = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, nodeId));
-    if (hit && !hit.isLocalWorktree) return hit;
-
-    const { settledNodeIds } = await refreshMeshFromDaemon(ctx);
-
-    const refreshed = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, nodeId));
-    if (refreshed) return refreshed;
-
-    // Settled removal (see findNodeWithRefresh) — report absence without escalating.
-    if (settledNodeIds.has(nodeId)) return null;
-
-    const owned = await resolveNodeFromOwningDaemons(ctx, nodeId);
-    return owned.node;
+    return (await resolveNodeCoordinatorFirst(ctx, nodeId)).node;
 }
 
 /** The active-work view `buildMeshActiveWork` produces (computed in the daemon — see readActiveWorkFromDaemon). */
@@ -1239,8 +1168,7 @@ export async function recordRecoverableLaunchFailure(
     return failure;
 }
 
-export async function getLatestActiveLaunchFailure(ctx: MeshContext, nodeId: string): Promise<Record<string, unknown> | null> {
-    const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, tail: 200 });
+function latestActiveLaunchFailureFromEntries(entries: MeshLedgerEntry[], nodeId: string): Record<string, unknown> | null {
     for (let i = entries.length - 1; i >= 0; i -= 1) {
         const entry = entries[i];
         if (entry.nodeId !== nodeId) continue;
@@ -1250,6 +1178,30 @@ export async function getLatestActiveLaunchFailure(ctx: MeshContext, nodeId: str
         }
     }
     return null;
+}
+
+/**
+ * MESH-STATUS-LOCAL-CHATTER dedup: mesh_status calls this ONCE PER NODE inside
+ * its `Promise.all(mesh.nodes.map(...))` assembly, and every call asked for the
+ * exact same `ledgerQuery(tail: 200)` window — an N-node mesh made N identical
+ * IPC round trips to answer N different `nodeId` filters over the SAME tail
+ * slice. `getLatestActiveLaunchFailureBatch` issues that one query and indexes
+ * it by nodeId so every node in the call shares it; `getLatestActiveLaunchFailure`
+ * stays as a single-node convenience wrapper for callers outside that per-node
+ * loop (unchanged: still one query per call, since it has no batch to join).
+ */
+export async function getLatestActiveLaunchFailureBatch(ctx: MeshContext, nodeIds: string[]): Promise<Map<string, Record<string, unknown> | null>> {
+    const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, tail: 200 });
+    const byNode = new Map<string, Record<string, unknown> | null>();
+    for (const nodeId of nodeIds) {
+        if (!byNode.has(nodeId)) byNode.set(nodeId, latestActiveLaunchFailureFromEntries(entries as unknown as MeshLedgerEntry[], nodeId));
+    }
+    return byNode;
+}
+
+export async function getLatestActiveLaunchFailure(ctx: MeshContext, nodeId: string): Promise<Record<string, unknown> | null> {
+    const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, tail: 200 });
+    return latestActiveLaunchFailureFromEntries(entries as unknown as MeshLedgerEntry[], nodeId);
 }
 
 export type RemoteAgentDispatchResult =
@@ -1521,11 +1473,49 @@ export async function ipcDispatchToRemoteAgent(
         }
     } else if (!sessionId || args.session_id) {
         try {
-            const relayResult = await transport.meshCommand(daemonId, 'get_status_metadata', {});
-            const sessions = extractStatusMetadataSessions(relayResult);
+            // ★PROVIDER-PIN-BYPASS — chooseDispatchableSession treats an EMPTY
+            // providerType as "any provider will do" (its matchingProvider is
+            // `!providerType || ...`). With a pin in play that is precisely the
+            // wrong default, so pass the single pinned provider as the filter when
+            // the node resolution left the type blank. Unpinned dispatches still
+            // pass '' and keep the any-session behavior.
+            const sessionProviderFilter = resolvedProviderType || (providerPins.length === 1 ? providerPins[0] : '');
+            // QUOTA GATE (sessionless auto-pick): mirror the claim path's candidate
+            // filtering — never auto-pick an idle session whose provider is
+            // measurably quota-exhausted, the same predicate checkDirectDispatchQuotaGate
+            // applies to an explicit session_id below. A pre-filter here (rather than
+            // gating only the final pick) lets chooseDispatchableSession fall through
+            // to the NEXT idle session on this node when one exists, instead of
+            // treating "the first idle session happens to be gated" as "no session
+            // available". allowQuotaExhausted also disables this pre-filter, so the
+            // opt-out has one consistent meaning across both call sites.
+            // Prefer live idle sessions launched for this mesh node. Never route
+            // a new task into restored/stopped session records; that produces the
+            // coordinator-visible "pending only, chat never received it" failure.
+            const pickSession = (list: any[]) => sessionId
+                ? list.find(session => readSessionRecordId(session) === sessionId)
+                : chooseDispatchableSession(args.allowQuotaExhausted ? list : list.filter((session: any) => {
+                    const sessionProviderType = resolveSessionProviderType(session);
+                    if (!sessionProviderType) return true;
+                    return !checkDirectDispatchQuotaGate(node, sessionProviderType, ctx.mesh.policy?.quotaRouting ?? null);
+                }), sessionProviderFilter, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
+            // HELD-FIRST (owner principle 2026-09-26): pick from the coordinator-held
+            // runtime the member pushed; only a non-decisive held answer costs ONE
+            // live get_status_metadata read (mesh-held-node-state.ts explains which).
+            const held = await readHeldDispatchSessions(ctx, node);
+            let picked = held ? pickSession(held.sessions) : undefined;
+            if (!held || !isHeldDispatchPickDecisive(picked, {
+                explicit: !!sessionId,
+                meshId: ctx.mesh.id,
+                nodeId: node.id,
+                coordinatorDaemonId: dispatchCoordinatorDaemonId,
+                stampsComplete: held.stampsComplete,
+            })) {
+                picked = pickSession(extractStatusMetadataSessions(await transport.meshCommand(daemonId, 'get_status_metadata', {})));
+            }
 
             if (sessionId) {
-                const explicitSession = sessions.find(session => readSessionRecordId(session) === sessionId);
+                const explicitSession = picked;
                 if (!explicitSession) {
                     return {
                         success: false,
@@ -1566,32 +1556,7 @@ export async function ipcDispatchToRemoteAgent(
                     resolvedProviderType = adoptSessionProviderType(explicitSession);
                 }
             } else {
-                // Prefer live idle sessions launched for this mesh node. Never route
-                // a new task into restored/stopped session records; that produces the
-                // coordinator-visible "pending only, chat never received it" failure.
-                //
-                // ★PROVIDER-PIN-BYPASS — chooseDispatchableSession treats an EMPTY
-                // providerType as "any provider will do" (its matchingProvider is
-                // `!providerType || ...`). With a pin in play that is precisely the
-                // wrong default, so pass the single pinned provider as the filter when
-                // the node resolution left the type blank. Unpinned dispatches still
-                // pass '' and keep the any-session behavior.
-                const sessionProviderFilter = resolvedProviderType || (providerPins.length === 1 ? providerPins[0] : '');
-                // QUOTA GATE (sessionless auto-pick): mirror the claim path's candidate
-                // filtering — never auto-pick an idle session whose provider is
-                // measurably quota-exhausted, the same predicate checkDirectDispatchQuotaGate
-                // applies to an explicit session_id below. A pre-filter here (rather than
-                // gating only the final pick) lets chooseDispatchableSession fall through
-                // to the NEXT idle session on this node when one exists, instead of
-                // treating "the first idle session happens to be gated" as "no session
-                // available". allowQuotaExhausted also disables this pre-filter, so the
-                // opt-out has one consistent meaning across both call sites.
-                const dispatchableSessions = args.allowQuotaExhausted ? sessions : sessions.filter((session: any) => {
-                    const sessionProviderType = resolveSessionProviderType(session);
-                    if (!sessionProviderType) return true;
-                    return !checkDirectDispatchQuotaGate(node, sessionProviderType, ctx.mesh.policy?.quotaRouting ?? null);
-                });
-                const targetSession = chooseDispatchableSession(dispatchableSessions, sessionProviderFilter, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
+                const targetSession = picked;
 
                 if (targetSession?.id || targetSession?.sessionId) {
                     sessionId = targetSession.id || targetSession.sessionId;
@@ -2015,7 +1980,7 @@ export async function collectLiveStatusSessions(
 // collapses both to `[]`, which is fine for its callers (fall back to the persisted
 // snapshot either way) but is NOT safe as staleness evidence: a failed probe must
 // never be treated as proof a session is gone.
-async function collectLiveStatusSessionsVerified(
+export async function collectLiveStatusSessionsVerified(
     ctx: MeshContext,
     node: LocalMeshNodeEntry,
     opts?: { refresh?: boolean },
@@ -2341,9 +2306,19 @@ export async function buildMeshReadChatCacheFallback(
     }, null, 2);
 }
 
+/**
+ * Node whose workspace a refine / change-impact config validate or suggest reads.
+ * An explicit node_id targets that node (its repo files live on its machine).
+ * Without one, the COORDINATOR's own node is used (owner principle: a default read
+ * never reaches a member); the first workspace node remains only for a coordinator
+ * with no workspace node of its own.
+ */
 export function resolveRefineConfigNode(ctx: MeshContext, nodeId?: string): LocalMeshNodeEntry {
     if (nodeId) return findNode(ctx.mesh, nodeId);
-    const node = ctx.mesh.nodes.find((entry: LocalMeshNodeEntry) => !!entry.workspace);
+    const withWorkspace = ctx.mesh.nodes.filter((entry: LocalMeshNodeEntry) => !!entry.workspace);
+    const node = withWorkspace.find((entry: LocalMeshNodeEntry) => isLocalControlPlaneNode(ctx, entry) && !entry.isLocalWorktree)
+        ?? withWorkspace.find((entry: LocalMeshNodeEntry) => isLocalControlPlaneNode(ctx, entry))
+        ?? withWorkspace[0];
     if (!node) throw new Error('No mesh node with a workspace is available');
     return node;
 }

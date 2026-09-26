@@ -25,6 +25,7 @@ import { useTranslation } from 'react-i18next'
 import type { RepoMeshDaemonEntry, RepoMeshFeatures } from '../../context/RepoMeshContext'
 import { runMeshCreateSequence, useMeshList } from '../../pages/repo-mesh/useMeshList'
 import { type MeshEntry, type MeshNode } from '../../pages/repo-mesh/types'
+import { resolveMeshHostDaemonId } from '../../pages/repo-mesh/host-seed'
 import { isPhantomDaemonEntry } from '@adhdev/mesh-shared'
 import {
     defaultProviderPriorityFromInventory,
@@ -139,9 +140,11 @@ export default function SetupWizard({
         [meshes, selectedMeshId],
     )
     const nodes: MeshNode[] = useMemo(() => selectedMesh?.nodes || [], [selectedMesh])
+    // Mesh writes go to the mesh's host/coordinator (resolved from the host pin),
+    // never to whichever daemon happened to list the mesh.
     const targetDaemonId = useCallback(
-        (mesh: MeshEntry | null) => (mesh as any)?.__sourceDaemonId || primaryDaemonId,
-        [primaryDaemonId],
+        (mesh: MeshEntry | null) => resolveMeshHostDaemonId(mesh as any, daemons),
+        [daemons],
     )
 
     // ── Create form ─────────────────────────────────────────────────
@@ -302,7 +305,8 @@ export default function SetupWizard({
 
     const handleAttach = useCallback(async () => {
         const target = targetDaemonId(selectedMesh)
-        if (!selectedMeshId || !target || attaching) return
+        if (!selectedMeshId || attaching) return
+        if (!target) { setError(t('mesh.host.noCommandTarget')); return }
         const ws = attachWorkspace.trim()
         if (!ws) return
         setAttaching(true)
@@ -343,7 +347,7 @@ export default function SetupWizard({
         } finally {
             setAttaching(false)
         }
-    }, [selectedMesh, selectedMeshId, attachWorkspace, attachDaemonId, attachDaemon, attaching, features.addNodeDaemonPicker, targetDaemonId, daemons, sendCommand, unwrapResult, loadMeshes, setError])
+    }, [selectedMesh, selectedMeshId, attachWorkspace, attachDaemonId, attachDaemon, attaching, features.addNodeDaemonPicker, targetDaemonId, daemons, sendCommand, unwrapResult, loadMeshes, setError, t])
 
     // ── Render ──────────────────────────────────────────────────────
     // Onboarding is complete once a mesh exists with at least one node on it.

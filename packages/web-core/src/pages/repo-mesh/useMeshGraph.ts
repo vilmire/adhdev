@@ -1,27 +1,28 @@
 /**
  * useMeshGraph — mesh graph loading state and actions
  *
- * Manages loading of RepoMeshStatus for the graph view.
+ * Reads the selected mesh's RepoMeshStatus from the shared coordinator
+ * mesh-status store (utils/coordinator-mesh-status-store.ts), the same holder
+ * the dashboard graph dialog and the session info dialog read. `loadGraph`
+ * asks the COORDINATOR daemon once — no retry/settle loop: node freshness is
+ * reported by the coordinator per node (gitObservation / heldRuntime).
  */
-import { useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import type { RepoMeshContextValue } from '../../context/RepoMeshContext'
-import { buildMeshGraph, isMeshGraphStructurallyComplete } from '../../utils/mesh-visualization'
+import {
+    getCoordinatorMeshStatusSnapshot,
+    loadCoordinatorMeshStatus,
+    peekCoordinatorMeshStatus,
+    primeCoordinatorMeshStatus,
+} from '../../utils/coordinator-mesh-status-store'
+import { useCoordinatorMeshStatusSnapshot } from '../../hooks/useCoordinatorMeshStatus'
 
 interface UseMeshGraphOptions {
     selectedMeshId: string | null
     loadMeshStatus: RepoMeshContextValue['loadMeshStatus']
     extractStatus: RepoMeshContextValue['extractStatus']
     normalizeNode?: RepoMeshContextValue['normalizeNode']
-    /**
-     * Cloud-only opt-in. When true, a structurally-incomplete snapshot (a peer
-     * git/submodule report still pending) is NOT committed if a prior complete
-     * graph already exists — instead the loader retains the last graph, flags
-     * provenance 'settling', and schedules ONE settled background reload. This
-     * avoids the sparse-graph flash seen when cloud aggregates over P2P peers.
-     * Undefined (standalone) keeps the original commit-always behavior.
-     */
-    gateIncompleteGraph?: boolean
 }
 
 function readBootstrapFallback(response: unknown): boolean {
@@ -29,22 +30,9 @@ function readBootstrapFallback(response: unknown): boolean {
     return (response as Record<string, unknown>)._bootstrapFallback === true
 }
 
-// Module-level last-good graph cache, keyed by meshId. Survives component
-// unmount/remount so re-entering the /mesh route (cloud) or switching back to a
-// previously-viewed mesh serves the last committed graph instantly and freshens
-// in the background — no cold 'loading' paint. Mirrors the dashboard dialog's
-// dashboardMeshGraphStatusCache. Cleared entries are simply overwritten on the
-// next commit; a small unbounded map is fine (meshes per user are few).
-const meshGraphStatusCache = new Map<string, RepoMeshStatus>()
-
+/** Last-good status for a mesh from the shared store (survives route re-entry). */
 export function getCachedMeshGraphStatus(meshId: string | null): RepoMeshStatus | null {
-    if (!meshId) return null
-    return meshGraphStatusCache.get(meshId) ?? null
-}
-
-function rememberMeshGraphStatus(meshId: string | null, status: RepoMeshStatus | null): void {
-    if (!meshId || !status) return
-    meshGraphStatusCache.set(meshId, status)
+    return peekCoordinatorMeshStatus(meshId)
 }
 
 export function useMeshGraph({
@@ -52,95 +40,59 @@ export function useMeshGraph({
     loadMeshStatus,
     extractStatus,
     normalizeNode,
-    gateIncompleteGraph,
 }: UseMeshGraphOptions) {
-    // Seed from the module cache so a remount (route re-entry) paints the
-    // last-good graph immediately instead of a spinner; the load effect still
-    // fires a background refresh on top.
-    const [meshGraphStatus, setMeshGraphStatus] = useState<RepoMeshStatus | null>(
-        () => getCachedMeshGraphStatus(selectedMeshId),
-    )
-    const [graphLoading, setGraphLoading] = useState(false)
+    const snapshot = useCoordinatorMeshStatusSnapshot(selectedMeshId)
     const [graphError, setGraphError] = useState<string | null>(null)
     const [graphProvenance, setGraphProvenance] = useState<'idle' | 'first_paint' | 'settling' | 'settled'>('idle')
-    const [graphBootstrapFallback, setGraphBootstrapFallback] = useState(false)
-    // Guards the gated settled reload so an incomplete snapshot can only trigger
-    // one in-flight background retry, never a reload loop.
-    const settledReloadInFlight = useRef(false)
 
+    const rawStatus = snapshot?.status ?? null
+    // Platform node normalization is a VIEW over the shared status, so the store
+    // keeps the coordinator's answer untouched for the other surfaces.
+    const meshGraphStatus = useMemo<RepoMeshStatus | null>(() => {
+        if (!rawStatus || !normalizeNode) return rawStatus
+        return {
+            ...rawStatus,
+            nodes: (rawStatus.nodes ?? []).map((node: any) => normalizeNode(node, rawStatus.meshId ?? selectedMeshId ?? '', '')),
+        }
+    }, [rawStatus, normalizeNode, selectedMeshId])
+
+    /** Overwrite the held status for the selected mesh (null clears it). */
+    function setMeshGraphStatus(status: RepoMeshStatus | null) {
+        if (!selectedMeshId) return
+        primeCoordinatorMeshStatus(selectedMeshId, status, snapshot?.daemonId ?? null)
+    }
+
+    /**
+     * Read the coordinator's mesh_status. `refresh` is true ONLY for an explicit
+     * user action; every automatic trigger reads the coordinator's held answer.
+     */
     async function loadGraph(activeDaemonId: string, meshId: string | null = selectedMeshId, refresh = false) {
         if (!activeDaemonId || !meshId) return
-        try {
-            setGraphLoading(!refresh && meshGraphStatus === null)
-            setGraphProvenance(refresh ? 'settling' : 'first_paint')
-            setGraphError(null)
-            const response = await loadMeshStatus(activeDaemonId, meshId, {
-                refresh,
-                retryProfile: refresh ? 'settled' : 'interactive',
-            })
-            setGraphBootstrapFallback(readBootstrapFallback(response))
-            const rawStatus = extractStatus(response)
-            const status = normalizeNode && rawStatus
-                ? {
-                    ...rawStatus,
-                    nodes: (rawStatus.nodes ?? []).map((node: any) =>
-                        normalizeNode(node, rawStatus.meshId ?? meshId, '')
-                    ),
-                }
-                : rawStatus
-            if (status) {
-                // Cloud-only gate: keep the last complete graph instead of
-                // flashing a sparse one while peer snapshots are still arriving.
-                // Inert for standalone (flag unset) and for the first load (no
-                // prior committed status — partial beats blank, the skeleton
-                // already covers it). On a settled refresh we always commit so a
-                // genuinely-offline peer never strands the user on a spinner.
-                if (
-                    gateIncompleteGraph
-                    && !refresh
-                    && meshGraphStatus !== null
-                    && !isMeshGraphStructurallyComplete(buildMeshGraph(status))
-                ) {
-                    setGraphProvenance('settling')
-                    if (!settledReloadInFlight.current) {
-                        settledReloadInFlight.current = true
-                        // Schedule ONE background settled reload. The loader's own
-                        // settled retry profile waits for peer snapshots; if it
-                        // returns complete it commits, if it's still incomplete the
-                        // refresh path commits anyway (peer truly down).
-                        void Promise.resolve()
-                            .then(() => loadGraph(activeDaemonId, meshId, true))
-                            .finally(() => {
-                                settledReloadInFlight.current = false
-                            })
-                    }
-                    return
-                }
-                setMeshGraphStatus(status)
-                rememberMeshGraphStatus(meshId, status)
-                setGraphProvenance('settled')
-            } else {
-                setMeshGraphStatus(null)
-                setGraphError('mesh_status returned an unexpected payload.')
-                setGraphProvenance('idle')
-            }
-        } catch (e: any) {
-            if (!meshGraphStatus) setMeshGraphStatus(null)
-            setGraphError(e?.message || 'Failed to load mesh graph')
+        setGraphError(null)
+        setGraphProvenance(refresh ? 'settling' : 'first_paint')
+        const status = await loadCoordinatorMeshStatus({
+            meshId,
+            daemonId: activeDaemonId,
+            refresh,
+            load: (daemonId, targetMeshId, options) => loadMeshStatus(daemonId, targetMeshId, { refresh: options.refresh }),
+            extract: response => extractStatus(response),
+        })
+        if (status) {
+            setGraphProvenance('settled')
+        } else {
+            setGraphError(getCoordinatorMeshStatusSnapshot(meshId)?.error || 'Failed to load mesh graph')
             setGraphProvenance('idle')
-        } finally {
-            setGraphLoading(false)
         }
     }
 
     return {
         meshGraphStatus,
         setMeshGraphStatus,
-        graphLoading,
-        graphError,
+        graphLoading: !!snapshot?.loading && !rawStatus,
+        graphError: graphError ?? (rawStatus ? null : snapshot?.error ?? null),
         setGraphError,
         graphProvenance,
-        graphBootstrapFallback,
+        graphBootstrapFallback: readBootstrapFallback(snapshot?.response),
         loadGraph,
     }
 }

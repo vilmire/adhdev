@@ -23,9 +23,24 @@
 import { normalizeMeshNodeFacts, type MeshNodeFacts } from '@adhdev/mesh-shared';
 
 export const MESH_NODE_RUNTIME_SUMMARY_SCHEMA_VERSION = 1;
+/**
+ * Version of the per-session routing stamps the allow-list carries. 2 = the
+ * settings projection includes `meshLastNodeId` (the sticky node marker a
+ * DETACHED session keeps) and `meshCoordinatorDaemonId` (the relay anchor).
+ * Stamped by the builder on the MEMBER and only PRESERVED (never defaulted) by
+ * the sanitizer, so a coordinator re-sanitizing an older member's summary keeps
+ * it absent — readers can tell "the member did not send the field" apart from
+ * "the session has no such stamp".
+ */
+export const MESH_NODE_RUNTIME_SESSION_STAMP_VERSION = 2;
 /** Upper bound on sessions carried per node (a daemon rarely hosts more than a handful). */
 export const MESH_NODE_RUNTIME_MAX_SESSIONS = 64;
+/** Upper bound on provider catalog rows carried per node. */
+export const MESH_NODE_RUNTIME_MAX_PROVIDERS = 96;
+const MAX_AUTO_APPROVE_MODES = 16;
 const MAX_ID_CHARS = 200;
+/** Manifest-authored labels / warnings (provider catalog, never user or agent text). */
+const MAX_LABEL_CHARS = 300;
 
 /** One session, in the RAW get_status_metadata session shape (so existing readers need no adapter), allow-listed. */
 export interface MeshNodeRuntimeSession {
@@ -53,6 +68,10 @@ export interface MeshNodeRuntimeSession {
         meshNodeId?: string;
         meshCoordinatorFor?: string;
         launchedByCoordinator?: boolean;
+        /** Sticky node marker of a detached session (identifier). Stamp version >= 2. */
+        meshLastNodeId?: string;
+        /** Coordinator daemon the session relays to (identifier). Stamp version >= 2. */
+        meshCoordinatorDaemonId?: string;
     };
 }
 
@@ -62,6 +81,34 @@ export interface MeshNodeRuntimeDaemonBuild {
     version?: string;
     builtAt?: string;
     track: 'stable' | 'preview' | 'unknown';
+}
+
+/** One provider-declared auto-approve choice (manifest metadata; launch args are not carried). */
+export interface MeshNodeRuntimeAutoApproveMode {
+    id: string;
+    label?: string;
+    strategy?: string;
+    risk?: string;
+    warning?: string;
+}
+
+/**
+ * One provider in the node's catalog — what a launch surface needs to offer it
+ * on that machine without asking the machine: identity, whether it is
+ * installed / enabled there, its versions and its auto-approve choices.
+ * Everything is manifest / detection metadata; nothing is user or agent text.
+ */
+export interface MeshNodeRuntimeProvider {
+    type: string;
+    category?: string;
+    installed?: boolean;
+    enabled?: boolean;
+    machineStatus?: string;
+    /** CLI binary version detected on the node (same source as nodeFacts.providerVersions). */
+    version?: string;
+    /** Provider manifest version the node loads. */
+    providerVersion?: string;
+    autoApproveModes?: { default?: string; modes: MeshNodeRuntimeAutoApproveMode[] };
 }
 
 /** A failed/rolled-back upgrade on record — structured fields only, never the notice prose. */
@@ -83,6 +130,13 @@ export interface MeshNodeRuntimeSummary {
     nodeFacts?: MeshNodeFacts;
     /** True when `sessions` hit MESH_NODE_RUNTIME_MAX_SESSIONS. */
     sessionsTruncated?: boolean;
+    /** The node's provider catalog (installed / enabled / versions / auto-approve modes). */
+    providers?: MeshNodeRuntimeProvider[];
+    /**
+     * MESH_NODE_RUNTIME_SESSION_STAMP_VERSION of the member that built this
+     * summary; absent = an older member whose sessions lack the v2 routing stamps.
+     */
+    sessionStampVersion?: number;
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
@@ -147,9 +201,87 @@ export function sanitizeMeshNodeRuntimeSession(raw: unknown): MeshNodeRuntimeSes
             meshNodeId: readId(settings.meshNodeId),
             meshCoordinatorFor: readId(settings.meshCoordinatorFor),
             launchedByCoordinator: readBool(settings.launchedByCoordinator),
+            meshLastNodeId: readId(settings.meshLastNodeId),
+            meshCoordinatorDaemonId: readId(settings.meshCoordinatorDaemonId),
         }) : undefined,
     };
     return compact(session as unknown as Record<string, unknown>) as unknown as MeshNodeRuntimeSession;
+}
+
+/** A single-line manifest label, bounded; newlines collapse to spaces. */
+function readLabel(value: unknown): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    const collapsed = value.replace(/[\r\n]+/g, ' ').trim();
+    if (!collapsed) return undefined;
+    return collapsed.length > MAX_LABEL_CHARS ? collapsed.slice(0, MAX_LABEL_CHARS) : collapsed;
+}
+
+function sanitizeAutoApproveModes(raw: unknown): MeshNodeRuntimeProvider['autoApproveModes'] | undefined {
+    const config = readRecord(raw);
+    if (!config || !Array.isArray(config.modes)) return undefined;
+    const modes: MeshNodeRuntimeAutoApproveMode[] = [];
+    for (const entry of config.modes) {
+        const mode = readRecord(entry);
+        const id = readId(mode?.id);
+        if (!mode || !id) continue;
+        if (modes.length >= MAX_AUTO_APPROVE_MODES) break;
+        modes.push(compact({
+            id,
+            label: readLabel(mode.label),
+            strategy: readId(mode.strategy),
+            risk: readId(mode.risk),
+            warning: readLabel(mode.warning),
+        }) as MeshNodeRuntimeAutoApproveMode);
+    }
+    if (modes.length === 0) return undefined;
+    const def = readId(config.default);
+    return { ...(def ? { default: def } : {}), modes };
+}
+
+export function sanitizeMeshNodeRuntimeProvider(raw: unknown): MeshNodeRuntimeProvider | null {
+    const p = readRecord(raw);
+    const type = readId(p?.type) ?? readId(p?.id);
+    if (!p || !type) return null;
+    return compact({
+        type,
+        category: readId(p.category),
+        installed: readBool(p.installed),
+        enabled: readBool(p.enabled),
+        machineStatus: readId(p.machineStatus),
+        version: readId(p.version),
+        providerVersion: readId(p.providerVersion),
+        autoApproveModes: sanitizeAutoApproveModes(p.autoApproveModes),
+    }) as MeshNodeRuntimeProvider;
+}
+
+function sanitizeProviders(raw: unknown): MeshNodeRuntimeProvider[] | undefined {
+    if (!Array.isArray(raw)) return undefined;
+    const out: MeshNodeRuntimeProvider[] = [];
+    for (const entry of raw) {
+        const provider = sanitizeMeshNodeRuntimeProvider(entry);
+        if (!provider) continue;
+        if (out.length >= MESH_NODE_RUNTIME_MAX_PROVIDERS) break;
+        out.push(provider);
+    }
+    return out;
+}
+
+/**
+ * Project a provider catalog (`buildAvailableProviders` / ProviderLoader info
+ * rows) plus the node's detected CLI versions into runtime provider rows.
+ */
+export function buildMeshNodeRuntimeProviders(
+    rows: unknown,
+    providerVersions?: Record<string, string> | null,
+): MeshNodeRuntimeProvider[] | undefined {
+    if (!Array.isArray(rows)) return undefined;
+    return sanitizeProviders(rows.map((row) => {
+        const record = readRecord(row);
+        const type = readId(record?.type);
+        const version = type && providerVersions ? readId(providerVersions[type]) : undefined;
+        // `version` is ALWAYS the detected binary version, never a same-named manifest field.
+        return record ? { ...record, version } : row;
+    }));
 }
 
 function sanitizeDaemonBuild(raw: unknown): MeshNodeRuntimeDaemonBuild | undefined {
@@ -200,6 +332,14 @@ export function sanitizeMeshNodeRuntimeSummary(raw: unknown): MeshNodeRuntimeSum
     const nodeFacts = normalizeMeshNodeFacts(record.nodeFacts);
     const daemonId = readId(record.daemonId);
     const truncated = rawSessions.length > sessions.length && sessions.length >= MESH_NODE_RUNTIME_MAX_SESSIONS;
+    const providers = sanitizeProviders(record.providers);
+    // Preserved, never defaulted (see MESH_NODE_RUNTIME_SESSION_STAMP_VERSION).
+    const sessionStampVersion = typeof record.sessionStampVersion === 'number'
+        && Number.isInteger(record.sessionStampVersion)
+        && record.sessionStampVersion > 0
+        && record.sessionStampVersion < 1000
+        ? record.sessionStampVersion
+        : undefined;
     return {
         schemaVersion: MESH_NODE_RUNTIME_SUMMARY_SCHEMA_VERSION,
         ...(daemonId ? { daemonId } : {}),
@@ -208,6 +348,8 @@ export function sanitizeMeshNodeRuntimeSummary(raw: unknown): MeshNodeRuntimeSum
         sessions,
         ...(nodeFacts ? { nodeFacts } : {}),
         ...(truncated ? { sessionsTruncated: true } : {}),
+        ...(providers ? { providers } : {}),
+        ...(sessionStampVersion ? { sessionStampVersion } : {}),
     };
 }
 
@@ -216,18 +358,23 @@ export function sanitizeMeshNodeRuntimeSummary(raw: unknown): MeshNodeRuntimeSum
  * instanceId, sessions }, daemonBuild, upgradeFailure }`, bare or wrapped in
  * `{ result }`) plus an optional facts bundle.
  */
-export function buildMeshNodeRuntimeSummary(statusMetadata: unknown, nodeFacts?: unknown): MeshNodeRuntimeSummary | null {
+export function buildMeshNodeRuntimeSummary(statusMetadata: unknown, nodeFacts?: unknown, providers?: unknown): MeshNodeRuntimeSummary | null {
     let payload = readRecord(statusMetadata);
     if (payload && readRecord(payload.result) && !readRecord(payload.status)) payload = readRecord(payload.result);
     if (!payload) return null;
     const status = readRecord(payload.status) ?? payload;
     if (!Array.isArray(status.sessions)) return null;
+    // A legacy member's get_status_metadata may carry the catalog as availableProviders.
+    const catalog = providers ?? (Array.isArray(status.availableProviders) ? buildMeshNodeRuntimeProviders(status.availableProviders) : undefined);
     return sanitizeMeshNodeRuntimeSummary({
         daemonId: status.instanceId,
         daemonBuild: payload.daemonBuild,
         upgradeFailure: payload.upgradeFailure,
         sessions: status.sessions,
         nodeFacts: nodeFacts ?? undefined,
+        ...(catalog ? { providers: catalog } : {}),
+        // Built from RAW session records here, so the v2 stamps are present when set.
+        sessionStampVersion: MESH_NODE_RUNTIME_SESSION_STAMP_VERSION,
     });
 }
 
@@ -255,12 +402,19 @@ export function computeMeshNodeRuntimeSignature(summary: MeshNodeRuntimeSummary 
         summary.upgradeFailure ? stripTimes(summary.upgradeFailure) : null,
         summary.sessions.map((s) => stripTimes(s)),
         summary.nodeFacts ? stripTimes(summary.nodeFacts) : null,
+        summary.providers ?? null,
+        summary.sessionStampVersion ?? null,
     ]);
 }
 
-/** Signature of just the facts bundle (quota / build) — the part the dashboard renders. */
+/** Signature of the facts bundle (quota / build) and provider catalog — the parts the dashboard renders. */
 export function computeMeshNodeFactsSignature(summary: MeshNodeRuntimeSummary | null | undefined): string {
-    if (!summary?.nodeFacts) return 'none';
+    if (!summary?.nodeFacts && !summary?.providers) return 'none';
     // `reportedAt` (like every *At key) is ignored by the signature.
-    return computeMeshNodeRuntimeSignature({ schemaVersion: 1, sessions: [], nodeFacts: summary.nodeFacts });
+    return computeMeshNodeRuntimeSignature({
+        schemaVersion: 1,
+        sessions: [],
+        ...(summary.nodeFacts ? { nodeFacts: summary.nodeFacts } : {}),
+        ...(summary.providers ? { providers: summary.providers } : {}),
+    });
 }

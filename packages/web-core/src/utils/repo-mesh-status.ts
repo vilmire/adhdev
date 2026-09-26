@@ -334,8 +334,107 @@ function normalizeRepoMeshNodeStatus(node: unknown): RepoMeshNodeStatus | null {
             ? { nodeFacts: record.nodeFacts as RepoMeshNodeStatus['nodeFacts'] } : {}),
         // Coordinator-held observation metadata (age / refreshing / unreachable).
         ...(normalizeGitObservation(record.gitObservation) ? { gitObservation: normalizeGitObservation(record.gitObservation)! } : {}),
+        // Coordinator-held RUNTIME of a node served by another daemon (sessions /
+        // build / upgrade marker). Carried through so the node's sessions render
+        // from the coordinator's answer instead of a per-member live call.
+        ...(normalizeHeldRuntime(record.heldRuntime ?? record.held_runtime) ? { heldRuntime: normalizeHeldRuntime(record.heldRuntime ?? record.held_runtime)! } : {}),
+        ...(readString(record.role) ? { role: readString(record.role) as RepoMeshNodeStatus['role'] } : {}),
+        ...(readString(record.nodeLabel, record.node_label) ? { nodeLabel: readString(record.nodeLabel, record.node_label) } : {}),
         ...(error ? { error } : {}),
     }
+}
+
+type HeldRuntime = NonNullable<RepoMeshNodeStatus['heldRuntime']>
+const HELD_RUNTIME_SOURCES = new Set(['member_push', 'coordinator_probe', 'none'])
+
+/**
+ * Validate the coordinator's per-node `heldRuntime` defensively: the shape is
+ * owned by the daemon and may grow (or be absent on older daemons). Unknown
+ * extra keys ride through untouched; a record without a sessions list or with
+ * an unknown source is dropped.
+ */
+export function normalizeHeldRuntime(value: unknown): HeldRuntime | null {
+    const record = readRecord(value)
+    if (Object.keys(record).length === 0) return null
+    const source = readString(record.source) || 'none'
+    if (!HELD_RUNTIME_SOURCES.has(source)) return null
+    const sessions = Array.isArray(record.sessions)
+        ? record.sessions.filter((entry: unknown) => Object.keys(readRecord(entry)).length > 0)
+        : []
+    return {
+        ...record,
+        source: source as HeldRuntime['source'],
+        observedAt: readNullableNumber(record.observedAt),
+        refreshing: record.refreshing === true,
+        sessions,
+    } as HeldRuntime
+}
+
+/**
+ * Map one held (raw get_status_metadata-shaped) session onto the node session
+ * record the graph/list surfaces read. Content-free fields only.
+ */
+function heldSessionToMeshSession(raw: unknown, meshId: string, workspace: string | undefined): RepoMeshSessionStatus | null {
+    const session = readRecord(raw)
+    const settings = readRecord(session.settings)
+    const activeChat = readRecord(session.activeChat)
+    const coordinatorFor = readString(readRecord(session.coordinator).meshId, settings.meshCoordinatorFor)
+    const role = meshId && coordinatorFor === meshId
+        ? 'coordinator'
+        : meshId && readString(settings.meshNodeFor) === meshId ? 'worker' : undefined
+    const normalized = normalizeMeshSessionRecord({
+        sessionId: readString(session.instanceId, session.id, session.sessionId),
+        providerType: readString(session.providerType),
+        state: readString(session.status),
+        chatStatus: readString(activeChat.status),
+        ...(role ? { role } : {}),
+        ...(workspace ? { workspace } : {}),
+    })
+    if (!normalized) return null
+    return { ...normalized, isSelfCoordinator: false }
+}
+
+/** True when a held session belongs to this node (stamped node id), or is this mesh's coordinator on the node's daemon. */
+function heldSessionBelongsToNode(raw: unknown, meshId: string, node: RepoMeshNodeStatus, soleNodeOfDaemon: boolean): boolean {
+    const session = readRecord(raw)
+    const settings = readRecord(session.settings)
+    const stampedNodeId = readString(settings.meshNodeId)
+    if (stampedNodeId) return stampedNodeId === node.nodeId
+    if (!soleNodeOfDaemon || !meshId) return false
+    const coordinatorFor = readString(readRecord(session.coordinator).meshId, settings.meshCoordinatorFor)
+    return coordinatorFor === meshId || readString(settings.meshNodeFor) === meshId
+}
+
+/**
+ * Fold each node's coordinator-held runtime sessions into `activeSessionDetails`
+ * / `activeSessions`, so remote nodes render their sessions from `mesh_status`
+ * alone. `heldRuntime.source === 'none'` means "not known yet" and adds nothing.
+ */
+export function attachHeldRuntimeSessionsToNodes(meshId: string, nodes: RepoMeshNodeStatus[]): RepoMeshNodeStatus[] {
+    const nodesPerDaemon = new Map<string, number>()
+    for (const node of nodes) {
+        if (!node.heldRuntime || !node.daemonId) continue
+        nodesPerDaemon.set(node.daemonId, (nodesPerDaemon.get(node.daemonId) ?? 0) + 1)
+    }
+    return nodes.map(node => {
+        const held = node.heldRuntime
+        if (!held || held.source === 'none' || !Array.isArray(held.sessions) || held.sessions.length === 0) return node
+        const soleNodeOfDaemon = !!node.daemonId && nodesPerDaemon.get(node.daemonId) === 1
+        const mapped = held.sessions
+            .filter(session => heldSessionBelongsToNode(session, meshId, node, soleNodeOfDaemon))
+            .map(session => heldSessionToMeshSession(session, meshId, node.workspace || undefined))
+            .filter((entry): entry is RepoMeshSessionStatus => entry !== null)
+        if (mapped.length === 0) return node
+        const activeSessionDetails = dedupeSessionDetails([...(node.activeSessionDetails ?? []), ...mapped])
+        return {
+            ...node,
+            activeSessionDetails,
+            activeSessions: dedupeSessionDetails([
+                ...activeSessionDetails,
+                ...(node.activeSessions ?? []).map(sessionId => ({ sessionId })),
+            ]).map(session => session.sessionId),
+        }
+    })
 }
 
 function dedupeSessionDetails(sessions: RepoMeshSessionStatus[]): RepoMeshSessionStatus[] {
@@ -432,7 +531,7 @@ export function canonicalizeRepoMeshStatus(status: RepoMeshStatus | null | undef
     const nodes = canonicalizeRepoMeshNodes(safe.nodes ?? [])
     return {
         ...safe,
-        nodes: attachCoordinatorSessionsToNodes(safe, nodes),
+        nodes: attachHeldRuntimeSessionsToNodes(readString(safe.meshId) || '', attachCoordinatorSessionsToNodes(safe, nodes)),
     }
 }
 
@@ -465,7 +564,10 @@ function normalizeRepoMeshStatus(candidate: JsonRecord): RepoMeshStatus | null {
         : null
     if (!meshId || !normalizedNodes) return null
 
-    const nodes = attachCoordinatorSessionsToNodes(candidate as unknown as RepoMeshStatus, canonicalizeRepoMeshNodes(normalizedNodes))
+    const nodes = attachHeldRuntimeSessionsToNodes(
+        meshId,
+        attachCoordinatorSessionsToNodes(candidate as unknown as RepoMeshStatus, canonicalizeRepoMeshNodes(normalizedNodes)),
+    )
     const meshName = readString(candidate.meshName, candidate.mesh_name, candidate.name)
     const repoIdentity = readString(candidate.repoIdentity, candidate.repo_identity)
     const refreshedAt = readString(candidate.refreshedAt, candidate.refreshed_at, candidate.updatedAt, candidate.updated_at)

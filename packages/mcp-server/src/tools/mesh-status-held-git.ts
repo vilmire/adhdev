@@ -27,6 +27,8 @@
 import {
     assignFullGitSnapshot,
     buildBranchConvergence,
+    collectLiveStatusProbe,
+    collectLiveStatusSessionsVerified,
     countUncommittedChanges,
     extractSubmodules,
     isGitStatusDirty,
@@ -34,9 +36,36 @@ import {
     readNodeDaemonId,
     unwrapCommandPayload,
 } from './mesh-tools-internal.js';
-import type { LocalMeshNodeEntry, MeshContext, MeshUpgradeFailureSummary } from './mesh-tools-internal.js';
-import { extractDaemonBuildInfo, isLocalControlPlaneNode } from './mesh-tools-internal.js';
+import type { LocalMeshNodeEntry, MeshContext } from './mesh-tools-internal.js';
+import { isLocalControlPlaneNode } from './mesh-tools-internal.js';
 import { IpcTransport } from '../transports/ipc.js';
+import {
+    cachedHeldNodeState,
+    findHeldNodeStatus,
+    heldNodeStatusProbe,
+    usesHeldNodeRuntime,
+} from './mesh-held-node-state.js';
+import type { HeldNodeRuntimeObservation, NodeStatusProbe } from './mesh-held-node-state.js';
+
+// The held-read primitive lives in mesh-held-node-state.ts (importable by
+// mesh-tools-internal.ts without a cycle); re-exported so importers of this
+// module keep working unchanged.
+export {
+    __resetNodeRuntimeCacheForTest,
+    findHeldNodeStatus,
+    heldNodeStatusProbe,
+    readCoordinatorHeldNodeState,
+    usesHeldNodeRuntime,
+} from './mesh-held-node-state.js';
+export type {
+    CoordinatorHeldNodeState,
+    HeldNodeRuntimeObservation,
+    NodeStatusProbe,
+} from './mesh-held-node-state.js';
+
+function readRecord(value: unknown): Record<string, any> | null {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : null;
+}
 
 /** Mirror of daemon-core `RepoMeshNodeGitObservation` (wire contract). */
 export interface HeldNodeGitObservation {
@@ -45,130 +74,6 @@ export interface HeldNodeGitObservation {
     refreshing: boolean;
     unreachableSince: number | null;
     lastRefreshError?: string | null;
-}
-
-export interface CoordinatorHeldNodeState {
-    /** Daemon-rendered node status, keyed by nodeId. */
-    byNodeId: Map<string, Record<string, any>>;
-    /** Set when the coordinator daemon could not answer (IPC failure / error result). */
-    error?: string;
-    /** The daemon answered with held runtime for foreign-daemon nodes (`nodeRuntimeHeld`). */
-    runtimeHeld?: boolean;
-}
-
-/** Where a node's sessions / build came from on this call. */
-export interface HeldNodeRuntimeObservation {
-    /** 'local_read' = the coordinator's own daemon, read directly; 'none' = nothing held yet (sessions unknown, not zero). */
-    source: 'local_read' | 'member_push' | 'coordinator_probe' | 'none';
-    observedAt: number | null;
-    refreshing: boolean;
-}
-
-/** Same shape as collectLiveStatusProbe's result. */
-export interface NodeStatusProbe {
-    sessions: any[];
-    daemonId?: string;
-    daemonBuild?: { commit: string; commitShort: string; version: string; builtAt?: string; track: 'stable' | 'preview' | 'unknown' };
-    upgradeFailure?: MeshUpgradeFailureSummary;
-}
-
-function readRecord(value: unknown): Record<string, any> | null {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : null;
-}
-
-/**
- * ONE local read of the coordinator daemon's held mesh view. Never probes a
- * remote node: the daemon's `mesh_status` answers from its node-git store and
- * only kicks (never awaits) background refreshes. `awaitLiveProbes` is never
- * sent — that internal escape hatch is for daemon-side callers only.
- */
-export async function readCoordinatorHeldNodeState(
-    ctx: MeshContext,
-    opts: { refresh?: boolean } = {},
-): Promise<CoordinatorHeldNodeState> {
-    const byNodeId = new Map<string, Record<string, any>>();
-    let raw: any;
-    try {
-        raw = await ctx.transport.command('mesh_status', {
-            meshId: ctx.mesh.id,
-            ...(opts.refresh === true ? { refresh: true } : {}),
-        });
-    } catch (error: any) {
-        return { byNodeId, error: error?.message || 'coordinator mesh_status read failed' };
-    }
-    const payload = unwrapCommandPayload(raw);
-    const record = readRecord(payload) ?? readRecord(raw);
-    if (!record || record.success === false) {
-        return { byNodeId, error: typeof record?.error === 'string' ? record.error : 'coordinator mesh_status returned no node state' };
-    }
-    const nodes = Array.isArray(record.nodes) ? record.nodes : [];
-    for (const node of nodes) {
-        const status = readRecord(node);
-        const nodeId = typeof status?.nodeId === 'string' ? status.nodeId : '';
-        if (status && nodeId) byNodeId.set(nodeId, status);
-    }
-    return { byNodeId, ...(record.nodeRuntimeHeld === true ? { runtimeHeld: true } : {}) };
-}
-
-/**
- * Whether this node's runtime is answered from the coordinator-held state: the
- * daemon holds runtime (marker) and the node is served by another daemon — the
- * exact case in which the legacy path made a P2P get_status_metadata round trip
- * (commandForNode's remote branch).
- */
-export function usesHeldNodeRuntime(ctx: MeshContext, node: LocalMeshNodeEntry, state: CoordinatorHeldNodeState): boolean {
-    if (state.runtimeHeld !== true) return false;
-    if (!(ctx.transport instanceof IpcTransport) || !node.daemonId) return false;
-    return !isLocalControlPlaneNode(ctx, node);
-}
-
-/**
- * The held runtime as a status probe result — no transport call. A node with no
- * held runtime yet returns no sessions and `source: 'none'` (unknown, the
- * daemon's background refresh is kicked), never a live read.
- */
-export function heldNodeStatusProbe(held: Record<string, any> | undefined): { probe: NodeStatusProbe; observation: HeldNodeRuntimeObservation } {
-    const runtime = readRecord(held?.heldRuntime);
-    const numberOrNull = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null;
-    const source = runtime?.source === 'member_push' || runtime?.source === 'coordinator_probe' ? runtime.source : 'none';
-    const observation: HeldNodeRuntimeObservation = {
-        source,
-        observedAt: source === 'none' ? null : numberOrNull(runtime?.observedAt),
-        refreshing: runtime?.refreshing === true,
-    };
-    if (!runtime || source === 'none') return { probe: { sessions: [] }, observation };
-    const daemonBuild = extractDaemonBuildInfo({ daemonBuild: runtime.daemonBuild });
-    const failure = readRecord(runtime.upgradeFailure);
-    const targetVersion = typeof failure?.targetVersion === 'string' ? failure.targetVersion : undefined;
-    const upgradeFailure: MeshUpgradeFailureSummary | undefined = failure
-        ? {
-            // The notice prose stays on the node (content-free push); the structured facts travel.
-            summary: `Daemon upgrade${targetVersion ? ` to ${targetVersion}` : ''} failed on this node (rolled back); the full notice is on that node.`,
-            ...(typeof failure.recordedAt === 'string' ? { recordedAt: failure.recordedAt } : {}),
-            ...(targetVersion ? { targetVersion } : {}),
-            noticePath: typeof failure.noticePath === 'string' ? failure.noticePath : '',
-            logPath: typeof failure.logPath === 'string' ? failure.logPath : '',
-        }
-        : undefined;
-    return {
-        probe: {
-            sessions: Array.isArray(runtime.sessions) ? runtime.sessions : [],
-            ...(typeof runtime.daemonId === 'string' && runtime.daemonId ? { daemonId: runtime.daemonId } : {}),
-            ...(daemonBuild ? { daemonBuild } : {}),
-            ...(upgradeFailure ? { upgradeFailure } : {}),
-        },
-        observation,
-    };
-}
-
-/** The daemon-rendered status for `node` (exact id, then canonical id-form match). */
-export function findHeldNodeStatus(state: CoordinatorHeldNodeState, node: LocalMeshNodeEntry): Record<string, any> | undefined {
-    const exact = state.byNodeId.get(node.id);
-    if (exact) return exact;
-    for (const [nodeId, status] of state.byNodeId) {
-        if (meshNodeIdMatches(node as any, nodeId)) return status;
-    }
-    return undefined;
 }
 
 export function readHeldNodeGitObservation(held: Record<string, any> | undefined): HeldNodeGitObservation {
@@ -262,9 +167,19 @@ export function deriveDataFreshnessFromObservation(args: {
 /**
  * Stamp one coordinator-surface node entry from the daemon-held node status:
  * health / git / branch / dirty / branchConvergence / staleDaemonBuild / quota /
- * submodule warning (same derivations as the old live-probe path), plus
- * `gitObservation` and a `dataFreshness` derived from it. Never throws and never
- * touches the transport.
+ * submodule warning, plus `gitObservation` and a `dataFreshness`. Never throws
+ * and never touches the transport.
+ *
+ * AUDIT FIX (owner principle 2026-09-26): the daemon's `mesh_status` handler
+ * already computes `health` (deriveMeshNodeHealthFromGit) and
+ * `branchConvergence` (applyInlineMeshBranchConvergence) on every node object
+ * in the SAME response this reads (daemon-core mesh-status.ts / mesh-node-
+ * identity.ts / mesh-branch-convergence.ts) — re-deriving them here from the
+ * raw git snapshot duplicated logic the daemon already ran. When the daemon
+ * supplies them (`held.health` / `held.branchConvergence`), they are passed
+ * through as-is; the MCP-side derivation below runs ONLY as a fallback for an
+ * older daemon whose `mesh_status` response predates these fields (or a test
+ * fixture answering the bare git shape).
  */
 export function applyHeldNodeGitToEntry(entry: Record<string, any>, args: {
     mesh: MeshContext['mesh'];
@@ -277,15 +192,17 @@ export function applyHeldNodeGitToEntry(entry: Record<string, any>, args: {
     const observation = readHeldNodeGitObservation(held);
     const status = readRecord(held?.git);
     const hasGit = !!status && (typeof status.isGitRepo === 'boolean' || typeof status.branch === 'string');
+    const daemonHealth = typeof held?.health === 'string' ? held.health : undefined;
+    const daemonBranchConvergence = readRecord(held?.branchConvergence);
     if (hasGit && status) {
         const uncommittedChanges = countUncommittedChanges(status);
         const dirty = isGitStatusDirty(status);
-        entry.health = status.isGitRepo ? (dirty ? 'dirty' : 'online') : 'degraded';
+        entry.health = daemonHealth ?? (status.isGitRepo ? (dirty ? 'dirty' : 'online') : 'degraded');
         assignFullGitSnapshot(entry, status);
         entry.branch = status.branch;
         entry.isDirty = dirty;
         entry.uncommittedChanges = uncommittedChanges;
-        entry.branchConvergence = buildBranchConvergence(mesh as any, node, status, dirty, uncommittedChanges);
+        entry.branchConvergence = daemonBranchConvergence ?? buildBranchConvergence(mesh as any, node, status, dirty, uncommittedChanges);
         const buildBehind = readRecord(status.daemonBuildBehind) ?? readRecord(held?.staleDaemonBuild);
         if (buildBehind) entry.staleDaemonBuild = buildBehind;
         const policy = (node.policy as any) ?? {};
@@ -345,4 +262,129 @@ export function buildNodeGitStateSummary(entries: Array<Record<string, any>>, er
             ...(refreshingNodeIds.length > 0 ? { refreshingNodeIds } : {}),
         },
     };
+}
+
+// ─── readNodeRuntime — the ONE held-first entry point for a node's runtime ────
+//
+// AUDIT FIX (owner principle 2026-09-26, held-node-state audit): before this,
+// four different call sites each re-derived "is this node's runtime available
+// without a live probe" — mesh_status's own inline usesHeldNodeRuntime/
+// heldNodeStatusProbe branch (still inlined there, since it already shares the
+// held read across many other fields in the same call), and three OTHER raw
+// `commandForNode(...'get_status_metadata')` / `transport.meshCommand(daemonId,
+// 'get_status_metadata')` call sites (mesh_view_queue, mesh_send_task /
+// mesh_launch_session session lookups, MAGI idle checks, mesh_node_slots
+// propose) that always went live, one per node, even for a REMOTE node whose
+// runtime the coordinator daemon already holds from a member push.
+//
+// `readNodeRuntime` collapses that decision into one helper: read the
+// coordinator daemon's held mesh_status ONCE per MeshContext per call (cached —
+// see `cachedHeldNodeState` in mesh-held-node-state.ts), and for each node either answer from the
+// held runtime (no transport call) or fall back to a live `get_status_metadata`
+// probe when:
+//   - the daemon predates `nodeRuntimeHeld` (older daemon — the marker is
+//     absent), or
+//   - the node's held source is 'none' (nothing pushed/observed yet for it), or
+//   - the caller explicitly passes `allowLive: true` (a caller that needs a
+//     guaranteed-fresh read regardless of what is held, e.g. a destructive
+//     dup-guard check right before a mutation).
+
+export interface NodeRuntimeResult {
+    probe: NodeStatusProbe;
+    /** Present whenever the answer did not require a live transport call. */
+    observation?: HeldNodeRuntimeObservation;
+    /** 'held' when answered from the coordinator's held state; 'live' otherwise. */
+    source: 'held' | 'live';
+}
+
+/**
+ * The held-first entry point every call site enumerated in the audit should
+ * use instead of its own raw `get_status_metadata` probe. Never throws — a
+ * live-probe failure resolves to `{ sessions: [] }` (matching
+ * `collectLiveStatusProbe`'s existing failure contract) so callers keep their
+ * current fail-open behavior.
+ */
+export async function readNodeRuntime(
+    ctx: MeshContext,
+    node: LocalMeshNodeEntry,
+    opts: { allowLive?: boolean; refresh?: boolean } = {},
+): Promise<NodeRuntimeResult> {
+    // Cheap locality check FIRST — no transport call. usesHeldNodeRuntime's other
+    // preconditions (IpcTransport + daemonId + not-local) never depend on the
+    // fetched held state, only `state.runtimeHeld` does; checking them before
+    // fetching held state means a LOCAL node (the common single-machine/self
+    // case) never issues the held-state `mesh_status` read at all — it goes
+    // straight to the SAME live get_status_metadata call it always made.
+    const canUseHeld = !opts.allowLive
+        && ctx.transport instanceof IpcTransport
+        && !!node.daemonId
+        && !isLocalControlPlaneNode(ctx, node);
+    if (canUseHeld) {
+        const heldState = await cachedHeldNodeState(ctx);
+        if (usesHeldNodeRuntime(ctx, node, heldState)) {
+            const heldNode = findHeldNodeStatus(heldState, node);
+            const held = heldNodeStatusProbe(heldNode);
+            // A 'none' source means nothing is held for this node yet (new node /
+            // member not pushing) — fall through to a live probe rather than
+            // reporting an empty session list as if it were authoritative.
+            if (held.observation.source !== 'none') {
+                return { probe: held.probe, observation: held.observation, source: 'held' };
+            }
+        }
+    }
+    const probe = await collectLiveStatusProbe(ctx, node, opts.refresh ? { refresh: true } : undefined);
+    return { probe, source: 'live' };
+}
+
+/**
+ * mesh_view_queue / mesh_list_pending_approvals node-decoration, held-first.
+ * Same output shape as the legacy `collectMeshViewQueueNodesWithLiveSessionsVerified`
+ * (mesh-tools-internal.ts) — `sessions` replaced + `__liveProbeVerified` stamped for
+ * a node whose runtime is now KNOWN (held or a verified live probe), left
+ * unstamped (`false`) only when neither source could confirm anything (a stale
+ * daemon predating the held-runtime marker AND a failed live probe — the same
+ * "probe failed, never treat as evidence of absence" contract the legacy
+ * function documented).
+ */
+/**
+ * mesh_list_pending_approvals node decoration, held-first — the simpler,
+ * unverified sibling of collectMeshViewQueueNodesHeldOrLive (matches the shape
+ * the legacy collectMeshViewQueueNodesWithLiveSessions produced: sessions
+ * replaced only when non-empty, no __liveProbeVerified stamp, since this
+ * caller does not consume it).
+ */
+export async function collectPendingApprovalNodesHeldOrLive(
+    ctx: MeshContext,
+    opts?: { refresh?: boolean },
+): Promise<any[]> {
+    return Promise.all(ctx.mesh.nodes.map(async (node) => {
+        const result = await readNodeRuntime(ctx, node as LocalMeshNodeEntry, opts);
+        return result.probe.sessions.length > 0
+            ? { ...node, sessions: result.probe.sessions }
+            : node;
+    }));
+}
+
+export async function collectMeshViewQueueNodesHeldOrLive(
+    ctx: MeshContext,
+    opts?: { refresh?: boolean },
+): Promise<any[]> {
+    return Promise.all(ctx.mesh.nodes.map(async (node) => {
+        const result = await readNodeRuntime(ctx, node as LocalMeshNodeEntry, opts);
+        if (result.source === 'held') {
+            // Held state answers authoritatively (even a confirmed-empty session
+            // list — see readNodeRuntime's 'none' fallthrough) without a live probe.
+            return { ...node, sessions: result.probe.sessions, __liveProbeVerified: true };
+        }
+        // source === 'live': readNodeRuntime's own collectLiveStatusProbe swallows a
+        // failed probe into `{sessions: []}`, which is NOT distinguishable from a
+        // verified-empty probe — re-derive that distinction the same way the legacy
+        // collectMeshViewQueueNodesWithLiveSessionsVerified did. This reuses the
+        // shared probe cache (probeStatusMetadataForNode), so it is a cache hit, not
+        // a second network round trip.
+        const { sessions, verified } = await collectLiveStatusSessionsVerified(ctx, node as LocalMeshNodeEntry, opts);
+        return verified
+            ? { ...node, sessions, __liveProbeVerified: true }
+            : { ...node, __liveProbeVerified: false };
+    }));
 }

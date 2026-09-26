@@ -389,9 +389,37 @@ export interface TurnProbeReader {
     read(attempt: TurnAttempt, location: ProbeLocation, holds: readonly HoldReason[]): Promise<TurnProbeRead>;
 }
 
+/**
+ * A remote node's session list as the coordinator HOLDS it (member-pushed
+ * runtime summary, mesh/mesh-node-git-state.ts). Returned only when trustworthy
+ * — pushed by the member (changes arrive within the push debounce) and the
+ * member is still pushing; null otherwise (no entry, a coordinator-probe
+ * snapshot, stale, or an older member that does not push its runtime).
+ */
+export interface HeldRemoteSessions {
+    sessions: ReadonlyArray<{ id: string; instanceId?: string; sessionId?: string; status?: string }>;
+    /** Epoch ms the member observed this list. */
+    observedAt: number;
+    /** The member hit its per-summary session cap — absence proves nothing. */
+    truncated?: boolean;
+}
+
+/**
+ * A held list proves a session ABSENT only when it was observed at least this
+ * long after the attempt's turn boundary (member ↔ coordinator clock skew, and
+ * the launch → push debounce, must not turn into a false `dead`).
+ */
+export const HELD_ABSENCE_MARGIN_MS = 10_000;
+
 export interface ComponentsProbeReaderOptions {
     analyzer: TranscriptAnalyzer;
     now?: () => number;
+    /**
+     * Held remote session presence/status. When it answers, the per-daemon
+     * `get_status_metadata` round trip is skipped; transcript content still
+     * comes from the replica / read_chat.
+     */
+    readHeldSessions?: (attempt: TurnAttempt, daemonId: string) => HeldRemoteSessions | null;
 }
 
 type ProbeComponents = Pick<DaemonComponents,
@@ -454,14 +482,29 @@ export function createComponentsProbeReader(components: ProbeComponents, options
             const peer = getPeer(daemonId);
             if (!peer || String(peer.state) !== 'connected') return { presence: 'unknown' };
         }
-        let sessions: any[];
-        try {
-            sessions = extractStatusMetadataSessions(await probeRemoteStatusMetadata(components, daemonId, now()));
-        } catch {
-            return { presence: 'unknown' };
+        // Presence / status from the coordinator-HELD runtime when it is live
+        // (member-pushed, still pushing). "Absent" from held state is trusted only
+        // when the observation postdates this attempt's dispatch — a session just
+        // launched may not have been pushed yet — and the list was not truncated;
+        // otherwise (and for older members) the live per-daemon probe answers.
+        let row: any;
+        const held = options.readHeldSessions?.(attempt, daemonId) ?? null;
+        const heldRow = held?.sessions.find((s) => str(s.id) === attempt.sessionId || str(s.sessionId) === attempt.sessionId || str(s.instanceId) === attempt.sessionId);
+        if (heldRow) {
+            row = heldRow;
+        } else if (held && !held.truncated && held.sessions.length > 0
+            && held.observedAt > turnStartBoundary(attempt) + HELD_ABSENCE_MARGIN_MS) {
+            return { presence: 'absent' };
+        } else {
+            let sessions: any[];
+            try {
+                sessions = extractStatusMetadataSessions(await probeRemoteStatusMetadata(components, daemonId, now()));
+            } catch {
+                return { presence: 'unknown' };
+            }
+            row = sessions.find((s) => str(s?.id) === attempt.sessionId || str(s?.sessionId) === attempt.sessionId);
+            if (!row) return sessions.length > 0 ? { presence: 'absent' } : { presence: 'unknown' };
         }
-        const row = sessions.find((s) => str(s?.id) === attempt.sessionId || str(s?.sessionId) === attempt.sessionId);
-        if (!row) return sessions.length > 0 ? { presence: 'absent' } : { presence: 'unknown' };
         const status = str(row.status).toLowerCase() || undefined;
         if (!wantsTranscript(attempt, holds, status)) return { presence: 'present', ...(status ? { status } : {}) };
         const replica = readTranscriptForDaemonConsumer({

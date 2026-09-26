@@ -20,67 +20,45 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(mainViewSource).toContain('onClose={() => setMeshGraphConversation(null)}')
   })
 
-  it('drives the dialog from cached aggregate mesh_status data and lets the surface derive the graph', () => {
+  it('drives the dialog from the SHARED coordinator mesh_status store and lets the surface derive the graph', () => {
     const dialogSource = readSource('components/dashboard/DashboardMeshGraphDialog.tsx')
     const hookSource = readSource('hooks/useMeshGraphMetadataSubscription.ts')
+    const statusHookSource = readSource('hooks/useCoordinatorMeshStatus.ts')
 
     expect(dialogSource).toContain('useDashboardMeshOverrides()')
     expect(dialogSource).toContain('useTransport()')
     expect(dialogSource).toContain('useMeshGraphMetadataSubscription({')
+    // One shared loader: the dialog reads the per-mesh coordinator store (the same
+    // one the /mesh page and SessionInfoDialog read) — no private cache, no
+    // private pending-git retry loop.
+    expect(dialogSource).toContain('useCoordinatorMeshStatus({')
+    expect(dialogSource).not.toContain('dashboardMeshGraphStatusCache')
+    expect(dialogSource).not.toContain('hasPendingDashboardMeshRefresh')
+    expect(dialogSource).not.toContain('nextDashboardMeshRefreshDelayMs')
+    expect(dialogSource).not.toContain('retryProfile')
+    expect(dialogSource).toContain('meshOverrides?.loadMeshStatus')
+    expect(dialogSource).toContain("sendDaemonCommand(targetDaemonId, 'mesh_status', { meshId: targetMeshId, refresh: options.refresh })")
+    // Automatic reads are refresh:false (mount / coordinator revision / backstop);
+    // refresh:true is the explicit button only.
+    expect(statusHookSource).toContain('void read(false)')
+    expect(statusHookSource).toContain('const refresh = useCallback(() => read(true), [read])')
+    expect(statusHookSource).not.toContain('read(true)\n')
+    // The metadata subscription is on the coordinator daemon only.
     expect(hookSource).toContain('subscriptionManager.subscribe(')
     expect(hookSource).toContain("topic: 'daemon.metadata'")
     expect(hookSource).toContain('getMeshGraphMetadataSignature(update, meshId)')
-    // Multi-daemon subscription: sessions are collected per daemon and aggregated.
-    expect(hookSource).toContain('const sessions = collectMeshGraphLiveSessionStatuses(update, meshId)')
-    expect(hookSource).toContain('setPerDaemonSessions(prev => {')
-    expect(hookSource).toContain('for (const unsub of unsubscribes) unsub()')
-    expect(dialogSource).toContain('meshOverrides?.loadMeshStatus')
-    expect(dialogSource).toContain("sendDaemonCommand(daemonId, 'mesh_status', { meshId, refresh })")
-    expect(dialogSource).toContain('meshOverrides.loadMeshStatus(daemonId, meshId, {')
-    // Manual user Refresh keeps the full blocking probe; the automatic on-open
-    // retry loop uses the lighter 'interactive' profile so a slow peer can't
-    // make every auto-retry a 25s blocking fan-out and storm the daemon.
-    expect(dialogSource).toContain("retryProfile: isAutoRetry ? 'interactive' : 'settled'")
-    // The on-open background refresh is an auto-retry (lighter profile), so the
-    // bounded hasPendingDashboardMeshRefresh loop converges instead of looping.
-    expect(dialogSource).toContain('loadGraph(true, true)')
-    // The cold-open paint ALSO uses the auto-retry (interactive) profile — a
-    // `settled` cold-open over a cached aggregate would self-escalate to a blocking
-    // refresh:true fan-out and stall 25s on the slowest/offline peer. Interactive
-    // paints the held state immediately and never self-fires refresh.
-    expect(dialogSource).toContain('loadGraph(false, true)')
-    expect(dialogSource).not.toContain('await loadGraph(false)\n')
+    expect(hookSource).not.toContain('extraDaemonIds')
+    expect(hookSource).not.toContain('isFirstNode')
+    expect(hookSource).toContain('mergeMeshGraphLiveSessionStatusIntoMeshStatus(status, liveMeshSessions, daemonId)')
     expect(dialogSource).not.toContain('buildMeshGraph')
-    expect(dialogSource).toContain('setLoading(showInitialLoader)')
-    expect(dialogSource).toContain('dashboardMeshGraphStatusCache')
-    expect(dialogSource).toContain('dashboardMeshGraphStatusCache.get(cacheKey)')
-    expect(dialogSource).toContain('dashboardMeshGraphStatusCache.set(cacheKey, status)')
-    expect(dialogSource).toContain('loadGraph(true)')
-    expect(dialogSource).not.toContain('MESH_GRAPH_CONNECTED_BACKGROUND_REFRESH_MS')
-    expect(dialogSource).not.toContain('MESH_GRAPH_RECONNECTING_BACKGROUND_REFRESH_MS')
-    expect(dialogSource).not.toContain('loadGraph(true, { background: true })')
-    // Periodic refresh while the dialog is open IS allowed — but ONLY on the
-    // light path: the interval must fire loadGraph(true, true) (auto-retry →
-    // 'interactive' probe profile, held-state truth, no blocking peer-git
-    // fan-out) and must skip hidden tabs and in-flight loads. What stays
-    // banned is the old BLOCKING background-refresh class (the constants
-    // above): a settled-profile refresh on a timer stormed daemons with 25s
-    // per-peer fan-outs.
-    expect(dialogSource).toContain('AUTO_REFRESH_MS')
-    expect(dialogSource).toContain('if (document.hidden) return')
-    expect(dialogSource).toContain('if (loadInFlightRef.current) return')
     // The header metadata chip copy is now i18n-wired; assert the translation keys are used.
     expect(dialogSource).toContain("t('mesh.dialog.liveMetadata')")
     expect(dialogSource).toContain("t('mesh.dialog.metadataUnavailable')")
-    expect(hookSource).toContain('mergeMeshGraphLiveSessionStatusIntoMeshStatus(status, liveMeshSessions)')
-    expect(dialogSource).not.toContain('if (!refresh && meshOverrides?.loadMeshStatus)')
     expect(dialogSource).toContain('<MeshObservabilitySurface')
     expect(dialogSource).toContain('status={displayedMeshStatus}')
     expect(dialogSource).not.toContain('graph={')
     expect(dialogSource).toContain('daemonId={daemonId}')
     expect(dialogSource).toContain('sendDaemonCommand={sendDaemonCommand}')
-    expect(dialogSource).toContain('hasPendingDashboardMeshRefresh')
-    expect(dialogSource).toContain('nextDashboardMeshRefreshDelayMs')
     expect(dialogSource).not.toContain('mockMeshGraph')
     expect(dialogSource).not.toContain('mockNodes')
   })
@@ -362,7 +340,10 @@ describe('dashboard mesh graph dialog wiring', () => {
   it('adds direct session/chat affordances and on-demand git history to the observability detail flow', () => {
     const surfaceSource = readSource('components/MeshGraph/MeshObservabilitySurface.tsx')
 
-    expect(surfaceSource).toContain("sendDaemonCommand(targetDaemonId, 'git_log', { workspace, limit: 5 })")
+    // Git history is ALWAYS read through the coordinator (mesh_node_git_log) —
+    // never a raw git_log to the node's own daemon.
+    expect(surfaceSource).toContain("sendDaemonCommand(targetDaemonId, 'mesh_node_git_log', { meshId: meshIdForGitLog, nodeId: gitNodeId, limit: 5 })")
+    expect(surfaceSource).not.toContain("'git_log'")
     expect(surfaceSource).toContain("Row label={t('mesh.obs.fieldHead')}")
     expect(surfaceSource).toContain("Row label={t('mesh.obs.fieldSessions')}")
     expect(readSource('components/MeshGraph/MeshGraphView.tsx')).toContain('visibleCardSessions')

@@ -9,7 +9,8 @@
  * shape changed — only physical location + `this.` → `self.`.
  *
  * The group is read-only: it reads self.deps.statusInstanceId, the cached inline-mesh
- * nodes, and the aggregate-status snapshot nodes. It never mutates router state.
+ * nodes, the aggregate-status snapshot nodes and the coordinator-held node runtime
+ * (member-pushed session lists). It never mutates router state.
  */
 import type { DaemonCommandRouter } from './router.js';
 import { meshNodeIdMatches, daemonIdsEquivalent } from '@adhdev/mesh-shared';
@@ -79,6 +80,18 @@ export function resolveRemoteMeshSessionOwnerDaemonId(
                 // id-form robust: the node daemonId and selfDaemonId may be stored in different
                 // forms of the same machine — a strict `===` would miss the self-match and forward
                 // a local session to a remote form of THIS daemon (loopback).
+                if (selfDaemonId && daemonIdsEquivalent(nodeDaemonId, selfDaemonId)) return undefined;
+                return nodeDaemonId;
+            }
+        }
+        // Coordinator-HELD runtime (member-pushed session lists, mesh-node-git-state.ts):
+        // the authoritative remote session inventory, independent of what a client
+        // echoed into the inline cache or whether an aggregate snapshot was built.
+        if (trimmed) {
+            for (const match of self.meshNodeGitState?.findRuntimeSessions(trimmed) ?? []) {
+                const rosterNode = candidates.find((node) => meshNodeIdMatches(node, match.nodeId));
+                const nodeDaemonId = (rosterNode ? readMeshNodeDaemonId(readObjectRecord(rosterNode)) : undefined) ?? match.daemonId ?? undefined;
+                if (!nodeDaemonId) continue;
                 if (selfDaemonId && daemonIdsEquivalent(nodeDaemonId, selfDaemonId)) return undefined;
                 return nodeDaemonId;
             }

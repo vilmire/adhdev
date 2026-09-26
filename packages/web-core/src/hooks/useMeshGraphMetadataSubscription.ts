@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DaemonMetadataUpdate, RepoMeshStatus } from '@adhdev/daemon-core'
-import { normalizeSessionStatus, type SessionStatus } from '@adhdev/mesh-shared'
+import { daemonIdsEquivalent, normalizeSessionStatus, type SessionStatus } from '@adhdev/mesh-shared'
 import { subscriptionManager } from '../managers/SubscriptionManager'
 
 export type MeshGraphLiveSessionStatus = {
@@ -27,9 +27,12 @@ export type MeshGraphLiveSessionStatus = {
 
 type MeshGraphMetadataSubscriptionArgs = {
     status: RepoMeshStatus | null
+    /**
+     * The mesh's COORDINATOR daemon — the only daemon this hook subscribes to.
+     * Member daemons are never subscribed: the coordinator holds every node's
+     * runtime (mesh_status `heldRuntime`), so remote sessions come from there.
+     */
     daemonId: string | null
-    /** Additional daemon IDs to subscribe to (e.g. worker node daemons in cloud multi-daemon mesh). */
-    extraDaemonIds?: string[]
     meshId: string | null
     sendData?: (daemonId: string, data: any) => boolean
     extraLiveSessions?: Array<MeshGraphLiveSessionStatus | null | undefined>
@@ -134,18 +137,42 @@ function mergeExtraLiveSessions(
     return [...merged, ...extras]
 }
 
+/**
+ * The node a coordinator-owned live session with no stamped node id belongs to:
+ * the node served by the coordinator daemon itself (its host/self node), and
+ * only when that choice is unambiguous. Never a positional guess.
+ */
+function resolveCoordinatorHomeNodeId(status: RepoMeshStatus, coordinatorDaemonId: string | null | undefined): string | null {
+    const nodes = status.nodes ?? []
+    const selfNodes = nodes.filter(node => node.connection?.state === 'self')
+    const candidates = selfNodes.length > 0
+        ? selfNodes
+        : coordinatorDaemonId
+            ? nodes.filter(node => daemonIdsEquivalent(String(node.daemonId || ''), coordinatorDaemonId))
+            : []
+    if (candidates.length === 1) return candidates[0].nodeId
+    const hosts = candidates.filter(node => (node as { role?: string }).role === 'host')
+    if (hosts.length === 1) return hosts[0].nodeId
+    const baseCheckouts = candidates.filter(node => !node.isLocalWorktree)
+    return baseCheckouts.length === 1 ? baseCheckouts[0].nodeId : null
+}
+
 export function mergeMeshGraphLiveSessionStatusIntoMeshStatus(
     status: RepoMeshStatus,
     liveSessions: MeshGraphLiveSessionStatus[],
+    coordinatorDaemonId?: string | null,
 ): RepoMeshStatus {
     if (liveSessions.length === 0) return status
+    const coordinatorHomeNodeId = liveSessions.some(session => session.isSelfCoordinator && !session.nodeId)
+        ? resolveCoordinatorHomeNodeId(status, coordinatorDaemonId)
+        : null
     const liveById = new Map<string, MeshGraphLiveSessionStatus>()
     for (const session of liveSessions) {
         for (const alias of liveSessionAliases(session)) liveById.set(alias, session)
     }
     let changed = false
     const sourceNodes = status.nodes ?? []
-    const nodes = sourceNodes.map((node, nodeIndex) => {
+    const nodes = sourceNodes.map((node) => {
         const rawDetails = Array.isArray(node.activeSessionDetails)
             ? node.activeSessionDetails as any[]
             : Array.isArray((node as any).sessions)
@@ -181,14 +208,15 @@ export function mergeMeshGraphLiveSessionStatusIntoMeshStatus(
         for (const sessionId of node.activeSessions ?? []) {
             if (!byId.has(sessionId)) byId.set(sessionId, { sessionId, workspace: node.workspace, isCached: true })
         }
-        const isFirstNode = nodeIndex === 0
         for (const live of liveSessions) {
             const aliases = liveSessionAliases(live)
             if (aliases.some(alias => byId.has(alias))) continue
             // Coordinator sessions may report nodeId=null; inject into the matching node
-            // (by nodeId) or, when nodeId is absent, into the first node only.
+            // (by nodeId) or, when nodeId is absent, into the coordinator daemon's own
+            // node — resolved from the status, never "whichever node is listed first".
             const matchesById = live.nodeId != null && live.nodeId === node.nodeId
-            const matchesAsNullCoordinator = live.isSelfCoordinator && !live.nodeId && isFirstNode
+            const matchesAsNullCoordinator = live.isSelfCoordinator && !live.nodeId
+                && coordinatorHomeNodeId !== null && coordinatorHomeNodeId === node.nodeId
             if (!matchesById && !matchesAsNullCoordinator) continue
             changed = true
             byId.set(live.sessionId, {
@@ -247,73 +275,49 @@ export function getMeshGraphMetadataSignature(update: DaemonMetadataUpdate, mesh
 export function useMeshGraphMetadataSubscription({
     status,
     daemonId,
-    extraDaemonIds,
     meshId,
     sendData,
     extraLiveSessions = EMPTY_LIVE_SESSIONS,
 }: MeshGraphMetadataSubscriptionArgs): RepoMeshStatus | null {
-    // Per-daemon live session state: Map<daemonId, MeshGraphLiveSessionStatus[]>
-    const [perDaemonSessions, setPerDaemonSessions] = useState<Map<string, MeshGraphLiveSessionStatus[]>>(new Map)
-    const signatureRefs = useRef<Map<string, string | null>>(new Map)
-
-    // All daemon IDs to subscribe (primary + extras, deduplicated).
-    // Use a stable sorted-join key so the subscription effect only re-runs when the set changes.
-    const allDaemonIds = useMemo(() => {
-        const ids = new Set<string>()
-        if (daemonId) ids.add(daemonId)
-        if (extraDaemonIds) for (const id of extraDaemonIds) if (id) ids.add(id)
-        return [...ids].sort()
-    }, [daemonId, extraDaemonIds])
-    const allDaemonIdsKey = allDaemonIds.join(',')
+    // Live state of the COORDINATOR daemon's own mesh sessions. Member daemons are
+    // deliberately not subscribed (their sessions arrive in mesh_status heldRuntime).
+    const [coordinatorSessions, setCoordinatorSessions] = useState<MeshGraphLiveSessionStatus[]>(EMPTY_LIVE_SESSIONS)
+    const signatureRef = useRef<string | null>(null)
 
     useEffect(() => {
-        signatureRefs.current = new Map
-        setPerDaemonSessions(new Map)
+        signatureRef.current = null
+        setCoordinatorSessions(EMPTY_LIVE_SESSIONS)
     }, [daemonId, meshId])
 
     useEffect(() => {
-        if (!meshId || !sendData || allDaemonIds.length === 0) return
-        const unsubscribes = allDaemonIds.map(did => subscriptionManager.subscribe(
+        if (!meshId || !sendData || !daemonId) return
+        const unsubscribe = subscriptionManager.subscribe(
             { sendData },
-            did,
+            daemonId,
             {
                 type: 'subscribe',
                 topic: 'daemon.metadata',
-                key: `daemon:metadata:${did}`,
+                key: `daemon:metadata:${daemonId}`,
                 params: { includeSessions: true },
             },
             (update: DaemonMetadataUpdate) => {
                 if (update.topic !== 'daemon.metadata') return
                 const signature = getMeshGraphMetadataSignature(update, meshId)
-                if (signature === (signatureRefs.current.get(did) ?? null)) return
-                signatureRefs.current.set(did, signature)
-                const sessions = collectMeshGraphLiveSessionStatuses(update, meshId)
-                setPerDaemonSessions(prev => {
-                    const next = new Map(prev)
-                    next.set(did, sessions)
-                    return next
-                })
+                if (signature === signatureRef.current) return
+                signatureRef.current = signature
+                setCoordinatorSessions(collectMeshGraphLiveSessionStatuses(update, meshId))
             },
-        ))
-        return () => {
-            for (const unsub of unsubscribes) unsub()
-        }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [allDaemonIdsKey, meshId, sendData])
-
-    const metadataLiveSessions = useMemo(() => {
-        const all: MeshGraphLiveSessionStatus[] = []
-        for (const sessions of perDaemonSessions.values()) all.push(...sessions)
-        return all
-    }, [perDaemonSessions])
+        )
+        return () => { unsubscribe() }
+    }, [daemonId, meshId, sendData])
 
     const liveMeshSessions = useMemo(
-        () => mergeExtraLiveSessions(metadataLiveSessions, extraLiveSessions),
-        [extraLiveSessions, metadataLiveSessions],
+        () => mergeExtraLiveSessions(coordinatorSessions, extraLiveSessions),
+        [extraLiveSessions, coordinatorSessions],
     )
 
     return useMemo(
-        () => status ? mergeMeshGraphLiveSessionStatusIntoMeshStatus(status, liveMeshSessions) : null,
-        [liveMeshSessions, status],
+        () => status ? mergeMeshGraphLiveSessionStatusIntoMeshStatus(status, liveMeshSessions, daemonId) : null,
+        [liveMeshSessions, status, daemonId],
     )
 }

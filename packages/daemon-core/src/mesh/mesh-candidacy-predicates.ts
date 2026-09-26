@@ -26,6 +26,8 @@
 // the localCoordinatorDaemonId() CANON helper defined there.
 
 import type { DaemonComponents } from '../boot/daemon-components.js';
+import type { MeshNodeGitStateStore } from './mesh-node-git-state.js';
+import { isHeldRuntimeLive } from './mesh-node-git-refresher.js';
 import { loadConfig } from '../config/config.js';
 import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, getQueue } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
@@ -181,6 +183,30 @@ export function isSessionActivelyGenerating(components: Pick<DaemonComponents, '
     const state = components.instanceManager?.getInstance?.(sessionId)?.getState?.();
     if (!state) return false;
     return sessionStateLooksActive(state);
+}
+
+/**
+ * The REMOTE half of the requeue guard: a session hosted by ANOTHER daemon is
+ * never in this daemon's instanceManager, so isSessionActivelyGenerating cannot
+ * see it. The coordinator-held runtime (member-pushed session list,
+ * mesh-node-git-state.ts) can — trusted only while live (pushed by the member,
+ * member still pushing; see isHeldRuntimeLive). No held entry / a stale or
+ * probe-only snapshot → false (unknown is not "generating"; `force` stays the
+ * operator override either way).
+ */
+export function isHeldRemoteSessionGenerating(
+    store: MeshNodeGitStateStore | null | undefined,
+    meshId: string,
+    sessionId: string,
+    now: number = Date.now(),
+): boolean {
+    if (!store || !meshId || !sessionId) return false;
+    for (const match of store.findRuntimeSessions(sessionId, { meshId })) {
+        const entry = store.get(match.meshId, match.nodeId);
+        if (!isHeldRuntimeLive(entry, now)) continue;
+        if (sessionStateLooksActive(match.session)) return true;
+    }
+    return false;
 }
 
 /**

@@ -16,9 +16,11 @@
  * with the context this family needs.
  */
 import type { CommandRouterDeps, CommandRouterResult, MeshGitProbeCache } from '../router.js';
+import type { MeshNodeGitStateStore } from '../../mesh/mesh-node-git-state.js';
 import type { DaemonComponentsAccessor } from '../daemon-components-port.js';
 import type { RepoMeshSessionCleanupMode } from '../../repo-mesh-types.js';
 import type { WorktreeBootstrapState } from '../../mesh/worktree-bootstrap-config.js';
+import type { PersistRemoteWorktreeNodeOutcome } from '../../mesh/mesh-remote-worktree-membership.js';
 
 /** Mesh record resolved from the router's inline-mesh cache + local config. */
 export type ResolvedMeshForCommand = {
@@ -102,6 +104,19 @@ export interface MedFamilyContext {
      * node carries no resolvable id (or the seed failed); best-effort by contract.
      */
     seedRemoteClonedWorktreeNode: (meshId: string, node: any) => boolean;
+
+    /**
+     * Bound `DaemonCommandRouter.persistRemoteClonedWorktreeNode` — write that same
+     * remotely-cloned node into this coordinator's meshes.json so it survives a
+     * coordinator restart (idempotent; never for a tombstoned node).
+     */
+    persistRemoteClonedWorktreeNode: (meshId: string, node: any) => Promise<PersistRemoteWorktreeNodeOutcome | 'tombstoned'>;
+
+    /**
+     * Bound `DaemonCommandRouter.tombstoneRemovedMeshNode` — record a removal so late
+     * one-shot events / member reports cannot re-register the node (idempotent).
+     */
+    tombstoneRemovedMeshNode: (meshId: string, nodeId: string) => void;
 
     /** Bound `DaemonCommandRouter.removeInlineMeshNode`. */
     removeInlineMeshNode: (meshId: string, mesh: any, nodeId: string) => boolean;
@@ -188,6 +203,11 @@ export interface MedFamilyContext {
 
     /** Router's mesh git-probe cache (reused direct-truth probes for get_mesh). */
     meshGitProbeCache: MeshGitProbeCache;
+    /**
+     * Coordinator-held node state (mesh/mesh-node-git-state.ts): get_mesh hydrates
+     * remote nodes' git from it; the requeue guard reads held remote session status.
+     */
+    meshNodeGitState?: MeshNodeGitStateStore;
 }
 
 export type MedFamilyHandler = (ctx: MedFamilyContext, args: any) => Promise<CommandRouterResult>;

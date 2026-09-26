@@ -15,15 +15,19 @@ const read = (rel: string) => fs.readFileSync(path.join(import.meta.dirname, rel
  * impractical to mount in a unit test) — pinned at the source level, same
  * convention as repo-mesh-create-hang-regression.test.ts.
  */
-describe('RepoMesh.tsx — G5-1 mesh-selection queue load has no dead-flag guard', () => {
-    it('the queue-load effect calls loadQueue with no queueSection (or any) guard in front of it', () => {
+describe('RepoMesh.tsx — the queue is read from the coordinator mesh_status', () => {
+    it('RepoMesh.tsx derives meshQueue from the coordinator status — no per-daemon queue load', () => {
         const source = read('../../src/pages/RepoMesh.tsx')
-        const marker = 'Auto-load queue on mesh selection'
-        const idx = source.indexOf(marker)
-        expect(idx).toBeGreaterThan(-1)
-        const effect = source.slice(idx, source.indexOf('loadQueue(selectedMeshId)', idx) + 'loadQueue(selectedMeshId)'.length)
-        expect(effect).not.toContain('queueSection')
-        expect(effect).not.toMatch(/if\s*\(/)
+        expect(source).toContain('useMeshQueue({ status: meshGraphStatus })')
+        expect(source).not.toContain('loadQueue')
+        expect(source).not.toContain("'get_mesh_queue'")
+    })
+
+    it('useMeshQueue.ts never sends a command (no daemons[0] / primaryDaemonId queue read)', () => {
+        const source = read('../../src/pages/repo-mesh/useMeshQueue.ts')
+        expect(source).not.toContain('sendCommand')
+        expect(source).not.toContain('get_mesh_queue')
+        expect(source).not.toContain('primaryDaemonId')
     })
 
     it('RepoMeshFeatures no longer declares a queueSection flag anywhere in web-core', () => {
@@ -31,12 +35,13 @@ describe('RepoMesh.tsx — G5-1 mesh-selection queue load has no dead-flag guard
         expect(context).not.toContain('queueSection')
     })
 
-    it('useMeshNodeActions.ts has no queueSection-gated loadQueue call', () => {
+    it('useMeshNodeActions.ts has no queueSection gate and no direct queue load', () => {
         const source = read('../../src/pages/repo-mesh/useMeshNodeActions.ts')
         expect(source).not.toContain('queueSection')
-        // Both post-mutation refresh call sites must call loadQueue directly,
-        // not behind a conditional.
-        const calls = source.split('\n').filter(line => line.includes('loadQueue('))
+        expect(source).not.toContain('loadQueue')
+        // Both post-mutation refresh call sites re-read the coordinator status
+        // directly, not behind a conditional.
+        const calls = source.split('\n').filter(line => line.includes('await reloadMeshStatus()'))
         expect(calls.length).toBeGreaterThanOrEqual(2)
         for (const line of calls) {
             expect(line).not.toMatch(/if\s*\(/)
@@ -80,22 +85,23 @@ afterEach(() => {
  * (or any other guard around the call) and this test goes red — `loadQueue`
  * stops being called.
  */
-describe('useMeshNodeActions — G5-1 loadQueue is not gated behind a dead feature flag', () => {
+describe('useMeshNodeActions — post-mutation status reload + coordinator-routed writes', () => {
     function harness(overrides: Partial<Parameters<typeof useMeshNodeActions>[0]> = {}) {
-        const loadQueue = vi.fn(async () => {})
+        const reloadMeshStatus = vi.fn(async () => {})
         const loadMeshes = vi.fn(async () => {})
         const sendCommand = vi.fn(async () => ({ success: true }))
         const unwrapResult = vi.fn((raw: any) => raw)
         const setError = vi.fn()
-        const mesh: MeshEntry = { id: 'mesh_1', name: 'Test Mesh', nodes: [] } as any
+        // The list record carries the daemon that happened to LIST it (a member);
+        // writes must ignore it and go to the resolved coordinator.
+        const mesh: MeshEntry = { id: 'mesh_1', name: 'Test Mesh', nodes: [], __sourceDaemonId: 'daemon_member' } as any
 
         let latest: ReturnType<typeof useMeshNodeActions> | null = null
         function Harness() {
             latest = useMeshNodeActions({
                 selectedMesh: mesh,
                 selectedMeshId: mesh.id,
-                primaryDaemonId: 'daemon_1',
-                activeDaemonId: 'daemon_1',
+                activeDaemonId: 'daemon_coord',
                 daemons: [],
                 availableCliProviders: [],
                 sendCommand,
@@ -104,7 +110,7 @@ describe('useMeshNodeActions — G5-1 loadQueue is not gated behind a dead featu
                 launchCoordinator: (async () => ({ message: 'ok' })) as any,
                 features: { addNodeDaemonPicker: false },
                 loadMeshes,
-                loadQueue,
+                reloadMeshStatus,
                 setError,
                 confirmAction: async () => true,
                 ...overrides,
@@ -116,16 +122,17 @@ describe('useMeshNodeActions — G5-1 loadQueue is not gated behind a dead featu
         // re-reads the latest render's closure — required because
         // handleAddNode reads `nodeWorkspace` from hook state, and a
         // destructured snapshot would freeze it at its pre-update value.
-        return { get hook() { return latest! }, loadQueue, loadMeshes, sendCommand, setError }
+        return { get hook() { return latest! }, reloadMeshStatus, loadMeshes, sendCommand, setError }
     }
 
-    it('handleRemoveNode calls loadQueue unconditionally after a successful removal', async () => {
+    it('handleRemoveNode re-reads the coordinator status after a successful removal, sent to the coordinator', async () => {
         const harnessResult = harness()
         await act(async () => {
             await harnessResult.hook.handleRemoveNode('node_1')
         })
-        expect(harnessResult.loadQueue).toHaveBeenCalledTimes(1)
-        expect(harnessResult.loadQueue).toHaveBeenCalledWith('mesh_1')
+        expect(harnessResult.reloadMeshStatus).toHaveBeenCalledTimes(1)
+        expect(harnessResult.sendCommand).toHaveBeenCalledWith('daemon_coord', 'remove_mesh_node', { meshId: 'mesh_1', nodeId: 'node_1' })
+        expect(harnessResult.sendCommand.mock.calls.some(call => (call as unknown[])[0] === 'daemon_member')).toBe(false)
     })
 
     it('handleAddNode calls loadQueue unconditionally after a successful add', async () => {
@@ -139,8 +146,34 @@ describe('useMeshNodeActions — G5-1 loadQueue is not gated behind a dead featu
         await act(async () => {
             await harnessResult.hook.handleAddNode()
         })
-        expect(harnessResult.loadQueue).toHaveBeenCalledTimes(1)
-        expect(harnessResult.loadQueue).toHaveBeenCalledWith('mesh_1')
+        expect(harnessResult.reloadMeshStatus).toHaveBeenCalledTimes(1)
+        const addCall = sendCommand.mock.calls.find(call => call[1] === 'add_mesh_node')
+        expect(addCall?.[0]).toBe('daemon_coord')
+    })
+
+    it('every mesh write (policy / slots / tags / prompts) goes to the coordinator, never the listing daemon', async () => {
+        const harnessResult = harness()
+        const node = { id: 'node_1', workspace: '/repo' } as any
+        await act(async () => {
+            await harnessResult.hook.handleUpdatePolicy({ schedulingStrategy: 'in_order' })
+            await harnessResult.hook.handleUpdateNodeSlots(node, [])
+            await harnessResult.hook.handleUpdateNodeCapabilities(node, ['gpu'])
+            await harnessResult.hook.handleSaveCoordinatorPrompt()
+            await harnessResult.hook.handleSaveNodeSystemPrompt(node)
+        })
+        const targets = harnessResult.sendCommand.mock.calls.map(call => (call as unknown[])[0])
+        expect(targets.length).toBe(5)
+        expect(new Set(targets)).toEqual(new Set(['daemon_coord']))
+    })
+
+    it('with no resolved coordinator, a write is refused (error shown) instead of sent anywhere', async () => {
+        const harnessResult = harness({ activeDaemonId: '' })
+        await act(async () => {
+            await harnessResult.hook.handleUpdatePolicy({ schedulingStrategy: 'in_order' })
+            await harnessResult.hook.handleRemoveNode('node_1')
+        })
+        expect(harnessResult.sendCommand).not.toHaveBeenCalled()
+        expect(harnessResult.setError).toHaveBeenCalled()
     })
 
     it('useMeshNodeActions no longer accepts (or requires) a queueSection option', () => {

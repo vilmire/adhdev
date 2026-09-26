@@ -18,6 +18,12 @@ import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from '../command-a
 import { rosterEvidenceExtra } from '../mesh-sender.js';
 import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
 
+/**
+ * Remote log-tail forward budget — under the dashboard's 30s command deadline,
+ * with room for a full-file grep on the member.
+ */
+export const MESH_NODE_LOGS_TIMEOUT_MS = 20_000;
+
 export const meshNodeLogsHandlers: Record<string, LowFamilyHandler> = {
     get_mesh_node_logs: async (ctx: LowFamilyContext, args: any) => {
         // Coordinator-driven remote log fetch: read a (possibly remote)
@@ -44,8 +50,23 @@ export const meshNodeLogsHandlers: Record<string, LowFamilyHandler> = {
         // local — read locally instead of forwarding. Equivalent → local.
         const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent(nodeDaemonId, selfDaemonId);
         if (isRemote && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
-            const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'get_mesh_node_logs', withMeshDirectDispatch(args, rosterEvidenceExtra(args, resolvedMesh)));
-            return unwrapMeshRelayResult(forwarded, { command: 'get_mesh_node_logs', peerDaemonId: nodeDaemonId }) as CommandRouterResult;
+            // An explicit single-node read stays live, but with a bounded wait (like
+            // mesh_node_git_log) so an unreachable member cannot hold the caller past
+            // the dashboard's command deadline.
+            let timer: ReturnType<typeof setTimeout> | null = null;
+            try {
+                const forwarded = await Promise.race([
+                    ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'get_mesh_node_logs', withMeshDirectDispatch(args, rosterEvidenceExtra(args, resolvedMesh))),
+                    new Promise<never>((_, reject) => {
+                        timer = setTimeout(() => reject(new Error('mesh_node_logs_timeout')), MESH_NODE_LOGS_TIMEOUT_MS);
+                    }),
+                ]);
+                return unwrapMeshRelayResult(forwarded, { command: 'get_mesh_node_logs', peerDaemonId: nodeDaemonId }) as CommandRouterResult;
+            } catch (error: any) {
+                return { success: false, code: 'mesh_node_unreachable', error: error?.message || 'get_mesh_node_logs forward failed', nodeId } as CommandRouterResult;
+            } finally {
+                if (timer) clearTimeout(timer);
+            }
         }
 
         // Local read on the owning daemon.

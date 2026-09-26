@@ -24,12 +24,26 @@
  * probe re-subscribes when it comes back. Nothing here is persisted: after a
  * member restart the coordinator's next background probe re-registers.
  *
+ * Worktree reconciliation: every coordinator ack carries its per-process
+ * `coordinatorBootId`. The first push of a (re-)registered subscription, and
+ * the first push after the boot id changes (the coordinator restarted), also
+ * lists the worktree nodes this daemon owns on the mesh (`memberWorktreeNodes`)
+ * so the coordinator adopts any its roster lost. When a plain push reveals a new
+ * boot id, one follow-up push carries the list right away.
+ *
+ * Every (re-)registration makes the next check tick push, so the coordinator's
+ * held state flips from its own probe's snapshot to `member_push` within one
+ * check interval — and a probe never postpones the heartbeat. A coordinator
+ * that wants fresh state now (an explicit refresh) sends `mesh_node_state_nudge`
+ * (`nudge`), which pushes immediately instead of waiting for the tick.
+ *
  * P2P only — no server path, no seqscribe topic.
  */
 import { LOG } from '../logging/logger.js';
 import { readMeshTimeoutEnvMs } from '../runtime-defaults.js';
 import { carryUpstreamFreshness, computeMeshNodeGitSignature, sanitizeObservedGit } from './mesh-node-git-state.js';
 import { computeMeshNodeRuntimeSignature, sanitizeMeshNodeRuntimeSummary, type MeshNodeRuntimeSummary } from './mesh-node-runtime-summary.js';
+import { sanitizeMemberWorktreeNodes, type MemberWorktreeNodeRecord } from './mesh-remote-worktree-membership.js';
 
 export const MESH_NODE_STATE_REPORT_COMMAND = 'mesh_node_git_report';
 /** How often a subscribed workspace's git is re-read. */
@@ -38,6 +52,8 @@ export const MESH_NODE_STATE_PUSH_CHECK_MS = readMeshTimeoutEnvMs('MESH_NODE_STA
 export const MESH_NODE_STATE_PUSH_HEARTBEAT_MS = 300_000;
 /** A subscription the coordinator has not acked for this long is dropped. */
 export const MESH_NODE_STATE_PUSH_TTL_MS = 30 * 60_000;
+/** A nudge re-fetches the upstream only when the last upstream refresh is at least this old. */
+export const MESH_NODE_STATE_NUDGE_UPSTREAM_MIN_MS = 60_000;
 /** A burst of session lifecycle changes is coalesced into one runtime push after this quiet period. */
 export const MESH_NODE_RUNTIME_PUSH_DEBOUNCE_MS = readMeshTimeoutEnvMs('MESH_NODE_RUNTIME_PUSH_DEBOUNCE_MS', 1_500);
 
@@ -54,6 +70,12 @@ export interface MeshNodeStatePushSubscription {
     lastUpstreamGit: Record<string, unknown> | null;
     /** Signature of the runtime summary the coordinator last acked (null = never sent). */
     lastRuntimeSignature: string | null;
+    /** Boot id the coordinator returned on its last ack (null = none seen / older coordinator). */
+    coordinatorBootId: string | null;
+    /** Boot id the worktree list was last delivered to ('' = a coordinator without boot ids; null = not yet). */
+    worktreeNodesDeliveredFor: string | null;
+    /** Boot id a follow-up push was already triggered for (one follow-up per boot id). */
+    worktreeFollowUpFor?: string | null;
 }
 
 export interface MeshNodeStatePusherOptions {
@@ -61,6 +83,8 @@ export interface MeshNodeStatePusherOptions {
     readGit: (workspace: string, opts: { refreshUpstream: boolean }) => Promise<Record<string, unknown> | null>;
     /** This daemon's content-free runtime summary (absent = git-only pusher, e.g. older wiring/tests). */
     readRuntime?: () => Promise<MeshNodeRuntimeSummary | Record<string, unknown> | null>;
+    /** The worktree nodes this daemon owns on a mesh (absent = no worktree reconciliation). */
+    readWorktreeNodes?: (meshId: string) => Promise<MemberWorktreeNodeRecord[] | unknown[]>;
     runtimeDebounceMs?: number;
     /** Injected for tests; defaults to an unref'd setTimeout. */
     startDebounce?: (fn: () => void, ms: number) => { stop(): void };
@@ -86,6 +110,11 @@ export function readMeshStateSubscription(args: unknown): { meshId: string; node
     const meshId = readString(marker.meshId);
     const nodeId = readString(marker.nodeId);
     return meshId && nodeId ? { meshId, nodeId } : null;
+}
+
+function readBootId(response: unknown): string | null {
+    const root = readRecord(response);
+    return readString(root.coordinatorBootId) || readString(readRecord(root.result).coordinatorBootId) || null;
 }
 
 /** true = accepted, false = explicitly refused (drop), null = no usable answer. */
@@ -134,7 +163,9 @@ export class MeshNodeStatePusher {
 
     /**
      * Register (or renew) from an answered coordinator probe. `git` is the state
-     * just returned to the coordinator, so it is not pushed again until it changes.
+     * just returned to the coordinator. The next check tick pushes regardless
+     * (lastPushedAt cleared): the coordinator learns the subscription is live and
+     * its held state becomes member-pushed, so it stops probing this node.
      */
     register(args: { coordinatorDaemonId: string; meshId: string; nodeId: string; workspace: string; git?: unknown }): boolean {
         if (!this.options.dispatch) return false;
@@ -152,11 +183,16 @@ export class MeshNodeStatePusher {
             workspace,
             expiresAt: now + this.ttlMs,
             lastSignature: git ? computeMeshNodeGitSignature(git) : (existing?.lastSignature ?? null),
-            lastPushedAt: git ? now : (existing?.lastPushedAt ?? null),
+            // Push on the next tick (see above) — never "just pushed", which used to
+            // postpone the heartbeat every time the coordinator probed.
+            lastPushedAt: null,
             // The probe that registered us refreshed the upstream already.
             lastUpstreamRefreshAt: now,
             lastUpstreamGit: git ?? existing?.lastUpstreamGit ?? null,
             lastRuntimeSignature: existing?.lastRuntimeSignature ?? null,
+            coordinatorBootId: existing?.coordinatorBootId ?? null,
+            // A probe means the coordinator wants fresh state: re-report the worktree list.
+            worktreeNodesDeliveredFor: null,
         });
         if (!existing) {
             LOG.info('MeshNodeState', `pushing git state of node ${args.nodeId} (mesh ${args.meshId}) to coordinator ${coordinatorDaemonId.slice(0, 12)}`);
@@ -164,6 +200,26 @@ export class MeshNodeStatePusher {
             this.noteRuntimeChanged();
         }
         this.ensureTimer();
+        return true;
+    }
+
+    /**
+     * A coordinator asks for this node's state now (explicit refresh). Returns
+     * whether a subscription exists — false tells the coordinator to fall back
+     * to its handshake probe, which (re-)registers one. The push itself runs in
+     * the background; the upstream is re-fetched only when the last refresh is
+     * older than MESH_NODE_STATE_NUDGE_UPSTREAM_MIN_MS.
+     */
+    nudge(coordinatorDaemonId: string, meshId: string, nodeId: string): boolean {
+        const key = this.key(readString(coordinatorDaemonId), readString(meshId), readString(nodeId));
+        const sub = this.subscriptions.get(key);
+        if (!sub || !this.options.dispatch) return false;
+        let runtime: MeshNodeRuntimeSummary | null | undefined;
+        const readRuntimeOnce = async () => {
+            if (runtime === undefined) runtime = await this.readRuntimeSummary();
+            return runtime;
+        };
+        void this.checkOne(key, sub, readRuntimeOnce, { force: true }).catch(() => { /* best-effort */ });
         return true;
     }
 
@@ -214,6 +270,7 @@ export class MeshNodeStatePusher {
             for (const [key, sub] of [...this.subscriptions.entries()]) {
                 if (sub.lastRuntimeSignature === signature) continue;
                 let response: unknown;
+                const worktreeNodes = await this.worktreeNodesDue(sub);
                 try {
                     response = await this.options.dispatch!(sub.coordinatorDaemonId, MESH_NODE_STATE_REPORT_COMMAND, {
                         meshId: sub.meshId,
@@ -221,6 +278,7 @@ export class MeshNodeStatePusher {
                         workspace: sub.workspace,
                         runtime,
                         runtimeObservedAt: observedAt,
+                        ...(worktreeNodes ? { memberWorktreeNodes: worktreeNodes } : {}),
                     });
                 } catch {
                     continue; // unreachable — the next tick retries (subscription kept until its TTL)
@@ -233,6 +291,7 @@ export class MeshNodeStatePusher {
                 if (ack === true) {
                     sub.lastRuntimeSignature = signature;
                     sub.expiresAt = this.now() + this.ttlMs;
+                    this.noteWorktreeAck(key, sub, response, worktreeNodes !== null);
                 }
             }
         })().finally(() => {
@@ -293,10 +352,13 @@ export class MeshNodeStatePusher {
         key: string,
         sub: MeshNodeStatePushSubscription,
         readRuntime: () => Promise<MeshNodeRuntimeSummary | null>,
+        opts?: { force?: boolean },
     ): Promise<void> {
         const now = this.now();
-        const heartbeatDue = sub.lastPushedAt === null || now - sub.lastPushedAt >= this.heartbeatMs;
-        const refreshUpstream = sub.lastUpstreamRefreshAt === null || now - sub.lastUpstreamRefreshAt >= this.heartbeatMs;
+        const force = opts?.force === true;
+        const heartbeatDue = force || sub.lastPushedAt === null || now - sub.lastPushedAt >= this.heartbeatMs;
+        const upstreamRefreshEvery = force ? Math.min(MESH_NODE_STATE_NUDGE_UPSTREAM_MIN_MS, this.heartbeatMs) : this.heartbeatMs;
+        const refreshUpstream = sub.lastUpstreamRefreshAt === null || now - sub.lastUpstreamRefreshAt >= upstreamRefreshEvery;
         let git: Record<string, unknown> | null = null;
         try {
             git = sanitizeObservedGit(await this.options.readGit(sub.workspace, { refreshUpstream }));
@@ -319,6 +381,7 @@ export class MeshNodeStatePusher {
         const runtimeChanged = runtimeSignature !== null && runtimeSignature !== sub.lastRuntimeSignature;
         if (signature === sub.lastSignature && !heartbeatDue && !runtimeChanged) return;
         const observedAt = typeof git.lastCheckedAt === 'number' ? git.lastCheckedAt : now;
+        const worktreeNodes = await this.worktreeNodesDue(sub);
         let response: unknown;
         try {
             response = await this.options.dispatch!(sub.coordinatorDaemonId, MESH_NODE_STATE_REPORT_COMMAND, {
@@ -328,6 +391,7 @@ export class MeshNodeStatePusher {
                 git,
                 observedAt,
                 ...(runtime ? { runtime, runtimeObservedAt: now } : {}),
+                ...(worktreeNodes ? { memberWorktreeNodes: worktreeNodes } : {}),
             });
         } catch {
             // Coordinator unreachable right now — keep the subscription until its TTL.
@@ -344,6 +408,45 @@ export class MeshNodeStatePusher {
             sub.lastPushedAt = now;
             sub.expiresAt = now + this.ttlMs;
             if (runtimeSignature !== null) sub.lastRuntimeSignature = runtimeSignature;
+            this.noteWorktreeAck(key, sub, response, worktreeNodes !== null);
         }
+    }
+
+    /**
+     * The worktree list to attach to this push, or null when it is not due: it is
+     * due until delivered once to the coordinator's current boot id.
+     */
+    private async worktreeNodesDue(sub: MeshNodeStatePushSubscription): Promise<MemberWorktreeNodeRecord[] | null> {
+        if (!this.options.readWorktreeNodes) return null;
+        const due = sub.worktreeNodesDeliveredFor === null
+            || (sub.coordinatorBootId !== null && sub.worktreeNodesDeliveredFor !== sub.coordinatorBootId);
+        if (!due) return null;
+        try {
+            return sanitizeMemberWorktreeNodes(await this.options.readWorktreeNodes(sub.meshId));
+        } catch (error: any) {
+            LOG.debug('MeshNodeState', `worktree node read failed for mesh ${sub.meshId}: ${error?.message || error}`);
+            return null;
+        }
+    }
+
+    /** Record an accepted push's boot id; a newly seen boot id triggers ONE follow-up push carrying the list. */
+    private noteWorktreeAck(key: string, sub: MeshNodeStatePushSubscription, response: unknown, carriedWorktreeNodes: boolean): void {
+        const bootId = readBootId(response);
+        sub.coordinatorBootId = bootId;
+        if (carriedWorktreeNodes) {
+            sub.worktreeNodesDeliveredFor = bootId ?? '';
+            return;
+        }
+        if (!this.options.readWorktreeNodes || bootId === null || sub.worktreeNodesDeliveredFor === bootId) return;
+        if (sub.worktreeFollowUpFor === bootId) return;
+        sub.worktreeFollowUpFor = bootId;
+        // The coordinator restarted since the list was delivered: re-report now rather
+        // than on the next heartbeat.
+        let runtime: MeshNodeRuntimeSummary | null | undefined;
+        const readRuntimeOnce = async () => {
+            if (runtime === undefined) runtime = await this.readRuntimeSummary();
+            return runtime;
+        };
+        void this.checkOne(key, sub, readRuntimeOnce, { force: true }).catch(() => { /* best-effort */ });
     }
 }

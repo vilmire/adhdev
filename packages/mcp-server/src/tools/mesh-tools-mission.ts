@@ -703,23 +703,16 @@ export async function meshReviewInbox(
     // another mesh's data. Only attach inlineMesh when the requested meshId actually
     // IS ctx.mesh.id (the common case — no mesh_id override, or an override that
     // just names the caller's own mesh).
-    // FOREIGN-MESH-INLINE-LEAK: inlineMesh is a cache-priming hint for the CURRENT
-    // mesh (ctx.mesh) — the daemon merges it into its own record for that mesh id.
-    // When the caller names a DIFFERENT mesh via mesh_id, forwarding ctx.mesh as
-    // inlineMesh would hand the daemon this mesh's inline node statuses to mix into
-    // the FOREIGN mesh_id's ledger read, contaminating a report about one mesh with
-    // another mesh's data. Only attach inlineMesh when the requested meshId actually
-    // IS ctx.mesh.id (the common case — no mesh_id override, or an override that
-    // just names the caller's own mesh).
     const isOwnMesh = meshId === ctx.mesh.id;
-    // OFFLINE-NODE-BLOCKING: the review inbox is read from a single hardcoded node
-    // (nodes[0]). If that node is offline (powered off) the read-only `get_mesh_review_inbox`
-    // relay would otherwise sink into the 90s connect deadline. Stamp the status-origin
-    // marker ({ statusProbe: true }) so the daemon-cloud relay grants the SHORT connect-wait
-    // budget and an offline nodes[0] fails fast (~2s) instead of hanging the inbox read.
-    const result = await commandForNode(ctx, ctx.mesh.nodes[0], 'get_mesh_review_inbox', {
+    // COORDINATOR-ONLY READ (owner principle 2026-09-26): the review inbox is derived
+    // from the coordinator's OWN ledger (readLocalRecords) and the node statuses it
+    // holds (member-pushed git) — daemon-core get_mesh_review_inbox. It used to be
+    // sent to `ctx.mesh.nodes[0]`, which relayed over P2P whenever that node was a
+    // remote member (reading the member's ledger, not the coordinator's, and
+    // hanging on an offline member). Always ask the local coordinator daemon.
+    const result = await ctx.transport.command('get_mesh_review_inbox', {
         meshId,
         ...(isOwnMesh ? { inlineMesh: ctx.mesh } : {}),
-    }, { statusProbe: true });
+    });
     return JSON.stringify(result, null, 2);
 }

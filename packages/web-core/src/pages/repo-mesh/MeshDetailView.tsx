@@ -233,9 +233,12 @@ export function MeshDetailView({
     // a provider installed only on a member machine must be configurable here too.
     // Routed through `nodes` (not `daemons` wholesale) so daemons belonging to other
     // meshes never contribute providers this mesh cannot launch.
+    // A provider inventory the coordinator holds for a node wins over the member
+    // daemon's own; the member's is only the fallback for an older coordinator.
+    const statusNodes = displayedMeshStatus?.nodes ?? null
     const meshProviderInventory = useMemo(
-        () => collectMeshProviderInventory(nodes, daemons),
-        [nodes, daemons],
+        () => collectMeshProviderInventory(nodes, daemons, statusNodes),
+        [nodes, daemons, statusNodes],
     )
     // Drives the priority_only → distribution display: a legacy 'priority_only' mesh
     // shows as Smart only when a node priority is actually set (otherwise it is
@@ -338,6 +341,7 @@ export function MeshDetailView({
             {/* ── Nodes & Providers ── */}
             <MeshNodeList
                 nodes={nodes}
+                statusNodes={statusNodes}
                 meshQueue={meshQueue}
                 activeDaemon={activeDaemon}
                 daemons={daemons}

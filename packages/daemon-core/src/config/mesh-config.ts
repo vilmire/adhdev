@@ -1001,6 +1001,9 @@ export interface AddNodeOptions {
      *  the daemon that owns its workspace (self/base node or a local worktree
      *  clone), so the local config is the correct source. */
     machineNickname?: string;
+    /** The node is owned by ANOTHER daemon (a remote-cloned worktree registered on
+     *  the coordinator): never fall back to this daemon's own nickname. */
+    ownerIsRemote?: boolean;
     /** Caller-supplied node id (e.g. an id already minted for an inline-cache
      *  node) so a durable config-file twin shares the SAME id as its inline
      *  counterpart. Without this, addNode mints its own id and the two
@@ -1034,6 +1037,7 @@ function addNodeUnlocked(meshId: string, opts: AddNodeOptions): LocalMeshNodeEnt
     const machineNickname = (() => {
         const explicit = typeof opts.machineNickname === 'string' ? opts.machineNickname.trim() : '';
         if (explicit) return explicit;
+        if (opts.ownerIsRemote === true) return undefined;
         try {
             const local = getMachineNickname();
             return typeof local === 'string' && local.trim() ? local.trim() : undefined;

@@ -23,7 +23,7 @@ import {
     compactMeshStatusNode,
     compactNodeSeverity,
     drainCoordinatorPendingEvents,
-    getLatestActiveLaunchFailure,
+    getLatestActiveLaunchFailureBatch,
     summarizeMeshUsage,
     getMeshStatusMissionSummaries,
     getMeshStatusMissionsCompact,
@@ -167,6 +167,11 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     const schedulingRuntime = runtimeView.schedulingRuntime as unknown as MeshSchedulingRuntime;
     const schedulingByNode = new Map(schedulingRuntime.nodes.map(n => [n.nodeId, n]));
 
+    // MESH-STATUS-LOCAL-CHATTER: one ledgerQuery(tail: 200), shared by every node's
+    // launch-failure check below, instead of each node in the Promise.all issuing
+    // its own identical tail-200 query (getLatestActiveLaunchFailureBatch).
+    const activeLaunchFailureByNode = await getLatestActiveLaunchFailureBatch(ctx, mesh.nodes.map(n => n.id)).catch(() => new Map<string, Record<string, unknown> | null>());
+
     // Assemble all nodes in parallel — held git (above) + session collection per node.
     //
     // Dual-surface note (mesh-status-dual-surface): this coordinator-side node object
@@ -268,7 +273,7 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             };
         }
 
-        const activeLaunchFailure = await getLatestActiveLaunchFailure(ctx, node.id).catch(() => null);
+        const activeLaunchFailure = activeLaunchFailureByNode.get(node.id) ?? null;
         if (activeLaunchFailure && node.isLocalWorktree) {
             entry.health = 'degraded';
             entry.degradedReason = 'worktree_launch_failed';

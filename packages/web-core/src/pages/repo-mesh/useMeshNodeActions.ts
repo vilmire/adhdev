@@ -3,6 +3,7 @@
  * coordinator prompt, and coordinator launch state/actions.
  */
 import { useState, useMemo, useEffect } from 'react'
+import i18next from 'i18next'
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared'
 import {
     normalizeAvailableCliProviders,
@@ -20,7 +21,11 @@ interface UseMeshNodeActionsOptions {
     confirmAction?: (request: { title: string; description?: string; confirmLabel: string; cancelLabel?: string; tone?: 'default' | 'danger' }) => Promise<boolean>
     selectedMesh: MeshEntry | null
     selectedMeshId: string | null
-    primaryDaemonId: string
+    /**
+     * The mesh's resolved COORDINATOR daemon (RepoMesh's resolvedActiveDaemonId —
+     * the host, or the temporary re-bind route while the host is offline). Every
+     * mesh write goes here; never to whichever daemon happened to list the mesh.
+     */
     activeDaemonId: string
     daemons: RepoMeshDaemonEntry[]
     availableCliProviders: AvailableCliProviderOption[]
@@ -33,14 +38,14 @@ interface UseMeshNodeActionsOptions {
         addNodeDaemonPicker: boolean
     }
     loadMeshes: () => Promise<void>
-    loadQueue: (meshId: string | null) => Promise<void>
+    /** Re-read the coordinator's mesh_status (queue + node runtime) after a write. */
+    reloadMeshStatus: () => Promise<void>
     setError: (msg: string | null) => void
 }
 
 export function useMeshNodeActions({
     selectedMesh,
     selectedMeshId,
-    primaryDaemonId,
     activeDaemonId,
     daemons,
     sendCommand,
@@ -50,10 +55,19 @@ export function useMeshNodeActions({
     launchCoordinator,
     features,
     loadMeshes,
-    loadQueue,
+    reloadMeshStatus,
     setError,
     confirmAction,
 }: UseMeshNodeActionsOptions) {
+    // Mesh writes (add/remove node, policy, prompts, slots, tags) all target the
+    // coordinator. No coordinator resolved → the write is refused with a clear
+    // message instead of being sent to an arbitrary daemon.
+    const coordinatorDaemonId = activeDaemonId
+    function requireCoordinator(): string | null {
+        if (coordinatorDaemonId) return coordinatorDaemonId
+        setError(i18next.t('mesh.host.noCommandTarget'))
+        return null
+    }
     // Selected node in the node list
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
 
@@ -104,7 +118,9 @@ export function useMeshNodeActions({
             setNodeOnboardingPlan(null)
             return
         }
-        const planDaemonId = features.addNodeDaemonPicker ? nodeDaemonId : ((selectedMesh as any)?.__sourceDaemonId || primaryDaemonId)
+        // Cloud probes the workspace on the daemon that owns it (the picked machine);
+        // standalone's single daemon is the coordinator.
+        const planDaemonId = features.addNodeDaemonPicker ? nodeDaemonId : coordinatorDaemonId
         if (!planDaemonId) return
         let cancelled = false
         setNodePlanLoading(true)
@@ -127,7 +143,7 @@ export function useMeshNodeActions({
         selectedMesh,
         nodeWorkspace,
         nodeDaemonId,
-        primaryDaemonId,
+        coordinatorDaemonId,
         features.addNodeDaemonPicker,
         sendCommand,
         unwrapResult,
@@ -136,10 +152,11 @@ export function useMeshNodeActions({
     // ─── Actions ──────────────────────────────────────────────────
 
     async function handleAddNode() {
-        const targetDaemonId = (selectedMesh as any)?.__sourceDaemonId || primaryDaemonId
-        if (!selectedMeshId || !targetDaemonId) return
+        if (!selectedMeshId) return
         const ws = nodeWorkspace.trim()
         if (!ws) return
+        const targetDaemonId = requireCoordinator()
+        if (!targetDaemonId) return
         try {
             const planDaemonId = features.addNodeDaemonPicker ? nodeDaemonId : targetDaemonId
             const planRaw = await sendCommand(planDaemonId, 'plan_mesh_onboarding', {
@@ -175,7 +192,7 @@ export function useMeshNodeActions({
             setNodeDaemonId('')
             setNodeCustomPath(false)
             await loadMeshes()
-            await loadQueue(selectedMeshId)
+            await reloadMeshStatus()
         } catch (e: any) { setError(e?.message || 'Add node failed') }
     }
 
@@ -199,21 +216,23 @@ export function useMeshNodeActions({
             })
             : confirm(`Remove this node?\n\nNode removal cleanup policy: ${cleanupLabel}`)
         if (!confirmed) return
-        const targetDaemonId = (selectedMesh as any).__sourceDaemonId || primaryDaemonId
+        const targetDaemonId = requireCoordinator()
+        if (!targetDaemonId) return
         try {
             const raw = await sendCommand(targetDaemonId, 'remove_mesh_node', { meshId: selectedMesh.id, nodeId })
             const result = unwrapResult(raw)
             if (result?.success === false) throw new Error(result.error || 'Remove failed')
             if (selectedNodeId === nodeId) setSelectedNodeId(null)
             await loadMeshes()
-            await loadQueue(selectedMeshId)
+            await reloadMeshStatus()
         } catch (e: any) { setError(e?.message || 'Remove node failed') }
     }
 
     async function handleUpdatePolicy(patch: Record<string, unknown>) {
         if (!selectedMesh) return
         const nextPolicy = { ...readMeshPolicy(selectedMesh), ...patch }
-        const targetDaemonId = (selectedMesh as any).__sourceDaemonId || primaryDaemonId
+        const targetDaemonId = requireCoordinator()
+        if (!targetDaemonId) return
         try {
             setSavingPolicy(true)
             setError(null)
@@ -235,7 +254,8 @@ export function useMeshNodeActions({
     const [savingNodeSlotsId, setSavingNodeSlotsId] = useState<string | null>(null)
     async function handleUpdateNodeSlots(node: MeshNode, slots: NodeCapabilitySlot[]) {
         if (!selectedMeshId) return
-        const targetDaemonId = (selectedMesh as any)?.__sourceDaemonId || primaryDaemonId
+        const targetDaemonId = requireCoordinator()
+        if (!targetDaemonId) return
         try {
             setSavingNodeSlotsId(node.id)
             setError(null)
@@ -257,7 +277,8 @@ export function useMeshNodeActions({
     const [savingNodeCapabilitiesId, setSavingNodeCapabilitiesId] = useState<string | null>(null)
     async function handleUpdateNodeCapabilities(node: MeshNode, capabilities: string[]) {
         if (!selectedMeshId) return
-        const targetDaemonId = (selectedMesh as any)?.__sourceDaemonId || primaryDaemonId
+        const targetDaemonId = requireCoordinator()
+        if (!targetDaemonId) return
         const cleaned = capabilities.map(t => t.trim()).filter(Boolean)
         try {
             setSavingNodeCapabilitiesId(node.id)
@@ -271,7 +292,9 @@ export function useMeshNodeActions({
     }
 
     async function handleSaveCoordinatorPrompt() {
-        if (!primaryDaemonId || !selectedMeshId) return
+        if (!selectedMeshId) return
+        const targetDaemonId = requireCoordinator()
+        if (!targetDaemonId) return
         const existingCoord = ((selectedMesh as any)?.coordinator || {}) as Record<string, unknown>
         const nextCoord: Record<string, unknown> = { ...existingCoord }
         if (coordinatorPromptDraft.override.trim()) nextCoord.systemPromptOverride = coordinatorPromptDraft.override
@@ -282,7 +305,7 @@ export function useMeshNodeActions({
         try {
             setSavingCoordinatorPrompt(true)
             setError(null)
-            const raw = await sendCommand(primaryDaemonId, 'update_mesh', { meshId: selectedMeshId, coordinator: nextCoord })
+            const raw = await sendCommand(targetDaemonId, 'update_mesh', { meshId: selectedMeshId, coordinator: nextCoord })
             const result = unwrapResult(raw)
             if (result?.success === false) { setError(result.error || 'Coordinator prompt save failed'); return }
             await loadMeshes()
@@ -291,12 +314,14 @@ export function useMeshNodeActions({
     }
 
     async function handleSaveNodeSystemPrompt(node: MeshNode) {
-        if (!primaryDaemonId || !selectedMeshId) return
+        if (!selectedMeshId) return
+        const targetDaemonId = requireCoordinator()
+        if (!targetDaemonId) return
         const next = (nodeSystemPromptDrafts[node.id] || '').trim()
         try {
             setSavingNodeSystemPromptId(node.id)
             setError(null)
-            const raw = await sendCommand(primaryDaemonId, 'update_mesh_node', { meshId: selectedMeshId, nodeId: node.id, systemPrompt: next })
+            const raw = await sendCommand(targetDaemonId, 'update_mesh_node', { meshId: selectedMeshId, nodeId: node.id, systemPrompt: next })
             const result = unwrapResult(raw)
             if (result?.success === false) { setError(result.error || 'Node instruction save failed'); return }
             await loadMeshes()

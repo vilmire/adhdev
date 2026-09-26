@@ -574,17 +574,18 @@ export function extractGitLogEntries(response: any): GitLogEntry[] {
 
 /**
  * Recent-commits read for the node detail. ALWAYS addressed to the selected
- * coordinator daemon (the dashboard never talks to a remote node's daemon): with
- * a nodeId the coordinator serves `mesh_node_git_log` locally or forwards it to
- * the node's daemon. The node's own daemon is used only when no coordinator is
- * known (a surface rendered without one).
+ * coordinator daemon as `mesh_node_git_log` (the dashboard never talks to a
+ * remote node's daemon): the coordinator serves a local node itself or forwards
+ * the read over the mesh channel. Without a coordinator or a node id there is
+ * no request (null) — never a fallback to the node's own daemon or a raw
+ * `git_log`.
  */
 export function resolveGitLogRequest(args: {
     coordinatorDaemonId: string | null
     selectedNodeStatus: RepoMeshNodeStatus | null
     selectedSessionEntry: SessionListEntry | null
     selectedGraphNode: MeshGraphNode | null
-}): { daemonId: string; workspace: string; nodeId: string | null } | null {
+}): { daemonId: string; workspace: string; nodeId: string } | null {
     const workspace = args.selectedSessionEntry?.session.workspace
         || args.selectedSessionEntry?.workspace
         || args.selectedNodeStatus?.git?.workspace
@@ -592,8 +593,8 @@ export function resolveGitLogRequest(args: {
         || null
     if (!workspace || (!args.selectedSessionEntry && !args.selectedNodeStatus)) return null
     const nodeId = args.selectedNodeStatus?.nodeId || args.selectedSessionEntry?.nodeId || null
-    const daemonId = args.coordinatorDaemonId || args.selectedNodeStatus?.daemonId || null
-    return daemonId ? { daemonId, workspace, nodeId } : null
+    const daemonId = args.coordinatorDaemonId || null
+    return daemonId && nodeId ? { daemonId, workspace, nodeId } : null
 }
 
 export function describeProviders(node: RepoMeshNodeStatus): string {

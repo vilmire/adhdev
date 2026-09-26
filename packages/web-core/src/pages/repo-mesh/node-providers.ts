@@ -1,4 +1,5 @@
 import { normalizeNodeCapabilitySlots } from '@adhdev/mesh-shared'
+import type { RepoMeshNodeStatus } from '@adhdev/daemon-core'
 
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import {
@@ -40,7 +41,7 @@ export function buildProvidersByDaemonId(
  * use that sole daemon's providers — unambiguous, with no cross-machine leak
  * risk (there is only one machine).
  */
-export function resolveNodeAvailableProviders(
+function memberNodeProviders(
     node: MeshNode,
     providersByDaemonId: Map<string, AvailableCliProviderOption[]>,
 ): AvailableCliProviderOption[] {
@@ -53,6 +54,75 @@ export function resolveNodeAvailableProviders(
         return [...providersByDaemonId.values()][0]
     }
     return []
+}
+
+function readRecord(value: unknown): Record<string, any> {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {}
+}
+
+/**
+ * The raw provider inventory the COORDINATOR holds for a node, when it carries
+ * one (`nodeFacts.availableProviders` or `heldRuntime.availableProviders`).
+ * Read defensively — older coordinators do not send it.
+ */
+export function readCoordinatorHeldProviders(statusNode: RepoMeshNodeStatus | null | undefined): any[] | null {
+    if (!statusNode) return null
+    const fromFacts = readRecord(statusNode.nodeFacts).availableProviders
+    if (Array.isArray(fromFacts) && fromFacts.length > 0) return fromFacts
+    const fromHeld = readRecord((statusNode as { heldRuntime?: unknown }).heldRuntime).availableProviders
+    if (Array.isArray(fromHeld) && fromHeld.length > 0) return fromHeld
+    return null
+}
+
+/**
+ * Provider types the coordinator reports as detected on a node: the keys of its
+ * held provider versions (node-level `providerVersions`, else the facts
+ * bundle's), minus providers the node reports as disabled. Empty = the
+ * coordinator did not say.
+ */
+export function readCoordinatorDetectedProviderTypes(statusNode: RepoMeshNodeStatus | null | undefined): string[] {
+    if (!statusNode) return []
+    const facts = readRecord(statusNode.nodeFacts)
+    const versions = Object.keys(readRecord(statusNode.providerVersions)).length > 0
+        ? readRecord(statusNode.providerVersions)
+        : readRecord(facts.providerVersions)
+    const enablement = readRecord(facts.providerEnablement)
+    return Object.keys(versions)
+        .map(type => type.trim())
+        .filter(type => type && readRecord(enablement[type]).enabled !== false)
+}
+
+/**
+ * Detected CLI providers to show for an existing node. The COORDINATOR's view
+ * of the node wins (it holds every node's latest facts):
+ *   1. a held provider inventory, when the coordinator carries one;
+ *   2. the coordinator's detected provider set (provider versions) — labels and
+ *      model lists are taken from the member's own inventory when it has the
+ *      same provider, so the coordinator decides WHAT is there and the member
+ *      only decorates it;
+ *   3. only when the coordinator says nothing: the member daemon's own
+ *      inventory (the pre-coordinator behavior, below).
+ *
+ * Member fallback: key by the node's own daemon (`daemon_id`) so a multi-machine
+ * mesh never leaks one machine's detected providers into another's panel.
+ * Standalone mesh nodes carry NO `daemon_id` (single local daemon), so an unbound
+ * node with exactly one connected daemon uses that daemon's providers.
+ */
+export function resolveNodeAvailableProviders(
+    node: MeshNode,
+    providersByDaemonId: Map<string, AvailableCliProviderOption[]>,
+    statusNode?: RepoMeshNodeStatus | null,
+): AvailableCliProviderOption[] {
+    const held = readCoordinatorHeldProviders(statusNode)
+    if (held) return normalizeAvailableCliProviders(held)
+    const member = memberNodeProviders(node, providersByDaemonId)
+    const detected = readCoordinatorDetectedProviderTypes(statusNode)
+    if (detected.length === 0) return member
+    if (member.length > 0) {
+        const detectedSet = new Set(detected)
+        return member.filter(option => detectedSet.has(option.type))
+    }
+    return normalizeAvailableCliProviders(detected.map(type => ({ type, category: 'cli', installed: true })))
 }
 
 /** The union of provider inventories across a mesh's nodes, plus reporting coverage. */
@@ -85,6 +155,8 @@ export interface MeshProviderInventory {
 export function collectMeshProviderInventory(
     nodes: MeshNode[] | undefined | null,
     daemons: RepoMeshDaemonEntry[],
+    /** The coordinator's mesh_status nodes; a held inventory there wins over the member's. */
+    statusNodes?: RepoMeshNodeStatus[] | null,
 ): MeshProviderInventory {
     // Raw (un-normalized) inventories keyed by daemon id. Deliberately NOT
     // buildProvidersByDaemonId: normalizeAvailableCliProviders drops the very fields
@@ -103,11 +175,13 @@ export function collectMeshProviderInventory(
 
     for (const node of Array.isArray(nodes) ? nodes : []) {
         const nodeDaemonId = String((node as any)?.daemon_id || (node as any)?.daemonId || '')
+        const statusNode = findStatusNodeForNode(node, statusNodes)
+        // Coordinator-held inventory first; the member's own only as a fallback.
         // Mirror resolveNodeAvailableProviders' standalone fallback: an unbound node
         // with exactly one connected daemon belongs to that daemon.
-        const raw = nodeDaemonId
+        const raw = readCoordinatorHeldProviders(statusNode) ?? (nodeDaemonId
             ? rawByDaemonId.get(nodeDaemonId)
-            : (rawByDaemonId.size === 1 ? [...rawByDaemonId.values()][0] : undefined)
+            : (rawByDaemonId.size === 1 ? [...rawByDaemonId.values()][0] : undefined))
 
         // No inventory yet (daemon offline, or P2P/status metadata still in flight).
         if (!raw || raw.length === 0) {
@@ -128,6 +202,16 @@ export function collectMeshProviderInventory(
         String(a?.type || a?.id || '').localeCompare(String(b?.type || b?.id || '')))
 
     return { providers, reportedNodeCount, unreportedNodeCount }
+}
+
+/** The coordinator's mesh_status record for a mesh config node (by node id). */
+export function findStatusNodeForNode(
+    node: MeshNode | null | undefined,
+    statusNodes: RepoMeshNodeStatus[] | null | undefined,
+): RepoMeshNodeStatus | undefined {
+    const nodeId = String((node as any)?.id || (node as any)?.nodeId || '').trim()
+    if (!nodeId || !Array.isArray(statusNodes)) return undefined
+    return statusNodes.find(statusNode => statusNode?.nodeId === nodeId)
 }
 
 /**

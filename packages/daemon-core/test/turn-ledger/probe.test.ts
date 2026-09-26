@@ -215,3 +215,110 @@ describe('B4 locality — 0 get_status_metadata for the local node; 1 cached pro
         expect(dispatchMeshCommand).not.toHaveBeenCalled();
     });
 });
+
+// Coordinator-held node state (mesh-node-git-state.ts): a remote session's
+// presence / status comes from the member-PUSHED runtime summary the coordinator
+// holds, not a per-tick get_status_metadata round trip. The live probe remains
+// the fallback for members that do not push (older builds) or a stale hold, and
+// transcript content still comes from the replica / read_chat.
+describe('remote presence from the coordinator-held runtime', () => {
+    function components() {
+        const dispatchMeshCommand = vi.fn(async (_daemon: string, cmd: string) => (cmd === 'get_status_metadata'
+            ? { success: true, status: { sessions: [{ id: 's-live', status: 'generating' }] } }
+            : { success: true, status: 'idle', providerObservedStatus: 'idle', messages: [] }));
+        return {
+            dispatchMeshCommand,
+            comps: {
+                sessionRegistry: { get: () => undefined, list: () => [] },
+                instanceManager: { getInstance: () => undefined },
+                commandHandler: { handle: vi.fn() },
+                dispatchMeshCommand,
+                getMeshPeerConnectionStatus: () => ({ state: 'connected' }),
+                transcriptReplicaStore: undefined,
+            } as never,
+        };
+    }
+    const loc = { kind: 'remote' as const, daemonId: 'daemon_mach_remote' };
+    const statusCalls = (d: ReturnType<typeof components>['dispatchMeshCommand']) => d.mock.calls.filter((c) => c[1] === 'get_status_metadata');
+
+    it('a live held list answers presence + status with ZERO get_status_metadata', async () => {
+        const { comps, dispatchMeshCommand } = components();
+        const readHeldSessions = vi.fn(() => ({ sessions: [{ id: 's1', status: 'generating' }], observedAt: T0 + 50_000 }));
+        const reader = createComponentsProbeReader(comps, { analyzer: () => obs(), now: () => NOW, readHeldSessions });
+        expect(await reader.read(attempt(), loc, ['liveness'])).toEqual({ presence: 'present', status: 'generating' });
+        expect(readHeldSessions).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', meshId: 'm1', nodeId: 'n1' }), 'daemon_mach_remote');
+        expect(statusCalls(dispatchMeshCommand)).toHaveLength(0);
+    });
+
+    it('an idle held session still reads the transcript (read_chat), but not the status list', async () => {
+        const { comps, dispatchMeshCommand } = components();
+        const reader = createComponentsProbeReader(comps, {
+            analyzer: () => obs({ finalAssistantAt: T0 + 40_000 }),
+            now: () => NOW,
+            readHeldSessions: () => ({ sessions: [{ id: 's1', status: 'idle' }], observedAt: T0 + 50_000 }),
+        });
+        const read = await reader.read(attempt(), loc, []);
+        expect(read).toMatchObject({ presence: 'present', status: 'idle', transcript: expect.objectContaining({ finalAssistantAt: T0 + 40_000 }) });
+        expect(statusCalls(dispatchMeshCommand)).toHaveLength(0);
+        expect(dispatchMeshCommand.mock.calls.filter((c) => c[1] === 'read_chat')).toHaveLength(1);
+    });
+
+    it('absent from a held list observed well after the turn boundary → absent, no live call', async () => {
+        const { comps, dispatchMeshCommand } = components();
+        const reader = createComponentsProbeReader(comps, {
+            analyzer: () => obs(),
+            now: () => NOW,
+            readHeldSessions: () => ({ sessions: [{ id: 's-other', status: 'idle' }], observedAt: T0 + 50_000 }),
+        });
+        expect(await reader.read(attempt(), loc, [])).toEqual({ presence: 'absent' });
+        expect(statusCalls(dispatchMeshCommand)).toHaveLength(0);
+    });
+
+    it('absent from a held list that predates the turn (a just-launched session may not be pushed yet) → live fallback', async () => {
+        const { comps, dispatchMeshCommand } = components();
+        const reader = createComponentsProbeReader(comps, {
+            analyzer: () => obs(),
+            now: () => NOW,
+            // Observed only 1 s after consumedAt — inside the skew / push-debounce margin.
+            readHeldSessions: () => ({ sessions: [{ id: 's-other', status: 'idle' }], observedAt: T0 + 1_200 }),
+        });
+        expect(await reader.read(attempt({ sessionId: 's-live' }), loc, ['liveness'])).toEqual({ presence: 'present', status: 'generating' });
+        expect(statusCalls(dispatchMeshCommand)).toHaveLength(1);
+    });
+
+    it('no live hold (older member / stale / probe-only snapshot) → the live get_status_metadata answers', async () => {
+        const { comps, dispatchMeshCommand } = components();
+        const reader = createComponentsProbeReader(comps, { analyzer: () => obs(), now: () => NOW, readHeldSessions: () => null });
+        expect(await reader.read(attempt({ sessionId: 's-live' }), loc, ['liveness'])).toEqual({ presence: 'present', status: 'generating' });
+        expect(statusCalls(dispatchMeshCommand)).toHaveLength(1);
+    });
+
+    it('a disconnected peer stays `unknown` even when a hold exists (the R32u grace hold is unchanged)', async () => {
+        const { comps, dispatchMeshCommand } = components();
+        (comps as { getMeshPeerConnectionStatus: () => unknown }).getMeshPeerConnectionStatus = () => null;
+        const reader = createComponentsProbeReader(comps, {
+            analyzer: () => obs(),
+            now: () => NOW,
+            readHeldSessions: () => ({ sessions: [{ id: 's1', status: 'generating' }], observedAt: T0 + 50_000 }),
+        });
+        expect(await reader.read(attempt(), loc, [])).toEqual({ presence: 'unknown' });
+        expect(dispatchMeshCommand).not.toHaveBeenCalled();
+    });
+
+    it('readLiveHeldRuntime trusts only a live member push of the SAME daemon', async () => {
+        const { MeshNodeGitStateStore } = await import('../../src/mesh/mesh-node-git-state.js');
+        const { readLiveHeldRuntime, MESH_NODE_STATE_STALE_MS } = await import('../../src/mesh/mesh-node-git-refresher.js');
+        const now = 10_000_000;
+        const store = new MeshNodeGitStateStore(null, () => now);
+        const runtime = { sessions: [{ id: 's1', status: 'generating' }] };
+        store.recordRuntimeObservation({ meshId: 'm1', nodeId: 'n1', workspace: '/w', runtime, source: 'member_push', observedAt: now - 60_000, daemonId: 'daemon_mach_remote' });
+        expect(readLiveHeldRuntime(store, { meshId: 'm1', nodeId: 'n1', daemonId: 'daemon_mach_remote' }, now)?.runtime.sessions[0]).toMatchObject({ id: 's1', status: 'generating' });
+        // Another daemon now serves the node → never answer for it.
+        expect(readLiveHeldRuntime(store, { meshId: 'm1', nodeId: 'n1', daemonId: 'daemon_mach_other' }, now)).toBeNull();
+        // The member stopped pushing.
+        expect(readLiveHeldRuntime(store, { meshId: 'm1', nodeId: 'n1', daemonId: 'daemon_mach_remote' }, now + MESH_NODE_STATE_STALE_MS)).toBeNull();
+        // A one-off coordinator probe snapshot is not maintained by anyone.
+        store.recordRuntimeObservation({ meshId: 'm1', nodeId: 'n2', workspace: '/w2', runtime, source: 'coordinator_probe', observedAt: now - 1_000, daemonId: 'daemon_mach_remote' });
+        expect(readLiveHeldRuntime(store, { meshId: 'm1', nodeId: 'n2', daemonId: 'daemon_mach_remote' }, now)).toBeNull();
+    });
+});

@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { DaemonCommandRouter } from '../../src/commands/router'
+import { MESH_SENDER_DAEMON_ID_ARG } from '../../src/commands/mesh-sender'
 import { notifyMeshCoordinator } from '../../src/mesh/mesh-events'
 // C-W3: notices are turn.notify rows; the helper binds a capturing notice runtime.
 import { drainPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
@@ -82,6 +83,19 @@ function createRouter(overrides: Record<string, unknown> = {}) {
   })
 
   return { router, sessionHostControl }
+}
+
+/**
+ * Remote git reaches mesh_status only through the coordinator-held store: the
+ * first call kicks the background handshake probe (never awaited); once it has
+ * settled, a held-state rebuild renders what it recorded. No request path ever
+ * probes a member.
+ */
+async function meshStatusAfterHeldProbe(router: any, args: Record<string, unknown>) {
+  const first = await router.execute('mesh_status', args)
+  await router.meshNodeGitRefresher.whenIdle()
+  const settled = await router.execute('mesh_status', { ...args, refresh: false, rebuildFromHeld: true })
+  return { first, settled }
 }
 
 // Safety net: close the process-wide mesh runtime sqlite store after every test so
@@ -607,7 +621,7 @@ describe('mesh_status', () => {
     }
   })
 
-  it('marks a freshly P2P-probed remote node as live truth', async () => {
+  it('renders a remote node from the coordinator-held probe result as held (cached), never live, with the member\'s own check time', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-live-marker-')
     try {
       const dispatchMeshCommand = vi.fn(async () => ({
@@ -639,9 +653,9 @@ describe('mesh_status', () => {
         : null)
       const { router } = createRouter({ dispatchMeshCommand, getMeshPeerConnectionStatus })
 
-      const result = await router.execute('mesh_status', {
+      const { settled: result } = await meshStatusAfterHeldProbe(router, {
         meshId: 'mesh-live-marker',
-        refresh: true, awaitLiveProbes: true,
+        refresh: true,
         inlineMesh: {
           id: 'mesh-live-marker',
           name: 'Live Marker Mesh',
@@ -656,13 +670,16 @@ describe('mesh_status', () => {
 
       expect(result.success).toBe(true)
       const remote = result.nodes.find((node: any) => node.nodeId === 'node-remote')
+      // A remote node is never "live" on a request path — it is what the
+      // coordinator holds, dated by the member's own git check.
       expect(remote.dataFreshness).toEqual(expect.objectContaining({
-        dataSource: 'live',
-        probeOk: true,
+        dataSource: 'cached',
+        probeOk: false,
         reachable: true,
-        staleness: 'fresh',
         lastProbeAt: '2026-06-20T07:02:58.779Z',
       }))
+      expect(remote.gitObservation).toMatchObject({ source: 'coordinator_probe' })
+      expect(remote.git).toMatchObject({ branch: 'main' })
     } finally {
       await cleanupTempDir(dir)
     }
@@ -749,7 +766,7 @@ describe('mesh_status', () => {
 
       const result = await router.execute('mesh_status', {
         meshId: 'mesh-preview',
-        refresh: true, awaitLiveProbes: true,
+        refresh: true,
         inlineMesh: {
           id: 'mesh-preview',
           name: 'Preview Mesh',
@@ -793,7 +810,7 @@ describe('mesh_status', () => {
 
       const result = await router.execute('mesh_status', {
         meshId: 'mesh-preview-unconfigured',
-        refresh: true, awaitLiveProbes: true,
+        refresh: true,
         inlineMesh: {
           id: 'mesh-preview-unconfigured',
           name: 'Preview Mesh',
@@ -832,7 +849,7 @@ describe('mesh_status', () => {
 
       const result = await router.execute('mesh_status', {
         meshId: 'mesh-preview-npm-script',
-        refresh: true, awaitLiveProbes: true,
+        refresh: true,
         inlineMesh: {
           id: 'mesh-preview-npm-script',
           name: 'Preview Mesh',
@@ -1142,8 +1159,11 @@ describe('mesh_status', () => {
   it('retries remote git probe after peer telemetry flips to connected and surfaces live remote git truth', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-retry-')
     try {
-      const dispatchMeshCommand = vi.fn(async () => {
-        if (dispatchMeshCommand.mock.calls.length === 1) {
+      let gitStatusCallCount = 0
+      const dispatchMeshCommand = vi.fn(async (_daemonId: string, command: string) => {
+        if (command !== 'git_status') return { success: false, error: 'not handled' }
+        gitStatusCallCount += 1
+        if (gitStatusCallCount === 1) {
           throw new Error('timeout')
         }
         return {
@@ -1205,11 +1225,11 @@ describe('mesh_status', () => {
         getMeshPeerConnectionStatus,
       })
 
-      const result = await router.execute('mesh_status', {
+      const { settled: result } = await meshStatusAfterHeldProbe(router, {
         meshId: 'mesh-retry',
-        // Standing-state model: per-node remote git probe + retry only fires on
-        // an explicit refresh; the default load returns held truth without it.
-        refresh: true, awaitLiveProbes: true,
+        // The coordinator's background handshake probe (bounded retry) lands the
+        // remote git in the held store; the request path never waits on it.
+        refresh: true,
         inlineMesh: {
           id: 'mesh-retry',
           name: 'Mesh Retry',
@@ -1242,7 +1262,7 @@ describe('mesh_status', () => {
       }) as any
 
       expect(result.success).toBe(true)
-      expect(dispatchMeshCommand).toHaveBeenCalledTimes(2)
+      expect(gitStatusCallCount).toBe(2)
       // The bounded retry re-reads the peer connection across attempts: a pre-attempt
       // liveness gate fast-fails offline/dropped peers, the between-attempt gate decides
       // whether to retry, and the warmup deadline samples it while a cold channel opens.
@@ -1256,10 +1276,11 @@ describe('mesh_status', () => {
       expect(getMeshPeerConnectionStatus).toHaveBeenCalledWith('machine-remote')
       const remoteNode = result.nodes.find((node: any) => node.nodeId === 'node-remote')
       expect(remoteNode?.gitProbePending).toBeUndefined()
+      // The echoed cachedStatus (machineStatus / lastSeenAt) is not truth for a
+      // node another daemon serves: freshness comes from the held git + telemetry.
       expect(remoteNode).toEqual(expect.objectContaining({
         health: 'online',
         launchReady: true,
-        machineStatus: 'online',
         providers: ['hermes-cli'],
         lastSeenAt: '2026-05-20T07:00:23.000Z',
         updatedAt: '2026-05-20T07:02:58.779Z',
@@ -1275,20 +1296,19 @@ describe('mesh_status', () => {
         lastConnectedAt: '2026-05-20T07:00:06.000Z',
         lastCommandAt: '2026-05-20T07:00:23.000Z',
       }))
+      // Held git renders through the shared transit normalizer (the raw
+      // member-side extras such as `head` / an embedded verdict are not carried);
+      // the node-level convergence verdict is recomputed from it.
       expect(remoteNode?.git).toEqual(expect.objectContaining({
         workspace: '/missing/remote',
         repoRoot: '/missing/remote',
         isGitRepo: true,
         branch: 'main',
-        head: '710e11de',
         upstream: 'origin/main',
         upstreamStatus: 'fresh',
         ahead: 0,
         behind: 5,
-        branchConvergence: expect.objectContaining({
-          status: 'blocked_review',
-          reason: 'default_branch_not_even_with_upstream',
-        }),
+        submodules: [expect.objectContaining({ path: 'oss' })],
       }))
     } finally {
       await cleanupTempDir(dir)
@@ -1300,7 +1320,7 @@ describe('mesh_status', () => {
     try {
       const remoteWorkspace = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
       const dispatchMeshCommand = vi.fn(async (_daemonId: string, command: string) => {
-        expect(command).toBe('git_status')
+        if (command !== 'git_status') return { success: false, error: 'not handled' }
         return {
           success: true,
           status: {
@@ -1356,18 +1376,18 @@ describe('mesh_status', () => {
         ],
       }
 
-      const refreshed = await router.execute('mesh_status', {
+      const { settled: refreshed } = await meshStatusAfterHeldProbe(router, {
         meshId: 'mesh_303_cache',
         inlineMesh,
         requireDirectPeerTruth: true,
-        refresh: true, awaitLiveProbes: true,
+        refresh: true,
       }) as any
 
       expect(refreshed.success).toBe(true)
       expect(refreshed.sourceOfTruth.aggregateSnapshot).toMatchObject({
         owner: 'coordinator_daemon_memory',
         cached: false,
-        refreshReason: 'explicit_refresh',
+        refreshReason: 'held_state_rebuild',
       })
       // The requireDirectPeerTruth refresh confirms remote git via the bootstrap
       // hydrate, which lands on node.lastGit; the render loop reads that as held
@@ -1382,8 +1402,8 @@ describe('mesh_status', () => {
         lastProbeAt: '2026-05-21T14:10:00.000Z',
         staleness: 'stale',
       }))
-      expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
-      expect(sessionHostControl.listSessions).toHaveBeenCalledTimes(1)
+      expect(dispatchMeshCommand.mock.calls.filter((call: any[]) => call[1] === 'git_status')).toHaveLength(1)
+      expect(sessionHostControl.listSessions).toHaveBeenCalledTimes(2) // the kicking read + the held-state rebuild
 
       dispatchMeshCommand.mockClear()
       sessionHostControl.listSessions.mockClear()
@@ -1453,7 +1473,7 @@ describe('mesh_status', () => {
       addNode(mesh.id, { workspace: repoRoot, repoRoot })
 
       const { router, sessionHostControl } = createRouter()
-      const initial = await router.execute('mesh_status', { meshId: mesh.id, refresh: true, awaitLiveProbes: true }) as any
+      const initial = await router.execute('mesh_status', { meshId: mesh.id, refresh: true }) as any
       expect(initial.success).toBe(true)
       expect(initial.queue.summary.total).toBe(0)
       expect(initial.sourceOfTruth.aggregateSnapshot.cached).toBe(false)
@@ -1501,7 +1521,7 @@ describe('mesh_status', () => {
       addNode(mesh.id, { workspace: repoRoot, repoRoot })
       const { router, sessionHostControl } = createRouter()
 
-      const initial = await router.execute('mesh_status', { meshId: mesh.id, refresh: true, awaitLiveProbes: true }) as any
+      const initial = await router.execute('mesh_status', { meshId: mesh.id, refresh: true }) as any
       expect(initial.success).toBe(true)
       expect(initial.pendingCoordinatorEvents).toBeUndefined()
 
@@ -1635,7 +1655,7 @@ describe('mesh_status', () => {
         })
       }
 
-      const result = await router.execute('mesh_status', { meshId: mesh.id, refresh: true, awaitLiveProbes: true }) as any
+      const result = await router.execute('mesh_status', { meshId: mesh.id, refresh: true }) as any
       expect(result.success).toBe(true)
       expect(result.asyncRefineJobs).toEqual([
         expect.objectContaining({
@@ -1682,7 +1702,7 @@ describe('mesh_status', () => {
         ]),
       })
 
-      const result = await router.execute('mesh_status', { meshId: mesh.id, refresh: true, awaitLiveProbes: true }) as any
+      const result = await router.execute('mesh_status', { meshId: mesh.id, refresh: true }) as any
       expect(result.success).toBe(true)
       expect(result.nodes).toHaveLength(1)
       expect(result.nodes[0].activeSessions).toEqual([])
@@ -1705,13 +1725,13 @@ describe('mesh_status', () => {
     }
   })
 
-  it('refreshes instead of returning a stale pending cache hit when direct peer truth is required', async () => {
+  it('a stale pending cache is replaced by the held truth once the background probe lands (no request-path probe)', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-stale-cache-refresh-')
     try {
       const remoteWorkspace = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
       let allowRemoteGit = false
       const dispatchMeshCommand = vi.fn(async (_daemonId: string, command: string) => {
-        expect(command).toBe('git_status')
+        if (command !== 'git_status') return { success: false, error: 'not handled' }
         if (!allowRemoteGit) return { success: false, error: 'not ready' }
         return {
           success: true,
@@ -1760,10 +1780,10 @@ describe('mesh_status', () => {
         ],
       }
 
-      const stale = await router.execute('mesh_status', {
+      const { settled: stale } = await meshStatusAfterHeldProbe(router, {
         meshId: 'mesh_stale_pending_cache',
         inlineMesh,
-        refresh: true, awaitLiveProbes: true,
+        refresh: true,
       }) as any
       expect(stale.success).toBe(true)
       const staleNode303 = stale.nodes.find((node: any) => node.nodeId === 'node_303')
@@ -1773,27 +1793,35 @@ describe('mesh_status', () => {
       allowRemoteGit = true
       dispatchMeshCommand.mockClear()
       sessionHostControl.listSessions.mockClear()
-      // Standing-state model: a stale pending cache no longer auto-triggers a
-      // blocking peer fan-out on a default load — only an explicit refresh does.
+      // The member (now subscribed) pushes its git: the held store changes and
+      // the stale aggregate is invalidated — nothing is probed for it.
+      const pushed = await router.execute('mesh_node_git_report', {
+        meshId: 'mesh_stale_pending_cache',
+        nodeId: 'node_303',
+        workspace: remoteWorkspace,
+        git: {
+          isGitRepo: true, workspace: remoteWorkspace, repoRoot: remoteWorkspace, branch: 'main', upstream: 'origin/main', upstreamStatus: 'fresh',
+          headCommit: 'live-after-stale-cache', ahead: 0, behind: 10, staged: 0, modified: 0, untracked: 0, deleted: 0, renamed: 0, hasConflicts: false,
+        },
+        observedAt: Date.now(),
+        [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_303',
+      }, 'mesh') as any
+      expect(pushed).toMatchObject({ success: true, accepted: true, changed: true })
       const refreshed = await router.execute('mesh_status', {
         meshId: 'mesh_stale_pending_cache',
         inlineMesh,
         requireDirectPeerTruth: true,
-        refresh: true, awaitLiveProbes: true,
       }) as any
 
       expect(refreshed.success).toBe(true)
-      expect(refreshed.sourceOfTruth.aggregateSnapshot).toMatchObject({
-        cached: false,
-        refreshReason: 'explicit_refresh',
-      })
-      expect(dispatchMeshCommand).toHaveBeenCalled()
+      expect(refreshed.sourceOfTruth.aggregateSnapshot).toMatchObject({ cached: false })
+      expect(dispatchMeshCommand.mock.calls.filter((call: any[]) => call[1] === 'git_status')).toEqual([])
       expect(sessionHostControl.listSessions).toHaveBeenCalledTimes(1)
       const node303 = refreshed.nodes.find((node: any) => node.nodeId === 'node_303')
       expect(node303).toMatchObject({
         health: 'online',
         launchReady: true,
-        connection: expect.objectContaining({ state: 'connected', transport: 'direct', reported: true }),
+        gitObservation: expect.objectContaining({ source: 'member_push' }),
         git: expect.objectContaining({ branch: 'main', upstream: 'origin/main', headCommit: 'live-after-stale-cache' }),
       })
       expect(node303).not.toHaveProperty('gitProbePending')
@@ -1837,7 +1865,7 @@ describe('mesh_status', () => {
       const stale = await router.execute('mesh_status', {
         meshId: 'mesh_cache_hydrate',
         inlineMesh: pendingInlineMesh,
-        refresh: true, awaitLiveProbes: true,
+        refresh: true,
       }) as any
       expect(stale.success).toBe(true)
       expect(stale.nodes.find((node: any) => node.nodeId === 'node_303')).toMatchObject({
@@ -1911,14 +1939,14 @@ describe('mesh_status', () => {
   // direct-peer-truth-UNAVAILABLE (visible via unavailableNodeIds) rather than
   // silently dropped from the membership list — this is the actionable signal
   // callers should key off, not quiet deletion.
-  it('keeps a cached inline node in membership (flagged unavailable, not dropped) when absent from a newer live inline snapshot', async () => {
+  it('keeps a cached inline node in membership (not dropped) when absent from a newer live inline snapshot', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-prune-inline-cache-')
     try {
       const { router } = createRouter()
 
       await router.execute('mesh_status', {
         meshId: 'mesh_prune_inline_cache',
-        refresh: true, awaitLiveProbes: true,
+        refresh: true,
         inlineMesh: {
           id: 'mesh_prune_inline_cache',
           name: 'ADHDev',
@@ -1933,16 +1961,14 @@ describe('mesh_status', () => {
         },
       })
 
-      // requireDirectPeerTruth is a separate, pre-existing, intentional gate:
-      // a non-worktree node whose direct truth cannot be confirmed correctly
-      // fails THIS specific call (unrelated to the membership-merge fix under
-      // test here). What this test asserts is that the node's MEMBERSHIP
-      // itself is preserved (visible via unavailableNodeIds) rather than
-      // silently vanishing from the mesh's node list.
+      // No request path probes a peer any more, so a node without confirmed
+      // truth no longer fails a requireDirectPeerTruth refresh — it is simply
+      // pending. What this test asserts is that the node's MEMBERSHIP itself is
+      // preserved rather than silently vanishing from the mesh's node list.
       const result = await router.execute('mesh_status', {
         meshId: 'mesh_prune_inline_cache',
         requireDirectPeerTruth: true,
-        refresh: true, awaitLiveProbes: true,
+        refresh: true,
         inlineMesh: {
           id: 'mesh_prune_inline_cache',
           name: 'ADHDev',
@@ -1956,15 +1982,14 @@ describe('mesh_status', () => {
         },
       }) as any
 
-      expect(result.success).toBe(false)
-      expect(result.code).toBe('mesh_direct_peer_truth_unavailable')
+      expect(result.success).toBe(true)
       expect(result.sourceOfTruth.directPeerTruth).toMatchObject({
         required: true,
-        satisfied: false,
+        satisfied: true,
         localConfirmedCount: 1,
         peerAttemptedCount: 0,
-        unavailableNodeIds: ['node_removed'],
       })
+      expect(result.nodes.map((node: any) => node.nodeId).sort()).toEqual(['node_7', 'node_removed'])
 
       // The membership-merge fix under test: a plain (non-gated) read must
       // still show the cache-only node as a live member — preserved, not
@@ -1972,7 +1997,7 @@ describe('mesh_status', () => {
       // it unresolved rather than membership pretending it never existed.
       const plainRead = await router.execute('mesh_status', {
         meshId: 'mesh_prune_inline_cache',
-        refresh: true, awaitLiveProbes: true,
+        refresh: true,
         inlineMesh: {
           id: 'mesh_prune_inline_cache',
           name: 'ADHDev',
@@ -2011,7 +2036,7 @@ describe('mesh_status', () => {
 
       const afterRemoval = await router.execute('mesh_status', {
         meshId: 'mesh_prune_inline_cache',
-        refresh: true, awaitLiveProbes: true,
+        refresh: true,
         inlineMesh: {
           id: 'mesh_prune_inline_cache',
           name: 'ADHDev',
@@ -2034,7 +2059,7 @@ describe('mesh_status', () => {
     const primary = await createTempGitRepo('mesh-status-local-direct-primary-')
     const sibling = await createTempGitRepo('mesh-status-local-direct-sibling-')
     try {
-      const dispatchMeshCommand = vi.fn(async () => {
+      const dispatchMeshCommand = vi.fn(async (_daemonId: string, _command: string) => {
         throw new Error('local workspace should not need P2P dispatch')
       })
       const { router } = createRouter({ dispatchMeshCommand })
@@ -2042,7 +2067,7 @@ describe('mesh_status', () => {
       const result = await router.execute('mesh_status', {
         meshId: 'mesh_local_worktree_direct_truth',
         requireDirectPeerTruth: true,
-        refresh: true, awaitLiveProbes: true,
+        refresh: true,
         inlineMesh: {
           id: 'mesh_local_worktree_direct_truth',
           name: 'ADHDev',
@@ -2072,7 +2097,9 @@ describe('mesh_status', () => {
         health: 'online',
         git: expect.objectContaining({ isGitRepo: true, branch: expect.any(String) }),
       })
-      expect(dispatchMeshCommand).not.toHaveBeenCalled()
+      // Local workspaces are read here; the only mesh traffic allowed is the
+      // background runtime read of the (foreign) daemons serving them.
+      expect(dispatchMeshCommand.mock.calls.filter((call: any[]) => call[1] !== 'get_status_metadata')).toEqual([])
     } finally {
       await cleanupTempDir(primary.dir)
       await cleanupTempDir(sibling.dir)
@@ -2143,46 +2170,35 @@ describe('mesh_status', () => {
     }
   })
 
-  it('fails closed when a direct peer remains unavailable even if another peer has live git truth', async () => {
+  it('an explicit refresh answers from held truth and never hard-fails on an unreachable peer (no request-path probe)', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-single-aggregate-')
     try {
       const remoteWorkspace = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
       const failedDaemonId = '9f061b89ce435a06666a3e70db28d6230b1b3081b370fbd5766e631ea0a6e78d'
-      const dispatchMeshCommand = vi.fn(async (daemonId: string, command: string, args: Record<string, unknown>) => {
-        expect(command).toBe('git_status')
-        if (daemonId === 'daemon_303') {
-          expect(args).toMatchObject({ workspace: remoteWorkspace })
-          return {
-            success: true,
-            status: {
-              isGitRepo: true,
-              workspace: remoteWorkspace,
-              repoRoot: remoteWorkspace,
-              branch: 'main',
-              upstream: 'origin/main',
-              upstreamStatus: 'fresh',
-              headCommit: '083fe011',
-              ahead: 0,
-              behind: 8,
-              staged: 0,
-              modified: 1,
-              untracked: 1,
-              deleted: 0,
-              renamed: 0,
-              hasConflicts: false,
-              stashCount: 2,
-              lastCheckedAt: Date.parse('2026-05-21T13:24:47.000Z'),
-              submodules: [
-                { path: 'adhdev-providers', repoPath: `${remoteWorkspace}/adhdev-providers`, commit: 'provider-sha', dirty: false, outOfSync: false },
-                { path: 'oss', repoPath: `${remoteWorkspace}/oss`, commit: 'oss-sha', dirty: false, outOfSync: false },
-              ],
-            },
-          }
-        }
-        if (daemonId === failedDaemonId) {
-          throw new Error('P2P state changed to failed after remote_desc_duplicate_ignored on mesh_p2p_answer')
-        }
-        throw new Error(`unexpected daemon ${daemonId}`)
+      const heldRemoteGit = {
+        isGitRepo: true,
+        workspace: remoteWorkspace,
+        repoRoot: remoteWorkspace,
+        branch: 'main',
+        upstream: 'origin/main',
+        upstreamStatus: 'fresh',
+        headCommit: '083fe011',
+        ahead: 0,
+        behind: 8,
+        staged: 0,
+        modified: 1,
+        untracked: 1,
+        deleted: 0,
+        renamed: 0,
+        hasConflicts: false,
+        stashCount: 2,
+        submodules: [
+          { path: 'adhdev-providers', repoPath: `${remoteWorkspace}/adhdev-providers`, commit: 'provider-sha', dirty: false, outOfSync: false },
+          { path: 'oss', repoPath: `${remoteWorkspace}/oss`, commit: 'oss-sha', dirty: false, outOfSync: false },
+        ],
+      }
+      const dispatchMeshCommand = vi.fn(async (daemonId: string, _command: string, _args: Record<string, unknown>) => {
+        throw new Error(`unexpected dispatch to ${daemonId}`)
       })
       const getMeshPeerConnectionStatus = vi.fn((daemonId: string) => {
         if (daemonId === 'daemon_303') {
@@ -2211,13 +2227,15 @@ describe('mesh_status', () => {
         return null
       })
       const { router } = createRouter({ dispatchMeshCommand, getMeshPeerConnectionStatus })
+      // daemon_303 pushed its state seconds ago; the failed peer never did.
+      const now = Date.now()
+      router.meshNodeGitState.recordObservation({ meshId: 'mesh_303', nodeId: 'node_303', workspace: remoteWorkspace, git: { ...heldRemoteGit, lastCheckedAt: now }, source: 'member_push', observedAt: now })
+      router.meshNodeGitState.recordRuntimeObservation({ meshId: 'mesh_303', nodeId: 'node_303', workspace: remoteWorkspace, runtime: { sessions: [] }, source: 'member_push', observedAt: now })
 
-      // Standing-state model: the hard fail-closed on an unreachable peer is
-      // reserved for an explicit refresh that actually attempts the fan-out.
       const result = await router.execute('mesh_status', {
         meshId: 'mesh_303',
         requireDirectPeerTruth: true,
-        refresh: true, awaitLiveProbes: true,
+        refresh: true,
         inlineMesh: {
           id: 'mesh_303',
           name: 'ADHDev',
@@ -2263,27 +2281,31 @@ describe('mesh_status', () => {
       }) as any
 
       expect(result).toMatchObject({
-        success: false,
-        code: 'mesh_direct_peer_truth_unavailable',
+        success: true,
         sourceOfTruth: {
           membership: 'inline_bootstrap_snapshot',
-          coordinatorOwnsLiveTruth: false,
-          currentStatus: 'direct_peer_truth_unavailable',
+          coordinatorOwnsLiveTruth: true,
+          currentStatus: 'live_git_and_session_probes',
           directPeerTruth: expect.objectContaining({
             required: true,
-            satisfied: false,
-            peerAttemptedCount: 2,
-            peerConfirmedCount: 1,
-            unavailableNodeIds: ['node_9f061_timeout_peer'],
+            satisfied: true,
+            peerAttemptedCount: 0,
+            peerConfirmedCount: 0,
           }),
         },
       })
-      // The `failed` peer is still ATTEMPTED (peerAttemptedCount: 2) and classified
-      // unavailable, but its git_status probe is now SKIPPED before dispatch — a
-      // definitively-down transport (state: 'failed') no longer burns a 25s probe
-      // window that would stall the graph cold-open. So only the one reachable peer
-      // (daemon_303) actually dispatches git_status.
-      expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
+      const held = result.nodes.find((node: any) => node.nodeId === 'node_303')
+      expect(held.git).toMatchObject({ headCommit: '083fe011', behind: 8 })
+      expect(held.gitObservation).toMatchObject({ source: 'member_push' })
+      const failed = result.nodes.find((node: any) => node.nodeId === 'node_9f061_timeout_peer')
+      expect(failed.git?.headCommit).toBeUndefined()
+      expect(failed.gitObservation.source).toBe('none')
+      await router.meshNodeGitRefresher.whenIdle()
+      // Nothing was probed on the request path: the fresh member is not even
+      // nudged, and the failed peer's background handshake is skipped before
+      // dispatch (definitively-down transport).
+      expect(dispatchMeshCommand.mock.calls.filter((call: any[]) => call[1] === 'git_status')).toEqual([])
+      expect(dispatchMeshCommand.mock.calls.filter((call: any[]) => call[0] === 'daemon_303')).toEqual([])
     } finally {
       await cleanupTempDir(dir)
     }
@@ -2372,7 +2394,7 @@ describe('mesh_status', () => {
       const result = await router.execute('mesh_status', {
         meshId: 'mesh_missing_worktree_direct_truth',
         requireDirectPeerTruth: true,
-        refresh: true, awaitLiveProbes: true,
+        refresh: true,
         inlineMesh: {
           id: 'mesh_missing_worktree_direct_truth',
           name: 'ADHDev',
@@ -2406,10 +2428,10 @@ describe('mesh_status', () => {
           satisfied: true,
           directEvidenceCount: 1,
           localConfirmedCount: 1,
-          peerAttemptedCount: 1,
+          peerAttemptedCount: 0,
           peerConfirmedCount: 0,
-          unavailableNodeIds: ['node_removed_worktree'],
-          partialNodeFailures: ['node_removed_worktree'],
+          unavailableNodeIds: [],
+          partialNodeFailures: [],
         }),
       })
       const removedWorktree = result.nodes.find((node: any) => node.nodeId === 'node_removed_worktree')
@@ -2527,7 +2549,7 @@ describe('mesh_status dead local worktree exclusion', () => {
       const result = await router.execute('mesh_status', {
         meshId: 'mesh_dead_worktree',
         requireDirectPeerTruth: true,
-        refresh: true, awaitLiveProbes: true,
+        refresh: true,
         inlineMesh: {
           id: 'mesh_dead_worktree',
           name: 'ADHDev',
@@ -2573,11 +2595,10 @@ describe('mesh_status dead local worktree exclusion', () => {
     }
   })
 
-  it('still fails closed for a genuinely unavailable remote peer (dead-worktree guard does not over-apply)', async () => {
+  it('a dead local worktree is never probed, and a remote peer without held truth is pending (no request-path probe)', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-dead-worktree-remote-')
     try {
-      const dispatchMeshCommand = vi.fn(async (daemonId: string, command: string) => {
-        expect(command).toBe('git_status')
+      const dispatchMeshCommand = vi.fn(async (daemonId: string, _command: string) => {
         if (daemonId === 'daemon_remote') {
           throw new Error('P2P probe failed for remote peer')
         }
@@ -2595,7 +2616,7 @@ describe('mesh_status dead local worktree exclusion', () => {
       const result = await router.execute('mesh_status', {
         meshId: 'mesh_dead_plus_remote',
         requireDirectPeerTruth: true,
-        refresh: true, awaitLiveProbes: true,
+        refresh: true,
         inlineMesh: {
           id: 'mesh_dead_plus_remote',
           name: 'ADHDev',
@@ -2636,12 +2657,13 @@ describe('mesh_status dead local worktree exclusion', () => {
         },
       }) as any
 
-      expect(result.success).toBe(false)
-      expect(result.code).toBe('mesh_direct_peer_truth_unavailable')
-      expect(result.sourceOfTruth.directPeerTruth.unavailableNodeIds).toContain('node_remote')
+      expect(result.success).toBe(true)
       expect(result.sourceOfTruth.directPeerTruth.unavailableNodeIds).not.toContain('node_dead')
-      // The dead worktree was never probed; only the genuine remote peer was
-      // (the remote may be retried, so assert the target rather than the count).
+      const remoteNode = result.nodes.find((node: any) => node.nodeId === 'node_remote')
+      expect(remoteNode.gitProbePending).toBe(true)
+      await router.meshNodeGitRefresher.whenIdle()
+      // Only the genuine remote peer gets the BACKGROUND handshake probe; the dead
+      // worktree (this daemon's own) is never probed.
       expect(dispatchMeshCommand).toHaveBeenCalledWith('daemon_remote', 'git_status', expect.anything())
       for (const call of dispatchMeshCommand.mock.calls) {
         expect(call[0]).not.toBe('daemon_self')
@@ -2972,7 +2994,7 @@ describe('mesh_status machine ⊃ nodes label axes', () => {
       const { router } = createRouter()
       const result = await router.execute('mesh_status', {
         meshId: 'mesh_axes',
-        refresh: true, awaitLiveProbes: true,
+        refresh: true,
         inlineMesh: {
           id: 'mesh_axes',
           name: 'Axes',
