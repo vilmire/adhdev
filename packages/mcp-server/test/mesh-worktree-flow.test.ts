@@ -13,6 +13,7 @@ import { makeFakeTurnIpcTransport } from './fake-turn-ipc-transport.js';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 import { seedLocalRecord } from './helpers/local-records.js';
+import { heldMeshStatusResponse } from './helpers/held-node-state.js';
 // meshQueueRequeue delegates the requeue to the mesh-host daemon in IpcTransport mode so
 // the single-flight guard is co-located with dispatch (requeue_mesh_queue_task). This stub
 // emulates the daemon handler's contract with the same requeueTask call the real handler
@@ -1046,13 +1047,14 @@ test('mesh_status preserves full git snapshot fields from the aggregate node sta
     if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
     if (command === 'get_pending_mesh_events') return { events: [] };
+    // The node's git is the coordinator daemon's HELD state (member push).
+    if (command === 'mesh_status') return heldMeshStatusResponse(ctx.mesh, () => ({ status: heldGit }), { observedAt: 1710000000000 });
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (_daemonId, command) => {
-    if (command === 'git_status') {
-      return {
-        success: true,
-        status: {
+    throw new Error(`mesh_status must not probe a remote node live: ${command}`);
+  };
+  const heldGit = {
           workspace: '/repo-remote',
           repoRoot: '/repo-remote',
           isGitRepo: true,
@@ -1082,10 +1084,6 @@ test('mesh_status preserves full git snapshot fields from the aggregate node sta
               lastCheckedAt: 1710000000001,
             },
           ],
-        },
-      };
-    }
-    throw new Error(`unexpected mesh command: ${command}`);
   };
 
   // Full git snapshot is the verbose payload; compact (the default for LLM callers)
@@ -1123,7 +1121,7 @@ test('mesh_status preserves full git snapshot fields from the aggregate node sta
   assert.deepEqual(nodeStatus.outOfSyncSubmodules, ['oss']);
 });
 
-test('mesh_status marks git_status P2P timeout as recoverable degraded node metadata', async () => {
+test('mesh_status reports a node whose coordinator refreshes keep failing as degraded/unreachable — without probing it', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -1155,12 +1153,18 @@ test('mesh_status marks git_status P2P timeout as recoverable degraded node meta
     if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
     if (command === 'get_pending_mesh_events') return { events: [] };
+    // The coordinator holds no git for this node and its background refresh fails.
+    if (command === 'mesh_status') {
+      return heldMeshStatusResponse(ctx.mesh, () => {
+        throw new Error("P2P DataChannel command 'git_status' to daemon-remote timed out after 30s");
+      });
+    }
     throw new Error(`unexpected direct command: ${command}`);
   };
+  const meshCommands: string[] = [];
   transport.meshCommand = async (_daemonId, command) => {
-    if (command === 'git_status') {
-      throw new Error("P2P DataChannel command 'git_status' to daemon-remote timed out after 30s");
-    }
+    meshCommands.push(command);
+    if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
     throw new Error(`unexpected mesh command: ${command}`);
   };
 
@@ -1169,11 +1173,12 @@ test('mesh_status marks git_status P2P timeout as recoverable degraded node meta
   const nodeStatus = status.nodes.find((node: any) => node.nodeId === 'node-remote-status');
 
   assert.equal(nodeStatus.health, 'degraded');
-  assert.equal(nodeStatus.recoverable, true);
-  assert.equal(nodeStatus.code, 'p2p_timeout');
-  assert.equal(nodeStatus.transport, 'p2p');
-  assert.equal(nodeStatus.retryRecommended, true);
-  assert.match(nodeStatus.noFallbackReason, /no cloud\/WS relay fallback/i);
+  assert.equal(nodeStatus.degradedReason, 'node_unreachable');
+  assert.match(nodeStatus.error, /timed out after 30s/);
+  assert.equal(typeof nodeStatus.gitObservation.unreachableSince, 'number');
+  assert.equal(nodeStatus.dataFreshness.dataSource, 'unreachable');
+  assert.equal(nodeStatus.dataFreshness.reachable, false);
+  assert.ok(!meshCommands.includes('git_status'), 'the request path never probes the node git live');
 });
 
 // 'mesh_task_history backfills remote pending completion events into the coordinator
@@ -2299,23 +2304,20 @@ test('mesh_status surfaces branch convergence follow-up for clean non-main branc
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
+  // Coordinator-held git per node workspace (the daemon's node-git store).
+  const heldGit = (workspace: string) => {
+    if (workspace.endsWith('/main')) return { isGitRepo: true, branch: 'main', upstream: 'origin/main', upstreamStatus: 'fresh', ahead: 0, behind: 0, modified: 0 };
+    if (workspace.endsWith('/feature')) return { isGitRepo: true, branch: 'fix/feature', upstream: 'origin/fix/feature', upstreamStatus: 'fresh', ahead: 0, behind: 0, modified: 0 };
+    if (workspace.endsWith('/worktree')) return { isGitRepo: true, branch: 'fix/worktree', modified: 0 };
+    throw new Error(`unexpected workspace: ${workspace}`);
+  };
   transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
     if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
+    if (command === 'mesh_status') return heldMeshStatusResponse(ctx.mesh, (node) => heldGit(String(node.workspace)));
     throw new Error(`unexpected direct command: ${command}`);
   };
-  transport.meshCommand = async (_daemonId, command, args = {}) => {
-    if (command !== 'git_status') throw new Error(`unexpected mesh command: ${command}`);
-    const workspace = String((args as any).workspace || '');
-    if (workspace.endsWith('/main')) {
-      return { success: true, result: { success: true, result: { status: { isGitRepo: true, branch: 'main', upstream: 'origin/main', upstreamStatus: 'fresh', ahead: 0, behind: 0, modified: 0 } } } };
-    }
-    if (workspace.endsWith('/feature')) {
-      return { success: true, result: { success: true, result: { status: { isGitRepo: true, branch: 'fix/feature', upstream: 'origin/fix/feature', upstreamStatus: 'fresh', ahead: 0, behind: 0, modified: 0 } } } };
-    }
-    if (workspace.endsWith('/worktree')) {
-      return { success: true, result: { success: true, result: { status: { isGitRepo: true, branch: 'fix/worktree', modified: 0 } } } };
-    }
-    throw new Error(`unexpected workspace: ${workspace}`);
+  transport.meshCommand = async (_daemonId, command) => {
+    throw new Error(`unexpected mesh command: ${command}`);
   };
 
   const ctx = {
@@ -2370,27 +2372,25 @@ test('mesh_status surfaces branch convergence follow-up for clean non-main branc
   assert.ok(worktree.nextStepHints.some((hint: string) => hint.includes('mesh_refine_node')));
 });
 
-test('mesh_status and mesh_git_status request refreshed upstream truth and block convergence when freshness is unverified', async () => {
+test('mesh_status blocks convergence when the held upstream freshness is unverified — without a live git probe', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  const heldGit = (workspace: string) => {
+    if (workspace.endsWith('/main')) return { isGitRepo: true, branch: 'main', upstream: 'origin/main', upstreamStatus: 'stale', ahead: 0, behind: 0, upstreamFetchError: 'timeout', modified: 0 };
+    if (workspace.endsWith('/feature')) return { isGitRepo: true, branch: 'fix/feature', upstream: 'origin/fix/feature', upstreamStatus: 'stale', ahead: 0, behind: 0, upstreamFetchError: 'timeout', modified: 0 };
+    throw new Error(`unexpected workspace: ${workspace}`);
+  };
   transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
     if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
+    if (command === 'mesh_status') return heldMeshStatusResponse(ctx.mesh, (node) => heldGit(String(node.workspace)));
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
     calls.push({ daemonId, command, args });
-    if (command !== 'git_status') throw new Error(`unexpected mesh command: ${command}`);
-    const workspace = String((args as any).workspace || '');
-    if (workspace.endsWith('/main')) {
-      return { success: true, result: { success: true, result: { status: { isGitRepo: true, branch: 'main', upstream: 'origin/main', upstreamStatus: 'stale', ahead: 0, behind: 0, upstreamFetchError: 'timeout', modified: 0 } } } };
-    }
-    if (workspace.endsWith('/feature')) {
-      return { success: true, result: { success: true, result: { status: { isGitRepo: true, branch: 'fix/feature', upstream: 'origin/fix/feature', upstreamStatus: 'stale', ahead: 0, behind: 0, upstreamFetchError: 'timeout', modified: 0 } } } };
-    }
-    throw new Error(`unexpected workspace: ${workspace}`);
+    throw new Error(`unexpected mesh command: ${command}`);
   };
 
   const ctx = {
@@ -2420,7 +2420,7 @@ test('mesh_status and mesh_git_status request refreshed upstream truth and block
   assert.equal(main.branchConvergence.status, 'blocked_review');
   assert.equal(feature.branchConvergence.reason, 'feature_branch_upstream_unverified');
   assert.equal(feature.branchConvergence.status, 'blocked_review');
-  assert.ok(calls.filter(call => call.command === 'git_status').every(call => call.args.refreshUpstream === true));
+  assert.deepEqual(calls.filter(call => call.command === 'git_status'), [], 'mesh_status never probes node git live');
 });
 
 test('mesh_git_status source requests refreshed upstream truth', () => {
@@ -3352,6 +3352,13 @@ test('mesh_git_status and mesh_remove_node refresh ctx.mesh from daemon cache wh
         },
       };
     }
+    // The coordinator daemon holds the clone's git (mesh_status reads it, no live probe).
+    if (cmd === 'mesh_status') {
+      return heldMeshStatusResponse({ nodes: [newNode] }, () => ({
+        isGitRepo: true, branch: 'test/branch', staged: 0, modified: 1, untracked: 0, deleted: 0, renamed: 0,
+        hasConflicts: false, conflictFiles: [],
+      }));
+    }
     throw new Error(`unexpected direct command: ${cmd}`);
   };
   transport.meshCommand = async (daemonId, command) => {
@@ -3411,7 +3418,8 @@ test('mesh_git_status and mesh_remove_node refresh ctx.mesh from daemon cache wh
   const status = JSON.parse(statusText);
   const statusNode = status.nodes.find((n: any) => n.nodeId === 'node-worktree-new');
   assert.ok(statusNode, 'mesh_status should include refreshed worktree node');
-  assert.equal(statusNode.health, 'dirty', 'mesh_status should unwrap relayed git_status payload before deriving health');
+  assert.equal(statusNode.health, 'dirty', 'mesh_status derives health from the coordinator-held git');
+  assert.ok(!meshCommands.includes('git_status'), 'mesh_status must not probe the node git live');
   assert.equal(statusNode.branch, 'test/branch');
   assert.equal(statusNode.isDirty, true);
   assert.equal(statusNode.uncommittedChanges, 1);

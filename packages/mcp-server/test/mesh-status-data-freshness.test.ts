@@ -4,6 +4,7 @@ import test from 'node:test';
 import { meshStatus } from '../src/tools/mesh-tools.js';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { heldMeshStatusFromResponder } from './helpers/held-node-state.js';
 // REGRESSION: the daemon-core `mesh_status` command stamps a per-node
 // `dataFreshness` marker (live | self | cached | unreachable | …) via
 // finalizeMeshNodeStatus. But the COORDINATOR-FACING mesh_status MCP tool
@@ -13,6 +14,12 @@ import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // daemon-core unit test passed because it asserts on the raw router output, a
 // surface the coordinator never sees. These tests drive the actual MCP tool so
 // the marker is exercised end-to-end on the path that was broken.
+//
+// Since 2026-09-26 (coordinator-held node git) the MCP tool no longer probes
+// nodes live: node git comes from the coordinator daemon's held state and
+// dataFreshness is DERIVED from each node's gitObservation — a remote peer's
+// held truth reads 'cached' (with its age), never 'live'.
+const OBSERVED_AT = Date.parse('2026-09-26T00:00:00.000Z');
 
 function buildCtx() {
   const mesh = {
@@ -21,9 +28,9 @@ function buildCtx() {
     nodes: [
       // Same-machine coordinator node (matches localDaemonId) → dataSource 'self'.
       { id: 'node-self', workspace: '/self', repoRoot: '/self', daemonId: 'daemon-A', machineId: 'machine-A', userOverrides: {}, policy: { providerPriority: ['hermes-cli'] } },
-      // Reachable remote peer whose fresh probe succeeds → dataSource 'live'.
+      // Remote peer whose git the coordinator holds (member push) → dataSource 'cached'.
       { id: 'node-live', workspace: '/live', repoRoot: '/live', daemonId: 'daemon-B', machineId: 'machine-B', userOverrides: {}, policy: { providerPriority: ['hermes-cli'] } },
-      // Remote peer whose probe throws (no held truth) → dataSource 'unreachable'.
+      // Remote peer with no held truth whose background refresh fails → 'unreachable'.
       { id: 'node-unreach', workspace: '/unreachable', repoRoot: '/unreachable', daemonId: 'daemon-C', machineId: 'machine-C', userOverrides: {}, policy: { providerPriority: ['hermes-cli'] } },
       // A second quiet peer on daemon-A. The per-daemon representative pin keeps ONE
       // node per daemon in full detail, so this one is what actually reaches the
@@ -35,8 +42,9 @@ function buildCtx() {
     ],
   };
   const cleanGit = { isGitRepo: true, isDirty: false, branch: 'main', headCommit: 'abc', ahead: 0, behind: 0, submodules: [] };
-  const responder = (command: string, args?: any) => {
+  const responder = (command: string, args?: any): any => {
     if (command === 'get_mesh') return { success: true, mesh };
+    if (command === 'mesh_status') return heldMeshStatusFromResponder(mesh, responder, { localDaemonId: 'daemon-A', observedAt: OBSERVED_AT });
     if (command === 'get_pending_mesh_events') return { events: [] };
     if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
     if (command === 'git_status') {
@@ -84,27 +92,35 @@ test('compact mesh_status stamps dataFreshness on every node — including quiet
   // probe), and only a 'cached' dataSource projects as 'cached' — self projects
   // live_or_absent. Both fields are part of the freshness contract, so the stub must
   // carry them through verbatim rather than dropping them.
-  assert.deepEqual(self.dataFreshness, {
+  const { ageMs: selfAgeMs, ...selfFreshness } = self.dataFreshness;
+  assert.equal(typeof selfAgeMs, 'number', 'ageMs = now - the held observation time');
+  assert.deepEqual(selfFreshness, {
     dataSource: 'self',
     probeOk: true,
     reachable: true,
     directPeerTruthSatisfied: true,
     projection: 'live_or_absent',
-    lastProbeAt: null,
-    ageMs: null,
+    lastProbeAt: new Date(OBSERVED_AT).toISOString(),
     staleness: 'fresh',
   });
+  assert.deepEqual(self.gitObservation, { source: 'self', observedAt: OBSERVED_AT, refreshing: false, unreachableSince: null });
 
   assert.notEqual(live.folded, true, 'the daemon-B machine node is pinned to full detail');
-  assert.equal(live.dataFreshness?.dataSource, 'live');
-  assert.equal(live.dataFreshness?.probeOk, true);
-  assert.equal(live.dataFreshness?.reachable, true);
-  assert.equal(live.dataFreshness?.staleness, 'fresh');
+  // Held remote truth is 'cached' with its real age — never claimed as live.
+  assert.equal(live.dataFreshness?.dataSource, 'cached');
+  assert.equal(live.dataFreshness?.probeOk, false);
+  assert.equal(live.dataFreshness?.projection, 'cached');
+  assert.equal(live.dataFreshness?.lastProbeAt, new Date(OBSERVED_AT).toISOString());
+  assert.equal(live.gitObservation?.source, 'member_push');
+  assert.equal(live.gitObservation?.observedAt, OBSERVED_AT);
+  assert.equal(live.health, 'online', 'held git still drives health');
 
   // Degraded (probe threw) node stays detailed; the marker separates it from idle.
   assert.equal(unreach.dataFreshness?.dataSource, 'unreachable');
   assert.equal(unreach.dataFreshness?.probeOk, false);
   assert.equal(unreach.dataFreshness?.reachable, false);
+  assert.equal(typeof unreach.gitObservation?.unreachableSince, 'number');
+  assert.equal(unreach.degradedReason, 'node_unreachable');
 });
 
 test('verbose mesh_status carries dataFreshness on every node', async () => {
@@ -113,7 +129,8 @@ test('verbose mesh_status carries dataFreshness on every node', async () => {
   assert.equal(verbose.payloadMode, 'full');
 
   assert.equal(findNode(verbose.nodes, 'node-self').dataFreshness?.dataSource, 'self');
-  assert.equal(findNode(verbose.nodes, 'node-live').dataFreshness?.dataSource, 'live');
+  assert.equal(findNode(verbose.nodes, 'node-live').dataFreshness?.dataSource, 'cached');
+  assert.equal(findNode(verbose.nodes, 'node-live').gitObservation?.source, 'member_push');
   const unreach = findNode(verbose.nodes, 'node-unreach');
   assert.equal(unreach.dataFreshness?.dataSource, 'unreachable');
   assert.equal(unreach.dataFreshness?.reachable, false);

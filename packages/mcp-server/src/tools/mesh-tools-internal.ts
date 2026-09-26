@@ -1826,9 +1826,24 @@ export async function resolveMeshSessionProviderMetadata(
 
 
 
-export async function collectRelatedRepoStatuses(ctx: MeshContext, node: LocalMeshNodeEntry): Promise<Array<Record<string, unknown>>> {
+export async function collectRelatedRepoStatuses(
+    ctx: MeshContext,
+    node: LocalMeshNodeEntry,
+    opts?: { localOnly?: boolean },
+): Promise<Array<Record<string, unknown>>> {
     const relatedRepos = readRelatedRepos(node);
     if (!relatedRepos.length) return [];
+    // mesh_status (localOnly): related-repo git is not part of the coordinator-held
+    // node state, and the request path never probes a remote peer — list the repo
+    // without status. mesh_git_status(node_id) is the explicit live detail read.
+    if (opts?.localOnly === true && node.daemonId && !isLocalControlPlaneNode(ctx, node)) {
+        return relatedRepos.map((repo) => ({
+            label: repo.label,
+            workspace: repo.workspace,
+            statusHeld: false,
+            note: 'Remote related-repo git is not held by the coordinator; mesh_git_status(node_id) reads it live.',
+        }));
+    }
 
     const results: Array<Record<string, unknown>> = [];
     for (const repo of relatedRepos) {
