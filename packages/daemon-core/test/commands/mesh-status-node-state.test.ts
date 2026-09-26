@@ -92,6 +92,8 @@ function createRouter(opts: {
   dispatchMeshCommand?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>
   onMeshStateChange?: (meshId: string) => void
   store?: MeshNodeGitStateStore
+  statusInstanceId?: string
+  instanceStates?: any[]
 } = {}) {
   return new DaemonCommandRouter({
     commandHandler: {
@@ -103,7 +105,7 @@ function createRouter(opts: {
     cdpManagers: new Map(),
     providerLoader: {} as any,
     instanceManager: {
-      collectAllStates: () => [],
+      collectAllStates: () => opts.instanceStates ?? [],
       listInstanceIds: () => [],
       getInstance: () => null,
       getByCategory: () => [],
@@ -113,7 +115,7 @@ function createRouter(opts: {
     sessionHostControl: { listSessions: vi.fn(async () => []) } as any,
     dispatchMeshCommand: opts.dispatchMeshCommand,
     onMeshStateChange: opts.onMeshStateChange,
-    statusInstanceId: 'daemon_local',
+    statusInstanceId: opts.statusInstanceId ?? 'daemon_local',
     meshNodeGitStateStore: opts.store,
   })
 }
@@ -157,12 +159,16 @@ describe('mesh_status — coordinator-held node state', () => {
       expect(remote.gitProbePending).toBe(true)
       expect(remote.gitObservation).toMatchObject({ source: 'none', observedAt: null, refreshing: true })
       // Kicked exactly once, in the background, carrying the push subscription.
-      expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
-      expect(dispatchMeshCommand.mock.calls[0][1]).toBe('git_status')
-      expect(dispatchMeshCommand.mock.calls[0][2]).toMatchObject({
+      const gitProbes = dispatchMeshCommand.mock.calls.filter((call: any) => call[1] === 'git_status') as any[]
+      expect(gitProbes).toHaveLength(1)
+      expect(gitProbes[0][2]).toMatchObject({
         workspace: REMOTE_WORKSPACE,
         meshStateSubscription: { meshId: MESH_ID, nodeId: REMOTE_NODE },
       })
+      // Nothing held for the node's runtime either: ONE background runtime probe of its daemon.
+      expect(dispatchMeshCommand.mock.calls.filter((call: any) => call[1] === 'get_status_metadata').map((call: any) => call[0])).toEqual([REMOTE_DAEMON])
+      expect(remote.heldRuntime).toMatchObject({ source: 'none', refreshing: true, sessions: [] })
+      expect(dispatchMeshCommand).toHaveBeenCalledTimes(2)
     } finally {
       await cleanupTempDir(dir)
     }
@@ -175,6 +181,7 @@ describe('mesh_status — coordinator-held node state', () => {
       const store = new MeshNodeGitStateStore()
       const observedAt = Date.now() - 60_000
       store.recordObservation({ meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, git: remoteGit(), source: 'member_push', observedAt })
+      store.recordRuntimeObservation({ meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, runtime: { sessions: [] }, source: 'member_push', observedAt })
       const router = createRouter({ dispatchMeshCommand, store })
 
       const result: any = await router.execute('mesh_status', { meshId: MESH_ID, inlineMesh: inlineMesh(repoRoot) })
@@ -199,7 +206,9 @@ describe('mesh_status — coordinator-held node state', () => {
     const { dir, repoRoot } = await createTempGitRepo('node-state-bg-')
     try {
       let answer: (value: unknown) => void = () => {}
-      const dispatchMeshCommand = vi.fn(() => new Promise<unknown>((resolve) => { answer = resolve }))
+      const dispatchMeshCommand = vi.fn((_daemonId: string, cmd: string) => cmd === 'git_status'
+        ? new Promise<unknown>((resolve) => { answer = resolve })
+        : Promise.resolve({ success: true, status: { instanceId: REMOTE_DAEMON, sessions: [] } }))
       const onMeshStateChange = vi.fn()
       const router = createRouter({ dispatchMeshCommand, onMeshStateChange })
 
@@ -215,8 +224,9 @@ describe('mesh_status — coordinator-held node state', () => {
       const remote = remoteNodeOf(second)
       expect(remote.gitObservation).toMatchObject({ source: 'coordinator_probe', refreshing: false })
       expect(remote.git.submodules.map((s: any) => s.path)).toEqual(['adhdev-providers', 'oss'])
-      // Fresh → no second probe.
-      expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
+      expect(remote.heldRuntime).toMatchObject({ source: 'coordinator_probe', sessions: [] })
+      // Fresh → no second probe (one git probe + one runtime probe, both in the background).
+      expect(dispatchMeshCommand.mock.calls.map((call: any) => call[1]).sort()).toEqual(['get_status_metadata', 'git_status'])
     } finally {
       await cleanupTempDir(dir)
     }
@@ -242,7 +252,8 @@ describe('mesh_status — coordinator-held node state', () => {
       expect(remote.gitObservation.observedAt).toBe(observedAt)
       expect(typeof remote.gitObservation.unreachableSince).toBe('number')
       // The failure backoff holds: no immediate re-probe storm.
-      expect(dispatchMeshCommand.mock.calls.length).toBeLessThanOrEqual(3)
+      expect(dispatchMeshCommand.mock.calls.filter((call: any) => call[1] === 'git_status').length).toBeLessThanOrEqual(3)
+      expect(dispatchMeshCommand.mock.calls.filter((call: any) => call[1] === 'get_status_metadata').length).toBeLessThanOrEqual(1)
     } finally {
       await cleanupTempDir(dir)
     }
@@ -406,6 +417,126 @@ describe('mesh_node_git_report — member push ingest', () => {
       expect(router.meshNodeGitState.get(MESH_ID, REMOTE_NODE)?.git ?? null).toBeNull()
     } finally {
       await cleanupTempDir(dir)
+    }
+  })
+})
+
+describe('mesh_node_git_report — held runtime (sessions / build / quota)', () => {
+  const runtime = {
+    daemonId: REMOTE_DAEMON,
+    daemonBuild: { commit: 'abcdef0123456789', commitShort: 'abcdef0', version: '1.0.60-rc.2', track: 'preview' },
+    sessions: [{ id: 'sess-r1', providerType: 'claude-cli', status: 'generating', lastMessagePreview: 'PRIVATE CHAT TEXT', title: 'PRIVATE TITLE' }],
+    nodeFacts: { schemaVersion: 1, reportedAt: Date.now(), quota: { 'claude-cli': { status: 'ok', windows: [{ usedPercent: 42 }] } } },
+  }
+
+  it('ingests a runtime-only push from the owner, re-applies the allow-list, and mesh_status answers it for the remote node', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('node-runtime-ingest-')
+    try {
+      const onMeshStateChange = vi.fn()
+      const router = createRouter({ dispatchMeshCommand: vi.fn(() => new Promise<unknown>(() => {})), onMeshStateChange })
+      const mesh = inlineMesh(repoRoot)
+      // A worktree node served by the same member daemon (runtime is daemon-wide).
+      mesh.nodes.push({ id: 'node_remote_wt', daemonId: REMOTE_DAEMON, workspace: `${REMOTE_WORKSPACE}-wt`, repoRoot: `${REMOTE_WORKSPACE}-wt`, providers: [], policy: {} })
+      await router.execute('mesh_status', { meshId: MESH_ID, inlineMesh: mesh })
+      onMeshStateChange.mockClear()
+
+      const pushed: any = await router.execute('mesh_node_git_report', {
+        meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, runtime, runtimeObservedAt: Date.now(),
+        [MESH_SENDER_DAEMON_ID_ARG]: REMOTE_DAEMON,
+      }, 'mesh')
+      expect(pushed).toMatchObject({ success: true, accepted: true, changed: false, runtimeChanged: true })
+      // Quota changed → one revision (dashboards render it); no aggregate rebuild needed.
+      expect(onMeshStateChange).toHaveBeenCalledTimes(1)
+
+      const status: any = await router.execute('mesh_status', { meshId: MESH_ID }, 'p2p')
+      expect(status.nodeRuntimeHeld).toBe(true)
+      const remote = remoteNodeOf(status)
+      expect(remote.heldRuntime).toMatchObject({ source: 'member_push', daemonId: REMOTE_DAEMON, daemonBuild: { commitShort: 'abcdef0', track: 'preview' } })
+      expect(remote.heldRuntime.sessions).toEqual([{ id: 'sess-r1', providerType: 'claude-cli', status: 'generating' }])
+      expect(remote.nodeFacts.quota['claude-cli'].windows[0].usedPercent).toBe(42)
+      expect(JSON.stringify(status)).not.toContain('PRIVATE')
+      // The sibling worktree node of the same daemon holds the same runtime (no extra probe needed).
+      expect(status.nodes.find((node: any) => node.nodeId === 'node_remote_wt').heldRuntime).toMatchObject({ source: 'member_push', sessions: [{ id: 'sess-r1' }] })
+      // The coordinator's own node is read directly, never stamped from held state.
+      expect(status.nodes.find((node: any) => node.nodeId === 'node_local').heldRuntime).toBeUndefined()
+
+      const intruder: any = await router.execute('mesh_node_git_report', {
+        meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, runtime: { ...runtime, sessions: [] },
+        [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_intruder',
+      }, 'mesh')
+      expect(intruder).toMatchObject({ success: false, code: 'mesh_sender_not_node_owner' })
+      expect(router.meshNodeGitState.get(MESH_ID, REMOTE_NODE)!.runtime!.sessions).toHaveLength(1)
+    } finally {
+      await cleanupTempDir(dir)
+    }
+  })
+
+  it("the router's member pusher reads this daemon's runtime in-process and pushes it to the subscribing coordinator", async () => {
+    const { dir, repoRoot } = await createTempGitRepo('node-runtime-member-')
+    try {
+      const dispatch = vi.fn(async () => ({ success: true, accepted: true }))
+      const router = createRouter({ dispatchMeshCommand: dispatch })
+      await router.execute('git_status', {
+        workspace: repoRoot,
+        meshStateSubscription: { meshId: MESH_ID, nodeId: 'node_member' },
+        [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_coordinator',
+      }, 'mesh')
+      await router.meshNodeStatePusher.pushRuntimeChanges()
+      router.meshNodeStatePusher.stop()
+      const report = dispatch.mock.calls.find((call: any) => call[1] === 'mesh_node_git_report') as any
+      expect(report).toBeTruthy()
+      expect(report[0]).toBe('daemon_coordinator')
+      expect(report[2]).toMatchObject({ meshId: MESH_ID, nodeId: 'node_member', runtime: { daemonId: 'daemon_local', sessions: [] } })
+      expect(report[2].git).toBeUndefined()
+    } finally {
+      await cleanupTempDir(dir)
+    }
+  })
+})
+
+describe('held runtime — member daemon → coordinator daemon, end to end', () => {
+  it("a member's session change reaches the coordinator's mesh_status without the coordinator asking", async () => {
+    const coordRepo = await createTempGitRepo('node-runtime-e2e-coord-')
+    const memberRepo = await createTempGitRepo('node-runtime-e2e-member-')
+    try {
+      const memberStates: any[] = []
+      let coordinator!: DaemonCommandRouter
+      // member → coordinator: the mesh channel stamps the authenticated sender.
+      const memberDispatch = vi.fn(async (_daemonId: string, cmd: string, args: Record<string, unknown>) =>
+        coordinator.execute(cmd, { ...args, [MESH_SENDER_DAEMON_ID_ARG]: REMOTE_DAEMON }, 'mesh'))
+      const member = createRouter({ dispatchMeshCommand: memberDispatch, statusInstanceId: REMOTE_DAEMON, instanceStates: memberStates })
+      const coordDispatch = vi.fn(() => new Promise<unknown>(() => {})) // the coordinator never gets an answer from the peer
+      coordinator = createRouter({ dispatchMeshCommand: coordDispatch })
+      const mesh = inlineMesh(coordRepo.repoRoot)
+      mesh.nodes[1] = { ...mesh.nodes[1], workspace: memberRepo.repoRoot, repoRoot: memberRepo.repoRoot }
+      await coordinator.execute('mesh_status', { meshId: MESH_ID, inlineMesh: mesh })
+
+      // The coordinator's background git probe reaches the member → push subscription.
+      await member.execute('git_status', {
+        workspace: memberRepo.repoRoot,
+        meshStateSubscription: { meshId: MESH_ID, nodeId: REMOTE_NODE },
+        [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_local',
+      }, 'mesh')
+      await member.meshNodeStatePusher.pushRuntimeChanges()
+
+      // A worker session starts generating on the member (a lifecycle fact).
+      memberStates.push({ category: 'cli', type: 'claude-cli', instanceId: 'sess-worker-1', status: 'generating', settings: {}, activeChat: { messages: [{ role: 'assistant', content: 'PRIVATE WORK' }] } })
+      member.meshNodeStatePusher.noteRuntimeChanged()
+      await member.meshNodeStatePusher.pushRuntimeChanges()
+      member.meshNodeStatePusher.stop()
+
+      const startedAt = Date.now()
+      const status: any = await coordinator.execute('mesh_status', { meshId: MESH_ID }, 'p2p')
+      expect(Date.now() - startedAt).toBeLessThan(5_000)
+      const remote = remoteNodeOf(status)
+      expect(remote.heldRuntime).toMatchObject({ source: 'member_push', daemonId: REMOTE_DAEMON })
+      expect(remote.heldRuntime.sessions.map((s: any) => [s.id, s.status])).toEqual([['sess-worker-1', 'generating']])
+      expect(JSON.stringify(status)).not.toContain('PRIVATE WORK')
+      // Nothing the coordinator sent to the member was awaited for this answer.
+      expect(coordDispatch.mock.calls.every((call: any) => call[1] === 'git_status' || call[1] === 'get_status_metadata')).toBe(true)
+    } finally {
+      await cleanupTempDir(coordRepo.dir)
+      await cleanupTempDir(memberRepo.dir)
     }
   })
 })

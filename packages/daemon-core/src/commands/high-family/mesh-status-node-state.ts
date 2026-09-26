@@ -12,13 +12,20 @@
  *   3. overlay  — stamp each returned node with `gitObservation` (source, age,
  *                 refreshing, unreachable-since) computed NOW, so even a cached
  *                 aggregate snapshot reports the current refresh state.
+ *
+ * The same three steps carry the node's held RUNTIME (sessions / build / quota,
+ * mesh/mesh-node-runtime-summary.ts): kick runs one background runtime probe per
+ * remote daemon whose held runtime is missing/stale, and overlay stamps
+ * `heldRuntime` plus the newest facts bundle (quota) onto every remote node, and
+ * `nodeRuntimeHeld: true` on the response so a reader knows remote sessions are
+ * answered from held state (and never needs a per-daemon live call).
  */
 import * as fs from 'fs';
 import { daemonIdsEquivalent, normalizeMeshNodeId } from '@adhdev/mesh-shared';
 import type { MeshNodeGitStateStore } from '../../mesh/mesh-node-git-state.js';
 import type { MeshNodeGitRefresher } from '../../mesh/mesh-node-git-refresher.js';
 import { buildInlineMeshTransitGitStatus } from '../../mesh/mesh-node-identity.js';
-import type { RepoMeshNodeGitObservation } from '../../repo-mesh-types.js';
+import type { RepoMeshNodeGitObservation, RepoMeshNodeHeldRuntime } from '../../repo-mesh-types.js';
 
 /** node.lastGit.source stamped on truth hydrated from the coordinator store. */
 export const MESH_NODE_STATE_HELD_SOURCE = 'coordinator_node_state';
@@ -53,6 +60,20 @@ export function isRemoteMeshNodeForState(node: any, locality: MeshNodeLocality):
     if (locality.localMachineId && daemonIdsEquivalent(daemonId, locality.localMachineId)) return false;
     if (locality.localDaemonId && daemonIdsEquivalent(daemonId, locality.localDaemonId)) return false;
     return !workspaceExistsLocally(readString(node?.workspace));
+}
+
+/**
+ * A node served by ANOTHER daemon. Runtime (sessions / build) is per daemon, so
+ * this — not workspace locality — decides whether the coordinator answers a
+ * node's runtime from held state: a second daemon on this machine (stable +
+ * preview) owns sessions this daemon cannot list either.
+ */
+export function isForeignDaemonMeshNode(node: any, locality: MeshNodeLocality): boolean {
+    const daemonId = readString(node?.daemonId);
+    if (!daemonId) return false;
+    if (locality.localMachineId && daemonIdsEquivalent(daemonId, locality.localMachineId)) return false;
+    if (locality.localDaemonId && daemonIdsEquivalent(daemonId, locality.localDaemonId)) return false;
+    return true;
 }
 
 function heldCheckedAt(node: any): number | null {
@@ -125,19 +146,56 @@ export function kickMeshNodeGitRefreshes(args: {
     const now = args.now ?? Date.now();
     let started = 0;
     const nodes = Array.isArray(args.mesh?.nodes) ? args.mesh.nodes : [];
+    const runtimeTargetsByDaemon = new Map<string, Array<{ nodeId: string; workspace: string; force: boolean }>>();
     for (const node of nodes) {
         if (!node || typeof node !== 'object') continue;
-        if (!isRemoteMeshNodeForState(node, args.locality)) continue;
+        if (!isForeignDaemonMeshNode(node, args.locality)) continue;
         const nodeId = normalizeMeshNodeId(node) ?? '';
         const daemonId = readString(node.daemonId);
         const workspace = readString(node.workspace);
         if (!nodeId || !daemonId || !workspace) continue;
         const entry = args.store.get(args.meshId, nodeId);
-        const force = args.refresh
-            && (!entry || entry.observedAt === null || now - entry.observedAt >= MESH_NODE_STATE_REFRESH_MAX_AGE_MS);
-        if (args.refresher.kick({ meshId: args.meshId, nodeId, daemonId, workspace }, { force })) started += 1;
+        if (isRemoteMeshNodeForState(node, args.locality)) {
+            const force = args.refresh
+                && (!entry || entry.observedAt === null || now - entry.observedAt >= MESH_NODE_STATE_REFRESH_MAX_AGE_MS);
+            if (args.refresher.kick({ meshId: args.meshId, nodeId, daemonId, workspace }, { force })) started += 1;
+        }
+        const runtimeForce = args.refresh
+            && (!entry || entry.runtimeObservedAt === null || now - entry.runtimeObservedAt >= MESH_NODE_STATE_REFRESH_MAX_AGE_MS);
+        const targets = runtimeTargetsByDaemon.get(daemonId) ?? [];
+        targets.push({ nodeId, workspace, force: runtimeForce });
+        runtimeTargetsByDaemon.set(daemonId, targets);
+    }
+    for (const [daemonId, targets] of runtimeTargetsByDaemon) {
+        if (args.refresher.kickRuntime(args.meshId, daemonId, targets)) started += 1;
     }
     return started;
+}
+
+function factsReportedAt(facts: unknown): number {
+    const reportedAt = readRecord(facts).reportedAt;
+    return typeof reportedAt === 'number' && Number.isFinite(reportedAt) ? reportedAt : 0;
+}
+
+/** The held runtime of one remote node, rendered NOW (also refreshes its facts bundle / quota). */
+function overlayHeldRuntime(status: Record<string, any>, entry: ReturnType<MeshNodeGitStateStore['get']>, refreshing: boolean): void {
+    const runtime = entry?.runtime ?? null;
+    const held: RepoMeshNodeHeldRuntime = {
+        source: runtime ? (entry?.runtimeSource ?? 'member_push') : 'none',
+        observedAt: runtime ? (entry?.runtimeObservedAt ?? null) : null,
+        refreshing,
+        sessions: runtime ? runtime.sessions : [],
+        ...(runtime?.daemonId ? { daemonId: runtime.daemonId } : {}),
+        ...(runtime?.daemonBuild ? { daemonBuild: runtime.daemonBuild } : {}),
+        ...(runtime?.upgradeFailure ? { upgradeFailure: runtime.upgradeFailure } : {}),
+        ...(runtime?.sessionsTruncated ? { sessionsTruncated: true } : {}),
+    };
+    status.heldRuntime = held;
+    // Quota / build facts: the pushed bundle wins when it is newer than the one
+    // stamped on the node record (which only a git probe's envelope refreshes).
+    if (runtime?.nodeFacts && factsReportedAt(runtime.nodeFacts) > factsReportedAt(status.nodeFacts)) {
+        status.nodeFacts = runtime.nodeFacts;
+    }
 }
 
 const LIVE_PEER_REASON_PREFIX = 'Live peer git snapshot';
@@ -151,11 +209,22 @@ export function overlayMeshNodeGitObservations(snapshot: any, args: {
     meshId: string;
     store: MeshNodeGitStateStore;
     refresher: MeshNodeGitRefresher;
+    /** Enables the held-runtime overlay (sessions / build / quota of nodes served by another daemon). */
+    locality?: MeshNodeLocality;
 }): void {
     if (!snapshot || !Array.isArray(snapshot.nodes)) return;
+    if (args.locality) snapshot.nodeRuntimeHeld = true;
     for (const status of snapshot.nodes) {
         if (!status || typeof status !== 'object') continue;
         const nodeId = readString(status.nodeId);
+        const daemonId = readString(status.daemonId);
+        if (args.locality && status.connection?.state !== 'self' && isForeignDaemonMeshNode(status, args.locality)) {
+            overlayHeldRuntime(
+                status,
+                nodeId ? args.store.get(args.meshId, nodeId) : undefined,
+                daemonId ? args.refresher.isRuntimeRefreshing(args.meshId, daemonId) : false,
+            );
+        }
         const connection = readRecord(status.connection);
         const git = readRecord(status.git);
         const workspace = readString(status.workspace);

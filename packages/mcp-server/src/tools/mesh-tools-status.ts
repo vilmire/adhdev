@@ -34,7 +34,6 @@ import {
     readNodeDaemonId,
     readNodeMachineId,
     readRelatedRepos,
-    reconcileDirectDispatchesFromTranscriptEvidence,
     readActiveWorkFromDaemon,
     recordMeshCoordinatorToolCall,
     refreshMeshFromDaemon,
@@ -50,7 +49,15 @@ import type {
 // daemon-core symbols mesh-tools-internal.ts itself imports.
 import type { MeshLedgerSummary as MeshLedgerSummaryView, MeshSchedulingRuntime, SessionRecoveryContext } from '@adhdev/daemon-core';
 import { activeWorkQuery, recoveryContextQuery, taskStatsQuery } from '../ipc/turn-commands.js';
-import { applyHeldNodeGitToEntry, buildNodeGitStateSummary, findHeldNodeStatus, readCoordinatorHeldNodeState } from './mesh-status-held-git.js';
+import {
+    applyHeldNodeGitToEntry,
+    buildNodeGitStateSummary,
+    findHeldNodeStatus,
+    heldNodeStatusProbe,
+    readCoordinatorHeldNodeState,
+    usesHeldNodeRuntime,
+} from './mesh-status-held-git.js';
+import { scheduleBackgroundDirectReconcile } from './mesh-status-background.js';
 
 // The v2 protocol version literal (mirrors MESH_PROTOCOL_VERSION_V2 in
 // daemon-core mesh/contracts.ts). Kept as a local literal so this MCP-side
@@ -135,14 +142,21 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
 
     // C-W9a: the record summary and the scheduling runtime are computed in the
     // daemon (`active_work_query`) — the queue and the records never leave it.
-    const runtimeView = await activeWorkQuery(transport, {
-        meshId: mesh.id,
-        compute: false,
-        includeSummary: true,
-        includeSchedulingRuntime: true,
-        mesh: mesh as unknown as Record<string, unknown>,
-    });
-    let ledgerSummary = runtimeView.summary as unknown as MeshLedgerSummaryView;
+    // ONE local read of the coordinator daemon's held node state (git, submodules,
+    // gitObservation, freshness, remote nodes' runtime) runs alongside it. Never
+    // waits on a remote peer; `refresh` only kicks the daemon's background refresh
+    // (see mesh-status-held-git.ts).
+    const [runtimeView, heldNodeState] = await Promise.all([
+        activeWorkQuery(transport, {
+            meshId: mesh.id,
+            compute: false,
+            includeSummary: true,
+            includeSchedulingRuntime: true,
+            mesh: mesh as unknown as Record<string, unknown>,
+        }),
+        readCoordinatorHeldNodeState(ctx, { refresh: args.refresh === true }),
+    ]);
+    const ledgerSummary = runtimeView.summary as unknown as MeshLedgerSummaryView;
 
     // Scheduling-runtime projection (load-balancer's live view): tie-break strategy,
     // global parallel caps + consumption, and per-node load / priority / provider caps
@@ -152,11 +166,6 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     // node entry below can attach its slice and the response can carry the mesh rollup.
     const schedulingRuntime = runtimeView.schedulingRuntime as unknown as MeshSchedulingRuntime;
     const schedulingByNode = new Map(schedulingRuntime.nodes.map(n => [n.nodeId, n]));
-
-    // ONE local read of the coordinator daemon's held node state (git, submodules,
-    // gitObservation, freshness). Never waits on a remote peer; `refresh` only
-    // kicks the daemon's background refresh (see mesh-status-held-git.ts).
-    const heldNodeState = await readCoordinatorHeldNodeState(ctx, { refresh: args.refresh === true });
 
     // Assemble all nodes in parallel — held git (above) + session collection per node.
     //
@@ -236,10 +245,11 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         // quota facts and freshness come from the coordinator daemon's held node
         // state (ONE local `mesh_status` read above — member pushes + the daemon's
         // own background refresh), the same view the dashboard renders.
+        const heldNode = findHeldNodeStatus(heldNodeState, node);
         applyHeldNodeGitToEntry(entry, {
             mesh,
             node,
-            held: findHeldNodeStatus(heldNodeState, node),
+            held: heldNode,
             heldStateError: heldNodeState.error,
         });
 
@@ -301,7 +311,19 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         const relatedRepos = await collectRelatedRepoStatuses(ctx, node, { localOnly: true });
         if (relatedRepos.length) entry.relatedRepos = relatedRepos;
 
-        const statusProbe = await collectLiveStatusProbe(ctx, node, probeOpts);
+        // Sessions / daemon build / upgrade marker: a node served by ANOTHER daemon
+        // answers from the coordinator-held runtime (member push, content-free) —
+        // no per-daemon get_status_metadata round trip on the request path. The
+        // coordinator's own nodes are read directly (one local, cached IPC call).
+        let statusProbe: Awaited<ReturnType<typeof collectLiveStatusProbe>>;
+        if (usesHeldNodeRuntime(ctx, node, heldNodeState)) {
+            const held = heldNodeStatusProbe(heldNode);
+            statusProbe = held.probe;
+            entry.runtimeObservation = held.observation;
+        } else {
+            statusProbe = await collectLiveStatusProbe(ctx, node, probeOpts);
+            if (heldNodeState.runtimeHeld) entry.runtimeObservation = { source: 'local_read', observedAt: Date.now(), refreshing: false };
+        }
         const liveSessions = statusProbe.sessions;
         // Per-node daemon build stamp (commit/version of the running daemon).
         // Compact mode folds these per-daemonId at the response level, but the
@@ -379,12 +401,12 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     // dispatches and records (+ turn outcomes); the inputs come back only for the
     // transcript-reconcile pass below. buildMeshActiveWork never reads `task.input`
     // (MESH-IMAGE-DISPATCH), and no queue row reaches this response from here.
-    let activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: results, recordTail: 200, includeInputs: true });
-    const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, results, activeWorkView.directDispatches, activeWorkView.records);
-    if (directReconciliation.reconciled > 0) {
-        activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: results, recordTail: 200, includeInputs: true, includeSummary: true });
-        if (activeWorkView.summary) ledgerSummary = activeWorkView.summary as unknown as MeshLedgerSummaryView;
-    }
+    const activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: results, recordTail: 200, includeInputs: true });
+    // Idle direct dispatches: transcript evidence is gathered in the BACKGROUND
+    // (mesh-status-background.ts) — it may read a remote worker's transcript, and
+    // its only effect is a terminal the daemon's turn ledger commits, which the
+    // next mesh_status shows. This response never waits on it.
+    scheduleBackgroundDirectReconcile(ctx, results, activeWorkView.directDispatches, activeWorkView.records);
     const activeWorkEvidence = activeWorkView.activeWork!;
     // The record tail the refine-job and MAGI folds below read (the same window as before).
     const ledgerEntries = activeWorkView.records;

@@ -8,6 +8,7 @@ import { meshEnqueueTask, meshQueueCancel, meshSendTask, meshStatus, meshTaskHis
 import { buildTaskCompletionEvidence, enqueueTask, getLedgerDir, getQueue, loadConfig, notifyMeshCoordinator, readLocalRecords, __writeTaskStatusForTests } from '@adhdev/daemon-core';
 import { answerTurnIpc, armTestTurnLedger, closeOpenTestAttempts, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 import { drainPendingMeshCoordinatorEvents } from './helpers/pending-notices.js';
+import { awaitMeshStatusBackgroundWork } from '../src/tools/mesh-status-background.js';
 
 // The stdio MCP coordinator runs on its own daemon/machine, so a self-fallback (ownerless)
 // terminal broadcast — a refine:* event queued with no coordinator identity — is stamped
@@ -430,6 +431,9 @@ test('mesh_status reports an idle direct dispatch\'s final transcript as ONE con
     await seedDirectTranscriptDispatch(meshId, taskId);
 
     await meshStatus(ctx as any, { includeStaleDirectWorkDetails: true, includeTerminalDirectWork: true });
+    // The transcript read is BACKGROUND work (mesh-status-background.ts): the
+    // response never waits on a (possibly remote) read_chat.
+    await awaitMeshStatusBackgroundWork(ctx as any);
     assert.equal(calls.some(call => call.command === 'read_chat'), true);
     const observed = turnObserveCalls(calls);
     assert.equal(observed.length, 1);
@@ -446,6 +450,7 @@ test('mesh_status reports an idle direct dispatch\'s final transcript as ONE con
     // A second poll over the SAME turn end re-sends the SAME eventId (the ledger
     // collapses it on its primary key) rather than a fresh evidence row per poll.
     await meshStatus(ctx as any, { includeTerminalDirectWork: true });
+    await awaitMeshStatusBackgroundWork(ctx as any);
     const observedAgain = turnObserveCalls(calls);
     assert.equal(observedAgain.length, 2);
     assert.equal(observedAgain[1].eventId, observedAgain[0].eventId);

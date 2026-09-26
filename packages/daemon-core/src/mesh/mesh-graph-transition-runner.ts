@@ -682,6 +682,7 @@ function advanceGraphForTerminalNode(
         // `block` (default): do not mutate dependents, do not strip dependsOn,
         // do not rewrite the failure as a skip. Views derive dependencyFailures.
         const dependents = graphStore.listEdges(node.graphId)
+            // eslint-disable-next-line no-restricted-syntax -- GRAPH node UUIDs from one graph store (mesh_task_graph_nodes.nodeId), single canonical form — not mesh machine/daemon ids
             .filter(e => e.fromNodeId === node.nodeId && e.kind !== 'gate')
             .map(e => byId.get(e.toNodeId))
             .filter((n): n is MeshTaskGraphNodeRow => !!n && n.kind === 'worker_task');
@@ -702,6 +703,7 @@ function advanceGraphForTerminalNode(
         // worker steps AND gates (a gate behind a failed step can never open).
         if (terminal.status === 'failed') {
             blockedDownstream = graphStore.listEdges(node.graphId)
+                // eslint-disable-next-line no-restricted-syntax -- GRAPH node UUIDs from one graph store (mesh_task_graph_nodes.nodeId), single canonical form — not mesh machine/daemon ids
                 .filter(e => e.fromNodeId === node.nodeId)
                 .map(e => byId.get(e.toNodeId))
                 .filter((n): n is MeshTaskGraphNodeRow => !!n && !isStoppedOrDoneNodeState(n.state));
@@ -953,6 +955,7 @@ export function maybeOpenCoordinatorGate(
     if (gateNode.state !== 'declared' && gateNode.state !== 'blocked') return false;
     const gate = graphStore.findGateByNodeId(gateNode.graphId, gateNode.nodeId);
     if (!gate || gate.state !== 'declared') return false;
+    // eslint-disable-next-line no-restricted-syntax -- GRAPH node UUIDs from one graph store (mesh_task_graph_nodes.nodeId), single canonical form — not mesh machine/daemon ids
     const incoming = edges.filter(e => e.toNodeId === gateNode.nodeId);
     const satisfied = incoming.every(e => {
         const sourceState = byId.get(e.fromNodeId)?.state;
@@ -986,6 +989,7 @@ export function maybeOpenCoordinatorGate(
     // block is left untouched (design :998) — the settle-time gate guard below
     // still stops materialization even when the visible block is not ours.
     const block = coordinatorGateBlockReason(gate.gateId);
+    // eslint-disable-next-line no-restricted-syntax -- GRAPH node UUIDs from one graph store (mesh_task_graph_nodes.nodeId), single canonical form — not mesh machine/daemon ids
     for (const edge of edges.filter(e => e.fromNodeId === gateNode.nodeId)) {
         const target = byId.get(edge.toNodeId);
         if (!target || target.kind !== 'worker_task' || !target.queueTaskId) continue;
@@ -1083,6 +1087,7 @@ export function settleDownstreamNode(
     nowIso: string,
 ): SettleOutcome {
     const graphStore = store.graphStore();
+    // eslint-disable-next-line no-restricted-syntax -- GRAPH node UUIDs from one graph store (mesh_task_graph_nodes.nodeId), single canonical form — not mesh machine/daemon ids
     const incoming = edges.filter(e => e.toNodeId === target.nodeId && e.kind !== 'gate');
 
     // ★ PHASE C2 gate guard (design :402-405): an incoming `gate` edge is an
@@ -1090,6 +1095,7 @@ export function settleDownstreamNode(
     // never materialize, however settled its worker inputs are — a later
     // upstream completion must not side-step an awaiting/claimed gate, and a
     // TIMEOUT is never passage (there is no auto-release, design :431-432).
+    // eslint-disable-next-line no-restricted-syntax -- GRAPH node UUIDs from one graph store (mesh_task_graph_nodes.nodeId), single canonical form — not mesh machine/daemon ids
     const gateIncoming = edges.filter(e => e.toNodeId === target.nodeId && e.kind === 'gate');
     for (const edge of gateIncoming) {
         if (byId.get(edge.fromNodeId)?.state !== 'released') return { kind: 'deferred' };
@@ -1429,6 +1435,7 @@ function blockWithMaterializationError(
 /** Step 7's generation check, isolated so both call sites share one rule. */
 function clearMatchingGraphBlock(queueEntry: MeshWorkQueueEntry, target: MeshTaskGraphNodeRow): void {
     const block = parseGraphMaterializationBlock(queueEntry.blockedReason);
+    // eslint-disable-next-line no-restricted-syntax -- GRAPH node UUIDs from one graph store (mesh_task_graph_nodes.nodeId), single canonical form — not mesh machine/daemon ids
     if (block && block.nodeId === target.nodeId && block.version === target.materializationVersion) {
         delete queueEntry.blockedReason;
         return;

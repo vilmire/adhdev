@@ -4,11 +4,6 @@
       "count": 3
     }
   },
-  "src/mesh/mesh-graph-transition-runner.ts": {
-    "no-restricted-syntax": {
-      "count": 7
-    }
-  },
   "src/mesh/mesh-graph-view.ts": {
     "no-restricted-syntax": {
       "count": 1

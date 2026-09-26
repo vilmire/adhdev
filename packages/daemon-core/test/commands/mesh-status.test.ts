@@ -1418,10 +1418,16 @@ describe('mesh_status', () => {
       // than the stale threshold — so the default load may kick ONE background
       // freshness probe (never awaited: the cached answer above was already
       // returned), and that probe subscribes the member to push its state.
-      expect(dispatchMeshCommand.mock.calls.length).toBeLessThanOrEqual(1)
-      for (const call of dispatchMeshCommand.mock.calls as any[]) {
+      const gitProbes = (dispatchMeshCommand.mock.calls as any[]).filter((call) => call[1] === 'git_status')
+      expect(gitProbes.length).toBeLessThanOrEqual(1)
+      for (const call of gitProbes) {
         expect(call[2]).toMatchObject({ meshStateSubscription: { meshId: 'mesh_303_cache', nodeId: 'node_303a1ded96a859540d7bf608448d1fcc' } })
       }
+      // Everything else is the background runtime probe (sessions / build) of a
+      // daemon whose runtime is not held yet — at most one per daemon, never awaited.
+      const runtimeProbes = (dispatchMeshCommand.mock.calls as any[]).filter((call) => call[1] !== 'git_status')
+      expect(runtimeProbes.every((call) => call[1] === 'get_status_metadata')).toBe(true)
+      expect(new Set(runtimeProbes.map((call) => call[0])).size).toBe(runtimeProbes.length)
       expect(sessionHostControl.listSessions).not.toHaveBeenCalled()
     } finally {
       await cleanupTempDir(dir)
@@ -2335,10 +2341,16 @@ describe('mesh_status', () => {
       // The request itself never fans out: at most one BACKGROUND freshness probe
       // is kicked for the never-observed peer (its failure cannot reach this
       // already-returned response), carrying the push-subscription marker.
-      expect(dispatchMeshCommand.mock.calls.length).toBeLessThanOrEqual(1)
-      for (const call of dispatchMeshCommand.mock.calls as any[]) {
+      const gitProbes = (dispatchMeshCommand.mock.calls as any[]).filter((call) => call[1] === 'git_status')
+      expect(gitProbes.length).toBeLessThanOrEqual(1)
+      for (const call of gitProbes) {
         expect(call[2]).toMatchObject({ meshStateSubscription: { meshId: 'mesh_standing_default', nodeId: 'node_slow' } })
       }
+      // Everything else is the background runtime probe (sessions / build) of a
+      // daemon whose runtime is not held yet — at most one per daemon, never awaited.
+      const runtimeProbes = (dispatchMeshCommand.mock.calls as any[]).filter((call) => call[1] !== 'git_status')
+      expect(runtimeProbes.every((call) => call[1] === 'get_status_metadata')).toBe(true)
+      expect(new Set(runtimeProbes.map((call) => call[0])).size).toBe(runtimeProbes.length)
       expect(result.sourceOfTruth.coordinatorOwnsLiveTruth).toBe(true)
       const localNode = result.nodes.find((node: any) => node.nodeId === 'node_7')
       expect(localNode.git).toMatchObject({ isGitRepo: true })
