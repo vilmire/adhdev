@@ -177058,6 +177058,9 @@ ${notice.notice}${supersededHint}`;
     init_logger();
     init_builders();
     var TURN_SOURCED_WIRE_NAMES = new Set(TURN_WIRE_EVENT_NAMES);
+    function nonEmpty(value) {
+      return typeof value === "string" && value.trim() ? value.trim() : void 0;
+    }
     function toDaemonStatusEventName(value) {
       switch (value) {
         case "agent:generating_started":
@@ -177091,6 +177094,74 @@ ${notice.notice}${supersededHint}`;
           // approval/choice frame in the same turn.
           muted: resolveMuted(settings, state?.status)
         };
+      };
+    }
+    function createInstanceSessionMetaResolver(instanceManager, sessionRegistry) {
+      const readState = (sessionId) => {
+        const getInstance = instanceManager?.getInstance;
+        if (typeof getInstance !== "function") return void 0;
+        try {
+          return getInstance.call(instanceManager, sessionId)?.getState?.();
+        } catch {
+          return void 0;
+        }
+      };
+      return (sessionId) => {
+        if (!sessionId) return void 0;
+        let state = readState(sessionId);
+        let workspace = state?.workspace;
+        if (!state) {
+          let parentId;
+          try {
+            parentId = nonEmpty(sessionRegistry?.get(sessionId)?.parentSessionId);
+          } catch {
+            parentId = void 0;
+          }
+          const parent = parentId ? readState(parentId) : void 0;
+          const children = parent && parent.category === "ide" && Array.isArray(parent.extensions) ? parent.extensions : [];
+          state = children.find((child) => child?.instanceId === sessionId);
+          if (!state) return void 0;
+          workspace = parent?.workspace;
+        }
+        const meta3 = {};
+        const providerType = nonEmpty(state.type);
+        if (providerType) meta3.providerType = providerType;
+        const providerSessionId = nonEmpty(state.providerSessionId);
+        if (providerSessionId) meta3.providerSessionId = providerSessionId;
+        const workspaceName = nonEmpty(workspace);
+        if (workspaceName) meta3.workspaceName = workspaceName;
+        return meta3;
+      };
+    }
+    function createTurnDurationTracker(maxEntries = 256) {
+      const starts = /* @__PURE__ */ new Map();
+      return {
+        observe(event) {
+          if (!event.attemptId || typeof event.at !== "number" || !Number.isFinite(event.at)) return void 0;
+          if (event.phase === "started") {
+            starts.delete(event.attemptId);
+            starts.set(event.attemptId, { sessionId: event.sessionId, at: event.at });
+            while (starts.size > maxEntries) {
+              const oldest = starts.keys().next().value;
+              if (oldest === void 0) break;
+              starts.delete(oldest);
+            }
+            return void 0;
+          }
+          if (event.phase !== "committed") return void 0;
+          const start = starts.get(event.attemptId);
+          starts.delete(event.attemptId);
+          if (!start || event.at < start.at) return void 0;
+          return Math.round((event.at - start.at) / 1e3);
+        },
+        forgetSession(sessionId) {
+          for (const [attemptId, start] of starts) {
+            if (start.sessionId === sessionId) starts.delete(attemptId);
+          }
+        },
+        get size() {
+          return starts.size;
+        }
       };
     }
     function projectServerStatusEvent(event, resolveHideMute) {
@@ -177143,7 +177214,7 @@ ${notice.notice}${supersededHint}`;
       }
       return payload;
     }
-    function projectTurnStatusEvent(event, at, resolveHideMute) {
+    function projectTurnStatusEvent(event, at, resolveHideMute, extras) {
       const wire = projectTurnWireEvent(event, at);
       if (!wire) return null;
       const payload = {
@@ -177151,6 +177222,18 @@ ${notice.notice}${supersededHint}`;
         timestamp: wire.timestamp,
         targetSessionId: wire.sessionId
       };
+      const meta3 = extras?.resolveSessionMeta?.(wire.sessionId);
+      if (meta3) {
+        const providerType = nonEmpty(meta3.providerType);
+        if (providerType) payload.providerType = providerType;
+        const providerSessionId = nonEmpty(meta3.providerSessionId);
+        if (providerSessionId) payload.providerSessionId = providerSessionId;
+        const workspaceName = nonEmpty(meta3.workspaceName);
+        if (workspaceName) payload.workspaceName = workspaceName;
+      }
+      if (wire.event === "agent:generating_completed" && typeof extras?.durationSec === "number" && Number.isFinite(extras.durationSec) && extras.durationSec >= 0) {
+        payload.duration = extras.durationSec;
+      }
       if (resolveHideMute) {
         const hideMute = resolveHideMute(wire.sessionId);
         if (hideMute) {
@@ -177175,6 +177258,8 @@ ${notice.notice}${supersededHint}`;
     }
     function createStatusEventEmitter(bus, deps) {
       const resolveHideMute = createInstanceHideMuteResolver(deps.instanceManager);
+      const resolveSessionMeta = createInstanceSessionMetaResolver(deps.instanceManager, deps.sessionRegistry);
+      const durations = createTurnDurationTracker();
       const unsubProviderEvent = bus.on("provider_event", (e) => {
         const raw = e.event;
         const serverEvent = projectServerStatusEvent(raw, resolveHideMute);
@@ -177195,7 +177280,8 @@ ${notice.notice}${supersededHint}`;
       }, { name: "host.status-event" });
       const unsubTurn = deps.turnCommits === false ? () => {
       } : bus.on("turn", (e) => {
-        const serverEvent = projectTurnStatusEvent(e, e.at, resolveHideMute);
+        const durationSec = durations.observe(e);
+        const serverEvent = projectTurnStatusEvent(e, e.at, resolveHideMute, { resolveSessionMeta, durationSec });
         if (!serverEvent) return;
         LOG.debug("StatusEvent", `${serverEvent.event} (turn ledger commit, session=${serverEvent.targetSessionId})`);
         try {
@@ -177211,9 +177297,14 @@ ${notice.notice}${supersededHint}`;
           }
         }
       }, { name: "host.status-event.turn" });
+      const unsubTerminated = deps.turnCommits === false ? () => {
+      } : bus.on("terminated", (e) => {
+        durations.forgetSession(e.sessionId);
+      }, { name: "host.status-event.turn-duration-evict" });
       return () => {
         unsubProviderEvent();
         unsubTurn();
+        unsubTerminated();
       };
     }
     init_dist();
@@ -177462,6 +177553,7 @@ ${notice.notice}${supersededHint}`;
         }, { name: "host.send-chat-git-refresh" }),
         createStatusEventEmitter(bus, {
           instanceManager: components.instanceManager,
+          sessionRegistry: components.sessionRegistry,
           sendDashboard: (payload) => transport.sendStatusEvent(payload),
           ...transport.sendServerStatusEvent ? { sendServer: (payload) => transport.sendServerStatusEvent(payload) } : {}
         })

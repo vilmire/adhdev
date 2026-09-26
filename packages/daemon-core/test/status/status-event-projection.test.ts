@@ -12,6 +12,8 @@ import {
     projectP2PStatusEvent,
     projectServerStatusEvent,
     projectTurnStatusEvent,
+    createInstanceSessionMetaResolver,
+    createTurnDurationTracker,
 } from '../../src/status/status-event.js';
 
 const RAW = {
@@ -216,5 +218,143 @@ describe('createStatusEventEmitter', () => {
         bus.emit({ kind: 'provider_event', sessionId: 's1', at: 0, event: { event: 'agent:stopped', targetSessionId: 's1' } as any });
         expect(dashboard).toHaveLength(0);
         expect(server).toHaveLength(0);
+    });
+});
+
+/**
+ * REGRESSION (2026-09-26): after C-W5c moved `agent:generating_completed` /
+ * `agent:stopped` onto the turn ledger, the wire event lost the session
+ * identity and duration the legacy `provider_event` completion carried, so
+ * webhooks fell back to the daemon kind for `providerType` and the completion
+ * push lost its workspace and "Ns" wording. These pin the restored fields.
+ */
+describe('turn-sourced status_event — restored non-content fields', () => {
+    const COMMITTED = { kind: 'turn', phase: 'committed', sessionId: 's1', attemptId: 'a1', generation: 0, outcome: 'completed', strength: 'genuine' } as const;
+
+    function cliInstanceManager(overrides: Record<string, unknown> = {}) {
+        const state = {
+            type: 'claude-cli',
+            category: 'cli',
+            instanceId: 's1',
+            providerSessionId: '3f2a9c1e-5b7d-4e8a-9c0f-1a2b3c4d5e6f',
+            workspace: '/Users/someone/projects/my-app',
+            status: 'idle',
+            settings: {},
+            activeChat: { title: 'private chat title', messages: [{ role: 'assistant', content: 'full assistant transcript' }] },
+            ...overrides,
+        };
+        return { getInstance: (id: string) => (id === 's1' ? { getState: () => state as any } : undefined) };
+    }
+
+    it('projectTurnStatusEvent copies providerType / providerSessionId / workspaceName from the resolver, and duration on completion', () => {
+        const payload = projectTurnStatusEvent(COMMITTED, 9_000, undefined, {
+            resolveSessionMeta: () => ({ providerType: ' claude-cli ', providerSessionId: 'psid', workspaceName: '/w/repo' }),
+            durationSec: 42,
+        });
+        expect(payload).toEqual({
+            event: 'agent:generating_completed',
+            timestamp: 9_000,
+            targetSessionId: 's1',
+            providerType: 'claude-cli',
+            providerSessionId: 'psid',
+            workspaceName: '/w/repo',
+            duration: 42,
+        });
+    });
+
+    it('agent:stopped never carries duration (the legacy stop never did)', () => {
+        const payload = projectTurnStatusEvent({ ...COMMITTED, outcome: 'failed', strength: 'weak' }, 1, undefined, {
+            resolveSessionMeta: () => ({ providerType: 'claude-cli' }),
+            durationSec: 5,
+        })!;
+        expect(payload.event).toBe('agent:stopped');
+        expect(payload.providerType).toBe('claude-cli');
+        expect(payload).not.toHaveProperty('duration');
+    });
+
+    it('the resolver result is allow-listed field by field — an extra key it returns never reaches the wire', () => {
+        const payload = projectTurnStatusEvent(COMMITTED, 1, undefined, {
+            resolveSessionMeta: () => ({ providerType: 'claude-cli', chatTitle: 'private chat title', finalSummary: 'x' } as any),
+        })!;
+        expect(Object.keys(payload).sort()).toEqual(['event', 'providerType', 'targetSessionId', 'timestamp']);
+    });
+
+    it('createInstanceSessionMetaResolver reads type / providerSessionId / workspace off the live state (legacy pushEvent semantics)', () => {
+        const resolve = createInstanceSessionMetaResolver(cliInstanceManager());
+        expect(resolve('s1')).toEqual({
+            providerType: 'claude-cli',
+            providerSessionId: '3f2a9c1e-5b7d-4e8a-9c0f-1a2b3c4d5e6f',
+            workspaceName: '/Users/someone/projects/my-app',
+        });
+        expect(resolve('remote-worker')).toBeUndefined();
+    });
+
+    it('an IDE extension session resolves through its parent IDE: its own type, the parent workspace', () => {
+        const ide = {
+            type: 'cursor', category: 'ide', instanceId: 'ide1', workspace: '/w/app', settings: {},
+            extensions: [{ type: 'cline', category: 'extension', instanceId: 'ext1', providerSessionId: 'chat-9', settings: {} }],
+        };
+        const resolve = createInstanceSessionMetaResolver(
+            { getInstance: (id: string) => (id === 'ide1' ? { getState: () => ide as any } : undefined) },
+            { get: (id: string) => (id === 'ext1' ? { parentSessionId: 'ide1' } : undefined) },
+        );
+        expect(resolve('ext1')).toEqual({ providerType: 'cline', providerSessionId: 'chat-9', workspaceName: '/w/app' });
+    });
+
+    it('createTurnDurationTracker: whole seconds from started to committed, evicted at commit', () => {
+        const t = createTurnDurationTracker();
+        expect(t.observe({ ...COMMITTED, phase: 'started', at: 1_000 } as any)).toBeUndefined();
+        expect(t.observe({ ...COMMITTED, phase: 'suspended', at: 5_000 } as any)).toBeUndefined();
+        expect(t.observe({ ...COMMITTED, at: 43_600 })).toBe(43);
+        expect(t.size).toBe(0);
+        // A commit whose start was never seen (daemon restarted mid-turn) has no duration.
+        expect(t.observe({ ...COMMITTED, at: 50_000 })).toBeUndefined();
+    });
+
+    it('createTurnDurationTracker is bounded and forgets a terminated session', () => {
+        const t = createTurnDurationTracker(3);
+        for (let i = 0; i < 10; i++) t.observe({ kind: 'turn', phase: 'started', sessionId: `s${i % 2}`, attemptId: `a${i}`, generation: 0, at: i } as any);
+        expect(t.size).toBe(3);
+        t.forgetSession('s1');
+        expect(t.size).toBe(1);
+    });
+
+    it('createStatusEventEmitter stamps session identity + duration on the committed turn, both legs, and carries no content', () => {
+        const bus = createSessionLifecycleBus();
+        const dashboard: any[] = [];
+        const server: any[] = [];
+        createStatusEventEmitter(bus, {
+            instanceManager: cliInstanceManager(),
+            sendDashboard: (p) => dashboard.push(p),
+            sendServer: (p) => server.push(p),
+        });
+        bus.emit({ kind: 'turn', at: 10_000, phase: 'started', sessionId: 's1', attemptId: 'a1', generation: 0 } as any);
+        bus.emit({ kind: 'turn', at: 72_400, phase: 'committed', sessionId: 's1', attemptId: 'a1', generation: 0, outcome: 'completed', strength: 'genuine' } as any);
+        expect(server).toHaveLength(1);
+        expect(server[0]).toEqual({
+            event: 'agent:generating_completed',
+            timestamp: 72_400,
+            targetSessionId: 's1',
+            providerType: 'claude-cli',
+            providerSessionId: '3f2a9c1e-5b7d-4e8a-9c0f-1a2b3c4d5e6f',
+            workspaceName: '/Users/someone/projects/my-app',
+            duration: 62,
+            surfaceHidden: false,
+            muted: false,
+        });
+        expect(dashboard[0]).toEqual(server[0]);
+        const wire = JSON.stringify(server[0]);
+        expect(wire).not.toContain('private chat title');
+        expect(wire).not.toContain('full assistant transcript');
+    });
+
+    it('a terminated session drops its open turn start (no stale duration on a later commit with the same attempt id)', () => {
+        const bus = createSessionLifecycleBus();
+        const server: any[] = [];
+        createStatusEventEmitter(bus, { instanceManager: cliInstanceManager(), sendDashboard: () => {}, sendServer: (p) => server.push(p) });
+        bus.emit({ kind: 'turn', at: 0, phase: 'started', sessionId: 's1', attemptId: 'a1', generation: 0 } as any);
+        bus.emit({ kind: 'terminated', sessionId: 's1', at: 1, cause: 'user', providerType: 'claude-cli', runtimeSettings: {} } as any);
+        bus.emit({ kind: 'turn', at: 9_000, phase: 'committed', sessionId: 's1', attemptId: 'a1', generation: 0, outcome: 'completed', strength: 'genuine' } as any);
+        expect(server[0]).not.toHaveProperty('duration');
     });
 });

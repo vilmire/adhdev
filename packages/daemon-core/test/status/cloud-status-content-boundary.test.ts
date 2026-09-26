@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildCloudStatusReportPayload } from '../../src/status/reporter.js';
+import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js';
+import { createStatusEventEmitter } from '../../src/status/status-event.js';
 
 /**
  * The server WS control plane must never carry user chat content.
@@ -712,5 +714,81 @@ describe('★beacon diagnostics never reach the server status frame', () => {
 
         expect(payload.sessions[0]).not.toHaveProperty('beacon');
         expect(JSON.stringify(payload)).not.toContain('adhdev-fedcba9876543210');
+    });
+});
+
+/**
+ * The turn-sourced `status_event` (agent:generating_completed / agent:stopped,
+ * projected from the turn ledger's commit) reads the live provider state to
+ * stamp providerType / providerSessionId / workspaceName. That state holds the
+ * whole conversation, so this pins that only the identifiers cross — the server
+ * leg of `createStatusEventEmitter` is what the cloud host sends on its WS.
+ */
+describe('turn-sourced status_event — server content boundary', () => {
+    const STATE = {
+        type: 'claude-cli',
+        category: 'cli',
+        instanceId: 'sess-1',
+        providerSessionId: '3f2a9c1e-5b7d-4e8a-9c0f-1a2b3c4d5e6f',
+        workspace: '/Users/someone/projects/my-app',
+        status: 'idle',
+        settings: { executablePath: '/opt/homebrew/bin/claude' },
+        activeChat: {
+            id: 'chat-1',
+            title: 'why is my auth token expiring early',
+            messages: [
+                { role: 'user', content: 'secret prompt text' },
+                { role: 'assistant', content: 'The bug is in refreshToken() — it compares seconds to ms' },
+            ],
+            activeModal: { message: 'Allow rm -rf build/?', buttons: ['Yes', 'No'] },
+        },
+        summaryMetadata: { items: [{ id: 'branch', value: 'fix/auth-token-ttl' }] },
+        controlValues: { model: 'opus' },
+    };
+
+    function emit(outcome: 'completed' | 'failed' | 'cancelled') {
+        const bus = createSessionLifecycleBus();
+        const server: any[] = [];
+        createStatusEventEmitter(bus, {
+            instanceManager: { getInstance: (id: string) => (id === 'sess-1' ? { getState: () => STATE as any } : undefined) },
+            sendDashboard: () => {},
+            sendServer: (p) => server.push(p),
+        });
+        bus.emit({ kind: 'turn', at: 1_000, phase: 'started', sessionId: 'sess-1', attemptId: 'a1', generation: 0 } as any);
+        bus.emit({ kind: 'turn', at: 31_000, phase: 'committed', sessionId: 'sess-1', attemptId: 'a1', generation: 0, outcome, strength: 'genuine' } as any);
+        expect(server).toHaveLength(1);
+        return server[0];
+    }
+
+    it('completion carries exactly the allow-listed identifiers, flags and duration', () => {
+        expect(Object.keys(emit('completed')).sort()).toEqual([
+            'duration', 'event', 'muted', 'providerSessionId', 'providerType',
+            'surfaceHidden', 'targetSessionId', 'timestamp', 'workspaceName',
+        ]);
+    });
+
+    it('stop carries the identifiers but no duration', () => {
+        expect(Object.keys(emit('failed')).sort()).toEqual([
+            'event', 'muted', 'providerSessionId', 'providerType',
+            'surfaceHidden', 'targetSessionId', 'timestamp', 'workspaceName',
+        ]);
+    });
+
+    it('never serializes chat text, titles, modal text or settings from the live state', () => {
+        for (const outcome of ['completed', 'cancelled'] as const) {
+            const wire = JSON.stringify(emit(outcome));
+            for (const needle of [
+                'why is my auth token expiring early',
+                'secret prompt text',
+                'refreshToken',
+                'Allow rm -rf build/?',
+                'fix/auth-token-ttl',
+                'opus',
+                '/opt/homebrew/bin/claude',
+                'chat-1',
+            ]) {
+                expect(wire).not.toContain(needle);
+            }
+        }
     });
 });
