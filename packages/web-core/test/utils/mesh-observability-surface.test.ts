@@ -383,7 +383,7 @@ describe('MeshObservabilitySurface', () => {
     expect(detailNode?.branch).toBe('main')
   })
 
-  it('routes git_log to the selected node daemon and skips detached graph-only workspaces', () => {
+  it('routes the node git log THROUGH the coordinator (never the remote node daemon) and skips detached graph-only workspaces', () => {
     expect(resolveGitLogRequest({
       coordinatorDaemonId: 'daemon-coordinator',
       selectedNodeStatus: {
@@ -400,7 +400,7 @@ describe('MeshObservabilitySurface', () => {
         id: 'node-peer',
         workspace: '/remote/repo',
       } as any,
-    })).toEqual({ daemonId: 'daemon-peer', workspace: '/remote/repo' })
+    })).toEqual({ daemonId: 'daemon-coordinator', workspace: '/remote/repo', nodeId: 'node-peer' })
 
     expect(resolveGitLogRequest({
       coordinatorDaemonId: 'daemon-coordinator',

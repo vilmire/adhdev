@@ -641,7 +641,7 @@ describe('mesh_status', () => {
 
       const result = await router.execute('mesh_status', {
         meshId: 'mesh-live-marker',
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
         inlineMesh: {
           id: 'mesh-live-marker',
           name: 'Live Marker Mesh',
@@ -749,7 +749,7 @@ describe('mesh_status', () => {
 
       const result = await router.execute('mesh_status', {
         meshId: 'mesh-preview',
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
         inlineMesh: {
           id: 'mesh-preview',
           name: 'Preview Mesh',
@@ -793,7 +793,7 @@ describe('mesh_status', () => {
 
       const result = await router.execute('mesh_status', {
         meshId: 'mesh-preview-unconfigured',
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
         inlineMesh: {
           id: 'mesh-preview-unconfigured',
           name: 'Preview Mesh',
@@ -832,7 +832,7 @@ describe('mesh_status', () => {
 
       const result = await router.execute('mesh_status', {
         meshId: 'mesh-preview-npm-script',
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
         inlineMesh: {
           id: 'mesh-preview-npm-script',
           name: 'Preview Mesh',
@@ -1209,7 +1209,7 @@ describe('mesh_status', () => {
         meshId: 'mesh-retry',
         // Standing-state model: per-node remote git probe + retry only fires on
         // an explicit refresh; the default load returns held truth without it.
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
         inlineMesh: {
           id: 'mesh-retry',
           name: 'Mesh Retry',
@@ -1360,7 +1360,7 @@ describe('mesh_status', () => {
         meshId: 'mesh_303_cache',
         inlineMesh,
         requireDirectPeerTruth: true,
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
       }) as any
 
       expect(refreshed.success).toBe(true)
@@ -1414,7 +1414,14 @@ describe('mesh_status', () => {
         probeOk: false,
         lastProbeAt: '2026-05-21T14:10:00.000Z',
       }))
-      expect(dispatchMeshCommand).not.toHaveBeenCalled()
+      // Coordinator-held node state: the held truth dates from 2026-05-21 — older
+      // than the stale threshold — so the default load may kick ONE background
+      // freshness probe (never awaited: the cached answer above was already
+      // returned), and that probe subscribes the member to push its state.
+      expect(dispatchMeshCommand.mock.calls.length).toBeLessThanOrEqual(1)
+      for (const call of dispatchMeshCommand.mock.calls as any[]) {
+        expect(call[2]).toMatchObject({ meshStateSubscription: { meshId: 'mesh_303_cache', nodeId: 'node_303a1ded96a859540d7bf608448d1fcc' } })
+      }
       expect(sessionHostControl.listSessions).not.toHaveBeenCalled()
     } finally {
       await cleanupTempDir(dir)
@@ -1440,7 +1447,7 @@ describe('mesh_status', () => {
       addNode(mesh.id, { workspace: repoRoot, repoRoot })
 
       const { router, sessionHostControl } = createRouter()
-      const initial = await router.execute('mesh_status', { meshId: mesh.id, refresh: true }) as any
+      const initial = await router.execute('mesh_status', { meshId: mesh.id, refresh: true, awaitLiveProbes: true }) as any
       expect(initial.success).toBe(true)
       expect(initial.queue.summary.total).toBe(0)
       expect(initial.sourceOfTruth.aggregateSnapshot.cached).toBe(false)
@@ -1488,7 +1495,7 @@ describe('mesh_status', () => {
       addNode(mesh.id, { workspace: repoRoot, repoRoot })
       const { router, sessionHostControl } = createRouter()
 
-      const initial = await router.execute('mesh_status', { meshId: mesh.id, refresh: true }) as any
+      const initial = await router.execute('mesh_status', { meshId: mesh.id, refresh: true, awaitLiveProbes: true }) as any
       expect(initial.success).toBe(true)
       expect(initial.pendingCoordinatorEvents).toBeUndefined()
 
@@ -1622,7 +1629,7 @@ describe('mesh_status', () => {
         })
       }
 
-      const result = await router.execute('mesh_status', { meshId: mesh.id, refresh: true }) as any
+      const result = await router.execute('mesh_status', { meshId: mesh.id, refresh: true, awaitLiveProbes: true }) as any
       expect(result.success).toBe(true)
       expect(result.asyncRefineJobs).toEqual([
         expect.objectContaining({
@@ -1669,7 +1676,7 @@ describe('mesh_status', () => {
         ]),
       })
 
-      const result = await router.execute('mesh_status', { meshId: mesh.id, refresh: true }) as any
+      const result = await router.execute('mesh_status', { meshId: mesh.id, refresh: true, awaitLiveProbes: true }) as any
       expect(result.success).toBe(true)
       expect(result.nodes).toHaveLength(1)
       expect(result.nodes[0].activeSessions).toEqual([])
@@ -1750,7 +1757,7 @@ describe('mesh_status', () => {
       const stale = await router.execute('mesh_status', {
         meshId: 'mesh_stale_pending_cache',
         inlineMesh,
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
       }) as any
       expect(stale.success).toBe(true)
       const staleNode303 = stale.nodes.find((node: any) => node.nodeId === 'node_303')
@@ -1766,7 +1773,7 @@ describe('mesh_status', () => {
         meshId: 'mesh_stale_pending_cache',
         inlineMesh,
         requireDirectPeerTruth: true,
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
       }) as any
 
       expect(refreshed.success).toBe(true)
@@ -1824,7 +1831,7 @@ describe('mesh_status', () => {
       const stale = await router.execute('mesh_status', {
         meshId: 'mesh_cache_hydrate',
         inlineMesh: pendingInlineMesh,
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
       }) as any
       expect(stale.success).toBe(true)
       expect(stale.nodes.find((node: any) => node.nodeId === 'node_303')).toMatchObject({
@@ -1905,7 +1912,7 @@ describe('mesh_status', () => {
 
       await router.execute('mesh_status', {
         meshId: 'mesh_prune_inline_cache',
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
         inlineMesh: {
           id: 'mesh_prune_inline_cache',
           name: 'ADHDev',
@@ -1929,7 +1936,7 @@ describe('mesh_status', () => {
       const result = await router.execute('mesh_status', {
         meshId: 'mesh_prune_inline_cache',
         requireDirectPeerTruth: true,
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
         inlineMesh: {
           id: 'mesh_prune_inline_cache',
           name: 'ADHDev',
@@ -1959,7 +1966,7 @@ describe('mesh_status', () => {
       // it unresolved rather than membership pretending it never existed.
       const plainRead = await router.execute('mesh_status', {
         meshId: 'mesh_prune_inline_cache',
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
         inlineMesh: {
           id: 'mesh_prune_inline_cache',
           name: 'ADHDev',
@@ -1998,7 +2005,7 @@ describe('mesh_status', () => {
 
       const afterRemoval = await router.execute('mesh_status', {
         meshId: 'mesh_prune_inline_cache',
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
         inlineMesh: {
           id: 'mesh_prune_inline_cache',
           name: 'ADHDev',
@@ -2029,7 +2036,7 @@ describe('mesh_status', () => {
       const result = await router.execute('mesh_status', {
         meshId: 'mesh_local_worktree_direct_truth',
         requireDirectPeerTruth: true,
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
         inlineMesh: {
           id: 'mesh_local_worktree_direct_truth',
           name: 'ADHDev',
@@ -2204,7 +2211,7 @@ describe('mesh_status', () => {
       const result = await router.execute('mesh_status', {
         meshId: 'mesh_303',
         requireDirectPeerTruth: true,
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
         inlineMesh: {
           id: 'mesh_303',
           name: 'ADHDev',
@@ -2325,7 +2332,13 @@ describe('mesh_status', () => {
       // Graph renders: success, the local node carries live git, and the slow
       // peer is simply pending (setup inventory) rather than fatal.
       expect(result.success).toBe(true)
-      expect(dispatchMeshCommand).not.toHaveBeenCalled()
+      // The request itself never fans out: at most one BACKGROUND freshness probe
+      // is kicked for the never-observed peer (its failure cannot reach this
+      // already-returned response), carrying the push-subscription marker.
+      expect(dispatchMeshCommand.mock.calls.length).toBeLessThanOrEqual(1)
+      for (const call of dispatchMeshCommand.mock.calls as any[]) {
+        expect(call[2]).toMatchObject({ meshStateSubscription: { meshId: 'mesh_standing_default', nodeId: 'node_slow' } })
+      }
       expect(result.sourceOfTruth.coordinatorOwnsLiveTruth).toBe(true)
       const localNode = result.nodes.find((node: any) => node.nodeId === 'node_7')
       expect(localNode.git).toMatchObject({ isGitRepo: true })
@@ -2347,7 +2360,7 @@ describe('mesh_status', () => {
       const result = await router.execute('mesh_status', {
         meshId: 'mesh_missing_worktree_direct_truth',
         requireDirectPeerTruth: true,
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
         inlineMesh: {
           id: 'mesh_missing_worktree_direct_truth',
           name: 'ADHDev',
@@ -2502,7 +2515,7 @@ describe('mesh_status dead local worktree exclusion', () => {
       const result = await router.execute('mesh_status', {
         meshId: 'mesh_dead_worktree',
         requireDirectPeerTruth: true,
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
         inlineMesh: {
           id: 'mesh_dead_worktree',
           name: 'ADHDev',
@@ -2570,7 +2583,7 @@ describe('mesh_status dead local worktree exclusion', () => {
       const result = await router.execute('mesh_status', {
         meshId: 'mesh_dead_plus_remote',
         requireDirectPeerTruth: true,
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
         inlineMesh: {
           id: 'mesh_dead_plus_remote',
           name: 'ADHDev',
@@ -2947,7 +2960,7 @@ describe('mesh_status machine ⊃ nodes label axes', () => {
       const { router } = createRouter()
       const result = await router.execute('mesh_status', {
         meshId: 'mesh_axes',
-        refresh: true,
+        refresh: true, awaitLiveProbes: true,
         inlineMesh: {
           id: 'mesh_axes',
           name: 'Axes',

@@ -283,6 +283,10 @@ const LEGACY_MED_FAMILY_COMMANDS = [
 const LEGACY_HIGH_FAMILY_COMMANDS = [
     'mesh_forward_event', 'get_pending_mesh_events', 'interactive_prompt_response', 'launch_mesh_coordinator',
     'mesh_status', 'get_mesh_review_inbox',
+    // Coordinator-held node state (high-family/mesh-node-state.ts): the member
+    // push ingest and the coordinator-routed node git log. Fresh additions, not
+    // a legacy-table migration.
+    'mesh_node_git_report', 'mesh_node_git_log',
 ];
 
 // ─── Helpers ───────────────────────────────────────────────────────────────

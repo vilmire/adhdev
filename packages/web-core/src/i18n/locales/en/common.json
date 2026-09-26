@@ -457,7 +457,12 @@
     "mesh": {
         "graph": {
             "remoteBadge": "remote",
-            "activeSessionAria": "active session"
+            "activeSessionAria": "active session",
+            "observationAsOf": "as of {{age}} ago",
+            "observationRefreshing": "as of {{age}} ago · refreshing",
+            "observationFetching": "fetching state…",
+            "observationUnreachable": "unreachable · last known {{age}} ago",
+            "observationUnreachableNoState": "unreachable · no state yet"
         },
         "statusTab": {
             "v2ScopeHint": "Pending events by scope",
@@ -1044,6 +1049,7 @@
             "refreshedAt": "Refreshed {{time}}",
             "liveMetadata": "Live daemon metadata",
             "metadataUnavailable": "Metadata subscription unavailable",
+            "refreshFailedQuiet": "refresh failed · showing last loaded",
             "refreshTitle": "Refresh live mesh graph",
             "refresh": "Refresh",
             "refreshing": "Refreshing…",

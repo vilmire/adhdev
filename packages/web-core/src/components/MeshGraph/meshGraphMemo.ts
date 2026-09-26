@@ -41,6 +41,12 @@ function nodeFingerprint(node: MeshGraphNode): string {
         node.parentNodeId ?? '',
         node.submodulePath ?? '',
         node.submoduleCommit ?? '',
+        // Coordinator-held observation (age / refreshing / unreachable) — a cached
+        // aggregate can keep refreshedAt while only these move.
+        node.gitObservation?.source ?? '',
+        node.gitObservation?.observedAt ?? '',
+        node.gitObservation?.refreshing ? 1 : 0,
+        node.gitObservation?.unreachableSince ?? '',
     ].join('|')
 }
 

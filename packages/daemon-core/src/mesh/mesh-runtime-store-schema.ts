@@ -20,6 +20,7 @@
 import { LOG } from '../logging/logger.js';
 import { migrateMeshGraphSchema } from './mesh-graph-schema.js';
 import { ensureTurnLedgerSchema } from './turn-ledger/schema.js';
+import { ensureMeshNodeGitStateSchema } from './mesh-node-git-state.js';
 import type { MeshRuntimeStore } from './mesh-runtime-store.js';
 
 let loggedMigrationFailureFlag = false;
@@ -180,6 +181,8 @@ export function migrate(self: MeshRuntimeStore): void {
     // the store is open (MeshRuntimeStore.runTurnLedgerMigrationV1), never from
     // here: its step 0 re-enters the store singleton.
     ensureTurnLedgerSchema(self.db);
+    // Coordinator-held last-known node git state (additive, idempotent).
+    ensureMeshNodeGitStateSchema(self.db);
 }
 
 

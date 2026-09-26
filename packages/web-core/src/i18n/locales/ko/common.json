@@ -457,7 +457,12 @@
     "mesh": {
         "graph": {
             "remoteBadge": "원격",
-            "activeSessionAria": "활성 세션"
+            "activeSessionAria": "활성 세션",
+            "observationAsOf": "{{age}} 전 기준",
+            "observationRefreshing": "{{age}} 전 기준 · 새로 고치는 중",
+            "observationFetching": "상태 가져오는 중…",
+            "observationUnreachable": "연결 안 됨 · 마지막 상태 {{age}} 전",
+            "observationUnreachableNoState": "연결 안 됨 · 아직 상태 없음"
         },
         "statusTab": {
             "v2ScopeHint": "범위별 대기 이벤트",
@@ -1044,6 +1049,7 @@
             "refreshedAt": "{{time}} 갱신됨",
             "liveMetadata": "라이브 데몬 메타데이터",
             "metadataUnavailable": "메타데이터 구독 불가",
+            "refreshFailedQuiet": "새로 고침 실패 · 마지막으로 불러온 상태 표시 중",
             "refreshTitle": "라이브 메시 그래프 새로 고침",
             "refresh": "새로 고침",
             "refreshing": "새로 고침 중…",

@@ -131,6 +131,7 @@ export type {
   LocalMeshNodeEntry,
   RepoMeshStatus,
   RepoMeshNodeStatus,
+  RepoMeshNodeGitObservation,
   RepoMeshPeerConnectionStatus,
   RepoMeshPeerConnectionState,
   RepoMeshPeerConnectionTransport,

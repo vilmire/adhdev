@@ -457,7 +457,12 @@
     "mesh": {
         "graph": {
             "remoteBadge": "remoto",
-            "activeSessionAria": "sesión activa"
+            "activeSessionAria": "sesión activa",
+            "observationAsOf": "hace {{age}}",
+            "observationRefreshing": "hace {{age}} · actualizando",
+            "observationFetching": "obteniendo estado…",
+            "observationUnreachable": "inaccesible · último estado hace {{age}}",
+            "observationUnreachableNoState": "inaccesible · aún sin estado"
         },
         "statusTab": {
             "v2ScopeHint": "Eventos pendientes por ámbito",
@@ -1049,6 +1054,7 @@
             "refreshedAt": "Actualizado {{time}}",
             "liveMetadata": "Metadatos del daemon en vivo",
             "metadataUnavailable": "Suscripción a metadatos no disponible",
+            "refreshFailedQuiet": "la actualización falló · mostrando lo último cargado",
             "refreshTitle": "Actualizar el grafo de malla en vivo",
             "refresh": "Actualizar",
             "refreshing": "Actualizando…",

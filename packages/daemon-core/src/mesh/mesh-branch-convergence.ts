@@ -42,7 +42,31 @@ function buildInlineMeshBranchConvergence(args: {
         isDefaultBranch: branch === defaultBranch,
     };
 
-    if (readBooleanValue(git.isGitRepo) !== true) {
+    // UNKNOWN ≠ BLOCKED: no git evidence at all (a remote node whose state the
+    // coordinator has not observed yet / a probe still in flight), or a skeletal
+    // git object that carries neither a branch nor a HEAD commit, is an absence of
+    // data — never a review verdict. Classify it 'unknown' (no follow-up demanded)
+    // so no surface renders it as BLOCKED REVIEW. A real observation that the
+    // workspace is NOT a git repo (isGitRepo === false) keeps its blocked_review
+    // verdict below, as does a genuine detached HEAD (commit known, no branch).
+    const isGitRepo = readBooleanValue(git.isGitRepo);
+    const headCommit = readStringValue(git.headCommit, git.head);
+    if (isGitRepo === undefined || (isGitRepo === true && !readStringValue(git.branch) && !headCommit)) {
+        const worktreeGoneEarly = args.node?.isLocalWorktree === true && isGitRepo === undefined
+            && !!readStringValue(args.node?.workspace)
+            && !((): boolean => { try { return fs.existsSync(readStringValue(args.node?.workspace)!); } catch { return true; } })();
+        if (!worktreeGoneEarly) {
+            return {
+                ...base,
+                status: 'unknown',
+                needsConvergence: false,
+                reason: isGitRepo === undefined ? 'git_status_unavailable' : 'branch_unknown',
+                nextStep: null,
+            };
+        }
+    }
+
+    if (isGitRepo !== true) {
         // GHOST-WORKTREE-CLEANUP-DEADLOCK: a local worktree node whose DIRECTORY is
         // gone also reports isGitRepo:false, and "resolve git status" is misdirection
         // there — no working tree remains to resolve anything in, so the only real

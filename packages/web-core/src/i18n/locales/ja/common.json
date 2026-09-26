@@ -457,7 +457,12 @@
     "mesh": {
         "graph": {
             "remoteBadge": "リモート",
-            "activeSessionAria": "アクティブなセッション"
+            "activeSessionAria": "アクティブなセッション",
+            "observationAsOf": "{{age}}前の状態",
+            "observationRefreshing": "{{age}}前の状態 · 更新中",
+            "observationFetching": "状態を取得中…",
+            "observationUnreachable": "到達不可 · 最終状態 {{age}}前",
+            "observationUnreachableNoState": "到達不可 · 状態なし"
         },
         "statusTab": {
             "v2ScopeHint": "スコープ別の保留中イベント",
@@ -1044,6 +1049,7 @@
             "refreshedAt": "{{time}} に更新",
             "liveMetadata": "ライブデーモンメタデータ",
             "metadataUnavailable": "メタデータのサブスクリプションは利用できません",
+            "refreshFailedQuiet": "更新に失敗 · 最後に読み込んだ状態を表示中",
             "refreshTitle": "ライブメッシュグラフを更新",
             "refresh": "更新",
             "refreshing": "更新中…",
