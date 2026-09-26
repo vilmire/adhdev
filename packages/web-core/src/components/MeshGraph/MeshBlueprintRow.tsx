@@ -318,8 +318,9 @@ function GateActionButton({ label, tone, onClick, disabled, meshTheme }: {
  * command surface inline here rather than a toast, per D5's "surface command
  * errors inline".
  */
-function GateActionsPanel({ row, actions, meshTheme, busy }: {
-    row: BlueprintGateRow
+export function GateActionsPanel({ radioGroupId, actions, meshTheme, busy }: {
+    /** Unique per gate — scopes the outcome radio group. */
+    radioGroupId: string
     actions: GateActionHandlers
     meshTheme: MeshGraphTheme
     busy: boolean
@@ -392,11 +393,11 @@ function GateActionsPanel({ row, actions, meshTheme, busy }: {
                 <div className={`flex flex-col gap-1.5 rounded-lg border p-2 ${meshTheme.isDark ? 'border-white/10 bg-black/20' : 'border-slate-200 bg-white'}`}>
                     <div className="flex items-center gap-2 text-4xs">
                         <label className="flex items-center gap-1">
-                            <input type="radio" name={`release-outcome-${row.nodeId}`} checked={outcome === 'passed'} onChange={() => setOutcome('passed')} />
+                            <input type="radio" name={`release-outcome-${radioGroupId}`} checked={outcome === 'passed'} onChange={() => setOutcome('passed')} />
                             {t('mesh.blueprint.gate.outcomePassed')}
                         </label>
                         <label className="flex items-center gap-1">
-                            <input type="radio" name={`release-outcome-${row.nodeId}`} checked={outcome === 'failed'} onChange={() => setOutcome('failed')} />
+                            <input type="radio" name={`release-outcome-${radioGroupId}`} checked={outcome === 'failed'} onChange={() => setOutcome('failed')} />
                             {t('mesh.blueprint.gate.outcomeFailed')}
                         </label>
                     </div>
@@ -513,7 +514,7 @@ export function MeshBlueprintGateRowView({ row, meshTheme, nowMs, onOpen, planEx
                 through the same sendDaemonCommand prop the rest of this tab
                 already uses for fast-forward/route-preview). */}
             {actions && row.gate && (
-                <GateActionsPanel row={row} actions={actions} meshTheme={meshTheme} busy={Boolean(actionsBusy)} />
+                <GateActionsPanel radioGroupId={row.nodeId} actions={actions} meshTheme={meshTheme} busy={Boolean(actionsBusy)} />
             )}
         </div>
     )

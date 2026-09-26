@@ -15,6 +15,10 @@
  *    same mesh_graph_gate_release/abandon/extend daemon commands the MCP
  *    tools wrap, through the same sendDaemonCommand path every other
  *    Blueprint action (fast-forward, route preview) already uses.
+ *  - List / Graph switch (2026-09-26): MeshBlueprintGraph draws the same
+ *    data as a laned task graph (queue depends_on chains + graph DAGs +
+ *    gates). The choice is remembered per viewer (blueprintViewMode); both
+ *    views share one open-task / open-gate path and the same gate verbs.
  *  - on-demand mini DAG: a row backed by a graph WITH edges (or queue
  *    dependency edges) can expand a small React Flow plan (MeshMiniDag) —
  *    the only graph drawing left on this tab.
@@ -25,7 +29,7 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { MeshGraphView, RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
+import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
 import { unwrapDaemonCommandBody } from '../../utils/daemon-command-envelope'
 import { IconRefresh } from '../Icons'
 import { useTheme } from '../../hooks/useTheme'
@@ -33,6 +37,10 @@ import { getMeshGraphTheme } from './meshGraphTheme'
 import { collectMachineQuotaGroups, machineKeyForMeshNode, resolveMachineLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
 import { MeshMachineQuotaCard } from './MeshObservabilitySurface/MeshStatusTab'
 import MeshBlueprintList from './MeshBlueprintList'
+import MeshBlueprintGraph from './MeshBlueprintGraph'
+import BlueprintViewSwitch from './BlueprintViewSwitch'
+import { snapshotHasStructure } from './blueprintGraphModel'
+import { readBlueprintViewMode, resolveBlueprintViewMode, writeBlueprintViewMode, type BlueprintViewMode } from './blueprintViewMode'
 import { MeshOverviewDetailModal } from './MeshOverviewCards'
 import {
     BLUEPRINT_GRAPH_INITIAL_LIMIT,
@@ -137,6 +145,18 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     }, [schedDetailOpen])
     const canCommand = Boolean(daemonId && sendDaemonCommand)
 
+    /* List / Graph switch — stored per viewer; otherwise Graph once the
+     * snapshot has structure (latched, so a poll never flips it back). */
+    const [storedViewMode, setStoredViewMode] = useState<BlueprintViewMode | null>(() => readBlueprintViewMode())
+    const hasStructure = useMemo(() => snapshotHasStructure(tasks, graphs), [tasks, graphs])
+    const [structureSeen, setStructureSeen] = useState(hasStructure)
+    useEffect(() => { if (hasStructure) setStructureSeen(true) }, [hasStructure])
+    const viewMode = resolveBlueprintViewMode(storedViewMode, structureSeen || hasStructure)
+    const chooseViewMode = useCallback((mode: BlueprintViewMode) => {
+        setStoredViewMode(mode)
+        writeBlueprintViewMode(mode)
+    }, [])
+
     // Machine ⊃ nodes: a node's display name is its checkout identity
     // (⎇ branch for worktrees, base otherwise); the MACHINE is a separate
     // grouping axis (machineKeyForMeshNode) used to dedupe slot/quota views.
@@ -169,6 +189,12 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
         }
         return map
     }, [status])
+
+    /** Shared by List rows and Graph nodes — one open-task / open-gate behaviour. */
+    const openQueueTask = useCallback((task: RepoMeshQueueTask) => setDetail({ kind: 'queue', task }), [])
+    const openGate = useCallback((graph: MeshGraphView, nodeId: string, gate?: MeshGraphGateView) => {
+        setDetail({ kind: 'gate', graph, nodeId, gate: gate ?? null })
+    }, [])
 
     const openMission = useCallback((missionId: string) => {
         const mission = ((status as RepoMeshStatus).missions ?? []).find(candidate => candidate.id === missionId)
@@ -295,6 +321,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
      *  pagination, refresh. Wrap-flex — on a phone it drops to its own line. */
     const headerExtras = (
         <>
+            <BlueprintViewSwitch mode={viewMode} onChange={chooseViewMode} meshTheme={meshTheme} />
             {predictedSlots && (
                 <button
                     type="button"
@@ -351,24 +378,44 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                 no floor of its own. ── */}
             <div className={`${meshTheme.blueprintShellClass} flex-1 min-h-0`}>
                 <div className="absolute inset-0 flex flex-col p-2">
-                    <MeshBlueprintList
-                        tasks={tasks}
-                        status={status}
-                        graphs={graphs}
-                        meshTheme={meshTheme}
-                        nodeLabels={nodeLabels}
-                        missionTitles={missionTitles}
-                        pinnedSlots={pinnedSlots}
-                        emptyMessage={emptyMessage}
-                        onTaskOpen={task => setDetail({ kind: 'queue', task })}
-                        onGateOpen={(graph, nodeId, gate) => setDetail({ kind: 'gate', graph, nodeId, gate: gate ?? null })}
-                        onMissionOpen={openMission}
-                        headerExtras={headerExtras}
-                        daemonId={daemonId}
-                        meshId={meshId}
-                        sendDaemonCommand={sendDaemonCommand}
-                        onGatesChanged={refreshGraphs}
-                    />
+                    {viewMode === 'graph' ? (
+                        <MeshBlueprintGraph
+                            tasks={tasks}
+                            status={status}
+                            graphs={graphs}
+                            meshTheme={meshTheme}
+                            nodeLabels={nodeLabels}
+                            missionTitles={missionTitles}
+                            emptyMessage={emptyMessage}
+                            onTaskOpen={openQueueTask}
+                            onGateOpen={openGate}
+                            onMissionOpen={openMission}
+                            headerExtras={headerExtras}
+                            daemonId={daemonId}
+                            meshId={meshId}
+                            sendDaemonCommand={sendDaemonCommand}
+                            onGatesChanged={refreshGraphs}
+                        />
+                    ) : (
+                        <MeshBlueprintList
+                            tasks={tasks}
+                            status={status}
+                            graphs={graphs}
+                            meshTheme={meshTheme}
+                            nodeLabels={nodeLabels}
+                            missionTitles={missionTitles}
+                            pinnedSlots={pinnedSlots}
+                            emptyMessage={emptyMessage}
+                            onTaskOpen={openQueueTask}
+                            onGateOpen={openGate}
+                            onMissionOpen={openMission}
+                            headerExtras={headerExtras}
+                            daemonId={daemonId}
+                            meshId={meshId}
+                            sendDaemonCommand={sendDaemonCommand}
+                            onGatesChanged={refreshGraphs}
+                        />
+                    )}
                 </div>
 
                 {/* ── Scheduling popover — anchored under the header chip.
