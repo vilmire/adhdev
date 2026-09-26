@@ -40,6 +40,29 @@ const TURN_SOURCED_WIRE_NAMES: ReadonlySet<string> = new Set(TURN_WIRE_EVENT_NAM
 export type StatusEventHideMute = { surfaceHidden: boolean; muted: boolean };
 export type ResolveStatusEventHideMute = (sessionId: string) => StatusEventHideMute | undefined;
 
+/**
+ * Non-content session identity stamped onto a turn-sourced `status_event`
+ * (`agent:generating_completed` / `agent:stopped`). These are the fields the
+ * pre-C-W5c `provider_event` completion carried after each instance's
+ * `pushEvent` enrichment (cli-provider-events.ts `pushEvent`,
+ * acp/ide/extension-provider-instance.ts `pushEvent`): the provider type, the
+ * provider-native session id, and the instance's workspace. Identifiers only —
+ * never chat content.
+ */
+export type StatusEventSessionMeta = { providerType?: string; providerSessionId?: string; workspaceName?: string };
+export type ResolveStatusEventSessionMeta = (sessionId: string) => StatusEventSessionMeta | undefined;
+
+type StatusEventInstanceManager = {
+    getInstance?(sessionId: string): { getState?(): ProviderState | undefined } | undefined;
+} | null | undefined;
+type StatusEventSessionRegistry = {
+    get(sessionId: string): { parentSessionId?: string | null } | undefined;
+} | null | undefined;
+
+function nonEmpty(value: unknown): string | undefined {
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
 /** The event names the server accepts on `status_event`; anything else is dropped. */
 export function toDaemonStatusEventName(value: unknown): DaemonStatusEventPayload['event'] | null {
     switch (value) {
@@ -87,6 +110,120 @@ export function createInstanceHideMuteResolver(
             // approval/choice frame in the same turn.
             muted: resolveMuted(settings, (state as { status?: string } | undefined)?.status),
         };
+    };
+}
+
+/**
+ * Resolve the non-content identity of the session a turn committed on, from
+ * the live provider instance — the same values the legacy `provider_event`
+ * completion carried:
+ *   - providerType      ← `state.type` (every instance's `pushEvent` stamped
+ *                          `providerType: this.type`)
+ *   - providerSessionId ← `state.providerSessionId` (CLI `pushEvent` stamped
+ *                          `host.providerSessionId`)
+ *   - workspaceName     ← `state.workspace` (CLI/ACP `workingDir`, IDE
+ *                          `workspace`), or the parent IDE's workspace for an
+ *                          extension session (extension `pushEvent` stamped
+ *                          `parent.workspaceName`)
+ *
+ * An extension session is a child of its IDE instance and is not in the
+ * instance manager's own map, so it is found through the registry's
+ * `parentSessionId` and the parent state's `extensions` list.
+ *
+ * Returns undefined when the session has no local instance (a remote mesh
+ * worker hosted elsewhere); the event then carries none of these fields.
+ */
+export function createInstanceSessionMetaResolver(
+    instanceManager: StatusEventInstanceManager,
+    sessionRegistry?: StatusEventSessionRegistry,
+): ResolveStatusEventSessionMeta {
+    const readState = (sessionId: string): ProviderState | undefined => {
+        const getInstance = instanceManager?.getInstance;
+        if (typeof getInstance !== 'function') return undefined;
+        try {
+            return getInstance.call(instanceManager, sessionId)?.getState?.();
+        } catch {
+            return undefined;
+        }
+    };
+    return (sessionId) => {
+        if (!sessionId) return undefined;
+        let state = readState(sessionId);
+        let workspace: unknown = state?.workspace;
+        if (!state) {
+            let parentId: string | undefined;
+            try {
+                parentId = nonEmpty(sessionRegistry?.get(sessionId)?.parentSessionId);
+            } catch {
+                parentId = undefined;
+            }
+            const parent = parentId ? readState(parentId) : undefined;
+            const children = parent && parent.category === 'ide' && Array.isArray(parent.extensions) ? parent.extensions : [];
+            state = children.find((child) => child?.instanceId === sessionId);
+            if (!state) return undefined;
+            workspace = parent?.workspace;
+        }
+        const meta: StatusEventSessionMeta = {};
+        const providerType = nonEmpty(state.type);
+        if (providerType) meta.providerType = providerType;
+        const providerSessionId = nonEmpty(state.providerSessionId);
+        if (providerSessionId) meta.providerSessionId = providerSessionId;
+        const workspaceName = nonEmpty(workspace);
+        if (workspaceName) meta.workspaceName = workspaceName;
+        return meta;
+    };
+}
+
+/**
+ * Per-turn wall-clock start, for the `duration` a turn-sourced
+ * `agent:generating_completed` carries. The legacy producers sent
+ * `Math.round((completedAt - generatingStartedAt) / 1000)` — whole seconds from
+ * the first generating edge to completion, approval waits included — and
+ * `agent:stopped` never carried a duration. Here the start is the ledger's
+ * `turn{phase:'started'}` (re-armed on a reclaim's fresh start; suspension /
+ * resume do not reset it) and the end is the `committed` bus event.
+ *
+ * Bounded: an entry is dropped at commit or when its session terminates, and
+ * the map never holds more than `maxEntries` (oldest evicted first), so a turn
+ * whose commit never arrives cannot grow it.
+ */
+export interface TurnDurationTracker {
+    /** Feed every `turn` bus event; returns whole seconds at a `committed` phase whose start was seen. */
+    observe(event: TurnBusEvent & { at: number }): number | undefined;
+    /** Drop every open turn of a terminated session. */
+    forgetSession(sessionId: string): void;
+    readonly size: number;
+}
+
+export function createTurnDurationTracker(maxEntries = 256): TurnDurationTracker {
+    const starts = new Map<string, { sessionId: string; at: number }>();
+    return {
+        observe(event) {
+            if (!event.attemptId || typeof event.at !== 'number' || !Number.isFinite(event.at)) return undefined;
+            if (event.phase === 'started') {
+                starts.delete(event.attemptId);
+                starts.set(event.attemptId, { sessionId: event.sessionId, at: event.at });
+                while (starts.size > maxEntries) {
+                    const oldest = starts.keys().next().value;
+                    if (oldest === undefined) break;
+                    starts.delete(oldest);
+                }
+                return undefined;
+            }
+            if (event.phase !== 'committed') return undefined;
+            const start = starts.get(event.attemptId);
+            starts.delete(event.attemptId);
+            if (!start || event.at < start.at) return undefined;
+            return Math.round((event.at - start.at) / 1000);
+        },
+        forgetSession(sessionId) {
+            for (const [attemptId, start] of starts) {
+                if (start.sessionId === sessionId) starts.delete(attemptId);
+            }
+        },
+        get size() {
+            return starts.size;
+        },
     };
 }
 
@@ -179,7 +316,9 @@ export function projectServerStatusEvent(
  * the only consumer that turns that projection into the wire payload. Unlike
  * `projectServerStatusEvent` (an allow-list over an untyped `Record`),
  * `TurnWireEvent` is already a closed, content-free shape by construction — no
- * modalMessage/modalButtons exist on it, so there is nothing to drop.
+ * modalMessage/modalButtons exist on it, so there is nothing to drop. The
+ * session identity and duration the legacy completion carried are added from
+ * the injected resolvers, each copied individually (identifiers and a number).
  *
  * Returns null for a non-`committed` phase (started/suspended/resumed/progress
  * travel as their own bus kinds — input_state, modal, … — not status_event).
@@ -188,6 +327,12 @@ export function projectTurnStatusEvent(
     event: TurnBusEvent,
     at: number,
     resolveHideMute?: ResolveStatusEventHideMute,
+    extras?: {
+        /** Session identity (providerType / providerSessionId / workspaceName). */
+        resolveSessionMeta?: ResolveStatusEventSessionMeta;
+        /** Whole seconds from turn start to this commit, when the start was observed. */
+        durationSec?: number;
+    },
 ): DaemonStatusEventPayload | null {
     const wire: TurnWireEvent | null = projectTurnWireEvent(event, at);
     if (!wire) return null;
@@ -196,6 +341,25 @@ export function projectTurnStatusEvent(
         timestamp: wire.timestamp,
         targetSessionId: wire.sessionId,
     };
+    // Allow-list, field by field — never a spread of whatever the resolver returned.
+    const meta = extras?.resolveSessionMeta?.(wire.sessionId);
+    if (meta) {
+        const providerType = nonEmpty(meta.providerType);
+        if (providerType) payload.providerType = providerType;
+        const providerSessionId = nonEmpty(meta.providerSessionId);
+        if (providerSessionId) payload.providerSessionId = providerSessionId;
+        const workspaceName = nonEmpty(meta.workspaceName);
+        if (workspaceName) payload.workspaceName = workspaceName;
+    }
+    // The legacy producers put `duration` on completion only, never on stop.
+    if (
+        wire.event === 'agent:generating_completed'
+        && typeof extras?.durationSec === 'number'
+        && Number.isFinite(extras.durationSec)
+        && extras.durationSec >= 0
+    ) {
+        payload.duration = extras.durationSec;
+    }
     if (resolveHideMute) {
         const hideMute = resolveHideMute(wire.sessionId);
         if (hideMute) {
@@ -230,8 +394,10 @@ export function projectP2PStatusEvent(rawEvent: Record<string, unknown>, serverE
 }
 
 export interface StatusEventEmitterDeps {
-    /** Live instance lookup for the hide/mute stamp. */
+    /** Live instance lookup for the hide/mute stamp and the turn-event session identity. */
     instanceManager?: { getInstance?(sessionId: string): { getState?(): ProviderState | undefined } | undefined } | null;
+    /** Parent lookup so an IDE extension session (not in the instance map) resolves through its IDE. */
+    sessionRegistry?: StatusEventSessionRegistry;
     /** Dashboard delivery: cloud P2P DataChannel, standalone WS broadcast. */
     sendDashboard(payload: P2PStatusEventPayload): void;
     /** Server delivery (push / webhook / audit). Cloud only; standalone has no server leg. */
@@ -258,6 +424,8 @@ export interface StatusEventEmitterDeps {
  */
 export function createStatusEventEmitter(bus: Pick<SessionLifecycleBus, 'on'>, deps: StatusEventEmitterDeps): Unsubscribe {
     const resolveHideMute = createInstanceHideMuteResolver(deps.instanceManager);
+    const resolveSessionMeta = createInstanceSessionMetaResolver(deps.instanceManager, deps.sessionRegistry);
+    const durations = createTurnDurationTracker();
     const unsubProviderEvent = bus.on('provider_event', (e) => {
         const raw = e.event as unknown as Record<string, unknown>;
         const serverEvent = projectServerStatusEvent(raw, resolveHideMute);
@@ -281,7 +449,8 @@ export function createStatusEventEmitter(bus: Pick<SessionLifecycleBus, 'on'>, d
     // default — see StatusEventEmitterDeps.turnCommits above). No P2P
     // enrichment applies — a committed turn carries no interactivePrompt.
     const unsubTurn = deps.turnCommits === false ? () => {} : bus.on('turn', (e) => {
-        const serverEvent = projectTurnStatusEvent(e, e.at, resolveHideMute);
+        const durationSec = durations.observe(e);
+        const serverEvent = projectTurnStatusEvent(e, e.at, resolveHideMute, { resolveSessionMeta, durationSec });
         if (!serverEvent) return;
         LOG.debug('StatusEvent', `${serverEvent.event} (turn ledger commit, session=${serverEvent.targetSessionId})`);
         try {
@@ -297,8 +466,12 @@ export function createStatusEventEmitter(bus: Pick<SessionLifecycleBus, 'on'>, d
             }
         }
     }, { name: 'host.status-event.turn' });
+    const unsubTerminated = deps.turnCommits === false ? () => {} : bus.on('terminated', (e) => {
+        durations.forgetSession(e.sessionId);
+    }, { name: 'host.status-event.turn-duration-evict' });
     return () => {
         unsubProviderEvent();
         unsubTurn();
+        unsubTerminated();
     };
 }

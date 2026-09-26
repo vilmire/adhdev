@@ -256,6 +256,7 @@ export function createDaemonHostRuntime(runtime: DaemonRuntime, transport: Daemo
         }, { name: 'host.send-chat-git-refresh' }),
         createStatusEventEmitter(bus, {
             instanceManager: components.instanceManager,
+            sessionRegistry: components.sessionRegistry,
             sendDashboard: (payload) => transport.sendStatusEvent(payload),
             ...(transport.sendServerStatusEvent ? { sendServer: (payload: DaemonStatusEventPayload) => transport.sendServerStatusEvent!(payload) } : {}),
         }),
