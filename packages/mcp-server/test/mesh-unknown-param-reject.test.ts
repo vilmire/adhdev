@@ -68,7 +68,7 @@ test('unknown tool names fall through to the dispatcher (null, no rejection)', (
 });
 
 test('hidden 1-release aliases validate against their unified tool schema', () => {
-  // node_id/config are legal on the unified mesh_refine_config schema.
+  // node_id/config are legal on the merged mesh_config schema.
   assert.equal(rejectUnknownMeshToolArgs('mesh_validate_refine_config', { node_id: 'n1' }), null);
   // A key the unified schema does not declare is still rejected on the alias.
   const error = rejectUnknownMeshToolArgs('mesh_refine_config_schema', { nod_id: 'n1' });

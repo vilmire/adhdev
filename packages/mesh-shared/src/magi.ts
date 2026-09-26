@@ -59,7 +59,7 @@
  * already pinned the (node, provider) target, so any difficulty would be inert at best
  * and would fight the panel's own slot selection at worst. To change how hard a
  * replica thinks or how much parallelism a node grants, edit that NODE's capability
- * slots (`mesh_node_slots_set`); it is a different axis, on purpose.
+ * slots (`mesh_node_slots` action "set"); it is a different axis, on purpose.
  *
  * Unknown keys are dropped rather than rejected, so slots written by another version
  * stay readable. Write paths pair the normalizer with

@@ -1613,7 +1613,7 @@ export interface PatchGraphNodeAndRetryResult {
  * production caller and no tool wrapping it, so the contract was reachable only
  * from a unit test that imported it directly. Live, a node blocked on
  * `materialization_error:*` was unrecoverable: the only patch surface was
- * `mesh_graph_gate_release`, which demands a CLAIMED GATE and a DIRECT gate
+ * the gate release (`mesh_graph_gate` action=release), which demands a CLAIMED GATE and a DIRECT gate
  * edge, so a plain `inputs_from` node with no gate could not be patched at all.
  * The graph re-settle loop does retry such a node on every later upstream
  * terminal, but it re-reads the SAME baked spec and so fails identically
@@ -1714,7 +1714,7 @@ export function patchGraphNodeAndRetry(input: PatchGraphNodeAndRetryInput): Patc
         if (target.kind !== 'worker_task') {
             throw new Error(
                 `node_not_patchable: node '${target.nodeId}' is a '${target.kind}', not a worker task — `
-                + 'gate nodes are driven by mesh_graph_gate_claim/release/abandon',
+                + 'gate nodes are driven by mesh_graph_gate (claim / release / abandon)',
             );
         }
         // Same immutability rule as the gate-release patch path.

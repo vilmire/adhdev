@@ -540,7 +540,7 @@ export async function recoveryContextQuery(
 // (mesh-graph-ipc.ts writes its own audit record inline) but stays exported
 // in case another caller still uses the standalone command.
 
-/** Claim a graph gate's coordinator lease (`mesh_graph_gate_claim`'s core, now in the daemon). */
+/** Claim a graph gate's coordinator lease (`mesh_graph_gate` action=claim's core, now in the daemon). */
 export async function graphGateClaim(
     transport: CommandTransport,
     args: Omit<GraphGateClaimRequest, 'v'>,
@@ -588,7 +588,7 @@ export async function taskStatsQuery(
     return dispatch(transport, 'task_stats_query', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeTaskStatsQueryResponse);
 }
 
-/** Run (or dry-run) the stale-direct-dispatch prune, entirely in the daemon (`mesh_prune_stale_direct`'s core). */
+/** Run (or dry-run) the stale-direct-dispatch prune, entirely in the daemon (`mesh_cleanup_sessions` mode=prune_stale_direct's core). */
 export async function pruneStaleDirect(
     transport: CommandTransport,
     args: Omit<PruneStaleDirectRequest, 'v'>,

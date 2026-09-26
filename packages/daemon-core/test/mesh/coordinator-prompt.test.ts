@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT, WORKER_TOOLS, renderCoordinatorWorkerSection } from '@adhdev/mesh-shared'
+import { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT, RETIRED_MESH_TOOLS, WORKER_TOOLS, renderCoordinatorWorkerSection } from '@adhdev/mesh-shared'
 import { buildCoordinatorSystemPrompt, buildMagiKindPanelsSection } from '../../src/mesh/coordinator-prompt.js'
 
 describe('Repo Mesh coordinator prompt', () => {
@@ -419,7 +419,7 @@ describe('Repo Mesh coordinator prompt', () => {
 
   it('instructs recording operating notes even when NO notes exist yet', () => {
     // buildOperatingNotesSection returns '' when there are zero notes, and the
-    // only imperative to CALL mesh_record_note used to live inside that section
+    // only imperative to CALL mesh_record_note (now mesh_note) used to live inside that section
     // — so a fresh mesh never saw the instruction to record the first note, and
     // the section stayed empty forever. The rule must therefore live in Rules,
     // which always renders. Build with NO operatingNotes to pin exactly that.
@@ -446,7 +446,7 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).not.toContain('## Operating Notes\n')
 
     expect(prompt).toContain('**Promote durable lessons to operating notes — especially at mission close.**')
-    expect(prompt).toContain('call `mesh_record_note` FIRST')
+    expect(prompt).toContain('call `mesh_note` with action `record` FIRST')
 
     // Over-recording guard: all three conditions must be present, since a bare
     // "record lessons" instruction turns the note list into a mission diary.
@@ -811,7 +811,7 @@ describe('Repo Mesh coordinator prompt', () => {
     })
 
     expect(prompt).toContain('## Operating Notes')
-    expect(prompt).toContain('mesh_record_note')
+    expect(prompt).toContain('recorded via `mesh_note` (action "record")')
     expect(prompt).toContain('[provider quirk] codex-cli swallows bare CR on win32')
     expect(prompt).toContain('[pattern to avoid] do not merge a sibling worktree')
   })
@@ -850,13 +850,13 @@ describe('Repo Mesh coordinator prompt', () => {
 
     expect(prompt).toContain('## Onboarding / Reinit')
     expect(prompt).toContain('mesh_init')
-    expect(prompt).toContain('mesh_reinit')
+    expect(prompt).toContain('`mesh_init` with `mode="reinit"`')
     // Save-scope labels — repo-file (commit) vs machine-local.
     expect(prompt).toContain('repo-file (commit target)')
     expect(prompt).toContain('machine-local')
     // Machine-local + repo write tools called out.
-    expect(prompt).toContain('mesh_magi_kind_panel_set')
-    expect(prompt).toContain('mesh_write_mesh_json_config')
+    expect(prompt).toContain('`mesh_magi_kind_panel` with `action="set"`')
+    expect(prompt).toContain('`mesh_config` with `kind="mesh_json"`')
     // reinit must diff-then-approve before overwriting hand-edits.
     expect(prompt).toContain('current-vs-suggested diff')
   })
@@ -1077,6 +1077,35 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(exposed.length).toBe(CANONICAL_MESH_TOOL_COUNT + FLAG_GATED_PROMPT_TOOLS.length)
   })
 
+  // ── 2026-09-26 tool consolidation ──
+  // A retired tool name anywhere in the prompt (table, rules, notices, onboarding)
+  // teaches a coordinator to call something that now answers with an error. The
+  // table's 6-6 check above only sees table rows; this sees the whole rendered text,
+  // including the bundled coordinator rules.
+  it('no retired tool name appears anywhere in the rendered prompt', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: baseMesh() as any,
+      coordinatorCliType: 'claude-cli',
+      operatingNotes: [{ text: 'a note', category: 'recovery_lesson' }],
+      magiKindPanels: { rca: [{ provider: 'codex-cli' }] },
+    })
+    const leaked = Object.keys(RETIRED_MESH_TOOLS).filter(name => new RegExp(`\\b${name}\\b`).test(prompt))
+    expect(leaked, `retired tool names still in the prompt: ${leaked.join(', ')}`).toEqual([])
+  })
+
+  // Owner finding (2026-09-26): rarely used tools sat in the table as one line with
+  // no "when to use" trigger, so a coordinator never reached for them. Every merged
+  // tool's row (and the graph repair tool) must open with a bold **When …** trigger.
+  it('every merged tool row in the tool table opens with a concrete **When…** trigger', () => {
+    const prompt = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
+    const merged = ['mesh_graph_gate', 'mesh_graph_node_patch', 'mesh_node_slots', 'mesh_magi_kind_panel', 'mesh_coordinator_prompt_append', 'mesh_note', 'mesh_config', 'mesh_init', 'mesh_create', 'mesh_cleanup_sessions']
+    for (const tool of merged) {
+      const row = prompt.split('\n').find(line => line.startsWith(`| \`${tool}\` |`))
+      expect(row, `${tool} has no tool-table row`).toBeTruthy()
+      expect(row!, `${tool} row has no trigger`).toMatch(/^\| `[a-z_]+` \| \*\*(When|Only when) /)
+    }
+  })
+
   // ── F1: the Workers section (coordinator half of the worker protocol) ──
   //
   // Measured 2026-09-23: 1,075 coordinator mesh_status calls in 14 days against 3
@@ -1168,7 +1197,7 @@ describe('Repo Mesh coordinator prompt', () => {
       expect(text).toContain('×2')
       // Guidance line — required task_kind + read-only replicas.
       expect(text).toContain('mesh_magi_review')
-      expect(text).toContain('mesh_magi_kind_panel_list')
+      expect(text).toContain('`mesh_magi_kind_panel` (action "list")')
       expect(text).toContain('read-only')
     })
 
@@ -1204,7 +1233,7 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('## Task difficulty')
     expect(prompt).toContain('ROUTING HINT')
     expect(prompt).toContain('The slot decides the model and thinking level')
-    expect(prompt).toContain('mesh_node_slots_set')
+    expect(prompt).toContain('`mesh_node_slots` action "set"')
 
     // ★ The old preset framing must be GONE from the rendered prompt. These are the
     // exact strings that taught the coordinator difficulty == a model choice, and

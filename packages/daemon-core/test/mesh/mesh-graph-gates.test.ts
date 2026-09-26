@@ -1002,7 +1002,7 @@ describe('mesh_graph_view — coordinator actions name real tools', () => {
             const view = buildMeshGraphViews(id, { graphId: g.graphId })[0];
             const action = view.nextCoordinatorAction!.find(a => a.gateId === g.gateId)!;
             expect(action.kind).toBe('gate_abandon');
-            expect(action.detail).toContain('mesh_graph_gate_abandon');
+            expect(action.detail).toContain('mesh_graph_gate (action "abandon")');
             expect(action.detail).toContain('ORPHANED');
             // It must not ALSO tell the coordinator to claim and release it —
             // releasing an orphan opens nothing.
@@ -1020,7 +1020,7 @@ describe('mesh_graph_view — coordinator actions name real tools', () => {
             const action = buildMeshGraphViews(id, { graphId: g.graphId })[0]
                 .nextCoordinatorAction!.find(a => a.gateId === g.gateId)!;
             expect(action.kind).toBe('gate_awaiting');
-            expect(action.detail).toContain('mesh_graph_gate_claim');
+            expect(action.detail).toContain('mesh_graph_gate (action "claim")');
         } finally {
             cleanup(id);
         }
@@ -1041,7 +1041,7 @@ describe('mesh_graph_view — coordinator actions name real tools', () => {
         }
     });
 
-    it('★ the expired-hold advice names mesh_graph_gate_abandon, not a nonexistent "cancel the branch"', () => {
+    it('★ the expired-hold advice names the mesh_graph_gate abandon action, not a nonexistent "cancel the branch"', () => {
         const id = meshId('view_expired_advice');
         try {
             const t0 = Date.now();
@@ -1052,7 +1052,9 @@ describe('mesh_graph_view — coordinator actions name real tools', () => {
             const action = buildMeshGraphViews(id, { graphId: g.graphId })[0]
                 .nextCoordinatorAction!.find(a => a.gateId === g.gateId)!;
             expect(action.kind).toBe('gate_reclaim');
-            expect(action.detail).toContain('mesh_graph_gate_abandon');
+            expect(action.detail).toContain('mesh_graph_gate action "claim"');
+            expect(action.detail).toContain('action "abandon"');
+            expect(action.detail).toContain('action "extend"');
             expect(action.detail).not.toContain('cancel the branch explicitly');
             // The timeout contract is still stated in the advice itself.
             expect(action.detail).toContain('A timeout is never passage');

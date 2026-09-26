@@ -30,7 +30,7 @@
  * `gate_reclaim` text used to end with "or cancel the branch explicitly", which
  * pointed at nothing — there was no cleanup verb at all, so a coordinator that
  * followed the advice found no way to do it. It now names
- * `mesh_graph_gate_abandon`, and `gate_abandon` is reported outright for the
+ * `mesh_graph_gate` action=abandon, and `gate_abandon` is reported outright for the
  * orphan case that advice was really describing.
  */
 
@@ -366,7 +366,7 @@ export function buildMeshGraphViews(meshId: string, opts: BuildMeshGraphViewOpti
                     gateId: gate.gateId,
                     detail: `Gate '${gate.ref ?? gate.gateId}' (${gate.action}) is ORPHANED: every task it was gating is already `
                         + 'cancelled, failed or skipped, so releasing it would open nothing. While it stays unsettled this graph '
-                        + 'cannot reach ANY terminal state — not even cancelled. Close it with mesh_graph_gate_abandon and a reason. '
+                        + 'cannot reach ANY terminal state — not even cancelled. Close it with mesh_graph_gate (action "abandon") and a reason. '
                         + 'Abandon cancels what the gate was holding; it never passes the gate.',
                 });
                 continue;
@@ -376,7 +376,7 @@ export function buildMeshGraphViews(meshId: string, opts: BuildMeshGraphViewOpti
                     kind: 'gate_awaiting',
                     gateId: gate.gateId,
                     detail: `Gate '${gate.ref ?? gate.gateId}' (${gate.action}) is awaiting a coordinator. `
-                        + 'Claim it with mesh_graph_gate_claim, perform the action, then release it with mesh_graph_gate_release.',
+                        + 'Claim it with mesh_graph_gate (action "claim"), perform the action, then release it (action "release").',
                 });
             } else if (gate.state === 'claimed' && gate.leaseExpired) {
                 actions.push({
@@ -398,8 +398,8 @@ export function buildMeshGraphViews(meshId: string, opts: BuildMeshGraphViewOpti
                     kind: 'gate_reclaim',
                     gateId: gate.gateId,
                     detail: `Gate '${gate.ref ?? gate.gateId}' passed its deadline under on_timeout=hold — downstream is still held. `
-                        + 'Reclaim it with mesh_graph_gate_claim (optionally with extend_deadline_seconds) to resume, '
-                        + 'or give it up with mesh_graph_gate_abandon, which cancels what it was holding instead of opening it. '
+                        + 'Reclaim it with mesh_graph_gate action "claim" (optionally with extend_deadline_seconds) or push its deadline with action "extend" to resume, '
+                        + 'or give it up with action "abandon", which cancels what it was holding instead of opening it. '
                         + 'A timeout is never passage: the gate cannot release itself.',
                 });
             }

@@ -894,7 +894,7 @@ export async function meshEnqueueBatch(
                     ? {
                         gates: graphPlan.gates,
                         gateHint: 'Gates are declared shut. When their predecessors complete they open (awaiting_coordinator) and BLOCK their '
-                            + 'downstream tasks. Pass one with mesh_graph_gate_claim → do the action yourself → mesh_graph_gate_release. '
+                            + 'downstream tasks. Pass one with mesh_graph_gate action=claim → do the action yourself → mesh_graph_gate action=release. '
                             + 'The daemon never performs a gate action and a deadline can only expire a gate, never pass it.',
                     }
                     : {}),

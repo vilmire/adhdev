@@ -336,7 +336,7 @@ export async function meshForgetNote(
             note: matched > 0
                 ? `Retracted ${matched} operating note(s). Future coordinators on this mesh will no longer see them at launch. History is preserved (append-only tombstone).`
                 : idTargetMissed
-                    ? `No live operating note matched note_id '${noteId}' — likely a truncated/wrong id (this tool requires an exact match). A tombstone was still recorded so any matching note appended later is also suppressed, but nothing was actually retracted. Use mesh_task_history or mesh_record_note's returned noteId to get the full id.`
+                    ? `No live operating note matched note_id '${noteId}' — likely a truncated/wrong id (this tool requires an exact match). A tombstone was still recorded so any matching note appended later is also suppressed, but nothing was actually retracted. Use mesh_task_history or the noteId returned by mesh_note action=\"record\" to get the full id.`
                     : 'No live operating note matched — recorded a tombstone anyway so any matching note appended later is also suppressed.',
         }, null, 2);
     } catch (e: any) {

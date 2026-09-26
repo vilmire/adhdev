@@ -371,7 +371,7 @@ export function renderGraphStopNotice(n: MeshGraphStopNotice): RenderedGraphStop
         }
         const giveUp: string[] = [];
         if (tasks.length > 0) giveUp.push(`mesh_queue_cancel(task_id=…) for ${tasks.map(t => `'${t.taskId}'`).slice(0, GRAPH_STOP_NOTICE_LIST_CAP).join(', ')}`);
-        if (gates.length > 0) giveUp.push(`mesh_graph_gate_abandon(gate_id=…) for ${gates.map(g => `'${g.gateId}'`).slice(0, GRAPH_STOP_NOTICE_LIST_CAP).join(', ')}`);
+        if (gates.length > 0) giveUp.push(`mesh_graph_gate(action="abandon", gate_id=…) for ${gates.map(g => `'${g.gateId}'`).slice(0, GRAPH_STOP_NOTICE_LIST_CAP).join(', ')}`);
         if (giveUp.length > 0) actions.push(`or drop this branch: ${giveUp.join(' and ')} (a gate left guarding only cancelled work closes itself)`);
         const coordinatorMessage =
             `Graph ${n.graphId}: ${describeRoot(n.root)} and ${n.blocked.length} downstream step(s) are now blocked waiting on it: `
@@ -441,7 +441,7 @@ export function renderGraphStopNotice(n: MeshGraphStopNotice): RenderedGraphStop
     const stuckGates = n.stuck.filter(s => s.kind === 'coordinator_gate' && s.gateId);
     const drop: string[] = [];
     if (stuckTasks.length > 0) drop.push(`mesh_queue_cancel(task_id=…) for ${stuckTasks.slice(0, GRAPH_STOP_NOTICE_LIST_CAP).map(s => `'${s.taskId}'`).join(', ')}`);
-    if (stuckGates.length > 0) drop.push(`mesh_graph_gate_abandon(gate_id=…) for ${stuckGates.slice(0, GRAPH_STOP_NOTICE_LIST_CAP).map(s => `'${s.gateId}'`).join(', ')}`);
+    if (stuckGates.length > 0) drop.push(`mesh_graph_gate(action="abandon", gate_id=…) for ${stuckGates.slice(0, GRAPH_STOP_NOTICE_LIST_CAP).map(s => `'${s.gateId}'`).join(', ')}`);
     if (drop.length > 0) actions.push(`or settle the graph: ${drop.join(' and ')}`);
     const deadPart = n.deadUpstream.length > 0
         ? ` They wait on ${listCapped(n.deadUpstream, d => `${label(d)} (${d.state})`)}.`

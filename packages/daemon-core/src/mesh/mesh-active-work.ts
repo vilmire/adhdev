@@ -1042,7 +1042,7 @@ export interface PruneStaleDirectDispatchesOptions {
 /**
  * Shared staleDirect prune core. Single source of truth for the prune decision + the
  * mutation (store-row delete + audit-ledger append) used by BOTH the manual MCP tool
- * (mesh_prune_stale_direct, minAgeMs=0) and the daemon reconcile loop's auto-prune
+ * (mesh_cleanup_sessions mode=prune_stale_direct, minAgeMs=0) and the daemon reconcile loop's auto-prune
  * PHASE (minAgeMs > 0). Pure decision logic via buildMeshActiveWork + classifyStaleDirectForPrune;
  * the only side effects (on execute) are the ledger `cancel` of each pruned dispatch's
  * `mesh_direct` attempt (C-W8) and a single direct_dispatch_pruned ledger entry — never touching the append-only audit history of the

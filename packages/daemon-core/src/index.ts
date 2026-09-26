@@ -278,7 +278,7 @@ export { normalizeMeshNodeId, meshNodeIdMatches } from '@adhdev/mesh-shared';
 // consistency the 6-6 test enforces). Re-exported so mcp-server (which depends on
 // daemon-core, not on mesh-shared directly) and the daemon-core prompt test both
 // reference one list.
-export { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT } from '@adhdev/mesh-shared';
+export { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT, RETIRED_MESH_TOOLS, retiredMeshToolError } from '@adhdev/mesh-shared';
 export type { CanonicalMeshToolName } from '@adhdev/mesh-shared';
 
 // ── Mesh Coordinator ──
@@ -412,7 +412,7 @@ export {
 export { WorkspaceSagaPermanentError } from './mesh/mesh-graph-workspace-ports.js';
 // ── GRAPH-ORCHESTRATION Phase E: the coordinator-facing surface ──
 // C2 built claim/release/sweep but deliberately left MCP exposure to E; these are
-// the exports the mesh_graph_gate_claim / mesh_graph_gate_release tools call.
+// the exports behind the mesh_graph_gate tool (claim / release actions).
 export {
     claimMeshGraphGate,
     releaseMeshGraphGate,

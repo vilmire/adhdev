@@ -1757,7 +1757,7 @@ export function buildMeshRefineValidationPlan(mesh: any, workspace: string): Rec
         source: command.source,
         cwd: command.cwd,
         timeoutMs: command.timeoutMs,
-        // DOCS-ROOT: surface the change-impact scopes so `mesh_refine_config` shows which
+        // DOCS-ROOT: surface the change-impact scopes so `mesh_config` kind=refine shows which
         // area(s) each command runs in (absent → every area).
         ...(command.scopes ? { scopes: command.scopes } : {}),
     });

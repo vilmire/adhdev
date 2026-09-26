@@ -1,4 +1,4 @@
-import { useTranslation } from 'react-i18next'
+import { Trans, useTranslation } from 'react-i18next'
 import { AlertBanner, Button, Input, Select } from '@adhdev/web-core'
 import {
   CHAT_FONT_PRESET_OPTIONS,
@@ -63,14 +63,16 @@ function FontControl({
           }}
         >
           {options.map(option => (
-            <option key={option.id} value={option.id}>{option.label}</option>
+            <option key={option.id} value={option.id}>
+              {option.labelKey ? t(option.labelKey, option.label) : option.label}
+            </option>
           ))}
         </Select>
         {value.preset === 'custom' && (
           <Input
             type="text"
             className="font-mono"
-            placeholder="e.g. &quot;Pretendard&quot;, &quot;Noto Sans KR&quot;, sans-serif"
+            placeholder={t('standalone.fonts.customFamilyPlaceholder')}
             value={value.customFamily || ''}
             onChange={event => onChange({ preset: 'custom', customFamily: event.target.value })}
           />
@@ -139,10 +141,19 @@ export default function StandaloneFontSettingsSection({
           <div>
             <div className="text-sm font-medium text-text-primary">{t('standalone.fonts.livePreview')}</div>
             <div className="text-xs text-text-muted mt-1">
-              Chat: {getStandaloneFontPreferenceLabel('chat', value.chat.preset)} · Code: {getStandaloneFontPreferenceLabel('code', value.code.preset)} · Terminal: {getStandaloneFontPreferenceLabel('terminal', value.terminal.preset)}
+              {t('standalone.fonts.previewSummary', {
+                chat: getStandaloneFontPreferenceLabel('chat', value.chat.preset, t),
+                code: getStandaloneFontPreferenceLabel('code', value.code.preset, t),
+                terminal: getStandaloneFontPreferenceLabel('terminal', value.terminal.preset, t),
+              })}
             </div>
           </div>
-          <div className="text-2xs text-text-muted">{t('standalone.fonts.defaults')} {getStandaloneFontPreferenceLabel('chat', DEFAULT_STANDALONE_FONT_PREFERENCES.chat.preset)} / {getStandaloneFontPreferenceLabel('code', DEFAULT_STANDALONE_FONT_PREFERENCES.code.preset)}</div>
+          <div className="text-2xs text-text-muted">
+            {t('standalone.fonts.defaultsSummary', {
+              chat: getStandaloneFontPreferenceLabel('chat', DEFAULT_STANDALONE_FONT_PREFERENCES.chat.preset, t),
+              code: getStandaloneFontPreferenceLabel('code', DEFAULT_STANDALONE_FONT_PREFERENCES.code.preset, t),
+            })}
+          </div>
         </div>
 
         <div className="chat-container rounded-xl border border-border-subtle min-h-0 !p-4">
@@ -151,10 +162,16 @@ export default function StandaloneFontSettingsSection({
               <div className="chat-bubble chat-bubble-assistant">
                 <div className="chat-bubble-header mb-1.5">
                   <span className="chat-sender">Hermes</span>
-                  <span className="chat-time">now</span>
+                  <span className="chat-time">{t('standalone.fonts.previewNow')}</span>
                 </div>
                 <div className="chat-markdown">
-                  <p>Readable prose, <strong>bold text</strong>, and <code>inline code</code> should all follow your standalone font choices.</p>
+                  <p>
+                    <Trans
+                      i18nKey="standalone.fonts.previewProse"
+                      ns="common"
+                      components={{ strong: <strong />, code: <code /> }}
+                    />
+                  </p>
                   <pre><code>const message = 'standalone custom fonts'</code></pre>
                 </div>
               </div>
@@ -164,7 +181,7 @@ export default function StandaloneFontSettingsSection({
               <span className="tool-text">tool_call --scope standalone --font preview</span>
             </div>
             <div className="chat-msg-terminal">
-              <div className="chat-msg-header">Terminal</div>
+              <div className="chat-msg-header">{t('standalone.fonts.terminal')}</div>
               <pre className="chat-msg-body">$ npm run dev:standalone\nready on http://localhost:3847</pre>
             </div>
           </div>

@@ -11,8 +11,8 @@
  * registration convention — merged into `turnLedgerIpcHandlers`
  * (turn-ledger-ipc.ts) rather than adding a new router import.
  *
- * Wire contract: `@adhdev/mesh-shared` `turn-ipc.ts`. `mesh_graph_gate_release`
- * and `mesh_graph_node_patch`'s cores THROW for every rejection (the whole
+ * Wire contract: `@adhdev/mesh-shared` `turn-ipc.ts`. The gate release
+ * and `mesh_graph_node_patch` cores THROW for every rejection (the whole
  * transaction must roll back) — this file catches that and reports it as a
  * RESULT (`released: false` / `patched: false` + `refusalCode`), the same
  * success:true-carries-a-refusal shape `queue_enqueue_graph` (mesh-store-ipc.ts)

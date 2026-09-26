@@ -39,7 +39,10 @@ const VOCABULARY_BY_PROPERTY: Record<string, { name: string; values: readonly st
 
 const VOCABULARY_BY_PATH: Record<string, { name: string; values: readonly string[] }> = {
     'mesh_remove_node.session_cleanup_mode': { name: 'MESH_SESSION_CLEANUP_MODES', values: MESH_SESSION_CLEANUP_MODES },
-    'mesh_cleanup_sessions.mode': { name: 'MESH_SESSION_CLEANUP_MODES', values: MESH_SESSION_CLEANUP_MODES },
+    // 2026-09-26 tool consolidation: mesh_cleanup_sessions.mode is the session
+    // vocabulary PLUS the prune_stale_direct mode (the former
+    // mesh_prune_stale_direct tool) — still derived from the tuple by spread.
+    'mesh_cleanup_sessions.mode': { name: 'MESH_SESSION_CLEANUP_MODES', values: [...MESH_SESSION_CLEANUP_MODES, 'prune_stale_direct'] },
 };
 
 const EVERY_VOCABULARY = [

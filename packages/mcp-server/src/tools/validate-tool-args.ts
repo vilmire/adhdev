@@ -37,7 +37,9 @@
  * names their replacement, instead of the generic unknown-key text.
  */
 
-import { ALL_MESH_TOOLS, MESH_CHANGE_IMPACT_CONFIG_TOOL, MESH_NOTIFY_WORKER_TOOL, MESH_REFINE_CONFIG_TOOL } from './mesh-tool-schemas.js';
+import { MESH_SESSION_CLEANUP_MODES, retiredMeshToolError } from '@adhdev/mesh-shared';
+
+import { ALL_MESH_TOOLS, MESH_CONFIG_TOOL, MESH_NOTIFY_WORKER_TOOL } from './mesh-tool-schemas.js';
 
 export interface ToolSchemaLike {
     name: string;
@@ -452,26 +454,162 @@ export function retiredMeshToolArgsError(name: string, args: Record<string, unkn
     return null;
 }
 
+// ─── Per-action argument sets (2026-09-26 tool consolidation) ───────────────
+//
+// Several tools were merged into one tool selected by a discriminator argument
+// (`action`, `kind` or `mode`). The published schema is the UNION of every
+// action's arguments, so the unknown-key gate alone would accept, say, an
+// `outcome` on a gate claim and the handler would silently ignore it — the
+// exact silent-drop class this file exists to close (see the header incident).
+// This table narrows the union per action: an argument that belongs to a
+// different action is refused with the action(s) it belongs to, and each
+// action's own required keys are enforced.
+//
+// `args` lists every accepted key for the action, camelCase aliases included
+// (they are declared schema properties, not MESH_ACCEPTED_ARG_ALIASES entries).
+// `defaultAction` is used when the caller omits the discriminator (mesh_init,
+// mesh_create keep their pre-merge default behaviour).
+
+export interface MeshActionSpec {
+    readonly key: string;
+    readonly defaultAction?: string;
+    readonly actions: Readonly<Record<string, { readonly args: readonly string[]; readonly required?: readonly string[] }>>;
+}
+
+const GATE_ID = ['gate_id', 'gateId'] as const;
+const GATE_OWNER = ['coordinator_session_id', 'coordinatorSessionId'] as const;
+const NODE_ID = ['node_id', 'nodeId'] as const;
+const SESSION_CLEANUP_ARGS = { args: ['node_id', 'session_ids', 'dry_run'], required: ['node_id'] } as const;
+const READ_ONLY_CONFIG_ARGS = { args: ['mode', 'node_id', 'config'], required: ['mode'] } as const;
+
+export const MESH_TOOL_ACTIONS: Readonly<Record<string, MeshActionSpec>> = {
+    mesh_graph_gate: {
+        key: 'action',
+        actions: {
+            claim: { args: [...GATE_ID, 'lease_seconds', 'leaseSeconds', 'extend_deadline_seconds', 'extendDeadlineSeconds', ...GATE_OWNER], required: ['gate_id'] },
+            release: {
+                args: [...GATE_ID, 'fencing_token', 'fencingToken', 'lease_generation', 'leaseGeneration', 'idempotency_key', 'idempotencyKey', 'outcome', 'result', 'evidence', 'patches'],
+                required: ['gate_id', 'fencing_token', 'lease_generation', 'idempotency_key', 'outcome'],
+            },
+            abandon: { args: [...GATE_ID, 'reason', 'force', ...GATE_OWNER], required: ['gate_id', 'reason'] },
+            extend: { args: [...GATE_ID, 'extend_seconds'], required: ['gate_id', 'extend_seconds'] },
+        },
+    },
+    mesh_node_slots: {
+        key: 'action',
+        actions: {
+            list: { args: [...NODE_ID], required: ['node_id'] },
+            propose: { args: [...NODE_ID, 'include_magi', 'includeMagi'], required: ['node_id'] },
+            set: { args: [...NODE_ID, 'slots', 'reason', 'write'], required: ['node_id', 'slots'] },
+        },
+    },
+    mesh_magi_kind_panel: {
+        key: 'action',
+        actions: {
+            list: { args: ['task_kind'] },
+            set: { args: ['task_kind', 'slots', 'write'], required: ['task_kind', 'slots'] },
+        },
+    },
+    mesh_coordinator_prompt_append: {
+        key: 'action',
+        actions: {
+            get: { args: ['cli_type'] },
+            set: { args: ['cli_type', 'content'] },
+        },
+    },
+    mesh_note: {
+        key: 'action',
+        actions: {
+            record: { args: ['text', 'category', 'pinned', 'ttl_days', 'expiresAt', 'expires_at', 'supersedes', 'subject_key'], required: ['text'] },
+            forget: { args: ['note_id', 'noteId', 'text', 'reason'] },
+        },
+    },
+    mesh_config: {
+        key: 'kind',
+        actions: {
+            refine: READ_ONLY_CONFIG_ARGS,
+            change_impact: READ_ONLY_CONFIG_ARGS,
+            mesh_json: { args: ['node_id', 'workspace', 'write', 'overwrite'] },
+        },
+    },
+    mesh_init: {
+        key: 'mode',
+        defaultAction: 'init',
+        actions: {
+            init: { args: ['node_id', 'write', 'overwrite'] },
+            reinit: { args: ['node_id', 'write', 'overwrite'] },
+        },
+    },
+    mesh_create: {
+        key: 'mode',
+        defaultAction: 'create',
+        actions: {
+            create: { args: ['name', 'repo_remote_url', 'repo_identity', 'default_branch', 'add_current', 'workspace'], required: ['name'] },
+            plan: { args: ['workspace', 'mesh_id', 'operation', 'branch'], required: ['workspace'] },
+        },
+    },
+    mesh_cleanup_sessions: {
+        key: 'mode',
+        actions: {
+            ...Object.fromEntries(MESH_SESSION_CLEANUP_MODES.map(mode => [mode, SESSION_CLEANUP_ARGS])),
+            prune_stale_direct: { args: ['execute', 'dry_run', 'include_terminal'] },
+        },
+    },
+};
+
+/**
+ * Error text when `args` carries a key that does not belong to the chosen
+ * action of a merged tool (or, with `checkRequired`, lacks one of that action's
+ * required keys), else null. A missing or unknown discriminator returns null:
+ * the schema's own required / enum checks already name it.
+ */
+export function meshToolActionArgsError(
+    name: string,
+    args: Record<string, unknown>,
+    options: { checkRequired?: boolean; schema?: ToolSchemaLike['inputSchema'] } = {},
+): string | null {
+    const spec = MESH_TOOL_ACTIONS[name];
+    if (!spec) return null;
+    const raw = args[spec.key];
+    const chosen = typeof raw === 'string' && raw.trim() ? raw.trim() : spec.defaultAction;
+    if (!chosen || !Object.prototype.hasOwnProperty.call(spec.actions, chosen)) return null;
+    const action = spec.actions[chosen];
+    const allowed = new Set<string>([spec.key, ...action.args]);
+    const stray = Object.keys(args).filter(key => !allowed.has(key) && args[key] !== undefined);
+    const label = `${name} ${spec.key}="${chosen}"`;
+    if (stray.length > 0) {
+        const described = stray.map((key) => {
+            const owners = Object.entries(spec.actions)
+                .filter(([other, def]) => other !== chosen && def.args.includes(key))
+                .map(([other]) => other);
+            return owners.length > 0 ? `"${key}" (belongs to ${spec.key}=${owners.join(' | ')})` : `"${key}"`;
+        });
+        return `Parameter(s) not accepted by ${label}: ${described.join(', ')}. `
+            + `Accepted for ${chosen}: ${[spec.key, ...action.args].join(', ')}.`;
+    }
+    if (!options.checkRequired || !action.required || action.required.length === 0) return null;
+    return missingRequiredToolArgsError(label, { properties: options.schema?.properties, required: action.required }, args);
+}
+
 const MESH_TOOL_BY_NAME = new Map<string, ToolSchemaLike>(
     (ALL_MESH_TOOLS as ToolSchemaLike[]).map(tool => [tool.name, tool]),
 );
 
-// Hidden 1-release aliases (Part 8-4 and its change-impact symmetric) are not
-// published in ALL_MESH_TOOLS but stay dispatchable in server.ts, forwarding to
-// the unified tool with `mode` injected. Validate their arguments against the
-// unified schema they forward to — its properties (mode/node_id/config) are a
-// superset of anything the pre-consolidation callers could pass.
+// Hidden aliases (Part 8-4 and its change-impact symmetric) are not published in
+// ALL_MESH_TOOLS but stay dispatchable (mesh-tool-dispatch.ts), forwarding to the
+// merged mesh_config tool with `kind` + `mode` injected. Validate their arguments
+// against the schema they forward to — its properties are a superset of anything
+// the pre-consolidation callers could pass.
 //
-// `injected` names the keys the dispatcher fills in for the alias (server.ts /
-// mesh-tool-dispatch.ts inject `mode`), so the required-key check does not demand
-// from the caller what the alias exists to supply.
+// `injected` names the keys the dispatcher fills in for the alias, so the
+// required-key check does not demand from the caller what the alias exists to supply.
 const MESH_ALIAS_TOOL: Record<string, { schema: ToolSchemaLike; injected: readonly string[] }> = {
-    mesh_refine_config_schema: { schema: MESH_REFINE_CONFIG_TOOL, injected: ['mode'] },
-    mesh_validate_refine_config: { schema: MESH_REFINE_CONFIG_TOOL, injected: ['mode'] },
-    mesh_suggest_refine_config: { schema: MESH_REFINE_CONFIG_TOOL, injected: ['mode'] },
-    mesh_change_impact_config_schema: { schema: MESH_CHANGE_IMPACT_CONFIG_TOOL, injected: ['mode'] },
-    mesh_validate_change_impact_config: { schema: MESH_CHANGE_IMPACT_CONFIG_TOOL, injected: ['mode'] },
-    mesh_suggest_change_impact_config: { schema: MESH_CHANGE_IMPACT_CONFIG_TOOL, injected: ['mode'] },
+    mesh_refine_config_schema: { schema: MESH_CONFIG_TOOL, injected: ['kind', 'mode'] },
+    mesh_validate_refine_config: { schema: MESH_CONFIG_TOOL, injected: ['kind', 'mode'] },
+    mesh_suggest_refine_config: { schema: MESH_CONFIG_TOOL, injected: ['kind', 'mode'] },
+    mesh_change_impact_config_schema: { schema: MESH_CONFIG_TOOL, injected: ['kind', 'mode'] },
+    mesh_validate_change_impact_config: { schema: MESH_CONFIG_TOOL, injected: ['kind', 'mode'] },
+    mesh_suggest_change_impact_config: { schema: MESH_CONFIG_TOOL, injected: ['kind', 'mode'] },
     // E-T0: NOT in ALL_MESH_TOOLS on purpose (server.ts publishes it only when
     // the worker-MCP flag is on, so ListTools stays byte-identical when off —
     // see the tool's own doc comment in mesh-tool-schemas.ts). Registered here
@@ -491,12 +629,13 @@ function resolveMeshTool(name: string): { schema: ToolSchemaLike; injected: read
 /**
  * Mesh-mode gate: error text when the call carries unknown arguments — at the
  * top level OR inside a declared array-of-objects field (`tasks[]`,
- * `workspaces[]`, `gates[]`) — else null. Unknown tool names return null and
- * fall through to the dispatcher's existing "Unknown tool" response.
+ * `workspaces[]`, `gates[]`) — else null. A retired (merged) tool name returns the
+ * redirect error naming its replacement; any other unknown tool name returns null
+ * and falls through to the dispatcher's existing "Unknown tool" response.
  */
 export function rejectUnknownMeshToolArgs(name: string, rawArgs: Record<string, unknown>): string | null {
     const tool = resolveMeshTool(name);
-    if (!tool) return null;
+    if (!tool) return retiredMeshToolError(name);
     const retired = retiredMeshToolArgsError(name, rawArgs);
     if (retired) return retired;
     const args = canonicalizeMeshToolArgs(name, rawArgs);
@@ -505,7 +644,8 @@ export function rejectUnknownMeshToolArgs(name: string, rawArgs: Record<string, 
         ?? nestedArrayItemArgsError(name, properties, args)
         ?? nestedArrayItemArrayTypeError(name, properties, args)
         ?? enumValueError(name, properties, args)
-        ?? nestedArrayItemEnumValueError(name, properties, args);
+        ?? nestedArrayItemEnumValueError(name, properties, args)
+        ?? meshToolActionArgsError(name, args);
 }
 
 function isPresent(value: unknown): boolean {
@@ -548,7 +688,10 @@ export function missingRequiredToolArgsError(
  */
 export function validateMeshToolArgs(name: string, rawArgs: Record<string, unknown>): string | null {
     const tool = resolveMeshTool(name);
-    if (!tool) return null;
+    // A retired (merged) tool name gets an error naming its replacement — never
+    // the generic "Unknown tool", so a coordinator on an old prompt recovers on
+    // its next call. Any other unknown name falls through to the dispatcher.
+    if (!tool) return retiredMeshToolError(name);
     const retired = retiredMeshToolArgsError(name, rawArgs);
     if (retired) return retired;
     // Accepted aliases are renamed BEFORE the unknown-key gate: an alias is never
@@ -560,5 +703,6 @@ export function validateMeshToolArgs(name: string, rawArgs: Record<string, unkno
         ?? nestedArrayItemArrayTypeError(name, properties, args)
         ?? enumValueError(name, properties, args)
         ?? nestedArrayItemEnumValueError(name, properties, args)
-        ?? missingRequiredToolArgsError(name, tool.schema.inputSchema, args, tool.injected);
+        ?? missingRequiredToolArgsError(name, tool.schema.inputSchema, args, tool.injected)
+        ?? meshToolActionArgsError(name, args, { checkRequired: true, schema: tool.schema.inputSchema });
 }

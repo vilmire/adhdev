@@ -2022,11 +2022,21 @@
             "terminalDescription": "ターミナルのトランスクリプトカードと、チャットモードのツール／コマンド行。",
             "livePreview": "ライブプレビュー",
             "resolvedStack": "解決されたスタック:",
-            "defaults": "既定値:",
             "saveFontSettings": "フォント設定を保存",
             "revertToSaved": "保存済みに戻す",
             "resetToDefaults": "既定値にリセット",
-            "saving": "保存中…"
+            "saving": "保存中…",
+            "customFamilyPlaceholder": "例: \"Pretendard\", \"Noto Sans KR\", sans-serif",
+            "previewSummary": "チャット: {{chat}} ・ コード: {{code}} ・ ターミナル: {{terminal}}",
+            "defaultsSummary": "既定値: {{chat}} / {{code}}",
+            "previewNow": "たった今",
+            "previewProse": "読みやすい本文、<strong>太字テキスト</strong>、<code>インラインコード</code>はすべて Standalone のフォント設定に従います。",
+            "presets": {
+                "default": "既定",
+                "defaultMono": "既定の等幅",
+                "custom": "カスタム…",
+                "serif": "セリフ"
+            }
         }
     },
     "cloud": {

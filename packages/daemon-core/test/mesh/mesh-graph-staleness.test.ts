@@ -151,7 +151,7 @@ describe('mesh graph staleness sweep', () => {
         expect(queued.events).toHaveLength(1);
         expect(queued.events[0].event).toBe('mesh:graph_stale');
         expect(queued.events[0].coordinatorMessage).toContain("'land' (refinery, awaiting_coordinator)");
-        expect(queued.events[0].coordinatorMessage).toContain('mesh_graph_gate_claim');
+        expect(queued.events[0].coordinatorMessage).toContain('use mesh_graph_gate: action "claim"');
     });
 
     it('pages a stale gate separately when its graph looks fresh', () => {

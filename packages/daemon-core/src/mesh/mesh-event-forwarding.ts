@@ -786,7 +786,7 @@ export function setupMeshEventForwarding(components: DaemonComponents): () => vo
         const coordinatorMessage = notification.kind === 'graph_gate_awaiting'
             ? `Coordinator gate '${gateLabel}'${actionLabel} is awaiting you (graph ${notification.graphId}). `
               + `${notification.instructions ? `Instructions: ${notification.instructions} ` : ''}`
-              + `Claim it with mesh_graph_gate_claim (gateId: ${notification.gateId}), perform the action, then release or abandon it. `
+              + `Claim it with mesh_graph_gate (action: "claim", gate_id: ${notification.gateId}), perform the action, then call it again with action "release" (or "abandon"). `
               + 'Downstream tasks stay blocked until the gate is released.'
             : notification.kind === 'graph_gate_deadline_expired'
                 // D3(b): elapsed time is NOT completion evidence — the gate was
@@ -794,7 +794,7 @@ export function setupMeshEventForwarding(components: DaemonComponents): () => vo
                 ? `Coordinator gate '${gateLabel}'${actionLabel} passed its deadline${ageLabel} without release and is now expired `
                   + `(graph ${notification.graphId}, gateId: ${notification.gateId}, policy: ${notification.policy ?? 'hold'}). `
                   + (notification.policy === 'hold' || !notification.policy
-                      ? 'Downstream stays blocked. Extend it (mesh_graph_gate_extend), reclaim and release it with evidence, or abandon it if the work is obsolete.'
+                      ? 'Downstream stays blocked. Extend it (mesh_graph_gate action "extend" with extend_seconds), reclaim and release it with evidence (actions "claim" then "release"), or abandon it (action "abandon") if the work is obsolete.'
                       : 'The timeout policy already settled its downstream; nothing is waiting on this gate.')
                 : `Coordinator gate '${gateLabel}'${actionLabel} lease expired without release (graph ${notification.graphId}, gateId: ${notification.gateId}). `
                   + 'If the external action already happened, reconcile its evidence and release; otherwise reclaim the gate before retrying.';

@@ -258,7 +258,7 @@ describe('N(a) — block policy: a failure that leaves downstream blocked', () =
         expect(rendered.eventId).toBe(`graph:graph_dependency_blocked:${g.graphId}:${g.byRef('x').nodeId}:${notice.generation}`);
         expect(rendered.coordinatorMessage).toContain(`mesh_queue_requeue(task_id='${g.byRef('x').taskId}', force=true)`);
         expect(rendered.coordinatorMessage).toContain(`mesh_queue_cancel(task_id=…) for '${g.byRef('d').taskId}'`);
-        expect(rendered.coordinatorMessage).toContain(`mesh_graph_gate_abandon(gate_id=…) for '${g.gate('g1').gateId}'`);
+        expect(rendered.coordinatorMessage).toContain(`mesh_graph_gate(action="abandon", gate_id=…) for '${g.gate('g1').gateId}'`);
         expect(rendered.coordinatorMessage).toContain(`mesh_graph_node_patch(node='d', graph_id='${g.graphId}')`);
         expect(JSON.stringify(rendered)).not.toContain(SECRET);
 

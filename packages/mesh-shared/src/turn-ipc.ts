@@ -1675,8 +1675,8 @@ export function decodeRecoveryContextQueryResponse(value: unknown): RecoveryCont
 // Wiring-unification Phase C, workstream C-W9c (2026-09-24 19:00 stamp
 // "mcp-server graph gates/plan/patch ... still call daemon-core in-process").
 //
-// `mesh-tools-graph.ts`'s five graph-orchestration tools (`mesh_graph_gate_claim`
-// / `_release` / `_abandon`, `mesh_graph_node_patch`, `mesh_graph_view`) called
+// `mesh-tools-graph.ts`'s five graph-orchestration tools (the gate claim
+// / release / abandon verbs, now `mesh_graph_gate`, `mesh_graph_node_patch`, `mesh_graph_view`) called
 // daemon-core's MeshRuntimeStore-backed graph module in-process
 // (`claimMeshGraphGate` / `releaseMeshGraphGate` / `abandonMeshGraphGate` /
 // `patchGraphNodeAndRetry` / `buildMeshGraphViews`, all in `mesh-graph-gates.ts` /
@@ -1700,7 +1700,7 @@ export interface GraphGateClaimRequest {
     coordinatorSessionId: string
     leaseSeconds?: number
     extendDeadlineSeconds?: number
-    /** Also collect `collectGateConvergenceEvidence` on a successful claim (mesh_graph_gate_claim's own behavior). */
+    /** Also collect `collectGateConvergenceEvidence` on a successful claim (mesh_graph_gate action=claim's own behavior). */
     probeConvergenceEvidence?: boolean
 }
 
@@ -1760,7 +1760,7 @@ export interface GraphGateReleaseRequest {
 // roll back — mesh-graph-gates.ts file header). The daemon handler catches
 // that and reports it as a RESULT, not an IPC-level failure (the same
 // success:true-carries-a-refusal shape `queue_enqueue_graph` already uses) —
-// `mesh_graph_gate_release`'s tool layer classifies `refusalCode` by prefix
+// `mesh_graph_gate` action=release's tool layer classifies `refusalCode` by prefix
 // exactly as it did the in-process thrown message.
 export type GraphGateReleaseResponse =
     | {
@@ -2003,7 +2003,7 @@ export function decodeTaskStatsQueryResponse(value: unknown): TaskStatsQueryResp
 // ─── prune_stale_direct ─────────────────────────────────────────────────────
 //
 // C-W9c: replaces the in-process `pruneStaleDirectDispatches` call
-// (`mesh_prune_stale_direct` tool, `mesh-tools-session.ts`). Unlike the other
+// (`mesh_cleanup_sessions` mode=prune_stale_direct, `mesh-tools-session.ts`). Unlike the other
 // C-W9 commands this one does NOT take its inputs (queue/records/direct
 // dispatches) on the wire — the daemon already reads them itself
 // (`getQueue`/`readLocalRecords`/`getActiveDirectDispatches`), so the request

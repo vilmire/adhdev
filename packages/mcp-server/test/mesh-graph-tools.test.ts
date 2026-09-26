@@ -11,6 +11,7 @@ import {
     ALL_MESH_TOOLS,
 } from '../src/tools/mesh-tools.js';
 import { IpcTransport } from '../src/transports/ipc.js';
+import { MESH_TOOL_ACTIONS } from '../src/tools/validate-tool-args.js';
 import { getQueue, __writeTaskStatusForTests, readLocalRecords } from '@adhdev/daemon-core';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
@@ -92,20 +93,20 @@ async function enqueueGatedBatch(ctx: any, extra: Record<string, unknown> = {}) 
 
 // ── E-1: the gate verbs are REACHABLE AS MCP TOOLS ───────────────────────────
 
-test('E-1: the three graph tools are registered in ALL_MESH_TOOLS with required fields', () => {
+test('E-1: the graph tools are registered in ALL_MESH_TOOLS with required fields', () => {
     const byName = new Map(ALL_MESH_TOOLS.map(t => [t.name, t]));
-    for (const name of ['mesh_graph_gate_claim', 'mesh_graph_gate_release', 'mesh_graph_view']) {
+    for (const name of ['mesh_graph_gate', 'mesh_graph_view']) {
         assert.ok(byName.has(name), `${name} is not published in ALL_MESH_TOOLS`);
     }
-    // The release tool must DEMAND the fence: a schema that made these optional
+    // The release action must DEMAND the fence: a schema that made these optional
     // would invite callers to omit them and get a confusing runtime rejection.
-    const release = byName.get('mesh_graph_gate_release')!;
+    // Since the 2026-09-26 consolidation the per-action required set lives in
+    // MESH_TOOL_ACTIONS (the union schema can only require action + gate_id).
+    const releaseRequired = MESH_TOOL_ACTIONS.mesh_graph_gate.actions.release.required ?? [];
     for (const field of ['gate_id', 'fencing_token', 'lease_generation', 'idempotency_key', 'outcome']) {
-        assert.ok(
-            (release.inputSchema as any).required.includes(field),
-            `mesh_graph_gate_release must require ${field}`,
-        );
+        assert.ok(releaseRequired.includes(field), `mesh_graph_gate action=release must require ${field}`);
     }
+    assert.deepEqual((byName.get('mesh_graph_gate')!.inputSchema as any).required, ['action', 'gate_id']);
     // ★ design :431-432 — there is deliberately NO tool that force-passes a gate.
     const forceish = ALL_MESH_TOOLS.filter(t =>
         /gate/.test(t.name) && /(force|auto_release|expire|skip)/.test(t.name));
@@ -163,7 +164,7 @@ test('E-1: full gate lifecycle through the MCP tools — declared → awaiting �
 });
 
 /**
- * rc.37 audit item 2 — mesh_graph_gate_release patches[].node aliases.
+ * rc.37 audit item 2 — mesh_graph_gate action=release patches[].node aliases.
  *
  * Before the fix, a patches[] entry given as {ref: 'deploy', ...} (rather than
  * {node: 'deploy', ...}) was silently DROPPED (`.filter(p => p.node.length > 0)`),
@@ -727,7 +728,7 @@ test('E-4: a single-tool decision claiming a superseded blocker gets the batch_c
     assert.equal(res.batchCapabilityAvailable, undefined);
 });
 
-// ── E-4: `mesh_graph_gate_abandon` — the graph can reach a terminal state ────
+// ── E-4: `mesh_graph_gate` action=abandon — the graph can reach a terminal state ────
 //
 // ★ The defect this closes: cancelling the work behind a gate left the gate
 // `awaiting_coordinator` with no tool able to touch it — the C3 cancel cascade
@@ -736,19 +737,18 @@ test('E-4: a single-tool decision claiming a superseded blocker gets the batch_c
 // graph could reach NO terminal state, not even `cancelled`. Every test here goes
 // through the REAL MCP tool, because "callable by a coordinator" is the deliverable.
 
-test('E-4: mesh_graph_gate_abandon is registered and demands a reason', () => {
-    const tool = ALL_MESH_TOOLS.find(t => t.name === 'mesh_graph_gate_abandon');
-    assert.ok(tool, 'mesh_graph_gate_abandon is not published in ALL_MESH_TOOLS');
+test('E-4: mesh_graph_gate action=abandon is registered and demands a reason', () => {
+    const tool = ALL_MESH_TOOLS.find(t => t.name === 'mesh_graph_gate');
+    assert.ok(tool, 'mesh_graph_gate is not published in ALL_MESH_TOOLS');
+    assert.ok(((tool!.inputSchema as any).properties.action.enum as string[]).includes('abandon'));
+    const abandonRequired = MESH_TOOL_ACTIONS.mesh_graph_gate.actions.abandon.required ?? [];
     for (const field of ['gate_id', 'reason']) {
-        assert.ok(
-            (tool!.inputSchema as any).required.includes(field),
-            `mesh_graph_gate_abandon must require ${field}`,
-        );
+        assert.ok(abandonRequired.includes(field), `mesh_graph_gate action=abandon must require ${field}`);
     }
     // ★ The description must not read as a way THROUGH a gate — that is the
     // force-release the module header forbids, and an LLM picks tools by prose.
-    assert.match(tool!.description, /NOT A PASS/i);
-    assert.match(tool!.description, /mesh_graph_gate_release/);
+    assert.match(tool!.description, /NOT a pass/);
+    assert.match(tool!.description, /release — pass a gate you hold: the ONLY way/);
 });
 
 test('E-4: abandoning a stranded gate cancels downstream and lets the graph go terminal', async () => {

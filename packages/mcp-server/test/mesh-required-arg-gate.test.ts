@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { ALL_MESH_TOOLS, MESH_NOTIFY_WORKER_TOOL, MESH_SEND_TASK_TOOL } from '../src/tools/mesh-tool-schemas.js';
 import {
+    MESH_TOOL_ACTIONS,
     missingRequiredToolArgsError,
     rejectUnknownMeshToolArgs,
     validateMeshToolArgs,
@@ -21,7 +22,11 @@ import {
 test('every published tool rejects an empty call iff its schema declares required keys', () => {
     let enforced = 0;
     for (const tool of [...ALL_MESH_TOOLS, MESH_NOTIFY_WORKER_TOOL]) {
-        const required = (tool.inputSchema as { required?: string[] }).required ?? [];
+        // A merged tool with a DEFAULT action (mesh_create → create, mesh_init → init)
+        // also owes that action's required keys on an empty call (2026-09-26 consolidation).
+        const spec = MESH_TOOL_ACTIONS[tool.name];
+        const defaultRequired = spec?.defaultAction ? (spec.actions[spec.defaultAction].required ?? []) : [];
+        const required = [...((tool.inputSchema as { required?: string[] }).required ?? []), ...defaultRequired];
         const error = validateMeshToolArgs(tool.name, {});
         if (required.length === 0) {
             assert.equal(error, null, `${tool.name} declares no required keys and must accept {}`);
@@ -44,7 +49,7 @@ test('the unknown-key gate alone still accepts an empty call (its contract is un
 test('a declared camelCase alias satisfies a snake_case required key', () => {
     assert.equal(validateMeshToolArgs('mesh_queue_cancel', { taskId: 't_x' }), null);
     assert.equal(validateMeshToolArgs('mesh_queue_cancel', { task_id: 't_x' }), null);
-    assert.equal(validateMeshToolArgs('mesh_node_slots_list', { nodeId: 'n_x' }), null);
+    assert.equal(validateMeshToolArgs('mesh_node_slots', { action: 'list', nodeId: 'n_x' }), null);
 });
 
 test('a blank required value counts as missing', () => {
@@ -78,11 +83,12 @@ test('mesh_send_task: session_id is optional (sessionless node dispatch is a sup
 });
 
 test('hidden 1-release aliases and the flag-gated worker tool are validated against their real schema', () => {
-    // The alias exists to inject `mode`, so the caller is not asked for it.
+    // The alias exists to inject `kind` + `mode`, so the caller is not asked for them.
     assert.equal(validateMeshToolArgs('mesh_validate_refine_config', { node_id: 'n1' }), null);
     assert.equal(validateMeshToolArgs('mesh_refine_config_schema', {}), null);
-    // The unified tool itself still requires it.
-    assert.match(validateMeshToolArgs('mesh_refine_config', {}) ?? '', /"mode"/);
+    // The merged tool itself still requires them: kind always, mode for kind=refine.
+    assert.match(validateMeshToolArgs('mesh_config', {}) ?? '', /"kind"/);
+    assert.match(validateMeshToolArgs('mesh_config', { kind: 'refine' }) ?? '', /mesh_config kind="refine": "mode"/);
     const error = validateMeshToolArgs('mesh_notify_worker', { node_id: 'n' });
     assert.ok(error);
     assert.match(error, /"task_id"/);

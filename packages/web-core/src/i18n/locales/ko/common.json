@@ -2022,11 +2022,21 @@
             "terminalDescription": "채팅 모드에서 터미널 트랜스크립트 카드 및 툴/명령 행.",
             "livePreview": "라이브 미리보기",
             "resolvedStack": "해결된 스택:",
-            "defaults": "기본값:",
             "saveFontSettings": "폰트 설정 저장",
             "revertToSaved": "저장된 값으로 되돌리기",
             "resetToDefaults": "기본값으로 재설정",
-            "saving": "저장 중…"
+            "saving": "저장 중…",
+            "customFamilyPlaceholder": "예: \"Pretendard\", \"Noto Sans KR\", sans-serif",
+            "previewSummary": "채팅: {{chat}} · 코드: {{code}} · 터미널: {{terminal}}",
+            "defaultsSummary": "기본값: {{chat}} / {{code}}",
+            "previewNow": "지금",
+            "previewProse": "가독성 있는 산문, <strong>굵은 텍스트</strong>, <code>인라인 코드</code> 모두 스탠드얼론 폰트 설정을 따릅니다.",
+            "presets": {
+                "default": "기본값",
+                "defaultMono": "기본 고정폭",
+                "custom": "사용자 지정…",
+                "serif": "세리프"
+            }
         }
     },
     "cloud": {

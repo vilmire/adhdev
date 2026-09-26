@@ -1,6 +1,6 @@
 // DRY-RUN-SILENTLY-IGNORED — `dry_run:false` alone must never be a silent no-op.
 //
-// In mesh_fast_forward_node / mesh_prune_stale_direct, `dry_run` is a VETO on
+// In mesh_fast_forward_node / mesh_cleanup_sessions mode=prune_stale_direct, `dry_run` is a VETO on
 // execution, not a trigger for it: `execute:true` is the only thing that runs
 // anything. A caller passing `dry_run:false` on its own is plainly asking to
 // execute, but used to get a silent dry-run back (dryRun:true / executed:false)
@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 
 import { meshFastForwardNode } from '../src/tools/mesh-tools-git.js';
 import { meshPruneStaleDirect } from '../src/tools/mesh-tools-session.js';
+import { resolveMeshToolHandler } from '../src/tools/mesh-tool-dispatch.js';
 import { meshRefineNode, meshRefineBatch } from '../src/tools/mesh-tools-refine.js';
 
 function makeCtx(calls: Array<{ verb: string; args: any }>) {
@@ -98,7 +99,7 @@ test('mesh_fast_forward_node: omitting both flags previews (default dry-run pres
     assert.equal(dispatched!.args.dryRun, true);
 });
 
-test('mesh_prune_stale_direct: dry_run:false without execute is refused', async () => {
+test('prune_stale_direct core: dry_run:false without execute is refused', async () => {
     const calls: Array<{ verb: string; args: any }> = [];
     const ctx = makeCtx(calls);
 
@@ -107,6 +108,20 @@ test('mesh_prune_stale_direct: dry_run:false without execute is refused', async 
     assert.equal(out.success, false);
     assert.equal(out.code, 'dry_run_false_requires_execute');
     assert.equal(out.executed, false);
+});
+
+// 2026-09-26 tool consolidation: the prune is published as mesh_cleanup_sessions
+// mode=prune_stale_direct. Drive it through the REAL dispatch table so the merge
+// cannot route the mode to the per-node session cleanup (which would need node_id
+// and never reach the prune core's veto).
+test('mesh_cleanup_sessions mode=prune_stale_direct reaches the prune core through dispatch (dry_run:false refused)', async () => {
+    const calls: Array<{ verb: string; args: any }> = [];
+    const ctx = makeCtx(calls);
+    const handler = resolveMeshToolHandler('mesh_cleanup_sessions')!;
+    const out = JSON.parse(await handler(ctx, { mode: 'prune_stale_direct', dry_run: false }));
+    assert.equal(out.success, false);
+    assert.equal(out.code, 'dry_run_false_requires_execute');
+    assert.match(out.nextAction, /mesh_cleanup_sessions\(mode: "prune_stale_direct", execute: true\)/);
 });
 
 // DRY-RUN-VETO-PRECEDENCE (safety) — parity audit gap: refine_mesh_node /

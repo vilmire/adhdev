@@ -420,7 +420,7 @@ export default function StandaloneSettings() {
                  daemon. Mounted here because those files are per-machine config —
                  mesh-level prompts stay on the Repo Mesh page. This is also the
                  only UI for the layer that the
-                 mesh_coordinator_prompt_append_set MCP tool writes. */}
+                 mesh_coordinator_prompt_append MCP tool (action "set") writes. */}
             <Section title={t('settings.coordinatorPrompts.sectionTitle')} description={t('settings.coordinatorPrompts.sectionDescription')}>
                 <CoordinatorPromptsSection daemonId={daemonEntry?.id} />
             </Section>
