@@ -25,9 +25,7 @@ import MeshMiniDag from './MeshMiniDag'
 import BlueprintStatusBar from './BlueprintStatusBar'
 import BlueprintScopeChips, { DEFAULT_BLUEPRINT_SCOPE, type BlueprintScope } from './BlueprintScopeChips'
 import { MeshBlueprintGateRowView, MeshBlueprintTaskRowView, type GateActionHandlers } from './MeshBlueprintRow'
-import { useConfirmDialog } from '../../hooks/useConfirmDialog'
-import { unwrapDaemonCommandBody } from '../../utils/daemon-command-envelope'
-import { buildGateAbandonArgs, buildGateExtendArgs, buildGateReleaseArgs } from './blueprintViewModel'
+import { useBlueprintGateCommands } from './useBlueprintGateCommands'
 import {
     BLUEPRINT_HISTORY_LOAD_STEP,
     buildBlueprintMissionGroups,
@@ -72,9 +70,9 @@ export default function MeshBlueprintList({ tasks, status, graphs, meshTheme, no
     const [historyLimit, setHistoryLimit] = useState(BLUEPRINT_HISTORY_LOAD_STEP)
     /** Row whose mini plan is open (one at a time — it is a drawing, not a tree). */
     const [expandedPlanKey, setExpandedPlanKey] = useState<string | null>(null)
-    /** Gate row (by rowKey) with a command currently in flight — disables its buttons only. */
-    const [busyGateKey, setBusyGateKey] = useState<string | null>(null)
-    const { confirm, confirmDialog } = useConfirmDialog()
+    /** D5 gate verbs — shared with the graph view's gate panel. */
+    const gateCommands = useBlueprintGateCommands({ daemonId, meshId, sendDaemonCommand, onGatesChanged })
+    const { busyGateKey, confirmDialog } = gateCommands
 
     /* Shared relative-time clock: coarse (30s) and paused while hidden, so
      * "3m ago" ages while the tab sits open without a data refetch. */
@@ -123,47 +121,10 @@ export default function MeshBlueprintList({ tasks, status, graphs, meshTheme, no
         onGateOpen(graph, gateNodeId, graph.gates.find(gate => gate.nodeId === gateNodeId))
     }
 
-    const canCommand = Boolean(daemonId && meshId && sendDaemonCommand)
-
-    /**
-     * Send one D5 gate command and refresh the graph list afterward. No
-     * optimistic UI (per the task): the row keeps showing its pre-command
-     * state — and, on success, whatever mesh_graph_overview returns next —
-     * until onGatesChanged's refetch lands. A non-success envelope throws so
-     * the caller's inline error UI (GateActionsPanel) can show it.
-     */
-    const sendGateCommand = async (gateKey: string, commandType: string, args: Record<string, unknown>): Promise<void> => {
-        if (!daemonId || !sendDaemonCommand) throw new Error(t('mesh.blueprint.gate.commandUnavailable'))
-        setBusyGateKey(gateKey)
-        try {
-            const raw = await sendDaemonCommand(daemonId, commandType, args)
-            const body = unwrapDaemonCommandBody<{ success?: boolean; error?: string }>(raw)
-            if (!body || body.success === false) throw new Error(body?.error || `${commandType} failed`)
-        } finally {
-            setBusyGateKey(current => (current === gateKey ? null : current))
-            onGatesChanged?.()
-        }
-    }
-
     const gateActionsFor = (row: BlueprintGateRow): { key: string; handlers: GateActionHandlers } | undefined => {
-        if (!canCommand || !row.gate) return undefined
         const key = rowKey(row)
-        const gateId = row.gate.gateId
-        return {
-            key,
-            handlers: {
-                onRelease: (outcome, evidence) => sendGateCommand(key, 'mesh_graph_gate_release', buildGateReleaseArgs(meshId!, gateId, outcome, evidence)),
-                onAbandon: (reason) => sendGateCommand(key, 'mesh_graph_gate_abandon', buildGateAbandonArgs(meshId!, gateId, reason)),
-                onExtend: async () => {
-                    const ok = await confirm({
-                        title: t('mesh.blueprint.gate.extendConfirmTitle', { ref: row.ref }),
-                        confirmLabel: t('mesh.blueprint.gate.extend24h'),
-                    })
-                    if (!ok) return
-                    await sendGateCommand(key, 'mesh_graph_gate_extend', buildGateExtendArgs(meshId!, gateId))
-                },
-            },
-        }
+        const handlers = gateCommands.handlersFor(key, row.gate?.gateId, row.ref)
+        return handlers ? { key, handlers } : undefined
     }
 
     const renderRow = (row: BlueprintRow) => {
