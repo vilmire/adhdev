@@ -77281,6 +77281,19 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }) : [];
       return JSON.stringify([head, submodules]);
     }
+    function carryUpstreamFreshness(prev, next, now, maxAgeMs = UPSTREAM_FRESHNESS_CARRY_MAX_AGE_MS) {
+      if (next.upstreamStatus !== "unchecked" || !prev || !next.upstream) return next;
+      if (prev.upstream !== next.upstream) return next;
+      if (prev.upstreamStatus !== "fresh" && prev.upstreamStatus !== "stale") return next;
+      const fetchedAt = typeof prev.upstreamFetchedAt === "number" ? prev.upstreamFetchedAt : null;
+      if (fetchedAt === null || now - fetchedAt > maxAgeMs) return next;
+      return {
+        ...next,
+        upstreamStatus: prev.upstreamStatus,
+        upstreamFetchedAt: fetchedAt,
+        ...prev.upstreamStatus === "stale" && typeof prev.upstreamFetchError === "string" ? { upstreamFetchError: prev.upstreamFetchError } : {}
+      };
+    }
     function emptyEntry(meshId, nodeId, workspace) {
       return {
         meshId,
@@ -77368,6 +77381,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       };
     }
     var SIGNATURE_GIT_KEYS;
+    var UPSTREAM_FRESHNESS_CARRY_MAX_AGE_MS;
     var MeshNodeGitStateStore;
     var init_mesh_node_git_state = __esm2({
       "src/mesh/mesh-node-git-state.ts"() {
@@ -77390,6 +77404,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           "stashCount",
           "error"
         ];
+        UPSTREAM_FRESHNESS_CARRY_MAX_AGE_MS = 10 * 6e4;
         MeshNodeGitStateStore = class {
           constructor(persistence = null, now = Date.now) {
             this.persistence = persistence;
@@ -77444,9 +77459,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            * re-confirms the same state does not make every dashboard refetch.
            */
           recordObservation(args) {
-            const git3 = sanitizeObservedGit(args.git);
-            if (!args.meshId || !args.nodeId || !git3) return { changed: false, entry: null };
+            const rawGit = sanitizeObservedGit(args.git);
+            if (!args.meshId || !args.nodeId || !rawGit) return { changed: false, entry: null };
             const entry = this.upsertBase(args.meshId, args.nodeId, args.workspace);
+            const git3 = carryUpstreamFreshness(entry.git, rawGit, this.now());
             const signature = computeMeshNodeGitSignature(git3);
             const recovered = entry.unreachableSince !== null;
             const changed = signature !== entry.signature || recovered;
@@ -148722,7 +148738,8 @@ ${ptyResult.output.slice(-2e3)}`);
               lastSignature: git3 ? computeMeshNodeGitSignature(git3) : existing?.lastSignature ?? null,
               lastPushedAt: git3 ? now : existing?.lastPushedAt ?? null,
               // The probe that registered us refreshed the upstream already.
-              lastUpstreamRefreshAt: now
+              lastUpstreamRefreshAt: now,
+              lastUpstreamGit: git3 ?? existing?.lastUpstreamGit ?? null
             });
             if (!existing) {
               LOG.info("MeshNodeState", `pushing git state of node ${args.nodeId} (mesh ${args.meshId}) to coordinator ${coordinatorDaemonId.slice(0, 12)}`);
@@ -148776,7 +148793,12 @@ ${ptyResult.output.slice(-2e3)}`);
               return;
             }
             if (!git3) return;
-            if (refreshUpstream) sub.lastUpstreamRefreshAt = now;
+            if (refreshUpstream) {
+              sub.lastUpstreamRefreshAt = now;
+              sub.lastUpstreamGit = git3;
+            } else {
+              git3 = carryUpstreamFreshness(sub.lastUpstreamGit, git3, now);
+            }
             const signature = computeMeshNodeGitSignature(git3);
             if (signature === sub.lastSignature && !heartbeatDue) return;
             const observedAt = typeof git3.lastCheckedAt === "number" ? git3.lastCheckedAt : now;

@@ -21,7 +21,7 @@
  */
 import { LOG } from '../logging/logger.js';
 import { readMeshTimeoutEnvMs } from '../runtime-defaults.js';
-import { computeMeshNodeGitSignature, sanitizeObservedGit } from './mesh-node-git-state.js';
+import { carryUpstreamFreshness, computeMeshNodeGitSignature, sanitizeObservedGit } from './mesh-node-git-state.js';
 
 export const MESH_NODE_STATE_REPORT_COMMAND = 'mesh_node_git_report';
 /** How often a subscribed workspace's git is re-read. */
@@ -40,6 +40,8 @@ export interface MeshNodeStatePushSubscription {
     lastSignature: string | null;
     lastPushedAt: number | null;
     lastUpstreamRefreshAt: number | null;
+    /** Last read that verified the upstream (the registering probe, or a refresh tick). */
+    lastUpstreamGit: Record<string, unknown> | null;
 }
 
 export interface MeshNodeStatePusherOptions {
@@ -131,6 +133,7 @@ export class MeshNodeStatePusher {
             lastPushedAt: git ? now : (existing?.lastPushedAt ?? null),
             // The probe that registered us refreshed the upstream already.
             lastUpstreamRefreshAt: now,
+            lastUpstreamGit: git ?? existing?.lastUpstreamGit ?? null,
         });
         if (!existing) {
             LOG.info('MeshNodeState', `pushing git state of node ${args.nodeId} (mesh ${args.meshId}) to coordinator ${coordinatorDaemonId.slice(0, 12)}`);
@@ -186,7 +189,14 @@ export class MeshNodeStatePusher {
             return;
         }
         if (!git) return;
-        if (refreshUpstream) sub.lastUpstreamRefreshAt = now;
+        if (refreshUpstream) {
+            sub.lastUpstreamRefreshAt = now;
+            sub.lastUpstreamGit = git;
+        } else {
+            // Between upstream refreshes the read says 'unchecked'; report the
+            // freshness verified at the last refresh instead (see carryUpstreamFreshness).
+            git = carryUpstreamFreshness(sub.lastUpstreamGit, git, now);
+        }
         const signature = computeMeshNodeGitSignature(git);
         if (signature === sub.lastSignature && !heartbeatDue) return;
         const observedAt = typeof git.lastCheckedAt === 'number' ? git.lastCheckedAt : now;

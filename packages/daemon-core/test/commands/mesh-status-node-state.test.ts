@@ -22,6 +22,11 @@ import { MeshNodeStatePusher } from '../../src/mesh/mesh-node-state-pusher'
 import { applyInlineMeshBranchConvergence } from '../../src/mesh/mesh-branch-convergence'
 import { MESH_SENDER_DAEMON_ID_ARG } from '../../src/commands/mesh-sender'
 import { createDefaultGitCommandServices } from '../../src/git/git-commands'
+// End-to-end with the dashboard's own normalizer + graph + badge (web-core source;
+// type-only imports of daemon-core there, so no daemon barrel is pulled in).
+import { extractRepoMeshStatus } from '../../../web-core/src/utils/repo-mesh-status'
+import { buildMeshGraph } from '../../../web-core/src/utils/mesh-visualization'
+import { getMeshGraphAttentionBadge } from '../../../web-core/src/components/MeshGraph/meshGraphViewModel'
 
 const execFileAsync = promisify(execFile)
 
@@ -254,6 +259,67 @@ describe('mesh_status — coordinator-held node state', () => {
     } finally {
       await cleanupTempDir(dir)
     }
+  })
+})
+
+describe('store-served remote node — dashboard and MCP agree (rc.56 live regression)', () => {
+  it('a clean main whose latest push was read without an upstream fetch stays merged_to_main end to end (no BLOCKED REVIEW)', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('node-state-e2e-')
+    try {
+      const store = new MeshNodeGitStateStore()
+      const now = Date.now()
+      // 1. The coordinator probe (refreshUpstream:true) verified the upstream a minute ago.
+      store.recordObservation({ meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, git: remoteGit({ upstreamFetchedAt: now - 60_000, lastCheckedAt: now - 60_000 }), source: 'coordinator_probe', observedAt: now - 60_000 })
+      const router = createRouter({ dispatchMeshCommand: vi.fn(() => new Promise<unknown>(() => {})), store })
+      await router.execute('mesh_status', { meshId: MESH_ID, inlineMesh: inlineMesh(repoRoot) })
+      // 2. The member then pushes a between-refresh read: same main/HEAD, upstream 'unchecked'.
+      const pushed: any = await router.execute('mesh_node_git_report', {
+        meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE,
+        git: remoteGit({ upstreamStatus: 'unchecked', lastCheckedAt: now }), observedAt: now,
+        [MESH_SENDER_DAEMON_ID_ARG]: REMOTE_DAEMON,
+      }, 'mesh')
+      expect(pushed).toMatchObject({ success: true, accepted: true, changed: false })
+
+      // 3. The exact dashboard command shape (cloud loader, settled refresh) over P2P.
+      const response: any = await router.execute('mesh_status', { meshId: MESH_ID, requireDirectPeerTruth: true, refresh: true }, 'p2p')
+      const remote = remoteNodeOf(response)
+      expect(remote.git.upstreamStatus).toBe('fresh')
+      expect(remote.branchConvergence).toMatchObject({ status: 'merged_to_main', reason: 'clean_default_branch' })
+
+      // 4. Through the dashboard normalizer → graph → attention badge.
+      const status = extractRepoMeshStatus({ success: true, result: response } as any)!
+      const graphNode = buildMeshGraph(status).nodes.find(node => node.id === REMOTE_NODE)!
+      expect(graphNode.branchConvergence?.status).toBe('merged_to_main')
+      expect(getMeshGraphAttentionBadge(graphNode)).toBeNull()
+    } finally {
+      await cleanupTempDir(dir)
+    }
+  })
+
+  it('the member pusher reports the verified freshness between upstream refreshes (no fresh↔unchecked churn)', async () => {
+    let now = 1_000_000
+    let refreshed: boolean[] = []
+    const dispatch = vi.fn(async () => ({ success: true, accepted: true }))
+    const pusher = new MeshNodeStatePusher({
+      dispatch,
+      readGit: async (_ws, opts) => {
+        refreshed.push(opts.refreshUpstream)
+        return opts.refreshUpstream
+          ? remoteGit({ upstreamStatus: 'fresh', upstreamFetchedAt: now, headCommit: 'h2' })
+          : remoteGit({ upstreamStatus: 'unchecked', headCommit: 'h2' })
+      },
+      now: () => now,
+      startTimer: () => ({ stop() {} }),
+    })
+    pusher.register({ coordinatorDaemonId: 'coord', meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, git: remoteGit({ upstreamFetchedAt: now }) })
+    now += 60_000
+    await pusher.tick() // HEAD moved, no upstream refresh this tick
+    expect(refreshed).toEqual([false])
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    expect((dispatch.mock.calls[0] as any)[2].git).toMatchObject({ headCommit: 'h2', upstreamStatus: 'fresh' })
+    now += 60_000
+    await pusher.tick()
+    expect(dispatch).toHaveBeenCalledTimes(1) // unchanged → quiet (no churn)
   })
 })
 
