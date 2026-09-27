@@ -8,7 +8,7 @@ import {
     getConversationTabMetaText,
     getConversationTitle,
 } from './conversation-presenters'
-import { MeshRoleIcon, MeshRoleLabel, useConversationMeshRoleTitle } from './ConversationMeshRoleMarker'
+import { MeshRoleIcon, useConversationMeshRoleTitle } from './ConversationMeshRoleMarker'
 import GitStatusPill from '../git/GitStatusPill'
 import ModalPortal from '../ui/ModalPortal'
 import LoadingSpinner from '../ui/LoadingSpinner'
@@ -208,7 +208,6 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
             <div className="adhdev-dockview-tab-copy">
                 <span className="adhdev-dockview-tab-primary" title={meshRoleTitle ? `${getConversationTitle(conv)} · ${meshRoleTitle}` : getConversationTitle(conv)}>{getConversationTitle(conv)}</span>
                 <span className="adhdev-dockview-tab-meta inline-flex min-w-0 items-center gap-1">
-                    <MeshRoleLabel conversation={conv} />
                     {isReconnecting ? (
                         <span className="adhdev-dockview-tab-reconnecting truncate">{getConversationTabMetaText(conv)}</span>
                     ) : viewStates.isConnecting ? (

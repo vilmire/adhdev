@@ -4,9 +4,10 @@
 //  1. Mesh graph is a visible, dedicated button for coordinator conversations
 //     again (opened often; the cue that "this is a coordinator") — not a "…"
 //     menu item.
-//  2. Coordinator conversations are recognisable at a glance on every surface:
-//     violet mesh icon before the title + "Coordinator · <mesh>" at the head of
-//     the subtitle. Workers get the same shapes in muted text ("Worker · <mesh>").
+//  2. Coordinator/worker conversations are recognisable at a glance on every
+//     surface via the mesh icon (MeshRoleIcon) alone — neutral colour, no
+//     visible text label and no chip. The role/mesh name live in the icon's
+//     accessible name (aria-label) and native tooltip (title) only.
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -150,10 +151,14 @@ describe('coordinator / worker markers across dashboard surfaces', () => {
         })
         const rows = Array.from(container.querySelectorAll('.dashboard-header-hidden-list .dashboard-header-inbox-item'))
         expect(rows).toHaveLength(2)
-        expect(rows[0].querySelector('.mesh-role-icon.is-coordinator')).not.toBeNull()
-        expect(rows[0].querySelector('.mesh-role-label')?.textContent).toBe('Coordinator · mesh-1 · ')
-        expect(rows[1].querySelector('.mesh-role-icon.is-worker')).not.toBeNull()
-        expect(rows[1].querySelector('.mesh-role-label')?.textContent).toBe('Worker · mesh-1 · ')
+        const coordinatorIcon = rows[0].querySelector('.mesh-role-icon.is-coordinator')
+        expect(coordinatorIcon).not.toBeNull()
+        expect(coordinatorIcon?.getAttribute('aria-label')).toBe('Coordinator for mesh-1')
+        expect(rows[0].querySelector('.mesh-role-label')).toBeNull()
+        const workerIcon = rows[1].querySelector('.mesh-role-icon.is-worker')
+        expect(workerIcon).not.toBeNull()
+        expect(workerIcon?.getAttribute('aria-label')).toBe('Worker for mesh-1')
+        expect(rows[1].querySelector('.mesh-role-label')).toBeNull()
     })
 
     function renderDockviewTab(conv: ActiveConversation) {
@@ -183,7 +188,7 @@ describe('coordinator / worker markers across dashboard surfaces', () => {
         return container.querySelector<HTMLElement>('.adhdev-dockview-tab')!
     }
 
-    it('dockview tab: coordinator → icon before the title, "Coordinator · <mesh>" heading the subtitle, and a descriptive tooltip', () => {
+    it('dockview tab: coordinator → icon before the title (no visible subtitle text), and a descriptive tooltip', () => {
         const tab = renderDockviewTab(coordinator())
         const icon = tab.querySelector('.mesh-role-icon.is-coordinator')!
         expect(icon).not.toBeNull()
@@ -193,17 +198,22 @@ describe('coordinator / worker markers across dashboard surfaces', () => {
         const children = Array.from(tab.children).map(el => el.className)
         expect(children.findIndex(c => c.includes('mesh-role-icon'))).toBeGreaterThan(children.findIndex(c => c.includes('adhdev-dockview-tab-status')))
         expect(children.findIndex(c => c.includes('mesh-role-icon'))).toBeLessThan(children.findIndex(c => c.includes('adhdev-dockview-tab-copy')))
-        const meta = tab.querySelector('.adhdev-dockview-tab-meta')!
-        expect(meta.firstElementChild?.className).toContain('mesh-role-label is-coordinator')
-        expect(meta.textContent).toMatch(/^Coordinator · mesh-1 · /)
+        // No visible "Coordinator · <mesh>" text anywhere in the tab — the icon alone carries the role.
+        expect(tab.querySelector('.mesh-role-label')).toBeNull()
+        expect(tab.textContent).not.toContain('Coordinator ·')
         expect(tab.getAttribute('title')).toBe('adhdev · Coordinator for mesh-1')
     })
 
-    it('dockview tab: shows the mesh name once any surface learns it (no request of its own)', () => {
+    it('dockview tab: shows the mesh name once any surface learns it, in the icon title/aria-label (no request of its own)', () => {
         const tab = renderDockviewTab(coordinator())
-        expect(tab.querySelector('.mesh-role-label')?.textContent).toBe('Coordinator · mesh-1 · ')
+        const icon = () => container.querySelector('.mesh-role-icon.is-coordinator')
+        expect(icon()?.getAttribute('aria-label')).toBe('Coordinator for mesh-1')
+        expect(icon()?.getAttribute('title')).toBe('Coordinator for mesh-1')
+        expect(tab.getAttribute('title')).toBe('adhdev · Coordinator for mesh-1')
         act(() => rememberMeshNames([{ id: 'mesh-1', name: 'adhdev mesh' }]))
-        expect(container.querySelector('.mesh-role-label')?.textContent).toBe('Coordinator · adhdev mesh · ')
+        expect(icon()?.getAttribute('aria-label')).toBe('Coordinator for adhdev mesh')
+        expect(icon()?.getAttribute('title')).toBe('Coordinator for adhdev mesh')
+        expect(container.querySelector('.adhdev-dockview-tab')?.getAttribute('title')).toBe('adhdev · Coordinator for adhdev mesh')
         expect(sendCommand).not.toHaveBeenCalled()
     })
 
@@ -217,7 +227,7 @@ describe('coordinator / worker markers across dashboard surfaces', () => {
         expect(plainTab.getAttribute('title')).toBe('adhdev')
     })
 
-    it('mobile inbox rows: coordinator row has the icon, the subtitle label and the violet graph button', () => {
+    it('mobile inbox rows: coordinator row has the icon (no subtitle label) and the mesh graph button', () => {
         const item = (conv: ActiveConversation): MobileConversationListItem => ({
             conversation: conv, timestamp: Date.now(), preview: 'preview', unread: false,
             requiresAction: false, isWorking: false, inboxBucket: 'idle',
@@ -237,17 +247,16 @@ describe('coordinator / worker markers across dashboard surfaces', () => {
         expect(container.querySelectorAll('.mesh-role-icon.is-coordinator')).toHaveLength(1)
         expect(container.querySelectorAll('.mesh-role-icon.is-worker')).toHaveLength(1)
         expect(container.querySelectorAll('.mobile-inbox-mesh-button')).toHaveLength(1)
-        const labels = Array.from(container.querySelectorAll('.mesh-role-label')).map(el => el.textContent)
-        expect(labels).toEqual(['Coordinator · mesh-1 · ', 'Worker · mesh-1 · '])
+        expect(container.querySelectorAll('.mesh-role-label')).toHaveLength(0)
     })
 
-    it('mobile chat header chips: role chip replaces the old "Mesh Node" chip', () => {
+    it('mobile chat header chips: no role chip renders (the mesh icon carries the role instead)', () => {
         render(<ConversationMetaChips conversation={coordinator()} interactive={false} />)
-        const chip = container.querySelector('.mesh-role-chip.is-coordinator')
-        expect(chip?.textContent).toBe('Coordinator · mesh-1')
-        expect(chip?.getAttribute('aria-label')).toBe('Coordinator for mesh-1')
+        expect(container.querySelector('.mesh-role-chip')).toBeNull()
+        expect(container.textContent).not.toContain('Coordinator · mesh-1')
         render(<ConversationMetaChips conversation={worker()} interactive={false} />)
-        expect(container.querySelector('.mesh-role-chip.is-worker')?.textContent).toBe('Worker · mesh-1')
+        expect(container.querySelector('.mesh-role-chip')).toBeNull()
+        expect(container.textContent).not.toContain('Worker · mesh-1')
         expect(container.textContent).not.toContain('Mesh Node')
     })
 

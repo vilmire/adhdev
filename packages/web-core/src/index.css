@@ -654,31 +654,6 @@
         opacity: 0.85;
     }
 
-    /* Keeps "Coordinator · <mesh>" readable: the rest of the subtitle truncates first. */
-    .mesh-role-label {
-        flex: 0 0 auto;
-        max-width: 65%;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    /* The trailing " · " must survive at the end of a flex item. */
-    .mesh-role-label-sep,
-    .mesh-role-label-mesh {
-        white-space: pre;
-    }
-
-    .mesh-role-label.is-coordinator .mesh-role-label-role {
-        font-weight: 600;
-    }
-
-    .mesh-role-label.is-worker .mesh-role-label-role {
-        font-weight: 600;
-    }
-
-
     .adhdev-dockview-tab-unread-dot {
         position: absolute;
         top: 4px;

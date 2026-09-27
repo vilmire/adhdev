@@ -2,14 +2,13 @@
  * Coordinator / worker markers — one visual language for "this conversation
  * is part of a Repo Mesh", shared by every surface that lists conversations.
  *
- *   coordinator → mesh icon before the title (neutral text colour; amber stays the only accent) +
- *                 "Coordinator · <mesh>" at the head of the subtitle
- *   worker      → the same shapes in muted text: "Worker · <mesh>"
+ *   coordinator → mesh icon before the title (neutral text colour; amber stays
+ *                 the only accent). No text label — the icon is the cue.
+ *   worker      → the same icon, muted.
  *
- * The icon never shrinks (narrow tabs keep it while the title and subtitle
- * truncate); the label truncates with the rest of the subtitle. Both carry
- * an accessible name ("Coordinator for <mesh>") and a native tooltip, so they
- * are safe inside buttons and draggable tabs where a focusable popover is not.
+ * The icon never shrinks (narrow tabs keep it while the title truncates). It
+ * carries an accessible name and native tooltip ("Coordinator for <mesh>"),
+ * safe inside buttons and draggable tabs where a focusable popover is not.
  */
 import { useTranslation } from 'react-i18next'
 import { IconMesh } from '../Icons'
@@ -75,45 +74,6 @@ export function MeshRoleIcon({ conversation, className, size = 12 }: MarkerProps
             className={cn('mesh-role-icon', `is-${role.role}`, className)}
         >
             <IconMesh size={size} />
-        </span>
-    )
-}
-
-/**
- * "Coordinator · <mesh>" at the head of a subtitle. `separator` appends the
- * " · " that joins it to the rest of the subtitle.
- */
-export function MeshRoleLabel({ conversation, className, separator = false }: MarkerProps & { separator?: boolean }) {
-    const role = useConversationMeshRole(conversation)
-    const text = useMeshRoleText(role)
-    if (!role.role || !text) return null
-    return (
-        <span
-            className={cn('mesh-role-label', `is-${role.role}`, className)}
-            data-mesh-role={role.role}
-            title={text.full}
-        >
-            <span className="mesh-role-label-role">{text.short}</span>
-            {text.mesh && <span className="mesh-role-label-mesh"> · {text.mesh}</span>}
-            {separator && <span className="mesh-role-label-sep" aria-hidden="true"> · </span>}
-        </span>
-    )
-}
-
-/** Pill form (icon + "Coordinator · <mesh>") for chip rows. */
-export function MeshRoleChip({ conversation, className }: MarkerProps) {
-    const role = useConversationMeshRole(conversation)
-    const text = useMeshRoleText(role)
-    if (!role.role || !text) return null
-    return (
-        <span
-            className={cn('conversation-meta-chip mesh-role-chip', `is-${role.role}`, className)}
-            data-mesh-role={role.role}
-            title={text.full}
-            aria-label={text.full}
-        >
-            <IconMesh size={12} />
-            <span className="truncate">{text.mesh ? `${text.short} · ${text.mesh}` : text.short}</span>
         </span>
     )
 }

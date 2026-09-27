@@ -54,7 +54,7 @@ function renderTabBar(conversation: ActiveConversation) {
 }
 
 describe('PaneGroupTabBar mesh role marker', () => {
-    it('marks a coordinator tab with the mesh icon before the title and "Coordinator" at the head of the subtitle', () => {
+    it('marks a coordinator tab with the mesh icon before the title, and carries the role in its tooltip', () => {
         const html = renderTabBar(createConversation({
             settings: {
                 meshNodeFor: 'mesh-1',
@@ -65,15 +65,18 @@ describe('PaneGroupTabBar mesh role marker', () => {
 
         expect(html).toContain('mesh-role-icon is-coordinator')
         expect(html).toContain('aria-label="Coordinator for mesh-1"')
-        expect(html).toContain('mesh-role-label is-coordinator')
-        expect(html).toContain('>Coordinator<')
-        // status dot → icon → title → subtitle
+        expect(html).toContain('title="Coordinator for mesh-1"')
+        // status dot → icon → title/subtitle copy
         expect(html.indexOf('mesh-role-icon')).toBeGreaterThan(html.indexOf('adhdev-dockview-tab-status'))
         expect(html.indexOf('mesh-role-icon')).toBeLessThan(html.indexOf('adhdev-dockview-tab-copy'))
-        expect(html.indexOf('mesh-role-label')).toBeGreaterThan(html.indexOf('adhdev-dockview-tab-meta'))
-        // The retired corner badge / plain-text role label are gone.
+        // No visible "Coordinator · <mesh>" subtitle text — the icon alone carries the role.
+        expect(html).not.toContain('Coordinator ·')
+        expect(html).not.toContain('>Coordinator<')
+        // The retired corner badge / plain-text role label / chip are gone.
         expect(html).not.toContain('adhdev-dockview-tab-mesh-badge')
         expect(html).not.toContain('adhdev-dockview-tab-mesh-role')
+        expect(html).not.toContain('mesh-role-label')
+        expect(html).not.toContain('mesh-role-chip')
     })
 
     it('marks a worker tab with the subtler worker marker', () => {

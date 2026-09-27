@@ -21,7 +21,7 @@ import GitStatusPill from '../git/GitStatusPill';
 import LoadingSpinner from '../ui/LoadingSpinner';
 import ConversationActionsMenu from './ConversationActionsMenu';
 import ConversationMeshGraphButton from './ConversationMeshGraphButton';
-import { MeshRoleIcon, MeshRoleLabel } from './ConversationMeshRoleMarker';
+import { MeshRoleIcon } from './ConversationMeshRoleMarker';
 import { Tooltip } from '../ui/InfoTip';
 
 export interface DashboardHeaderProps {
@@ -586,7 +586,6 @@ export default function DashboardHeader({
                                                     {hiddenConversations.indexOf(conversation) < 9 ? (
                                                         <span className="dashboard-header-item-shortcut">⌥{hiddenConversations.indexOf(conversation) + 1}</span>
                                                     ) : null}
-                                                    <MeshRoleLabel conversation={conversation} separator />
                                                     {getConversationMetaText(conversation)}
                                                 </span>
                                             </button>

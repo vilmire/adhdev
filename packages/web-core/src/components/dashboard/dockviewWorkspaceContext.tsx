@@ -25,7 +25,7 @@ import PaneGroupEmptyState from './PaneGroupEmptyState'
 import { areConversationsLoaded } from './dashboard-mobile-chat-mode-helpers'
 import type { DashboardDockviewPanelParams, DashboardDockviewRemotePanelParams } from './dockviewWorkspaceLayout'
 import LoadingSpinner from '../ui/LoadingSpinner'
-import { MeshRoleIcon, MeshRoleLabel, useConversationMeshRoleTitle } from './ConversationMeshRoleMarker'
+import { MeshRoleIcon, useConversationMeshRoleTitle } from './ConversationMeshRoleMarker'
 
 export interface DashboardDockviewContextValue {
     actionLogs: { routeId: string; text: string; timestamp: number }[]
@@ -280,7 +280,6 @@ export function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardD
             <div className="adhdev-dockview-tab-copy">
                 <div className="adhdev-dockview-tab-primary">{getConversationTitle(conversation)}</div>
                 <div className="adhdev-dockview-tab-meta">
-                    <MeshRoleLabel conversation={conversation} separator />
                     {isReconnecting ? (
                         <span className="adhdev-dockview-tab-reconnecting">{getConversationTabMetaText(conversation)}</span>
                     ) : isConnecting ? (

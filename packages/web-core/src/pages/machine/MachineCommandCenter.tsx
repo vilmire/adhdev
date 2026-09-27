@@ -8,7 +8,7 @@ import type { ActiveConversation } from '../../components/dashboard/types'
 import type { MachineRecentLaunch, ProviderInfo } from './types'
 import { getConversationActivityAt } from '../../components/dashboard/conversation-sort'
 import { getConversationMetaText, getConversationTitle } from '../../components/dashboard/conversation-presenters'
-import { MeshRoleIcon, MeshRoleLabel } from '../../components/dashboard/ConversationMeshRoleMarker'
+import { MeshRoleIcon } from '../../components/dashboard/ConversationMeshRoleMarker'
 import { buildMachineRecentLaunchCardView } from '../../utils/machine-recent-launch-presenters'
 import { buildDaemonUpdateStatusView } from '../../utils/daemon-update-status'
 import { InfoTip, Tooltip } from '../../components/ui/InfoTip'
@@ -100,7 +100,6 @@ export default function MachineCommandCenter({
                                             )}
                                         </div>
                                         <span className="text-xs text-text-secondary truncate w-full opacity-80">
-                                            <MeshRoleLabel conversation={conversation} separator />
                                             {getConversationMetaText(conversation)}
                                         </span>
                                     </button>
