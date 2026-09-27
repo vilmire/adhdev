@@ -911,8 +911,18 @@
         --chat-bubble-line-height: 1.65;
         --chat-bubble-max-width: min(76ch, 88%);
         --chat-font-family: var(--font-sans);
-        --chat-code-font-family: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
-        --chat-terminal-font-family: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+        /* CJK-FALLBACK: same defect class as terminal-render-web's xterm font
+           stack — the latin families carry no Hangul/CJK glyphs and this repo
+           bundles no @font-face, so wide characters fell through to generic
+           `monospace` and the OS picked a face whose advance width did not
+           match the latin cell. These surfaces (.chat-msg-terminal,
+           .chat-msg-activity-body, code blocks) are plain wrapped DOM text
+           rather than xterm's fixed grid, so the failure reads as ragged
+           spacing rather than an exact per-cell gap — but the cause and the
+           fix are identical. CJK faces go after the latin ones (latin priority
+           unchanged) and before generic `monospace` (the OS never guesses). */
+        --chat-code-font-family: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', 'D2Coding', 'Noto Sans Mono CJK KR', 'Apple SD Gothic Neo', 'Malgun Gothic', monospace;
+        --chat-terminal-font-family: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', 'D2Coding', 'Noto Sans Mono CJK KR', 'Apple SD Gothic Neo', 'Malgun Gothic', monospace;
         --chat-tool-font-family: var(--chat-terminal-font-family);
 
         /* Header (name / time) */
