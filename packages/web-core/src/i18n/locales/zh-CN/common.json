@@ -3132,8 +3132,8 @@
         "ws": "正在重新连接",
         "direct": "直连",
         "relay": "中继",
-        "turnBlocked": "已达中继上限",
-        "turnUsage": "TURN {{used}}/{{budget}}m",
+        "turnBlocked": "已达今日画面查看上限",
+        "turnUsage": "画面 {{used}}/{{budget}}分钟",
         "typeAndEnter": "输入并按 Enter...",
         "settings": "设置",
         "zoom": "缩放：",
@@ -3141,7 +3141,7 @@
         "fit": "适应",
         "directP2PTitle": "P2P 直连",
         "turnRelayTitle": "正在使用 TURN 中继",
-        "dailyTurnTitle": "每日 TURN 中继使用量",
+        "dailyTurnTitle": "今日远程画面查看已用时间（套餐上限）",
         "waitingState": {
             "turnRelayActive": "TURN 中继已启用"
         },
@@ -4196,13 +4196,12 @@
                 },
                 "pro": {
                     "period": "/月",
-                    "tagline": "两台机器、更多并发会话、面向受限网络的 TURN —— 还有 Repo Mesh，可跨两台机器编排智能体。",
+                    "tagline": "两台机器和更多并发会话 —— 还有 Repo Mesh，可跨两台机器编排智能体。",
                     "cta": "开始 7 天 Pro 试用",
                     "features": {
                         "machines": "2 台机器 — 两台都能运行代理",
                         "p2p": "更多并发 P2P 会话",
                         "push": "无限推送通知",
-                        "turn": "为受限网络提供 TURN 中继",
                         "share": "更多共享会话"
                     }
                 },

@@ -3132,8 +3132,8 @@
         "ws": "Reconnecting",
         "direct": "Direct",
         "relay": "Relay",
-        "turnBlocked": "Relay limit reached",
-        "turnUsage": "TURN {{used}}/{{budget}}m",
+        "turnBlocked": "Daily view limit reached",
+        "turnUsage": "View {{used}}/{{budget}}m",
         "typeAndEnter": "Type & Enter...",
         "settings": "SETTINGS",
         "zoom": "ZOOM:",
@@ -3141,7 +3141,7 @@
         "fit": "FIT",
         "directP2PTitle": "Direct P2P connection",
         "turnRelayTitle": "TURN relay in use",
-        "dailyTurnTitle": "Daily TURN relay usage",
+        "dailyTurnTitle": "Remote view minutes used today (plan limit)",
         "waitingState": {
             "turnRelayActive": "TURN relay active"
         },
@@ -4196,13 +4196,12 @@
                 },
                 "pro": {
                     "period": "/mo",
-                    "tagline": "Two machines, more concurrent sessions, and TURN for restrictive networks — plus Repo Mesh to orchestrate agents across both.",
+                    "tagline": "Two machines and more concurrent sessions — plus Repo Mesh to orchestrate agents across both.",
                     "cta": "Start 7-day Pro trial",
                     "features": {
                         "machines": "2 machines — run agents on both",
                         "p2p": "More concurrent P2P sessions",
                         "push": "Unlimited push notifications",
-                        "turn": "TURN relay for restrictive networks",
                         "share": "More shared sessions"
                     }
                 },
