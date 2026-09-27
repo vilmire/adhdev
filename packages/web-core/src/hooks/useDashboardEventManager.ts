@@ -56,10 +56,11 @@ export function useDashboardEventManager({
                     timestamp: toast.timestamp,
                     targetKey: toast.targetKey,
                     actions: toast.actions,
+                    details: toast.details,
                 }]
             })
             const dur = toast.duration || 5000
-            setTimeout(() => setToasts(prev => prev.filter(t => t.id !== toast.id)), dur)
+            setTimeout(() => setToasts(prev => prev.filter(t => t.id !== toast.id || t.pinned)), dur)
         })
 
         return () => {

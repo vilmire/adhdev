@@ -21,7 +21,7 @@ describe('PaneGroupEmptyState', () => {
     const html = renderEmptyState()
 
     expect(html).toContain('Waiting for your daemon')
-    expect(html).toContain('Start the ADHDev daemon to connect this dashboard.')
+    expect(html).toContain('Start the ADHDev daemon to connect.')
     expect(html).not.toContain(DASHBOARD_NEW_SESSION_LABEL)
   })
 

@@ -31,7 +31,7 @@ import './meshGraph.css'
 import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from './types'
 import {
     getMeshGraphAttentionBadge,
-    getMeshGraphCalloutText,
+    localizeMeshGraphHint,
     getMeshGraphObservationHint,
     shouldShowMeshGraphCallout,
     type MeshGraphObservationHint,
@@ -55,7 +55,10 @@ import {
 } from './meshGraphLayout'
 import { getMeshGraphDataFingerprint, getMeshGraphLayoutFingerprint } from './meshGraphMemo'
 import { formatMeshConnectionRtt, formatMeshConnectionTransport } from '../../utils/mesh-visualization'
-import { sessionElapsedLabel, sessionStatusLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
+import { sessionElapsedLabel, sessionRoleText, sessionStatusLabel, sessionStatusText } from './MeshObservabilitySurface/meshSurfaceHelpers'
+import { formatElapsedCompact } from '../../utils/time'
+import { edgeColor } from './meshGraphEdgeLegend'
+export { MeshGraphEdgeLegend } from './meshGraphEdgeLegend'
 import { IconGitBranch } from '../Icons'
 import { requestOpenSessionChat } from '../../utils/session-nav'
 
@@ -333,28 +336,11 @@ function parseSessionTimeMs(value: string | null | undefined): number | null {
     return Number.isFinite(parsed) ? parsed : null
 }
 
+/** Elapsed runtime, or '' when the daemon did not report a start time. */
 function formatElapsedSince(value: string | null | undefined): string {
     const timestamp = parseSessionTimeMs(value)
-    if (timestamp === null) return 'runtime age not reported'
-    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000))
-    if (elapsedSeconds < 60) return `${elapsedSeconds}s`
-    const minutes = Math.floor(elapsedSeconds / 60)
-    if (minutes < 60) return `${minutes}m`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 48) return `${hours}h ${minutes % 60}m`
-    const days = Math.floor(hours / 24)
-    return `${days}d ${hours % 24}h`
-}
-
-function shortSessionId(sessionId: string): string {
-    if (sessionId.length <= 18) return sessionId
-    return `${sessionId.slice(0, 10)}...${sessionId.slice(-4)}`
-}
-
-function getSessionRoleLabel(session: MeshGraphNode['sessionDetails'][number]): string {
-    if (session.isSelfCoordinator) return 'coordinator'
-    const role = typeof session.role === 'string' ? session.role.trim() : ''
-    return role || 'worker'
+    if (timestamp === null) return ''
+    return formatElapsedCompact(Math.max(0, Date.now() - timestamp))
 }
 
 function getSessionSummaryLabel(node: MeshGraphNode, t: (key: string, opts?: Record<string, unknown>) => string): string | null {
@@ -450,8 +436,12 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const observationPillClass = observationHint?.kind === 'unreachable'
         ? getBadgeClasses('dirty', meshTheme.isDark)
         : getBadgeClasses('meta', meshTheme.isDark)
-    // "fetching" duplicates the card's own "connecting" pill for a never-observed node.
-    const showObservationPill = !!observationLabel && !(observationHint?.kind === 'fetching' && node.health === 'unknown')
+    // Fresh / fetching / refreshing say nothing on the card — only a degraded
+    // observation earns a chip ("Stale" / "Unreachable"); its age is the tooltip.
+    const showObservationPill = !!observationLabel && (observationHint?.kind === 'aged' || observationHint?.kind === 'unreachable')
+    const observationChipLabel = observationHint?.kind === 'unreachable'
+        ? t('mesh.graph.observationUnreachableChip')
+        : t('mesh.graph.observationStaleChip')
 
     // ── Default-branch anchor: a compact branch pill, not a machine-like card.
     //    A full card here read as "another machine named main" — the anchor is a
@@ -501,7 +491,7 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 title={[
                     node.label,
                     node.submodulePath && node.submodulePath !== node.label ? node.submodulePath : null,
-                    node.nextStepHint || null,
+                    localizeMeshGraphHint(node, t)?.text || null,
                     shortCommit ? `@ ${shortCommit}` : null,
                     observationLabel,
                 ].filter(Boolean).join('\n')}
@@ -535,7 +525,8 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const connectionTransport = transportLabel === 'local' ? null : transportLabel
     const connectionRtt = isConnectionChipEligible ? formatMeshConnectionRtt(node) : null
     const attentionBadge = getMeshGraphAttentionBadge(node)
-    const calloutText = getMeshGraphCalloutText(node)
+    const calloutHint = localizeMeshGraphHint(node, t)
+    const calloutText = calloutHint?.text ?? null
     const hasActiveSession = isNodeActive(node)
     const visibleSessions = node.sessionDetails
     const visibleCardSessions = node.sessionDetails
@@ -543,13 +534,12 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const attentionLabel = attentionBadge ? translateAttentionLabel(attentionBadge.label, node, t) : null
     const nodeSummary = getNodeSummaryForLayout(node, t)
     const sessionTooltipLines = node.sessionDetails.map(session => {
-        const status = formatSessionStatusLabel(session)
-        const provider = session.providerType || 'provider unknown'
-        const role = getSessionRoleLabel(session)
+        const status = sessionStatusText(session, t)
+        const provider = session.providerType || t('mesh.panel.providerUnknown')
+        const role = sessionRoleText(session, t)
         const startedAt = session.startedAt || session.createdAt || null
-        const difficulty = session.difficulty ? ` · ${difficultyLabel(session.difficulty, t)}` : ''
-        const note = session.statusNote ? ` · ${session.statusNote}` : ''
-        return `Session: ${session.sessionId} · ${provider} · ${status} · ${role}${difficulty} · ${formatElapsedSince(startedAt)}${note}`
+        const difficulty = session.difficulty ? difficultyLabel(session.difficulty, t) : null
+        return [provider, status, role, difficulty, formatElapsedSince(startedAt) || null, session.statusNote || null].filter(Boolean).join(' · ')
     })
 
     if (compact) {
@@ -599,7 +589,7 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 )}
                 {showObservationPill && (
                     <div className={`mt-1 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-4xs ${observationPillClass}`} title={observationLabel ?? undefined}>
-                        <span className="truncate">{observationLabel}</span>
+                        <span className="truncate">{observationChipLabel}</span>
                     </div>
                 )}
                 {!attentionBadge && node.branch && !isSubmoduleNode && node.health !== 'unknown' && (
@@ -624,10 +614,8 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                 className={`min-w-0 cursor-pointer rounded-md border px-1.5 py-1 transition-colors ${meshTheme.isDark ? 'border-cyan-400/15 bg-cyan-500/[0.055] hover:bg-cyan-500/[0.12]' : 'border-sky-200 bg-white/80 hover:bg-sky-50'}`}
                                 title={[
                                     t('sessionNav.openChatHint'),
-                                    `Session ID: ${session.sessionId}`,
-                                    session.providerType ? `Provider: ${session.providerType}` : null,
-                                    `${t('mesh.panel.tooltipPrefixStatus')} ${formatSessionStatusLabel(session)}`,
-                                    `Role: ${getSessionRoleLabel(session)}`,
+                                    `${t('mesh.panel.tooltipPrefixStatus')} ${sessionStatusText(session, t)}`,
+                                    [session.providerType, sessionRoleText(session, t)].filter(Boolean).join(' · '),
                                     session.difficulty ? `${t('mesh.overview.routingDifficulty')}: ${difficultyLabel(session.difficulty, t)}` : null,
                                 ].filter(Boolean).join('\n')}
                             >
@@ -636,13 +624,13 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                         {session.providerType || t('mesh.panel.providerUnknown')}
                                     </span>
                                     <span className={`shrink-0 rounded-full border px-1 py-0 text-5xs font-semibold uppercase tracking-[0.1em] ${getSessionStatusBadgeClasses(session, meshTheme.isDark)}`}>
-                                        {formatSessionStatusLabel(session)}
+                                        {sessionStatusText(session, t)}
                                     </span>
                                 </div>
                                 {/* Role + age — the raw session id says nothing at a glance
                                     and stays available in the tooltip above. */}
                                 <div className={`mt-0.5 flex min-w-0 items-center gap-1.5 text-5xs ${meshTheme.textMuted}`}>
-                                    <span className="shrink-0">{getSessionRoleLabel(session)}</span>
+                                    <span className="shrink-0">{sessionRoleText(session, t)}</span>
                                     <span className="min-w-0 truncate tabular-nums">{sessionElapsedLabel(session).includes('not reported') ? '' : sessionElapsedLabel(session)}</span>
                                 </div>
                             </div>
@@ -665,13 +653,14 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
         attentionBadge ? `${t('mesh.panel.tooltipPrefixStatus')} ${attentionLabel}` : null,
         nodeSummary,
         node.branch ? `${t('mesh.panel.tooltipPrefixBranch')} ${node.branch}` : null,
-        node.dirty ? (isSubmoduleNode ? t('mesh.panel.tooltipLocalChanges') : `${node.dirtyFiles} dirty`) : null,
+        node.dirty ? (isSubmoduleNode ? t('mesh.panel.tooltipLocalChanges') : t('mesh.drift.changed', { count: node.dirtyFiles })) : null,
         node.hasConflicts ? t('mesh.panel.tooltipHasConflicts') : null,
         node.outOfSync ? t('mesh.panel.tooltipOutOfSync') : null,
         !isSubmoduleNode && node.upstream && node.upstreamStatus !== 'fresh' ? t('mesh.panel.tooltipUpstreamUnverified') : null,
         node.isOrphan ? t('mesh.panel.tooltipNeedsFollowUp') : null,
         observationLabel,
         shouldShowCallout && calloutText ? `${t('mesh.panel.tooltipPrefixNote')} ${calloutText}` : null,
+        shouldShowCallout && calloutHint?.detail ? calloutHint.detail : null,
         ...sessionTooltipLines,
     ].filter(Boolean).join('\n')
 
@@ -747,21 +736,23 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                         </span>
                     )}
                     {showObservationPill && (
-                        <span className={`rounded-full border px-1.5 py-px ${observationPillClass}`}>
-                            {observationLabel}
+                        <span className={`rounded-full border px-1.5 py-px ${observationPillClass}`} title={observationLabel ?? undefined}>
+                            {observationChipLabel}
                         </span>
                     )}
-                    {(connectionTransport || connectionRtt) && (
+                    {/* Direct links are the normal case and say nothing. A
+                        relayed link is the only one worth a chip. */}
+                    {connectionTransport === 'relay' && (
                         <span
                             className={`rounded-full border px-1.5 py-px ${getBadgeClasses('meta', meshTheme.isDark)}`}
-                            title={connectionTransport === 'relay' ? t('mesh.panel.tooltipP2PRelayed') : t('mesh.panel.tooltipP2PRtt')}
+                            title={[t('mesh.panel.tooltipP2PRelayed'), connectionRtt].filter(Boolean).join(' · ')}
                         >
-                            {[connectionTransport, connectionRtt].filter(Boolean).join(' · ')}
+                            {t('mesh.graph.slowLinkChip')}
                         </span>
                     )}
                     {node.dirty && (
                         <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('dirty', meshTheme.isDark)}`}>
-                            {`${node.dirtyFiles} dirty`}
+                            {t('mesh.drift.changed', { count: node.dirtyFiles })}
                         </span>
                     )}
                     {node.outOfSync && (
@@ -805,7 +796,7 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                         <div className="flex flex-col gap-1.5">
                             {visibleSessions.slice(0, CARD_SESSION_ROW_CAP).map(session => {
                                 const startedAt = session.startedAt || session.createdAt || null
-                                const roleLabel = getSessionRoleLabel(session)
+                                const roleLabel = sessionRoleText(session, t)
                                 return (
                                     <div
                                         key={session.sessionId}
@@ -813,27 +804,23 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                         className={`min-w-0 cursor-pointer rounded-lg border px-2.5 py-1.5 transition-colors ${meshTheme.isDark ? 'border-white/8 bg-white/[0.035] hover:bg-white/[0.08]' : 'border-slate-200 bg-white/80 hover:bg-slate-50'}`}
                                         title={[
                                             t('sessionNav.openChatHint'),
-                                            `Session ID: ${session.sessionId}`,
-                                            session.providerType ? `Provider: ${session.providerType}` : null,
-                                            `${t('mesh.panel.tooltipPrefixStatus')} ${formatSessionStatusLabel(session)}`,
-                                            `Role: ${roleLabel}`,
+                                            `${t('mesh.panel.tooltipPrefixStatus')} ${sessionStatusText(session, t)}`,
+                                            [session.providerType, roleLabel].filter(Boolean).join(' · '),
                                             session.difficulty ? `${t('mesh.overview.routingDifficulty')}: ${difficultyLabel(session.difficulty, t)}` : null,
-                                            startedAt ? `Started: ${startedAt}` : t('mesh.panel.tooltipStartedNotReported'),
                                             session.statusNote ? `${t('mesh.panel.tooltipPrefixNote')} ${session.statusNote}` : null,
                                         ].filter(Boolean).join('\n')}
                                     >
                                         <div className="flex min-w-0 items-center justify-between gap-2">
-                                            <span className={`min-w-0 truncate font-mono text-3xs select-text ${meshTheme.textPrimary}`}>
-                                                {shortSessionId(session.sessionId)}
+                                            <span className={`min-w-0 truncate text-3xs ${meshTheme.textPrimary}`}>
+                                                {session.providerType || t('mesh.panel.providerUnknown')}
                                             </span>
                                             <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-4xs font-semibold uppercase tracking-[0.12em] ${getSessionStatusBadgeClasses(session, meshTheme.isDark)}`}>
-                                                {formatSessionStatusLabel(session)}
+                                                {sessionStatusText(session, t)}
                                             </span>
                                         </div>
                                         <div className={`mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 text-4xs ${meshTheme.textMuted}`}>
-                                            <span className="truncate">{session.providerType || t('mesh.panel.providerUnknown')}</span>
                                             <span>{roleLabel}</span>
-                                            <span>{formatElapsedSince(startedAt)}</span>
+                                            {formatElapsedSince(startedAt) && <span>{formatElapsedSince(startedAt)}</span>}
                                             {session.difficulty && (
                                                 <span className={`shrink-0 rounded-full border px-1.5 py-0 text-5xs font-semibold uppercase tracking-[0.1em] ${getDifficultyBadgeClasses(session.difficulty, meshTheme.isDark)}`}>
                                                     {difficultyLabel(session.difficulty, t)}
@@ -861,6 +848,7 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     <div
                         className={`mt-3 rounded-xl border px-3 py-2 text-3xs leading-4 ${meshTheme.isDark ? 'border-cyan-400/15 bg-cyan-500/8 text-cyan-50/90' : 'border-sky-300 bg-sky-50 text-sky-700'}`}
                         style={calloutTextStyle}
+                        data-testid="mesh-node-callout"
                     >
                         {calloutText}
                     </div>
@@ -1146,25 +1134,6 @@ function pickVisibleEdgeLabels(edges: MeshGraphEdge[]): Set<string> {
     return visible
 }
 
-function edgeColor(edge: MeshGraphEdge): string {
-    switch (edge.type) {
-        case 'parentBranch':
-            return '#38bdf8'
-        case 'worktreeLink':
-            return '#a78bfa'
-        case 'sessionLink':
-            return '#34d399'
-        case 'orphanLink':
-            return '#f97316'
-        case 'submoduleLink':
-            return '#c084fc'
-        case 'cloneLink':
-            return '#2dd4bf'
-        default:
-            return '#64748b'
-    }
-}
-
 function minimapNodeColor(node: FlowNode): string {
     const graphNode = node.data.graphNode
     if (graphNode.locality === 'local') return '#38bdf8'
@@ -1239,31 +1208,6 @@ function MeshViewportController({ data, viewportKey }: { data: MeshGraphData; vi
 
 const MINIMAP_NODE_THRESHOLD = 12
 
-/** Legend rows in display order — only the types present in the graph render. */
-const LEGEND_EDGE_ORDER: MeshGraphEdge['type'][] = [
-    'parentBranch',
-    'cloneLink',
-    'worktreeLink',
-    'submoduleLink',
-    'sessionLink',
-    'orphanLink',
-]
-
-const LEGEND_EDGE_LABEL_KEY: Record<MeshGraphEdge['type'], string> = {
-    parentBranch: 'mesh.legendEdge.parentBranch',
-    cloneLink: 'mesh.legendEdge.cloneLink',
-    worktreeLink: 'mesh.legendEdge.worktreeLink',
-    submoduleLink: 'mesh.legendEdge.submoduleLink',
-    sessionLink: 'mesh.legendEdge.sessionLink',
-    orphanLink: 'mesh.legendEdge.orphanLink',
-}
-
-const LEGEND_EDGE_DASH: Partial<Record<MeshGraphEdge['type'], string>> = {
-    orphanLink: '5 4',
-    submoduleLink: '4 3',
-    cloneLink: '6 3',
-}
-
 function getGraphMinHeightClass(nodeCount: number): string {
     // Height floors are capped by viewport height: the canvas is pan/zoomable,
     // so on a short window a smaller canvas beats forcing the dialog body to
@@ -1331,12 +1275,6 @@ export default function MeshGraphView({
         machineKeys.delete('')
         return machineKeys.size > 1
     }, [data.nodes])
-    // Edge types present in the current graph — drives the in-canvas legend.
-    const presentEdgeTypes = useMemo(() => {
-        const types = new Set<MeshGraphEdge['type']>()
-        for (const edge of data.edges) types.add(edge.type)
-        return LEGEND_EDGE_ORDER.filter(type => types.has(type))
-    }, [data.edges])
     // Transient pan affordance hint — fades away instead of permanently floating
     // over the canvas.
     const [showPanHint, setShowPanHint] = useState(true)
@@ -1417,23 +1355,6 @@ export default function MeshGraphView({
             >
                 {t('mesh.obs.panHint')}
             </div>
-            {presentEdgeTypes.length > 0 && (
-                <div className={`pointer-events-none absolute right-3 top-2 z-10 flex flex-wrap items-center justify-end gap-x-2.5 gap-y-1 rounded-xl border px-2.5 py-1.5 text-4xs ${meshTheme.isDark ? 'border-white/10 bg-slate-950/75 text-slate-300' : 'border-slate-200 bg-white/90 text-slate-600'}`}>
-                    {presentEdgeTypes.map(type => (
-                        <span key={type} className="flex items-center gap-1">
-                            <svg width="16" height="4" aria-hidden>
-                                <line
-                                    x1="0" y1="2" x2="16" y2="2"
-                                    stroke={edgeColor({ type } as MeshGraphEdge)}
-                                    strokeWidth="2"
-                                    strokeDasharray={LEGEND_EDGE_DASH[type]}
-                                />
-                            </svg>
-                            {t(LEGEND_EDGE_LABEL_KEY[type])}
-                        </span>
-                    ))}
-                </div>
-            )}
             <div className="w-full min-w-0 flex-1" style={{ height: '100%' }}>
                 <ReactFlow<FlowNode, FlowEdge>
                     nodes={nodes}

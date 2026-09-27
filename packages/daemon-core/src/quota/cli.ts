@@ -12,13 +12,21 @@ import chalk from 'chalk';
 import { formatQuotaAccount, type MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import type { ProviderQuota, QuotaWindow } from './types.js';
 import type { InstallResult, UninstallResult, StatuslineStatus } from './statusline/install.js';
+// `IDENTITY.binaryName` is the SAME resolver every other CLI surface in this
+// codebase uses for "what is this binary actually called" (adhdev vs
+// adhdev-preview, by build track — see track-identity.ts, a dependency-free
+// leaf, so importing it here is safe). This file used to hardcode 'adhdev' in
+// every rendered command example, which told a preview-track user (whose
+// actual command is `adhdev-preview`) to run a binary that does not exist on
+// their machine.
+import { IDENTITY } from '../track-identity.js';
 
 /**
  * Why Claude alone needs an install step, in one line — shared by the "not
  * set up" error addendum and `claude:status`'s not-installed summary so the
  * two surfaces never drift apart.
  */
-const CLAUDE_NO_API_LINE = 'Claude has no quota API — adhdev borrows your statusLine to read it.';
+const CLAUDE_NO_API_LINE = `Claude has no quota API — ${IDENTITY.binaryName} borrows your statusLine to read it.`;
 /** What install actually does to the user's config, in one line. */
 const CLAUDE_WRAP_NOT_REPLACE_LINE = 'Install wraps (not replaces) your statusline, so nothing is lost.';
 
@@ -161,12 +169,10 @@ export function printQuotaRefreshOutcome(entries: ReadonlyArray<{
     for (const entry of entries) {
         if (entry.outcome === 'refreshed') continue;
         if (entry.outcome === 'cooldown') {
-            console.log(chalk.yellow(`• ${entry.provider}: rate-limited — not re-probed`));
-            if (typeof entry.retryAtMs === 'number' && Number.isFinite(entry.retryAtMs)) {
-                console.log(chalk.gray(`  Retrying no earlier than ${formatRelative(entry.retryAtMs)}.`));
-            }
-            console.log(chalk.gray('  The numbers shown are the last good reading.'));
-            console.log(chalk.gray("  Re-probing now would extend the provider's own throttle."));
+            const retry = typeof entry.retryAtMs === 'number' && Number.isFinite(entry.retryAtMs)
+                ? ` — retry ${formatRelative(entry.retryAtMs)}`
+                : '';
+            console.log(chalk.yellow(`• ${entry.provider}: rate-limited, showing last good reading${retry}`));
             continue;
         }
         console.log(chalk.gray(`• ${entry.provider}: ${entry.reason || entry.outcome}`));
@@ -217,11 +223,11 @@ export function printClaudeInstallResult(result: InstallResult): void {
         );
         console.log(chalk.gray(`    ${result.paths.wrapperFile}`));
         console.log(chalk.gray('    Claude Code will fail to load it once that path is gone;'));
-        console.log(chalk.gray('    re-run `adhdev quota claude:install` from a normal install to fix.'));
+        console.log(chalk.gray(`    re-run \`${IDENTITY.binaryName} quota claude:install\` from a normal install to fix.`));
     }
     console.log();
-    console.log(chalk.gray('  Open a Claude Code session, then run `adhdev quota claude`.'));
-    console.log(chalk.gray('  Undo any time with `adhdev quota claude:uninstall`.'));
+    console.log(chalk.gray(`  Open a Claude Code session, then run \`${IDENTITY.binaryName} quota claude\`.`));
+    console.log(chalk.gray(`  Undo any time with \`${IDENTITY.binaryName} quota claude:uninstall\`.`));
     console.log();
 }
 
@@ -240,8 +246,14 @@ export function printClaudeUninstallResult(result: UninstallResult): void {
     console.log();
 }
 
-/** Render the result of `readStatuslineStatus()`. */
-export function printClaudeStatuslineStatus(status: StatuslineStatus): void {
+/**
+ * Render the result of `readStatuslineStatus()`.
+ *
+ * `verbose` gates the wrapper/backup/snapshot FILE PATHS — useful for
+ * debugging a broken install, noise for the routine "is this set up" check.
+ * The install/broken/not-installed headline and undo/repair hints always show.
+ */
+export function printClaudeStatuslineStatus(status: StatuslineStatus, verbose = false): void {
     console.log();
     if (status.installed) {
         console.log(chalk.green('✓ Installed'));
@@ -252,8 +264,10 @@ export function printClaudeStatuslineStatus(status: StatuslineStatus): void {
                     : '  You had no statusline before install.',
             ),
         );
-        console.log(chalk.gray(`  Wrapper: ${status.paths.wrapperFile}`));
-        console.log(chalk.gray(`  Backup: ${status.paths.backupFile}`));
+        if (verbose) {
+            console.log(chalk.gray(`  Wrapper: ${status.paths.wrapperFile}`));
+            console.log(chalk.gray(`  Backup: ${status.paths.backupFile}`));
+        }
         let snapshotMtimeMs: number | null = null;
         try {
             snapshotMtimeMs = fs.statSync(status.paths.snapshotFile).mtimeMs;
@@ -263,9 +277,11 @@ export function printClaudeStatuslineStatus(status: StatuslineStatus): void {
         console.log(chalk.gray(
             snapshotMtimeMs === null
                 ? '  Last snapshot: none yet — open a Claude Code session to record one'
-                : `  Last snapshot: ${formatAgo(snapshotMtimeMs)} (${status.paths.snapshotFile})`,
+                : verbose
+                    ? `  Last snapshot: ${formatAgo(snapshotMtimeMs)} (${status.paths.snapshotFile})`
+                    : `  Last snapshot: ${formatAgo(snapshotMtimeMs)}`,
         ));
-        console.log(chalk.gray('  Undo with `adhdev quota claude:uninstall`.'));
+        console.log(chalk.gray(`  Undo with \`${IDENTITY.binaryName} quota claude:uninstall\`.`));
     } else if (status.failureKind === 'wrapper-missing') {
         // The third state. Neither of the other two branches is honest here:
         // "Installed" would send the user off to open a Claude Code session
@@ -278,8 +294,8 @@ export function printClaudeStatuslineStatus(status: StatuslineStatus): void {
         if (status.wrappedCommand) {
             console.log(chalk.gray(`  Your own statusline is still recorded: ${truncate(status.wrappedCommand, 80)}`));
         }
-        console.log(chalk.gray('  Repair with `adhdev quota claude:install`.'));
-        console.log(chalk.gray('  Or clear it with `adhdev quota claude:uninstall`.'));
+        console.log(chalk.gray(`  Repair with \`${IDENTITY.binaryName} quota claude:install\`.`));
+        console.log(chalk.gray(`  Or clear it with \`${IDENTITY.binaryName} quota claude:uninstall\`.`));
     } else {
         console.log(chalk.yellow('• Not installed'));
         if (status.foreignStatusLine) {
@@ -287,7 +303,7 @@ export function printClaudeStatuslineStatus(status: StatuslineStatus): void {
         }
         console.log(chalk.gray(`  ${CLAUDE_NO_API_LINE}`));
         console.log(chalk.gray(`  ${CLAUDE_WRAP_NOT_REPLACE_LINE}`));
-        console.log(chalk.gray('  Set up with `adhdev quota claude:install`.'));
+        console.log(chalk.gray(`  Set up with \`${IDENTITY.binaryName} quota claude:install\`.`));
     }
     console.log();
 }

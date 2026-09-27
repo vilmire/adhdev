@@ -51,9 +51,12 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(hookSource).not.toContain('isFirstNode')
     expect(hookSource).toContain('mergeMeshGraphLiveSessionStatusIntoMeshStatus(status, liveMeshSessions, daemonId)')
     expect(dialogSource).not.toContain('buildMeshGraph')
-    // The header metadata chip copy is now i18n-wired; assert the translation keys are used.
-    expect(dialogSource).toContain("t('mesh.dialog.liveMetadata')")
-    expect(dialogSource).toContain("t('mesh.dialog.metadataUnavailable')")
+    // Freshness is a dot + short time; "live updates paused" is the only state
+    // worth words, and it rides in the dot's tooltip (the old "Live daemon
+    // metadata" / "Metadata subscription unavailable" subtitle copy is gone).
+    expect(dialogSource).toContain("t('mesh.dialog.liveUpdatesPaused')")
+    expect(dialogSource).not.toContain('mesh.dialog.liveMetadata')
+    expect(dialogSource).not.toContain('mesh.dialog.metadataUnavailable')
     expect(dialogSource).toContain('<MeshObservabilitySurface')
     expect(dialogSource).toContain('status={displayedMeshStatus}')
     expect(dialogSource).not.toContain('graph={')
@@ -306,11 +309,13 @@ describe('dashboard mesh graph dialog wiring', () => {
         expect(dialogSource).toContain('meshTheme.dialogBodyClass')
         // i18n wave: the hint strings moved into the locale files; the source must
         // reference their keys (the en resource still carries the original text).
-        expect(surfaceSource).toContain("t('mesh.obs.legendClickHint')")
         expect(graphViewSource).toContain("t('mesh.obs.panHint')")
         expect(surfaceSource).toContain('role="dialog"')
         expect(surfaceSource).toContain('onClick={closeGraphDetail}')
-        expect(surfaceSource).toContain('absolute inset-x-3 bottom-3 top-20')
+        // Mobile: the side panel overlays the canvas area (below the header);
+        // from sm up it is an in-flow right column.
+        expect(surfaceSource).toContain('absolute inset-x-3 bottom-3 top-3')
+        expect(surfaceSource).toContain('sm:relative sm:inset-auto')
         expect(surfaceSource).not.toContain('max-h-[24vh] overflow-y-auto')
         expect(surfaceSource).not.toContain('max-h-[22vh] overflow-y-auto')
     })
@@ -345,7 +350,9 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(surfaceSource).toContain("sendDaemonCommand(targetDaemonId, 'mesh_node_git_log', { meshId: meshIdForGitLog, nodeId: gitNodeId, limit: 5 })")
     expect(surfaceSource).not.toContain("'git_log'")
     expect(surfaceSource).toContain("Row label={t('mesh.obs.fieldHead')}")
-    expect(surfaceSource).toContain("Row label={t('mesh.obs.fieldSessions')}")
+    // Sessions are a clickable list (opens the chat), not a bare count row.
+    expect(surfaceSource).toContain("t('mesh.obs.activeSessions')")
+    expect(surfaceSource).toContain("requestOpenSessionChat({ sessionId: entry.session.sessionId")
     expect(readSource('components/MeshGraph/MeshGraphView.tsx')).toContain('visibleCardSessions')
     expect(surfaceSource).toContain('Close')
     expect(surfaceSource).not.toContain('Open chat')
@@ -361,11 +368,14 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(modeSource).toContain('onOpenMeshGraph={onOpenMeshGraph}')
     expect(mainViewSource).toContain('setMeshGraphConversation(conversation)')
     expect(mainViewSource).toContain('activeConv={meshGraphConversation}')
-    expect(surfaceSource).toContain("t('mesh.obs.selectedNode')")
     expect(surfaceSource).toContain('resolveSelectedGraphNodeForDetail(canonicalGraph, selectedNodeId)')
-    expect(surfaceSource).toContain("Row label={t('mesh.obs.fieldDirtyAheadBehind')}")
-    expect(surfaceSource).toContain("Row label={t('mesh.obs.fieldSource')}")
-    expect(surfaceSource).toContain("Row label={t('mesh.obs.fieldTransport')}")
+    // Ahead / behind / changed are human chips; source, transport and ids sit
+    // behind the "Technical details" disclosure.
+    expect(surfaceSource).toContain("t('mesh.obs.aheadCount'")
+    expect(surfaceSource).toContain("t('mesh.obs.behindCount'")
+    expect(surfaceSource).toContain('<TechnicalDetails')
+    expect(surfaceSource).toContain("label: t('mesh.obs.fieldSource')")
+    expect(surfaceSource).toContain("label: t('mesh.obs.fieldTransport')")
     expect(surfaceSource).not.toContain('<MeshGraphPanel')
   })
 })

@@ -1,45 +1,37 @@
 /**
- * ToggleRow — A settings row with label, description, and a checkbox toggle.
- * Shared between cloud and standalone settings pages.
+ * ToggleRow — A settings row with a label, an optional ⓘ explanation, and the
+ * shared Switch. Shared between cloud and standalone settings pages.
  */
+import { useId } from 'react'
+import { InfoTip } from '../ui/InfoTip'
+import { Switch } from '../ui/Switch'
 
 export interface ToggleRowProps {
     label: React.ReactNode
-    description: string
+    /** Optional explanation — shown as an ⓘ tip beside the label by default. */
+    description?: React.ReactNode
+    /** Render the description as visible text under the label (warnings only). */
+    descriptionInline?: boolean
     checked: boolean
     disabled?: boolean
     onChange: (value: boolean) => void
     extra?: React.ReactNode
 }
 
-export function ToggleRow({ label, description, checked, disabled, onChange, extra }: ToggleRowProps) {
+export function ToggleRow({ label, description, descriptionInline = false, checked, disabled, onChange, extra }: ToggleRowProps) {
+    const labelId = useId()
     return (
         <div className={`flex justify-between items-center ${disabled ? 'opacity-60' : ''}`}>
-            <div className="pr-4">
-                <div className="font-medium text-sm">{label}</div>
-                <div className="text-2xs text-text-muted mt-0.5">{description}</div>
+            <div className="pr-4 min-w-0">
+                <div className="font-medium text-sm flex items-center gap-1">
+                    <span id={labelId}>{label}</span>
+                    {description && !descriptionInline && <InfoTip content={description} />}
+                </div>
+                {description && descriptionInline && <div className="text-2xs text-text-muted mt-0.5">{description}</div>}
             </div>
             <div className="flex items-center gap-3 shrink-0">
                 {extra}
-                <button
-                    type="button"
-                    role="switch"
-                    aria-checked={checked}
-                    aria-disabled={disabled}
-                    disabled={disabled}
-                    onClick={() => onChange(!checked)}
-                    className={`relative inline-flex items-center ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
-                >
-                    <div 
-                        className="w-[40px] h-[22px] rounded-full transition-colors duration-200 ease-in-out"
-                        style={{ backgroundColor: checked ? 'var(--accent-primary)' : 'color-mix(in srgb, var(--surface-primary) 60%, var(--border-default))' }}
-                    />
-                    <div 
-                        className={`absolute left-[1.5px] top-[1.5px] w-[19px] h-[19px] bg-white rounded-full transition-transform duration-200 ease-in-out shadow-[0_1px_2px_rgba(0,0,0,0.15)] ${
-                            checked ? 'translate-x-[18px]' : 'translate-x-0'
-                        }`}
-                    />
-                </button>
+                <Switch checked={checked} disabled={disabled} onChange={onChange} aria-labelledby={labelId} />
             </div>
         </div>
     )

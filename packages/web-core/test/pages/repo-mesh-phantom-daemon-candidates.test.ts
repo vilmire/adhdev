@@ -79,8 +79,10 @@ describe('daemon candidate cards cannot overflow the viewport on mobile', () => 
         expect(cardBlock).toMatch(/className=\{`text-left rounded-lg border[^`]*\bmin-w-0\b/)
     })
 
-    it('keeps the id subtitle truncating', () => {
-        expect(cardBlock).toMatch(/font-mono truncate[^"]*">\{d\.id\}/)
+    it('does not print the raw daemon id on the card at all (nothing long to overflow)', () => {
+        // The 64-char monospace id subtitle was internal noise; the card shows the
+        // machine name and workspace count only.
+        expect(cardBlock).not.toMatch(/>\{d\.id\}</)
     })
 
     it('lets the label yield before the host badge', () => {

@@ -29,14 +29,19 @@ export interface FleetStatusPeerViewBadgeProps {
     now?: number
 }
 
-export function FleetStatusPeerViewBadge({
-    peer,
-    wsOnline,
-    wsSessionCount,
-    className,
-    now = Date.now(),
-}: FleetStatusPeerViewBadgeProps) {
-    const { t } = useTranslation()
+type TFn = (key: string, opts?: Record<string, unknown>) => string
+
+/**
+ * The divergence as data (tooltip text), or null when the peer view is absent,
+ * stale, or agrees — shared by the badge and the machine card's status dot.
+ */
+export function buildFleetPeerDivergence(
+    peer: FleetStatusPeerEntry | undefined,
+    wsOnline: boolean,
+    wsSessionCount: number,
+    t: TFn,
+    now: number = Date.now(),
+): string | null {
     if (!peer) return null
 
     const observedAt = Date.parse(peer.at)
@@ -54,13 +59,26 @@ export function FleetStatusPeerViewBadge({
         state === 'online' ? t('machine.card.fleetPeer.stateOnline')
             : state === 'offline' ? t('machine.card.fleetPeer.stateOffline')
                 : state
-    const tooltip = t('machine.card.fleetPeer.tooltip', {
+    return t('machine.card.fleetPeer.tooltip', {
         wsState: stateLabel(wsState),
         wsCount: wsSessionCount,
         peerState: stateLabel(peer.onlineState),
         peerCount: peerSessionCount,
         age: Math.floor(ageMs / 1000),
     })
+}
+
+export function FleetStatusPeerViewBadge({
+    peer,
+    wsOnline,
+    wsSessionCount,
+    className,
+    now = Date.now(),
+}: FleetStatusPeerViewBadgeProps) {
+    const { t } = useTranslation()
+    const tooltip = buildFleetPeerDivergence(peer, wsOnline, wsSessionCount, t, now)
+    if (!tooltip) return null
+    const diverged = true
 
     return (
         <span

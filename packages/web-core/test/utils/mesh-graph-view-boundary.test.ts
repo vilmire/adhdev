@@ -61,8 +61,12 @@ describe('mesh graph view interaction boundaries', () => {
         expect(source).toContain("graphEdge.type === 'worktreeLink' || graphEdge.type === 'submoduleLink'")
         expect(source).toContain('<BaseEdge')
         expect(source).toContain('<EdgeLabelRenderer>')
-        expect(source).toContain("case 'submoduleLink':")
-        expect(source).toContain("return '#c084fc'")
+        // Edge colours moved to meshGraphEdgeLegend.tsx (shared with the Legend
+        // popover so it need not load the canvas module).
+        const edgeStyleSource = readSource('components/MeshGraph/meshGraphEdgeLegend.tsx')
+        expect(source).toContain("import { edgeColor } from './meshGraphEdgeLegend'")
+        expect(edgeStyleSource).toContain("case 'submoduleLink':")
+        expect(edgeStyleSource).toContain("return '#c084fc'")
     })
 
     it('surfaces non-converged drift inside node cards instead of falling back to a quiet +0 / -0 style summary', () => {
@@ -165,7 +169,7 @@ describe('mesh graph view interaction boundaries', () => {
         // (min-h-0 + flex-1 + overflow-y-auto), otherwise the card list is clipped by
         // the dialog shell's overflow-hidden and the dashboard full view cannot scroll
         // down to the lower cards (missions/ledger/nodes/sessions).
-        expect(surfaceSource).toContain("'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto")
+        expect(surfaceSource).toContain("'flex' : 'hidden'} min-h-0 flex-1 flex-col gap-3 overflow-y-auto")
         // MeshOverviewCards itself must NOT be a second scroll container / flex-1 item,
         // so the wrapper above owns scrolling and grows with the card content.
         const overviewSource = readSource('components/MeshGraph/MeshOverviewCards.tsx')

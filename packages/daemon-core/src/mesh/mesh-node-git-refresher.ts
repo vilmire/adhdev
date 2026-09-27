@@ -26,6 +26,16 @@
  * unreachable). A probe that re-confirms the same state is silent: the per-call
  * overlay already reports its age, so dashboards need not refetch.
  *
+ * Handshake on (re)connect / restart (`handshakeDaemon`): a member that
+ * restarted lost its in-memory push subscription, so waiting for its held
+ * observation to age past MESH_NODE_STATE_STALE_MS left the coordinator
+ * reporting the replaced process's build for up to that long. When a member
+ * daemon's link comes up — or the coordinator restarts / upgrades it — the
+ * store marks that daemon's held entries handshake-pending and this nudges
+ * each node at once, falling back to the handshake probe when the member is
+ * not subscribed or too old to know the nudge. Event-driven only: nothing here
+ * runs on a timer.
+ *
  * Runtime half (`kickRuntime`): a node whose held runtime summary (sessions /
  * build / quota, mesh-node-runtime-summary.ts) is missing or stale — a member
  * too old to push it, or one that has not subscribed yet — gets ONE background
@@ -65,11 +75,13 @@ export const MESH_NODE_STATE_NUDGE_COMMAND = 'mesh_node_state_nudge';
  * `coordinator_probe` snapshot is a one-off read nothing keeps current.
  */
 export function isHeldRuntimeLive(
-    entry: Pick<MeshNodeGitStateEntry, 'runtime' | 'runtimeSource' | 'runtimeObservedAt'> | null | undefined,
+    entry: Pick<MeshNodeGitStateEntry, 'runtime' | 'runtimeSource' | 'runtimeObservedAt'> & Partial<Pick<MeshNodeGitStateEntry, 'handshakePendingSince'>> | null | undefined,
     now: number = Date.now(),
     staleMs: number = MESH_NODE_STATE_STALE_MS,
 ): boolean {
     if (!entry?.runtime || entry.runtimeSource !== 'member_push' || entry.runtimeObservedAt === null) return false;
+    // A handshake is pending (member reconnected / restarted): the held summary may be the replaced process's.
+    if (entry.handshakePendingSince != null) return false;
     return now - entry.runtimeObservedAt < staleMs;
 }
 
@@ -95,6 +107,11 @@ export interface MeshNodeGitRefreshTarget {
     nodeId: string;
     daemonId: string;
     workspace: string;
+}
+
+/** A handshake target; `runtimeOnly` = the coordinator reads this node's git itself (same machine). */
+export interface MeshNodeHandshakeTarget extends MeshNodeGitRefreshTarget {
+    runtimeOnly?: boolean;
 }
 
 export interface MeshNodeGitRefresherOptions {
@@ -125,6 +142,8 @@ export class MeshNodeGitRefresher {
     private readonly runtimeInflight = new Map<string, Promise<void>>();
     private readonly nudgeInflight = new Map<string, Promise<void>>();
     private readonly lastNudgeAt = new Map<string, number>();
+    /** Nodes whose handshake nudge is in flight — the request-path kick leaves them to it. */
+    private readonly handshakeNodes = new Set<string>();
     private readonly now: () => number;
     private readonly staleMs: number;
     private readonly legacyStaleMs: number;
@@ -153,6 +172,7 @@ export class MeshNodeGitRefresher {
     /** Whether a kick for this node would start a probe right now. */
     shouldRefresh(meshId: string, nodeId: string, opts?: { force?: boolean }): boolean {
         if (this.isRefreshing(meshId, nodeId)) return false;
+        if (!opts?.force && this.handshakeNodes.has(this.key(meshId, nodeId))) return false;
         const entry = this.options.store.get(meshId, nodeId);
         const now = this.now();
         if (entry?.lastAttemptAt !== null && entry?.lastAttemptAt !== undefined
@@ -165,6 +185,8 @@ export class MeshNodeGitRefresher {
             return false;
         }
         if (!entry || entry.observedAt === null || !entry.git) return true;
+        // Member reconnected / restarted: its held state is suspect NOW, not after the stale threshold.
+        if (entry.handshakePendingSince !== null) return true;
         return now - entry.observedAt >= this.staleFor(entry.source);
     }
 
@@ -223,14 +245,17 @@ export class MeshNodeGitRefresher {
         return this.runtimeInflight.has(this.key(meshId, daemonId));
     }
 
-    private runtimeNeedsRefresh(meshId: string, nodeId: string, force: boolean): boolean {
+    private runtimeNeedsRefresh(meshId: string, nodeId: string, force: boolean, handshake = false): boolean {
         const entry = this.options.store.get(meshId, nodeId);
         const now = this.now();
         if (entry?.runtimeLastAttemptAt != null && now - entry.runtimeLastAttemptAt < MESH_NODE_STATE_FORCE_MIN_INTERVAL_MS) return false;
+        // The handshake fallback (the member did not take the nudge) reads the runtime once.
+        if (handshake) return true;
         // A member that pushes its runtime is never force-probed: a refresh nudges it instead.
         if (force && entry?.runtimeSource !== 'member_push') return true;
         if (entry?.runtimeLastFailureAt != null && now - entry.runtimeLastFailureAt < this.failureBackoffMs) return false;
         if (!entry || entry.runtimeObservedAt === null || !entry.runtime) return true;
+        if (entry.handshakePendingSince !== null) return true;
         return now - entry.runtimeObservedAt >= this.staleFor(entry.runtimeSource);
     }
 
@@ -239,12 +264,12 @@ export class MeshNodeGitRefresher {
      * held runtime is missing/stale (or `force` — an explicit refresh — for a
      * member that does not push its runtime). Never awaited by the request path.
      */
-    kickRuntime(meshId: string, daemonId: string, targets: Array<{ nodeId: string; workspace: string; force?: boolean }>): boolean {
+    kickRuntime(meshId: string, daemonId: string, targets: Array<{ nodeId: string; workspace: string; force?: boolean; handshake?: boolean }>): boolean {
         const probeRuntime = this.options.probeRuntime;
         if (!probeRuntime || !meshId || !daemonId || targets.length === 0) return false;
         const key = this.key(meshId, daemonId);
         if (this.runtimeInflight.has(key)) return false;
-        if (!targets.some((t) => this.runtimeNeedsRefresh(meshId, t.nodeId, t.force === true))) return false;
+        if (!targets.some((t) => this.runtimeNeedsRefresh(meshId, t.nodeId, t.force === true, t.handshake === true))) return false;
         const { store } = this.options;
         const startedAt = this.now();
         for (const t of targets) store.recordRuntimeProbeAttempt(meshId, t.nodeId, t.workspace, startedAt);
@@ -262,7 +287,7 @@ export class MeshNodeGitRefresher {
                         meshId, nodeId: t.nodeId, workspace: t.workspace, runtime, source: 'coordinator_probe', observedAt: this.now(), daemonId,
                     });
                     if (!recorded.entry) store.recordRuntimeProbeFailure(meshId, t.nodeId, t.workspace, this.now());
-                    factsChanged = factsChanged || recorded.factsChanged || recorded.sessionsChanged;
+                    factsChanged = factsChanged || recorded.factsChanged || recorded.sessionsChanged || recorded.instanceChanged;
                 } else {
                     store.recordRuntimeProbeFailure(meshId, t.nodeId, t.workspace, this.now());
                 }
@@ -314,6 +339,57 @@ export class MeshNodeGitRefresher {
         })()
             .catch(() => { /* best-effort */ })
             .finally(() => {
+                if (this.nudgeInflight.get(key) === run) this.nudgeInflight.delete(key);
+            });
+        this.nudgeInflight.set(key, run);
+        return true;
+    }
+
+    /**
+     * The member daemon `daemonId` (re)connected, or was restarted by this
+     * coordinator: handshake every node of it on `meshId` NOW. Each node is
+     * nudged (the member pushes at once when it holds a subscription); a node
+     * whose member is not subscribed, does not know the nudge, or did not answer
+     * gets the handshake probe (git_status carrying meshStateSubscription, which
+     * re-registers the push), plus one runtime read for the daemon. Bypasses the
+     * nudge throttle and the failure backoff (the link just came up) but not the
+     * per-node minimum interval, so a flapping link cannot storm the member.
+     * Fire-and-forget; returns whether a handshake was started.
+     */
+    handshakeDaemon(meshId: string, daemonId: string, targets: MeshNodeHandshakeTarget[]): boolean {
+        const eligible = targets.filter((t) => t.meshId === meshId && t.nodeId && t.daemonId && t.workspace);
+        if (!meshId || !daemonId || eligible.length === 0) return false;
+        const usable = eligible.filter((t) => !t.runtimeOnly);
+        const runtimeOnly = eligible.filter((t) => t.runtimeOnly);
+        const key = `handshake\u0000${this.key(meshId, daemonId)}`;
+        if (this.nudgeInflight.has(key)) return false;
+        const nudge = this.options.nudge;
+        const run = (async () => {
+            const fallback: MeshNodeGitRefreshTarget[] = [];
+            for (const target of usable) this.handshakeNodes.add(this.key(target.meshId, target.nodeId));
+            await Promise.all(usable.map(async (target) => {
+                let subscribed: boolean | null = null;
+                if (nudge) {
+                    this.lastNudgeAt.set(this.key(target.meshId, target.nodeId), this.now());
+                    try {
+                        subscribed = await nudge(target);
+                    } catch {
+                        subscribed = null;
+                    }
+                }
+                this.handshakeNodes.delete(this.key(target.meshId, target.nodeId));
+                if (subscribed !== true) fallback.push(target);
+            }));
+            for (const target of fallback) this.kick(target, { force: true });
+            // A node the member did not take the nudge for — or one whose git this
+            // coordinator reads itself — gets one runtime read of the daemon.
+            const runtimeTargets = [...fallback, ...runtimeOnly];
+            if (runtimeTargets.length === 0) return;
+            this.kickRuntime(meshId, daemonId, runtimeTargets.map((t) => ({ nodeId: t.nodeId, workspace: t.workspace, handshake: true })));
+        })()
+            .catch(() => { /* best-effort */ })
+            .finally(() => {
+                for (const target of usable) this.handshakeNodes.delete(this.key(target.meshId, target.nodeId));
                 if (this.nudgeInflight.get(key) === run) this.nudgeInflight.delete(key);
             });
         this.nudgeInflight.set(key, run);

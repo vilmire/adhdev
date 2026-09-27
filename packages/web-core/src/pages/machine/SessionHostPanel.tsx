@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { formatClockTime, formatRelativeTimeLocalized } from '../../utils/time'
 import type { SessionHostDiagnosticsSnapshot } from '@adhdev/daemon-core'
 import {
     getSessionHostAvailabilityBadge,
@@ -10,6 +11,8 @@ import {
     partitionSessionHostRecords,
 } from '../../utils/session-host-surface'
 import Card from '../../components/Card'
+import { InfoTip, Tooltip } from '../../components/ui/InfoTip'
+import { TechnicalDetails } from '../../components/ui/TechnicalDetails'
 import { IconRefresh, IconServer, IconTerminal, IconUsers, IconWarning } from '../../components/Icons'
 import { getHostedRuntimeRecoveryDescription } from '../../utils/dashboard-launch-copy'
 import {
@@ -108,25 +111,19 @@ function unwrapCommandEnvelope(raw: any): any {
 }
 
 function formatClock(timestamp?: number | null): string {
-    if (!timestamp) return 'unknown'
-    return new Date(timestamp).toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-    })
+    return formatClockTime(timestamp, { seconds: true }) || '—'
 }
 
 function formatRelativeTime(timestamp?: number | null): string {
-    if (!timestamp) return 'unknown'
-    const diffMs = Date.now() - timestamp
-    const diffSeconds = Math.max(0, Math.round(diffMs / 1000))
-    if (diffSeconds < 60) return `${diffSeconds}s ago`
-    const diffMinutes = Math.round(diffSeconds / 60)
-    if (diffMinutes < 60) return `${diffMinutes}m ago`
-    const diffHours = Math.round(diffMinutes / 60)
-    if (diffHours < 48) return `${diffHours}h ago`
-    const diffDays = Math.round(diffHours / 24)
-    return `${diffDays}d ago`
+    return formatRelativeTimeLocalized(timestamp) || '—'
+}
+
+/** Transition actions are daemon command names; show them as words. */
+function describeTransitionAction(action: string, t: (key: string, opts?: Record<string, unknown>) => string): string {
+    const key = String(action || '').replace(/^session_host_/, '').replace(/_session$/, '')
+    const known = ['resume', 'restart', 'stop', 'start', 'attach', 'detach', 'recover']
+    if (known.includes(key)) return t(`sessionHost.transition.${key}`)
+    return key.replace(/_/g, ' ')
 }
 
 function describeOwner(owner: SessionHostWriteOwner | null | undefined): string {
@@ -351,15 +348,10 @@ export default function SessionHostPanel({
                             )}
                         </div>
                         <div className="text-2xs text-text-secondary mt-1 flex flex-wrap gap-2">
-                            <span className="text-text-primary/90">{session.workspaceLabel || linkedCli?.runtimeWorkspaceLabel || session.workspace || t('sessionHost.noWorkspace')}</span>
-                            <span className="text-text-muted">·</span>
-                            <span className="font-mono text-text-primary">{session.runtimeKey}</span>
-                            {session.osPid ? (
-                                <>
-                                    <span className="text-text-muted">·</span>
-                                    <span className="text-text-primary/90">pid {session.osPid}</span>
-                                </>
-                            ) : null}
+                            {/* Runtime key and OS pid are identifiers — kept one hover away. */}
+                            <Tooltip content={[session.runtimeKey, session.osPid ? `pid ${session.osPid}` : ''].filter(Boolean).join(' · ')}>
+                                <span className="text-text-primary/90">{session.workspaceLabel || linkedCli?.runtimeWorkspaceLabel || session.workspace || t('sessionHost.noWorkspace')}</span>
+                            </Tooltip>
                         </div>
                         <div className="text-3xs text-text-secondary mt-1 flex flex-wrap gap-2">
                             <span className={session.writeOwner?.ownerType === 'user' ? 'text-amber-200' : 'text-text-primary/85'}>
@@ -567,10 +559,11 @@ export default function SessionHostPanel({
                                                     {(session?.displayName || cliBySessionId.get(transition.sessionId)?.cliName || transition.sessionId)}
                                                 </div>
                                                 <div className="text-text-secondary mt-0.5 leading-relaxed">
-                                                    {transition.action}
-                                                    {transition.lifecycle ? ` · ${transition.lifecycle}` : ''}
-                                                    {transition.detail ? ` · ${transition.detail}` : ''}
-                                                    {transition.error ? ` · ${transition.error}` : ''}
+                                                    {describeTransitionAction(transition.action, t)}
+                                                    {transition.lifecycle ? ` · ${getSessionHostLifecycleLabel(transition.lifecycle, t)}` : ''}
+                                                    {(transition.detail || transition.error) && (
+                                                        <InfoTip content={[transition.detail, transition.error].filter(Boolean).join('\n')} size={11} className="ml-1" />
+                                                    )}
                                                 </div>
                                             </div>
                                             <div className={`shrink-0 text-3xs ${transition.success === false ? 'text-red-300' : 'text-text-secondary'}`}>
@@ -583,10 +576,13 @@ export default function SessionHostPanel({
                         )}
                     </div>
 
-                    <div className="text-3xs text-text-secondary mt-3">
-                        {t('sessionHost.endpointLabel')} <span className="font-mono text-text-primary">{diagnostics.endpoint || t('sessionHost.unknown')}</span>
-                        {error ? <span className="text-amber-200"> · {t('sessionHost.lastErrorLabel')} {error}</span> : null}
-                    </div>
+                    <TechnicalDetails
+                        className="mt-3"
+                        rows={[
+                            { label: t('sessionHost.endpointLabel'), value: diagnostics.endpoint || null },
+                            { label: t('sessionHost.lastErrorLabel'), value: error || null, copyable: false },
+                        ]}
+                    />
                 </>
             )}
             {confirmDialog}

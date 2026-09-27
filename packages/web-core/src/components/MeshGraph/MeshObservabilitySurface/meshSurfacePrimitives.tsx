@@ -1,5 +1,6 @@
 import { useContext, type ReactNode } from 'react'
 import { MeshGraphThemeContext } from './meshSurfaceTheme'
+import { Tooltip } from '../../ui/InfoTip'
 
 export function Badge({ label, tone = 'default', className, title }: { label: string; tone?: 'default' | 'good' | 'warn' | 'danger' | 'info'; className?: string; title?: string }) {
     const meshTheme = useContext(MeshGraphThemeContext)
@@ -12,7 +13,10 @@ export function Badge({ label, tone = 'default', className, title }: { label: st
     // text instead of sitting on the baseline (which left a descender gap below).
     // `pr` > `pl` compensates for tracking, which also applies after the last glyph and
     // otherwise makes the label look shifted left inside its own border.
-    return <span title={title} className={`rounded-full border pl-2 pr-[calc(0.5rem-0.16em)] py-0.5 text-[10px] leading-none align-middle uppercase tracking-[0.16em] ${meshTheme.badge(tone)}${className ? ` ${className}` : ''}`}>{label}</span>
+    const chip = <span className={`rounded-full border pl-2 pr-[calc(0.5rem-0.16em)] py-0.5 text-[10px] leading-none align-middle uppercase tracking-[0.16em] ${meshTheme.badge(tone)}${className ? ` ${className}` : ''}`}>{label}</span>
+    // A hint rides in the shared Tooltip (hover, focus AND tap) instead of a
+    // mouse-only native title.
+    return title ? <Tooltip content={title}>{chip}</Tooltip> : chip
 }
 
 export function Row({ label, value }: { label: string; value: ReactNode }) {

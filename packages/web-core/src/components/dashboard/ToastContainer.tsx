@@ -1,8 +1,10 @@
 /**
  * ToastContainer — Toast notification container for Dashboard
  */
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Toast } from '../../context/BaseDaemonContext';
+import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import { IconX } from '../Icons';
 export type { Toast };
 
@@ -31,6 +33,41 @@ const TYPE_TONE: Record<string, { accent: string; chipBg: string; chipText: stri
         chipText: 'var(--accent-primary-light)',
         labelKey: 'toast.label.info',
     },
+}
+
+/**
+ * "Details" expander for a toast's raw technical text (daemon error, ids).
+ * Opening it pins the toast so the auto-dismiss timer does not pull it away
+ * while it is being read; the × still closes it.
+ */
+function ToastDetails({ toast }: { toast: Toast }) {
+    const { t } = useTranslation();
+    const { setToasts } = useBaseDaemons();
+    const [open, setOpen] = useState(false);
+    if (!toast.details) return null;
+    return (
+        <div className="mt-2" data-toast-details="">
+            <button
+                type="button"
+                className="bg-transparent border-none p-0 text-xs font-semibold text-text-muted hover:text-text-primary cursor-pointer"
+                aria-expanded={open}
+                onClick={(event) => {
+                    event.stopPropagation();
+                    const next = !open;
+                    setOpen(next);
+                    if (next) setToasts(prev => prev.map(item => item.id === toast.id ? { ...item, pinned: true } : item));
+                }}
+            >
+                <span className="mr-1 inline-block transition-transform" style={{ transform: open ? 'rotate(90deg)' : undefined }} aria-hidden>▸</span>
+                {t('toast.details')}
+            </button>
+            {open && (
+                <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border-subtle bg-bg-secondary/60 px-2.5 py-2 font-mono text-3xs leading-relaxed text-text-secondary">
+                    {toast.details}
+                </pre>
+            )}
+        </div>
+    );
 }
 
 export default function ToastContainer({ toasts, onDismiss, onClickToast }: ToastContainerProps) {
@@ -84,6 +121,7 @@ export default function ToastContainer({ toasts, onDismiss, onClickToast }: Toas
                             <div className="mt-2 text-[13px] font-semibold leading-[1.45] text-text-primary">
                                 {toast.message}
                             </div>
+                            <ToastDetails toast={toast} />
                             {toast.actions && toast.actions.length > 0 && (
                                 <div className="flex gap-2 mt-3">
                                     {toast.actions.map((action, idx) => (

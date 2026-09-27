@@ -19,7 +19,8 @@ export interface SavedHistoryLaunchSectionProps {
   savedSessionsLoaded?: boolean
   savedSessionsCount?: number
   selectedSession: SavedHistoryLaunchSectionSelectedSession | null
-  onRefresh: () => void
+  /** Whether the inline history picker is currently open (toggles the button). */
+  historyOpen?: boolean
   onOpenHistory: () => void
   onClearSelection: () => void
 }
@@ -32,8 +33,9 @@ function buildSavedHistoryRefreshStatus(t: TFunction, {
   if (savedSessionsLoading) {
     return t('launch.refreshingSavedHistory')
   }
+  // Nothing loaded yet: the "Open saved history" button says it all.
   if (!savedSessionsLoaded) {
-    return t('launch.savedHistoryIntro')
+    return ''
   }
   if (savedSessionsCount > 0) {
     return t('launch.savedHistoryLoadedCount', { count: savedSessionsCount })
@@ -48,7 +50,7 @@ export default function SavedHistoryLaunchSection({
   savedSessionsLoaded,
   savedSessionsCount = 0,
   selectedSession,
-  onRefresh,
+  historyOpen = false,
   onOpenHistory,
   onClearSelection,
 }: SavedHistoryLaunchSectionProps) {
@@ -60,38 +62,30 @@ export default function SavedHistoryLaunchSection({
     savedSessionsCount,
   })
 
+  const hasBody = !!summary || !!refreshStatus || !!savedSessionsError
   return (
     <LaunchSectionCard
       title={t('launch.savedHistoryBadge')}
       description={getSavedHistoryHelperLabel(t)}
       action={(
-        <>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            disabled={busy || savedSessionsLoading}
-            onClick={onRefresh}
-          >
-            {savedSessionsLoading ? t('launch.loadingShort') : t('launch.refresh')}
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            disabled={busy}
-            onClick={onOpenHistory}
-          >
-            {getOpenHistoryLabel(t)}
-          </button>
-        </>
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          disabled={busy}
+          aria-expanded={historyOpen}
+          onClick={onOpenHistory}
+        >
+          {getOpenHistoryLabel(t)}
+        </button>
       )}
     >
+      {hasBody ? (<>
       {summary ? (
         <div className="rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2.5 text-2xs text-text-muted leading-relaxed">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
               <div className="text-3xs uppercase tracking-[0.08em] text-text-muted">{t('launch.selectedSavedHistory')}</div>
-              <div className="mt-1 font-semibold text-text-primary truncate">{summary.title}</div>
-              <div className="font-mono break-all mt-0.5">{summary.providerSessionId}</div>
+              <div className="mt-1 font-semibold text-text-primary truncate" title={summary.providerSessionId}>{summary.title}</div>
               <div className="mt-1">{summary.metaLine}</div>
               {summary.updatedLabel && (
                 <div className="mt-1 text-text-secondary">{summary.updatedLabel}</div>
@@ -110,15 +104,16 @@ export default function SavedHistoryLaunchSection({
             </button>
           </div>
         </div>
-      ) : (
+      ) : refreshStatus ? (
         <div className="text-2xs text-text-muted" aria-live="polite">
           {refreshStatus}
         </div>
-      )}
+      ) : null}
 
-      {savedSessionsError && (
+      {savedSessionsError ? (
         <div className="mt-2 text-2xs text-status-error">{savedSessionsError}</div>
-      )}
+      ) : null}
+      </>) : null}
     </LaunchSectionCard>
   )
 }

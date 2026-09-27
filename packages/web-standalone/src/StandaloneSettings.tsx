@@ -20,7 +20,10 @@ import {
     useTransport,
     IconSettings,
     IconUser,
+    InfoTip,
+    Tooltip,
 } from '@adhdev/web-core'
+import { Link } from 'react-router-dom'
 import {
     DEFAULT_STANDALONE_FONT_PREFERENCES,
     applyStandaloneFontPreferences,
@@ -43,7 +46,6 @@ export default function StandaloneSettings() {
     const { ides } = useBaseDaemons()
 
     const daemonEntry: any = ides.find((d: any) => d.type === 'adhdev-daemon')
-    const detectedIdes: { type: string; name: string; running: boolean }[] = daemonEntry?.detectedIdes || []
 
     const { sendCommand } = useTransport()
 
@@ -249,10 +251,6 @@ export default function StandaloneSettings() {
             subtitle={t('standalone.settings.subtitle')}
             widthClassName="max-w-5xl"
         >
-            <AlertBanner variant="info">
-                {t('standalone.settings.infoNotice')}
-            </AlertBanner>
-
             {authStatus?.publicHostWarning && (
                 <AlertBanner variant="warning">
                     {t('standalone.settings.publicHostWarning')}
@@ -260,7 +258,7 @@ export default function StandaloneSettings() {
             )}
 
             {/* ═══ Daemon Info ═══ */}
-            <Section title={t('standalone.settings.daemonSection')} description={t('standalone.settings.daemonDescription')}>
+            <Section title={t('standalone.settings.daemonSection')}>
                 <div className="flex flex-col gap-2">
                     <div className="flex items-center justify-between px-3.5 py-3 bg-bg-glass rounded-xl border border-border-subtle">
                         <span className="text-sm text-text-muted">{t('standalone.settings.versionLabel')}</span>
@@ -273,52 +271,41 @@ export default function StandaloneSettings() {
                         </span>
                     </div>
                     <div className="flex items-center justify-between px-3.5 py-3 bg-bg-glass rounded-xl border border-border-subtle">
-                        <span className="text-sm text-text-muted">{t('standalone.settings.currentBindLabel')}</span>
-                        <span className="font-mono text-xs text-text-primary">{preferences?.currentBindHost || authStatus?.boundHost || '127.0.0.1'}</span>
-                    </div>
-                    <div className="flex items-center justify-between px-3.5 py-3 bg-bg-glass rounded-xl border border-border-subtle">
-                        <span className="text-sm text-text-muted">{t('standalone.settings.defaultBindLabel')}</span>
-                        <span className="font-mono text-xs text-text-primary">{preferences?.standaloneBindHost || '127.0.0.1'}</span>
-                    </div>
-                    <div className="flex items-center justify-between px-3.5 py-3 bg-bg-glass rounded-xl border border-border-subtle">
                         <span className="text-sm text-text-muted">{t('standalone.settings.authLabel')}</span>
                         <span className="text-xs text-text-primary">
                             {authStatus?.hasPasswordAuth ? t('standalone.settings.authPassword') : authStatus?.hasTokenAuth ? t('standalone.settings.authToken') : t('standalone.settings.authNone')}
                         </span>
                     </div>
+                    {/* Detected IDEs and agents are managed with every other provider. */}
+                    {daemonEntry?.id && (
+                        <div className="px-1 pt-1 text-xs text-text-muted" data-testid="standalone-providers-link">
+                            {t('standalone.settings.providersIntro')}{' '}
+                            <Link to={`/machines/${daemonEntry.id}`} state={{ initialMachineTab: 'providers' }} className="text-accent-primary hover:underline">
+                                {t('standalone.settings.providersLink')}
+                            </Link>
+                        </div>
+                    )}
                 </div>
             </Section>
 
-            <Section title={t('standalone.settings.networkSection')} description={t('standalone.settings.networkDescription')}>
+            <Section title={t('standalone.settings.networkSection')} description={t('standalone.settings.networkHint')}>
                 <div className="flex flex-col gap-3">
-                    <div className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-3 text-sm text-text-muted">
-                        {t('standalone.settings.networkHint')}
-                    </div>
-                    <div className="grid gap-3 md:grid-cols-2">
-                        <label className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-3 text-sm flex gap-3 items-start cursor-pointer">
-                            <input
-                                type="radio"
-                                name="standalone-bind-host"
-                                checked={bindHostInput === '127.0.0.1'}
-                                onChange={() => setBindHostInput('127.0.0.1')}
-                            />
-                            <span>
-                                <span className="block font-medium text-text-primary">{t('standalone.settings.localhostLabel')}</span>
-                                <span className="block text-text-muted text-xs mt-1">{t('standalone.settings.localhostHint')}</span>
-                            </span>
-                        </label>
-                        <label className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-3 text-sm flex gap-3 items-start cursor-pointer">
-                            <input
-                                type="radio"
-                                name="standalone-bind-host"
-                                checked={bindHostInput === '0.0.0.0'}
-                                onChange={() => setBindHostInput('0.0.0.0')}
-                            />
-                            <span>
-                                <span className="block font-medium text-text-primary">{t('standalone.settings.allInterfacesLabel')}</span>
-                                <span className="block text-text-muted text-xs mt-1">{t('standalone.settings.allInterfacesHint')}</span>
-                            </span>
-                        </label>
+                    <div className="grid gap-3 md:grid-cols-2" role="radiogroup" aria-label={t('standalone.settings.networkSection')}>
+                        {([
+                            { host: '127.0.0.1' as const, label: t('standalone.settings.localhostLabel'), hint: t('standalone.settings.localhostHint') },
+                            { host: '0.0.0.0' as const, label: t('standalone.settings.allInterfacesLabel'), hint: t('standalone.settings.allInterfacesHint') },
+                        ]).map(option => (
+                            <label key={option.host} className={`rounded-xl border px-4 py-3 text-sm flex gap-3 items-center cursor-pointer ${bindHostInput === option.host ? 'border-accent-primary/40 bg-accent-primary/5' : 'border-border-subtle bg-bg-glass'}`}>
+                                <input
+                                    type="radio"
+                                    name="standalone-bind-host"
+                                    checked={bindHostInput === option.host}
+                                    onChange={() => setBindHostInput(option.host)}
+                                />
+                                <span className="font-medium text-text-primary">{option.label}</span>
+                                <InfoTip content={option.hint} />
+                            </label>
+                        ))}
                     </div>
                     <div className="flex flex-wrap gap-2 items-center">
                         <Button
@@ -330,12 +317,20 @@ export default function StandaloneSettings() {
                         >
                             {authSaving ? t('standalone.settings.saving') : t('standalone.settings.saveNetworkMode')}
                         </Button>
-                        <span className="text-xs text-text-muted">{t('standalone.settings.networkRestartHint', { host: preferences?.currentBindHost || authStatus?.boundHost || '127.0.0.1' })}</span>
+                        {/* Saved default differs from what this run is bound to. */}
+                        {preferences?.standaloneBindHost && (preferences.currentBindHost || authStatus?.boundHost)
+                            && preferences.standaloneBindHost !== (preferences.currentBindHost || authStatus?.boundHost) && (
+                            <Tooltip content={t('standalone.settings.networkRestartHint', { host: preferences.currentBindHost || authStatus?.boundHost || '127.0.0.1' })}>
+                                <span className="inline-flex items-center rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-3xs font-semibold text-amber-400" data-testid="standalone-restart-chip">
+                                    {t('standalone.settings.restartToApply')}
+                                </span>
+                            </Tooltip>
+                        )}
                     </div>
                 </div>
             </Section>
 
-            <Section title={t('standalone.settings.securitySection')} description={t('standalone.settings.securityDescription')}>
+            <Section title={t('standalone.settings.securitySection')}>
                 <div className="flex flex-col gap-3">
                     <div className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-3 text-sm text-text-muted">
                         {authStatus?.hasPasswordAuth
@@ -390,50 +385,21 @@ export default function StandaloneSettings() {
                 </div>
             </Section>
 
-            {/* ═══ Detected IDEs ═══ */}
-            <Section title={t('standalone.settings.detectedIdesSection')} description={t('standalone.settings.detectedIdesDescription')}>
-                {detectedIdes.length === 0 ? (
-                    <p className="text-sm text-text-muted">{t('standalone.settings.noIdesDetected')}</p>
-                ) : (
-                    <div className="flex flex-col gap-2">
-                        {detectedIdes.map((ide) => (
-                            <div key={ide.type} className="flex items-center justify-between px-3.5 py-3 bg-bg-glass rounded-xl border border-border-subtle">
-                                <div className="flex items-center gap-2.5">
-                                    <span className={`w-2 h-2 rounded-full ${ide.running ? 'bg-green-400' : 'bg-text-muted/30'}`} />
-                                    <span className="text-sm font-medium text-text-primary">{ide.name}</span>
-                                </div>
-                                <span className="text-2xs text-text-muted font-mono">{ide.type}</span>
-                            </div>
-                        ))}
-                    </div>
-                )}
-            </Section>
-
             {/* No "Connected Machine" section here: standalone is single-machine
                 by construction (this page only renders in standalone mode), so a
                 separate machine card is redundant — the Daemon Info section above
                 already carries version/status. Cloud keeps its own machine UI
                 (multi-machine) untouched. Removed 2026-08-24 (owner decision). */}
 
-            {/* ═══ Coordinator prompts ═══
-                 Edits ~/.adhdev/coordinator-prompts/<cli>.{md,append.md} on this
-                 daemon. Mounted here because those files are per-machine config —
-                 mesh-level prompts stay on the Repo Mesh page. This is also the
-                 only UI for the layer that the
-                 mesh_coordinator_prompt_append MCP tool (action "set") writes. */}
-            <Section title={t('settings.coordinatorPrompts.sectionTitle')} description={t('settings.coordinatorPrompts.sectionDescription')}>
-                <CoordinatorPromptsSection daemonId={daemonEntry?.id} />
-            </Section>
-
             {/* ═══ Theme ═══ */}
-            <Section title={t('standalone.settings.appearanceSection')} description={t('standalone.settings.appearanceDescription')}>
+            <Section title={t('standalone.settings.appearanceSection')}>
                 <AppearanceSettingsSection
-                    themeDescription={t('standalone.settings.themeDescription')}
-                    mobileDescription={t('standalone.settings.mobileDescription')}
                     fontsSlot={
                         <div className="border-t border-border-subtle pt-4">
-                            <div className="text-xs text-text-muted mb-1 font-medium">{t('standalone.settings.fontsLabel')}</div>
-                            <p className="text-2xs text-text-muted mb-3">{t('standalone.settings.fontsDescription')}</p>
+                            <div className="text-xs text-text-muted mb-2 font-medium flex items-center gap-1">
+                                {t('standalone.settings.fontsLabel')}
+                                <InfoTip content={t('standalone.settings.fontsDescription')} size={12} />
+                            </div>
                             <StandaloneFontSettingsSection
                                 value={fontPreferences}
                                 savedValue={normalizeStandaloneFontPreferences(preferences?.standaloneFontPreferences)}
@@ -455,15 +421,13 @@ export default function StandaloneSettings() {
                 2026-08-24) when that page gained a standalone route. */}
 
             {/* ═══ Preferences ═══ */}
-            <Section title={t('standalone.settings.profileSection')} description={t('standalone.settings.profileDescription')}>
+            <Section title={t('standalone.settings.profileSection')}>
                 <div className="flex flex-col gap-3">
                     <div className="flex items-center justify-between px-3.5 py-4 bg-bg-glass rounded-xl border border-border-subtle hover:border-border-default transition-colors">
                         <div className="flex flex-col gap-1 pr-4 max-w-[500px]">
                             <span className="text-sm font-semibold flex items-center gap-2">
                                 <IconUser size={16} className="text-text-secondary" /> {t('standalone.settings.displayNameLabel')}
-                            </span>
-                            <span className="text-[12px] text-text-muted leading-relaxed">
-                                {t('standalone.settings.displayNameHint')}
+                                <InfoTip content={t('standalone.settings.displayNameHint')} />
                             </span>
                         </div>
                         <Input
@@ -481,6 +445,20 @@ export default function StandaloneSettings() {
                         />
                     </div>
                 </div>
+            </Section>
+
+            {/* ═══ Advanced (collapsed) — coordinator prompts ═══
+                 Edits ~/.adhdev/coordinator-prompts/<cli>.{md,append.md} on this
+                 daemon. Mounted here because those files are per-machine config —
+                 mesh-level prompts stay on the Repo Mesh page. This is also the
+                 only UI for the layer that the
+                 mesh_coordinator_prompt_append MCP tool (action "set") writes. */}
+            <Section title={t('settings.advancedTitle')} collapsible defaultOpen={false}>
+                <div className="mb-2 flex items-center gap-1 text-xs font-medium text-text-secondary">
+                    {t('settings.coordinatorPrompts.sectionTitle')}
+                    <InfoTip content={t('settings.coordinatorPrompts.sectionDescription')} size={12} />
+                </div>
+                <CoordinatorPromptsSection daemonId={daemonEntry?.id} embedded />
             </Section>
         </AppPage>
     )

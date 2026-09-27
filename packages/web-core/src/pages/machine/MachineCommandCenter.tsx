@@ -10,6 +10,7 @@ import { getConversationActivityAt } from '../../components/dashboard/conversati
 import { getConversationMetaText, getConversationTitle } from '../../components/dashboard/conversation-presenters'
 import { buildMachineRecentLaunchCardView } from '../../utils/machine-recent-launch-presenters'
 import { buildDaemonUpdateStatusView } from '../../utils/daemon-update-status'
+import { InfoTip, Tooltip } from '../../components/ui/InfoTip'
 
 declare const __APP_VERSION__: string
 
@@ -54,6 +55,16 @@ export default function MachineCommandCenter({
     const topRecentLaunches = recentLaunches.slice(0, 4)
     const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null
     const updateStatus = buildDaemonUpdateStatusView(machineEntry, appVersion)
+    const updateTooltip = updateStatus.visible
+        ? [
+            t(updateStatus.descriptionKey),
+            updateStatus.targetVersion
+                ? (updateStatus.channel
+                    ? t('machine.commandCenter.updateTargetWithChannel', { version: updateStatus.targetVersion, channel: t(`machine.commandCenter.updateChannel.${updateStatus.channel}`) })
+                    : t('machine.commandCenter.updateTarget', { version: updateStatus.targetVersion }))
+                : '',
+        ].filter(Boolean).join('\n')
+        : ''
 
     return (
         <div className="flex flex-col gap-4 md:min-w-[300px] md:max-w-[360px] shrink-0 md:h-full overflow-y-auto">
@@ -132,40 +143,36 @@ export default function MachineCommandCenter({
                 </div>
             )}
 
-            {updateStatus.visible && (
-                <div className="flex flex-col gap-2">
+            {/* Daemon update: a title and the button when there is something to do;
+                otherwise one quiet "Up to date" chip. Explanations are in ⓘ/tooltip. */}
+            {updateStatus.visible && updateStatus.showButton && (
+                <div className="flex flex-col gap-2" data-testid="daemon-update-card">
                     <SectionTitle icon={<IconWarning size={13} />}>{t('machine.commandCenter.daemonUpdate')}</SectionTitle>
-                    <SectionCard className={updateStatus.tone === 'good' ? 'border-emerald-500/20 bg-emerald-500/5' : updateStatus.tone === 'info' ? 'border-sky-500/20 bg-sky-500/5' : 'border-amber-500/20 bg-amber-500/5'}>
+                    <SectionCard className="border-amber-500/20 bg-amber-500/5">
                         <div className="flex flex-col gap-3">
-                            <div className="text-sm font-semibold text-text-primary">
+                            <div className="flex items-center gap-1 text-sm font-semibold text-text-primary">
                                 {t(updateStatus.titleKey)}
+                                <InfoTip content={updateTooltip} />
                             </div>
-                            <div className="text-xs text-text-secondary leading-relaxed">
-                                {t(updateStatus.descriptionKey)}
-                                {updateStatus.targetVersion && (
-                                    <span className="block mt-1 text-text-muted">
-                                        {updateStatus.channel
-                                            ? t('machine.commandCenter.updateTargetWithChannel', { version: updateStatus.targetVersion, channel: t(`machine.commandCenter.updateChannel.${updateStatus.channel}`) })
-                                            : t('machine.commandCenter.updateTarget', { version: updateStatus.targetVersion })}
-                                    </span>
-                                )}
-                            </div>
-                            {updateStatus.showButton ? (
-                                <button
-                                    type="button"
-                                    className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-amber-500/12 border border-amber-500/20 text-amber-300 hover:bg-amber-500/18 transition-colors"
-                                    onClick={onUpgradeDaemon}
-                                >
-                                    <IconRefresh size={13} />
-                                    <span className="text-sm font-medium">{updateStatus.targetVersion ? t('machine.commandCenter.updateToVersion', { version: updateStatus.targetVersion }) : t('machine.commandCenter.updateDaemon')}</span>
-                                </button>
-                            ) : (
-                                <div className={updateStatus.tone === 'good' ? 'text-xs font-medium text-emerald-300' : 'text-xs font-medium text-sky-300'}>
-                                    {t('machine.commandCenter.previewNoActionNeeded')}
-                                </div>
-                            )}
+                            <button
+                                type="button"
+                                className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-amber-500/12 border border-amber-500/20 text-amber-300 hover:bg-amber-500/18 transition-colors"
+                                onClick={onUpgradeDaemon}
+                            >
+                                <IconRefresh size={13} />
+                                <span className="text-sm font-medium">{updateStatus.targetVersion ? t('machine.commandCenter.updateToVersion', { version: updateStatus.targetVersion }) : t('machine.commandCenter.updateDaemon')}</span>
+                            </button>
                         </div>
                     </SectionCard>
+                </div>
+            )}
+            {updateStatus.visible && !updateStatus.showButton && (
+                <div data-testid="daemon-update-chip">
+                    <Tooltip content={updateTooltip}>
+                        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-2xs font-medium ${updateStatus.tone === 'good' ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400' : 'border-border-subtle bg-bg-glass text-text-secondary'}`}>
+                            {updateStatus.tone === 'good' ? t('machine.commandCenter.upToDate') : t('machine.commandCenter.updateStatusUnknown')}
+                        </span>
+                    </Tooltip>
                 </div>
             )}
         </div>

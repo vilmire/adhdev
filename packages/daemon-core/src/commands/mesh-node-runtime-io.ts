@@ -28,8 +28,13 @@ import type { CommandRouterDeps } from './router.js';
  * get_status_metadata uses (metadata profile) — without the machine/config/
  * provider-catalog half of the snapshot, which the summary never carries.
  */
-export function readLocalMeshNodeRuntime(deps: Pick<CommandRouterDeps, 'instanceManager' | 'cdpManagers' | 'providerLoader' | 'statusInstanceId'>): MeshNodeRuntimeSummary | null {
+export function readLocalMeshNodeRuntime(
+    deps: Pick<CommandRouterDeps, 'instanceManager' | 'cdpManagers' | 'providerLoader' | 'statusInstanceId'>,
+    daemonBootId?: string,
+): MeshNodeRuntimeSummary | null {
     const core = {
+        // Per-process id: a coordinator seeing it change knows this daemon restarted.
+        ...(daemonBootId ? { daemonBootId } : {}),
         status: {
             instanceId: deps.statusInstanceId || getMachineId() || 'daemon',
             sessions: buildSessionEntries(deps.instanceManager.collectAllStates(), deps.cdpManagers, { profile: 'metadata' }),

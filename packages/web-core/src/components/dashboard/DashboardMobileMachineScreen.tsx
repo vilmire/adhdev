@@ -1,11 +1,11 @@
-import { IconChevronLeft, IconFolder } from '../Icons'
+import { IconChevronLeft } from '../Icons'
 import type { DaemonData } from '../../types'
 import { formatRelativeTime, type MobileConversationListItem, type MobileMachineActionState } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
-import type { MachineRecentLaunch, WorkspaceLaunchKind } from '../../pages/machine/types'
+import type { MachineRecentLaunch } from '../../pages/machine/types'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { getMachineDisplayName, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
+import { getMachineDisplayName } from '../../utils/daemon-utils'
 import {
     getCliLaunchBusyLabel,
     getCliLaunchPrimaryActionLabel,
@@ -27,7 +27,6 @@ import { buildLaunchWorkspaceOptions } from '../machine/launchWorkspaceOptions'
 import { getConversationTitle, getMachineConversationCardSubtitle } from './conversation-presenters'
 import { buildMachineRecentLaunchCardView } from '../../utils/machine-recent-launch-presenters'
 import { useDashboardMobileMachineLauncher } from './useDashboardMobileMachineLauncher'
-import { ProviderLogo } from '../ProviderLogo'
 
 interface LaunchProviderInfo {
     type: string
@@ -53,10 +52,7 @@ interface DashboardMobileMachineScreenProps {
     onOpenRecent: (launch: MachineRecentLaunch) => void
     onOpenMachineDetails: () => void
     onMachineUpgrade: () => void
-    onLaunchDetectedIde: (ideType: string, opts?: { workspacePath?: string | null }) => void
-    onAddWorkspace: (path: string, opts?: { createIfMissing?: boolean }) => void
     onBrowseDirectory: (path: string) => Promise<BrowseDirectoryResult>
-    onLaunchWorkspaceProvider: (kind: Extract<WorkspaceLaunchKind, 'cli' | 'acp'>, providerType: string, opts?: { workspaceId?: string | null; workspacePath?: string | null; useHome?: boolean; args?: string; model?: string; resumeSessionId?: string | null }) => void
     onListSavedSessions?: (providerType: string) => Promise<any[]>
 }
 
@@ -78,10 +74,7 @@ export default function DashboardMobileMachineScreen({
     onOpenRecent,
     onOpenMachineDetails,
     onMachineUpgrade,
-    onLaunchDetectedIde,
-    onAddWorkspace,
     onBrowseDirectory,
-    onLaunchWorkspaceProvider,
     onListSavedSessions,
 }: DashboardMobileMachineScreenProps) {
     const { t } = useTranslation('common')
@@ -256,239 +249,6 @@ export default function DashboardMobileMachineScreen({
                     </section>
                 )}
 
-                {/*
-                  * Old "Start" launcher (workspace dropdown + IDE/CLI/ACP picker)
-                  * removed: it duplicated the dashboard "+" New Session dialog
-                  * with worse UX. The inbox "+" button now drives all launches.
-                  */}
-                {false && (
-                    <section className="flex flex-col gap-0">
-                        <div className="text-2xs font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Start</div>
-                        <div className="grid grid-cols-1 gap-2.5 px-4">
-                            <div className="flex flex-col gap-2.5 w-full p-3.5 rounded-2xl border border-border-default/80 bg-surface-primary/90">
-                                <div className="text-sm font-bold text-text-primary">Workspace</div>
-                                <div className="text-xs leading-relaxed text-text-secondary">
-                                    Pick a saved workspace or browse folders before choosing a session type.
-                                </div>
-                                <select
-                                    value={launcher.workspaceChoice}
-                                    onChange={(event) => launcher.handleWorkspaceChoiceChange(event.target.value)}
-                                    className="w-full rounded-xl border border-border-default/90 bg-bg-primary/90 text-text-primary px-3 py-3 text-sm"
-                                >
-                                    {launcher.workspaceRows.length > 0 ? (
-                                        <>
-                                            {launcher.workspaceRows.map(workspace => (
-                                                <option key={workspace.id} value={workspace.id}>
-                                                    {workspace.id === launcher.defaultWorkspaceId ? '★ ' : ''}
-                                                    {getWorkspaceDisplayLabel(workspace.path, workspace.label) || workspace.path}
-                                                </option>
-                                            ))}
-                                            <option value="__custom__">Select workspace…</option>
-                                        </>
-                                    ) : (
-                                        <option value="__custom__">Select workspace…</option>
-                                    )}
-                                </select>
-                                {launcher.workspaceChoice === '__custom__' && (
-                                    <div className="flex flex-col gap-2.5">
-                                        <div className="rounded-2xl border border-border-default/80 bg-bg-primary/80 px-3.5 py-3">
-                                            <div className="flex items-start gap-3">
-                                                <span className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-accent-primary/10 text-accent-primary shrink-0">
-                                                    <IconFolder size={17} />
-                                                </span>
-                                                <div className="min-w-0 flex-1">
-                                                    <div className="text-3xs font-bold uppercase tracking-[0.08em] text-text-muted mb-1">Selected folder</div>
-                                                    <div className="text-xs leading-relaxed text-text-primary break-all">
-                                                        {launcher.resolvedWorkspacePath || launcher.browseCurrentPath || 'No folder selected yet.'}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div className="flex flex-wrap gap-2">
-                                            <button
-                                                type="button"
-                                                className="inline-flex items-center justify-center min-h-[36px] px-3 rounded-xl border border-border-default/90 bg-bg-primary/90 text-text-secondary text-xs font-bold"
-                                                onClick={launcher.openBrowseDialog}
-                                            >
-                                                Select workspace…
-                                            </button>
-                                            <button
-                                                type="button"
-                                                className="inline-flex items-center justify-center min-h-[36px] px-3 rounded-xl border border-accent-primary/30 bg-accent-primary/10 text-text-primary text-xs font-bold disabled:opacity-40"
-                                                onClick={() => {
-                                                    if (!launcher.resolvedWorkspacePath) return
-                                                    onAddWorkspace(launcher.resolvedWorkspacePath)
-                                                }}
-                                                disabled={!launcher.resolvedWorkspacePath || launcher.browseBusy}
-                                            >
-                                                Save as workspace
-                                            </button>
-                                        </div>
-                                    </div>
-                                )}
-                                {launcher.resolvedWorkspacePath && (
-                                    <div className="text-2xs leading-relaxed text-text-muted break-all">{launcher.resolvedWorkspacePath}</div>
-                                )}
-                            </div>
-                        </div>
-                        <div className="grid grid-cols-3 gap-2 px-4">
-                            {launcher.hasIdeOptions && (
-                                <button
-                                    className={`min-h-[40px] rounded-full border text-xs font-bold ${launcher.activeLauncherKind === 'ide' ? 'border-accent-primary/30 bg-accent-primary/10 text-text-primary' : 'border-border-default/80 bg-surface-primary/90 text-text-secondary'}`}
-                                    type="button"
-                                    onClick={() => launcher.setActiveLauncherKind('ide')}
-                                >
-                                    IDE
-                                </button>
-                            )}
-                            {cliProviders.length > 0 && (
-                                <button
-                                    className={`min-h-[40px] rounded-full border text-xs font-bold ${launcher.activeLauncherKind === 'cli' ? 'border-accent-primary/30 bg-accent-primary/10 text-text-primary' : 'border-border-default/80 bg-surface-primary/90 text-text-secondary'}`}
-                                    type="button"
-                                    onClick={() => launcher.setActiveLauncherKind('cli')}
-                                >
-                                    CLI
-                                </button>
-                            )}
-                            {acpProviders.length > 0 && (
-                                <button
-                                    className={`min-h-[40px] rounded-full border text-xs font-bold ${launcher.activeLauncherKind === 'acp' ? 'border-accent-primary/30 bg-accent-primary/10 text-text-primary' : 'border-border-default/80 bg-surface-primary/90 text-text-secondary'}`}
-                                    type="button"
-                                    onClick={() => launcher.setActiveLauncherKind('acp')}
-                                >
-                                    ACP
-                                </button>
-                            )}
-                        </div>
-                        {launcher.activeLauncherKind && (
-                            <div className="flex flex-col gap-2.5 px-4 pt-3">
-                                <div className="text-xs font-bold text-text-secondary">
-                                    {launcher.activeLauncherKind === 'ide'
-                                        ? 'Choose an IDE'
-                                        : launcher.activeLauncherKind === 'cli'
-                                            ? 'Choose a CLI provider'
-                                            : 'Choose an ACP provider'}
-                                </div>
-                                <div className="grid grid-cols-1 gap-2">
-                                    {launcher.activeLauncherKind === 'ide'
-                                        ? (selectedMachineEntry.detectedIdes || []).slice(0, 6).map(ide => (
-                                            <button
-                                                key={ide.type}
-                                                type="button"
-                                                className="flex flex-col items-start gap-1 w-full text-left p-3 rounded-2xl border border-border-default/80 bg-surface-primary/90 text-text-primary"
-                                                onClick={() => {
-                                                    const { options, selectedKey } = buildLaunchWorkspaceOptions({
-                                                        machine: {
-                                                            workspaces: launcher.workspaceRows,
-                                                            defaultWorkspaceId: launcher.defaultWorkspaceId,
-                                                        },
-                                                        currentWorkspaceId: launcher.workspaceChoice !== '__custom__' ? launcher.workspaceChoice : null,
-                                                        currentWorkspacePath: launcher.resolvedWorkspacePath,
-                                                        homeLabel: t('newSession.homeDirectory'),
-                                                        homeDescription: t('newSession.launchWithoutWorkspace'),
-                                                    })
-                                                    launcher.openLaunchConfirm({
-                                                        title: `Launch ${ide.name}?`,
-                                                        description: 'Review or change the target folder before opening this IDE.',
-                                                        confirmLabel: 'Launch IDE',
-                                                        workspaceOptions: options,
-                                                        selectedWorkspaceKey: selectedKey,
-                                                        details: [
-                                                            { label: 'Mode', value: 'Workspace' },
-                                                            { label: 'Provider', value: ide.name },
-                                                        ],
-                                                    }, async () => {
-                                                        const selectedOption = options.find(option => option.key === launcher.launchConfirmWorkspaceKeyRef.current)
-                                                        launcher.setWorkspaceSelectionFromOption(selectedOption)
-                                                        onLaunchDetectedIde(ide.type, {
-                                                            workspacePath: selectedOption?.workspacePath ?? null,
-                                                        })
-                                                    })
-                                                }}
-                                            >
-                                                <span className="text-xxs font-bold text-text-primary">{ide.name}</span>
-                                                <span className="text-2xs leading-relaxed text-text-muted break-all">
-                                                    {launcher.resolvedWorkspacePath || 'Use selected workspace'}
-                                                </span>
-                                            </button>
-                                        ))
-                                        : (launcher.activeLauncherKind === 'cli' ? cliProviders : acpProviders).map(provider => (
-                                            <button
-                                                key={provider.type}
-                                                type="button"
-                                                className="flex flex-col items-start gap-1 w-full text-left p-3 rounded-2xl border border-border-default/80 bg-surface-primary/90 text-text-primary"
-                                                onClick={() => {
-                                                    const launchKind = launcher.activeLauncherKind === 'cli' ? 'cli' : 'acp'
-                                                    const { options, selectedKey } = buildLaunchWorkspaceOptions({
-                                                        machine: {
-                                                            workspaces: launcher.workspaceRows,
-                                                            defaultWorkspaceId: launcher.defaultWorkspaceId,
-                                                        },
-                                                        currentWorkspaceId: launcher.workspaceChoice !== '__custom__' ? launcher.workspaceChoice : null,
-                                                        currentWorkspacePath: launcher.resolvedWorkspacePath,
-                                                        homeLabel: t('newSession.homeDirectory'),
-                                                        homeDescription: t('newSession.launchWithoutWorkspace'),
-                                                    })
-                                                    launcher.openLaunchConfirm({
-                                                        title: `Launch ${provider.displayName}?`,
-                                                        description: 'Review or change the provider workspace before starting this session.',
-                                                        confirmLabel: `Launch ${launchKind.toUpperCase()}`,
-                                                        workspaceOptions: options,
-                                                        selectedWorkspaceKey: selectedKey,
-                                                        details: [
-                                                            { label: 'Mode', value: launchKind.toUpperCase() },
-                                                            { label: 'Provider', value: provider.displayName },
-                                                        ],
-                                                        showArgsInput: true,
-                                                        showModelInput: launchKind === 'acp',
-                                                        initialArgs: '',
-                                                        initialModel: '',
-                                                        providerType: provider.type,
-                                                    }, async () => {
-                                                        const selectedOption = options.find(option => option.key === launcher.launchConfirmWorkspaceKeyRef.current)
-                                                        launcher.setWorkspaceSelectionFromOption(selectedOption)
-                                                        onLaunchWorkspaceProvider(launchKind, provider.type, {
-                                                            workspaceId: selectedOption?.workspaceId ?? null,
-                                                            workspacePath: selectedOption?.workspacePath ?? null,
-                                                            // "Home directory" option (null id + null path) → useHome:true.
-                                                            useHome: !selectedOption?.workspaceId && !selectedOption?.workspacePath,
-                                                            args: launcher.launchConfirmArgs,
-                                                            model: launcher.launchConfirmModel,
-                                                            resumeSessionId: launcher.launchConfirmResumeId || null,
-                                                        })
-                                                    })
-                                                }}
-                                            >
-                                                <span className="inline-flex items-center gap-1.5 text-xxs font-bold text-text-primary">
-                                                    <ProviderLogo type={provider.type} label={provider.displayName} size={15} />{provider.displayName}
-                                                </span>
-                                                <span className="text-2xs leading-relaxed text-text-muted break-all">
-                                                    {launcher.resolvedWorkspacePath || 'Use selected workspace'}
-                                                </span>
-                                            </button>
-                                        ))}
-                                </div>
-                            </div>
-                        )}
-                        {machineAction.message && (
-                            <div className={`mx-4 mt-2.5 p-3 rounded-xl text-xs leading-relaxed ${machineAction.state === 'error' ? 'text-status-error bg-status-error/10' : 'text-text-secondary bg-surface-primary/90'}`}>
-                                {machineAction.message}
-                                {launcher.canCreateMissingWorkspace && (
-                                    <div className="mt-2">
-                                        <button
-                                            type="button"
-                                            className="inline-flex items-center justify-center min-h-[34px] px-4 rounded-lg bg-surface-primary text-text-primary font-bold text-xs"
-                                            onClick={() => onAddWorkspace(launcher.resolvedWorkspacePath, { createIfMissing: true })}
-                                        >
-                                            {t('machine.mobile.createFolder')}
-                                        </button>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </section>
-                )}
-
                 <section className="flex flex-col gap-0">
                     <div className="text-2xs font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">{t('machine.mobile.inspect')}</div>
                     <div className="grid grid-cols-1 gap-2.5 px-4">
@@ -499,9 +259,6 @@ export default function DashboardMobileMachineScreen({
                                 onClick={onMachineUpgrade}
                             >
                                 <span className="text-sm font-bold text-text-primary">{t('machine.commandCenter.updateToVersion', { version: appVersion })}</span>
-                                <span className="text-xs leading-relaxed text-text-secondary">
-                                    {t('machine.mobile.updateDescription')}
-                                </span>
                             </button>
                         )}
                         <button
@@ -510,9 +267,6 @@ export default function DashboardMobileMachineScreen({
                             onClick={onOpenMachineDetails}
                         >
                             <span className="text-sm font-bold text-text-primary">{t('machine.mobile.machineDetails')}</span>
-                            <span className="text-xs leading-relaxed text-text-secondary">
-                                {t('machine.mobile.machineDetailsDescription')}
-                            </span>
                         </button>
                     </div>
                 </section>

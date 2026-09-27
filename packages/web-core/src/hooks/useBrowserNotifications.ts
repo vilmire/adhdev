@@ -11,6 +11,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import { shouldNotify } from './useNotificationPrefs'
+import { i18next } from '../i18n/config'
 import type { ConversationTarget } from '../components/dashboard/conversation-identity'
 
 interface NotificationOptions {
@@ -133,6 +134,49 @@ export function notify(title: string, body: string, tag?: string) {
     } catch { /* silent — e.g. Service Worker required on some browsers */ }
 }
 
+export type BrowserNotificationKind = 'question' | 'approval' | 'complete' | 'error'
+
+/**
+ * The desktop notification for one status transition, or null (exported for
+ * tests). Title is the agent name; the body is one short localized line —
+ * "Needs approval: <what>", "Finished", … — never a redundant
+ * "<name> — Task complete" + "Agent has finished generating" pair.
+ */
+export function buildBrowserNotificationContent(input: {
+    name: string
+    prev: string | undefined
+    curr: string
+    modalMessage?: string | null
+    questionEntered: boolean
+    onApproval: boolean
+    onComplete: boolean
+    onError: boolean
+}): { kind: BrowserNotificationKind; title: string; body: string } | null {
+    const { name, prev, curr, questionEntered } = input
+    const message = String(input.modalMessage || '').replace(/\s+/g, ' ').trim().slice(0, 120)
+    if (questionEntered && input.onApproval) {
+        return {
+            kind: 'question',
+            title: name,
+            body: message ? i18next.t('event.browser.questionWithMessage', { message }) : i18next.t('event.browser.question'),
+        }
+    }
+    if (input.onApproval && curr === 'waiting_approval' && prev !== 'waiting_approval') {
+        return {
+            kind: 'approval',
+            title: name,
+            body: message ? i18next.t('event.browser.approvalWithMessage', { message }) : i18next.t('event.browser.approval'),
+        }
+    }
+    if (input.onComplete && isManagedStatusWorking(prev) && curr === 'idle') {
+        return { kind: 'complete', title: name, body: i18next.t('event.browser.finished') }
+    }
+    if (input.onError && curr === 'error' && prev !== 'error') {
+        return { kind: 'error', title: name, body: i18next.t('event.browser.error') }
+    }
+    return null
+}
+
 /**
  * Hook that monitors agent states and triggers browser notifications.
  *
@@ -198,45 +242,19 @@ export function useBrowserNotifications(
                 continue
             }
 
-            // Question needs an answer (AskUserQuestion). Rides the approval
-            // pref category (an attention-required prompt) — no separate
-            // 'question' toggle; the throttle is shared too.
-            if (questionEntered && opts.onApproval && shouldNotify('approval')) {
-                const msg = agent.activeModal?.message || 'A question is waiting for your answer'
-                throttledNotify(
-                    `❓ ${name} — Question needs answer`,
-                    msg.slice(0, 120),
-                    `question-${agent.id}`,
-                )
-            }
-
-            // Approval request
-            if (opts.onApproval && shouldNotify('approval') && curr === 'waiting_approval' && prev !== 'waiting_approval') {
-                const msg = agent.activeModal?.message || 'Action requires your approval'
-                throttledNotify(
-                    `🔔 ${name} — Approval needed`,
-                    msg.slice(0, 120),
-                    `approval-${agent.id}`,
-                )
-            }
-
-            // Task complete (generating → idle)
-            if (opts.onComplete && shouldNotify('completion') && isManagedStatusWorking(prev) && curr === 'idle') {
-                throttledNotify(
-                    `✅ ${name} — Task complete`,
-                    'Agent has finished generating',
-                    `complete-${agent.id}`,
-                )
-            }
-
-            // Error
-            if (opts.onError && curr === 'error' && prev !== 'error') {
-                throttledNotify(
-                    `⚠️ ${name} — Error`,
-                    'Agent encountered an error',
-                    `error-${agent.id}`,
-                )
-            }
+            // Title = the agent's name (the notification already says which
+            // app it came from); the body is one short localized line.
+            const notice = buildBrowserNotificationContent({
+                name,
+                prev,
+                curr,
+                modalMessage: agent.activeModal?.message,
+                questionEntered,
+                onApproval: opts.onApproval && shouldNotify('approval'),
+                onComplete: opts.onComplete && shouldNotify('completion'),
+                onError: opts.onError,
+            })
+            if (notice) throttledNotify(notice.title, notice.body, `${notice.kind}-${agent.id}`)
 
             prevStates.current.set(agent.id, curr)
         }

@@ -32,6 +32,13 @@ const LEVEL_NUM: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error:
 const LEVEL_LABEL: Record<LogLevel, string> = { debug: 'DBG', info: 'INF', warn: 'WRN', error: 'ERR' };
 
 let currentLevel: LogLevel = 'info';
+// Terminal (console) output level for the FOREGROUND daemon. Kept separate
+// from `currentLevel` (which still gates the log FILE + remote ring buffer at
+// 'info' as before) so routine INFO telemetry — auth events, provider version
+// probes, TurnLedger migration reports — stops flooding an interactive
+// terminal by default while remaining fully available in the log file and via
+// `--log-level info` / `--verbose`. Errors and warnings still surface.
+let consoleLevel: LogLevel = 'warn';
 
 export function setLogLevel(level: LogLevel): void {
     currentLevel = level;
@@ -39,6 +46,20 @@ export function setLogLevel(level: LogLevel): void {
 }
 
 export function getLogLevel(): LogLevel { return currentLevel; }
+
+/**
+ * Set the terminal-only output level. Does not affect what is written to the
+ * log file or kept in the remote ring buffer — those remain governed by
+ * `setLogLevel` / `currentLevel`. Call this from the foreground daemon entry
+ * point when `--log-level`/`--verbose`/`--dev` explicitly asks for more (or
+ * less) terminal noise than the default `warn`.
+ */
+export function setConsoleLogLevel(level: LogLevel): void {
+    consoleLevel = level;
+}
+
+export function getConsoleLogLevel(): LogLevel { return consoleLevel; }
+
 // ─── File logging (date-based rolling) ──────────────────────────────
 // Logs live under the unified ADHDev home (~/.adhdev/logs/) on every platform,
 // alongside config.json, providers/, history/, daemon.pid and session-host.log.
@@ -430,15 +451,16 @@ const origConsoleWarn = console.warn.bind(console);
  * level filter apply, File logging, Ring buffer save
  */
 export function daemonLog(category: string, msg: string, level: LogLevel = 'info'): void {
- // Level filter (console output)
-    const shouldOutput = LEVEL_NUM[level] >= LEVEL_NUM[currentLevel];
+ // Level filter — file + ring buffer (remote transmission) on `currentLevel`,
+ // terminal echo on the separate, usually-stricter `consoleLevel`. A line
+ // below `currentLevel` is dropped entirely (never written, never echoed);
+ // one at or above `currentLevel` but below `consoleLevel` is still written
+ // to the file/ring buffer, just not echoed to an interactive terminal.
+    const shouldRecord = LEVEL_NUM[level] >= LEVEL_NUM[currentLevel];
+    if (!shouldRecord) return;
 
     const label = LEVEL_LABEL[level];
     const line = `[${ts()}] [${label}] [${category}] ${msg}`;
-
- // Apply the active log level consistently to console, file, and the remote ring buffer.
- // Debug hot paths are useful when explicitly enabled, but should not inflate normal-mode logs.
-    if (!shouldOutput) return;
 
     writeToFile(line);
 
@@ -447,7 +469,9 @@ export function daemonLog(category: string, msg: string, level: LogLevel = 'info
         ringBuffer.splice(0, ringBuffer.length - RING_BUFFER_SIZE);
     }
 
-    origConsoleLog(line);
+    if (LEVEL_NUM[level] >= LEVEL_NUM[consoleLevel]) {
+        origConsoleLog(line);
+    }
 }
 
 // ─── Convenience API ────────────────────────────────

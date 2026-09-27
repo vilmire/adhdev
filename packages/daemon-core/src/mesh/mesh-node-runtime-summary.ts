@@ -123,6 +123,12 @@ export interface MeshNodeRuntimeSummary {
     schemaVersion: number;
     /** The reporting daemon's status instance id. */
     daemonId?: string;
+    /**
+     * Per-process id of the reporting daemon (a new value on every daemon
+     * start). Lets the coordinator tell a restarted member from a late report of
+     * the process it replaced.
+     */
+    daemonBootId?: string;
     daemonBuild?: MeshNodeRuntimeDaemonBuild;
     upgradeFailure?: MeshNodeRuntimeUpgradeFailure;
     sessions: MeshNodeRuntimeSession[];
@@ -331,6 +337,7 @@ export function sanitizeMeshNodeRuntimeSummary(raw: unknown): MeshNodeRuntimeSum
     const upgradeFailure = sanitizeUpgradeFailure(record.upgradeFailure);
     const nodeFacts = normalizeMeshNodeFacts(record.nodeFacts);
     const daemonId = readId(record.daemonId);
+    const daemonBootId = readId(record.daemonBootId);
     const truncated = rawSessions.length > sessions.length && sessions.length >= MESH_NODE_RUNTIME_MAX_SESSIONS;
     const providers = sanitizeProviders(record.providers);
     // Preserved, never defaulted (see MESH_NODE_RUNTIME_SESSION_STAMP_VERSION).
@@ -343,6 +350,7 @@ export function sanitizeMeshNodeRuntimeSummary(raw: unknown): MeshNodeRuntimeSum
     return {
         schemaVersion: MESH_NODE_RUNTIME_SUMMARY_SCHEMA_VERSION,
         ...(daemonId ? { daemonId } : {}),
+        ...(daemonBootId ? { daemonBootId } : {}),
         ...(daemonBuild ? { daemonBuild } : {}),
         ...(upgradeFailure ? { upgradeFailure } : {}),
         sessions,
@@ -368,6 +376,7 @@ export function buildMeshNodeRuntimeSummary(statusMetadata: unknown, nodeFacts?:
     const catalog = providers ?? (Array.isArray(status.availableProviders) ? buildMeshNodeRuntimeProviders(status.availableProviders) : undefined);
     return sanitizeMeshNodeRuntimeSummary({
         daemonId: status.instanceId,
+        daemonBootId: payload.daemonBootId ?? status.daemonBootId,
         daemonBuild: payload.daemonBuild,
         upgradeFailure: payload.upgradeFailure,
         sessions: status.sessions,
@@ -398,6 +407,7 @@ export function computeMeshNodeRuntimeSignature(summary: MeshNodeRuntimeSummary 
     };
     return JSON.stringify([
         summary.daemonId ?? null,
+        summary.daemonBootId ?? null,
         summary.daemonBuild ?? null,
         summary.upgradeFailure ? stripTimes(summary.upgradeFailure) : null,
         summary.sessions.map((s) => stripTimes(s)),

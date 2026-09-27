@@ -1,16 +1,19 @@
 /**
  * The quota-busy fallback toggle must actually be reachable in the UI.
  *
- * Owner requirement: a per-mesh switch, on the SCHEDULING tab, defaulting ON.
- * The daemon-side default is asserted in daemon-core's
+ * Owner requirement: a per-mesh switch, defaulting ON. Since the 2026-09-27
+ * settings simplification it lives in the Advanced tab's "Quota routing"
+ * group, next to the quota thresholds it belongs with (quotaRouting is ONE
+ * nested policy object). The daemon-side default is asserted in daemon-core's
  * mesh-quota-busy-fallback.test.ts; this file guards the half that a
- * typecheck cannot catch — that the control is rendered inside the scheduling
- * tab (not merely defined), that it writes the nested quotaRouting sub-object
- * rather than a flat policy key, and that every shipped locale has its strings.
+ * typecheck cannot catch — that the control is rendered inside a real tab
+ * (not merely defined), that it writes the nested quotaRouting sub-object
+ * rather than a flat policy key, that saving the thresholds does not drop it,
+ * and that every shipped locale has its strings.
  *
- * INJECTION CHECK: deleting the <select> from schedulingTabContent, moving it to
- * another tab, flattening the patch to `onUpdatePolicy({ quotaBusyFallback })`,
- * or dropping a locale key turns this red.
+ * INJECTION CHECK: deleting the Switch from advancedTabContent, flattening the
+ * patch to `onUpdatePolicy({ quotaBusyFallback })`, dropping the carry-over in
+ * the threshold save, or dropping a locale key turns this red.
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -29,34 +32,32 @@ const source = readFileSync(
 )
 
 /**
- * The scheduling tab's JSX, from its declaration to the next TOP-LEVEL tab
- * declaration. Anchored on the `const <name>TabContent` sibling rather than any
- * `const`, since the tab body itself contains nested consts — slicing at the
- * first one would silently truncate the region under test and pass/fail for
- * the wrong reason.
+ * The advanced tab's JSX, from its declaration to the next TOP-LEVEL
+ * declaration. Anchored on the `const <name>TabContent` / `const tabs` sibling
+ * rather than any `const`, since the tab body itself contains nested consts —
+ * slicing at the first one would silently truncate the region under test.
  */
-function schedulingTabSource(): string {
-    const start = source.indexOf('const schedulingTabContent')
+function advancedTabSource(): string {
+    const start = source.indexOf('const advancedTabContent')
     expect(start).toBeGreaterThan(-1)
-    const rest = source.slice(start + 'const schedulingTabContent'.length)
-    const next = rest.search(/\n\s*const \w+TabContent\b/)
+    const rest = source.slice(start + 'const advancedTabContent'.length)
+    const next = rest.search(/\n\s*const (\w+TabContent|tabs)\b/)
     return rest.slice(0, next > -1 ? next : undefined)
 }
 
 describe('quota-busy fallback toggle — placement', () => {
-    it('renders inside the scheduling tab', () => {
-        // Owner: "메시세팅하는곳 스케줄링 탭에 만들어 두면 좋아보임".
-        expect(schedulingTabSource()).toContain('mesh.detail.quotaBusyFallback')
+    it('renders inside the advanced tab, in the quota routing group', () => {
+        const tab = advancedTabSource()
+        expect(tab).toContain('mesh.detail.quotaBusyFallback')
+        expect(tab).toContain('<QuotaPolicyStep')
     })
 
     it('is registered as a real tab the operator can open', () => {
-        expect(source).toMatch(/key:\s*'scheduling'[\s\S]{0,120}content:\s*schedulingTabContent/)
+        expect(source).toMatch(/key:\s*'advanced'[\s\S]{0,160}content:\s*advancedTabContent/)
     })
 
-    it('offers exactly the two on/off choices', () => {
-        const tab = schedulingTabSource()
-        expect(tab).toContain('mesh.detail.quotaBusyFallbackOn')
-        expect(tab).toContain('mesh.detail.quotaBusyFallbackOff')
+    it('is an on/off Switch', () => {
+        expect(advancedTabSource()).toMatch(/<Switch[\s\S]{0,80}checked=\{quotaBusyFallbackOn\}/)
     })
 })
 
@@ -66,15 +67,19 @@ describe('quota-busy fallback toggle — binding', () => {
         // the wrong level and be dropped by the daemon's policy normalizer; not
         // spreading the current value would silently clear the other quota
         // thresholds the operator has configured.
-        expect(schedulingTabSource()).toMatch(
-            /onUpdatePolicy\(\{\s*quotaRouting:\s*\{\s*\.\.\.qr,\s*quotaBusyFallback:/,
+        expect(advancedTabSource()).toMatch(
+            /onUpdatePolicy\(\{\s*quotaRouting:\s*\{\s*\.\.\.quotaRouting,\s*quotaBusyFallback:/,
         )
+    })
+
+    it('saving the thresholds carries the busy fallback over instead of dropping it', () => {
+        expect(advancedTabSource()).toMatch(/quotaRouting\.quotaBusyFallback !== undefined \? \{ quotaBusyFallback: quotaRouting\.quotaBusyFallback \}/)
     })
 
     it('treats only an explicit false as off, matching the daemon default', () => {
         // Default ON: an unset field must render as "on", so the UI and
         // resolveQuotaRoutingPolicy cannot disagree about what a fresh mesh does.
-        expect(schedulingTabSource()).toContain('qr.quotaBusyFallback !== false')
+        expect(source).toContain('quotaRouting.quotaBusyFallback !== false')
     })
 })
 
@@ -82,8 +87,6 @@ describe('quota-busy fallback toggle — i18n', () => {
     const KEYS = [
         'quotaBusyFallback',
         'quotaBusyFallbackHint',
-        'quotaBusyFallbackOn',
-        'quotaBusyFallbackOff',
     ]
 
     for (const [locale, bundle] of Object.entries(LOCALES)) {

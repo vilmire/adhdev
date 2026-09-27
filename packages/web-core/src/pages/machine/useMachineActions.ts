@@ -7,7 +7,7 @@
 import { useState, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatIdeType } from '../../utils/daemon-utils'
-import { eventManager } from '../../managers/EventManager'
+import { describeToastError, eventManager } from '../../managers/EventManager'
 import type { LogEntry, IdeSessionEntry } from './types'
 import { useLaunchCli } from '../../context/LaunchCliContext'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
@@ -61,11 +61,20 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         onDefaultWorkspaceChangedRef.current = fn
     }, [])
 
-    const addLog = useCallback((level: LogEntry['level'], message: string, showToast = false) => {
-        setLogs(prev => [...prev.slice(-100), { timestamp: Date.now(), level, message }])
+    /**
+     * Log a machine action and optionally toast it. `details` is the raw
+     * daemon/transport error: the toast shows the short localized `message`
+     * and keeps the raw text behind its "Details" expander; the action log
+     * records both.
+     */
+    const addLog = useCallback((level: LogEntry['level'], message: string, showToast = false, details?: unknown) => {
+        const detailText = describeToastError(details)
+        const logMessage = detailText && detailText !== message ? `${message} — ${detailText}` : message
+        setLogs(prev => [...prev.slice(-100), { timestamp: Date.now(), level, message: logMessage }])
         setTimeout(() => logsEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
         if (showToast) {
-            eventManager.showToast(message, level === 'error' ? 'warning' : level === 'warn' ? 'warning' : 'success')
+            if (level === 'error' || level === 'warn') eventManager.showErrorToast(message, details)
+            else eventManager.showToast(message, 'success')
         }
     }, [logsEndRef])
 
@@ -79,16 +88,17 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
     const handleLaunchIde = useCallback(async (ideType: string, opts?: { workspace?: string; useDefaultWorkspace?: boolean }) => {
         if (!machineId || launchingIde) return false
         setLaunchingIde(ideType)
-        addLog('info', `Launching ${formatIdeType(ideType)}${opts?.workspace ? ` in ${opts.workspace}` : ''}...`)
+        addLog('info', t('machine.actions.launching', { name: formatIdeType(ideType) }))
         try {
             const body: Record<string, unknown> = { ideType, enableCdp: true }
             if (opts?.workspace?.trim()) body.workspace = opts.workspace.trim()
             else if (opts?.useDefaultWorkspace) body.useDefaultWorkspace = true
             const res: any = await sendDaemonCommand(machineId, 'launch_ide', body)
-            addLog(res?.success ? 'info' : 'error', res?.success ? t('machine.actions.launched', { name: formatIdeType(ideType) }) : `Failed: ${res?.error}`, true)
+            if (res?.success) addLog('info', t('machine.actions.launched', { name: formatIdeType(ideType) }), true)
+            else addLog('error', t('machine.actions.launchFailed', { name: formatIdeType(ideType) }), true, res?.error)
             return !!res?.success
         } catch (e: any) {
-            addLog('error', `Launch error: ${e.message}`, true)
+            addLog('error', t('machine.actions.launchFailed', { name: formatIdeType(ideType) }), true, e)
             return false
         }
         finally { setLaunchingIde(null) }
@@ -106,7 +116,7 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         }
         const cliArgs = argsStr ? argsStr.split(/\s+/).filter(Boolean) : undefined
         const dirHint = dir?.trim() || (workspaceId ? `(saved id)` : useDefaultWorkspace ? '(default workspace)' : useHome ? '(home)' : '')
-        addLog('info', `Launching ${cliType}${dirHint ? ` in ${dirHint}` : ''}${model ? ` (model: ${model})` : ''}...`)
+        addLog('info', t('machine.actions.launching', { name: cliType }), false, [dirHint, model].filter(Boolean).join(' · ') || undefined)
         setLaunchingAgentType(cliType)
         try {
             const body: Record<string, unknown> = { cliType, cliArgs, initialModel: model || undefined }
@@ -119,20 +129,20 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
             const payload = res?.result || res
             if (res?.success) {
                 addLog('info', t('machine.actions.launched', { name: cliType }), true)
-                if (payload?.launchSource === 'home') addLog('info', `📂 Running in home directory (explicit choice)`)
-                else if (payload?.launchSource === 'defaultWorkspace') addLog('info', `📂 Using default workspace (explicit choice)`)
+                if (payload?.launchSource === 'home') addLog('info', t('machine.actions.runningInHome'))
+                else if (payload?.launchSource === 'defaultWorkspace') addLog('info', t('machine.actions.usingDefaultWorkspace'))
                 return { success: true as const, sessionId: payload?.sessionId as string | undefined }
             } else {
-                addLog('error', `Failed: ${res?.error || payload?.error}`, true)
+                addLog('error', t('machine.actions.launchFailed', { name: cliType }), true, res?.error || payload?.error)
                 if (res?.code === 'WORKSPACE_LAUNCH_CONTEXT_REQUIRED') setLaunchPick({ cliType, argsStr, model })
                 return { success: false as const, sessionId: payload?.sessionId as string | undefined }
             }
         } catch (e: any) {
             if (isTransientLaunchTimeout(e)) {
-                addLog('warn', `${cliType} launch requested — waiting for session to appear...`, true)
+                addLog('warn', t('machine.actions.launchPending', { name: cliType }), true)
                 return { success: false as const, pending: true }
             }
-            addLog('error', `Launch error: ${e.message}`, true)
+            addLog('error', t('machine.actions.launchFailed', { name: cliType }), true, e)
             return { success: false as const }
         } finally {
             setLaunchingAgentType(null)
@@ -163,15 +173,15 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         try {
             const res: any = await sendDaemonCommand(machineId, 'stop_cli', { cliType, dir, targetSessionId: entryId })
             if (res?.success) addLog('info', t('machine.actions.stopped', { name: cliType }), true)
-            else addLog('error', t('machine.actions.stopFailed', { error: res?.error || t('machine.actions.unknownError') }), true)
-        } catch (e: any) { addLog('error', t('machine.actions.stopFailed', { error: e.message }), true) }
+            else addLog('error', t('machine.actions.stopFailed'), true, res?.error)
+        } catch (e: any) { addLog('error', t('machine.actions.stopFailed'), true, e) }
     }, [machineId, addLog, confirm, sendDaemonCommand, t])
 
     const handleRestartIde = useCallback(async (ide: IdeSessionEntry) => {
         try {
             await sendDaemonCommand(ide.daemonId, 'restart_ide', { ideType: ide.type })
             addLog('info', t('machine.actions.restartInitiated', { name: formatIdeType(ide.type) }), true)
-        } catch (e: any) { addLog('error', t('machine.actions.restartFailed', { error: e.message }), true) }
+        } catch (e: any) { addLog('error', t('machine.actions.restartFailed'), true, e) }
     }, [addLog, sendDaemonCommand, t])
 
     const handleStopIde = useCallback(async (ide: IdeSessionEntry) => {
@@ -184,8 +194,8 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         try {
             const res: any = await sendDaemonCommand(ide.daemonId, 'stop_ide', { ideType: ide.type, killProcess: true })
             if (res?.success) addLog('info', t('machine.actions.stopped', { name: formatIdeType(ide.type) }), true)
-            else addLog('error', t('machine.actions.stopFailed', { error: res?.error || t('machine.actions.unknownError') }), true)
-        } catch (e: any) { addLog('error', t('machine.actions.stopFailed', { error: e.message }), true) }
+            else addLog('error', t('machine.actions.stopFailed'), true, res?.error)
+        } catch (e: any) { addLog('error', t('machine.actions.stopFailed'), true, e) }
     }, [addLog, confirm, sendDaemonCommand, t])
 
     const handleDetectIdes = useCallback(async () => {
@@ -193,7 +203,7 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         try {
             const res: any = await sendDaemonCommand(machineId, 'detect_ides', {})
             addLog('info', t('machine.actions.idesFound', { count: (res?.result || []).length }), true)
-        } catch (e: any) { addLog('error', `Detection failed: ${e.message}`, true) }
+        } catch (e: any) { addLog('error', t('machine.actions.detectFailed'), true, e) }
     }, [machineId, addLog, sendDaemonCommand, t])
 
     const handleWorkspaceAdd = useCallback(async (path: string) => {
@@ -202,17 +212,17 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         try {
             const res: any = await sendDaemonCommand(machineId, 'workspace_add', { path: path.trim() })
             if (res?.success) {
-                addLog('info', `Workspace added: ${path.trim()}`)
+                addLog('info', t('machine.actions.workspaceAdded'), false, path.trim())
                 return true
             }
-            addLog('error', res?.error || 'workspace_add failed')
+            addLog('error', t('machine.actions.workspaceActionFailed'), false, res?.error)
             return false
         } catch (e: any) {
-            addLog('error', e.message)
+            addLog('error', t('machine.actions.workspaceActionFailed'), false, e)
             return false
         }
         finally { setWorkspaceBusy(false) }
-    }, [machineId, addLog, sendDaemonCommand])
+    }, [machineId, addLog, sendDaemonCommand, t])
 
     // Confirmation is the caller's job (inline two-step button in
     // ManagedWorkspacesSection) — window.confirm is silently auto-dismissed in
@@ -223,8 +233,8 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         try {
             const res: any = await sendDaemonCommand(machineId, 'workspace_remove', { id })
             if (res?.success) addLog('info', t('machine.actions.workspaceRemoved'), true)
-            else addLog('error', res?.error || 'workspace_remove failed', true)
-        } catch (e: any) { addLog('error', e.message, true) }
+            else addLog('error', t('machine.actions.workspaceActionFailed'), true, res?.error)
+        } catch (e: any) { addLog('error', t('machine.actions.workspaceActionFailed'), true, e) }
         finally { setWorkspaceBusy(false) }
     }, [machineId, addLog, sendDaemonCommand, t])
 
@@ -239,8 +249,8 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
                 const dp = typeof res.defaultWorkspacePath === 'string' ? res.defaultWorkspacePath : ''
                 if (dp) onDefaultWorkspaceChangedRef.current?.(dp)
             }
-            else addLog('error', res?.error || 'workspace_set_default failed', true)
-        } catch (e: any) { addLog('error', e.message, true) }
+            else addLog('error', t('machine.actions.workspaceActionFailed'), true, res?.error)
+        } catch (e: any) { addLog('error', t('machine.actions.workspaceActionFailed'), true, e) }
         finally { setWorkspaceBusy(false) }
     }, [machineId, addLog, sendDaemonCommand, t])
 
@@ -257,10 +267,10 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
                 addLog('info', t('machine.actions.workspaceLabelUpdated'), true)
                 return true
             }
-            addLog('error', res?.error || t('machine.managedWorkspaces.renameFailed'), true)
+            addLog('error', t('machine.managedWorkspaces.renameFailed'), true, res?.error)
             return false
         } catch (e: any) {
-            addLog('error', e.message, true)
+            addLog('error', t('machine.managedWorkspaces.renameFailed'), true, e)
             return false
         } finally {
             setWorkspaceBusy(false)
@@ -274,13 +284,13 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         try {
             const res: any = await sendDaemonCommand(machineId, 'workspace_set_default', { path: p })
             if (res?.success) {
-                addLog('info', 'Default workspace set from history')
+                addLog('info', t('machine.actions.defaultWorkspaceUpdated'))
                 onDefaultWorkspaceChangedRef.current?.(p)
             }
-            else addLog('error', res?.error || 'Could not set default (path missing on disk?)')
-        } catch (e: any) { addLog('error', e.message) }
+            else addLog('error', t('machine.actions.workspaceActionFailed'), false, res?.error || t('machine.actions.pathMissing'))
+        } catch (e: any) { addLog('error', t('machine.actions.workspaceActionFailed'), false, e) }
         finally { setWorkspaceBusy(false) }
-    }, [machineId, addLog, sendDaemonCommand])
+    }, [machineId, addLog, sendDaemonCommand, t])
 
     const handleSaveNickname = useCallback(async () => {
         if (!machineId) return
@@ -294,13 +304,13 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
                         nickname: nicknameInput,
                     })
                 } catch (e: any) {
-                    addLog('warn', `Live nickname updated, but account sync failed: ${e.message}`)
+                    addLog('warn', t('machine.actions.nicknameSyncFailed'), false, e)
                 }
             }
-            addLog('info', `Nickname set to "${nicknameInput || '(cleared)'}"`)
+            addLog('info', t('machine.actions.nicknameSaved'))
             setEditingNickname(false)
-        } catch (e: any) { addLog('error', `Failed: ${e.message}`) }
-    }, [machineId, nicknameInput, registeredMachineId, addLog, onNicknameSynced, sendDaemonCommand])
+        } catch (e: any) { addLog('error', t('machine.actions.nicknameFailed'), true, e) }
+    }, [machineId, nicknameInput, registeredMachineId, addLog, onNicknameSynced, sendDaemonCommand, t])
 
     return {
         // State

@@ -41,7 +41,8 @@ import MeshBlueprintGraph from './MeshBlueprintGraph'
 import BlueprintViewSwitch from './BlueprintViewSwitch'
 import { snapshotHasStructure } from './blueprintGraphModel'
 import { readBlueprintViewMode, resolveBlueprintViewMode, writeBlueprintViewMode, type BlueprintViewMode } from './blueprintViewMode'
-import { MeshOverviewDetailModal } from './MeshOverviewCards'
+import { MeshOverviewDetailModal, useDetailStack } from './MeshOverviewCards'
+import { InfoTip, Tooltip } from '../ui/InfoTip'
 import {
     BLUEPRINT_GRAPH_INITIAL_LIMIT,
     BLUEPRINT_GRAPH_LOAD_MORE_STEP,
@@ -95,12 +96,14 @@ interface RoutePreviewNode {
 const slotLabel = routePreviewSlotLabel
 
 
-export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonCommand, emptyMessage }: {
+export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonCommand, emptyMessage, refreshToken }: {
     tasks: RepoMeshQueueTask[]
     status: RepoMeshStatus
     daemonId?: string | null
     sendDaemonCommand?: ((id: string, type: string, data?: Record<string, unknown>) => Promise<any>) | null
     emptyMessage?: string
+    /** Bumped by the host's single Refresh control — reloads the graphs too. */
+    refreshToken?: number
 }) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
@@ -113,7 +116,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     const [graphsLoading, setGraphsLoading] = useState(false)
     const [graphLimit, setGraphLimit] = useState(BLUEPRINT_GRAPH_INITIAL_LIMIT)
     /** Shared overview detail modal — task rows and gate rows both open here. */
-    const [detail, setDetail] = useState<import('./MeshOverviewCards').DetailSelection | null>(null)
+    const { detail, canGoBack, open: setDetail, back: backDetail, close: closeDetail, filter: filterDetail } = useDetailStack()
 
 
     const [schedDetailOpen, setSchedDetailOpen] = useState(false)
@@ -191,15 +194,15 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     }, [status])
 
     /** Shared by List rows and Graph nodes — one open-task / open-gate behaviour. */
-    const openQueueTask = useCallback((task: RepoMeshQueueTask) => setDetail({ kind: 'queue', task }), [])
+    const openQueueTask = useCallback((task: RepoMeshQueueTask) => setDetail({ kind: 'queue', task }), [setDetail])
     const openGate = useCallback((graph: MeshGraphView, nodeId: string, gate?: MeshGraphGateView) => {
         setDetail({ kind: 'gate', graph, nodeId, gate: gate ?? null })
-    }, [])
+    }, [setDetail])
 
     const openMission = useCallback((missionId: string) => {
         const mission = ((status as RepoMeshStatus).missions ?? []).find(candidate => candidate.id === missionId)
         if (mission) setDetail({ kind: 'mission', mission })
-    }, [status])
+    }, [setDetail, status])
 
     // missionId → title, so mission chips and group headers read as names.
     const missionTitles = useMemo(() => {
@@ -237,10 +240,17 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     }, [canCommand, daemonId, graphLimit, meshId, sendDaemonCommand])
 
     useEffect(() => { void refreshGraphs() }, [refreshGraphs])
+    // The dialog header owns the one Refresh control; follow its token.
+    const lastRefreshToken = useRef(refreshToken)
+    useEffect(() => {
+        if (refreshToken === undefined || refreshToken === lastRefreshToken.current) return
+        lastRefreshToken.current = refreshToken
+        void refreshGraphs()
+    }, [refreshGraphs, refreshToken])
     // Drop a gate detail whose graph left the list (e.g. pagination change).
     useEffect(() => {
-        setDetail(current => current?.kind === 'gate' && !graphs.some(g => g.graphId === current.graph.graphId) ? null : current)
-    }, [graphs])
+        filterDetail(current => !(current.kind === 'gate' && !graphs.some(g => g.graphId === current.graph.graphId)))
+    }, [filterDetail, graphs])
 
     // Load the full difficulty matrix in one sweep — the point of the panel is
     // "which slot matches next, per difficulty, at a glance", so it must not
@@ -340,7 +350,13 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
             )}
             {!graphsLoading && (
                 <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-3xs text-text-muted">
-                    <span>{t('mesh.graphs.shown', { count: graphs.length })}</span>
+                    <Tooltip content={[
+                        t('mesh.graphs.shown', { count: graphs.length }),
+                        graphPagination.atServerLimit ? t('mesh.graphs.serverLimitHidden', { count: graphPagination.hiddenCount }) : null,
+                        graphPagination.atServerLimit ? t('mesh.graphs.serverLimitReached') : null,
+                    ].filter(Boolean).join('\n')}>
+                        <span className="tabular-nums">{graphs.length}{graphPagination.atServerLimit ? '+' : ''}</span>
+                    </Tooltip>
                     {graphPagination.canLoadMore && (
                         <button
                             type="button"
@@ -354,16 +370,8 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                             })}
                         </button>
                     )}
-                    {graphPagination.atServerLimit && (
-                        <span title={t('mesh.graphs.serverLimitReached')}>
-                            · {t('mesh.graphs.serverLimitHidden', { count: graphPagination.hiddenCount })}
-                        </span>
-                    )}
                 </div>
             )}
-            <button type="button" className="btn btn-sm btn-secondary flex shrink-0 items-center" disabled={graphsLoading || !canCommand} onClick={() => void refreshGraphs()} title={t('mesh.graphs.refresh')} aria-label={t('mesh.graphs.refresh')}>
-                <IconRefresh size={13} />
-            </button>
         </>
     )
 
@@ -454,10 +462,9 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                             </button>
                         </div>
                         {schedError && <div className="text-3xs text-red-400">{schedError}</div>}
-                        <div className="mb-1.5 text-4xs leading-4 text-text-muted">
-                            {t('mesh.blueprint.schedUnpinnedTitle')}
-                            {' · '}
-                            {t('mesh.blueprint.schedPointInTime')}
+                        <div className="mb-1.5 flex items-center gap-1 text-4xs leading-4 text-text-muted">
+                            <span>{t('mesh.blueprint.schedPrediction')}</span>
+                            <InfoTip content={`${t('mesh.blueprint.schedUnpinnedTitle')}\n${t('mesh.blueprint.schedPointInTime')}`} size={12} />
                         </div>
                         {/* Per-machine plan quota at a glance — the same card the
                             Status tab renders, so the two surfaces cannot drift. */}
@@ -613,7 +620,8 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                 <MeshOverviewDetailModal
                     meshTheme={meshTheme}
                     detail={detail}
-                    onClose={() => setDetail(null)}
+                    onClose={closeDetail}
+                    onBack={canGoBack ? backDetail : undefined}
                     daemonId={daemonId}
                     meshId={meshId}
                     sendDaemonCommand={sendDaemonCommand}

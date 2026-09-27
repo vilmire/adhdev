@@ -30,6 +30,7 @@ import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import type { MagiSynthesis, MagiResponseSource } from '@adhdev/mesh-shared'
 import { useTheme } from '../../hooks/useTheme'
 import Button from '../ui/Button'
+import { InfoTip } from '../ui/InfoTip'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import { nodeDisplayName } from './MeshObservabilitySurface/meshSurfaceHelpers'
 
@@ -216,7 +217,10 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                         {/* Raw answers — live-only, not persisted */}
                         <div className={`mt-3 pt-3 ${sepClass}`}>
                             <div className="flex flex-wrap items-center gap-2">
-                                <span className={`text-2xs font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>{t('mesh.synthesis.rawReplicaAnswers')}</span>
+                                <span className={`inline-flex items-center gap-1 text-2xs font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>
+                                    {t('mesh.synthesis.rawReplicaAnswers')}
+                                    <InfoTip content={t('mesh.synthesis.rawNotice')} size={12} />
+                                </span>
                                 <Button
                                     variant="secondary"
                                     size="sm"
@@ -229,15 +233,13 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                                     {rawState?.loading ? t('mesh.synthesis.loading') : rawState?.fetched ? t('mesh.synthesis.reloadRaw') : t('mesh.synthesis.loadRaw')}
                                 </Button>
                             </div>
-                            <p className={`mt-1 text-2xs ${meshTheme.textMuted}`}>
-                                {t('mesh.synthesis.rawNotice')}
-                            </p>
                             {rawState?.error && (
                                 <div className={`mt-2 text-2xs ${dk ? 'text-rose-300' : 'text-rose-600'}`}>{rawState.error}</div>
                             )}
                             {rawState?.fetched && !rawState.error && rawReplicas.length === 0 && (
-                                <div className={`mt-2 text-2xs ${meshTheme.textMuted}`}>
-                                    {t('mesh.synthesis.rawEmpty')}
+                                <div className={`mt-2 flex items-center gap-1 text-2xs ${meshTheme.textMuted}`}>
+                                    <span>{t('mesh.synthesis.rawUnavailable')}</span>
+                                    <InfoTip content={t('mesh.synthesis.rawEmpty')} size={12} />
                                 </div>
                             )}
                             {rawReplicas.length > 0 && (

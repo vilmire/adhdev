@@ -1,26 +1,28 @@
 /**
- * Notifications — Unified notification management page.
+ * Notifications — alert toggles only.
  *
- * Combines:
- *  1. Global master / browser notification toggles (from Settings)
- *  2. Provider-level alert settings (autoApprove, approvalAlert, noProgressAlert)
- *     grouped by category with bulk "Apply to All" controls.
- *
- * This replaces the scattered notification UI across Settings and ProvidersTab.
+ *  1. Global master / browser notification toggles (+ cloud push, injected).
+ *  2. Agent alerts: "Approval needed" and "No progress", applied to every
+ *     provider on every online machine. Per-provider fine-tuning lives in
+ *     Machine → Providers (linked), and auto-approve is NOT a notification —
+ *     it is configured in Provider settings, New Session → Advanced, and the
+ *     mesh's Advanced settings.
  */
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Section } from '../components/ui/Section'
 import { ToggleRow } from '../components/settings/ToggleRow'
+import { InfoTip } from '../components/ui/InfoTip'
+import { RefreshButton } from '../components/ui/RefreshButton'
+import { Link, useInRouterContext } from 'react-router-dom'
 import { useNotificationPrefs } from '../hooks/useNotificationPrefs'
 import { requestNotificationPermission } from '../hooks/useBrowserNotifications'
 import { useTransport } from '../context/TransportContext'
 import type { ProviderSettingsEntry, ProviderInfo } from './machine/types'
 import { buildProviderSettingsEntries, extractProviderSettingsPayload } from './machine/providerSettings'
-import { IconBell, IconMonitor, IconCheckCircle, IconZap, IconPlug, IconVolume } from '../components/Icons'
+import { IconBell, IconMonitor, IconCheckCircle, IconZap, IconPlug, IconVolume, IconClock } from '../components/Icons'
 import { getMachineDisplayName } from '../utils/daemon-utils'
-import { localizeProviderSetting } from '../utils/provider-setting-copy'
 
 /* ─── helpers ──────────────────────────────────────────────── */
 
@@ -35,35 +37,31 @@ interface DaemonMachine {
 
 // 'longGeneratingAlert'/'longGeneratingThresholdSec' are legacy aliases for the renamed
 // 'noProgressAlert'/'noProgressThresholdSec' keys; both are recognized for backward compat.
-const NOTIFICATION_SETTING_KEYS = new Set(['autoApprove', 'approvalAlert', 'noProgressAlert', 'noProgressThresholdSec', 'longGeneratingAlert', 'longGeneratingThresholdSec'])
+const NOTIFICATION_SETTING_KEYS = new Set(['approvalAlert', 'noProgressAlert', 'noProgressThresholdSec', 'longGeneratingAlert', 'longGeneratingThresholdSec'])
+
+/** The agent alerts this page controls, each mapped to its provider setting key(s). */
+export const AGENT_ALERT_ROWS = [
+    { id: 'approval', keys: ['approvalAlert'] },
+    { id: 'noProgress', keys: ['noProgressAlert', 'longGeneratingAlert'] },
+] as const
 
 function filterNotificationSettings(schema: ProviderSettingsEntry['schema']): ProviderSettingsEntry['schema'] {
     return schema.filter((setting) => NOTIFICATION_SETTING_KEYS.has(setting.key))
 }
 
-/* Toggle‑switch component (self-contained — small) */
-function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+function MachineProvidersLinkInRouter({ machineId, children }: { machineId: string; children: React.ReactNode }) {
     return (
-        <button
-            onClick={() => !disabled && onChange(!checked)}
-            className="w-10 h-[22px] rounded-[11px] border-none relative cursor-pointer transition-colors duration-200"
-            style={{ background: checked ? '#8b5cf6' : 'var(--border-subtle)', opacity: disabled ? 0.4 : 1 }}
-            disabled={disabled}
-        >
-            <div
-                className="w-4 h-4 rounded-full bg-white absolute top-[3px] transition-[left] duration-200 shadow-[0_1px_3px_rgba(0,0,0,0.3)]"
-                style={{ left: checked ? 21 : 3 }}
-            />
-        </button>
+        <Link to={`/machines/${machineId}`} state={{ initialMachineTab: 'providers' }} className="text-accent-primary hover:underline">
+            {children}
+        </Link>
     )
 }
 
-/* ─── Category Colors ──────────────────────────────────────── */
-const CAT_COLORS: Record<string, { bg: string; text: string; border: string }> = {
-    acp: { bg: 'rgba(139,92,246,0.08)', text: '#a78bfa', border: 'rgba(139,92,246,0.2)' },
-    cli: { bg: 'rgba(59,130,246,0.08)', text: '#60a5fa', border: 'rgba(59,130,246,0.2)' },
-    ide: { bg: 'rgba(34,197,94,0.08)', text: '#86efac', border: 'rgba(34,197,94,0.2)' },
-    extension: { bg: 'color-mix(in srgb, var(--status-warning) 8%, transparent)', text: 'var(--status-warning)', border: 'color-mix(in srgb, var(--status-warning) 20%, transparent)' },
+/** Link to one machine's Providers tab (router-aware; plain anchor outside a router). */
+function MachineProvidersLink({ machineId, children }: { machineId: string; children: React.ReactNode }) {
+    const inRouter = useInRouterContext()
+    if (inRouter) return <MachineProvidersLinkInRouter machineId={machineId}>{children}</MachineProvidersLinkInRouter>
+    return <a href={`/machines/${machineId}`} className="text-accent-primary hover:underline">{children}</a>
 }
 
 /* ─── Main Component ──────────────────────────────────────── */
@@ -103,7 +101,6 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
     /* ─── Provider alert settings (from daemons) ─── */
     const [settings, setSettings] = useState<Record<string, ProviderSettingsEntry[]>>({}) // machineId → entries
     const [loading, setLoading] = useState(false)
-    const [savingKey, setSavingKey] = useState<string | null>(null)
 
     const onlineMachines = useMemo(() => machines.filter(m => m.status === 'online'), [machines])
 
@@ -164,26 +161,8 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
         return flat
     }, [settings, onlineMachines])
 
-    // Group by category
-    const categories = useMemo(() => {
-        const cats: Record<string, typeof allEntries> = {}
-        for (const e of allEntries) {
-            if (!cats[e.category]) cats[e.category] = []
-            cats[e.category].push(e)
-        }
-        // Sort categories: acp, cli, ide, extension, then anything else
-        const order = ['acp', 'cli', 'ide', 'extension', 'unknown']
-        const sorted = order.filter(c => cats[c])
-        // Add any categories not in the predefined order
-        for (const c of Object.keys(cats)) {
-            if (!sorted.includes(c)) sorted.push(c)
-        }
-        return sorted.map(c => ({ category: c, entries: cats[c] }))
-    }, [allEntries])
-
     // Handler for setting a single provider setting
     const handleSet = useCallback(async (machineId: string, providerType: string, key: string, value: unknown) => {
-        setSavingKey(`${providerType}.${key}`)
         // Optimistic update
         setSettings(prev => {
             const next = { ...prev }
@@ -195,16 +174,24 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
         try {
             await sendCommand(machineId, 'set_provider_setting', { providerType, key, value })
         } catch { /* rollback on next refresh */ }
-        setSavingKey(null)
     }, [sendCommand])
 
-    // Bulk toggle: set key=value for all providers in a category across all machines
-    const handleBulk = useCallback(async (category: string, key: string, value: boolean) => {
-        const targets = allEntries.filter(e => e.category === category && e.schema.some(s => s.key === key))
-        for (const t of targets) {
-            await handleSet(t.machineId, t.type, key, value)
+    // One switch per alert, applied to every provider (all machines) that has it.
+    const alertStats = useMemo(() => AGENT_ALERT_ROWS.map(row => {
+        const withKey = allEntries
+            .map(entry => ({ entry, key: row.keys.find(key => entry.schema.some(s => s.key === key)) }))
+            .filter((item): item is { entry: typeof allEntries[number]; key: typeof row.keys[number] } => !!item.key)
+        const onCount = withKey.filter(({ entry, key }) => !!(entry.values[key] ?? entry.schema.find(s => s.key === key)?.default)).length
+        return { id: row.id, targets: withKey, total: withKey.length, onCount }
+    }).filter(stat => stat.total > 0), [allEntries])
+
+    const handleAlertToggle = useCallback(async (id: string, value: boolean) => {
+        const stat = alertStats.find(item => item.id === id)
+        if (!stat) return
+        for (const { entry, key } of stat.targets) {
+            await handleSet(entry.machineId, entry.type, key, value)
         }
-    }, [allEntries, handleSet])
+    }, [alertStats, handleSet])
 
     // Browser pref helper
     const setBrowserPref = (key: string, value: boolean) => {
@@ -212,7 +199,6 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
         onBrowserPrefChange?.(key, value)
     }
 
-    const multiMachine = onlineMachines.length > 1
 
     return (
         <div className="flex flex-col h-full">
@@ -241,31 +227,45 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                         )}
 
                         {prefs.globalEnabled && (
-                            <div className="ml-5 pl-3 border-l-2 border-border-subtle flex flex-col gap-2">
-                                <div className="text-2xs text-text-muted">
-                                    {renderPushSection ? t('notifications.browserBackgroundInfoWithPush') : t('notifications.browserBackgroundInfo')}
-                                </div>
+                            <div className="ml-5 pl-3 border-l-2 border-border-subtle flex flex-wrap items-center gap-2" data-testid="browser-permission-row">
+                                {/* Status chip + one ⓘ; the long explanations live in the popover. */}
+                                {browserPermission === 'granted' && (
+                                    <span className="inline-flex items-center rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-3xs font-semibold text-emerald-400">
+                                        {t('notifications.permissionAllowedChip')}
+                                    </span>
+                                )}
                                 {browserPermission === 'default' && (
-                                    <div className="flex flex-wrap items-center gap-2 text-2xs text-amber-300">
-                                        <span>{t('notifications.permissionDefault')}</span>
+                                    <>
+                                        <span className="inline-flex items-center rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-3xs font-semibold text-amber-400">
+                                            {t('notifications.permissionNeededChip')}
+                                        </span>
                                         <button
                                             onClick={() => { void requestNotificationPermission().then(setBrowserPermission) }}
-                                            className="px-2 py-0.5 rounded border border-border-default bg-bg-glass text-text-secondary hover:text-text-primary transition-colors"
+                                            className="px-2 py-0.5 rounded border border-border-default bg-bg-glass text-2xs text-text-secondary hover:text-text-primary transition-colors"
                                         >
                                             {t('notifications.allowNotifications')}
                                         </button>
-                                    </div>
+                                    </>
                                 )}
                                 {browserPermission === 'denied' && (
-                                    <div className="text-2xs text-amber-300">
-                                        {t('notifications.permissionDenied')}
-                                    </div>
+                                    <span className="inline-flex items-center rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-3xs font-semibold text-amber-400">
+                                        {t('notifications.permissionBlockedChip')}
+                                    </span>
                                 )}
                                 {browserPermission === 'unsupported' && (
-                                    <div className="text-2xs text-amber-300">
-                                        {t('notifications.permissionUnsupported')}
-                                    </div>
+                                    <span className="inline-flex items-center rounded-full border border-border-subtle bg-bg-glass px-2 py-0.5 text-3xs font-semibold text-text-muted">
+                                        {t('notifications.permissionUnsupportedChip')}
+                                    </span>
                                 )}
+                                <InfoTip
+                                    content={[
+                                        renderPushSection ? t('notifications.browserBackgroundInfoWithPush') : t('notifications.browserBackgroundInfo'),
+                                        browserPermission === 'default' ? t('notifications.permissionDefault')
+                                            : browserPermission === 'denied' ? t('notifications.permissionDenied')
+                                                : browserPermission === 'unsupported' ? t('notifications.permissionUnsupported')
+                                                    : '',
+                                    ].filter(Boolean).join('\n\n')}
+                                />
                             </div>
                         )}
 
@@ -310,16 +310,13 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                     </div>
                 </Section>
 
-                {/* ═══ Section 2: Provider Alert Rules ═══ */}
+                {/* ═══ Section 2: Agent alerts ═══ */}
                 <Section
                     title={t('notifications.sectionProviderAlerts')}
+                    description={t('notifications.agentAlertsDesc')}
+                    action={<RefreshButton onClick={() => { void fetchAllSettings() }} refreshing={loading} label={t('notifications.refresh')} />}
                     className="mb-4"
                 >
-                    <div className="flex justify-end mb-3 -mt-1">
-                        <button onClick={fetchAllSettings} disabled={loading} className="machine-btn text-2xs">
-                            {loading ? t('notifications.loading') : t('notifications.refresh')}
-                        </button>
-                    </div>
                     {!initialLoaded ? (
                         /* Daemon list still in flight — "no online machines" would be a
                          * claim we cannot make yet (see the initialLoaded prop docs). */
@@ -329,132 +326,44 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                     ) : loading && allEntries.length === 0 ? (
                         <p className="text-sm text-text-muted py-6 text-center">{t('notifications.loadingProviderSettings')}</p>
                     ) : (
-                        <div className="flex flex-col gap-5">
-                            {categories.map(({ category, entries }) => {
-                                const color = CAT_COLORS[category] || CAT_COLORS.cli
-                                // Find common boolean alert keys across all entries in this category
-                                // 'longGeneratingAlert' is the legacy alias for 'noProgressAlert'; both map to the same label.
-                                const alertKeys = ['autoApprove', 'approvalAlert', 'noProgressAlert', 'longGeneratingAlert'] as const
-                                const keyStats = alertKeys.map(key => {
-                                    const withKey = entries.filter(e => e.schema.some(s => s.key === key))
-                                    const onCount = withKey.filter(e => !!(e.values[key] ?? e.schema.find(s => s.key === key)?.default)).length
-                                    return { key, label: key === 'autoApprove' ? t('notifications.keyStatAutoApprove') : key === 'approvalAlert' ? t('notifications.keyStatApprovalAlert') : t('notifications.keyStatNoProgressAlert'), total: withKey.length, onCount }
-                                }).filter(k => k.total > 0)
-
-                                return (
-                                    <div key={category}>
-                                        {/* Category header + bulk controls */}
-                                        <div
-                                            className="px-4 py-3 rounded-xl mb-3"
-                                            style={{ background: color.bg, border: `1px solid ${color.border}` }}
-                                        >
-                                            <div className="flex items-center justify-between mb-2">
-                                                <div className="flex items-center gap-2">
-                                                    <span
-                                                        className="px-2 py-0.5 rounded text-3xs font-bold"
-                                                        style={{ background: color.bg, color: color.text, border: `1px solid ${color.border}` }}
-                                                    >{category.toUpperCase()}</span>
-                                                    <span className="text-2xs text-text-muted">{t('notifications.providerCount', { count: entries.length })}</span>
-                                                </div>
-                                            </div>
-                                            {keyStats.length > 0 && (
-                                                <div className="flex flex-col gap-2">
-                                                    {keyStats.map(({ key, label, total, onCount }) => {
-                                                        const allOn = onCount === total
-                                                        const description = onCount === total
-                                                            ? t('notifications.bulkEnabledAll', { total })
-                                                            : onCount === 0
-                                                                ? t('notifications.bulkDisabledAll', { total })
-                                                                : t('notifications.bulkEnabledSome', { onCount, total })
-                                                        return (
-                                                            <ToggleRow
-                                                                key={key}
-                                                                label={
-                                                                    <span className="flex items-center gap-1.5">
-                                                                        <span>{label}</span>
-                                                                        <span className="text-3xs text-text-muted">({onCount}/{total})</span>
-                                                                    </span>
-                                                                }
-                                                                description={description}
-                                                                checked={allOn}
-                                                                onChange={v => void handleBulk(category, key, v)}
-                                                            />
-                                                        )
-                                                    })}
-                                                </div>
+                        <div className="flex flex-col gap-3" data-testid="agent-alert-toggles">
+                            {alertStats.map(({ id, total, onCount }) => (
+                                <ToggleRow
+                                    key={id}
+                                    label={
+                                        <span className="flex items-center gap-1.5">
+                                            {id === 'approval' ? <IconZap size={15} /> : <IconClock size={15} />}
+                                            <span>{t(`notifications.agentAlert.${id}`)}</span>
+                                            {onCount > 0 && onCount < total && (
+                                                <span className="text-3xs text-text-muted">{t('notifications.mixed')}</span>
                                             )}
-                                        </div>
-
-                                        {/* Per-provider rows (collapsible) */}
-                                        <ProviderCategoryDetail
-                                            entries={entries}
-                                            multiMachine={multiMachine}
-                                            savingKey={savingKey}
-                                            onSet={handleSet}
-                                        />
-                                    </div>
-                                )
-                            })}
+                                        </span>
+                                    }
+                                    description={t(`notifications.agentAlert.${id}Desc`)}
+                                    checked={onCount === total}
+                                    onChange={v => void handleAlertToggle(id, v)}
+                                />
+                            ))}
+                            {/* Per-provider alerts (and auto-approve) are edited where the
+                                provider lives: Machine → Providers. */}
+                            <div className="border-t border-border-subtle pt-3 text-2xs text-text-muted" data-testid="per-provider-link">
+                                {t('notifications.perProviderIntro')}{' '}
+                                {onlineMachines.map((machine, index) => (
+                                    <span key={machine.id}>
+                                        {index > 0 ? ', ' : ''}
+                                        <MachineProvidersLink machineId={machine.id}>
+                                            {onlineMachines.length > 1
+                                                ? getMachineDisplayName(machine, { fallbackId: machine.id })
+                                                : t('notifications.machineProviders')}
+                                        </MachineProvidersLink>
+                                    </span>
+                                ))}
+                            </div>
                         </div>
                     )}
                 </Section>
 
             </div>
-        </div>
-    )
-}
-
-/* ─── Collapsible provider detail per category ─── */
-
-function ProviderCategoryDetail({ entries, multiMachine, savingKey, onSet }: {
-    entries: (ProviderSettingsEntry & { machineId: string; machineLabel: string })[]
-    multiMachine: boolean
-    savingKey: string | null
-    onSet: (machineId: string, providerType: string, key: string, value: unknown) => Promise<void>
-}) {
-    const { t } = useTranslation('common')
-    const [expanded, setExpanded] = useState(false)
-
-    return (
-        <div>
-            <button
-                onClick={() => setExpanded(!expanded)}
-                className="machine-btn text-3xs mb-2"
-            >
-                {expanded ? t('notifications.hideDetails') : t('notifications.showDetails', { count: entries.length })}
-            </button>
-
-            {expanded && (
-                <div className="flex flex-col gap-1.5 ml-2">
-                    {entries.map((prov, i) => (
-                        <div
-                            key={`${prov.machineId}-${prov.type}-${i}`}
-                            className="flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-glass border border-border-subtle text-xs"
-                        >
-                            <span className="text-base shrink-0">{prov.icon}</span>
-                            <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-1.5">
-                                    <span className="font-medium text-text-primary truncate">{prov.displayName}</span>
-                                    {multiMachine && (
-                                        <span className="text-4xs text-text-muted bg-bg-secondary px-1 py-px rounded">{prov.machineLabel}</span>
-                                    )}
-                                </div>
-                            </div>
-                            {prov.schema.filter(s => s.type === 'boolean').map(s => {
-                                const val = !!(prov.values[s.key] ?? s.default)
-                                const saving = savingKey === `${prov.type}.${s.key}`
-                                return (
-                                    <div key={s.key} className="flex items-center gap-1 shrink-0">
-                                        <span className="text-4xs text-text-muted">{localizeProviderSetting(t, s, prov.displayName).label}</span>
-                                        {saving && <span className="text-5xs text-violet-400">...</span>}
-                                        <Toggle checked={val} onChange={v => void onSet(prov.machineId, prov.type, s.key, v)} />
-                                    </div>
-                                )
-                            })}
-                        </div>
-                    ))}
-                </div>
-            )}
         </div>
     )
 }

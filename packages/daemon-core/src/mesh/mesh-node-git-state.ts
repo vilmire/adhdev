@@ -72,6 +72,34 @@ export interface MeshNodeGitStateEntry {
      * fallback until the next push.
      */
     daemonId: string | null;
+    /**
+     * Set when the coordinator knows its held state for this node may be
+     * obsolete — the member daemon's link (re)connected, or the coordinator
+     * restarted / upgraded it (`mesh_restart_daemon`). While set, the refresher
+     * handshakes instead of waiting for the stale threshold, the held runtime is
+     * not trusted as live, and the next report is accepted even if its
+     * timestamp is older than what is held. Not persisted.
+     */
+    handshakePendingSince: number | null;
+    handshakePendingReason: MeshNodeHandshakeReason | null;
+    /** The held runtime's boot id when a `restart` was marked (a report from that same process does not clear it). */
+    handshakePendingBootId: string | null;
+}
+
+export type MeshNodeHandshakeReason = 'reconnect' | 'restart';
+
+/** Whether `next` comes from a different daemon process / build than `prev` (a restart, upgrade or re-install). */
+export function meshNodeRuntimeInstanceChanged(
+    prev: MeshNodeRuntimeSummary | null | undefined,
+    next: MeshNodeRuntimeSummary | null | undefined,
+): boolean {
+    if (!prev || !next) return false;
+    if (prev.daemonBootId && next.daemonBootId && prev.daemonBootId !== next.daemonBootId) return true;
+    if (prev.daemonId && next.daemonId && !daemonIdsEquivalent(prev.daemonId, next.daemonId)) return true;
+    const a = prev.daemonBuild;
+    const b = next.daemonBuild;
+    if (a && b && (a.commit !== b.commit || (a.version ?? null) !== (b.version ?? null) || a.track !== b.track)) return true;
+    return false;
 }
 
 /** One session found in a held runtime summary, with where/when it was observed. */
@@ -180,7 +208,16 @@ function emptyEntry(meshId: string, nodeId: string, workspace: string): MeshNode
         runtimeLastAttemptAt: null,
         runtimeLastFailureAt: null,
         daemonId: null,
+        handshakePendingSince: null,
+        handshakePendingReason: null,
+        handshakePendingBootId: null,
     };
+}
+
+function clearHandshakePending(entry: MeshNodeGitStateEntry): void {
+    entry.handshakePendingSince = null;
+    entry.handshakePendingReason = null;
+    entry.handshakePendingBootId = null;
 }
 
 export class MeshNodeGitStateStore {
@@ -262,10 +299,15 @@ export class MeshNodeGitStateStore {
         const observedAt = typeof args.observedAt === 'number' && Number.isFinite(args.observedAt)
             ? Math.min(args.observedAt, this.now())
             : this.now();
-        // Never let an older report (a delayed push racing a probe) roll the held state back.
-        if (entry.observedAt !== null && observedAt < entry.observedAt && !recovered) {
+        // Never let an older report (a delayed push racing a probe) roll the held state back —
+        // unless a handshake is pending: then the held state is the suspect one (a
+        // restarted member's clock / first report may predate the last held stamp).
+        const pending = entry.handshakePendingSince !== null;
+        if (entry.observedAt !== null && observedAt < entry.observedAt && !recovered && !pending) {
             return { changed: false, entry };
         }
+        // A git report proves the link; a pending RESTART waits for the new process's runtime.
+        if (pending && entry.handshakePendingReason !== 'restart') clearHandshakePending(entry);
         entry.git = git;
         entry.observedAt = observedAt;
         entry.source = args.source;
@@ -311,17 +353,30 @@ export class MeshNodeGitStateStore {
         observedAt?: number;
         /** The node's roster daemon id (dispatch target), when the caller knows it. */
         daemonId?: string | null;
-    }): { changed: boolean; factsChanged: boolean; sessionsChanged: boolean; entry: MeshNodeGitStateEntry | null } {
+    }): { changed: boolean; factsChanged: boolean; sessionsChanged: boolean; instanceChanged: boolean; entry: MeshNodeGitStateEntry | null } {
         const runtime = sanitizeMeshNodeRuntimeSummary(args.runtime);
-        if (!args.meshId || !args.nodeId || !runtime) return { changed: false, factsChanged: false, sessionsChanged: false, entry: null };
+        if (!args.meshId || !args.nodeId || !runtime) return { changed: false, factsChanged: false, sessionsChanged: false, instanceChanged: false, entry: null };
         const entry = this.upsertBase(args.meshId, args.nodeId, args.workspace);
         const rosterDaemonId = typeof args.daemonId === 'string' && args.daemonId.trim() ? args.daemonId.trim() : null;
         if (rosterDaemonId) entry.daemonId = rosterDaemonId;
         const observedAt = typeof args.observedAt === 'number' && Number.isFinite(args.observedAt)
             ? Math.min(args.observedAt, this.now())
             : this.now();
-        if (entry.runtimeObservedAt !== null && observedAt < entry.runtimeObservedAt) {
-            return { changed: false, factsChanged: false, sessionsChanged: false, entry };
+        // A different daemon process / build than held is always news (restart,
+        // upgrade): its first report may carry a stamp older than the held one.
+        const instanceChanged = meshNodeRuntimeInstanceChanged(entry.runtime, runtime);
+        const pending = entry.handshakePendingSince !== null;
+        if (entry.runtimeObservedAt !== null && observedAt < entry.runtimeObservedAt && !instanceChanged && !pending) {
+            return { changed: false, factsChanged: false, sessionsChanged: false, instanceChanged: false, entry };
+        }
+        if (pending) {
+            // A pending RESTART is cleared only by the NEW process (a different boot
+            // id / build) — a late report of the process being replaced leaves it set.
+            const fromReplacedProcess = entry.handshakePendingReason === 'restart'
+                && !!entry.handshakePendingBootId
+                && runtime.daemonBootId === entry.handshakePendingBootId
+                && !instanceChanged;
+            if (!fromReplacedProcess) clearHandshakePending(entry);
         }
         const signature = computeMeshNodeRuntimeSignature(runtime);
         const changed = signature !== entry.runtimeSignature;
@@ -333,7 +388,24 @@ export class MeshNodeGitStateStore {
         entry.runtimeSignature = signature;
         entry.runtimeLastFailureAt = null;
         this.persist(entry);
-        return { changed, factsChanged, sessionsChanged, entry };
+        return { changed: changed || instanceChanged, factsChanged, sessionsChanged, instanceChanged, entry };
+    }
+
+    /**
+     * Mark a node's held state as needing a handshake now (see
+     * MeshNodeGitStateEntry.handshakePendingSince). A pending `restart` is not
+     * downgraded to `reconnect`: the member's link coming back is exactly when
+     * the restart's report is expected, and it must still come from the new
+     * process. Only nodes the coordinator already holds state for are marked.
+     */
+    markHandshakePending(meshId: string, nodeId: string, reason: MeshNodeHandshakeReason, at: number = this.now()): boolean {
+        const entry = this.get(meshId, nodeId);
+        if (!entry) return false;
+        if (entry.handshakePendingSince !== null && entry.handshakePendingReason === 'restart' && reason === 'reconnect') return true;
+        entry.handshakePendingSince = at;
+        entry.handshakePendingReason = reason;
+        entry.handshakePendingBootId = reason === 'restart' ? (entry.runtime?.daemonBootId ?? null) : null;
+        return true;
     }
 
     recordRuntimeProbeAttempt(meshId: string, nodeId: string, workspace: string, at: number = this.now()): void {
@@ -463,6 +535,9 @@ export function createDbMeshNodeGitStatePersistence(getDb: () => DatabaseHandle)
                     runtimeLastAttemptAt: null,
                     runtimeLastFailureAt: null,
                     daemonId: null,
+                    handshakePendingSince: null,
+                    handshakePendingReason: null,
+                    handshakePendingBootId: null,
                 };
             });
         },

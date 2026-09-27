@@ -38,7 +38,7 @@ function makeItem(conversation: ActiveConversation): MobileConversationListItem 
 }
 
 describe('DashboardMobileChatInbox render behavior', () => {
-  it('renders the mobile hide action under the leading chat icon and keeps hiding behind confirmation state', () => {
+  it('renders one row "…" menu (Mute / Hide / Stop live inside it) instead of three corner icons', () => {
     const conversation = makeConversation()
     const html = renderToStaticMarkup(
       React.createElement(DashboardMobileChatInbox, {
@@ -63,15 +63,16 @@ describe('DashboardMobileChatInbox render behavior', () => {
     )
 
     const railIndex = html.indexOf('mobile-inbox-leading-rail')
-    const hideIndex = html.indexOf('mobile-inbox-hide-button')
+    const menuIndex = html.indexOf('mobile-inbox-row-menu-button')
     const titleIndex = html.indexOf('Refactor mobile inbox')
 
     // Layout: leading rail (avatar + Graph) → content (title) → top-right
-    // corner-actions cluster (timestamp · Mute · Hide · Stop). So Hide is icon-only
-    // in the corner cluster, rendered after the title in DOM order.
+    // corner (timestamp · "…"). Hide is a menu item, closed by default, and
+    // there is no confirm dialog for it (Undo toast instead).
     expect(railIndex).toBeGreaterThanOrEqual(0)
-    expect(hideIndex).toBeGreaterThan(railIndex)
-    expect(hideIndex).toBeGreaterThan(titleIndex)
+    expect(menuIndex).toBeGreaterThan(titleIndex)
+    expect(html).toContain('aria-label="More actions for Refactor mobile inbox"')
+    expect(html).not.toContain('mobile-inbox-hide-button')
     expect(html).not.toContain('Hide this chat from the inbox?')
   })
 
@@ -103,14 +104,13 @@ describe('DashboardMobileChatInbox render behavior', () => {
     )
 
     const railIndex = html.indexOf('mobile-inbox-leading-rail')
-    const hideIndex = html.indexOf('mobile-inbox-hide-button')
+    const menuIndex = html.indexOf('mobile-inbox-row-menu-button')
     const meshIndex = html.indexOf('mobile-inbox-mesh-button')
 
     // Graph (mesh) button lives in the leading rail under the avatar (before the
-    // title); Hide lives in the top-right corner cluster (after). So the mesh
-    // button precedes Hide in DOM order and sits just after the rail marker.
+    // title); the row "…" menu lives in the top-right corner (after).
     expect(meshIndex).toBeGreaterThan(railIndex)
-    expect(hideIndex).toBeGreaterThan(meshIndex)
+    expect(menuIndex).toBeGreaterThan(meshIndex)
     expect(html).toContain('Open mesh graph for Refactor mobile inbox')
   })
 })

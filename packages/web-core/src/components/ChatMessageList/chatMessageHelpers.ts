@@ -7,6 +7,7 @@
  */
 
 import { stringifyTextContent } from '../../utils/text';
+import { formatClockTime } from '../../utils/time';
 import type { ChatMessage } from '../../types';
 
 export interface ActionLog {
@@ -18,8 +19,7 @@ export type MessageMeta = NonNullable<ChatMessage['meta']> & { renderMode?: unkn
 
 export function formatTime(ms?: number): string {
     if (!ms) return '';
-    const d = new Date(ms);
-    return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+    return formatClockTime(ms);
 }
 
 export function getRenderableTimestamp(message: ChatMessage, index: number, receivedAtMap: Record<string, number>): number {

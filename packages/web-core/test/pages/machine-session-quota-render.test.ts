@@ -122,7 +122,7 @@ describe('session info dialog — compact form', () => {
     // Quota comes from the coordinator's held facts for the session's node
     // (nodeFacts.quota); the session daemon's own get_session_info quota is
     // only the fallback when the coordinator has none.
-    expect(dialogSource).toContain('collectQuotaEntries(meshNode?.quota ?? data.quota)')
+    expect(dialogSource).toContain('collectQuotaEntries(meshNode?.quota ?? data?.quota)')
     // The Row label is provider + (when reported) the account it belongs to,
     // joined only when there is something to join — see formatQuotaAccount.
     expect(dialogSource).toMatch(/<Row\s+key=\{provider\}/)

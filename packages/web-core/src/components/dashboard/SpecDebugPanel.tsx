@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { formatRelativeTimeLocalized } from '../../utils/time'
 import { useTransport } from '../../context/TransportContext'
 import type { ActiveConversation } from './types'
 import SpecFormBuilder, { type SpecModel, type FsmCond, type PreviewMap, type SectionDefModel, type SectionPreviewState } from './SpecFormBuilder'
@@ -99,12 +100,12 @@ interface Props {
 
 function formatAgo(ms: number): string {
     const delta = Date.now() - ms
-    if (delta < 0) return 'just now'
-    if (delta < 2000) return `${delta}ms ago`
-    if (delta < 60000) return `${(delta / 1000).toFixed(1)}s ago`
-    const min = Math.floor(delta / 60000)
-    if (min < 60) return `${min}m ago`
-    return `${Math.floor(min / 60)}h ago`
+    // Sub-minute precision is the point of this debug panel; past a minute the
+    // shared localized relative formatter takes over.
+    if (delta < 0) return formatRelativeTimeLocalized(ms)
+    if (delta < 2000) return `${delta}ms`
+    if (delta < 60000) return `${(delta / 1000).toFixed(1)}s`
+    return formatRelativeTimeLocalized(ms)
 }
 
 function formatDur(ms: number): string {

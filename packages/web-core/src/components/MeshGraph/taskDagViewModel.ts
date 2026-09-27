@@ -11,6 +11,7 @@
  */
 
 import type { RepoMeshQueueTask } from '@adhdev/daemon-core'
+import { formatClockTime } from '../../utils/time'
 
 export type TaskDagEdgeState = 'satisfied' | 'waiting' | 'failed'
 
@@ -229,7 +230,7 @@ export function formatTaskCardTime(
     if (!raw) return undefined
     const parsed = Date.parse(raw)
     if (!Number.isFinite(parsed)) return undefined
-    const absolute = new Date(parsed).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    const absolute = formatClockTime(parsed)
     return { absolute, relative: formatRelativeTime(parsed, now, t), iso: new Date(parsed).toISOString() }
 }
 

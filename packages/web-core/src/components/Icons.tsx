@@ -423,6 +423,17 @@ export function IconX({ size = defaults.size, className }: IconProps) {
   );
 }
 
+// "More" (horizontal ellipsis) — overflow menus
+export function IconMoreHorizontal({ size = defaults.size, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" stroke="none" className={className}>
+      <circle cx="5" cy="12" r="1.9" />
+      <circle cx="12" cy="12" r="1.9" />
+      <circle cx="19" cy="12" r="1.9" />
+    </svg>
+  );
+}
+
 // Rocket / launch
 export function IconRocket({ size = defaults.size, className }: IconProps) {
   return (

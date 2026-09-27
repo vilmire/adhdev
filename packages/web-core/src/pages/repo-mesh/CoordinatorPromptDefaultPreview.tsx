@@ -19,6 +19,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { InfoTip } from '../../components/ui/InfoTip'
 
 interface Props {
     daemonId: string
@@ -101,17 +102,12 @@ export default function CoordinatorPromptDefaultPreview({ daemonId, meshId, cliT
                     )}
                     {!loading && !error && prompt !== null && (
                         <>
-                            <div className="mb-1 flex items-center justify-between text-2xs text-text-muted">
-                                <span>{t('mesh.promptPreview.info')}</span>
-                                {bytes !== null && <span>{(bytes / 1024).toFixed(1)} KB</span>}
-                            </div>
                             {/* The preview deliberately omits the launch-scope sections
                                 (mission / recent activity / operating notes) — see the
-                                coordinator_prompt_preview handler. Say so, otherwise the
-                                operator reads this as the complete prompt and wonders why
-                                the live coordinator got more than what is shown here. */}
-                            <div className="mb-1 text-2xs text-text-muted/80">
-                                {t('mesh.promptPreview.launchScopeNote')}
+                                coordinator_prompt_preview handler. Both notes ride in one ⓘ. */}
+                            <div className="mb-1 flex items-center justify-between text-2xs text-text-muted">
+                                <InfoTip content={`${t('mesh.promptPreview.info')}\n${t('mesh.promptPreview.launchScopeNote')}`} size={12} />
+                                {bytes !== null && <span>{(bytes / 1024).toFixed(1)} KB</span>}
                             </div>
                             <textarea
                                 readOnly

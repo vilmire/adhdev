@@ -20,6 +20,7 @@ export default function BlueprintStatusBar({ counts, scope, onToggle, meshTheme 
     const segment = (label: string, active: boolean, urgent: boolean, onClick: () => void) => (
         <button
             type="button"
+            aria-pressed={active}
             onClick={onClick}
             className={`shrink-0 whitespace-nowrap rounded-full border px-2 py-0.5 text-3xs font-medium transition-colors ${urgent
                 ? (meshTheme.isDark ? 'border-amber-400/30 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20' : 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100')

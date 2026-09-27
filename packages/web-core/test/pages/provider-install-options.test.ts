@@ -86,7 +86,8 @@ describe('install options — quota is offered only where it works', () => {
 
     it('claude gets the statusLine side-effect note, nobody else does', () => {
         expect(tabSource).toContain("quotaInstallsClaudeStatusline={installOptionsFor === 'claude-cli'}")
-        expect(modalSource).toContain('{quotaInstallsClaudeStatusline && quotaEnabled && (')
+        // The note now rides the quota row's ⓘ, and only while quota is ON.
+        expect(modalSource).toContain("quotaInstallsClaudeStatusline && quotaEnabled ? t('machine.installOptions.quotaClaudeNote') : ''")
     })
 })
 

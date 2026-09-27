@@ -58,9 +58,18 @@ describe('MeshOverviewDetailModal — G5-2 ledger raw payload is disclosure-gate
         })
     }
 
+    // Since 2026-09-27 the raw payload sits INSIDE the collapsed "Technical
+    // details" disclosure (ids / raw record kind / routing internals), as its
+    // own nested disclosure — two levels away from the default view.
+    const rawPayloadDetails = () => document.body.querySelector('details[data-raw-payload]')
+
     it('renders the raw payload behind a collapsed <details> disclosure, not inline', () => {
         renderLedgerDetail({ foo: 'bar', nested: { a: 1 } })
-        const details = document.body.querySelector('details')
+        const technical = document.body.querySelector('details[data-technical-details]')
+        expect(technical).not.toBeNull()
+        expect(technical?.hasAttribute('open')).toBe(false)
+        const details = rawPayloadDetails()
+        expect(technical?.contains(details!)).toBe(true)
         expect(details).not.toBeNull()
         expect(details?.hasAttribute('open')).toBe(false)
         const pre = details?.querySelector('pre')
@@ -72,13 +81,14 @@ describe('MeshOverviewDetailModal — G5-2 ledger raw payload is disclosure-gate
 
     it('the disclosure summary is user-facing copy, not the bare word "Payload"', () => {
         renderLedgerDetail({ foo: 'bar' })
-        const summary = document.body.querySelector('details summary')
+        const summary = rawPayloadDetails()?.querySelector('summary')
         expect(summary).not.toBeNull()
         expect(summary?.textContent?.toLowerCase()).toContain('raw')
     })
 
     it('renders no payload disclosure at all when the payload is empty', () => {
         renderLedgerDetail({})
-        expect(document.body.querySelector('details')).toBeNull()
+        expect(rawPayloadDetails()).toBeNull()
+        expect(document.body.querySelector('pre')).toBeNull()
     })
 })

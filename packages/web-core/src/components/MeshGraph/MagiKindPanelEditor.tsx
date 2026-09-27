@@ -321,9 +321,6 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
     return (
         <div className="flex flex-col gap-3 p-1">
             <div className="flex flex-wrap items-center gap-2">
-                <p className={`text-xs ${meshTheme.textSecondary}`}>
-                    {t('mesh.magiKind.intro')}
-                </p>
                 <div className="ml-auto flex items-center gap-2">
                     <button type="button" className={btnGhost} onClick={() => void loadKindPanels()} disabled={loading || !canCommand}>
                         {loading ? t('mesh.magiKind.loading') : t('mesh.magiKind.refresh')}

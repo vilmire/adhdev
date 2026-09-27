@@ -3,7 +3,9 @@ import { useTranslation } from 'react-i18next'
 import { normalizeSessionStatus } from '@adhdev/mesh-shared'
 import { getConversationTitle } from './conversation-presenters'
 import type { ActiveConversation } from './types'
-import { IconHelp, IconInfo, IconMesh, IconRefresh, IconX } from '../Icons'
+import { IconHelp, IconMesh, IconRefresh, IconX } from '../Icons'
+import { Tooltip } from '../ui/InfoTip'
+import { formatAbsoluteTime, formatRelativeTimeLocalized } from '../../utils/time'
 import { DialogShell } from '../ui/Dialog'
 import { MeshObservabilitySurface, MeshSurfaceTabControls, MeshHelpPanel, type MeshSurfaceTab } from '../MeshGraph'
 import { useDashboardMeshOverrides } from '../../context/DashboardMeshContext'
@@ -82,13 +84,9 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
             meshId,
         ],
     )
-    // On mobile the header otherwise stacks 5 rows (title, repo path, tabs,
-    // status chips, Refresh) and pushes the Missions/Ledger content far down.
-    // Collapse the secondary metadata (repo path + status chips) behind a
-    // disclosure toggle by default; the core actions (tabs/Refresh/close)
-    // stay pinned in the sticky header. Desktop ignores this and always
-    // shows everything (md: utilities below).
-    const [showHeaderMeta, setShowHeaderMeta] = useState(false)
+    // The ONE refresh control lives in this header. Panels with their own
+    // fetches (the task graphs) follow this token.
+    const [refreshToken, setRefreshToken] = useState(0)
 
     // ONE shared coordinator status per mesh (utils/coordinator-mesh-status-store):
     // the /mesh page, this dialog and the session info dialog read the same held
@@ -123,6 +121,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     const [manualRefreshFailed, setManualRefreshFailed] = useState(false)
     const loadGraph = useCallback(() => {
         setManualRefreshFailed(false)
+        setRefreshToken(token => token + 1)
         void refreshMeshStatus().then(result => { if (!result) setManualRefreshFailed(true) })
     }, [refreshMeshStatus])
     const failureSurface = classifyDashboardMeshLoadFailure({ background: !manualRefreshFailed, hasGraph: meshStatus !== null })
@@ -154,7 +153,16 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
         sendData,
         extraLiveSessions,
     })
-    const lastLoadedLabel = lastLoadedAt ? new Date(lastLoadedAt).toLocaleTimeString() : null
+    // Freshness is a dot + a short relative time; the exact time, the repo
+    // identity and "showing last loaded" ride in its tooltip.
+    const liveUpdatesPaused = !!meshStatus && (!sendData || !!error || !!quietRefreshError)
+    const lastLoadedShort = lastLoadedAt ? formatRelativeTimeLocalized(lastLoadedAt) : null
+    const freshnessDetail = [
+        lastLoadedAt ? t('mesh.dialog.refreshedAt', { time: formatAbsoluteTime(lastLoadedAt, { seconds: true }) }) : null,
+        meshStatus?.repoIdentity || null,
+        liveUpdatesPaused ? t('mesh.dialog.liveUpdatesPaused') : null,
+        quietRefreshError ? t('mesh.dialog.refreshFailedQuiet') : null,
+    ].filter(Boolean).join('\n')
     const emptyMessage = useMemo(
         () => (loading ? t('mesh.dialog.loadingStatus') : t('mesh.dialog.noGraph')),
         [loading, t],
@@ -175,14 +183,30 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
             surfaceClassName={meshTheme.dialogShellClass}
         >
                 <div className={`relative ${meshTheme.dialogHeaderClass}`}>
-                    {/* Close — anchored to the header's top-right corner so it never
-                        wraps below the chip row on mobile (where the row flex-wraps).
-                        On desktop it sits at the far-right, vertically centered. */}
-                    {/* Refresh (icon) + Close — one compact corner strip. The old
-                        full-width "새로 고침" text button ate a whole row on mobile
-                        for a single action; an icon beside the close keeps the
-                        header to one visual line. */}
-                    <div className="absolute right-4 top-4 z-10 flex items-center gap-1.5 md:right-5 md:top-1/2 md:-translate-y-1/2">
+                    {/* Corner strip: freshness dot + time, Refresh, help, close. */}
+                    <div className="absolute right-4 top-4 z-10 flex items-center gap-1.5 md:right-5 md:top-4">
+                        {meshStatus && (
+                            <Tooltip content={freshnessDetail}>
+                                <span className={`inline-flex items-center gap-1.5 whitespace-nowrap text-2xs ${meshTheme.textMuted}`} data-mesh-freshness={liveUpdatesPaused ? 'paused' : 'live'}>
+                                    <span
+                                        aria-hidden
+                                        className={`h-1.5 w-1.5 rounded-full ${liveUpdatesPaused ? 'bg-amber-400' : 'bg-emerald-400'}`}
+                                    />
+                                    <span className="hidden sm:inline">{lastLoadedShort ?? ''}</span>
+                                    <span className="sr-only">{liveUpdatesPaused ? t('mesh.dialog.liveUpdatesPaused') : t('mesh.dialog.liveUpdatesOn')}</span>
+                                </span>
+                            </Tooltip>
+                        )}
+                        <button
+                            type="button"
+                            onClick={loadGraph}
+                            disabled={loading || refreshing}
+                            className={meshTheme.dialogCloseButtonClass}
+                            aria-label={t('mesh.dialog.refreshTitle')}
+                            title={t('mesh.dialog.refreshTitle')}
+                        >
+                            <IconRefresh size={15} className={loading || refreshing ? 'animate-spin' : undefined} />
+                        </button>
                         <button
                             type="button"
                             onClick={() => setHelpOpen(prev => !prev)}
@@ -199,16 +223,6 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                         </button>
                         <button
                             type="button"
-                            onClick={loadGraph}
-                            disabled={loading || refreshing}
-                            className={meshTheme.dialogCloseButtonClass}
-                            aria-label={t('mesh.dialog.refreshTitle')}
-                            title={t('mesh.dialog.refreshTitle')}
-                        >
-                            <IconRefresh size={15} className={loading || refreshing ? 'animate-spin' : undefined} />
-                        </button>
-                        <button
-                            type="button"
                             onClick={onClose}
                             className={meshTheme.dialogCloseButtonClass}
                             aria-label={t('common.close')}
@@ -216,63 +230,30 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             <IconX size={16} />
                         </button>
                     </div>
-                    <div className="min-w-0 flex-1 pr-32 md:pr-0">
+                    <div className="min-w-0 flex-1 pr-36 sm:pr-52 md:pr-56">
                         <div className="flex items-center gap-3">
                             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-sky-400/20 bg-sky-500/12 text-sky-200 shadow-[0_12px_30px_rgba(14,165,233,0.18)]">
                                 <IconMesh size={18} />
                             </span>
                             <div className="min-w-0">
-                                <div className="flex flex-wrap items-center gap-2">
-                                    <h2 className={meshTheme.dialogTitleClass}>{detailLabel}</h2>
-                                    {/* Mobile-only disclosure toggle for the secondary
-                                        metadata (repo path + status chips). Sits right
-                                        beside the observability badge; hidden on desktop
-                                        where the header has room to show everything. */}
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowHeaderMeta(prev => !prev)}
-                                        aria-expanded={showHeaderMeta}
-                                        aria-label={showHeaderMeta ? t('mesh.dialog.hideDetails') : t('mesh.dialog.showDetails')}
-                                        className="btn btn-secondary btn-sm rounded-lg px-1.5 py-1 md:hidden"
-                                        title={showHeaderMeta ? t('mesh.dialog.hideDetails') : t('mesh.dialog.showDetails')}
-                                    >
-                                        <IconInfo size={14} />
-                                    </button>
-                                </div>
-                                {/* Repo path is secondary detail — collapsed on mobile
-                                    unless the user expands the metadata disclosure;
-                                    always visible on desktop where space allows. */}
-                                <p
-                                    className={`${meshTheme.dialogSubtitleClass} ${showHeaderMeta ? 'block' : 'hidden'} md:block`}
-                                >
-                                    {getConversationTitle(activeConv)}
-                                    {activeConv.workspaceName ? ` · ${activeConv.workspaceName}` : ''}
-                                    {meshStatus?.repoIdentity ? ` · ${meshStatus.repoIdentity}` : ''}
-                                    {/* Refresh/live state lives HERE (secondary line), not
-                                        beside the tab controls: variable-width chips next to
-                                        the tabs shifted the whole tab group on every refresh
-                                        cycle, so a tab click could land on the wrong tab. */}
-                                    {lastLoadedLabel ? ` · ${t('mesh.dialog.refreshedAt', { time: lastLoadedLabel })}` : ''}
-                                    {!refreshing && meshStatus ? ` · ${sendData && !error ? t('mesh.dialog.liveMetadata') : t('mesh.dialog.metadataUnavailable')}` : ''}
-                                    {quietRefreshError ? ` · ${t('mesh.dialog.refreshFailedQuiet')}` : ''}
+                                <h2 className={`${meshTheme.dialogTitleClass} truncate`}>{detailLabel}</h2>
+                                {/* Title + workspace only — the repo identity and refresh
+                                    state are in the freshness tooltip. */}
+                                <p className={`${meshTheme.dialogSubtitleClass} truncate`}>
+                                    {[...new Set([getConversationTitle(activeConv), activeConv.workspaceName].filter(Boolean))].filter(part => part !== detailLabel).join(' · ')}
                                 </p>
                             </div>
                         </div>
                     </div>
-                    <div className="flex min-w-0 items-center gap-2 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:justify-end md:pr-36">
-                        {/* Core actions — always pinned in the sticky shrink-0 header so
-                            they stay reachable no matter how long the body content is.
-                            The row scrolls horizontally instead of wrapping tab labels
-                            onto two lines on narrow screens. */}
-                        <MeshSurfaceTabControls
-                            meshTheme={meshTheme}
-                            activeTab={activeTab}
-                            onActiveTabChange={setActiveTab}
-                            helpOpen={helpOpen}
-                            onHelpOpenChange={setHelpOpen}
-                            hideHelpToggle
-                        />
-                    </div>
+                    {/* Underline tabs — same component and look as the settings pages. */}
+                    <MeshSurfaceTabControls
+                        meshTheme={meshTheme}
+                        activeTab={activeTab}
+                        onActiveTabChange={setActiveTab}
+                        helpOpen={helpOpen}
+                        onHelpOpenChange={setHelpOpen}
+                        hideHelpToggle
+                    />
                 </div>
 
                 {error && (
@@ -294,6 +275,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             onHelpOpenChange={setHelpOpen}
                             hideControls
                             onRequestRefresh={loadGraph}
+                            refreshToken={refreshToken}
                         />
                     ) : (
                         <div className={meshTheme.dialogEmptyClass}>

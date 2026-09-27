@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { AutoApproveMode, AutoApproveModesConfig } from '@adhdev/daemon-core'
 import { Section } from '../../components/ui/Section'
 import { AlertBanner } from '../../components/ui/AlertBanner'
+import { InfoTip, Tooltip } from '../../components/ui/InfoTip'
+import { Switch } from '../../components/ui/Switch'
+import { eventManager } from '../../managers/EventManager'
 import {
     AutoApproveModeSelector,
     AutoApproveRiskBadge,
@@ -147,14 +150,19 @@ export function MeshProviderAutoApproveSection({
         void loadDefaults()
     }, [loadDefaults])
 
+    // Each selection saves immediately (single-field autosave) — the old
+    // explicit "Save to mesh.json" step was one more thing to forget.
+    const saveRef = useRef<null | ((next: Record<string, string>) => Promise<void>)>(null)
+    const repoDefaultsRef = useRef(repoDefaults)
+    repoDefaultsRef.current = repoDefaults
     const applyDefault = useCallback((type: string, modeId: string | undefined) => {
         setSaved(false)
-        setRepoDefaults(prev => {
-            const next = { ...prev }
-            if (modeId && modeId.trim()) next[type] = modeId.trim()
-            else delete next[type]
-            return next
-        })
+        const next = { ...repoDefaultsRef.current }
+        if (modeId && modeId.trim()) next[type] = modeId.trim()
+        else delete next[type]
+        repoDefaultsRef.current = next
+        setRepoDefaults(next)
+        void saveRef.current?.(next)
     }, [])
 
     const onSelectMode = useCallback((type: string, mode: AutoApproveMode) => {
@@ -172,7 +180,7 @@ export function MeshProviderAutoApproveSection({
         setPendingDangerous(null)
     }, [applyDefault, pendingDangerous])
 
-    const save = useCallback(async () => {
+    const save = useCallback(async (nextDefaults: Record<string, string>) => {
         if (!canConfigure) return
         setSaving(true)
         setSaveError(null)
@@ -182,7 +190,7 @@ export function MeshProviderAutoApproveSection({
             // read-modify-write command (other mesh.json zones are preserved daemon-side).
             const res = await sendCommand(hostDaemonId, 'set_mesh_provider_defaults', {
                 workspace: hostWorkspace,
-                autoApproveModes: repoDefaults,
+                autoApproveModes: nextDefaults,
                 merge: false,
                 write: true,
             })
@@ -191,6 +199,7 @@ export function MeshProviderAutoApproveSection({
             const body = res?.result ?? res
             if (body?.success === false) throw new Error(body?.error || t('mesh.providerAutoApprove.saveError'))
             setSaved(true)
+            eventManager.showToast(t('common.saved'), 'success')
             // Re-read so the UI reflects exactly what landed on disk (normalized).
             await loadDefaults()
         } catch (e: any) {
@@ -198,12 +207,12 @@ export function MeshProviderAutoApproveSection({
         } finally {
             setSaving(false)
         }
-    }, [canConfigure, hostDaemonId, hostWorkspace, loadDefaults, repoDefaults, sendCommand, t])
+    }, [canConfigure, hostDaemonId, hostWorkspace, loadDefaults, sendCommand, t])
+    saveRef.current = save
 
     return (
         <Section
             title={t('mesh.providerAutoApprove.title')}
-            description={t('mesh.providerAutoApprove.subtitle')}
             collapsible
             defaultOpen={false}
         >
@@ -211,19 +220,11 @@ export function MeshProviderAutoApproveSection({
                 Rendered unconditionally: this machine's opt-in must stay reachable
                 even when the host is offline or advertises no providers. */}
             <div className="rounded-xl border border-border-subtle bg-bg-secondary/40 p-3.5">
-                <div className="text-sm font-semibold text-text-primary">{t('mesh.providerAutoApprove.machineSection.title')}</div>
-                <div className="mt-1 text-2xs text-text-muted">{t('mesh.providerAutoApprove.machineSection.hint')}</div>
-                <div className="mt-3 flex flex-wrap gap-2 text-2xs">
-                    <span className={`rounded-full border px-2 py-0.5 font-semibold ${machineAutoApproveEnabled ? 'border-status-online/25 bg-status-online/10 text-status-online' : 'border-border-subtle bg-surface-secondary/40 text-text-muted'}`}>
-                        {machineAutoApproveEnabled
-                            ? t('mesh.providerAutoApprove.machineSection.autoApproveOn')
-                            : t('mesh.providerAutoApprove.machineSection.autoApproveOff')}
-                    </span>
-                    <span className={`rounded-full border px-2 py-0.5 font-semibold ${machineDangerousAllowed ? 'border-status-error/30 bg-status-error/10 text-status-error' : 'border-border-subtle bg-surface-secondary/40 text-text-muted'}`}>
-                        {machineDangerousAllowed
-                            ? t('mesh.providerAutoApprove.machineSection.dangerousOn')
-                            : t('mesh.providerAutoApprove.machineSection.dangerousOff')}
-                    </span>
+                <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-text-primary">{t('mesh.providerAutoApprove.machineSection.title')}</span>
+                    <Tooltip content={t('mesh.providerAutoApprove.machineSection.hint')}>
+                        <span className="rounded-full border border-border-subtle bg-surface-secondary/40 px-2 py-0.5 text-3xs font-medium text-text-muted">{t('mesh.providerAutoApprove.machineSection.chip')}</span>
+                    </Tooltip>
                 </div>
                 <div className="mt-3 space-y-2">
                     <MachinePolicyToggle
@@ -266,16 +267,19 @@ export function MeshProviderAutoApproveSection({
                 <div className="space-y-6">
                     {loadError && <AlertBanner variant="error" onDismiss={() => setLoadError(null)}>{loadError}</AlertBanner>}
                     {/* The union is complete only when every node has reported. */}
-                    {unreportedNodeCount > 0 && (
-                        <div className="text-2xs text-text-muted">
-                            {t('mesh.providerAutoApprove.partialInventory', { count: unreportedNodeCount })}
-                        </div>
-                    )}
-
                     {/* ── Section 1: repository default (editable) + Section 3 per provider ── */}
-                    <div className="space-y-1">
-                        <div className="text-sm font-semibold text-text-primary">{t('mesh.providerAutoApprove.repoSection.title')}</div>
-                        <div className="text-2xs text-text-muted">{t('mesh.providerAutoApprove.repoSection.hint')}</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold text-text-primary">{t('mesh.providerAutoApprove.repoSection.title')}</span>
+                        <Tooltip content={t('mesh.providerAutoApprove.repoSection.hint')}>
+                            <span className="rounded-full border border-border-subtle bg-surface-secondary/40 px-2 py-0.5 text-3xs font-medium text-text-muted">{t('mesh.providerAutoApprove.repoSection.chip')}</span>
+                        </Tooltip>
+                        {/* The union is complete only when every node has reported. */}
+                        {unreportedNodeCount > 0 && (
+                            <Tooltip content={t('mesh.providerAutoApprove.partialInventory', { count: unreportedNodeCount })}>
+                                <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-3xs font-medium text-amber-400">{t('mesh.providerAutoApprove.partialInventoryChip', { count: unreportedNodeCount })}</span>
+                            </Tooltip>
+                        )}
+                        {saving && <span className="text-3xs text-text-muted">{t('mesh.providerAutoApprove.saving')}</span>}
                     </div>
 
                     <div className="space-y-5">
@@ -320,23 +324,8 @@ export function MeshProviderAutoApproveSection({
                         })}
                     </div>
 
-                    <div className="space-y-1">
-                        <div className="text-sm font-semibold text-text-primary">{t('mesh.providerAutoApprove.effectiveSection.title')}</div>
-                        <div className="text-2xs text-text-muted">{t('mesh.providerAutoApprove.effectiveSection.hint')}</div>
-                    </div>
-
                     {saveError && <AlertBanner variant="error" onDismiss={() => setSaveError(null)}>{saveError}</AlertBanner>}
-                    <div className="flex items-center gap-3">
-                        <button
-                            type="button"
-                            className="rounded-lg bg-accent-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                            onClick={() => void save()}
-                            disabled={saving}
-                        >
-                            {saving ? t('mesh.providerAutoApprove.saving') : t('mesh.providerAutoApprove.save')}
-                        </button>
-                        {saved && <span className="text-xs text-status-online">{t('mesh.providerAutoApprove.saved')}</span>}
-                    </div>
+                    {saved && <span className="sr-only" role="status">{t('mesh.providerAutoApprove.saved')}</span>}
                 </div>
             )}
 
@@ -378,7 +367,10 @@ export function MeshProviderAutoApproveSection({
                 // opt-in — non-opted-in machines still downgrade to pty-parse.
                 <div className="fixed inset-x-0 bottom-6 z-[60] mx-auto max-w-lg px-4">
                     <div className="rounded-xl border border-status-error/40 bg-bg-primary p-3.5 shadow-lg">
-                        <div className="text-sm font-semibold text-status-error">{t('mesh.providerAutoApprove.dangerous.sharedWarningTitle')}</div>
+                        <div className="flex items-center gap-1 text-sm font-semibold text-status-error">
+                            {t('mesh.providerAutoApprove.dangerous.sharedWarningTitle')}
+                            <InfoTip content={t('mesh.providerAutoApprove.dangerous.sharedWarningDetail')} />
+                        </div>
                         <div className="mt-1 text-xs text-text-muted">{t('mesh.providerAutoApprove.dangerous.sharedWarning')}</div>
                     </div>
                 </div>
@@ -399,6 +391,7 @@ function EffectiveResultRow({
         (id ? config.modes.find(m => m.id === id)?.label : undefined) || id || ''
 
     let text: string
+    let hint: string | null = null
     let tone: 'ok' | 'warn' | 'muted' = 'ok'
     switch (effective.status) {
         case 'requested':
@@ -410,6 +403,9 @@ function EffectiveResultRow({
             break
         case 'downgraded':
             text = t('mesh.providerAutoApprove.effectiveSection.statusDowngraded', {
+                mode: effective.effectiveMode?.label || '',
+            })
+            hint = t('mesh.providerAutoApprove.effectiveSection.statusDowngradedHint', {
                 requested: modeLabel(effective.requestedModeId) || modeLabel(effective.providerDefaultModeId),
                 mode: effective.effectiveMode?.label || '',
             })
@@ -436,11 +432,12 @@ function EffectiveResultRow({
                 <AutoApproveRiskBadge risk={deriveAutoApproveModeRisk(effective.effectiveMode)} />
             )}
             <span className="min-w-0">{text}</span>
+            {hint && <InfoTip content={hint} size={12} />}
         </div>
     )
 }
 
-/** Switch row for a machine-authorization policy flag (same switch idiom as LegacyAutoApproveToggle). */
+/** Switch row for a machine-authorization policy flag — label + ⓘ + the shared Switch. */
 function MachinePolicyToggle({
     label,
     hint,
@@ -454,22 +451,14 @@ function MachinePolicyToggle({
     disabled?: boolean
     onChange: (checked: boolean) => void
 }) {
+    const labelId = useId()
     return (
-        <button
-            type="button"
-            role="switch"
-            aria-checked={checked}
-            className="flex w-full items-center justify-between gap-3 rounded-xl border border-border-subtle bg-bg-primary/60 px-3.5 py-2.5 text-left disabled:opacity-50"
-            onClick={() => onChange(!checked)}
-            disabled={disabled}
-        >
-            <span>
-                <span className="block text-xxs font-semibold text-text-primary">{label}</span>
-                <span className="mt-0.5 block text-2xs text-text-muted">{hint}</span>
+        <div className={`flex w-full items-center justify-between gap-3 rounded-xl border border-border-subtle bg-bg-primary/60 px-3.5 py-2.5 ${disabled ? 'opacity-60' : ''}`}>
+            <span className="flex min-w-0 items-center gap-1">
+                <span id={labelId} className="text-xxs font-semibold text-text-primary">{label}</span>
+                <InfoTip content={hint} size={12} />
             </span>
-            <span className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? 'bg-accent-primary' : 'bg-surface-secondary'}`}>
-                <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
-            </span>
-        </button>
+            <Switch checked={checked} disabled={disabled} onChange={onChange} aria-labelledby={labelId} />
+        </div>
     )
 }

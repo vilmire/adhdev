@@ -25,12 +25,14 @@ import {
   StandaloneCliArgsError,
   STANDALONE_HELP_TEXT,
   resolveStandalonePortEnvOverride,
+  type StandaloneLogLevel,
 } from './standalone-cli-args.js';
 
 import {
   LOG,
   setLogInstancePort,
   setLogLevel,
+  setConsoleLogLevel,
   resolveDebugRuntimeConfig,
   setDebugRuntimeConfig,
   configureDebugTraceStore,
@@ -133,6 +135,7 @@ interface StandaloneOptions {
   open?: boolean;
   token?: string;
   dev?: boolean;
+  logLevel?: StandaloneLogLevel;
 }
 
 interface WsMessage {
@@ -434,18 +437,25 @@ class StandaloneServer {
     }
     console.log('');
 
-    const cdpCount = [...components.cdpManagers.values()].filter(m => m.isConnected).length;
-    console.log(`   CDP: ${cdpCount > 0 ? `✅ ${cdpCount} connected` : '❌ none'}`);
-    console.log(`   Providers: ${components.providerLoader.getAll().length} loaded`);
+    // CDP/Providers/Session-Host detail is diagnostic, not decision-relevant
+    // at startup — keep it under --dev/--log-level (verbose) and `status
+    // --verbose`-equivalent output only. A misconfigured session host is
+    // surfaced regardless: it is actionable, not routine telemetry.
+    const verboseBanner = Boolean(options.dev || (options.logLevel && options.logLevel !== 'warn' && options.logLevel !== 'error'));
     const sessionHostWarning = getStandaloneSessionHostAppNameWarning();
     if (sessionHostWarning) {
       console.warn(`   ⚠️  ${sessionHostWarning}`);
     }
-    console.log(`   Session Host: ${getStandaloneSessionHostAppName()}`);
-    if (options.dev) {
-      console.log(`   🛠️  DevConsole: http://127.0.0.1:19280`);
+    if (verboseBanner) {
+      const cdpCount = [...components.cdpManagers.values()].filter(m => m.isConnected).length;
+      console.log(`   CDP: ${cdpCount > 0 ? `✅ ${cdpCount} connected` : '❌ none'}`);
+      console.log(`   Providers: ${components.providerLoader.getAll().length} loaded`);
+      console.log(`   Session Host: ${getStandaloneSessionHostAppName()}`);
+      if (options.dev) {
+        console.log(`   🛠️  DevConsole: http://127.0.0.1:19280`);
+      }
+      console.log('');
     }
-    console.log('');
     console.log('   Press Ctrl+C to stop.');
     console.log('');
 
@@ -478,7 +488,7 @@ class StandaloneServer {
     this.clients.add(ws);
     this.chatTail.addClient(ws);
     this.registerWsConnection(ws);
-    console.log(`[WS] Client connected (total: ${this.clients.size})`);
+    LOG.debug('WS', `Client connected (total: ${this.clients.size})`);
 
     // Send initial status immediately. Runtime terminal snapshots stay pull-based
     // (runtime snapshot / events routes) so standalone matches cloud and does not
@@ -522,7 +532,7 @@ class StandaloneServer {
       this.clients.delete(ws);
       this.chatTail.removeClient(ws);
       this.releaseWsConnection(ws);
-      console.log(`[WS] Client disconnected (total: ${this.clients.size})`);
+      LOG.debug('WS', `Client disconnected (total: ${this.clients.size})`);
     });
 
     ws.on('error', () => {
@@ -790,6 +800,11 @@ async function main(): Promise<void> {
   setDebugRuntimeConfig(debugRuntime);
   configureDebugTraceStore();
   setLogLevel(debugRuntime.logLevel);
+  // Terminal echo defaults to 'warn' for the same reason as the cloud daemon
+  // (routine INFO telemetry should not flood an interactive foreground
+  // process); an explicit --log-level/--dev ask restores it on the console.
+  const wantsVerboseConsole = Boolean(parsed.options.logLevel || envLogLevel || options.dev);
+  setConsoleLogLevel(wantsVerboseConsole ? debugRuntime.logLevel : 'warn');
 
   // Try to find web-standalone build
   if (!hostExplicit) {

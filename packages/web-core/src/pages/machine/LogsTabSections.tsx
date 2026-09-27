@@ -1,6 +1,7 @@
 import type { Dispatch, SetStateAction } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
+import { formatClockTime } from '../../utils/time'
 import type { LogEntry } from './types'
 import type { MachineDiagnosticsStreamsState } from '../../hooks/useMachineDiagnosticsStreams'
 import { DEBUG_TRACE_FILTERS } from '../../utils/logs-trace-filters'
@@ -31,12 +32,12 @@ export interface LogsSectionsOpenState {
 
 function formatTimestamp(ts: number | null, t: TFunction): string {
     if (!ts) return t('machine.logsTabSections.notYetLoaded')
-    return new Date(ts).toLocaleTimeString()
+    return formatClockTime(ts, { seconds: true })
 }
 
 function formatDiagnosticTimestamp(ts: number, t: TFunction): string {
     if (!Number.isFinite(ts) || ts <= 0 || ts > Date.now() + 365 * 24 * 60 * 60 * 1000) return t('machine.logsTabSections.rawFile')
-    return new Date(ts).toLocaleTimeString()
+    return formatClockTime(ts, { seconds: true })
 }
 
 function sectionTone(level: DiagnosticSeverity): string {
@@ -246,7 +247,6 @@ export function DiagnosticsSummaryCards({
                 ) : (
                     <>
                         <div className="text-xxs text-text-primary font-medium">{t('machine.logsTabSections.noVisibleIssue')}</div>
-                        <div className="text-2xs text-text-secondary mt-1">{t('machine.logsTabSections.useIssuesOrAll')}</div>
                     </>
                 )}
             </div>

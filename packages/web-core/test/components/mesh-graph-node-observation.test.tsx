@@ -91,7 +91,8 @@ describe('topology — coordinator-held remote node state', () => {
         const mainpc = graph.nodes.find(node => node.id === 'node_mainpc')!
         expect(getMeshGraphObservationHint(mainpc, NOW)).toMatchObject({ kind: 'aged' })
         const html = renderCard(mainpc)
-        expect(html).toContain('>as of 12m ago</span>')
+        // Degraded observations get a short chip; the age rides in its tooltip.
+        expect(html).toContain('title="as of 12m ago">Stale</span>')
     })
 
     it('marks an unreachable node on the card itself, keeping its last-known state', () => {
@@ -102,16 +103,20 @@ describe('topology — coordinator-held remote node state', () => {
         const mainpc = graph.nodes.find(node => node.id === 'node_mainpc')!
         expect(mainpc.branch).toBe('main')
         expect(getMeshGraphObservationHint(mainpc, NOW)).toMatchObject({ kind: 'unreachable' })
-        // A visible pill on the card (not only the hover tooltip).
-        expect(renderCard(mainpc)).toContain('>unreachable · last known 30m ago</span>')
+        // A visible chip on the card (not only the card tooltip); detail in the chip title.
+        expect(renderCard(mainpc)).toContain('title="unreachable · last known 30m ago">Unreachable</span>')
     })
 
-    it('shows a refreshing marker while the coordinator re-probes, and nothing for local/fresh nodes', () => {
+    it('says nothing on the card while the coordinator re-reads a node, nor for local/fresh nodes', () => {
         const refreshing = buildMeshGraph(canonicalizeRepoMeshStatus(remoteStatus({
             gitObservation: { source: 'coordinator_probe', observedAt: NOW - 4 * 60_000, refreshing: true, unreachableSince: null },
         }) as any))
         const mainpc = refreshing.nodes.find(node => node.id === 'node_mainpc')!
-        expect(renderCard(mainpc)).toContain('>as of 4m ago · refreshing</span>')
+        // Refreshing is not a degraded state: no chip (the card tooltip keeps the detail).
+        const html = renderCard(mainpc)
+        expect(html).not.toContain('>as of 4m ago · refreshing</span>')
+        expect(html).not.toContain('>Stale</span>')
+        expect(html).toContain('as of 4m ago · refreshing')
         const local = refreshing.nodes.find(node => node.id === 'node_local')!
         expect(getMeshGraphObservationHint(local, NOW)).toBeNull()
         const fresh = buildMeshGraph(canonicalizeRepoMeshStatus(remoteStatus({

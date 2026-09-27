@@ -2470,10 +2470,6 @@
     }
 
     /* Compact agent count — hidden on desktop, shown on mobile */
-    .header-count-mobile {
-        display: none;
-    }
-
     .header-title-status-dot {
         display: inline-block;
         width: 6px;
@@ -2585,18 +2581,6 @@
         flex: 0 1 auto;
     }
 
-    .header-subtitle-status {
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .header-subtitle-status {
-        font-size: 10px;
-        opacity: 0.88;
-    }
-
     .dashboard-header-actions-group {
         display: inline-flex;
         align-items: center;
@@ -2605,30 +2589,6 @@
         border-radius: 10px;
         background: color-mix(in srgb, var(--surface-primary) 60%, var(--bg-secondary) 40%);
         border: 1px solid color-mix(in srgb, var(--border-subtle) 70%, transparent);
-    }
-
-    .dashboard-header-mesh-button {
-        min-height: 32px;
-        height: 32px;
-        padding: 4px 8px;
-        border-radius: 10px;
-        line-height: 1;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
-        white-space: nowrap;
-    }
-
-    .dashboard-header-action-target {
-        max-width: 120px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        padding: 4px 10px;
-        font-size: 11px;
-        font-weight: 700;
-        color: var(--text-secondary);
-        letter-spacing: -0.01em;
     }
 
     .dashboard-header-inbox {
@@ -3509,15 +3469,6 @@
             display: none !important;
         }
 
-        .header-count-mobile {
-            display: inline-flex !important;
-            flex: 0 0 auto;
-        }
-
-        .header-title-status-dot {
-            display: none;
-        }
-
         /* Mobile: show tab title, hide generic "Dashboard" */
         .header-title-desktop {
             display: none !important;
@@ -3533,10 +3484,6 @@
             font-size: 11px !important;
             min-width: 32px !important;
             min-height: 32px !important;
-        }
-
-        .dashboard-header-action-target {
-            display: none;
         }
 
         .dashboard-header-actions-group {

@@ -56,3 +56,18 @@ export function localizeProviderSetting(
         description: t(`machine.providerSettings.${setting.key}.description`, params),
     }
 }
+
+/**
+ * A select option's display text. Known values (low/medium/high, on/off, …)
+ * are translated; anything else is humanized ("fast-mode" → "Fast mode")
+ * instead of shown as a raw manifest token. The stored value never changes.
+ */
+export function localizeProviderSettingOption(t: TFunction, value: string): string {
+    const raw = String(value ?? '')
+    const humanized = raw
+        .replace(/[-_]+/g, ' ')
+        .trim()
+        .replace(/^./, c => c.toUpperCase())
+    if (!/^[a-z0-9][a-z0-9_-]*$/i.test(raw)) return humanized || raw
+    return t(`machine.providerSettings.option.${raw.toLowerCase()}`, { defaultValue: humanized || raw })
+}

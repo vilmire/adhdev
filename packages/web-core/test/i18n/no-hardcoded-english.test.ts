@@ -63,8 +63,6 @@ const ALLOWED: Record<string, string[]> = {
     'pages/machine/OverviewTab.tsx': ['IDEs', 'CLIs', 'ACPs'],
     // Provider source-mode enum values (Advanced panel; the value IS the setting).
     'pages/machine/ProvidersTab.tsx': ['normal'],
-    // OS process id label.
-    'pages/machine/SessionHostPanel.tsx': ['pid'],
 }
 
 function walk(dir: string, out: string[] = []): string[] {

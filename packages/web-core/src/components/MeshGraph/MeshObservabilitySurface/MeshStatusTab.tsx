@@ -8,6 +8,7 @@ import type {
 } from '@adhdev/daemon-core'
 import { MeshGraphThemeContext } from './meshSurfaceTheme'
 import { Badge } from './meshSurfacePrimitives'
+import { InfoTip, Tooltip } from '../../ui/InfoTip'
 import {
     SCHEDULING_STRATEGY_LABELS,
     collectMachineQuotaGroups,
@@ -38,8 +39,9 @@ function MeshSchedulingCard({ scheduling }: { scheduling?: RepoMeshSchedulingSta
     const meshTheme = useContext(MeshGraphThemeContext)
     if (!scheduling) {
         return (
-            <div className={`${meshTheme.cardClass} rounded-2xl p-4 text-xs ${meshTheme.textSecondary}`}>
-                {t('mesh.status.schedulingNotReported')}
+            <div className={`${meshTheme.cardClass} flex items-center gap-1 rounded-2xl p-4 text-xs ${meshTheme.textSecondary}`}>
+                <span>{t('mesh.status.schedulingNotReported')}</span>
+                <InfoTip content={t('mesh.status.schedulingNotReportedHint')} />
             </div>
         )
     }
@@ -52,7 +54,10 @@ function MeshSchedulingCard({ scheduling }: { scheduling?: RepoMeshSchedulingSta
     return (
         <div className={`${meshTheme.cardClass} rounded-2xl p-4`}>
             <div className="flex flex-wrap items-center gap-2">
-                <span className={`text-xs font-semibold ${meshTheme.textPrimary}`}>{t('mesh.status.schedulingTitle')}</span>
+                <span className={`inline-flex items-center gap-1 text-xs font-semibold ${meshTheme.textPrimary}`}>
+                    {t('mesh.status.schedulingTitle')}
+                    <InfoTip content={t('mesh.status.distributionTitle')} />
+                </span>
                 <Badge label={SCHEDULING_STRATEGY_LABELS[scheduling.strategy] ?? scheduling.strategy} tone="info" />
                 {hasGlobalCaps && (
                     <Badge
@@ -69,9 +74,6 @@ function MeshSchedulingCard({ scheduling }: { scheduling?: RepoMeshSchedulingSta
                     />
                 )}
             </div>
-            <p className={`mt-2 text-2xs ${meshTheme.textSecondary}`}>
-                {t('mesh.status.distributionTitle')}
-            </p>
         </div>
     )
 }
@@ -118,13 +120,13 @@ function MeshNodeSchedulingBadges({ scheduling }: { scheduling?: RepoMeshNodeSch
 //     shown, because that is what tells "not installed" from "channel broken".
 //   - ok: the 5h / 7d windows, tinted at the same 70/90% thresholds the
 //     `adhdev quota` CLI uses.
-/** Hover titles per chip kind — mesh-card styling; the chip CONTENT comes from the shared model. */
-const QUOTA_CHIP_TITLES: Record<QuotaChipHint, string> = {
-    bucket: 'Per-pool quota bucket reported by this machine — pools on one plan reset independently',
-    session: 'Rolling 5-hour plan window reported by this machine',
-    weekly: 'Rolling 7-day plan window reported by this machine',
-    monthly: 'Rolling 30-day billing window reported by this machine',
-    usage: 'Usage totals reported by this machine — this provider reports spend, not a percentage window',
+/** Hint per chip kind — mesh-card styling; the chip CONTENT comes from the shared model. */
+const QUOTA_CHIP_HINT_KEYS: Record<QuotaChipHint, string> = {
+    bucket: 'machine.quota.bucketHint',
+    session: 'machine.quota.sessionHint',
+    weekly: 'machine.quota.weeklyHint',
+    monthly: 'machine.quota.monthlyHint',
+    usage: 'machine.quota.usageHint',
 }
 
 export function MeshMachineQuotaCard({ machine, providerVersions }: { machine: MachineQuotaGroup; providerVersions?: Array<[string, string]> }) {
@@ -149,20 +151,23 @@ export function MeshMachineQuotaCard({ machine, providerVersions }: { machine: M
                     />
                 )}
                 {freshness && (
-                    <span className={`text-3xs ${meshTheme.textSecondary}`} title={t('mesh.status.quotaFreshnessHint')}>
-                        {freshness}
-                    </span>
+                    <Tooltip content={t('mesh.status.quotaFreshnessHint')}>
+                        <span className={`text-3xs ${meshTheme.textSecondary}`}>{freshness}</span>
+                    </Tooltip>
                 )}
             </div>
             {machine.quota.length === 0 ? (
-                <div className={`mt-1.5 text-2xs ${meshTheme.textSecondary}`}>
+                <div className={`mt-1.5 flex items-center gap-1 text-2xs ${meshTheme.textSecondary}`}>
                     {/* Two different silences, kept apart: a machine that has sent
                         no runtime facts at all (offline/degraded peer — we simply
                         have not heard from it) vs one that reports but whose
                         quota refresh has not run yet. Neither invents a number. */}
-                    {machine.hasReported
-                        ? t('mesh.status.quotaNotCollected')
-                        : t('mesh.status.machineNotReporting')}
+                    <span>
+                        {machine.hasReported
+                            ? t('mesh.status.quotaNotCollected')
+                            : t('mesh.status.machineNotReporting')}
+                    </span>
+                    <InfoTip content={machine.hasReported ? t('mesh.status.quotaNotCollectedHint') : t('mesh.status.machineNotReportingHint')} />
                 </div>
             ) : (
                 <div className="mt-2 flex flex-col gap-1.5">
@@ -180,44 +185,46 @@ export function MeshMachineQuotaCard({ machine, providerVersions }: { machine: M
                                     report no account (Claude Code exposes none), and
                                     then nothing renders — no placeholder. */}
                                 {formatQuotaAccount(quota) && (
-                                    <span className={`text-3xs ${meshTheme.textSecondary}`} title={t('mesh.status.quotaAccountHint')}>
-                                        {formatQuotaAccount(quota)}
-                                    </span>
+                                    <Tooltip content={t('mesh.status.quotaAccountHint')}>
+                                        <span className={`text-3xs ${meshTheme.textSecondary}`}>{formatQuotaAccount(quota)}</span>
+                                    </Tooltip>
                                 )}
                                 {model.kind === 'chips' && model.chips.map(chip => (
                                     <Badge
                                         key={chip.key}
                                         label={chip.label}
                                         tone={chip.tone}
-                                        title={QUOTA_CHIP_TITLES[chip.hint]}
+                                        title={t(QUOTA_CHIP_HINT_KEYS[chip.hint])}
                                     />
                                 ))}
                                 {model.kind === 'usage' && (
                                     <Badge
                                         label={model.usageLabel!}
                                         tone="info"
-                                        title={QUOTA_CHIP_TITLES.usage}
+                                        title={t(QUOTA_CHIP_HINT_KEYS.usage)}
                                     />
                                 )}
                                 {model.kind === 'okNoWindows' && (
-                                    <span className={`text-2xs ${meshTheme.textSecondary}`} title={t('mesh.statusTab.quotaOkNoWindowHint')}>
-                                        {model.message ?? t('mesh.status.quotaOkNoWindows')}
-                                    </span>
+                                    <Tooltip content={model.message ? `${model.message}\n${t('mesh.statusTab.quotaOkNoWindowHint')}` : t('mesh.statusTab.quotaOkNoWindowHint')}>
+                                        <span className={`text-2xs ${meshTheme.textSecondary}`}>{t('mesh.status.quotaOkNoWindows')}</span>
+                                    </Tooltip>
                                 )}
                                 {model.kind === 'failure' && (
-                                    <span className={`text-2xs ${meshTheme.textSecondary}`} title={t('mesh.statusTab.quotaFailedHint')}>
-                                        {model.message}
-                                    </span>
+                                    <Tooltip content={t('mesh.statusTab.quotaFailedHint')}>
+                                        <span className={`text-2xs ${meshTheme.textSecondary}`}>{model.message}</span>
+                                    </Tooltip>
                                 )}
                                 {/* Claude-only action for the existing failure: install a
                                     missing/broken capture bridge, or open one session when
                                     an installed bridge merely has an aged-out reading. */}
                                 {claudeHint && (
-                                    <span className={`text-2xs ${meshTheme.textSecondary} opacity-80`}>
-                                        {t(claudeHint === 'setup'
+                                    <Badge
+                                        label={t(claudeHint === 'setup' ? 'mesh.status.quotaClaudeSetupChip' : 'mesh.status.quotaClaudeRefreshChip')}
+                                        tone="warn"
+                                        title={t(claudeHint === 'setup'
                                             ? 'mesh.status.quotaClaudeSetupHint'
                                             : 'mesh.status.quotaClaudeRefreshHint')}
-                                    </span>
+                                    />
                                 )}
                             </div>
                         )
@@ -291,11 +298,12 @@ function MeshMachinesSection({ status, previewVersion }: { status: RepoMeshStatu
                 )
             })}
             {unreported.length > 0 && (
-                <div className={`rounded-xl border px-3 py-2 text-2xs ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
-                    {t('mesh.status.machinesNotReporting', {
-                        count: unreported.length,
-                        machines: unreported.map(machine => machine.label).join(', '),
-                    })}
+                <div className="px-1">
+                    <Badge
+                        tone="warn"
+                        label={t('mesh.status.machinesNotReporting', { count: unreported.length })}
+                        title={t('mesh.status.offlineMachinesTitle', { machines: unreported.map(machine => machine.label).join(', ') })}
+                    />
                 </div>
             )}
         </div>
@@ -327,23 +335,25 @@ function describeNodeHealthIssue(node: RepoMeshNodeStatus, t: (key: string, opts
     return t('mesh.status.healthNoLiveReport')
 }
 
-function MeshNodeRuntimeRow({ node, previewVersion, machineVersions }: { node: RepoMeshNodeStatus; previewVersion?: string; machineVersions?: Record<string, string> }) {
+/**
+ * The per-node runtime chips (health issue, worktree/bootstrap, connection,
+ * sessions, update state, scheduling load). Shared by the Diagnostics list and
+ * the Map tab's node side panel so the two cannot drift.
+ */
+export function MeshNodeRuntimeChips({ node, previewVersion, machineVersions, hideHealth = false }: { node: RepoMeshNodeStatus; previewVersion?: string; machineVersions?: Record<string, string>; hideHealth?: boolean }) {
     const { t } = useTranslation('common')
-    const meshTheme = useContext(MeshGraphThemeContext)
     const healthIssue = describeNodeHealthIssue(node, t)
     const sessionCount = (node.activeSessionDetails?.length ?? node.activeSessions?.length ?? 0)
-    const head = shortCommit(node.git?.headCommit)
     const isWorktree = node.isLocalWorktree === true
     const bootstrap = node.worktreeBootstrap as { status?: string } | undefined
     const staleBuild = node.staleDaemonBuild
-    // T7: detected provider CLI/ACP versions on this node, rendered as
-    // `provider@version` chips so a version skew across nodes is visible at a glance.
+    // T7: detected provider CLI/ACP versions on this node. Machine ⊃ nodes:
+    // versions are a machine property rendered once on the machine card; a node
+    // row only surfaces SKEW — a provider whose reported version differs from
+    // the machine consensus (stale report / partial env).
     const providerVersions = node.providerVersions && typeof node.providerVersions === 'object'
         ? node.providerVersions
         : undefined
-    // Machine ⊃ nodes: versions are a machine property rendered once on the
-    // machine card. A node row only surfaces SKEW — a provider whose reported
-    // version differs from the machine consensus (stale report / partial env).
     const providerVersionEntries = providerVersions
         ? Object.entries(providerVersions).filter(([provider, version]) =>
             typeof version === 'string' && version
@@ -355,12 +365,11 @@ function MeshNodeRuntimeRow({ node, previewVersion, machineVersions }: { node: R
         ? node.daemonBuildVersion
         : undefined
     // Versioned facts bundle: prefer its build identity (version + COMMIT) over
-    // the legacy flat version string — the commit is the deploy-lag anchor.
+    // the legacy flat version string.
     const factsBuild = node.nodeFacts?.daemonBuild
-    const buildChipLabel = factsBuild?.commitShort
-        ? `build ${factsBuild.version || daemonBuildVersion || '?'}@${factsBuild.commitShort}`
-        : daemonBuildVersion ? `build ${daemonBuildVersion}` : undefined
-    // Global deploy-lag anchor: the running daemon's build commit vs origin/main
+    const buildLabel = factsBuild?.commitShort
+        ? `${factsBuild.version || daemonBuildVersion || '?'}@${factsBuild.commitShort}`
+        : daemonBuildVersion
     // Deploy-lag is compared on the VERSION axis (daemon build version vs the
     // last deployed preview version), NOT commits: the daemon build stamps the
     // oss submodule commit while previewFreshness.currentMainCommit is a ROOT
@@ -369,34 +378,32 @@ function MeshNodeRuntimeRow({ node, previewVersion, machineVersions }: { node: R
     // fleet restart). Versions come from the same release axis on both sides.
     const nodeVersion = (factsBuild?.version || daemonBuildVersion || '').trim().toLowerCase()
     const deployLag = !!(nodeVersion && previewVersion && nodeVersion !== previewVersion.trim().toLowerCase())
+    // Stale build and deploy lag are one user-facing fact: this machine is not
+    // running the latest code yet. One chip; the specifics ride in its tooltip.
+    const updatePendingHint = [
+        buildLabel ? `${t('mesh.statusTab.daemonBuildHint')}: ${buildLabel}` : null,
+        staleBuild ? t('mesh.status.badgeStaleBuildTitle') : null,
+        deployLag ? `${t('mesh.status.badgeDeployLagTitle')} (${previewVersion})` : null,
+    ].filter(Boolean).join('\n')
     return (
-        <div className={`rounded-xl border p-3 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
-            <div className="flex flex-wrap items-center gap-2">
-                <span className={`text-xs font-semibold ${meshTheme.textPrimary}`}>
-                    {isWorktree
-                        ? `⎇ ${node.worktreeBranch || nodeWorkspaceBasename(node.workspace) || node.nodeId.slice(0, 8)}`
-                        : (nodeWorkspaceBasename(node.workspace) || node.machineLabel || node.nodeId)}
-                </span>
-                <Badge label={node.health} tone={healthTone(node.health)} />
+        <>
+            <div className="flex flex-wrap items-center gap-1.5">
+                {!hideHealth && <Badge label={node.health} tone={healthTone(node.health)} />}
+                {healthIssue && (typeof node.error === 'string' && node.error
+                    ? <Badge label={t('mesh.status.healthErrorChip')} tone="warn" title={node.error} />
+                    : <Badge label={healthIssue} tone="warn" />)}
                 {isWorktree && <Badge label={t('mesh.status.badgeWorktree')} tone="info" title={node.worktreeBranch ? t('mesh.status.badgeWorktreeBranchTitle', { branch: node.worktreeBranch }) : t('mesh.status.badgeWorktreeTitle')} />}
                 {bootstrap?.status && bootstrap.status !== 'ready' && (
-                    <Badge label={`bootstrap ${bootstrap.status}`} tone="warn" title={t('mesh.status.badgeBootstrapTitle')} />
+                    <Badge label={t('mesh.status.badgeBootstrap')} tone="warn" title={`${t('mesh.status.badgeBootstrapTitle')} (${bootstrap.status})`} />
                 )}
-                {node.connection?.state && node.connection.state !== 'self' && (
-                    <Badge label={node.connection.state} tone={node.connection.state === 'connected' ? 'good' : 'warn'} title={t('mesh.status.badgeConnectionTitle')} />
+                {node.connection?.state && node.connection.state !== 'self' && node.connection.state !== 'connected' && (
+                    <Badge label={node.connection.state} tone="warn" title={t('mesh.status.badgeConnectionTitle')} />
                 )}
                 {sessionCount > 0 && <Badge label={t('mesh.status.badgeSessions', { count: sessionCount })} tone="default" />}
                 {node.autoFastForwardEligible && <Badge label={t('mesh.status.badgeFastForwardReady')} tone="info" title={t('mesh.status.badgeFastForwardReadyTitle')} />}
-                {!!staleBuild && <Badge label={t('mesh.status.badgeStaleBuild')} tone="warn" title={t('mesh.status.badgeStaleBuildTitle')} />}
-                {buildChipLabel && <Badge label={buildChipLabel} tone={staleBuild || deployLag ? 'warn' : 'default'} title={t('mesh.statusTab.daemonBuildHint')} />}
-                {deployLag && <Badge label={`deploy-lag vs ${previewVersion}`} tone="warn" title={t('mesh.status.badgeDeployLagTitle')} />}
+                {(staleBuild || deployLag) && <Badge label={t('mesh.status.badgeUpdatePending')} tone="warn" title={updatePendingHint} />}
                 <MeshNodeSchedulingBadges scheduling={node.scheduling} />
             </div>
-            {healthIssue && (
-                <div className={`mt-1.5 truncate text-2xs ${meshTheme.isDark ? 'text-amber-200/85' : 'text-amber-700'}`} title={healthIssue}>
-                    {healthIssue}
-                </div>
-            )}
             {providerVersionEntries.length > 0 && (
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                     {providerVersionEntries.map(([provider, version]) => (
@@ -404,8 +411,35 @@ function MeshNodeRuntimeRow({ node, previewVersion, machineVersions }: { node: R
                     ))}
                 </div>
             )}
+        </>
+    )
+}
+
+function MeshNodeRuntimeRow({ node, previewVersion, machineVersions }: { node: RepoMeshNodeStatus; previewVersion?: string; machineVersions?: Record<string, string> }) {
+    const { t } = useTranslation('common')
+    const meshTheme = useContext(MeshGraphThemeContext)
+    const head = shortCommit(node.git?.headCommit)
+    const isWorktree = node.isLocalWorktree === true
+    const daemonBuildVersion = typeof node.daemonBuildVersion === 'string' && node.daemonBuildVersion ? node.daemonBuildVersion : undefined
+    const factsBuild = node.nodeFacts?.daemonBuild
+    const buildLabel = factsBuild?.commitShort
+        ? `${factsBuild.version || daemonBuildVersion || '?'}@${factsBuild.commitShort}`
+        : daemonBuildVersion
+    return (
+        <div className={`rounded-xl border p-3 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
+            <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                <span className={`text-xs font-semibold ${meshTheme.textPrimary}`}>
+                    {isWorktree
+                        ? `⎇ ${node.worktreeBranch || nodeWorkspaceBasename(node.workspace) || node.nodeId.slice(0, 8)}`
+                        : (nodeWorkspaceBasename(node.workspace) || node.machineLabel || node.nodeId)}
+                </span>
+                {/* Diagnostics keeps the exact build visible (it is what an
+                    operator compares here); the node panel hides it. */}
+                {buildLabel && <Badge label={buildLabel} tone="default" title={t('mesh.statusTab.daemonBuildHint')} />}
+            </div>
+            <MeshNodeRuntimeChips node={node} previewVersion={previewVersion} machineVersions={machineVersions} />
             <div className={`mt-1.5 text-2xs ${meshTheme.textSecondary}`}>
-                {summarizeNodeDrift(node)}
+                {summarizeNodeDrift(node, t)}
                 {head ? <span className="ml-2 font-mono opacity-70">@{head}</span> : null}
             </div>
         </div>

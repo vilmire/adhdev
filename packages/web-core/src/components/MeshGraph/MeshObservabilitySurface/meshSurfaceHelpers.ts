@@ -117,6 +117,26 @@ export function healthTone(status: string): 'default' | 'good' | 'warn' | 'dange
     }
 }
 
+const NODE_HEALTH_KEYS: Record<string, string> = {
+    online: 'mesh.nodeHealth.online',
+    dirty: 'mesh.nodeHealth.dirty',
+    offline: 'mesh.nodeHealth.offline',
+    degraded: 'mesh.nodeHealth.degraded',
+    wrong_branch: 'mesh.nodeHealth.wrongBranch',
+    unknown: 'mesh.nodeHealth.unknown',
+    enabled: 'mesh.nodeHealth.enabled',
+    pending: 'mesh.nodeHealth.pending',
+    assigned: 'mesh.nodeHealth.assigned',
+    completed: 'mesh.nodeHealth.completed',
+    failed: 'mesh.nodeHealth.failed',
+}
+
+/** Localized node health / status word ("degraded" → "Unreachable"). Unknown values pass through. */
+export function nodeHealthText(status: string | null | undefined, t: (key: string) => string): string {
+    const key = NODE_HEALTH_KEYS[(status || 'unknown').toLowerCase()]
+    return key ? t(key) : String(status)
+}
+
 export function sessionTone(state: string | null | undefined): 'default' | 'good' | 'warn' | 'danger' | 'info' {
     switch ((state || '').toLowerCase()) {
         case 'idle':
@@ -210,6 +230,42 @@ export function sessionStatusLabelKey(
     }
 }
 
+/**
+ * THE localized session-status text for display. `sessionStatusLabel` above
+ * stays canonical English because callers compare it ('generating') and derive
+ * tones from it; anything a user reads goes through this instead.
+ */
+export function sessionStatusText(
+    session: MeshGraphSessionDetail,
+    t: (key: string, opts?: Record<string, unknown>) => string,
+): string {
+    const { bucket, normalized } = classifySessionStatusBucket(session)
+    switch (bucket) {
+        case 'awaiting_approval': return t('sessionStatus.awaitingApproval')
+        case 'generating': return t('sessionStatus.generating')
+        case 'idle': return t('sessionStatus.idle')
+        case 'failed': return normalized.includes('stopped') || normalized.includes('interrupted')
+            ? t('sessionStatus.stopped')
+            : t('sessionStatus.failed')
+        default:
+            if (!normalized) return t('sessionStatus.unknown')
+            if (normalized === 'starting' || normalized === 'pending' || normalized === 'launching') return t('sessionStatus.starting')
+            return normalized.replace(/_/g, ' ')
+    }
+}
+
+/** Localized role: coordinator / worker (or a custom role name as-is). */
+export function sessionRoleText(
+    session: MeshGraphSessionDetail,
+    t: (key: string, opts?: Record<string, unknown>) => string,
+): string {
+    if (session.isSelfCoordinator) return t('mesh.panel.statusCoordinator')
+    const role = typeof session.role === 'string' ? session.role.trim() : ''
+    if (!role || role === 'worker') return t('mesh.panel.statusWorker')
+    if (role === 'coordinator') return t('mesh.panel.statusCoordinator')
+    return role
+}
+
 export function sessionRoleLabel(session: MeshGraphSessionDetail): string {
     if (session.isSelfCoordinator) return 'coordinator'
     const role = typeof session.role === 'string' ? session.role.trim() : ''
@@ -268,21 +324,28 @@ export function connectionLabel(connection: RepoMeshNodeStatus['connection'] | n
     return `mesh ${connection.state}`
 }
 
-export function summarizeNodeDrift(node: RepoMeshNodeStatus): string {
+type DriftT = (key: string, opts?: Record<string, unknown>) => string
+
+/**
+ * One-line git drift for a node. Pass `t` for the localized UI text; without
+ * it the canonical English form is returned (pure callers / tests).
+ */
+export function summarizeNodeDrift(node: RepoMeshNodeStatus, t?: DriftT): string {
+    const tr = (key: string, fallback: string, opts?: Record<string, unknown>) => (t ? t(key, opts) : fallback)
     const git = node.git
-    if (!git) return node.gitProbePending ? 'Git probe pending' : 'No git probe'
+    if (!git) return node.gitProbePending ? tr('mesh.drift.probePending', 'Git probe pending') : tr('mesh.drift.noGit', 'No git probe')
     const changes = (git.staged ?? 0) + (git.modified ?? 0) + (git.untracked ?? 0) + (git.deleted ?? 0) + (git.renamed ?? 0)
     const parts: string[] = []
     if (git.branch) parts.push(git.branch)
-    if (git.upstream && git.upstreamStatus !== 'fresh') parts.push('upstream unverified')
+    if (git.upstream && git.upstreamStatus !== 'fresh') parts.push(tr('mesh.drift.upstreamUnverified', 'upstream unverified'))
     if (git.upstreamStatus === 'fresh' && ((git.ahead ?? 0) > 0 || (git.behind ?? 0) > 0)) parts.push(`↑${git.ahead ?? 0}/↓${git.behind ?? 0}`)
-    if (changes > 0) parts.push(`${changes} dirty`)
+    if (changes > 0) parts.push(tr('mesh.drift.changed', `${changes} dirty`, { count: changes }))
     const dirtySubmodules = (git.submodules ?? []).filter(submodule => submodule.dirty)
     const driftedSubmodules = (git.submodules ?? []).filter(submodule => submodule.outOfSync || submodule.error)
-    if (dirtySubmodules.length > 0) parts.push(`${dirtySubmodules.length} submodule dirty`)
-    if (driftedSubmodules.length > 0) parts.push(`${driftedSubmodules.length} submodule drift`)
-    if (git.hasConflicts) parts.push('conflicts')
-    return parts.join(' · ') || 'Clean'
+    if (dirtySubmodules.length > 0) parts.push(tr('mesh.drift.submoduleChanged', `${dirtySubmodules.length} submodule dirty`, { count: dirtySubmodules.length }))
+    if (driftedSubmodules.length > 0) parts.push(tr('mesh.drift.submoduleOutOfSync', `${driftedSubmodules.length} submodule drift`, { count: driftedSubmodules.length }))
+    if (git.hasConflicts) parts.push(tr('mesh.drift.conflicts', 'conflicts'))
+    return parts.join(' · ') || tr('mesh.drift.clean', 'Clean')
 }
 
 // ─── Provider quota (nodeFacts.quota) ───────────────────────────────────────

@@ -399,7 +399,8 @@ describe('provider quota helpers', () => {
     expect(source).toMatch(
       /machine\.hasReported\s*\?\s*t\('mesh\.status\.quotaNotCollected'\)\s*:\s*t\('mesh\.status\.machineNotReporting'\)/,
     )
-    expect(source).toMatch(/machineNotReporting'\)\}\s*<\/div>/)
+    // (The line's explanation rides in an ⓘ right after the muted text span.)
+    expect(source).toMatch(/machineNotReporting'\)\}\s*<\/span>\s*<InfoTip/)
     // Failing -> the failureKind-bearing description. It arrives as the
     // 'failure' kind of the shared view-model (whose message IS
     // describeQuotaFailure — content assembly moved into buildQuotaDisplayModel

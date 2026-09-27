@@ -10,6 +10,7 @@
  */
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { InfoTip } from '../../components/ui/InfoTip'
 import { deriveNodeCapabilityTags } from './node-providers'
 import type { MeshNode } from './types'
 
@@ -97,7 +98,10 @@ export default function NodeTagEditor({ node, saving, onSave }: Props) {
             </div>
             {draftError && <div className="mt-1 text-2xs text-amber-400">{draftError}</div>}
             {custom.length === 0 && autoTags.length === 0 && (
-                <div className="mt-1 text-2xs text-text-muted">{t('mesh.tagEditor.empty')}</div>
+                <div className="mt-1 flex items-center gap-1 text-2xs text-text-muted">
+                    <span>{t('mesh.tagEditor.empty')}</span>
+                    <InfoTip content={t('mesh.tagEditor.emptyHint')} size={12} />
+                </div>
             )}
         </div>
     )

@@ -1,7 +1,7 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { IconBell, IconBellOff, IconSettings, IconChat, IconEyeOff, IconMesh, IconX } from '../Icons'
+import { IconBell, IconBellOff, IconSettings, IconChat, IconEyeOff, IconMesh, IconMoreHorizontal, IconX } from '../Icons'
 import InstallCommand from '../InstallCommand'
 import { countGeneratingConversations, formatRelativeTime, getConversationViewStates, type MobileConversationListItem, type MobileMachineCard } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
@@ -13,7 +13,6 @@ import { eventManager } from '../../managers/EventManager'
 import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUtils'
 import { unwrapCommandResult } from '../../hooks/useDashboardConversationCommands'
 import GitStatusPill from '../git/GitStatusPill'
-import ModalPortal from '../ui/ModalPortal'
 import LoadingSpinner from '../ui/LoadingSpinner'
 
 type MobileInboxDebugBundleCollector = (conversation: ActiveConversation) => void | Promise<void>
@@ -32,6 +31,8 @@ interface DashboardMobileChatInboxProps {
     onOpenConversation: (conversation: ActiveConversation) => void
     onShowAllHidden: () => void
     onHideConversation?: (conversation: ActiveConversation) => void
+    /** Restores one hidden conversation — the hide toast's Undo. */
+    onShowHiddenConversation?: (conversation: ActiveConversation) => void
     onOpenMeshGraph?: (conversation: ActiveConversation) => void
     /** Optional: stop (terminate) the underlying CLI/agent session for a conversation. */
     onStopCli?: (conversation?: ActiveConversation) => void | Promise<void>
@@ -117,52 +118,97 @@ function MobileEmptyHero({ icon, title, subtitle, children }: {
     )
 }
 
-function HideConversationConfirmDialog({
-    conversation,
-    onCancel,
-    onConfirm,
+/**
+ * Row overflow ("…") for one inbox conversation: Mute, Hide and Stop in one
+ * small menu instead of three always-visible icon buttons. Hide acts at once
+ * (with an Undo toast from the parent); only Stop keeps its confirmation.
+ */
+function MobileInboxRowMenu({
+    title,
+    isMuted,
+    onToggleMute,
+    onHide,
+    onStop,
 }: {
-    conversation: ActiveConversation
-    onCancel: () => void
-    onConfirm: () => void
+    title: string
+    isMuted?: boolean
+    onToggleMute?: () => void
+    onHide?: () => void
+    onStop?: () => void
 }) {
     const { t } = useTranslation()
-    const title = getConversationTitle(conversation)
-
+    const [open, setOpen] = useState(false)
+    const rootRef = useRef<HTMLDivElement | null>(null)
+    useEffect(() => {
+        if (!open) return
+        const onPointerDown = (event: Event) => {
+            if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+        }
+        const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false) }
+        document.addEventListener('pointerdown', onPointerDown, true)
+        document.addEventListener('mousedown', onPointerDown, true)
+        window.addEventListener('keydown', onKeyDown)
+        return () => {
+            document.removeEventListener('pointerdown', onPointerDown, true)
+            document.removeEventListener('mousedown', onPointerDown, true)
+            window.removeEventListener('keydown', onKeyDown)
+        }
+    }, [open])
+    if (!onToggleMute && !onHide && !onStop) return null
+    const itemClass = 'flex w-full items-center gap-2.5 rounded-lg border-none bg-transparent px-3 py-2.5 text-left text-sm font-medium text-text-secondary hover:bg-bg-secondary hover:text-text-primary'
+    const run = (action: () => void) => (event: MouseEvent<HTMLButtonElement>) => {
+        event.preventDefault()
+        event.stopPropagation()
+        setOpen(false)
+        action()
+    }
     return (
-        <ModalPortal>
-        <div className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4">
-            <div onClick={onCancel} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-            <div
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="mobile-hide-confirm-title"
-                className="card fade-in mobile-compact-dialog relative w-full sm:w-[min(92vw,420px)] md:w-[92%] md:max-w-[420px] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] flex flex-col overflow-hidden rounded-[24px] sm:rounded-[18px] shadow-[0_20px_40px_rgba(0,0,0,0.4)]"
+        <div ref={rootRef} className="relative">
+            <button
+                type="button"
+                className={`mobile-inbox-row-menu-button inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition-colors ${
+                    isMuted
+                        ? 'border-amber-500/60 bg-amber-500/15 text-amber-500'
+                        : 'border-border-subtle bg-bg-primary/70 text-text-muted hover:border-border-default hover:text-text-primary'
+                }`}
+                onClick={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    setOpen(value => !value)
+                }}
+                aria-haspopup="menu"
+                aria-expanded={open}
+                aria-label={t('mobileInbox.moreActionsFor', { title })}
+                title={t('dashboard.header.moreActions')}
             >
-                <div className="px-4 py-4 md:px-6 md:py-5 border-b border-border-subtle bg-bg-primary">
-                    <h3 id="mobile-hide-confirm-title" className="m-0 text-base md:text-lg font-extrabold">{t('mobileInbox.hideTitle', { title })}</h3>
-                    <div className="mt-1 text-[13px] md:text-sm text-text-muted leading-relaxed">
-                        {t('mobileInbox.hideDescription')}
-                    </div>
+                {isMuted ? <IconBellOff size={13} /> : <IconMoreHorizontal size={14} />}
+            </button>
+            {open && (
+                <div
+                    role="menu"
+                    className="absolute right-0 top-full z-[var(--z-popover)] mt-1 flex w-48 flex-col rounded-xl border border-border-default bg-bg-card p-1 shadow-xl"
+                >
+                    {onToggleMute && (
+                        <button type="button" role="menuitem" className={`mobile-inbox-mute-button ${itemClass}`} onClick={run(onToggleMute)}>
+                            {isMuted ? <IconBell size={15} /> : <IconBellOff size={15} />}
+                            {isMuted ? t('conversation.unmuteThis') : t('conversation.muteThis')}
+                        </button>
+                    )}
+                    {onHide && (
+                        <button type="button" role="menuitem" className={`mobile-inbox-hide-button ${itemClass}`} onClick={run(onHide)}>
+                            <IconEyeOff size={15} />
+                            {t('mobileInbox.hide')}
+                        </button>
+                    )}
+                    {onStop && (
+                        <button type="button" role="menuitem" className={`mobile-inbox-stop-button ${itemClass} !text-status-error`} onClick={run(onStop)}>
+                            <IconX size={15} />
+                            {t('mobileInbox.stopSessionTitle')}
+                        </button>
+                    )}
                 </div>
-
-                <div className="px-4 py-4 md:px-6 md:py-5 bg-bg-primary flex flex-col gap-2.5">
-                    <button
-                        onClick={onConfirm}
-                        className="btn btn-primary w-full justify-center min-h-[42px]"
-                    >
-                        {t('mobileInbox.hide')}
-                    </button>
-                    <button
-                        onClick={onCancel}
-                        className="btn btn-secondary w-full justify-center min-h-[42px]"
-                    >
-                        {t('common.cancel')}
-                    </button>
-                </div>
-            </div>
+            )}
         </div>
-        </ModalPortal>
     )
 }
 
@@ -273,7 +319,7 @@ function DashboardMobileChatItem({
                     onContextMenu={handleConversationContextMenu}
                     type="button"
                 >
-                    <div className="flex items-center gap-2 pr-[124px]">
+                    <div className="flex items-center gap-2 pr-[92px]">
                         <span className={`text-[15px] leading-[22px] font-bold truncate tracking-tight ${titleClassName}`}>{title}</span>
                     </div>
                     <div className={`text-xs font-medium truncate flex items-center ${metaClassName}`}>
@@ -314,55 +360,13 @@ function DashboardMobileChatItem({
                             {t('mobileInbox.done')}
                         </span>
                     )}
-                    {onToggleMute && (
-                        <button
-                            type="button"
-                            className={`mobile-inbox-mute-button inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition-colors ${
-                                isMuted
-                                    ? 'border-amber-500/60 bg-amber-500 text-white hover:bg-amber-600'
-                                    : 'border-border-subtle bg-bg-primary/70 text-text-muted hover:border-border-default hover:text-text-primary'
-                            }`}
-                            onClick={(event) => {
-                                event.preventDefault()
-                                event.stopPropagation()
-                                onToggleMute()
-                            }}
-                            aria-label={isMuted ? t('mobileInbox.unmute', { title }) : t('mobileInbox.mute', { title })}
-                            title={isMuted ? t('mobileInbox.mutedTitle') : t('mobileInbox.muteNotifications')}
-                        >
-                            {isMuted ? <IconBellOff size={13} /> : <IconBell size={13} />}
-                        </button>
-                    )}
-                    {onRequestHideConversation && (
-                        <button
-                            type="button"
-                            className="mobile-inbox-hide-button inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border-subtle bg-bg-primary/70 text-text-muted transition-colors hover:border-border-default hover:text-text-primary"
-                            onClick={(event) => {
-                                event.preventDefault()
-                                event.stopPropagation()
-                                onRequestHideConversation()
-                            }}
-                            aria-label={t('mobileInbox.hideConversationAria', { title })}
-                            title={t('mobileInbox.hideConversationTitle')}
-                        >
-                            <IconEyeOff size={13} />
-                        </button>
-                    )}
-                    {onRequestStopCli && (
-                        <button
-                            type="button"
-                            className="mobile-inbox-stop-button inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-status-error/30 bg-bg-primary/70 text-status-error transition-colors hover:border-status-error/60 hover:bg-status-error/10"
-                            onClick={(event) => {
-                                event.preventDefault()
-                                event.stopPropagation()
-                                onRequestStopCli()
-                            }}
-                            aria-label={t('mobileInbox.stopSessionAria', { title })}
-                            title={t('mobileInbox.stopSessionTitle')}
-                        >
-                            <IconX size={13} />
-                        </button>
-                    )}
+                    <MobileInboxRowMenu
+                        title={title}
+                        isMuted={isMuted}
+                        onToggleMute={onToggleMute}
+                        onHide={onRequestHideConversation}
+                        onStop={onRequestStopCli}
+                    />
                 </div>
             </div>
         </div>
@@ -400,6 +404,7 @@ export default function DashboardMobileChatInbox({
     onOpenConversation,
     onShowAllHidden,
     onHideConversation,
+    onShowHiddenConversation,
     onOpenMeshGraph,
     onStopCli,
     onOpenNewSession,
@@ -415,7 +420,6 @@ export default function DashboardMobileChatInbox({
     onToggleMuteConversation,
 }: DashboardMobileChatInboxProps) {
     const { t } = useTranslation()
-    const [hideConfirmConversation, setHideConfirmConversation] = useState<ActiveConversation | null>(null)
     const isDisconnected = wsStatus === 'disconnected' || wsStatus === 'reconnecting' || wsStatus === 'offline' || wsStatus === 'auth_failed'
     // Distinct from isDisconnected: the socket is up, the data just is not here yet.
     // Machine-section scope — gated on the daemon discovery snapshot.
@@ -473,11 +477,24 @@ export default function DashboardMobileChatInbox({
         )
     }, [actionLogs, sendDaemonCommand])
     const effectiveCollectChatDebugBundle = onCollectChatDebugBundle || collectMobileInboxChatDebugBundle
-    const handleConfirmHideConversation = useCallback(() => {
-        if (!hideConfirmConversation) return
-        onHideConversation?.(hideConfirmConversation)
-        setHideConfirmConversation(null)
-    }, [hideConfirmConversation, onHideConversation])
+    // Hide is reversible, so it acts immediately and offers Undo instead of a
+    // confirm dialog. Undo restores just that conversation (or all hidden ones
+    // when the host has no single-conversation restore).
+    const hideConversationWithUndo = useCallback((conversation: ActiveConversation) => {
+        if (!onHideConversation) return
+        onHideConversation(conversation)
+        eventManager.showToast(t('mobileInbox.hiddenToast', { title: getConversationTitle(conversation) }), 'info', {
+            duration: 6000,
+            actions: [{
+                label: t('mobileInbox.undo'),
+                variant: 'primary',
+                onClick: () => {
+                    if (onShowHiddenConversation) onShowHiddenConversation(conversation)
+                    else onShowAllHidden()
+                },
+            }],
+        })
+    }, [onHideConversation, onShowAllHidden, onShowHiddenConversation, t])
 
     return (
         <div className="flex h-full w-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-primary">
@@ -606,7 +623,7 @@ export default function DashboardMobileChatInbox({
                                         type="needs_attention"
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
-                                        onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
+                                        onRequestHideConversation={onHideConversation ? () => hideConversationWithUndo(item.conversation) : undefined}
                                         onRequestStopCli={onStopCli ? () => onStopCli(item.conversation) : undefined}
                                         onOpenMeshGraph={onOpenMeshGraph}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
@@ -630,7 +647,7 @@ export default function DashboardMobileChatInbox({
                                         type="task_complete"
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
-                                        onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
+                                        onRequestHideConversation={onHideConversation ? () => hideConversationWithUndo(item.conversation) : undefined}
                                         onRequestStopCli={onStopCli ? () => onStopCli(item.conversation) : undefined}
                                         onOpenMeshGraph={onOpenMeshGraph}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
@@ -654,7 +671,7 @@ export default function DashboardMobileChatInbox({
                                         type="working"
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
-                                        onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
+                                        onRequestHideConversation={onHideConversation ? () => hideConversationWithUndo(item.conversation) : undefined}
                                         onRequestStopCli={onStopCli ? () => onStopCli(item.conversation) : undefined}
                                         onOpenMeshGraph={onOpenMeshGraph}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
@@ -681,7 +698,7 @@ export default function DashboardMobileChatInbox({
                                             type="earlier"
                                             getAvatarText={getAvatarText}
                                             onOpenConversation={onOpenConversation}
-                                            onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
+                                            onRequestHideConversation={onHideConversation ? () => hideConversationWithUndo(item.conversation) : undefined}
                                             onRequestStopCli={onStopCli ? () => onStopCli(item.conversation) : undefined}
                                             onOpenMeshGraph={onOpenMeshGraph}
                                             onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
@@ -791,14 +808,6 @@ export default function DashboardMobileChatInbox({
                 >
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                 </button>
-            )}
-
-            {hideConfirmConversation && (
-                <HideConversationConfirmDialog
-                    conversation={hideConfirmConversation}
-                    onCancel={() => setHideConfirmConversation(null)}
-                    onConfirm={handleConfirmHideConversation}
-                />
             )}
 
             <DashboardMobileBottomNav section={section} onSectionChange={onSectionChange} />

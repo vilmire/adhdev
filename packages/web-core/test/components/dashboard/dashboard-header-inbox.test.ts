@@ -307,21 +307,29 @@ describe('DashboardHeader inbox notifications', () => {
     expect(mainViewSource).not.toContain('fixed right-4 bottom-24')
   })
 
-  it('keeps the mesh graph header button compact beside the CLI view toggle', () => {
+  it('collapses per-conversation actions into one pane toolbar: Stop + the "…" overflow, one status dot, no duplicate title', () => {
     const html = renderHeader({
       activeConv: createConversation({
         daemonId: 'daemon-1',
         coordinator: { meshId: 'mesh-1', role: 'coordinator' },
       }),
       onOpenMeshGraph: () => {},
+      onStopCli: () => {},
     })
     const css = readFileSync(path.resolve(process.cwd(), 'src/index.css'), 'utf8')
 
-    expect(html).toContain('dashboard-header-mesh-button')
-    expect(html).toContain('Open live repo mesh graph')
-    expect(css).toContain('.dashboard-header-mesh-button')
-    expect(css).toContain('height: 32px;')
-    expect(css).toContain('padding: 4px 8px;')
-    expect(css).toContain('line-height: 1;')
+    expect(html).toContain('data-testid="dashboard-pane-toolbar"')
+    expect(html).toContain('data-testid="dashboard-pane-stop"')
+    expect(html).toContain('data-testid="conversation-actions-menu"')
+    expect(html).toContain('aria-label="More actions"')
+    // History / remote / mesh graph are menu items now, not header buttons.
+    expect(html).not.toContain('dashboard-header-mesh-button')
+    expect(html).not.toContain('title="Chat History"')
+    // The active tab already names the conversation — no second title chip.
+    expect(html).not.toContain('dashboard-header-action-target')
+    expect(css).not.toContain('.dashboard-header-action-target')
+    // One connection dot (the mobile duplicate is gone).
+    expect(html.split('header-title-status-dot').length - 1).toBe(1)
+    expect(html).not.toContain('header-count-mobile')
   })
 })

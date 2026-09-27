@@ -46342,6 +46342,12 @@ ${renderWorkerProtocolFooter2(input)}`;
     function getLogLevel() {
       return currentLevel;
     }
+    function setConsoleLogLevel(level) {
+      consoleLevel = level;
+    }
+    function getConsoleLogLevel() {
+      return consoleLevel;
+    }
     function resolveLogDir() {
       return resolveConfigLogsDir();
     }
@@ -46523,16 +46529,18 @@ ${renderWorkerProtocolFooter2(input)}`;
       return (/* @__PURE__ */ new Date()).toISOString();
     }
     function daemonLog(category, msg, level = "info") {
-      const shouldOutput = LEVEL_NUM[level] >= LEVEL_NUM[currentLevel];
+      const shouldRecord = LEVEL_NUM[level] >= LEVEL_NUM[currentLevel];
+      if (!shouldRecord) return;
       const label2 = LEVEL_LABEL[level];
       const line = `[${ts()}] [${label2}] [${category}] ${msg}`;
-      if (!shouldOutput) return;
       writeToFile(line);
       ringBuffer.push({ ts: Date.now(), level, category, message: msg });
       if (ringBuffer.length > RING_BUFFER_SIZE) {
         ringBuffer.splice(0, ringBuffer.length - RING_BUFFER_SIZE);
       }
-      origConsoleLog(line);
+      if (LEVEL_NUM[level] >= LEVEL_NUM[consoleLevel]) {
+        origConsoleLog(line);
+      }
     }
     function installGlobalInterceptor() {
       if (interceptorInstalled) return;
@@ -46600,6 +46608,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     var LEVEL_NUM;
     var LEVEL_LABEL;
     var currentLevel;
+    var consoleLevel;
     var MAX_LOG_SIZE;
     var MAX_LOG_DAYS;
     var MAX_SIZE_ROTATION_GENERATIONS;
@@ -46631,6 +46640,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         LEVEL_NUM = { debug: 0, info: 1, warn: 2, error: 3 };
         LEVEL_LABEL = { debug: "DBG", info: "INF", warn: "WRN", error: "ERR" };
         currentLevel = "info";
+        consoleLevel = "warn";
         MAX_LOG_SIZE = 5 * 1024 * 1024;
         MAX_LOG_DAYS = 7;
         MAX_SIZE_ROTATION_GENERATIONS = 3;
@@ -77555,12 +77565,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const upgradeFailure = sanitizeUpgradeFailure(record22.upgradeFailure);
       const nodeFacts = normalizeMeshNodeFacts(record22.nodeFacts);
       const daemonId = readId(record22.daemonId);
+      const daemonBootId = readId(record22.daemonBootId);
       const truncated = rawSessions.length > sessions.length && sessions.length >= MESH_NODE_RUNTIME_MAX_SESSIONS;
       const providers = sanitizeProviders(record22.providers);
       const sessionStampVersion = typeof record22.sessionStampVersion === "number" && Number.isInteger(record22.sessionStampVersion) && record22.sessionStampVersion > 0 && record22.sessionStampVersion < 1e3 ? record22.sessionStampVersion : void 0;
       return {
         schemaVersion: MESH_NODE_RUNTIME_SUMMARY_SCHEMA_VERSION,
         ...daemonId ? { daemonId } : {},
+        ...daemonBootId ? { daemonBootId } : {},
         ...daemonBuild ? { daemonBuild } : {},
         ...upgradeFailure ? { upgradeFailure } : {},
         sessions,
@@ -77579,6 +77591,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const catalog = providers ?? (Array.isArray(status.availableProviders) ? buildMeshNodeRuntimeProviders(status.availableProviders) : void 0);
       return sanitizeMeshNodeRuntimeSummary({
         daemonId: status.instanceId,
+        daemonBootId: payload.daemonBootId ?? status.daemonBootId,
         daemonBuild: payload.daemonBuild,
         upgradeFailure: payload.upgradeFailure,
         sessions: status.sessions,
@@ -77603,6 +77616,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       };
       return JSON.stringify([
         summary.daemonId ?? null,
+        summary.daemonBootId ?? null,
         summary.daemonBuild ?? null,
         summary.upgradeFailure ? stripTimes(summary.upgradeFailure) : null,
         summary.sessions.map((s2) => stripTimes(s2)),
@@ -77640,6 +77654,15 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         MAX_LABEL_CHARS = 300;
       }
     });
+    function meshNodeRuntimeInstanceChanged(prev, next) {
+      if (!prev || !next) return false;
+      if (prev.daemonBootId && next.daemonBootId && prev.daemonBootId !== next.daemonBootId) return true;
+      if (prev.daemonId && next.daemonId && !daemonIdsEquivalent4(prev.daemonId, next.daemonId)) return true;
+      const a = prev.daemonBuild;
+      const b = next.daemonBuild;
+      if (a && b && (a.commit !== b.commit || (a.version ?? null) !== (b.version ?? null) || a.track !== b.track)) return true;
+      return false;
+    }
     function readRecord5(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : null;
     }
@@ -77696,8 +77719,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         runtimeSignature: null,
         runtimeLastAttemptAt: null,
         runtimeLastFailureAt: null,
-        daemonId: null
+        daemonId: null,
+        handshakePendingSince: null,
+        handshakePendingReason: null,
+        handshakePendingBootId: null
       };
+    }
+    function clearHandshakePending(entry) {
+      entry.handshakePendingSince = null;
+      entry.handshakePendingReason = null;
+      entry.handshakePendingBootId = null;
     }
     function computeMeshNodeSessionSetSignature(summary) {
       if (!summary) return "[]";
@@ -77772,7 +77803,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               runtimeSignature: runtime ? typeof row.runtime_signature === "string" ? row.runtime_signature : computeMeshNodeRuntimeSignature(runtime) : null,
               runtimeLastAttemptAt: null,
               runtimeLastFailureAt: null,
-              daemonId: null
+              daemonId: null,
+              handshakePendingSince: null,
+              handshakePendingReason: null,
+              handshakePendingBootId: null
             };
           });
         },
@@ -77890,9 +77924,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             const recovered = entry.unreachableSince !== null;
             const changed = signature !== entry.signature || recovered;
             const observedAt = typeof args.observedAt === "number" && Number.isFinite(args.observedAt) ? Math.min(args.observedAt, this.now()) : this.now();
-            if (entry.observedAt !== null && observedAt < entry.observedAt && !recovered) {
+            const pending = entry.handshakePendingSince !== null;
+            if (entry.observedAt !== null && observedAt < entry.observedAt && !recovered && !pending) {
               return { changed: false, entry };
             }
+            if (pending && entry.handshakePendingReason !== "restart") clearHandshakePending(entry);
             entry.git = git3;
             entry.observedAt = observedAt;
             entry.source = args.source;
@@ -77928,13 +77964,19 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            */
           recordRuntimeObservation(args) {
             const runtime = sanitizeMeshNodeRuntimeSummary(args.runtime);
-            if (!args.meshId || !args.nodeId || !runtime) return { changed: false, factsChanged: false, sessionsChanged: false, entry: null };
+            if (!args.meshId || !args.nodeId || !runtime) return { changed: false, factsChanged: false, sessionsChanged: false, instanceChanged: false, entry: null };
             const entry = this.upsertBase(args.meshId, args.nodeId, args.workspace);
             const rosterDaemonId = typeof args.daemonId === "string" && args.daemonId.trim() ? args.daemonId.trim() : null;
             if (rosterDaemonId) entry.daemonId = rosterDaemonId;
             const observedAt = typeof args.observedAt === "number" && Number.isFinite(args.observedAt) ? Math.min(args.observedAt, this.now()) : this.now();
-            if (entry.runtimeObservedAt !== null && observedAt < entry.runtimeObservedAt) {
-              return { changed: false, factsChanged: false, sessionsChanged: false, entry };
+            const instanceChanged = meshNodeRuntimeInstanceChanged(entry.runtime, runtime);
+            const pending = entry.handshakePendingSince !== null;
+            if (entry.runtimeObservedAt !== null && observedAt < entry.runtimeObservedAt && !instanceChanged && !pending) {
+              return { changed: false, factsChanged: false, sessionsChanged: false, instanceChanged: false, entry };
+            }
+            if (pending) {
+              const fromReplacedProcess = entry.handshakePendingReason === "restart" && !!entry.handshakePendingBootId && runtime.daemonBootId === entry.handshakePendingBootId && !instanceChanged;
+              if (!fromReplacedProcess) clearHandshakePending(entry);
             }
             const signature = computeMeshNodeRuntimeSignature(runtime);
             const changed = signature !== entry.runtimeSignature;
@@ -77946,7 +77988,23 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             entry.runtimeSignature = signature;
             entry.runtimeLastFailureAt = null;
             this.persist(entry);
-            return { changed, factsChanged, sessionsChanged, entry };
+            return { changed: changed || instanceChanged, factsChanged, sessionsChanged, instanceChanged, entry };
+          }
+          /**
+           * Mark a node's held state as needing a handshake now (see
+           * MeshNodeGitStateEntry.handshakePendingSince). A pending `restart` is not
+           * downgraded to `reconnect`: the member's link coming back is exactly when
+           * the restart's report is expected, and it must still come from the new
+           * process. Only nodes the coordinator already holds state for are marked.
+           */
+          markHandshakePending(meshId, nodeId, reason, at = this.now()) {
+            const entry = this.get(meshId, nodeId);
+            if (!entry) return false;
+            if (entry.handshakePendingSince !== null && entry.handshakePendingReason === "restart" && reason === "reconnect") return true;
+            entry.handshakePendingSince = at;
+            entry.handshakePendingReason = reason;
+            entry.handshakePendingBootId = reason === "restart" ? entry.runtime?.daemonBootId ?? null : null;
+            return true;
           }
           recordRuntimeProbeAttempt(meshId, nodeId, workspace, at = this.now()) {
             if (!meshId || !nodeId) return;
@@ -88144,6 +88202,7 @@ ${upstream}`;
       if (root.success === false || inner.success === false) {
         const code = readString6(root.code) || readString6(inner.code) || readString6(root.error) || readString6(inner.error);
         if (code.startsWith("mesh_sender_") || code === "mesh_node_unknown" || code === "mesh_not_found") return false;
+        if (code.startsWith("Unknown command")) return false;
       }
       return null;
     }
@@ -88153,10 +88212,12 @@ ${upstream}`;
     var MESH_NODE_STATE_PUSH_TTL_MS;
     var MESH_NODE_STATE_NUDGE_UPSTREAM_MIN_MS;
     var MESH_NODE_RUNTIME_PUSH_DEBOUNCE_MS;
+    var MESH_NODE_STATE_FORCED_PUSH_MIN_INTERVAL_MS;
     var MeshNodeStatePusher;
     var init_mesh_node_state_pusher = __esm2({
       "src/mesh/mesh-node-state-pusher.ts"() {
         "use strict";
+        init_dist();
         init_logger();
         init_runtime_defaults();
         init_mesh_node_git_state();
@@ -88168,6 +88229,7 @@ ${upstream}`;
         MESH_NODE_STATE_PUSH_TTL_MS = 30 * 6e4;
         MESH_NODE_STATE_NUDGE_UPSTREAM_MIN_MS = 6e4;
         MESH_NODE_RUNTIME_PUSH_DEBOUNCE_MS = readMeshTimeoutEnvMs("MESH_NODE_RUNTIME_PUSH_DEBOUNCE_MS", 1500);
+        MESH_NODE_STATE_FORCED_PUSH_MIN_INTERVAL_MS = 5e3;
         MeshNodeStatePusher = class {
           constructor(options) {
             this.options = options;
@@ -88230,9 +88292,113 @@ ${upstream}`;
             if (!existing) {
               LOG.info("MeshNodeState", `pushing git state of node ${args.nodeId} (mesh ${args.meshId}) to coordinator ${coordinatorDaemonId.slice(0, 12)}`);
               this.noteRuntimeChanged();
+              this.persistTargets();
+            } else if (existing.workspace !== workspace) {
+              this.persistTargets();
             }
             this.ensureTimer();
             return true;
+          }
+          /**
+           * Register a subscription this daemon knows of WITHOUT a coordinator probe —
+           * a restored one after a restart, or a membership derived from its mesh host
+           * records. Nothing is held for it yet, so the first push (pushNow / the next
+           * tick) carries the full git + runtime + worktree list. An existing
+           * subscription is left untouched. Returns whether one was added.
+           */
+          selfRegister(target) {
+            if (!this.options.dispatch) return false;
+            const coordinatorDaemonId = readString6(target.coordinatorDaemonId);
+            const meshId = readString6(target.meshId);
+            const nodeId = readString6(target.nodeId);
+            const workspace = readString6(target.workspace);
+            if (!coordinatorDaemonId || !meshId || !nodeId || !workspace) return false;
+            const key2 = this.key(coordinatorDaemonId, meshId, nodeId);
+            if (this.subscriptions.has(key2)) return false;
+            this.subscriptions.set(key2, {
+              coordinatorDaemonId,
+              meshId,
+              nodeId,
+              workspace,
+              expiresAt: this.now() + this.ttlMs,
+              lastSignature: null,
+              lastPushedAt: null,
+              lastUpstreamRefreshAt: null,
+              lastUpstreamGit: null,
+              lastRuntimeSignature: null,
+              coordinatorBootId: null,
+              worktreeNodesDeliveredFor: null
+            });
+            this.ensureTimer();
+            return true;
+          }
+          /**
+           * Boot: restore the persisted subscription set plus `derived` memberships
+           * (self-registered, not pushed — call pushNow once the transport is up).
+           * Returns how many subscriptions were added.
+           */
+          restore(derived = [], opts) {
+            const self = readString6(opts?.selfDaemonId);
+            let persisted = [];
+            try {
+              persisted = this.options.persistence?.load() ?? [];
+            } catch (error48) {
+              LOG.debug("MeshNodeState", `push subscription restore failed: ${error48?.message || error48}`);
+            }
+            let added = 0;
+            for (const target of [...persisted, ...derived]) {
+              if (self && daemonIdsEquivalent4(readString6(target?.coordinatorDaemonId), self)) continue;
+              if (this.selfRegister(target)) added += 1;
+            }
+            if (added > 0) {
+              LOG.info("MeshNodeState", `restored ${added} node state push subscription(s) \u2014 pushing to their coordinators now`);
+              this.persistTargets();
+            }
+            return added;
+          }
+          /**
+           * Push every subscription (or only those of `coordinatorDaemonId`) NOW, in
+           * the background — at boot once the mesh transport is up, and whenever the
+           * link to a coordinator (re)opens, so a coordinator learns this process's
+           * state (build, sessions, git) within seconds. A subscription force-pushed
+           * less than MESH_NODE_STATE_FORCED_PUSH_MIN_INTERVAL_MS ago is skipped.
+           * Returns how many pushes were started.
+           */
+          pushNow(coordinatorDaemonId) {
+            if (!this.options.dispatch) return 0;
+            const wanted = readString6(coordinatorDaemonId);
+            const now = this.now();
+            let runtime;
+            const readRuntimeOnce = async () => {
+              if (runtime === void 0) runtime = await this.readRuntimeSummary();
+              return runtime;
+            };
+            let started = 0;
+            for (const [key2, sub] of [...this.subscriptions.entries()]) {
+              if (wanted && !daemonIdsEquivalent4(sub.coordinatorDaemonId, wanted)) continue;
+              if (sub.lastForcedPushAt != null && now - sub.lastForcedPushAt < MESH_NODE_STATE_FORCED_PUSH_MIN_INTERVAL_MS) continue;
+              sub.lastForcedPushAt = now;
+              void this.checkOne(key2, sub, readRuntimeOnce, { force: true }).catch(() => {
+              });
+              started += 1;
+            }
+            return started;
+          }
+          persistTargets() {
+            if (!this.options.persistence) return;
+            try {
+              this.options.persistence.save([...this.subscriptions.values()].map((sub) => ({
+                coordinatorDaemonId: sub.coordinatorDaemonId,
+                meshId: sub.meshId,
+                nodeId: sub.nodeId,
+                workspace: sub.workspace
+              })));
+            } catch (error48) {
+              LOG.debug("MeshNodeState", `push subscription persist failed: ${error48?.message || error48}`);
+            }
+          }
+          dropSubscription(key2) {
+            if (this.subscriptions.delete(key2)) this.persistTargets();
           }
           /**
            * A coordinator asks for this node's state now (explicit refresh). Returns
@@ -88314,7 +88480,7 @@ ${upstream}`;
                 }
                 const ack = readAck(response);
                 if (ack === false) {
-                  this.subscriptions.delete(key2);
+                  this.dropSubscription(key2);
                   continue;
                 }
                 if (ack === true) {
@@ -88363,7 +88529,7 @@ ${upstream}`;
               for (const [key2, sub] of [...this.subscriptions.entries()]) {
                 const now = this.now();
                 if (now >= sub.expiresAt) {
-                  this.subscriptions.delete(key2);
+                  this.dropSubscription(key2);
                   LOG.info("MeshNodeState", `push subscription for node ${sub.nodeId} (mesh ${sub.meshId}) lapsed \u2014 coordinator did not ack within the TTL`);
                   continue;
                 }
@@ -88417,7 +88583,7 @@ ${upstream}`;
             }
             const ack = readAck(response);
             if (ack === false) {
-              this.subscriptions.delete(key2);
+              this.dropSubscription(key2);
               LOG.info("MeshNodeState", `coordinator refused git state push for node ${sub.nodeId} (mesh ${sub.meshId}); subscription dropped`);
               return;
             }
@@ -88468,6 +88634,7 @@ ${upstream}`;
     });
     function isHeldRuntimeLive(entry, now = Date.now(), staleMs = MESH_NODE_STATE_STALE_MS) {
       if (!entry?.runtime || entry.runtimeSource !== "member_push" || entry.runtimeObservedAt === null) return false;
+      if (entry.handshakePendingSince != null) return false;
       return now - entry.runtimeObservedAt < staleMs;
     }
     function readLiveHeldRuntime(store2, args, now = Date.now()) {
@@ -88507,6 +88674,8 @@ ${upstream}`;
           runtimeInflight = /* @__PURE__ */ new Map();
           nudgeInflight = /* @__PURE__ */ new Map();
           lastNudgeAt = /* @__PURE__ */ new Map();
+          /** Nodes whose handshake nudge is in flight — the request-path kick leaves them to it. */
+          handshakeNodes = /* @__PURE__ */ new Set();
           now;
           staleMs;
           legacyStaleMs;
@@ -88524,6 +88693,7 @@ ${upstream}`;
           /** Whether a kick for this node would start a probe right now. */
           shouldRefresh(meshId, nodeId, opts) {
             if (this.isRefreshing(meshId, nodeId)) return false;
+            if (!opts?.force && this.handshakeNodes.has(this.key(meshId, nodeId))) return false;
             const entry = this.options.store.get(meshId, nodeId);
             const now = this.now();
             if (entry?.lastAttemptAt !== null && entry?.lastAttemptAt !== void 0 && now - entry.lastAttemptAt < MESH_NODE_STATE_FORCE_MIN_INTERVAL_MS) {
@@ -88534,6 +88704,7 @@ ${upstream}`;
               return false;
             }
             if (!entry || entry.observedAt === null || !entry.git) return true;
+            if (entry.handshakePendingSince !== null) return true;
             return now - entry.observedAt >= this.staleFor(entry.source);
           }
           /**
@@ -88589,13 +88760,15 @@ ${upstream}`;
           isRuntimeRefreshing(meshId, daemonId) {
             return this.runtimeInflight.has(this.key(meshId, daemonId));
           }
-          runtimeNeedsRefresh(meshId, nodeId, force) {
+          runtimeNeedsRefresh(meshId, nodeId, force, handshake = false) {
             const entry = this.options.store.get(meshId, nodeId);
             const now = this.now();
             if (entry?.runtimeLastAttemptAt != null && now - entry.runtimeLastAttemptAt < MESH_NODE_STATE_FORCE_MIN_INTERVAL_MS) return false;
+            if (handshake) return true;
             if (force && entry?.runtimeSource !== "member_push") return true;
             if (entry?.runtimeLastFailureAt != null && now - entry.runtimeLastFailureAt < this.failureBackoffMs) return false;
             if (!entry || entry.runtimeObservedAt === null || !entry.runtime) return true;
+            if (entry.handshakePendingSince !== null) return true;
             return now - entry.runtimeObservedAt >= this.staleFor(entry.runtimeSource);
           }
           /**
@@ -88608,7 +88781,7 @@ ${upstream}`;
             if (!probeRuntime || !meshId || !daemonId || targets.length === 0) return false;
             const key2 = this.key(meshId, daemonId);
             if (this.runtimeInflight.has(key2)) return false;
-            if (!targets.some((t) => this.runtimeNeedsRefresh(meshId, t.nodeId, t.force === true))) return false;
+            if (!targets.some((t) => this.runtimeNeedsRefresh(meshId, t.nodeId, t.force === true, t.handshake === true))) return false;
             const { store: store2 } = this.options;
             const startedAt = this.now();
             for (const t of targets) store2.recordRuntimeProbeAttempt(meshId, t.nodeId, t.workspace, startedAt);
@@ -88632,7 +88805,7 @@ ${upstream}`;
                     daemonId
                   });
                   if (!recorded.entry) store2.recordRuntimeProbeFailure(meshId, t.nodeId, t.workspace, this.now());
-                  factsChanged = factsChanged || recorded.factsChanged || recorded.sessionsChanged;
+                  factsChanged = factsChanged || recorded.factsChanged || recorded.sessionsChanged || recorded.instanceChanged;
                 } else {
                   store2.recordRuntimeProbeFailure(meshId, t.nodeId, t.workspace, this.now());
                 }
@@ -88682,6 +88855,53 @@ ${upstream}`;
               if (subscribed === false) this.kick(target, { force: true });
             })().catch(() => {
             }).finally(() => {
+              if (this.nudgeInflight.get(key2) === run2) this.nudgeInflight.delete(key2);
+            });
+            this.nudgeInflight.set(key2, run2);
+            return true;
+          }
+          /**
+           * The member daemon `daemonId` (re)connected, or was restarted by this
+           * coordinator: handshake every node of it on `meshId` NOW. Each node is
+           * nudged (the member pushes at once when it holds a subscription); a node
+           * whose member is not subscribed, does not know the nudge, or did not answer
+           * gets the handshake probe (git_status carrying meshStateSubscription, which
+           * re-registers the push), plus one runtime read for the daemon. Bypasses the
+           * nudge throttle and the failure backoff (the link just came up) but not the
+           * per-node minimum interval, so a flapping link cannot storm the member.
+           * Fire-and-forget; returns whether a handshake was started.
+           */
+          handshakeDaemon(meshId, daemonId, targets) {
+            const eligible = targets.filter((t) => t.meshId === meshId && t.nodeId && t.daemonId && t.workspace);
+            if (!meshId || !daemonId || eligible.length === 0) return false;
+            const usable = eligible.filter((t) => !t.runtimeOnly);
+            const runtimeOnly = eligible.filter((t) => t.runtimeOnly);
+            const key2 = `handshake\0${this.key(meshId, daemonId)}`;
+            if (this.nudgeInflight.has(key2)) return false;
+            const nudge = this.options.nudge;
+            const run2 = (async () => {
+              const fallback = [];
+              for (const target of usable) this.handshakeNodes.add(this.key(target.meshId, target.nodeId));
+              await Promise.all(usable.map(async (target) => {
+                let subscribed = null;
+                if (nudge) {
+                  this.lastNudgeAt.set(this.key(target.meshId, target.nodeId), this.now());
+                  try {
+                    subscribed = await nudge(target);
+                  } catch {
+                    subscribed = null;
+                  }
+                }
+                this.handshakeNodes.delete(this.key(target.meshId, target.nodeId));
+                if (subscribed !== true) fallback.push(target);
+              }));
+              for (const target of fallback) this.kick(target, { force: true });
+              const runtimeTargets = [...fallback, ...runtimeOnly];
+              if (runtimeTargets.length === 0) return;
+              this.kickRuntime(meshId, daemonId, runtimeTargets.map((t) => ({ nodeId: t.nodeId, workspace: t.workspace, handshake: true })));
+            })().catch(() => {
+            }).finally(() => {
+              for (const target of usable) this.handshakeNodes.delete(this.key(target.meshId, target.nodeId));
               if (this.nudgeInflight.get(key2) === run2) this.nudgeInflight.delete(key2);
             });
             this.nudgeInflight.set(key2, run2);
@@ -113580,6 +113800,15 @@ ${marker}`,
         LOG.info("MeshRestart", `Re-armed persisted deferred restart for node ${record22.nodeId} (mode=${rearmed.mode}, expires ${new Date(record22.expiresAt).toISOString()})`);
       }
     }
+    function restartWillHappen(result, args) {
+      if (!result || result.success === false) return false;
+      if (args?.cancelWhenIdle === true || args?.whenIdleStatus === true) return false;
+      const record22 = result;
+      if (record22.restarted === false) return false;
+      const deferred = record22.deferredRestart;
+      if (deferred && typeof deferred === "object" && record22.restarted !== true) return false;
+      return true;
+    }
     var RESTART_BLOCKING_STATES;
     var DEFERRED_RESTART_DEFAULT_TIMEOUT_MS;
     var DEFERRED_RESTART_MAX_TIMEOUT_MS;
@@ -113622,7 +113851,14 @@ ${marker}`,
             const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent4(nodeDaemonId, selfDaemonId);
             if (isRemote && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
               const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId, "restart_daemon_node", withMeshDirectDispatch(args, rosterEvidenceExtra(args, resolvedMesh)));
-              return unwrapMeshRelayResult(forwarded, { command: "restart_daemon_node", peerDaemonId: nodeDaemonId });
+              const result = unwrapMeshRelayResult(forwarded, { command: "restart_daemon_node", peerDaemonId: nodeDaemonId });
+              if (restartWillHappen(result, args)) {
+                try {
+                  await ctx.noteMeshMemberRestarting?.(nodeDaemonId);
+                } catch {
+                }
+              }
+              return result;
             }
             const scheduleKey = deferredRestartScheduleKey(meshId, nodeId);
             if (args?.cancelWhenIdle === true) {
@@ -145278,9 +145514,9 @@ ${asText(streams.stderr)}
       }
       const { mkdtempSync: mkdtempSync3, rmSync: rmSync13, openSync: openSync14, closeSync: closeSync14 } = await import("fs");
       const { tmpdir: tmpdir8 } = await import("os");
-      const { join: join85 } = await import("path");
-      const scratch = mkdtempSync3(join85(tmpdir8(), "adhdev-patchid-"));
-      const patchFile = join85(scratch, "patch.diff");
+      const { join: join86 } = await import("path");
+      const scratch = mkdtempSync3(join86(tmpdir8(), "adhdev-patchid-"));
+      const patchFile = join86(scratch, "patch.diff");
       try {
         const out = openSync14(patchFile, "w");
         let diffRun;
@@ -148561,7 +148797,7 @@ ${ptyResult.output.slice(-2e3)}`);
                   workspace
                 };
               }
-              const { existsSync: existsSync86, readFileSync: readFileSync69, writeFileSync: writeFileSync37, copyFileSync: copyFileSync4, mkdirSync: mkdirSync44 } = await import("fs");
+              const { existsSync: existsSync87, readFileSync: readFileSync70, writeFileSync: writeFileSync38, copyFileSync: copyFileSync4, mkdirSync: mkdirSync44 } = await import("fs");
               const { dirname: dirname38 } = await import("path");
               const mcpConfigPath = coordinatorSetup.configPath;
               const hermesManualFallback = cliType === "hermes-cli" && configFormat === "hermes_config_yaml" ? createHermesManualMeshCoordinatorSetup(meshId, workspace) : null;
@@ -148606,14 +148842,14 @@ ${ptyResult.output.slice(-2e3)}`);
                 if (hermesManualFallback) return returnManualFallback(message);
                 return { success: false, code: "mesh_coordinator_config_write_failed", error: message, meshId, cliType, workspace };
               }
-              const hadExistingMcpConfig = existsSync86(mcpConfigPath);
+              const hadExistingMcpConfig = existsSync87(mcpConfigPath);
               let existingMcpConfig = hermesBaseConfig?.config || {};
               if (hermesBaseConfig) {
                 copyHermesCoordinatorCredentialFiles(hermesBaseConfig.sourceHome, dirname38(mcpConfigPath));
               }
               if (hadExistingMcpConfig) {
                 try {
-                  const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(readFileSync69(mcpConfigPath, "utf-8"), configFormat);
+                  const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(readFileSync70(mcpConfigPath, "utf-8"), configFormat);
                   const existingCoordinatorConfig = hermesManualFallback ? stripHermesCoordinatorTempModelProviderOverrides(parsedExistingMcpConfig) : parsedExistingMcpConfig;
                   existingMcpConfig = { ...existingMcpConfig, ...existingCoordinatorConfig };
                   copyFileSync4(mcpConfigPath, mcpConfigPath + ".backup");
@@ -148636,7 +148872,7 @@ ${ptyResult.output.slice(-2e3)}`);
                 }
               };
               try {
-                writeFileSync37(mcpConfigPath, serializeMeshCoordinatorMcpConfig(mcpConfig, configFormat), "utf-8");
+                writeFileSync38(mcpConfigPath, serializeMeshCoordinatorMcpConfig(mcpConfig, configFormat), "utf-8");
               } catch (error48) {
                 const message = `Could not write MCP config for automatic setup: ${error48?.message || error48}`;
                 LOG.error("MeshCoordinator", message);
@@ -148983,6 +149219,29 @@ ${ptyResult.output.slice(-2e3)}`);
         if (args.refresher.kickRuntime(args.meshId, daemonId, targets)) started += 1;
       }
       return started;
+    }
+    function collectHeldDaemonNodeTargets(args) {
+      const wanted = readString11(args.daemonId);
+      const nodes = Array.isArray(args.mesh?.nodes) ? args.mesh.nodes : [];
+      const out = [];
+      if (!args.meshId || !wanted) return out;
+      for (const node of nodes) {
+        if (!node || typeof node !== "object") continue;
+        const daemonId = readString11(node.daemonId);
+        if (!daemonId || !daemonIdsEquivalent4(daemonId, wanted)) continue;
+        if (!isForeignDaemonMeshNode(node, args.locality)) continue;
+        const nodeId = normalizeMeshNodeId(node) ?? "";
+        const workspace = readString11(node.workspace);
+        if (!nodeId || !workspace || !args.store.get(args.meshId, nodeId)) continue;
+        out.push({
+          meshId: args.meshId,
+          nodeId,
+          daemonId,
+          workspace,
+          ...isRemoteMeshNodeForState(node, args.locality) ? {} : { runtimeOnly: true }
+        });
+      }
+      return out;
     }
     function factsReportedAt(facts) {
       const reportedAt = readRecord12(facts).reportedAt;
@@ -149878,7 +150137,7 @@ ${ptyResult.output.slice(-2e3)}`);
               const { deriveMeshReviewInboxItems: deriveMeshReviewInboxItems2 } = await Promise.resolve().then(() => (init_mesh_review_inbox(), mesh_review_inbox_exports));
               const { readLocalRecords: readLocalRecords2 } = await Promise.resolve().then(() => (init_mesh_local_records(), mesh_local_records_exports));
               const { getGitDiffSummary: getGitDiffSummary2 } = await Promise.resolve().then(() => (init_git_diff(), git_diff_exports));
-              const { existsSync: existsSync86 } = await import("fs");
+              const { existsSync: existsSync87 } = await import("fs");
               const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
               const mesh = meshRecord2?.mesh;
               if (!mesh) return { success: false, error: "Mesh not found" };
@@ -149897,7 +150156,7 @@ ${ptyResult.output.slice(-2e3)}`);
               const derivation = deriveMeshReviewInboxItems2({ nodes: nodeStatuses, ledgerEntries });
               for (const item of derivation.items) {
                 const workspace = item.workspace;
-                if (!workspace || !existsSync86(workspace)) continue;
+                if (!workspace || !existsSync87(workspace)) continue;
                 const baseRef = item.defaultBranch ? `origin/${item.defaultBranch}` : "origin/main";
                 try {
                   const diffResult = await getGitDiffSummary2(workspace, { baseRef, maxFiles: 100 });
@@ -149989,6 +150248,7 @@ ${ptyResult.output.slice(-2e3)}`);
             let runtimeChanged = false;
             let factsChanged = false;
             let sessionsChanged = false;
+            let instanceChanged = false;
             if (runtime) {
               const runtimeObservedAt = typeof args?.runtimeObservedAt === "number" && Number.isFinite(args.runtimeObservedAt) ? args.runtimeObservedAt : void 0;
               const ownerDaemonId = readMeshNodeDaemonId(resolved.node) ?? "";
@@ -150004,6 +150264,7 @@ ${ptyResult.output.slice(-2e3)}`);
               runtimeChanged = recorded.changed;
               factsChanged = recorded.factsChanged;
               sessionsChanged = recorded.sessionsChanged;
+              instanceChanged = recorded.instanceChanged;
               const heal = (healNodeId, facts) => {
                 try {
                   ctx.selfHealNodeFromFacts?.(meshId, healNodeId, facts);
@@ -150027,6 +150288,7 @@ ${ptyResult.output.slice(-2e3)}`);
                 });
                 factsChanged = factsChanged || siblingRecorded.factsChanged;
                 sessionsChanged = sessionsChanged || siblingRecorded.sessionsChanged;
+                instanceChanged = instanceChanged || siblingRecorded.instanceChanged;
                 if (siblingRecorded.factsChanged && siblingRecorded.entry?.runtime?.nodeFacts) heal(siblingId, siblingRecorded.entry.runtime.nodeFacts);
               }
             }
@@ -150047,7 +150309,7 @@ ${ptyResult.output.slice(-2e3)}`);
               }
             }
             if (changed) ctx.invalidateAggregateMeshStatus(meshId);
-            else if (factsChanged || sessionsChanged) ctx.deps.onMeshStateChange?.(meshId);
+            else if (factsChanged || sessionsChanged || instanceChanged) ctx.deps.onMeshStateChange?.(meshId);
             return {
               success: true,
               accepted: true,
@@ -150105,8 +150367,161 @@ ${ptyResult.output.slice(-2e3)}`);
         }, { meshSender: "authenticated_peer" });
       }
     });
-    function readLocalMeshNodeRuntime(deps) {
+    function readString14(value) {
+      return typeof value === "string" ? value.trim() : "";
+    }
+    function readTarget(value) {
+      const record22 = value && typeof value === "object" && !Array.isArray(value) ? value : null;
+      if (!record22) return null;
+      const target = {
+        coordinatorDaemonId: readString14(record22.coordinatorDaemonId),
+        meshId: readString14(record22.meshId),
+        nodeId: readString14(record22.nodeId),
+        workspace: readString14(record22.workspace)
+      };
+      return target.coordinatorDaemonId && target.meshId && target.nodeId && target.workspace ? target : null;
+    }
+    function createFileMeshNodeStatePushPersistence(getDir = getConfigDir) {
+      const filePath2 = () => (0, import_path25.join)(getDir(), FILE_NAME2);
+      return {
+        load() {
+          try {
+            const path75 = filePath2();
+            if (!(0, import_fs25.existsSync)(path75)) return [];
+            const parsed = JSON.parse((0, import_fs25.readFileSync)(path75, "utf8"));
+            const rows = Array.isArray(parsed?.subscriptions) ? parsed.subscriptions : [];
+            return rows.map(readTarget).filter((t) => !!t).slice(0, MESH_NODE_PUSH_PERSIST_MAX);
+          } catch {
+            return [];
+          }
+        },
+        save(targets) {
+          try {
+            const path75 = filePath2();
+            const rows = targets.map(readTarget).filter((t) => !!t).slice(0, MESH_NODE_PUSH_PERSIST_MAX);
+            const tmp = `${path75}.${process.pid}.tmp`;
+            (0, import_fs25.writeFileSync)(tmp, JSON.stringify({ version: 1, subscriptions: rows }, null, 2), "utf8");
+            (0, import_fs25.renameSync)(tmp, path75);
+          } catch {
+          }
+        }
+      };
+    }
+    function deriveMemberPushTargets(args) {
+      const self = readString14(args.selfDaemonId);
+      if (!self) return [];
+      const exists = args.workspaceExists ?? ((workspace) => {
+        try {
+          return (0, import_fs25.existsSync)(workspace);
+        } catch {
+          return false;
+        }
+      });
+      const out = [];
+      for (const record22 of args.hostRecords) {
+        const meshId = readString14(record22?.meshId);
+        const host = readString14(record22?.hostDaemonId);
+        if (!meshId || !host || daemonIdsEquivalent4(host, self)) continue;
+        let nodes = [];
+        try {
+          nodes = args.getMeshNodes(meshId) ?? [];
+        } catch {
+          nodes = [];
+        }
+        for (const raw of nodes) {
+          const node = raw && typeof raw === "object" ? raw : null;
+          if (!node) continue;
+          const daemonId = readString14(node.daemonId);
+          const nodeId = readString14(normalizeMeshNodeId(node));
+          const workspace = readString14(node.workspace);
+          if (!daemonId || !nodeId || !workspace || !daemonIdsEquivalent4(daemonId, self)) continue;
+          if (!exists(workspace)) continue;
+          if (out.some((t) => t.meshId === meshId && meshNodeIdMatches7({ id: t.nodeId }, nodeId))) continue;
+          out.push({ coordinatorDaemonId: host, meshId, nodeId, workspace });
+        }
+      }
+      return out;
+    }
+    var import_fs25;
+    var import_path25;
+    var FILE_NAME2;
+    var MESH_NODE_PUSH_PERSIST_MAX;
+    var init_mesh_node_state_push_store = __esm2({
+      "src/mesh/mesh-node-state-push-store.ts"() {
+        "use strict";
+        import_fs25 = require("fs");
+        import_path25 = require("path");
+        init_dist();
+        init_config();
+        FILE_NAME2 = "mesh-node-push-subscriptions.json";
+        MESH_NODE_PUSH_PERSIST_MAX = 64;
+      }
+    });
+    function readString15(value) {
+      return typeof value === "string" ? value.trim() : "";
+    }
+    async function handshakeMeshMemberDaemon(port, daemonId, reason) {
+      const wanted = readString15(daemonId);
+      if (!wanted) return 0;
+      let meshes = [];
+      try {
+        meshes = await port.listKnownMeshes();
+      } catch {
+        meshes = [];
+      }
+      const locality = { localMachineId: getMachineId() || "", localDaemonId: port.selfDaemonId };
+      let marked = 0;
+      for (const mesh of meshes) {
+        const meshId = readString15(mesh?.id);
+        if (!meshId) continue;
+        const targets = collectHeldDaemonNodeTargets({ meshId, mesh, daemonId: wanted, store: port.store, locality });
+        if (targets.length === 0) continue;
+        for (const target of targets) if (port.store.markHandshakePending(meshId, target.nodeId, reason)) marked += 1;
+        if (reason === "reconnect") port.refresher.handshakeDaemon(meshId, targets[0].daemonId, targets);
+      }
+      if (marked > 0) {
+        LOG.info("MeshNodeState", `member daemon ${wanted.slice(0, 16)} ${reason === "restart" ? "restarting" : "reconnected"} \u2014 ${marked} held node(s) marked for handshake`);
+      }
+      return marked;
+    }
+    async function restoreMemberNodeStatePush(port) {
+      let meshes = [];
+      try {
+        meshes = await port.listKnownMeshes();
+      } catch {
+        meshes = [];
+      }
+      const byId = /* @__PURE__ */ new Map();
+      for (const mesh of meshes) {
+        const id22 = readString15(mesh?.id);
+        if (id22 && !byId.has(id22)) byId.set(id22, mesh);
+      }
+      let hostRecords = [];
+      try {
+        hostRecords = port.listMeshHostRecords();
+      } catch {
+        hostRecords = [];
+      }
+      const derived = deriveMemberPushTargets({
+        selfDaemonId: port.selfDaemonId,
+        hostRecords,
+        getMeshNodes: (meshId) => Array.isArray(byId.get(meshId)?.nodes) ? byId.get(meshId).nodes : []
+      });
+      return port.pusher.restore(derived, { selfDaemonId: port.selfDaemonId });
+    }
+    var init_mesh_node_state_lifecycle = __esm2({
+      "src/commands/mesh-node-state-lifecycle.ts"() {
+        "use strict";
+        init_config();
+        init_logger();
+        init_mesh_node_state_push_store();
+        init_mesh_status_node_state();
+      }
+    });
+    function readLocalMeshNodeRuntime(deps, daemonBootId) {
       const core2 = {
+        // Per-process id: a coordinator seeing it change knows this daemon restarted.
+        ...daemonBootId ? { daemonBootId } : {},
         status: {
           instanceId: deps.statusInstanceId || getMachineId() || "daemon",
           sessions: buildSessionEntries(deps.instanceManager.collectAllStates(), deps.cdpManagers, { profile: "metadata" })
@@ -154006,7 +154421,7 @@ ${e?.stderr || ""}`;
     function acceptableManagedWorktreePaths(resolveWorktreePath2, normalizePath2, repoRoot, meshName, branch, worktreeBaseDir) {
       const safeBranch = branch.replace(/[/\\:*?"<>|]/g, "-").replace(/^\.+|\.+$/g, "");
       const safeMeshName = meshName.replace(/[/\\:*?"<>|]/g, "-").replace(/^\.+|\.+$/g, "");
-      const legacyPath = (0, import_path25.join)((0, import_path25.dirname)(repoRoot), LEGACY_WORKTREE_DIR_NAME, safeMeshName, safeBranch);
+      const legacyPath = (0, import_path26.join)((0, import_path26.dirname)(repoRoot), LEGACY_WORKTREE_DIR_NAME, safeMeshName, safeBranch);
       const candidates = [
         resolveWorktreePath2(repoRoot, meshName, branch, worktreeBaseDir),
         legacyPath
@@ -154032,8 +154447,8 @@ ${e?.stderr || ""}`;
     function looksLikeCrossTrackWorktreePath(actualPath, normalizePath2) {
       const home = normalizePath2((0, import_node_os22.homedir)());
       return TRACK_CONFIG_DIR_NAMES.some((trackDirName) => {
-        const trackWorktreesDir = (0, import_path25.join)(home, trackDirName, "worktrees");
-        return actualPath === normalizePath2(trackWorktreesDir) || actualPath.startsWith(normalizePath2(trackWorktreesDir) + import_path25.sep);
+        const trackWorktreesDir = (0, import_path26.join)(home, trackDirName, "worktrees");
+        return actualPath === normalizePath2(trackWorktreesDir) || actualPath.startsWith(normalizePath2(trackWorktreesDir) + import_path26.sep);
       });
     }
     function unexpectedPathRecoveryHint(actualPath, normalizePath2, suffix) {
@@ -154143,7 +154558,7 @@ ${e?.stderr || ""}`;
       }
       const { resolveWorktreePath: resolveWorktreePath2, listWorktrees: listWorktrees2 } = await Promise.resolve().then(() => (init_git_worktree(), git_worktree_exports));
       const normalizePath2 = (value) => {
-        const resolved = (0, import_path25.resolve)(value);
+        const resolved = (0, import_path26.resolve)(value);
         try {
           return fs69.realpathSync(resolved);
         } catch {
@@ -154270,7 +154685,7 @@ ${e?.stderr || ""}`;
       }
       const { resolveWorktreePath: resolveWorktreePath2, listWorktrees: listWorktrees2, removeWorktree: removeWorktree2 } = await Promise.resolve().then(() => (init_git_worktree(), git_worktree_exports));
       const normalizePath2 = (value) => {
-        const resolved = (0, import_path25.resolve)(value);
+        const resolved = (0, import_path26.resolve)(value);
         try {
           return fs69.realpathSync(resolved);
         } catch {
@@ -154765,7 +155180,7 @@ ${e?.stderr || ""}`;
     }
     var fs69;
     var import_node_os22;
-    var import_path25;
+    var import_path26;
     var LEGACY_WORKTREE_DIR_NAME;
     var TRACK_CONFIG_DIR_NAMES;
     var init_router_worktree_cleanup = __esm2({
@@ -154773,7 +155188,7 @@ ${e?.stderr || ""}`;
         "use strict";
         fs69 = __toESM2(require("fs"));
         import_node_os22 = require("os");
-        import_path25 = require("path");
+        import_path26 = require("path");
         init_logger();
         init_git_locale();
         init_dist();
@@ -155139,6 +155554,8 @@ ${e?.stderr || ""}`;
         init_mesh_node_git_state();
         init_mesh_node_git_refresher();
         init_mesh_node_state_pusher();
+        init_mesh_node_state_push_store();
+        init_mesh_node_state_lifecycle();
         init_mesh_remote_worktree_membership();
         import_crypto19 = require("crypto");
         init_mesh_node_runtime_io();
@@ -155235,11 +155652,14 @@ ${e?.stderr || ""}`;
           /** Member side: pushes this daemon's node git state to the coordinators that probed it. */
           meshNodeStatePusher;
           /**
-           * Per-process id this daemon returns on every member push ack. A member that
-           * sees it change knows the coordinator restarted and re-reports the worktree
-           * nodes it owns once (member worktree reconciliation).
+           * Per-process id of this daemon. Returned on every member push ack (a member
+           * that sees it change knows the coordinator restarted and re-reports the
+           * worktree nodes it owns once — member worktree reconciliation), and carried
+           * as `daemonBootId` in this daemon's own runtime summary (a coordinator that
+           * sees it change knows this member restarted).
            */
           meshCoordinatorBootId = (0, import_crypto19.randomUUID)();
+          meshNodeStatePushRestore = null;
           constructor(deps) {
             this.deps = deps;
             this.meshNodeGitState = deps.meshNodeGitStateStore ?? new MeshNodeGitStateStore();
@@ -155268,7 +155688,9 @@ ${e?.stderr || ""}`;
             this.meshNodeStatePusher = new MeshNodeStatePusher({
               dispatch: deps.dispatchMeshCommand,
               readGit: (workspace, opts) => getGitRepoStatus(workspace, { refreshUpstream: opts.refreshUpstream }),
-              readRuntime: async () => readLocalMeshNodeRuntime(this.deps),
+              readRuntime: async () => readLocalMeshNodeRuntime(this.deps, this.meshCoordinatorBootId),
+              // The subscription set survives a restart, so the new process pushes at once.
+              persistence: createFileMeshNodeStatePushPersistence(),
               // Worktree nodes this daemon owns on the mesh (inline view ∪ config), reported
               // once per coordinator boot so the coordinator can adopt any it lost.
               readWorktreeNodes: async (meshId) => {
@@ -155521,6 +155943,7 @@ ${e?.stderr || ""}`;
               updateInlineMeshNode: this.updateInlineMeshNode.bind(this),
               seedRemoteClonedWorktreeNode: this.seedRemoteClonedWorktreeNode.bind(this),
               persistRemoteClonedWorktreeNode: this.persistRemoteClonedWorktreeNode.bind(this),
+              noteMeshMemberRestarting: this.noteMeshMemberRestarting.bind(this),
               removeInlineMeshNode: this.removeInlineMeshNode.bind(this),
               tombstoneRemovedMeshNode: this.tombstoneRemovedMeshNode.bind(this),
               normalizeMeshSessionCleanupMode: this.normalizeMeshSessionCleanupMode.bind(this),
@@ -156127,6 +156550,64 @@ ${e?.stderr || ""}`;
           async resumePendingRefineJobsOnStartup() {
             return resumePendingRefineJobsOnStartup(this);
           }
+          meshNodeStateLifecyclePort() {
+            return {
+              selfDaemonId: typeof this.deps.statusInstanceId === "string" ? this.deps.statusInstanceId : void 0,
+              store: this.meshNodeGitState,
+              refresher: this.meshNodeGitRefresher,
+              pusher: this.meshNodeStatePusher,
+              listKnownMeshes: async () => {
+                const byId = /* @__PURE__ */ new Map();
+                for (const [meshId, mesh] of this.inlineMeshCache) byId.set(meshId, mesh);
+                try {
+                  const { listMeshesReadOnly: listMeshesReadOnly2 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
+                  for (const mesh of listMeshesReadOnly2()) if (mesh?.id && !byId.has(mesh.id)) byId.set(mesh.id, mesh);
+                } catch {
+                }
+                return [...byId.values()];
+              },
+              listMeshHostRecords: () => listMeshHostRecords()
+            };
+          }
+          /**
+           * Boot (member side): restore this daemon's node-state push subscriptions
+           * (persisted set + memberships derived from mesh host records). Idempotent.
+           * The pushes themselves go out on noteMeshTransportReady / a peer open, or
+           * on the pusher's next check tick when the host wires neither.
+           */
+          resumeMeshNodeStatePushOnStartup() {
+            if (!this.meshNodeStatePushRestore) {
+              this.meshNodeStatePushRestore = restoreMemberNodeStatePush(this.meshNodeStateLifecyclePort()).catch(() => 0);
+            }
+            return this.meshNodeStatePushRestore;
+          }
+          /** Host wiring: the mesh transport is up — push restored subscriptions now. */
+          noteMeshTransportReady() {
+            void this.resumeMeshNodeStatePushOnStartup().then(() => {
+              this.meshNodeStatePusher.pushNow();
+            });
+          }
+          /**
+           * Host wiring: the mesh link to peer daemon `daemonId` opened (first connect
+           * or reconnect). Member side: push to it if it coordinates any of our nodes.
+           * Coordinator side: handshake the nodes it serves — a restarted member lost
+           * its push subscription, so do not wait for its held state to go stale.
+           */
+          noteMeshPeerOpened(daemonId) {
+            if (typeof daemonId !== "string" || !daemonId.trim()) return;
+            void this.resumeMeshNodeStatePushOnStartup().then(() => {
+              this.meshNodeStatePusher.pushNow(daemonId);
+            });
+            void handshakeMeshMemberDaemon(this.meshNodeStateLifecyclePort(), daemonId, "reconnect").catch(() => 0);
+          }
+          /**
+           * This coordinator is restarting / upgrading member daemon `daemonId`
+           * (restart_daemon_node forwarded to it): its held build is pending until the
+           * new process reports.
+           */
+          noteMeshMemberRestarting(daemonId) {
+            return handshakeMeshMemberDaemon(this.meshNodeStateLifecyclePort(), daemonId, "restart").catch(() => 0);
+          }
           /**
            * Boot path for restart_daemon_node whenIdle schedules: re-arm every
            * persisted, unexpired record this daemon owns (and audit/drop the expired
@@ -156247,17 +156728,17 @@ ${e?.stderr || ""}`;
       isLocalMembershipNode: () => isLocalMembershipNode,
       projectMeshMembershipOnly: () => projectMeshMembershipOnly
     });
-    function readString14(value) {
+    function readString16(value) {
       return typeof value === "string" ? value.trim() : "";
     }
     function isLocalMembershipNode(node, locality) {
-      const daemonId = readString14(node?.daemonId);
+      const daemonId = readString16(node?.daemonId);
       if (daemonId) {
         return Boolean(
           locality.localMachineId && daemonIdsEquivalent4(daemonId, locality.localMachineId) || locality.localDaemonId && daemonIdsEquivalent4(daemonId, locality.localDaemonId)
         );
       }
-      const workspace = readString14(node?.workspace);
+      const workspace = readString16(node?.workspace);
       return Boolean(workspace) && fs71.existsSync(workspace);
     }
     function projectMeshMembershipOnly(mesh, opts) {
@@ -156612,12 +157093,12 @@ ${e?.stderr || ""}`;
                 normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
                 MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
               } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-              const { mkdirSync: mkdirSync44, writeFileSync: writeFileSync37 } = await import("fs");
-              const { dirname: dirname38, join: join85 } = await import("path");
+              const { mkdirSync: mkdirSync44, writeFileSync: writeFileSync38 } = await import("fs");
+              const { dirname: dirname38, join: join86 } = await import("path");
               const scaffold = buildMeshJsonConfigScaffold2(mesh);
               const scaffoldJson = serializeMeshJsonConfigScaffold2(scaffold);
               const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
-              const absolutePath = join85(workspace, relativePath);
+              const absolutePath = join86(workspace, relativePath);
               const validation = normalizeRepoMeshDeclarativeConfig2(scaffold);
               if (!validation.valid) {
                 return { success: false, meshId, error: `invalid mesh.json scaffold: ${validation.errors.join("; ")}` };
@@ -156654,7 +157135,7 @@ ${e?.stderr || ""}`;
                 };
               }
               mkdirSync44(dirname38(absolutePath), { recursive: true });
-              writeFileSync37(absolutePath, `${scaffoldJson}
+              writeFileSync38(absolutePath, `${scaffoldJson}
 `, "utf-8");
               return {
                 success: true,
@@ -156723,18 +157204,18 @@ ${e?.stderr || ""}`;
                 normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
                 MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
               } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-              const { existsSync: existsSync86, readFileSync: readFileSync69, mkdirSync: mkdirSync44, writeFileSync: writeFileSync37 } = await import("fs");
-              const { dirname: dirname38, join: join85 } = await import("path");
+              const { existsSync: existsSync87, readFileSync: readFileSync70, mkdirSync: mkdirSync44, writeFileSync: writeFileSync38 } = await import("fs");
+              const { dirname: dirname38, join: join86 } = await import("path");
               const yaml3 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
               const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
               let baseDoc = { version: 1 };
-              let existingPath = join85(workspace, relativePath);
+              let existingPath = join86(workspace, relativePath);
               let existedAsYaml = false;
               for (const relative9 of MESH_JSON_CONFIG_LOCATIONS2) {
-                const candidate = join85(workspace, relative9);
-                if (!existsSync86(candidate)) continue;
+                const candidate = join86(workspace, relative9);
+                if (!existsSync87(candidate)) continue;
                 try {
-                  const text = readFileSync69(candidate, "utf-8");
+                  const text = readFileSync70(candidate, "utf-8");
                   const parsed = /\.json$/i.test(candidate) ? JSON.parse(text) : yaml3.load(text);
                   if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
                     baseDoc = parsed;
@@ -156789,7 +157270,7 @@ ${e?.stderr || ""}`;
                 };
               }
               mkdirSync44(dirname38(absolutePath), { recursive: true });
-              writeFileSync37(absolutePath, serialized, "utf-8");
+              writeFileSync38(absolutePath, serialized, "utf-8");
               return {
                 success: true,
                 written: true,
@@ -159259,6 +159740,7 @@ ${e?.stderr || ""}`;
       getActiveTurnLedger: () => getActiveTurnLedger,
       getAvailableIdeIds: () => getAvailableIdeIds,
       getConfigDir: () => getConfigDir,
+      getConsoleLogLevel: () => getConsoleLogLevel,
       getCoordinatorForSession: () => getCoordinatorForSession,
       getCurrentDaemonLogPath: () => getCurrentDaemonLogPath,
       getDaemonBuildInfo: () => getDaemonBuildInfo,
@@ -159623,6 +160105,7 @@ ${e?.stderr || ""}`;
       sessionTranscriptPolicy: () => sessionTranscriptPolicy,
       sessionTranscriptTopic: () => sessionTranscriptTopic,
       setActiveTurnLedgerForIpc: () => setActiveTurnLedgerForIpc,
+      setConsoleLogLevel: () => setConsoleLogLevel,
       setDebugRuntimeConfig: () => setDebugRuntimeConfig,
       setLogInstancePort: () => setLogInstancePort,
       setLogLevel: () => setLogLevel,
@@ -163505,7 +163988,7 @@ ${e?.stderr || ""}`;
     init_track_identity();
     init_normalize();
     init_logger();
-    var import_fs25 = require("fs");
+    var import_fs26 = require("fs");
     init_logger();
     var DISK_CRITICAL_PERCENT_FREE = 2;
     var DISK_CRITICAL_FREE_BYTES = 1 * 1024 * 1024 * 1024;
@@ -163540,7 +164023,7 @@ ${e?.stderr || ""}`;
     }
     function readDiskSpace(path75) {
       try {
-        const stats = (0, import_fs25.statfsSync)(path75);
+        const stats = (0, import_fs26.statfsSync)(path75);
         const blockSize = Number(stats.bsize);
         const freeBytes = Number(stats.bavail) * blockSize;
         const totalBytes = Number(stats.blocks) * blockSize;
@@ -172093,7 +172576,8 @@ data: ${JSON.stringify(msg.data)}
     var fs80 = __toESM2(require("fs"));
     var import_chalk2 = __toESM2((init_source(), __toCommonJS(source_exports)));
     init_dist();
-    var CLAUDE_NO_API_LINE = "Claude has no quota API \u2014 adhdev borrows your statusLine to read it.";
+    init_track_identity();
+    var CLAUDE_NO_API_LINE = `Claude has no quota API \u2014 ${IDENTITY2.binaryName} borrows your statusLine to read it.`;
     var CLAUDE_WRAP_NOT_REPLACE_LINE = "Install wraps (not replaces) your statusline, so nothing is lost.";
     function windowCue(quota) {
       const kind = quota.metadata?.failureKind;
@@ -172178,12 +172662,8 @@ data: ${JSON.stringify(msg.data)}
       for (const entry of entries) {
         if (entry.outcome === "refreshed") continue;
         if (entry.outcome === "cooldown") {
-          console.log(import_chalk2.default.yellow(`\u2022 ${entry.provider}: rate-limited \u2014 not re-probed`));
-          if (typeof entry.retryAtMs === "number" && Number.isFinite(entry.retryAtMs)) {
-            console.log(import_chalk2.default.gray(`  Retrying no earlier than ${formatRelative(entry.retryAtMs)}.`));
-          }
-          console.log(import_chalk2.default.gray("  The numbers shown are the last good reading."));
-          console.log(import_chalk2.default.gray("  Re-probing now would extend the provider's own throttle."));
+          const retry = typeof entry.retryAtMs === "number" && Number.isFinite(entry.retryAtMs) ? ` \u2014 retry ${formatRelative(entry.retryAtMs)}` : "";
+          console.log(import_chalk2.default.yellow(`\u2022 ${entry.provider}: rate-limited, showing last good reading${retry}`));
           continue;
         }
         console.log(import_chalk2.default.gray(`\u2022 ${entry.provider}: ${entry.reason || entry.outcome}`));
@@ -172215,11 +172695,11 @@ data: ${JSON.stringify(msg.data)}
         );
         console.log(import_chalk2.default.gray(`    ${result.paths.wrapperFile}`));
         console.log(import_chalk2.default.gray("    Claude Code will fail to load it once that path is gone;"));
-        console.log(import_chalk2.default.gray("    re-run `adhdev quota claude:install` from a normal install to fix."));
+        console.log(import_chalk2.default.gray(`    re-run \`${IDENTITY2.binaryName} quota claude:install\` from a normal install to fix.`));
       }
       console.log();
-      console.log(import_chalk2.default.gray("  Open a Claude Code session, then run `adhdev quota claude`."));
-      console.log(import_chalk2.default.gray("  Undo any time with `adhdev quota claude:uninstall`."));
+      console.log(import_chalk2.default.gray(`  Open a Claude Code session, then run \`${IDENTITY2.binaryName} quota claude\`.`));
+      console.log(import_chalk2.default.gray(`  Undo any time with \`${IDENTITY2.binaryName} quota claude:uninstall\`.`));
       console.log();
     }
     function printClaudeUninstallResult(result) {
@@ -172235,7 +172715,7 @@ data: ${JSON.stringify(msg.data)}
       }
       console.log();
     }
-    function printClaudeStatuslineStatus(status) {
+    function printClaudeStatuslineStatus(status, verbose = false) {
       console.log();
       if (status.installed) {
         console.log(import_chalk2.default.green("\u2713 Installed"));
@@ -172244,17 +172724,19 @@ data: ${JSON.stringify(msg.data)}
             status.wrappedCommand ? `  Wrapping your statusline: ${truncate2(status.wrappedCommand, 100)}` : "  You had no statusline before install."
           )
         );
-        console.log(import_chalk2.default.gray(`  Wrapper: ${status.paths.wrapperFile}`));
-        console.log(import_chalk2.default.gray(`  Backup: ${status.paths.backupFile}`));
+        if (verbose) {
+          console.log(import_chalk2.default.gray(`  Wrapper: ${status.paths.wrapperFile}`));
+          console.log(import_chalk2.default.gray(`  Backup: ${status.paths.backupFile}`));
+        }
         let snapshotMtimeMs = null;
         try {
           snapshotMtimeMs = fs80.statSync(status.paths.snapshotFile).mtimeMs;
         } catch {
         }
         console.log(import_chalk2.default.gray(
-          snapshotMtimeMs === null ? "  Last snapshot: none yet \u2014 open a Claude Code session to record one" : `  Last snapshot: ${formatAgo(snapshotMtimeMs)} (${status.paths.snapshotFile})`
+          snapshotMtimeMs === null ? "  Last snapshot: none yet \u2014 open a Claude Code session to record one" : verbose ? `  Last snapshot: ${formatAgo(snapshotMtimeMs)} (${status.paths.snapshotFile})` : `  Last snapshot: ${formatAgo(snapshotMtimeMs)}`
         ));
-        console.log(import_chalk2.default.gray("  Undo with `adhdev quota claude:uninstall`."));
+        console.log(import_chalk2.default.gray(`  Undo with \`${IDENTITY2.binaryName} quota claude:uninstall\`.`));
       } else if (status.failureKind === "wrapper-missing") {
         console.log(import_chalk2.default.red("\u2717 Broken \u2014 the configured wrapper no longer exists"));
         console.log(import_chalk2.default.gray(`  statusLine points at: ${truncate2(status.danglingWrapperPath ?? "unknown path", 100)}`));
@@ -172263,8 +172745,8 @@ data: ${JSON.stringify(msg.data)}
         if (status.wrappedCommand) {
           console.log(import_chalk2.default.gray(`  Your own statusline is still recorded: ${truncate2(status.wrappedCommand, 80)}`));
         }
-        console.log(import_chalk2.default.gray("  Repair with `adhdev quota claude:install`."));
-        console.log(import_chalk2.default.gray("  Or clear it with `adhdev quota claude:uninstall`."));
+        console.log(import_chalk2.default.gray(`  Repair with \`${IDENTITY2.binaryName} quota claude:install\`.`));
+        console.log(import_chalk2.default.gray(`  Or clear it with \`${IDENTITY2.binaryName} quota claude:uninstall\`.`));
       } else {
         console.log(import_chalk2.default.yellow("\u2022 Not installed"));
         if (status.foreignStatusLine) {
@@ -172272,7 +172754,7 @@ data: ${JSON.stringify(msg.data)}
         }
         console.log(import_chalk2.default.gray(`  ${CLAUDE_NO_API_LINE}`));
         console.log(import_chalk2.default.gray(`  ${CLAUDE_WRAP_NOT_REPLACE_LINE}`));
-        console.log(import_chalk2.default.gray("  Set up with `adhdev quota claude:install`."));
+        console.log(import_chalk2.default.gray(`  Set up with \`${IDENTITY2.binaryName} quota claude:install\`.`));
       }
       console.log();
     }
@@ -172281,8 +172763,8 @@ data: ${JSON.stringify(msg.data)}
 \u2717 ${message}
 `));
     }
-    var import_fs29 = require("fs");
-    var import_path29 = require("path");
+    var import_fs30 = require("fs");
+    var import_path30 = require("path");
     init_dist2();
     init_config();
     init_config_dir();
@@ -172329,20 +172811,20 @@ data: ${JSON.stringify(msg.data)}
       const authority = createFleetAuthority({ secret });
       return { authority, hooks: authority };
     }
-    var import_fs26 = require("fs");
-    var import_path26 = require("path");
+    var import_fs27 = require("fs");
+    var import_path27 = require("path");
     init_config();
     init_logger();
     var FLEET_SECRET_FILE = "seqscribe-fleet-secret.json";
     function fleetSecretPath(env2) {
-      return (0, import_path26.join)(getConfigDir(env2), FLEET_SECRET_FILE);
+      return (0, import_path27.join)(getConfigDir(env2), FLEET_SECRET_FILE);
     }
     function loadStoredFleetSecret(env2) {
       const path75 = fleetSecretPath(env2);
-      if (!(0, import_fs26.existsSync)(path75)) return null;
+      if (!(0, import_fs27.existsSync)(path75)) return null;
       let raw;
       try {
-        raw = (0, import_fs26.readFileSync)(path75, "utf-8");
+        raw = (0, import_fs27.readFileSync)(path75, "utf-8");
       } catch (err) {
         LOG.warn(
           "Seqscribe",
@@ -172369,32 +172851,32 @@ data: ${JSON.stringify(msg.data)}
         throw new Error("storeFleetSecret requires an integer version >= 1");
       }
       const dir = getConfigDir(env2);
-      if (!(0, import_fs26.existsSync)(dir)) {
-        (0, import_fs26.mkdirSync)(dir, { recursive: true, mode: 448 });
+      if (!(0, import_fs27.existsSync)(dir)) {
+        (0, import_fs27.mkdirSync)(dir, { recursive: true, mode: 448 });
       }
-      const path75 = (0, import_path26.join)(dir, FLEET_SECRET_FILE);
+      const path75 = (0, import_path27.join)(dir, FLEET_SECRET_FILE);
       const tmp = `${path75}.tmp-${process.pid}`;
-      (0, import_fs26.writeFileSync)(tmp, JSON.stringify({ secret, version: version2 }, null, 2), {
+      (0, import_fs27.writeFileSync)(tmp, JSON.stringify({ secret, version: version2 }, null, 2), {
         encoding: "utf-8",
         mode: 384
       });
       try {
-        (0, import_fs26.renameSync)(tmp, path75);
+        (0, import_fs27.renameSync)(tmp, path75);
       } catch (err) {
         try {
-          (0, import_fs26.unlinkSync)(tmp);
+          (0, import_fs27.unlinkSync)(tmp);
         } catch {
         }
         throw err;
       }
       try {
-        (0, import_fs26.chmodSync)(path75, 384);
+        (0, import_fs27.chmodSync)(path75, 384);
       } catch {
       }
       LOG.info("Seqscribe", `fleet secret stored (v${version2})`);
     }
-    var import_fs27 = require("fs");
-    var import_path27 = require("path");
+    var import_fs28 = require("fs");
+    var import_path28 = require("path");
     init_logger();
     init_load_better_sqlite3();
     var SEQSCRIBE_COMPACT_MIN_FREE_BYTES = 64 * 1024 * 1024;
@@ -172494,7 +172976,7 @@ data: ${JSON.stringify(msg.data)}
       let total = 0;
       for (const p of [dbPath, `${dbPath}-wal`]) {
         try {
-          total += (0, import_fs27.statSync)(p).size;
+          total += (0, import_fs28.statSync)(p).size;
         } catch {
         }
       }
@@ -172502,7 +172984,7 @@ data: ${JSON.stringify(msg.data)}
     }
     function defaultFreeDiskBytes(dir) {
       try {
-        const s2 = (0, import_fs27.statfsSync)(dir);
+        const s2 = (0, import_fs28.statfsSync)(dir);
         return Number(s2.bavail) * Number(s2.bsize);
       } catch {
         return null;
@@ -172526,7 +173008,7 @@ data: ${JSON.stringify(msg.data)}
         after: null,
         ...extra
       });
-      if (!(0, import_fs27.existsSync)(dbPath)) return report("skipped", "no seqscribe.db");
+      if (!(0, import_fs28.existsSync)(dbPath)) return report("skipped", "no seqscribe.db");
       let Database;
       try {
         Database = loadBetterSqlite3();
@@ -172574,7 +173056,7 @@ data: ${JSON.stringify(msg.data)}
             );
           }
           const needed = SEQSCRIBE_COMPACT_FREE_DISK_MULTIPLE * before.fileBytes;
-          const freeDisk = (opts.freeDiskBytes ?? defaultFreeDiskBytes)((0, import_path27.dirname)(dbPath));
+          const freeDisk = (opts.freeDiskBytes ?? defaultFreeDiskBytes)((0, import_path28.dirname)(dbPath));
           if (freeDisk === null || freeDisk < needed) {
             return report(
               "skipped",
@@ -172613,20 +173095,20 @@ data: ${JSON.stringify(msg.data)}
       }
     }
     var import_crypto22 = require("crypto");
-    var import_fs28 = require("fs");
-    var import_path28 = require("path");
+    var import_fs29 = require("fs");
+    var import_path29 = require("path");
     init_config();
     init_logger();
     var LOCAL_AUTHORITY_SECRET_FILE = "seqscribe-local-authority.json";
     function localAuthoritySecretPath(env2) {
-      return (0, import_path28.join)(getConfigDir(env2), LOCAL_AUTHORITY_SECRET_FILE);
+      return (0, import_path29.join)(getConfigDir(env2), LOCAL_AUTHORITY_SECRET_FILE);
     }
     function loadStoredLocalAuthoritySecret(env2) {
       const path75 = localAuthoritySecretPath(env2);
-      if (!(0, import_fs28.existsSync)(path75)) return null;
+      if (!(0, import_fs29.existsSync)(path75)) return null;
       let raw;
       try {
-        raw = (0, import_fs28.readFileSync)(path75, "utf-8");
+        raw = (0, import_fs29.readFileSync)(path75, "utf-8");
       } catch (err) {
         LOG.warn(
           "Seqscribe",
@@ -172649,26 +173131,26 @@ data: ${JSON.stringify(msg.data)}
         throw new Error("storeLocalAuthoritySecret requires a non-empty secret string");
       }
       const dir = getConfigDir(env2);
-      if (!(0, import_fs28.existsSync)(dir)) {
-        (0, import_fs28.mkdirSync)(dir, { recursive: true, mode: 448 });
+      if (!(0, import_fs29.existsSync)(dir)) {
+        (0, import_fs29.mkdirSync)(dir, { recursive: true, mode: 448 });
       }
-      const path75 = (0, import_path28.join)(dir, LOCAL_AUTHORITY_SECRET_FILE);
+      const path75 = (0, import_path29.join)(dir, LOCAL_AUTHORITY_SECRET_FILE);
       const tmp = `${path75}.tmp-${process.pid}`;
-      (0, import_fs28.writeFileSync)(tmp, JSON.stringify({ secret }, null, 2), {
+      (0, import_fs29.writeFileSync)(tmp, JSON.stringify({ secret }, null, 2), {
         encoding: "utf-8",
         mode: 384
       });
       try {
-        (0, import_fs28.renameSync)(tmp, path75);
+        (0, import_fs29.renameSync)(tmp, path75);
       } catch (err) {
         try {
-          (0, import_fs28.unlinkSync)(tmp);
+          (0, import_fs29.unlinkSync)(tmp);
         } catch {
         }
         throw err;
       }
       try {
-        (0, import_fs28.chmodSync)(path75, 384);
+        (0, import_fs29.chmodSync)(path75, 384);
       } catch {
       }
       LOG.info("Seqscribe", "local authority secret minted (standalone, no fleet secret configured)");
@@ -172701,12 +173183,12 @@ data: ${JSON.stringify(msg.data)}
     function getSeqscribeDbPath(env2 = process.env) {
       const suffix = env2[SEQSCRIBE_DB_SUFFIX_ENV_VAR]?.trim();
       const name = suffix ? `seqscribe-${suffix}.db` : SEQSCRIBE_DB_NAME;
-      return (0, import_path29.join)(getConfigDir(env2), name);
+      return (0, import_path30.join)(getConfigDir(env2), name);
     }
     function openSeqscribeNode(opts = {}) {
       const dbPath = opts.dbPath ?? getSeqscribeDbPath(opts.env ?? process.env);
-      const dir = (0, import_path29.dirname)(dbPath);
-      if (!(0, import_fs29.existsSync)(dir)) (0, import_fs29.mkdirSync)(dir, { recursive: true, mode: 448 });
+      const dir = (0, import_path30.dirname)(dbPath);
+      if (!(0, import_fs30.existsSync)(dir)) (0, import_fs30.mkdirSync)(dir, { recursive: true, mode: 448 });
       const Database = loadBetterSqlite3();
       const db = new Database(dbPath);
       db.pragma("auto_vacuum = INCREMENTAL");
@@ -178684,8 +179166,8 @@ ${notice.notice}${supersededHint}`;
     init_mesh_events_coordinator();
     init_mesh_events_utils();
     init_mesh_reconcile_identity();
-    var import_fs30 = require("fs");
-    var import_path30 = require("path");
+    var import_fs31 = require("fs");
+    var import_path31 = require("path");
     init_config();
     init_mesh_ledger_paths();
     init_mesh_local_records();
@@ -178732,7 +179214,7 @@ ${notice.notice}${supersededHint}`;
     }
     function safeUnlink(path75) {
       try {
-        (0, import_fs30.unlinkSync)(path75);
+        (0, import_fs31.unlinkSync)(path75);
         return true;
       } catch (e) {
         LOG.warn("DiskRetention", `Failed to delete ${path75}: ${e?.message || e}`);
@@ -178740,18 +179222,18 @@ ${notice.notice}${supersededHint}`;
       }
     }
     function listDirFiles(dir) {
-      if (!(0, import_fs30.existsSync)(dir)) return [];
+      if (!(0, import_fs31.existsSync)(dir)) return [];
       const out = [];
       let names;
       try {
-        names = (0, import_fs30.readdirSync)(dir);
+        names = (0, import_fs31.readdirSync)(dir);
       } catch {
         return [];
       }
       for (const name of names) {
-        const path75 = (0, import_path30.join)(dir, name);
+        const path75 = (0, import_path31.join)(dir, name);
         try {
-          const st = (0, import_fs30.statSync)(path75);
+          const st = (0, import_fs31.statSync)(path75);
           if (st.isFile()) out.push({ path: path75, mtimeMs: st.mtimeMs });
         } catch {
         }
@@ -178777,23 +179259,23 @@ ${notice.notice}${supersededHint}`;
       return deleted;
     }
     function pruneExpiredSessionHostRuntimes(now = Date.now()) {
-      const root = (0, import_path30.join)(getConfigDir(), "session-host");
-      if (!(0, import_fs30.existsSync)(root)) return 0;
+      const root = (0, import_path31.join)(getConfigDir(), "session-host");
+      if (!(0, import_fs31.existsSync)(root)) return 0;
       let apps;
       try {
-        apps = (0, import_fs30.readdirSync)(root);
+        apps = (0, import_fs31.readdirSync)(root);
       } catch {
         return 0;
       }
       const candidates = [];
       for (const app of apps) {
-        const runtimesDir = (0, import_path30.join)(root, app, "runtimes");
-        if (!(0, import_fs30.existsSync)(runtimesDir)) continue;
+        const runtimesDir = (0, import_path31.join)(root, app, "runtimes");
+        if (!(0, import_fs31.existsSync)(runtimesDir)) continue;
         for (const f of listDirFiles(runtimesDir)) {
           if (!f.path.endsWith(".json")) continue;
           let record22 = null;
           try {
-            const parsed = JSON.parse((0, import_fs30.readFileSync)(f.path, "utf-8"));
+            const parsed = JSON.parse((0, import_fs31.readFileSync)(f.path, "utf-8"));
             const rec = parsed && typeof parsed === "object" ? parsed.record : null;
             record22 = rec && typeof rec === "object" ? rec : null;
           } catch {
@@ -179723,6 +180205,9 @@ ${notice.notice}${supersededHint}`;
       setImmediate(() => void s7.router.resumePendingRefineJobsOnStartup());
       components.eventLoopMonitor = startEventLoopMonitor();
       setImmediate(() => s7.router.resumeDeferredRestartsOnStartup());
+      setImmediate(() => {
+        void s7.router.resumeMeshNodeStatePushOnStartup();
+      });
       components.composerResidueSweep = scheduleComposerResidueSweep(components);
       let disposed = false;
       return () => {
@@ -179731,6 +180216,10 @@ ${notice.notice}${supersededHint}`;
         s7.poller.stop();
         s7.cdpInitializer.stop();
         stopTurnLoops(components);
+        try {
+          s7.router.meshNodeStatePusher.stop();
+        } catch {
+        }
         try {
           components.composerResidueSweep?.stop();
         } catch {

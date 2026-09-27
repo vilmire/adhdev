@@ -196,7 +196,7 @@ export default function MeshCreateForm(props: MeshCreateFormProps) {
             <h3 className="text-base font-bold mb-4">{t('mesh.list.createTitle')}</h3>
 
             {showDaemonPicker && (
-                <FormField label={t('mesh.list.createOnMachine')} hint={t('mesh.list.createOnMachineHint')}>
+                <FormField label={t('mesh.list.createOnMachine')}>
                     {daemons.length === 0
                         ? <select className="input w-full" disabled><option value="">{t('mesh.list.noConnectedDaemon')}</option></select>
                         : machinePicker}

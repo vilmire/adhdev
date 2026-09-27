@@ -90,6 +90,8 @@ export const meshNodeStateHandlers: Record<string, HighFamilyHandler> = {
         let runtimeChanged = false;
         let factsChanged = false;
         let sessionsChanged = false;
+        // A different daemon process / build than held (restart, upgrade) — always a revision.
+        let instanceChanged = false;
         if (runtime) {
             const runtimeObservedAt = typeof args?.runtimeObservedAt === 'number' && Number.isFinite(args.runtimeObservedAt)
                 ? args.runtimeObservedAt
@@ -101,6 +103,7 @@ export const meshNodeStateHandlers: Record<string, HighFamilyHandler> = {
             runtimeChanged = recorded.changed;
             factsChanged = recorded.factsChanged;
             sessionsChanged = recorded.sessionsChanged;
+            instanceChanged = recorded.instanceChanged;
             const heal = (healNodeId: string, facts: unknown) => {
                 try { ctx.selfHealNodeFromFacts?.(meshId, healNodeId, facts); } catch { /* best-effort */ }
             };
@@ -117,6 +120,7 @@ export const meshNodeStateHandlers: Record<string, HighFamilyHandler> = {
                 });
                 factsChanged = factsChanged || siblingRecorded.factsChanged;
                 sessionsChanged = sessionsChanged || siblingRecorded.sessionsChanged;
+                instanceChanged = instanceChanged || siblingRecorded.instanceChanged;
                 if (siblingRecorded.factsChanged && siblingRecorded.entry?.runtime?.nodeFacts) heal(siblingId, siblingRecorded.entry.runtime.nodeFacts);
             }
         }
@@ -139,11 +143,12 @@ export const meshNodeStateHandlers: Record<string, HighFamilyHandler> = {
             } catch { /* best-effort: the member re-reports after the next coordinator boot */ }
         }
         // A revision only for what a viewer sees change: git content, the facts
-        // bundle / provider catalog, or a session launched / terminated (the
-        // node's active sessions render from this held runtime). Session STATUS
-        // churn is served by the per-call overlay without a refetch nudge.
+        // bundle / provider catalog, a session launched / terminated (the node's
+        // active sessions render from this held runtime), or a restarted /
+        // upgraded daemon. Session STATUS churn is served by the per-call overlay
+        // without a refetch nudge.
         if (changed) ctx.invalidateAggregateMeshStatus(meshId);
-        else if (factsChanged || sessionsChanged) ctx.deps.onMeshStateChange?.(meshId);
+        else if (factsChanged || sessionsChanged || instanceChanged) ctx.deps.onMeshStateChange?.(meshId);
         return {
             success: true,
             accepted: true,

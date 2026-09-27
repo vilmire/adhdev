@@ -177,6 +177,7 @@ export function formatMeshGraphAheadBehindLocalized(node: MeshGraphNode, t?: Mes
 
 export function getNodeSummaryForLayout(node: MeshGraphNode, t?: MeshSummaryTranslator): string {
     if (node.type === 'defaultBranchNode') {
+        if (t && node.nextStepHintI18n) return t(node.nextStepHintI18n.key, node.nextStepHintI18n.params)
         return node.nextStepHint || trOr(t, 'mesh.summary.anchor', 'Default branch anchor')
     }
 
@@ -197,7 +198,7 @@ export function getNodeSummaryForLayout(node: MeshGraphNode, t?: MeshSummaryTran
         if (drift) parts.push(drift)
     }
     if (node.activeSessionCount > 0) parts.push(trOr(t, 'mesh.summary.sessions', `${node.activeSessionCount} session${node.activeSessionCount === 1 ? '' : 's'}`, { count: node.activeSessionCount }))
-    if (node.dirtyFiles > 0) parts.push(trOr(t, 'mesh.summary.dirtyCount', `${node.dirtyFiles} dirty`, { count: node.dirtyFiles }))
+    if (node.dirtyFiles > 0) parts.push(trOr(t, 'mesh.drift.changed', `${node.dirtyFiles} changed`, { count: node.dirtyFiles }))
     if (node.hasConflicts) parts.push(trOr(t, 'mesh.summary.conflicts', 'conflicts'))
     if (parts.length === 0) {
         return node.branchConvergence?.needsConvergence

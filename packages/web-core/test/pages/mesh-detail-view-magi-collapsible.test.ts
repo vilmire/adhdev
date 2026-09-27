@@ -11,7 +11,8 @@ const read = (rel: string) => fs.readFileSync(path.join(import.meta.dirname, rel
  * prop, so (per Section.tsx: `isOpen = collapsible ? open : true`) it was
  * unconditionally expanded with no collapse affordance at all — unlike the
  * Safety & Git and Coordinator Prompt sections on the same page, which are
- * both `collapsible defaultOpen={false}` with an "advanced" badge.
+ * both `collapsible defaultOpen={false}`. (They all live in the Advanced tab
+ * now, so the per-section "advanced" badge was dropped as redundant.)
  *
  * Source-level (not mounted) because MeshDetailView is page-scale with a
  * large required-props surface — same convention as
@@ -28,6 +29,7 @@ describe('MeshDetailView — G5-7 MAGI section is collapsible, matching sibling 
         const sectionTag = source.slice(sectionStart, sectionOpenEnd)
         expect(sectionTag).toContain('collapsible')
         expect(sectionTag).toContain('defaultOpen={false}')
-        expect(sectionTag).toContain("t('mesh.detail.advanced')")
+        // Inside the Advanced tab a second "advanced" badge is noise.
+        expect(sectionTag).not.toContain("t('mesh.detail.advanced')")
     })
 })

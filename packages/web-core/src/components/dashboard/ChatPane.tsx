@@ -9,8 +9,6 @@ import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
 import ChatControlsSection, { readSessionLaunchSurface } from './ChatControlsSection';
 import ChatInputBar, { type ImageAttachment } from './ChatInputBar';
 import PendingQueueStrip from './PendingQueueStrip';
-import SessionInfoButton from './SessionInfoButton';
-import ConversationMuteButton from './ConversationMuteButton';
 import ChatMachineReconnectButton from './ChatMachineReconnectButton';
 import { getVisibleBarControls } from './ControlsBar';
 import { useControlsBarVisibility } from '../../hooks/useControlsBarVisibility';
@@ -26,6 +24,7 @@ import type { ChatMessage, DaemonData } from '../../types';
 import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader';
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace';
 import { IconChat, IconEye, IconFolder, IconPlug, IconSpinner } from '../Icons';
+import { InfoTip } from '../ui/InfoTip';
 import {
     getMessageTimestamp,
 } from './message-utils';
@@ -662,9 +661,9 @@ export default function ChatPane({
         if (!result.shouldCollect) return;
         void collectChatDebugBundle().catch((error) => {
             console.warn('[chat-debug-bundle] failed to collect debug bundle', error);
-            eventManager.showToast('Chat debug signal failed. Check the browser console or P2P connection.', 'warning');
+            eventManager.showErrorToast(t('chatPane.debugBundleFailed'), error);
         });
-    }, [collectChatDebugBundle]);
+    }, [collectChatDebugBundle, t]);
     const emptyState = useMemo(() => {
         if (liveMessages.length !== 0) return undefined;
         if (activeConv.connectionState === 'connecting' || activeConv.connectionState === 'new') {
@@ -762,22 +761,15 @@ export default function ChatPane({
                         <span className="chat-activity-toggle-count">{activityToggleCount}</span>
                     )}
                 </button>
+                {/* Only present while this machine is parked. Mute and Session
+                    info moved into the pane toolbar's "…" menu
+                    (ConversationActionsMenu) so this row stays a single control. */}
                 <div className="ml-auto flex items-center gap-1">
-                    {/* Only present while this machine is parked, so the steady-state
-                        header keeps its usual bell + ⓘ pair and gains nothing to
-                        crowd the narrow mobile row. */}
                     <ChatMachineReconnectButton
                         machineId={chatMachineId}
                         blocked={!!machineRetryStatus?.blocked}
                         retryConnection={daemonCtx.retryConnection}
                     />
-                    <ConversationMuteButton
-                        sessionId={activeConv.sessionId}
-                        daemonId={activeConv.daemonId}
-                        muted={!!controlsContext.targetEntry?.muted}
-                        sendDaemonCommand={sendCommand}
-                    />
-                    <SessionInfoButton sessionId={activeConv.sessionId} daemonId={activeConv.daemonId} conv={activeConv} />
                 </div>
             </div>
             {/* (§8 unit 5, design §3.7) A transcript-replica SNAP reset discards the
@@ -817,11 +809,12 @@ export default function ChatPane({
                 re-arm still happen immediately. */}
             {showReplicaDegradedBanner && (
                 <div
-                    className="px-3 py-1.5 text-2xs text-amber-400/90 bg-amber-500/10 border-b border-amber-500/20"
+                    className="flex items-center gap-1 px-3 py-1 text-2xs text-amber-400/90 bg-amber-500/10 border-b border-amber-500/20"
                     role="status"
                     data-testid="transcript-replica-degraded-notice"
                 >
-                    {t('chatPane.replicaDegraded')}
+                    <span className="font-semibold">{t('chatPane.replicaDegradedShort')}</span>
+                    <InfoTip content={t('chatPane.replicaDegraded')} size={12} />
                     {/* (dev/preview diagnostics) Append the controller's
                         `transcriptFallbackReason` (a closed-union label like
                         `no_node`, already on the snapshot — never content) so a

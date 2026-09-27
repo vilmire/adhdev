@@ -116,7 +116,7 @@ export async function runQuotaCommand(args: readonly string[]): Promise<number> 
             }
         }
         case 'claude:status':
-            printClaudeStatuslineStatus(readStatuslineStatus());
+            printClaudeStatuslineStatus(readStatuslineStatus(), args.includes('--verbose'));
             return 0;
         default:
             console.log(QUOTA_HELP_TEXT);
