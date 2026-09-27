@@ -3132,8 +3132,8 @@
         "ws": "再接続中",
         "direct": "直接",
         "relay": "リレー",
-        "turnBlocked": "リレー上限に達しました",
-        "turnUsage": "TURN {{used}}/{{budget}}m",
+        "turnBlocked": "本日の画面表示の上限に達しました",
+        "turnUsage": "画面 {{used}}/{{budget}}分",
         "typeAndEnter": "入力して Enter...",
         "settings": "設定",
         "zoom": "ズーム:",
@@ -3141,7 +3141,7 @@
         "fit": "フィット",
         "directP2PTitle": "P2P 直接接続",
         "turnRelayTitle": "TURN リレーを使用中",
-        "dailyTurnTitle": "1日の TURN リレー使用量",
+        "dailyTurnTitle": "本日のリモート画面表示の使用時間（プランの上限）",
         "waitingState": {
             "turnRelayActive": "TURN リレー有効"
         },
@@ -4196,13 +4196,12 @@
                 },
                 "pro": {
                     "period": "/月",
-                    "tagline": "2 台のマシン、より多くの同時セッション、制限的なネットワーク向けの TURN — さらに両方のマシンにまたがってエージェントをオーケストレーションする Repo Mesh。",
+                    "tagline": "2 台のマシンとより多くの同時セッション — さらに両方のマシンにまたがってエージェントをオーケストレーションする Repo Mesh。",
                     "cta": "7 日間の Pro トライアルを始める",
                     "features": {
                         "machines": "2 台のマシン — 両方でエージェントを実行",
                         "p2p": "同時 P2P セッション数の増加",
                         "push": "無制限のプッシュ通知",
-                        "turn": "制限の厳しいネットワーク向けの TURN リレー",
                         "share": "共有セッション数の増加"
                     }
                 },

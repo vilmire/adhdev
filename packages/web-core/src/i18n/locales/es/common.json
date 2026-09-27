@@ -3135,8 +3135,8 @@
         "ws": "Reconectando",
         "direct": "Directo",
         "relay": "Relé",
-        "turnBlocked": "Límite de relé alcanzado",
-        "turnUsage": "TURN {{used}}/{{budget}}m",
+        "turnBlocked": "Límite diario de vista alcanzado",
+        "turnUsage": "Vista {{used}}/{{budget}}m",
         "typeAndEnter": "Escribe y pulsa Enter...",
         "settings": "AJUSTES",
         "zoom": "ZOOM:",
@@ -3144,7 +3144,7 @@
         "fit": "AJUSTAR",
         "directP2PTitle": "Conexión P2P directa",
         "turnRelayTitle": "Relé TURN en uso",
-        "dailyTurnTitle": "Uso diario del relé TURN",
+        "dailyTurnTitle": "Minutos de vista remota usados hoy (límite del plan)",
         "waitingState": {
             "turnRelayActive": "Relé TURN activo"
         },
@@ -4199,13 +4199,12 @@
                 },
                 "pro": {
                     "period": "/mes",
-                    "tagline": "Dos máquinas, más sesiones simultáneas y TURN para redes restrictivas, más Repo Mesh para orquestar agentes en ambas.",
+                    "tagline": "Dos máquinas y más sesiones simultáneas, más Repo Mesh para orquestar agentes en ambas.",
                     "cta": "Empezar prueba Pro de 7 días",
                     "features": {
                         "machines": "2 máquinas: ejecuta agentes en ambas",
                         "p2p": "Más sesiones P2P simultáneas",
                         "push": "Notificaciones push ilimitadas",
-                        "turn": "Relay TURN para redes restrictivas",
                         "share": "Más sesiones compartidas"
                     }
                 },

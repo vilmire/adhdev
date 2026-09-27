@@ -3132,8 +3132,8 @@
         "ws": "재연결 중",
         "direct": "직접",
         "relay": "릴레이",
-        "turnBlocked": "릴레이 한도 도달",
-        "turnUsage": "TURN {{used}}/{{budget}}분",
+        "turnBlocked": "오늘 화면 보기 한도 도달",
+        "turnUsage": "화면 {{used}}/{{budget}}분",
         "typeAndEnter": "입력 후 Enter...",
         "settings": "설정",
         "zoom": "확대/축소:",
@@ -3141,7 +3141,7 @@
         "fit": "맞추기",
         "directP2PTitle": "직접 P2P 연결",
         "turnRelayTitle": "TURN 릴레이 사용 중",
-        "dailyTurnTitle": "일일 TURN 릴레이 사용량",
+        "dailyTurnTitle": "오늘 사용한 원격 화면 보기 시간 (플랜 한도)",
         "waitingState": {
             "turnRelayActive": "TURN 릴레이 활성"
         },
@@ -4196,13 +4196,12 @@
                 },
                 "pro": {
                     "period": "/월",
-                    "tagline": "머신 2개, 더 많은 동시 세션, 제한적 네트워크를 위한 TURN — 여기에 두 머신에 걸쳐 에이전트를 오케스트레이션하는 Repo Mesh까지.",
+                    "tagline": "머신 2개와 더 많은 동시 세션 — 여기에 두 머신에 걸쳐 에이전트를 오케스트레이션하는 Repo Mesh까지.",
                     "cta": "Pro 7일 체험 시작",
                     "features": {
                         "machines": "머신 2개 — 양쪽에서 에이전트 실행",
                         "p2p": "더 많은 동시 P2P 세션",
                         "push": "무제한 푸시 알림",
-                        "turn": "제한적 네트워크를 위한 TURN 릴레이",
                         "share": "더 많은 공유 세션"
                     }
                 },
