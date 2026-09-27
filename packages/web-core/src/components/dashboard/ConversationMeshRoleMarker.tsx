@@ -1,10 +1,12 @@
 /**
- * Coordinator / worker markers — one visual language for "this conversation
- * is part of a Repo Mesh", shared by every surface that lists conversations.
+ * Coordinator marker — the mesh icon that flags "this conversation is a
+ * Repo Mesh coordinator", shared by every surface that lists conversations.
  *
- *   coordinator → mesh icon before the title (neutral text colour; amber stays
- *                 the only accent). No text label — the icon is the cue.
- *   worker      → the same icon, muted.
+ * Owner decision (2026-09-27): a worker conversation looked identical to a
+ * coordinator (same icon), so the icon is now coordinator-only and rendered
+ * in the theme accent colour (`--mesh-coordinator`, themed to
+ * `--accent-primary`) so it doubles as a "this one is the coordinator" cue.
+ * Workers render no icon at all.
  *
  * The icon never shrinks (narrow tabs keep it while the title truncates). It
  * carries an accessible name and native tooltip ("Coordinator for <mesh>"),
@@ -16,6 +18,7 @@ import { cn } from '../../lib/utils'
 import type { ActiveConversation } from './types'
 import {
     getMeshRoleMeshLabel,
+    isCoordinatorConversation,
     useConversationMeshRole,
     type ConversationMeshRole,
 } from './conversation-mesh-role'
@@ -60,11 +63,11 @@ interface MarkerProps {
     className?: string
 }
 
-/** Compact icon placed immediately before the conversation title. */
+/** Compact icon placed immediately before the conversation title. Coordinator-only. */
 export function MeshRoleIcon({ conversation, className, size = 12 }: MarkerProps & { size?: number }) {
     const role = useConversationMeshRole(conversation)
     const text = useMeshRoleText(role)
-    if (!role.role || !text) return null
+    if (!isCoordinatorConversation(conversation) || !text) return null
     return (
         <span
             role="img"

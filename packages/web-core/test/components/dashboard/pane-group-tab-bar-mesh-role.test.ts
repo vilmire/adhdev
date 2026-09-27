@@ -79,11 +79,11 @@ describe('PaneGroupTabBar mesh role marker', () => {
         expect(html).not.toContain('mesh-role-chip')
     })
 
-    it('marks a worker tab with the subtler worker marker', () => {
+    it('renders no mesh icon for a worker tab — the icon is coordinator-only', () => {
         const html = renderTabBar(createConversation({ settings: { meshNodeFor: 'mesh-1' } }))
 
-        expect(html).toContain('mesh-role-icon is-worker')
-        expect(html).toContain('aria-label="Worker for mesh-1"')
+        expect(html).not.toContain('mesh-role-icon')
+        expect(html).not.toContain('is-worker')
         expect(html).not.toContain('is-coordinator')
     })
 
