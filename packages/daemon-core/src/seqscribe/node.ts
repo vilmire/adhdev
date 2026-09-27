@@ -36,6 +36,8 @@ import { loadStoredFleetSecret } from './fleet-secret.js';
 import { createSeqscribeDbMaintenance, type SeqscribeDbMaintenance } from './db-maintenance.js';
 import { createLocalAuthority } from './local-authority.js';
 import { baseTopicDefinitions, contentTopicsFor, type TopicDefinition } from './topics.js';
+import { createSubResyncWarner } from './sub-resync-log.js';
+import { installTranscriptTailSnapshotSelector } from './transcript-tail-snapshot.js';
 
 /** DB file name under the config dir (design §6.2 inventory). */
 export const SEQSCRIBE_DB_NAME = 'seqscribe.db';
@@ -252,6 +254,19 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
         throw err;
     }
 
+    // Transcript tail SNAPs carry only the newest complete revision (+ the
+    // in-flight one) instead of the last 500 rows — see
+    // transcript-tail-snapshot.ts. Best-effort: an older vendor build without
+    // the hook keeps the default window.
+    try {
+        installTranscriptTailSnapshotSelector(node);
+    } catch (err) {
+        LOG.warn(
+            'Seqscribe',
+            `transcript tail selector unavailable: ${err instanceof Error ? err.message : String(err)}`,
+        );
+    }
+
     // With EITHER a fleet or a local authority, every content topic defines
     // successfully (defineTopic requires verifyFinality for any policy naming
     // finalityAuthority — both authority kinds supply it). Only a node with
@@ -312,6 +327,7 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
     // host reading the log wants to see it next to `sync_stalled` rather than
     // buried in INFO. `sync_stalled` is the actionable one.
     let unsubAnomaly: (() => void) | null = null;
+    const warnSubResync = createSubResyncWarner((message) => LOG.warn('Seqscribe', message));
     try {
         unsubAnomaly = node.onAnomaly((anomaly) => {
             try {
@@ -321,7 +337,11 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
                     (anomaly.writer ? ` writer=${anomaly.writer}` : '') +
                     (anomaly.view ? ` view=${anomaly.view}` : '') +
                     (anomaly.consumer ? ` consumer=${anomaly.consumer}` : '');
-                if (anomaly.kind === 'sync_stalled') {
+                if (anomaly.kind === 'sub_resync') {
+                    // Rate-limited per (topic, peer): a persistently slow
+                    // subscriber re-enters resync after each recovered SNAP.
+                    warnSubResync(anomaly, writerId);
+                } else if (anomaly.kind === 'sync_stalled') {
                     LOG.warn(
                         'Seqscribe',
                         `sync stalled node=${writerId}${subject} — WANT rounds toward a peer stopped progressing`,

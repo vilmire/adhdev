@@ -235,7 +235,11 @@ describe('writer-gc discovers transcript topics that exist only on disk', () => 
             });
         }
         const latest = assembler.getLatestComplete();
-        expect(snapshotRows!.length).toBe(TRANSCRIPT_TAIL_WINDOW_ROWS);
+        // The daemon's transcript tail selector (transcript-tail-snapshot.ts)
+        // trims the SNAP to the newest complete revision — begin + 1 chunk +
+        // commit here — instead of the TRANSCRIPT_TAIL_WINDOW_ROWS window; the
+        // prune must still leave that revision intact and reachable.
+        expect(snapshotRows!.length).toBe(3);
         expect(latest?.identity.revision).toBe(REVISIONS);
     });
 

@@ -411,6 +411,35 @@ export interface SeqscribeStatusSummary {
      * are session-transport-routing counts, not obviously content-free the
      * way a bucketed backlog size is.
      */
+    /**
+     * The vendor SubHub's SUB serving counters (`NodeStats.subs`, seqscribe
+     * host-guide §4.6): SNAPs started/completed/abandoned, SNAP body bytes and
+     * chunks, resync entries (backpressure vs oversized DELTA), DELTAs withheld
+     * while a coalesced resync was owed, plus three gauges. Added after the
+     * 2026-09-27 resync storm, where nothing on any local surface showed that
+     * one subscriber was being re-SNAPped once per write.
+     *
+     * ★ LOCAL-ONLY: raw monotonic counters (they would defeat the deduped
+     * status-frame hash). Fixed keys, integer values — no topic, peer or
+     * session id. `buildCloudSeqscribeSummary` (status/reporter.ts) is a
+     * fixed-key allow-list that does not name this key.
+     */
+    subDelivery?: {
+        subscribers: number;
+        resyncPending: number;
+        snapsInFlight: number;
+        snapsStarted: number;
+        snapsCompleted: number;
+        snapsAbandoned: number;
+        snapBytes: number;
+        snapChunksSent: number;
+        snapCacheHits: number;
+        resyncs: number;
+        resyncsBackpressure: number;
+        resyncsOversized: number;
+        resyncWritesCoalesced: number;
+        deltasSent: number;
+    };
     transcriptTransportSelection?: {
         /** Times a dashboard peer's session used the seqscribe replica transport. */
         replicaSelected: number;
@@ -647,6 +676,7 @@ export function summarizeSeqscribeStats(
                   }
                 : {}),
             ...(opts.meshDelivery ? { meshDelivery: { ...opts.meshDelivery } } : {}),
+            ...(stats.subs ? { subDelivery: { ...stats.subs } } : {}),
             ...(opts.transcriptTransportSelection
                 ? {
                       transcriptTransportSelection: {
