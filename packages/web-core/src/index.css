@@ -206,8 +206,8 @@
         --status-busy: #f97316;
         --status-error: #ef4444;
         --status-offline: #71717a;
-        /* Repo Mesh coordinator marker (tabs, header, lists) — distinct from the amber accent. */
-        --mesh-coordinator: #a78bfa;
+        /* Repo Mesh coordinator marker (tabs, header, lists) — neutral: the icon is the cue; amber stays the only accent. */
+        --mesh-coordinator: var(--text-secondary);
 
         /* ── Semantic event colors ──────────────────────
            Meaning-keyed palette for audit/activity rows and scope chips, where
@@ -266,7 +266,7 @@
         --status-busy: #ea580c;
         --status-error: #dc2626;
         --status-offline: #a1a1aa;
-        --mesh-coordinator: #7c3aed;
+        --mesh-coordinator: var(--text-secondary);
 
         /* Semantic event colors — darkened for contrast on light backgrounds,
            matching the shift --status-* makes above. */
@@ -316,7 +316,7 @@
             --status-busy: #ea580c;
             --status-error: #dc2626;
             --status-offline: #a1a1aa;
-            --mesh-coordinator: #7c3aed;
+            --mesh-coordinator: var(--text-secondary);
 
             /* Semantic event colors — must mirror the :root[data-theme="light"]
                block above; this branch covers system-preference light mode. */
@@ -671,28 +671,13 @@
     }
 
     .mesh-role-label.is-coordinator .mesh-role-label-role {
-        color: var(--mesh-coordinator);
-        font-weight: 700;
+        font-weight: 600;
     }
 
     .mesh-role-label.is-worker .mesh-role-label-role {
         font-weight: 600;
     }
 
-    .conversation-meta-chip.mesh-role-chip.is-coordinator {
-        color: var(--mesh-coordinator);
-        border-color: color-mix(in srgb, var(--mesh-coordinator) 38%, transparent);
-        background: color-mix(in srgb, var(--mesh-coordinator) 9%, transparent);
-    }
-
-    .dashboard-header-mesh-button {
-        color: var(--mesh-coordinator) !important;
-        border-color: color-mix(in srgb, var(--mesh-coordinator) 34%, transparent) !important;
-    }
-
-    .dashboard-header-mesh-button:hover {
-        background: color-mix(in srgb, var(--mesh-coordinator) 10%, transparent) !important;
-    }
 
     .adhdev-dockview-tab-unread-dot {
         position: absolute;
