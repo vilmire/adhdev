@@ -10,7 +10,6 @@ function renderSection(props: Partial<React.ComponentProps<typeof SavedHistoryLa
       savedSessionsLoading: false,
       savedSessionsError: '',
       selectedSession: null,
-      onRefresh: vi.fn(),
       onOpenHistory: vi.fn(),
       onClearSelection: vi.fn(),
       ...props,
@@ -24,7 +23,10 @@ describe('SavedHistoryLaunchSection', () => {
 
     expect(html).toContain('Saved history')
     expect(html).toContain('Open saved history')
-    expect(html).toContain('Start fresh, or open saved history when you want continuity.')
+    // Nothing loaded yet: no status sentence — the button says it all, and the
+    // helper text sits behind the section's ⓘ.
+    expect(html).not.toContain('Start fresh, or open saved history when you want continuity.')
+    expect(html).not.toContain('>Refresh<')
     expect(html).not.toContain('Resume-ready only')
     expect(html).not.toContain('Search title or preview')
     expect(html).not.toContain('<select')

@@ -5,6 +5,7 @@ import { deriveProviderPriorityFromSlots } from '@adhdev/mesh-shared'
 import { Section } from '../../components/ui/Section'
 import { EmptyState } from '../../components/ui/EmptyState'
 import { AlertBanner } from '../../components/ui/AlertBanner'
+import { SettingsTabBar } from '../../components/ui/SettingsTabs'
 import { FormField, Input } from '../../components/ui/FormField'
 import { IconX, IconFolder } from '../../components/Icons'
 import ProviderPriorityEditor from '../../components/provider-priority/ProviderPriorityEditor'
@@ -124,34 +125,27 @@ export function groupNodesByMachine(nodes: MeshNode[], daemons: RepoMeshDaemonEn
     })
 }
 
+/** Per-machine tabs — the shared underline tab bar (same look as every settings page). */
 function MachineTabBar({ groups, activeKey, onChange }: { groups: MachineGroup[]; activeKey: string; onChange: (key: string) => void }) {
     const { t } = useTranslation('common')
     return (
-        <div className="flex items-center gap-1 px-1 border-b border-border-subtle mb-4 overflow-x-auto" role="tablist" aria-label={t('mesh.nodeList.machineTabsLabel')}>
-            {groups.map(group => {
-                const isActive = group.key === activeKey
-                return (
-                    <button
-                        key={group.key}
-                        type="button"
-                        role="tab"
-                        aria-selected={isActive}
-                        onClick={() => onChange(group.key)}
-                        className={`flex items-center gap-2 px-3 py-2.5 text-xxs font-medium border-b-2 -mb-px transition-colors cursor-pointer whitespace-nowrap ${
-                            isActive
-                                ? 'border-accent text-accent'
-                                : 'border-transparent text-text-muted hover:text-text-secondary'
-                        }`}
-                    >
-                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${group.online ? 'bg-green-400' : 'bg-neutral-500'}`} />
-                        <span className="truncate max-w-[160px]">{group.label}</span>
-                        <span className="text-2xs text-text-muted font-normal">
-                            {t('mesh.nodeList.machineTabCounts', { nodes: group.nodes.length, slots: group.slotCount })}
-                        </span>
-                    </button>
-                )
-            })}
-        </div>
+        <SettingsTabBar
+            variant="underline"
+            ariaLabel={t('mesh.nodeList.machineTabsLabel')}
+            activeKey={activeKey}
+            onSelect={onChange}
+            className="mb-4 px-1 md:px-1"
+            tabs={groups.map(group => ({
+                key: group.key,
+                icon: <span aria-hidden className={`w-1.5 h-1.5 rounded-full shrink-0 ${group.online ? 'bg-green-400' : 'bg-neutral-500'}`} />,
+                label: <span className="truncate max-w-[160px]">{group.label}</span>,
+                trailing: (
+                    <span className="text-2xs text-text-muted font-normal">
+                        {t('mesh.nodeList.machineTabCounts', { nodes: group.nodes.length, slots: group.slotCount })}
+                    </span>
+                ),
+            }))}
+        />
     )
 }
 
@@ -282,10 +276,7 @@ export function MeshNodeList({
             {features.addNodeDaemonPicker && (
                 <div className="mb-4 rounded-xl border border-border-subtle bg-bg-secondary/60 p-4">
                     <div className="flex items-center justify-between gap-3 mb-3">
-                        <div className="min-w-0">
-                            <div className="text-sm font-semibold text-text-primary">{t('mesh.nodeList.daemonCandidates')}</div>
-                            <div className="text-xs text-text-muted">{t('mesh.nodeList.daemonCandidatesHint')}</div>
-                        </div>
+                        <div className="min-w-0 text-sm font-semibold text-text-primary">{t('mesh.nodeList.daemonCandidates')}</div>
                         <span className="text-2xs text-text-muted shrink-0">{t('mesh.nodeList.available', { count: attachableDaemons.length })}</span>
                     </div>
                     {daemons.length === 0 ? (
@@ -313,7 +304,6 @@ export function MeshNodeList({
                                         <span className="text-sm font-medium truncate min-w-0">{daemonLabel(d)}</span>
                                         {d.id === coordinatorDaemonId && <span className="text-3xs text-accent-primary shrink-0">{t('mesh.nodeList.selectedHost')}</span>}
                                     </div>
-                                    <div className="mt-1 text-2xs text-text-muted font-mono truncate">{d.id}</div>
                                     <div className="mt-1 text-2xs text-text-muted">{t('mesh.nodeList.workspacesDetected', { count: (d.workspaces || []).length })}</div>
                                 </button>
                             ))}

@@ -1,5 +1,5 @@
 import { Trans, useTranslation } from 'react-i18next'
-import { AlertBanner, Button, Input, Select } from '@adhdev/web-core'
+import { AlertBanner, Button, InfoTip, Input, Select } from '@adhdev/web-core'
 import {
   CHAT_FONT_PRESET_OPTIONS,
   MONO_FONT_PRESET_OPTIONS,
@@ -48,9 +48,9 @@ function FontControl({
   const { t } = useTranslation('common')
   return (
     <div className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-3 flex flex-col gap-3">
-      <div>
-        <div className="text-sm font-medium text-text-primary">{title}</div>
-        <div className="text-xs text-text-muted mt-1">{description}</div>
+      <div className="flex items-center gap-1 text-sm font-medium text-text-primary">
+        {title}
+        <InfoTip content={description} size={12} />
       </div>
       <div className="flex flex-col gap-2">
         <Select
@@ -102,10 +102,6 @@ export default function StandaloneFontSettingsSection({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-3 text-sm text-text-muted">
-        {t('standalone.fonts.fontOverridesNotice')}
-      </div>
-
       {error && <AlertBanner variant="error">{error}</AlertBanner>}
       {notice && <AlertBanner variant="success">{notice}</AlertBanner>}
 
@@ -138,21 +134,24 @@ export default function StandaloneFontSettingsSection({
 
       <div className="rounded-2xl border border-border-subtle bg-bg-primary/70 p-4 flex flex-col gap-3">
         <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-medium text-text-primary">{t('standalone.fonts.livePreview')}</div>
-            <div className="text-xs text-text-muted mt-1">
-              {t('standalone.fonts.previewSummary', {
-                chat: getStandaloneFontPreferenceLabel('chat', value.chat.preset, t),
-                code: getStandaloneFontPreferenceLabel('code', value.code.preset, t),
-                terminal: getStandaloneFontPreferenceLabel('terminal', value.terminal.preset, t),
-              })}
-            </div>
-          </div>
-          <div className="text-2xs text-text-muted">
-            {t('standalone.fonts.defaultsSummary', {
-              chat: getStandaloneFontPreferenceLabel('chat', DEFAULT_STANDALONE_FONT_PREFERENCES.chat.preset, t),
-              code: getStandaloneFontPreferenceLabel('code', DEFAULT_STANDALONE_FONT_PREFERENCES.code.preset, t),
-            })}
+          <div className="flex items-center gap-1 text-sm font-medium text-text-primary">
+            {t('standalone.fonts.livePreview')}
+            {/* Current + default picks and the override note, one tap away. */}
+            <InfoTip
+              size={12}
+              content={[
+                t('standalone.fonts.previewSummary', {
+                  chat: getStandaloneFontPreferenceLabel('chat', value.chat.preset, t),
+                  code: getStandaloneFontPreferenceLabel('code', value.code.preset, t),
+                  terminal: getStandaloneFontPreferenceLabel('terminal', value.terminal.preset, t),
+                }),
+                t('standalone.fonts.defaultsSummary', {
+                  chat: getStandaloneFontPreferenceLabel('chat', DEFAULT_STANDALONE_FONT_PREFERENCES.chat.preset, t),
+                  code: getStandaloneFontPreferenceLabel('code', DEFAULT_STANDALONE_FONT_PREFERENCES.code.preset, t),
+                }),
+                t('standalone.fonts.fontOverridesNotice'),
+              ].join('\n\n')}
+            />
           </div>
         </div>
 

@@ -60,7 +60,7 @@ describe('ProviderPriorityEditor reorder controls', () => {
     expect(html).toContain('claude-cli')
     expect(html).toContain('antigravity-cli')
     // Each undetected row is tagged, not hidden.
-    expect(html).toContain('not on this machine')
+    expect(html).toContain('Not detected')
     // Reorder controls still render for the undetected rows.
     expect(html).toContain('aria-label="Move up"')
     expect(html).toContain('aria-label="Move down"')

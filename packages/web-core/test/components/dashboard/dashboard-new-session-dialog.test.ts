@@ -3,7 +3,7 @@ import path from 'node:path'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import DashboardNewSessionDialog, { LaunchCategorySelector } from '../../../src/components/dashboard/DashboardNewSessionDialog'
+import DashboardNewSessionDialog from '../../../src/components/dashboard/DashboardNewSessionDialog'
 import {
   AutoApproveModeSelector,
   DangerousAutoApproveModeDialog,
@@ -155,39 +155,43 @@ describe('DashboardNewSessionDialog', () => {
     expect(html).toContain('<option value="machine-6">Machine 6</option>')
   })
 
-  it('omits the separate category chips when mesh coordinator mode already selected CLI implicitly', () => {
-    const html = renderToStaticMarkup(
-      React.createElement(LaunchCategorySelector, {
-        workspaceMode: 'mesh',
-        activeKind: 'cli',
-        cliEnabled: true,
-        ideEnabled: true,
-        acpEnabled: true,
-        busy: false,
-        onSelect: () => {},
-      }),
-    )
+  it('lists every agent in one grouped radio list with the protocol as a small hint — no Category chip row', () => {
+    const machine = createMachine()
+    machine.availableProviders = [
+      ...(machine.availableProviders || []),
+      { type: 'gemini-acp', name: 'Gemini', displayName: 'Gemini', icon: 'gemini', category: 'acp', installed: true, enabled: true, machineStatus: 'detected' } as any,
+    ]
+    machine.detectedIdes = [{ type: 'cursor', name: 'Cursor', running: true } as any]
+    const html = renderDialog([machine])
 
-    expect(html).toBe('')
+    expect(html).toContain('role="radiogroup" aria-label="Agent"')
+    expect(html).toContain('data-launch-kind="cli"')
+    expect(html).toContain('data-launch-kind="acp"')
+    expect(html).toContain('data-launch-kind="ide"')
+    expect(html).not.toContain('>Category<')
+    expect(readDialogSource()).not.toContain('LaunchCategorySelector')
   })
 
-  it('shows category chips for normal workspace launches', () => {
-    const html = renderToStaticMarkup(
-      React.createElement(LaunchCategorySelector, {
-        workspaceMode: 'workspace',
-        activeKind: 'cli',
-        cliEnabled: true,
-        ideEnabled: true,
-        acpEnabled: true,
-        busy: false,
-        onSelect: () => {},
-      }),
-    )
+  it('collapses startup args, auto-approve and model/thinking under "Advanced options" by default', () => {
+    const html = renderDialog()
+    const advancedStart = html.indexOf('data-testid="new-session-advanced"')
+    expect(advancedStart).toBeGreaterThan(-1)
+    // A <details> without the `open` attribute = collapsed on first render.
+    const detailsTag = html.slice(html.lastIndexOf('<details', advancedStart), html.indexOf('>', advancedStart) + 1)
+    expect(detailsTag).not.toMatch(/\sopen(=|\s|>)/)
+    expect(html).toContain('Advanced options')
+    // The three set-once preferences live INSIDE the disclosure (still reachable).
+    const inside = html.slice(advancedStart, html.indexOf('</details>', advancedStart))
+    expect(inside).toContain('Startup arguments')
+    expect(inside).toContain('Auto approve')
+    expect(inside).toContain('Model')
+  })
 
-    expect(html).toContain('Category')
-    expect(html).toContain('CLI')
-    expect(html).toContain('IDE')
-    expect(html).toContain('ACP')
+  it('opens folder browsing and saved history inline — no modal on top of the New Session modal', () => {
+    const source = readDialogSource()
+    expect(source).toContain('<WorkspaceBrowseDialog\n                                            inline')
+    expect(source).toContain('<SavedHistoryInlinePanel')
+    expect(source).not.toContain('<HistoryModal')
   })
 
   it('renders the auto-approve mode picker for mesh coordinator launches too, not just workspace launches', () => {

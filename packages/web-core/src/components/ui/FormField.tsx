@@ -1,22 +1,29 @@
 import React from 'react'
 import { cn } from '../../lib/utils'
+import { InfoTip } from './InfoTip'
 
 /* ── FormField ─────────────────────────────────────── */
 interface FormFieldProps {
     label: string
-    hint?: string
+    /** Explanation shown as an ⓘ tip beside the label (details on demand). */
+    hint?: React.ReactNode
+    /** Render the hint as visible text under the control instead (warnings only). */
+    hintInline?: boolean
     children: React.ReactNode
     className?: string
 }
 
-export function FormField({ label, hint, children, className }: FormFieldProps) {
+export function FormField({ label, hint, hintInline = false, children, className }: FormFieldProps) {
     return (
         <div className={cn("mb-5", className)}>
-            <label className="block text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">
-                {label}
-            </label>
+            <div className="mb-2 flex items-center gap-1">
+                <label className="block text-xs font-semibold text-text-muted uppercase tracking-wider">
+                    {label}
+                </label>
+                {hint && !hintInline && <InfoTip content={hint} />}
+            </div>
             {children}
-            {hint && <p className="text-xs text-text-muted mt-1.5">{hint}</p>}
+            {hint && hintInline && <p className="text-xs text-text-muted mt-1.5">{hint}</p>}
         </div>
     )
 }

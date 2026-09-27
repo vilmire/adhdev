@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import { InfoTip, Tooltip } from '../ui/InfoTip'
 import {
   addProviderPriorityItem,
   moveProviderPriorityItem,
@@ -78,12 +79,16 @@ export default function ProviderPriorityEditor({
                   {detected ? (
                     <span className="rounded border border-green-500/20 bg-green-500/10 px-1.5 py-px text-4xs font-semibold text-green-400">{t('settings.providerPriority.available')}</span>
                   ) : (
-                    <span className="rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-px text-4xs font-semibold text-amber-400">{t('settings.providerPriority.notOnMachine')}</span>
+                    <Tooltip content={t('settings.providerPriority.keptUntilDetected')}>
+                      <span className="rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-px text-4xs font-semibold text-amber-400">{t('settings.providerPriority.notOnMachine')}</span>
+                    </Tooltip>
                   )}
                 </div>
-                <div className="mt-1 text-3xs text-text-muted">
-                  {provider ? `${provider.label} · ${provider.statusLabel}` : t('settings.providerPriority.keptUntilDetected')}
-                </div>
+                {provider && (
+                  <div className="mt-1 text-3xs text-text-muted">
+                    {`${provider.label} · ${provider.statusLabel}`}
+                  </div>
+                )}
               </div>
               <div className="flex flex-wrap items-center gap-1">
                 <button
@@ -130,9 +135,13 @@ export default function ProviderPriorityEditor({
         <button type="button" className="btn btn-secondary btn-sm" disabled={disabled || !addType} onClick={handleAdd}>{t('settings.providerPriority.addProvider')}</button>
         {saveButton}
       </div>
-      <div className="mt-2 text-2xs text-text-muted">
-        {t('settings.providerPriority.orderHint')}
-        {undetectedCount > 0 ? ` ${t('settings.providerPriority.undetectedHint', { count: undetectedCount })}` : ''}
+      <div className="mt-2 flex items-center gap-1 text-2xs text-text-muted">
+        <InfoTip
+          content={[
+            t('settings.providerPriority.orderHint'),
+            undetectedCount > 0 ? t('settings.providerPriority.undetectedHint', { count: undetectedCount }) : '',
+          ].filter(Boolean).join('\n\n')}
+        />
       </div>
     </div>
   )

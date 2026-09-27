@@ -31,6 +31,9 @@ import Card from '../../components/Card'
 import SourcesPanel from './SourcesPanel'
 import { IconSpinner } from '../../components/Icons'
 import { AlertBanner } from '../../components/ui/AlertBanner'
+import { RefreshButton } from '../../components/ui/RefreshButton'
+import { InfoTip } from '../../components/ui/InfoTip'
+import { CopyButton, TechnicalDetails } from '../../components/ui/TechnicalDetails'
 import { eventManager } from '../../managers/EventManager'
 import { interpretProviderChannelSyncResult } from '../../utils/provider-channel-sync'
 
@@ -93,8 +96,10 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
     // Provider type whose install-options modal is open, or null. Set when a
     // provider is switched ON; nothing is persisted until it is confirmed.
     const [installOptionsFor, setInstallOptionsFor] = useState<string | null>(null)
-    const [showSources, setShowSources] = useState(false)
-    const [showSourceConfig, setShowSourceConfig] = useState(false)
+    // One "Advanced" disclosure: external sources, provider source config and
+    // each row's manifest/pin details (it used to be two toggles).
+    const [showAdvanced, setShowAdvanced] = useState(false)
+    const [sourcesReloadToken, setSourcesReloadToken] = useState(0)
     const [sourceConfig, setSourceConfig] = useState<ProviderSourceConfigPayload | null>(null)
     const [sourceModeInput, setSourceModeInput] = useState<'normal' | 'no-upstream'>('normal')
     const [providerDirInput, setProviderDirInput] = useState('')
@@ -306,7 +311,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
             const res = await sendDaemonCommand(machineId, 'activate_provider_updates', {})
             const outcome = interpretProviderChannelSyncResult(res)
             if ('error' in outcome) {
-                eventManager.showToast(t('machine.detail.providerSyncFailed', { error: outcome.error }), 'warning')
+                eventManager.showErrorToast(t('machine.detail.providerSyncFailed'), outcome.error)
             } else {
                 eventManager.showToast(
                     outcome.activatedCount > 0
@@ -316,7 +321,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                 )
             }
         } catch (e) {
-            eventManager.showToast(t('machine.detail.providerSyncFailed', { error: e instanceof Error ? e.message : String(e) }), 'warning')
+            eventManager.showErrorToast(t('machine.detail.providerSyncFailed'), e)
         } finally {
             setUpdatingAll(false)
             // Report what actually moved, not what we hoped would.
@@ -351,7 +356,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
             const errors = extractChannelSyncErrors(res)
             if ('error' in outcome || errors.length > 0) {
                 const error = 'error' in outcome ? outcome.error : errors.map(e => e.message || e.code).join('; ')
-                eventManager.showToast(t('machine.detail.providerSyncFailed', { error }), 'warning')
+                eventManager.showErrorToast(t('machine.detail.providerSyncFailed'), error)
             } else {
                 eventManager.showToast(
                     outcome.activatedCount > 0
@@ -361,7 +366,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                 )
             }
         } catch (e) {
-            eventManager.showToast(t('machine.detail.providerSyncFailed', { error: e instanceof Error ? e.message : String(e) }), 'warning')
+            eventManager.showErrorToast(t('machine.detail.providerSyncFailed'), e)
         } finally {
             setUpdatingTypes(prev => {
                 const next = { ...prev }
@@ -533,12 +538,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                         >{cat.toUpperCase()}</button>
                     ))}
                 </div>
-                <div className="flex gap-1.5">
-                    <button
-                        onClick={() => setShowSources(v => !v)}
-                        className={`machine-btn text-3xs ${showSources ? 'bg-sky-500/[0.10] border-sky-500/30 text-sky-300' : ''}`}
-                        title={t('machine.providers.sourcesHint')}
-                    >{t('machine.providers.sources')}</button>
+                <div className="flex gap-1.5 items-center">
                     {/* "Update all" only when more than one provider is behind —
                         a single stale provider has its own inline Update. */}
                     {stalePinCount >= 2 && (
@@ -550,16 +550,26 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                             {updatingAll ? <IconSpinner size={11} /> : null} {t('machine.providers.updateAll')}
                         </button>
                     )}
+                    {/* The one refresh for the whole tab (settings, pins, and — when
+                        open — sources and source config). */}
+                    <RefreshButton
+                        onClick={() => {
+                            void fetchSettings({ explicit: true })
+                            void fetchPins()
+                            if (showAdvanced) {
+                                void fetchSourceConfig()
+                                setSourcesReloadToken(n => n + 1)
+                            }
+                        }}
+                        refreshing={loading}
+                        label={t('machine.providers.refresh')}
+                        size={12}
+                        className="h-7 w-7"
+                    />
                     <button
-                        onClick={() => { void fetchSettings({ explicit: true }); void fetchPins() }}
-                        disabled={loading}
-                        className="machine-btn text-3xs"
-                    >
-                        {loading ? <IconSpinner size={11} /> : '↻'} {t('machine.providers.refresh')}
-                    </button>
-                    <button
-                        onClick={() => setShowSourceConfig(v => !v)}
-                        className="machine-btn text-3xs"
+                        onClick={() => setShowAdvanced(v => !v)}
+                        aria-expanded={showAdvanced}
+                        className={`machine-btn text-3xs ${showAdvanced ? 'bg-accent-primary/10 border-accent-primary/30 text-accent-primary' : ''}`}
                         title={t('machine.providers.advancedHint')}
                     >{t('machine.providers.advanced')}</button>
                 </div>
@@ -577,8 +587,10 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                 and, before this section, uninstallable from the dashboard). */}
             {channelNewTypes.length > 0 && (
                 <Card padding="none" className="px-4.5 py-3.5">
-                    <div className="text-2xs font-semibold uppercase tracking-wider text-accent-primary">{t('machine.providers.newChannelTypesTitle')}</div>
-                    <div className="text-2xs text-text-muted mt-1 mb-2.5">{t('machine.providers.newChannelTypesDesc')}</div>
+                    <div className="mb-2.5 flex items-center gap-1 text-2xs font-semibold uppercase tracking-wider text-accent-primary">
+                        {t('machine.providers.newChannelTypesTitle')}
+                        <InfoTip content={t('machine.providers.newChannelTypesDesc')} size={12} />
+                    </div>
                     <div className="flex flex-col gap-1.5">
                         {channelNewTypes.map((providerType) => {
                             const errors = installErrors[providerType] ?? []
@@ -596,28 +608,25 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                                     </div>
                                     {errors.length > 0 && (
                                         <div className="rounded-md border border-red-500/30 bg-red-500/[0.07] px-2.5 py-1.5">
-                                            <div className="text-3xs font-semibold uppercase tracking-wider text-red-300">
-                                                {t('machine.providers.installFailedTitle')}
+                                            {/* Short verdict first; DIGEST_MISMATCH is not user-retryable, so
+                                                it gets its own plain line. Every raw daemon error (a sync can
+                                                refuse for more than one reason) stays behind Details. */}
+                                            <div className="text-3xs font-semibold text-red-300">
+                                                {hasDigestMismatch(errors)
+                                                    ? t('machine.providers.installFailedDigestMismatch')
+                                                    : t('machine.providers.installFailedTitle')}
                                             </div>
-                                            {/* DIGEST_MISMATCH is not user-retryable — say so plainly
-                                                instead of leaving only the raw daemon string. */}
-                                            {hasDigestMismatch(errors) && (
-                                                <div className="text-3xs text-red-200/90 mt-1">
-                                                    {t('machine.providers.installFailedDigestMismatch')}
-                                                </div>
-                                            )}
-                                            {/* Every error, not just the first: a sync can refuse for
-                                                more than one reason and a truncated list hides the
-                                                one that actually explains the failure. */}
-                                            <ul className="mt-1 flex flex-col gap-0.5">
-                                                {errors.map((err, i) => (
-                                                    <li key={`${err.code}-${i}`} className="text-3xs text-text-muted font-mono break-all">
-                                                        <span className="text-red-300/90">{err.code}</span>
-                                                        {err.providerType ? ` [${err.providerType}]` : ''}
-                                                        {err.message ? `: ${err.message}` : ''}
-                                                    </li>
-                                                ))}
-                                            </ul>
+                                            <TechnicalDetails summary={t('toast.details')} className="mt-1">
+                                                <ul className="flex flex-col gap-0.5">
+                                                    {errors.map((err, i) => (
+                                                        <li key={`${err.code}-${i}`} className="text-3xs text-text-muted font-mono break-all">
+                                                            <span className="text-red-300/90">{err.code}</span>
+                                                            {err.providerType ? ` [${err.providerType}]` : ''}
+                                                            {err.message ? `: ${err.message}` : ''}
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            </TechnicalDetails>
                                         </div>
                                     )}
                                 </div>
@@ -633,8 +642,10 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                 all are intentionally not listed (owner decision 2026-09-25). */}
             {modelStaleTypes.length > 0 && (
                 <Card padding="none" className="px-4.5 py-3.5">
-                    <div className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">{t('machine.providers.modelListTitle')}</div>
-                    <div className="text-2xs text-text-muted mt-1 mb-2">{t('machine.providers.modelListStaleDesc')}</div>
+                    <div className="mb-2 flex items-center gap-1 text-2xs font-semibold uppercase tracking-wider text-text-secondary">
+                        {t('machine.providers.modelListTitle')}
+                        <InfoTip content={t('machine.providers.modelListStaleDesc')} size={12} />
+                    </div>
                     <div className="flex flex-wrap gap-1.5">
                         {modelStaleTypes.map((providerType) => (
                             <span key={providerType} className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/[0.07] px-2 py-0.5">
@@ -647,23 +658,23 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
             )}
 
             {/* External provider sources (3rd-party git URLs) */}
-            {showSources && (
+            {showAdvanced && (
                 <SourcesPanel
                     machineId={machineId}
                     sendDaemonCommand={sendDaemonCommand}
                     onChange={() => { void fetchSettings() }}
+                    reloadToken={sourcesReloadToken}
                 />
             )}
 
             {/* Advanced: provider source config (collapsed by default) */}
-            {showSourceConfig && (
+            {showAdvanced && (
                 <Card padding="none" className="px-4.5 py-3.5">
                     <div className="flex items-center justify-between gap-3 mb-3">
-                        <div>
-                            <div className="text-2xs font-semibold uppercase tracking-wider text-accent-primary">{t('machine.providers.sourceConfigTitle')}</div>
-                            <div className="text-2xs text-text-muted mt-1">{t('machine.providers.sourceConfigDesc')}</div>
+                        <div className="flex items-center gap-1 text-2xs font-semibold uppercase tracking-wider text-accent-primary">
+                            {t('machine.providers.sourceConfigTitle')}
+                            <InfoTip content={t('machine.providers.sourceConfigDesc')} size={12} />
                         </div>
-                        <button onClick={fetchSourceConfig} className="machine-btn text-3xs">↻ {t('machine.providers.refresh')}</button>
                     </div>
                     <div className="grid md:grid-cols-[180px_1fr_auto] gap-3 items-end">
                         <label className="flex flex-col gap-1 text-2xs text-text-secondary">
@@ -693,10 +704,21 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                             className="machine-btn text-3xs bg-accent-primary/[0.08] border-accent-primary/20 text-accent-primary hover:bg-accent-primary/[0.14]"
                         >{sourceSaving ? t('machine.providers.applying') : t('machine.providers.applyReload')}</button>
                     </div>
-                    <div className="mt-3 grid gap-1 text-3xs text-text-muted">
-                        <div><span className="text-text-secondary font-medium">{t('machine.providers.userRoot')}</span> {sourceConfig?.userDir || '—'}</div>
-                        <div><span className="text-text-secondary font-medium">{t('machine.providers.upstreamRoot')}</span> {sourceConfig?.upstreamDir || '—'}</div>
-                        <div><span className="text-text-secondary font-medium">{t('machine.providers.providerRoots')}</span> {sourceConfig?.providerRoots?.join(' → ') || '—'}</div>
+                    {/* Paths are copyable (for a terminal or a bug report). */}
+                    <div className="mt-3 flex flex-col gap-1.5" data-testid="provider-source-paths">
+                        {[
+                            { label: t('machine.providers.userRoot'), value: sourceConfig?.userDir },
+                            { label: t('machine.providers.upstreamRoot'), value: sourceConfig?.upstreamDir },
+                            { label: t('machine.providers.providerRoots'), value: sourceConfig?.providerRoots?.join(' → ') },
+                        ].map(row => (
+                            <div key={row.label} className="flex min-w-0 items-center justify-between gap-2 text-3xs">
+                                <span className="shrink-0 font-medium text-text-secondary">{row.label}</span>
+                                <span className="flex min-w-0 items-center gap-1.5">
+                                    <span className="min-w-0 truncate font-mono text-text-muted" title={row.value || undefined}>{row.value || '—'}</span>
+                                    {row.value && <CopyButton value={row.value} label={t('common.copy')} />}
+                                </span>
+                            </div>
+                        ))}
                     </div>
                 </Card>
             )}
@@ -733,7 +755,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                             onUpdate={() => handleUpdateProvider(prov.type)}
                             updating={updatingTypes[prov.type] === true}
                             onRollbackUpdate={() => handleRollbackPin(prov.type)}
-                            showAdvanced={showSourceConfig}
+                            showAdvanced={showAdvanced}
                         />
                     ))}
                 </div>

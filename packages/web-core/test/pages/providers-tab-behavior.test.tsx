@@ -154,7 +154,9 @@ describe('ProvidersTab — no background refetch', () => {
         const send = makeSend(h)
         await render({ machineId: 'm1', sendDaemonCommand: send, providers: makeProviders() })
         const before = count('get_provider_settings')
-        const refresh = buttonsByText('Refresh')[0] as HTMLButtonElement
+        // Icon-only shared RefreshButton: found by its accessible name.
+        const refresh = container.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!
+        expect(refresh).not.toBeNull()
         const toggle = rowCard('Codex CLI').querySelector<HTMLElement>('[role="switch"]')!
         let resolveSet: (v: unknown) => void = () => {}
         h.replies.set_provider_setting = () => new Promise(r => { resolveSet = r })

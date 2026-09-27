@@ -38,8 +38,9 @@ describe('MeshObservabilitySurface', () => {
 
     expect(() => renderSurface(status)).not.toThrow()
     const html = renderSurface(status)
-    expect(html).toContain('mesh converged')
-    expect(html).toContain('0 recent failures')
+    // One headline chip; its tooltip lists only NON-zero facts.
+    expect(html).toContain('All synced')
+    expect(html).not.toContain('recent failure')
   })
 
   it('keeps the mobile graph status header in normal flow so it pushes the canvas down instead of overlaying it', () => {
@@ -52,11 +53,10 @@ describe('MeshObservabilitySurface', () => {
     // The header must NOT float as an absolute overlay on mobile — that overlay
     // both clipped the canvas top and created a touch dead-zone over the graph.
     expect(source).not.toContain('absolute inset-x-4 top-4 z-30')
-    // Normal-flow header: relative + shrink-0 so the badge column pushes the
-    // canvas down; capped height with internal scroll for extreme badge counts.
-    expect(source).toContain('relative z-30 max-h-[42dvh] overflow-y-auto')
-    expect(source).toContain('sm:max-h-none sm:mb-3')
-    expect(source).toContain('sm:overflow-visible')
+    // Normal-flow header: relative + shrink-0 so the chip row pushes the canvas
+    // down. (The 14-badge soup that needed a capped, scrolling header is gone:
+    // one headline chip + actionable chips only.)
+    expect(source).toContain('relative z-30 flex shrink-0 flex-wrap')
     expect(source).toContain('shrink-0')
   })
 
@@ -104,7 +104,8 @@ describe('MeshObservabilitySurface', () => {
       'utf8',
     )
     expect(source).toContain("t('mesh.panel.upstreamUnverified')")
-    expect(source).toContain("getMeshGraphCalloutText(node)")
+    // The callout is the LOCALIZED hint (daemon prose moves to the tooltip).
+    expect(source).toContain("localizeMeshGraphHint(node, t)")
     expect(source).toContain("t('mesh.panel.needsFollowUp')")
   })
 
@@ -182,11 +183,11 @@ describe('MeshObservabilitySurface', () => {
     }
 
     const html = renderSurface(status)
-    expect(html).toContain('mesh visibility incomplete')
+    expect(html).toContain('Some machines not visible')
     expect(html).toContain('1 incomplete peer snapshot')
     expect(html).toContain('1 missing submodule visibility')
     expect(html).toContain('1 node(s) are missing peer submodule visibility reported elsewhere in the mesh')
-    expect(html).not.toContain('mesh converged')
+    expect(html).not.toContain('All synced')
   })
 
   it('renders bootstrap inventory fallback graph nodes with direct-truth warnings', () => {
@@ -229,7 +230,7 @@ describe('MeshObservabilitySurface', () => {
     expect(graph.warnings).toContain('Selected coordinator could not confirm direct mesh truth yet. Showing setup inventory graph until direct mesh_status probes succeed.')
 
     const html = renderSurface(status)
-    expect(html).toContain('mesh visibility incomplete')
+    expect(html).toContain('Some machines not visible')
     expect(html).toContain('1 no git snapshot')
     expect(html).toContain('Selected coordinator could not confirm direct mesh truth yet. Showing setup inventory graph until direct mesh_status probes succeed.')
   })

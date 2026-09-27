@@ -17,6 +17,7 @@
  */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { InfoTip } from '../../components/ui/InfoTip'
 import ModalPortal from '../../components/ui/ModalPortal'
 
 export interface ProviderInstallOptions {
@@ -79,9 +80,6 @@ export default function ProviderInstallOptionsModal({
                 <div className="text-xxs font-semibold text-text-primary">
                     {t('machine.installOptions.title', { provider: displayName })}
                 </div>
-                <div className="mt-1 text-2xs text-text-muted">
-                    {t('machine.installOptions.subtitle')}
-                </div>
 
                 <div className="mt-4 flex flex-col gap-3">
                     {supportsQuota && (
@@ -93,17 +91,16 @@ export default function ProviderInstallOptionsModal({
                                 className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-accent-primary"
                             />
                             <span className="min-w-0">
-                                <span className="block text-xs font-medium text-text-primary">
+                                <span className="flex items-center gap-1 text-xs font-medium text-text-primary">
                                     {t('machine.installOptions.quotaLabel')}
+                                    <InfoTip
+                                        content={[
+                                            t('machine.installOptions.quotaHint'),
+                                            quotaInstallsClaudeStatusline && quotaEnabled ? t('machine.installOptions.quotaClaudeNote') : '',
+                                        ].filter(Boolean).join('\n\n')}
+                                        size={12}
+                                    />
                                 </span>
-                                <span className="mt-0.5 block text-2xs text-text-muted">
-                                    {t('machine.installOptions.quotaHint')}
-                                </span>
-                                {quotaInstallsClaudeStatusline && quotaEnabled && (
-                                    <span className="mt-1 block text-2xs text-amber-400">
-                                        {t('machine.installOptions.quotaClaudeNote')}
-                                    </span>
-                                )}
                             </span>
                         </label>
                     )}
@@ -133,10 +130,6 @@ export default function ProviderInstallOptionsModal({
                             )}
                         </span>
                     </label>
-                </div>
-
-                <div className="mt-3 text-3xs text-text-muted">
-                    {t('machine.installOptions.changeableLater')}
                 </div>
 
                 <div className="mt-4 flex justify-end gap-2">

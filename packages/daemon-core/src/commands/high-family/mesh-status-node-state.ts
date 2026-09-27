@@ -28,7 +28,7 @@
 import * as fs from 'fs';
 import { daemonIdsEquivalent, meshNodeIdMatches, normalizeMeshNodeId } from '@adhdev/mesh-shared';
 import type { MeshNodeGitStateEntry, MeshNodeGitStateStore } from '../../mesh/mesh-node-git-state.js';
-import { isHeldRuntimeLive, MESH_NODE_STATE_STALE_MS, type MeshNodeGitRefresher } from '../../mesh/mesh-node-git-refresher.js';
+import { isHeldRuntimeLive, MESH_NODE_STATE_STALE_MS, type MeshNodeGitRefresher, type MeshNodeHandshakeTarget } from '../../mesh/mesh-node-git-refresher.js';
 import type { MeshNodeRuntimeSession } from '../../mesh/mesh-node-runtime-summary.js';
 import type { RepoMeshNodeGitObservation, RepoMeshNodeHeldRuntime } from '../../repo-mesh-types.js';
 
@@ -214,6 +214,43 @@ export function kickMeshNodeGitRefreshes(args: {
         if (args.refresher.kickRuntime(args.meshId, daemonId, targets)) started += 1;
     }
     return started;
+}
+
+/**
+ * The nodes of `mesh` served by the member daemon `daemonId` (another daemon)
+ * that the coordinator already holds state for — what a (re)connect or restart
+ * of that daemon hands to MeshNodeGitRefresher.handshakeDaemon. A node whose
+ * workspace is on this machine (a second daemon here) is `runtimeOnly`: its git
+ * is read locally, only its runtime (build / sessions) is the member's.
+ */
+export function collectHeldDaemonNodeTargets(args: {
+    meshId: string;
+    mesh: any;
+    daemonId: string;
+    store: MeshNodeGitStateStore;
+    locality: MeshNodeLocality;
+}): MeshNodeHandshakeTarget[] {
+    const wanted = readString(args.daemonId);
+    const nodes = Array.isArray(args.mesh?.nodes) ? args.mesh.nodes : [];
+    const out: MeshNodeHandshakeTarget[] = [];
+    if (!args.meshId || !wanted) return out;
+    for (const node of nodes) {
+        if (!node || typeof node !== 'object') continue;
+        const daemonId = readString(node.daemonId);
+        if (!daemonId || !daemonIdsEquivalent(daemonId, wanted)) continue;
+        if (!isForeignDaemonMeshNode(node, args.locality)) continue;
+        const nodeId = normalizeMeshNodeId(node) ?? '';
+        const workspace = readString(node.workspace);
+        if (!nodeId || !workspace || !args.store.get(args.meshId, nodeId)) continue;
+        out.push({
+            meshId: args.meshId,
+            nodeId,
+            daemonId,
+            workspace,
+            ...(isRemoteMeshNodeForState(node, args.locality) ? {} : { runtimeOnly: true }),
+        });
+    }
+    return out;
 }
 
 function factsReportedAt(facts: unknown): number {

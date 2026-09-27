@@ -37,6 +37,10 @@ export interface Toast {
     targetKey?: string
     /** Optional inline action buttons (e.g., approve/reject for approval toasts) */
     actions?: { label: string; onClick: () => void; variant?: 'primary' | 'danger' | 'default' }[]
+    /** Raw technical detail shown behind the toast's "Details" expander. */
+    details?: string
+    /** Set once the user opens Details: the auto-dismiss timer skips pinned toasts. */
+    pinned?: boolean
 }
 
 export interface BaseDaemonContextValue {

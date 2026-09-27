@@ -221,7 +221,7 @@ describe('printClaudeStatuslineStatus — diagnostic output', () => {
         vi.restoreAllMocks();
     });
 
-    it('installed: shows wrapper path, backup location, last snapshot time, and the revert command', () => {
+    it('installed, default (non-verbose): shows install/snapshot summary but NOT wrapper/backup file paths', () => {
         const snapshotFile = path.join(tempDir, 'quota.json');
         fs.writeFileSync(snapshotFile, '{}', 'utf-8');
         const paths = fakePaths({ snapshotFile });
@@ -238,9 +238,35 @@ describe('printClaudeStatuslineStatus — diagnostic output', () => {
         const joined = captureLogs(() => printClaudeStatuslineStatus(status)).join('\n');
 
         expect(joined).toContain('✓ Installed');
+        // File paths are diagnostic detail, not routine "is this set up" output.
+        expect(joined).not.toContain(paths.wrapperFile);
+        expect(joined).not.toContain(paths.backupFile);
+        expect(joined).not.toContain(paths.snapshotFile);
+        expect(joined).toMatch(/Last snapshot:.*(just now|ago)/);
+        expect(joined).toContain('claude:uninstall');
+    });
+
+    it('installed, verbose: shows wrapper path, backup location, last snapshot time, and the revert command', () => {
+        const snapshotFile = path.join(tempDir, 'quota.json');
+        fs.writeFileSync(snapshotFile, '{}', 'utf-8');
+        const paths = fakePaths({ snapshotFile });
+        const status: StatuslineStatus = {
+            installed: true,
+            failureKind: null,
+            danglingWrapperPath: null,
+            wrappedCommand: 'my-old-statusline.sh',
+            foreignStatusLine: false,
+            volatileWrapperReason: null,
+            paths,
+        };
+
+        const joined = captureLogs(() => printClaudeStatuslineStatus(status, true)).join('\n');
+
+        expect(joined).toContain('✓ Installed');
         expect(joined).toContain(paths.wrapperFile);
         expect(joined).toContain(paths.backupFile);
         expect(joined).toMatch(/Last snapshot:.*(just now|ago)/);
+        expect(joined).toContain(paths.snapshotFile);
         expect(joined).toContain('claude:uninstall');
     });
 

@@ -19,10 +19,18 @@
  * a debounced runtime-only push. Unchanged runtime stays quiet until the heartbeat.
  *
  * Lifetime: the coordinator's ack renews the subscription; an explicit refusal
- * (node no longer on its roster, sender gate) drops it; an unreachable
- * coordinator lets it lapse after the TTL — the coordinator's own stale-state
- * probe re-subscribes when it comes back. Nothing here is persisted: after a
- * member restart the coordinator's next background probe re-registers.
+ * (node no longer on its roster, sender gate, a coordinator that does not know
+ * the report command) drops it; an unreachable coordinator lets it lapse after
+ * the TTL — the coordinator's handshake re-subscribes when its link comes back.
+ *
+ * Restart: the subscription SET (coordinator, mesh, node, workspace — ids and
+ * a local path, no state) is persisted (`persistence`). A restarted member
+ * restores it at boot (`restore`, plus memberships derived from its mesh host
+ * records / config) and pushes at once (`pushNow`) — and again whenever the
+ * link to a coordinator comes up (`pushNow(coordinatorDaemonId)`) — so the
+ * coordinator sees the new process's build within seconds instead of after
+ * its stale threshold. Without this the coordinator kept reporting the
+ * replaced build until its held state aged out (rc.61 live regression).
  *
  * Worktree reconciliation: every coordinator ack carries its per-process
  * `coordinatorBootId`. The first push of a (re-)registered subscription, and
@@ -39,6 +47,7 @@
  *
  * P2P only — no server path, no seqscribe topic.
  */
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import { readMeshTimeoutEnvMs } from '../runtime-defaults.js';
 import { carryUpstreamFreshness, computeMeshNodeGitSignature, sanitizeObservedGit } from './mesh-node-git-state.js';
@@ -56,6 +65,22 @@ export const MESH_NODE_STATE_PUSH_TTL_MS = 30 * 60_000;
 export const MESH_NODE_STATE_NUDGE_UPSTREAM_MIN_MS = 60_000;
 /** A burst of session lifecycle changes is coalesced into one runtime push after this quiet period. */
 export const MESH_NODE_RUNTIME_PUSH_DEBOUNCE_MS = readMeshTimeoutEnvMs('MESH_NODE_RUNTIME_PUSH_DEBOUNCE_MS', 1_500);
+
+/** A forced push (nudge / reconnect / boot) of one subscription is skipped when the last one is younger than this. */
+export const MESH_NODE_STATE_FORCED_PUSH_MIN_INTERVAL_MS = 5_000;
+
+/** The restart-surviving part of a subscription: who to push which node's state to. */
+export interface MeshNodeStatePushTarget {
+    coordinatorDaemonId: string;
+    meshId: string;
+    nodeId: string;
+    workspace: string;
+}
+
+export interface MeshNodeStatePushPersistence {
+    load(): MeshNodeStatePushTarget[];
+    save(targets: MeshNodeStatePushTarget[]): void;
+}
 
 export interface MeshNodeStatePushSubscription {
     coordinatorDaemonId: string;
@@ -76,6 +101,8 @@ export interface MeshNodeStatePushSubscription {
     worktreeNodesDeliveredFor: string | null;
     /** Boot id a follow-up push was already triggered for (one follow-up per boot id). */
     worktreeFollowUpFor?: string | null;
+    /** Epoch ms of the last forced push (nudge / reconnect / boot). */
+    lastForcedPushAt?: number | null;
 }
 
 export interface MeshNodeStatePusherOptions {
@@ -94,6 +121,8 @@ export interface MeshNodeStatePusherOptions {
     ttlMs?: number;
     /** Injected for tests; defaults to an unref'd setInterval. */
     startTimer?: (fn: () => void, ms: number) => { stop(): void };
+    /** Restart-surviving subscription set (absent = in-memory only). */
+    persistence?: MeshNodeStatePushPersistence;
 }
 
 function readRecord(value: unknown): Record<string, unknown> {
@@ -128,6 +157,8 @@ function readAck(response: unknown): boolean | null {
         const code = readString(root.code) || readString(inner.code) || readString(root.error) || readString(inner.error);
         // A sender-gate refusal or an unknown node is final for this subscription.
         if (code.startsWith('mesh_sender_') || code === 'mesh_node_unknown' || code === 'mesh_not_found') return false;
+        // A coordinator too old to hold pushed state (a restored subscription can reach one).
+        if (code.startsWith('Unknown command')) return false;
     }
     return null;
 }
@@ -198,9 +229,118 @@ export class MeshNodeStatePusher {
             LOG.info('MeshNodeState', `pushing git state of node ${args.nodeId} (mesh ${args.meshId}) to coordinator ${coordinatorDaemonId.slice(0, 12)}`);
             // Land the runtime half now instead of on the next check tick.
             this.noteRuntimeChanged();
+            this.persistTargets();
+        } else if (existing.workspace !== workspace) {
+            this.persistTargets();
         }
         this.ensureTimer();
         return true;
+    }
+
+    /**
+     * Register a subscription this daemon knows of WITHOUT a coordinator probe —
+     * a restored one after a restart, or a membership derived from its mesh host
+     * records. Nothing is held for it yet, so the first push (pushNow / the next
+     * tick) carries the full git + runtime + worktree list. An existing
+     * subscription is left untouched. Returns whether one was added.
+     */
+    selfRegister(target: MeshNodeStatePushTarget): boolean {
+        if (!this.options.dispatch) return false;
+        const coordinatorDaemonId = readString(target.coordinatorDaemonId);
+        const meshId = readString(target.meshId);
+        const nodeId = readString(target.nodeId);
+        const workspace = readString(target.workspace);
+        if (!coordinatorDaemonId || !meshId || !nodeId || !workspace) return false;
+        const key = this.key(coordinatorDaemonId, meshId, nodeId);
+        if (this.subscriptions.has(key)) return false;
+        this.subscriptions.set(key, {
+            coordinatorDaemonId,
+            meshId,
+            nodeId,
+            workspace,
+            expiresAt: this.now() + this.ttlMs,
+            lastSignature: null,
+            lastPushedAt: null,
+            lastUpstreamRefreshAt: null,
+            lastUpstreamGit: null,
+            lastRuntimeSignature: null,
+            coordinatorBootId: null,
+            worktreeNodesDeliveredFor: null,
+        });
+        this.ensureTimer();
+        return true;
+    }
+
+    /**
+     * Boot: restore the persisted subscription set plus `derived` memberships
+     * (self-registered, not pushed — call pushNow once the transport is up).
+     * Returns how many subscriptions were added.
+     */
+    restore(derived: MeshNodeStatePushTarget[] = [], opts?: { selfDaemonId?: string }): number {
+        const self = readString(opts?.selfDaemonId);
+        let persisted: MeshNodeStatePushTarget[] = [];
+        try {
+            persisted = this.options.persistence?.load() ?? [];
+        } catch (error: any) {
+            LOG.debug('MeshNodeState', `push subscription restore failed: ${error?.message || error}`);
+        }
+        let added = 0;
+        for (const target of [...persisted, ...derived]) {
+            // Never push to ourselves (a config dir shared with another daemon's record).
+            if (self && daemonIdsEquivalent(readString(target?.coordinatorDaemonId), self)) continue;
+            if (this.selfRegister(target)) added += 1;
+        }
+        if (added > 0) {
+            LOG.info('MeshNodeState', `restored ${added} node state push subscription(s) — pushing to their coordinators now`);
+            this.persistTargets();
+        }
+        return added;
+    }
+
+    /**
+     * Push every subscription (or only those of `coordinatorDaemonId`) NOW, in
+     * the background — at boot once the mesh transport is up, and whenever the
+     * link to a coordinator (re)opens, so a coordinator learns this process's
+     * state (build, sessions, git) within seconds. A subscription force-pushed
+     * less than MESH_NODE_STATE_FORCED_PUSH_MIN_INTERVAL_MS ago is skipped.
+     * Returns how many pushes were started.
+     */
+    pushNow(coordinatorDaemonId?: string): number {
+        if (!this.options.dispatch) return 0;
+        const wanted = readString(coordinatorDaemonId);
+        const now = this.now();
+        let runtime: MeshNodeRuntimeSummary | null | undefined;
+        const readRuntimeOnce = async () => {
+            if (runtime === undefined) runtime = await this.readRuntimeSummary();
+            return runtime;
+        };
+        let started = 0;
+        for (const [key, sub] of [...this.subscriptions.entries()]) {
+            if (wanted && !daemonIdsEquivalent(sub.coordinatorDaemonId, wanted)) continue;
+            if (sub.lastForcedPushAt != null && now - sub.lastForcedPushAt < MESH_NODE_STATE_FORCED_PUSH_MIN_INTERVAL_MS) continue;
+            sub.lastForcedPushAt = now;
+            void this.checkOne(key, sub, readRuntimeOnce, { force: true }).catch(() => { /* best-effort */ });
+            started += 1;
+        }
+        return started;
+    }
+
+    private persistTargets(): void {
+        if (!this.options.persistence) return;
+        try {
+            this.options.persistence.save([...this.subscriptions.values()].map((sub) => ({
+                coordinatorDaemonId: sub.coordinatorDaemonId,
+                meshId: sub.meshId,
+                nodeId: sub.nodeId,
+                workspace: sub.workspace,
+            })));
+        } catch (error: any) {
+            LOG.debug('MeshNodeState', `push subscription persist failed: ${error?.message || error}`);
+        }
+    }
+
+    private dropSubscription(key: string): void {
+        if (this.subscriptions.delete(key)) this.persistTargets();
     }
 
     /**
@@ -285,7 +425,7 @@ export class MeshNodeStatePusher {
                 }
                 const ack = readAck(response);
                 if (ack === false) {
-                    this.subscriptions.delete(key);
+                    this.dropSubscription(key);
                     continue;
                 }
                 if (ack === true) {
@@ -336,7 +476,7 @@ export class MeshNodeStatePusher {
             for (const [key, sub] of [...this.subscriptions.entries()]) {
                 const now = this.now();
                 if (now >= sub.expiresAt) {
-                    this.subscriptions.delete(key);
+                    this.dropSubscription(key);
                     LOG.info('MeshNodeState', `push subscription for node ${sub.nodeId} (mesh ${sub.meshId}) lapsed — coordinator did not ack within the TTL`);
                     continue;
                 }
@@ -399,7 +539,7 @@ export class MeshNodeStatePusher {
         }
         const ack = readAck(response);
         if (ack === false) {
-            this.subscriptions.delete(key);
+            this.dropSubscription(key);
             LOG.info('MeshNodeState', `coordinator refused git state push for node ${sub.nodeId} (mesh ${sub.meshId}); subscription dropped`);
             return;
         }

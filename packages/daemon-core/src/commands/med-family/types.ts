@@ -118,6 +118,13 @@ export interface MedFamilyContext {
      */
     tombstoneRemovedMeshNode: (meshId: string, nodeId: string) => void;
 
+    /**
+     * Bound `DaemonCommandRouter.noteMeshMemberRestarting` — restart_daemon_node
+     * forwarded to member daemon `daemonId`: its held build is pending until the
+     * new process reports (optional: absent in unit contexts).
+     */
+    noteMeshMemberRestarting?: (daemonId: string) => Promise<number>;
+
     /** Bound `DaemonCommandRouter.removeInlineMeshNode`. */
     removeInlineMeshNode: (meshId: string, mesh: any, nodeId: string) => boolean;
 

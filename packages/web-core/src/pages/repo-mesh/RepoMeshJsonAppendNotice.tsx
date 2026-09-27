@@ -25,6 +25,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { InfoTip } from '../../components/ui/InfoTip'
 
 /** Normalized view of the repo `.adhdev/mesh.json` coordinator layer. */
 export interface RepoMeshJsonCoordinatorLayer {
@@ -127,16 +128,10 @@ export default function RepoMeshJsonAppendNotice({ daemonId, workspace, sendComm
 
     return (
         <div className="mt-3 rounded-lg border border-border-subtle bg-bg-secondary/40 p-3">
-            <div className="mb-1 flex flex-wrap items-center gap-2">
+            <div className="mb-2 flex flex-wrap items-center gap-1">
                 <span className="text-[13px] leading-tight font-semibold">{t('mesh.detail.repoMeshJsonTitle')}</span>
-                <span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-3xs font-medium text-text-muted">
-                    {t('mesh.detail.repoMeshJsonReadOnly')}
-                </span>
+                <InfoTip content={`${t('mesh.detail.repoMeshJsonHint')}${layer.path ? `\n${layer.path}` : ''}`} size={12} />
             </div>
-            <p className="mb-2 text-xs text-text-muted">
-                {t('mesh.detail.repoMeshJsonHint')}
-                {layer.path && <span className="ml-1 font-mono text-2xs">{layer.path}</span>}
-            </p>
 
             {layer.override.trim() && (
                 <div className="mb-2">

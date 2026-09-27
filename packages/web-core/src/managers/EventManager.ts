@@ -11,6 +11,7 @@
  */
 
 import { i18next } from '../i18n/config'
+import { formatDurationLocalized } from '../utils/time'
 import { formatIdeType, getMachineDisplayName } from '../utils/daemon-utils'
 import { shouldNotify } from '../hooks/useNotificationPrefs'
 import { notify } from '../hooks/useBrowserNotifications'
@@ -44,6 +45,29 @@ export interface ToastConfig {
     targetKey?: string
     actions?: ToastAction[]
     duration?: number // ms before auto-dismiss (default 5000)
+    /**
+     * Raw technical detail (daemon error text, stack, ids). The toast shows the
+     * short localized `message`; this stays behind a "Details" expander.
+     */
+    details?: string
+}
+
+/**
+ * Raw error → the text for a toast's "Details" expander. Accepts an Error, a
+ * string, or a daemon command result (`{ error }` / `{ message }`).
+ */
+export function describeToastError(error: unknown): string | undefined {
+    if (error === null || error === undefined || error === '') return undefined
+    if (typeof error === 'string') return error.trim() || undefined
+    if (error instanceof Error) return error.message || String(error)
+    if (typeof error === 'object') {
+        const record = error as Record<string, unknown>
+        const inner = record.error ?? record.message ?? record.reason
+        if (typeof inner === 'string' && inner.trim()) return inner.trim()
+        if (inner && typeof inner === 'object') return describeToastError(inner)
+        try { return JSON.stringify(error) } catch { return undefined }
+    }
+    return String(error)
 }
 
 export type ToastCallback = (toast: ToastConfig) => void
@@ -164,6 +188,20 @@ class EventManager {
         this.emitToast({
             id: toastId, message, type, timestamp: toastId,
             duration: 5000,
+            ...opts,
+        })
+    }
+
+    /**
+     * Failure toast: a short localized `message` for everyone, the raw error
+     * (daemon text, stack) behind the toast's "Details" expander. Stays up a
+     * little longer than an info toast so there is time to open Details.
+     */
+    public showErrorToast(message: string, error?: unknown, opts?: Partial<ToastConfig>): void {
+        const details = describeToastError(error)
+        this.showToast(message, 'warning', {
+            duration: 8000,
+            ...(details && details !== message ? { details } : {}),
             ...opts,
         })
     }
@@ -325,7 +363,7 @@ class EventManager {
 
         if (payload.event === 'agent:generating_completed') {
             msg = payload.duration
-                ? `✅ ${i18next.t('event.taskCompletedWithDuration', { label: ideLabel, duration: payload.duration })}`
+                ? `✅ ${i18next.t('event.taskCompletedWithDuration', { label: ideLabel, duration: formatDurationLocalized(Number(payload.duration) * 1000) })}`
                 : `✅ ${i18next.t('event.taskCompleted', { label: ideLabel })}`
             type = 'success'
 

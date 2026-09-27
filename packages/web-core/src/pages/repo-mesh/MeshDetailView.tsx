@@ -5,27 +5,31 @@ import AppPage from '../../components/ui/AppPage'
 import { Section } from '../../components/ui/Section'
 import { AlertBanner } from '../../components/ui/AlertBanner'
 import { FormField } from '../../components/ui/FormField'
+import { InfoTip } from '../../components/ui/InfoTip'
+import { Switch } from '../../components/ui/Switch'
 import { SettingsTabs, type SettingsTab } from '../../components/ui/SettingsTabs'
-import { IconMesh } from '../../components/Icons'
+import { IconMesh, IconSettings, IconWrench } from '../../components/Icons'
 // The task_kind → panel binding editor (MagiKindPanelEditor) is the sole MAGI panel
 // surface — the named-panel CRUD (MagiPanelManager) was removed.
 import MagiKindPanelEditor from '../../components/MeshGraph/MagiKindPanelEditor'
+import { MeshNotesTab } from '../../components/MeshGraph/MeshObservabilitySurface/MeshNotesTab'
+import { MeshGraphThemeContext } from '../../components/MeshGraph/MeshObservabilitySurface/meshSurfaceTheme'
+import { getMeshGraphTheme } from '../../components/MeshGraph/meshGraphTheme'
+import { useTheme } from '../../hooks/useTheme'
 import QuotaPolicyStep from '../../components/setup-wizard/QuotaPolicyStep'
 import CoordinatorPromptDefaultPreview from './CoordinatorPromptDefaultPreview'
 import RepoMeshJsonAppendNotice from './RepoMeshJsonAppendNotice'
 // Lazy: the graph dialog (xyflow + elkjs) only loads when it first opens.
 import DashboardMeshGraphDialog from '../../components/dashboard/LazyDashboardMeshGraphDialog'
-import type { ActiveConversation } from '../../components/dashboard/types'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import type { AvailableCliProviderOption } from '../../utils/provider-priority'
 import { collectMeshProviderInventory } from './node-providers'
 import { COORDINATOR_PROMPT_PLACEHOLDERS } from './coordinator-prompt-placeholders'
-import { MeshMissionsSection } from './MeshMissionsSection'
 import { MeshProviderAutoApproveSection } from './MeshProviderAutoApproveSection'
 import { MeshNodeList } from './MeshNodeList'
 import { MeshHostDaemonSection } from './MeshHostDaemonSection'
 import { RepoMeshHermesMcpConfig } from './MeshHermesMcpConfig'
-import { IconRefresh } from './icons'
+import { buildMeshGraphLaunchConversation } from './graph-launch'
 import {
     readMeshPolicy,
     SESSION_CLEANUP_MODE_OPTIONS,
@@ -133,32 +137,6 @@ interface Props {
     sendCommand: (daemonId: string, command: string, payload?: any) => Promise<any>
 }
 
-/**
- * Build a minimal synthetic ActiveConversation so the /mesh settings page can launch
- * DashboardMeshGraphDialog without a real coordinator conversation. The dialog only
- * needs `daemonId` + a mesh id (read from `coordinator.meshId` / `settings.meshCoordinatorFor`)
- * to load `mesh_status` and render the observability surface; the live-session overlay
- * (built from `sessionId`) is simply absent here, which the dialog handles gracefully.
- */
-function buildMeshGraphLaunchConversation(args: { meshId: string; daemonId: string; meshName: string }): ActiveConversation {
-    return {
-        routeId: `mesh-settings:${args.meshId}`,
-        daemonId: args.daemonId,
-        agentName: args.meshName,
-        agentType: 'mesh',
-        status: 'idle',
-        title: args.meshName,
-        messages: [],
-        workspaceName: args.meshName,
-        displayPrimary: args.meshName,
-        displaySecondary: 'Mesh observability',
-        streamSource: 'native',
-        tabKey: `mesh-settings:${args.meshId}`,
-        coordinator: { meshId: args.meshId, role: 'coordinator' },
-        settings: { meshCoordinatorFor: args.meshId },
-    }
-}
-
 export function MeshDetailView({
     selectedMesh,
     error,
@@ -166,7 +144,6 @@ export function MeshDetailView({
     onBack,
     onDelete,
     displayedMeshStatus,
-    graphLoading,
     graphError,
     onRefreshGraph,
     savingPolicy,
@@ -265,41 +242,22 @@ export function MeshDetailView({
         ? null
         : (anyNodeHasSlots || nodes.length >= 2) ? 'smart' : null
 
-    // Graph/detail observability is now a launched dialog (DashboardMeshGraphDialog),
-    // not an embedded surface on the page — the page is the mesh SETTINGS surface.
+    // The live view (overview / tasks / map) is the graph dialog, opened from the
+    // header's primary "Open" button. This page is the mesh SETTINGS surface.
     const [graphDialogOpen, setGraphDialogOpen] = useState(false)
     const canLaunchGraphDialog = !!activeDaemonId && !!selectedMesh.id
+    const { theme } = useTheme()
+    const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
 
-    return (
-        <AppPage
-            icon={<IconMesh />}
-            title={selectedMesh.name}
-            subtitle={selectedMesh.repoIdentity || (selectedMesh as any).repo_identity || 'Repo Mesh'}
-            widthClassName="max-w-5xl"
-            actions={
-                <div className="flex gap-2">
-                    <button className="btn btn-secondary btn-sm" onClick={onBack}>{t('mesh.detail.back')}</button>
-                    <button className="btn btn-secondary btn-sm inline-flex items-center gap-1.5" onClick={() => onRefreshGraph(true)} disabled={graphLoading}>
-                        <IconRefresh size={13} />{graphLoading ? t('mesh.detail.probing') : t('mesh.detail.refresh')}
-                    </button>
-                    <button className="btn btn-danger btn-sm" onClick={() => onDelete(selectedMesh.id)}>{t('mesh.detail.delete')}</button>
-                </div>
-            }
-        >
-            {error && <AlertBanner variant="error" onDismiss={onDismissError} className="mb-4">{error}</AlertBanner>}
+    const selectCls = 'w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary'
+    const quotaRouting = (policy.quotaRouting && typeof policy.quotaRouting === 'object' ? policy.quotaRouting : {}) as RepoMeshQuotaRoutingPolicy
+    const quotaBusyFallbackOn = quotaRouting.quotaBusyFallback !== false
+    const currentDistribution = strategyToDistribution(policy.schedulingStrategy, { priorityConfigured: anyNodePriorityConfigured })
 
-            {(() => {
-            // Section order below follows the setup flow: add nodes first, then decide how
-            // work is scheduled across them, then configure MAGI review panels, then
-            // runtime telemetry (missions). Brain presets (difficulty → model/thinking)
-            // are absorbed into per-node capability slots (node capability slots design, 2026-07-09):
-            // each node slot declares the difficulty range it handles plus its
-            // provider/model/thinking, so the mesh-wide difficulty→brain mapping is no
-            // longer a separate surface — edit per-node in "Nodes & Providers".
-
-            const nodesTabContent = (
-            <>
-            {/* ── Cloud: Mesh host (read-only) ── */}
+    // ── General: nodes, distribution, visibility, auto-approve ──────────────
+    const generalTabContent = (
+        <>
+            {/* Cloud: host machine (read-only once pinned) */}
             {features.meshHostDaemonSection && (
                 <MeshHostDaemonSection
                     daemons={daemons}
@@ -317,29 +275,6 @@ export function MeshDetailView({
                 />
             )}
 
-            {/* ── Observability: graph / detail dialog launcher ──
-                 The page no longer embeds the observability surface (graph/overview/status);
-                 that surface is reserved for DashboardMeshGraphDialog, which this button
-                 launches. The dialog owns its own mesh_status loader + live-session overlay. */}
-            <Section title={t('mesh.detail.observabilityTitle')} description={t('mesh.detail.observabilityDescription')}>
-                {graphError && <div className="mb-3 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">{graphError}</div>}
-                <div className="flex flex-wrap items-center gap-3">
-                    <button
-                        type="button"
-                        className="btn btn-primary btn-sm inline-flex items-center gap-1.5"
-                        onClick={() => setGraphDialogOpen(true)}
-                        disabled={!canLaunchGraphDialog}
-                        title={canLaunchGraphDialog ? t('mesh.detail.observabilityOpenTitle') : t('mesh.detail.observabilityDisabledTitle')}
-                    >
-                        <IconMesh size={14} />{t('mesh.detail.observabilityOpen')}
-                    </button>
-                    <span className="text-xs text-text-muted">
-                        {t('mesh.detail.observabilityHint')}
-                    </span>
-                </div>
-            </Section>
-
-            {/* ── Nodes & Providers ── */}
             <MeshNodeList
                 nodes={nodes}
                 statusNodes={statusNodes}
@@ -380,142 +315,52 @@ export function MeshDetailView({
                 onAddNode={onAddNode}
                 onRemoveNode={onRemoveNode}
             />
-            </>
-            )
 
-            const schedulingTabContent = (
-            <>
-            {/* ── Scheduling ── */}
-            <Section title={t('mesh.detail.schedulingTitle')} description={t('mesh.detail.schedulingDescription')}>
-                {/* Mesh-level "Max parallel tasks" is hidden: the real concurrency
-                    limits live per node / per capability slot (node capability slots design, 2026-07-09),
-                    so a global cap has little meaning. The policy field still exists and
-                    defaults high — set it via the API only if you genuinely need a
-                    mesh-wide ceiling. */}
+            {/* Distribution — one line per option; the full explanation is the ⓘ.
+                (Mesh-level "Max parallel tasks" stays hidden: real concurrency lives
+                per node / per capability slot.) Saves on select. */}
+            <Section title={t('mesh.detail.distribution')}>
                 <fieldset className="border-none p-0 m-0">
-                    <legend className="text-xxs font-medium text-text-secondary mb-2">{t('mesh.detail.distribution')}</legend>
+                    <legend className="sr-only">{t('mesh.detail.distribution')}</legend>
                     <div className="flex flex-col gap-2">
                         {DISTRIBUTION_OPTIONS.map(opt => {
-                            const currentDistribution = strategyToDistribution(policy.schedulingStrategy, { priorityConfigured: anyNodePriorityConfigured })
                             const selected = currentDistribution === opt.value
                             return (
                                 <label key={opt.value}
-                                    className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition-colors ${selected ? 'border-accent-primary/60 bg-accent-primary/10' : 'border-border-subtle bg-bg-secondary/60 hover:border-border-default'}`}>
-                                    <input type="radio" name="mesh-distribution" className="mt-0.5 accent-[var(--accent-primary)]"
+                                    className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition-colors ${selected ? 'border-accent-primary/60 bg-accent-primary/10' : 'border-border-subtle bg-bg-secondary/60 hover:border-border-default'}`}>
+                                    <input type="radio" name="mesh-distribution" className="accent-[var(--accent-primary)]"
                                         value={opt.value} checked={selected} disabled={savingPolicy}
                                         onChange={() => onUpdatePolicy({ schedulingStrategy: distributionToStrategy(opt.value) })} />
-                                    <span className="min-w-0">
+                                    <span className="min-w-0 flex-1">
                                         <span className="flex items-center gap-2 text-sm text-text-primary">
                                             {t(opt.labelKey)}
                                             {recommendedDistribution === opt.value && (
                                                 <span className="rounded-full border border-accent-primary/40 bg-accent-primary/10 px-1.5 py-0.5 text-3xs font-medium text-accent-primary">{t('mesh.detail.recommended')}</span>
                                             )}
                                         </span>
-                                        <span className="block text-xs text-text-muted">{t(opt.descriptionKey)}</span>
+                                        <span className="block truncate text-xs text-text-muted">{t(opt.summaryKey)}</span>
                                     </span>
+                                    <InfoTip content={t(opt.descriptionKey)} />
                                 </label>
                             )
                         })}
                     </div>
                 </fieldset>
-                {(() => {
-                    // QUOTA-BUSY FALLBACK. quotaRouting is a NESTED policy object, so this
-                    // patches the whole sub-object (spread current + the changed field),
-                    // matching the autoFastForward idiom below. Default is ON, so only an
-                    // explicit `false` reads as off — mirroring the daemon's resolver.
-                    const qr = (policy.quotaRouting && typeof policy.quotaRouting === 'object' ? policy.quotaRouting : {}) as RepoMeshQuotaRoutingPolicy
-                    const fallbackOn = qr.quotaBusyFallback !== false
-                    return (
-                        <div className="mt-4">
-                            <FormField label={t('mesh.detail.quotaBusyFallback')}
-                                hint={t('mesh.detail.quotaBusyFallbackHint')}>
-                                <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
-                                    value={fallbackOn ? 'on' : 'off'}
-                                    onChange={e => onUpdatePolicy({ quotaRouting: { ...qr, quotaBusyFallback: e.target.value === 'on' } })}
-                                    disabled={savingPolicy}>
-                                    <option value="on">{t('mesh.detail.quotaBusyFallbackOn')}</option>
-                                    <option value="off">{t('mesh.detail.quotaBusyFallbackOff')}</option>
-                                </select>
-                            </FormField>
-                        </div>
-                    )
-                })()}
-                {savingPolicy && <div className="mt-3 text-xs text-text-muted">{t('mesh.detail.saving')}</div>}
-
-                {/* Per-node scheduling knobs (priority + per-provider max-parallel) were
-                    removed: capability slots absorb both — slot order = preference and
-                    slot.maxParallel = the per-slot concurrency cap — so editing them lives
-                    entirely in each node's "Preferred AI tools" slot list under Nodes &
-                    Providers. The daemon still reads legacy providerPriority for
-                    back-compat; this page just no longer offers a second place to set it. */}
             </Section>
 
-            {/* ── Dashboard visibility ──
-                 Surfaced as a primary (non-advanced) control: it decides whether the
-                 worker sessions the coordinator spawns clutter the operator's dashboard
-                 inbox + notifications, which most operators want to control. Same
-                 policy.spawnedSessionVisibility binding as before (moved out of the
-                 collapsed "Safety & Git" advanced accordion for discoverability). */}
-            <Section title={t('mesh.detail.visibilityTitle')} description={t('mesh.detail.visibilityDescription')}>
-                <FormField label={t('mesh.detail.visibilityLabel')}
-                    hint={t('mesh.detail.visibilityHint')}>
-                    <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
-                        value={policy.spawnedSessionVisibility === 'visible' ? 'visible' : 'hidden'}
-                        onChange={e => onUpdatePolicy({ spawnedSessionVisibility: e.target.value === 'visible' ? 'visible' : 'hidden' })}
-                        disabled={savingPolicy}>
-                        <option value="hidden">{t('mesh.detail.visibilityHidden')}</option>
-                        <option value="visible">{t('mesh.detail.visibilityVisible')}</option>
-                    </select>
-                </FormField>
+            {/* Dashboard visibility of the worker sessions this coordinator spawns. */}
+            <Section title={t('mesh.detail.visibilityTitle')} description={t('mesh.detail.visibilityHint')}>
+                <select className={selectCls} aria-label={t('mesh.detail.visibilityLabel')}
+                    value={policy.spawnedSessionVisibility === 'visible' ? 'visible' : 'hidden'}
+                    onChange={e => onUpdatePolicy({ spawnedSessionVisibility: e.target.value === 'visible' ? 'visible' : 'hidden' })}
+                    disabled={savingPolicy}>
+                    <option value="hidden">{t('mesh.detail.visibilityHidden')}</option>
+                    <option value="visible">{t('mesh.detail.visibilityVisible')}</option>
+                </select>
             </Section>
 
-            {/* ── MAGI task_kind → panel binding editor ──
-                 Placed after Nodes & Scheduling: MAGI panels reference the nodes/providers
-                 configured above. The sole MAGI panel surface — the named-panel CRUD
-                 (MagiPanelManager) and its magi_panel_* daemon commands were removed; only
-                 magi_kind_panel_* remains.
-                 Intentionally NOT gated on `displayedMeshStatus`: the editor talks to the
-                 daemon directly via magi_kind_panel_list/set/remove and needs no mesh
-                 status/graph truth to function (status only feeds the optional "Machine"
-                 node picker). Gating this on status meant one offline mesh peer — which
-                 fails mesh_status's direct-peer-truth and makes displayedMeshStatus null —
-                 hid MAGI config entirely, even though it still worked. `meshId` is passed
-                 explicitly (selectedMesh.id) so scoping survives status being null. */}
-            <Section title={t('mesh.detail.magiTitle')} collapsible defaultOpen={false}
-                badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-3xs font-medium text-text-muted">{t('mesh.detail.advanced')}</span>}
-                description={t('mesh.detail.magiDescription')}>
-                <MagiKindPanelEditor
-                    status={displayedMeshStatus}
-                    daemonId={activeDaemonId}
-                    meshId={selectedMesh.id}
-                    sendDaemonCommand={sendCommand}
-                    availableProviders={availableCliProviders}
-                />
-            </Section>
-
-            {/* ── Quota-aware routing thresholds (policy.quotaRouting) ──
-                 Placed next to MAGI: both are coordinator-side routing knobs that
-                 read the same mesh status/provider surface. Saved through the
-                 generic onUpdatePolicy → update_mesh path (same as every other
-                 policy field on this page), not the dedicated
-                 mesh_quota_routing_set command — quotaRouting is just a field on
-                 RepoMeshPolicy, so the shallow-merge patch here is sufficient. */}
-            <Section>
-                <QuotaPolicyStep
-                    quotaRouting={(policy.quotaRouting as RepoMeshQuotaRoutingPolicy | undefined) ?? null}
-                    saving={savingPolicy}
-                    error={error}
-                    onSave={quotaRouting => onUpdatePolicy({ quotaRouting })}
-                />
-            </Section>
-
-            {/* ── Provider auto-approve defaults (repo mesh.json providerDefaults) ──
-                 Three-section surface: repo default (committed) / this machine's
-                 authorization (local) / effective result with downgrade reasons. The
-                 host daemon owns the repo workspace's .adhdev/mesh.json read/write,
-                 while the provider inventory (with autoApproveModes) is the union
-                 across this mesh's nodes — a member machine's provider is
-                 configurable here too. */}
+            {/* Provider auto-approve defaults: repo default (committed) + this
+                machine's authorization + the effective result per provider. */}
             <MeshProviderAutoApproveSection
                 hostDaemonId={coordinatorDaemonId}
                 hostOnline={hostOnline}
@@ -528,223 +373,260 @@ export function MeshDetailView({
                 savingPolicy={savingPolicy}
                 sendCommand={sendCommand}
             />
-            </>
-            )
+        </>
+    )
 
-            const promptsTabContent = (
-            <>
-            {/* ── Coordinator prompt (advanced) ──
-                 Stored in this mesh's coordinator config (systemPromptOverride / systemPromptAppend)
-                 via `update_mesh`. Applies only to this mesh. The default base prompt is always
-                 rendered read-only above the Override field (coordinator_prompt_preview) so
-                 "leave empty to keep the default" is never a blank guess.
-                 There is deliberately no "copy default into Override" button: the preview is the
-                 fully-expanded prompt ({{tokens}} already substituted with live node/policy text),
-                 and copying that into Override would freeze a one-time snapshot there — it would
-                 stop tracking node/policy changes the moment it's saved. An override is meant to
-                 be authored with the literal {{token}} syntax documented below instead, so it keeps
-                 re-expanding on every render. (Removed 2026-08-24; see git history for the prior
-                 "Start from default" button if this needs revisiting.) */}
-            {features.coordinatorPrompt && (
-                <Section title={t('mesh.detail.coordinatorPromptTitle')} collapsible defaultOpen={false}
-                    badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-3xs font-medium text-text-muted">{t('mesh.detail.advanced')}</span>}
-                    description={t('mesh.detail.coordinatorPromptDescription')}>
+    // ── Advanced: collapsible groups ────────────────────────────────────────
+    // Auto fast-forward is a NESTED policy object (autoFastForward.*), so its
+    // toggles patch the whole sub-object. Defaults mirror the daemon normalizer:
+    // enabled=true, remoteNodes=false, mode='idle'.
+    const aff = (policy.autoFastForward && typeof policy.autoFastForward === 'object' ? policy.autoFastForward : {}) as {
+        enabled?: boolean; remoteNodes?: boolean; mode?: string;
+    }
+    const affEnabled = aff.enabled !== false
+    const affRemote = aff.remoteNodes === true
+    const affMode = aff.mode === 'continuous' ? 'continuous' : 'idle'
+    const patchAff = (change: Record<string, unknown>) => onUpdatePolicy({ autoFastForward: { ...aff, ...change } })
+    const cleanupMode = SESSION_CLEANUP_MODE_OPTIONS.find(o => o.value === policy.sessionCleanupOnNodeRemove) ?? SESSION_CLEANUP_MODE_OPTIONS[0]
 
-                    <div className="rounded-lg border border-border-subtle bg-bg-secondary/40 p-3">
-                        <div className="text-xxs font-semibold mb-1">{t('mesh.detail.thisMesh')}</div>
-                        <p className="text-xs text-text-muted mb-3">{t('mesh.detail.thisMeshHint', { name: selectedMesh.name })}</p>
+    const advancedTabContent = (
+        <>
+            {/* Quota-aware routing — thresholds AND the busy fallback in one group.
+                quotaRouting is ONE nested policy object; both editors patch it with
+                the other's current value preserved (the threshold form used to
+                replace the object and silently drop quotaBusyFallback). */}
+            <Section title={t('setupWizard.quotaPolicy.title')} description={t('setupWizard.quotaPolicy.description')} collapsible defaultOpen={false}>
+                <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-border-subtle bg-bg-secondary/40 px-3 py-2.5">
+                    <span className="flex min-w-0 items-center gap-1 text-sm text-text-primary">
+                        <span id="mesh-quota-busy-fallback-label">{t('mesh.detail.quotaBusyFallback')}</span>
+                        <InfoTip content={t('mesh.detail.quotaBusyFallbackHint')} />
+                    </span>
+                    <Switch
+                        checked={quotaBusyFallbackOn}
+                        disabled={savingPolicy}
+                        aria-labelledby="mesh-quota-busy-fallback-label"
+                        onChange={next => onUpdatePolicy({ quotaRouting: { ...quotaRouting, quotaBusyFallback: next } })}
+                    />
+                </div>
+                <QuotaPolicyStep
+                    quotaRouting={(policy.quotaRouting as RepoMeshQuotaRoutingPolicy | undefined) ?? null}
+                    saving={savingPolicy}
+                    error={error}
+                    hideHeader
+                    onSave={overrides => onUpdatePolicy({
+                        quotaRouting: {
+                            ...overrides,
+                            ...(quotaRouting.quotaBusyFallback !== undefined ? { quotaBusyFallback: quotaRouting.quotaBusyFallback } : {}),
+                        },
+                    })}
+                />
+            </Section>
 
-                        <CoordinatorPromptDefaultPreview
-                            daemonId={activeDaemonId}
-                            meshId={selectedMesh.id}
-                            cliType={coordinatorCliType}
-                            sendCommand={sendCommand}
-                            defaultOpen
-                        />
+            {/* MAGI task_kind → panel binding editor. Intentionally NOT gated on
+                `displayedMeshStatus`: the editor talks to the daemon directly
+                (magi_kind_panel_*) and needs no mesh status to function; `meshId`
+                is passed explicitly so scoping survives status being null. */}
+            <Section title={t('mesh.detail.magiTitle')} collapsible defaultOpen={false} description={t('mesh.detail.magiDescription')}>
+                <MagiKindPanelEditor
+                    status={displayedMeshStatus}
+                    daemonId={activeDaemonId}
+                    meshId={selectedMesh.id}
+                    sendDaemonCommand={sendCommand}
+                    availableProviders={availableCliProviders}
+                />
+            </Section>
 
-                        <FormField label={t('mesh.detail.overrideLabel')} hint={t('mesh.detail.overrideHint')} className="mt-3">
-                            <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
-                                rows={6} value={coordinatorPromptDraft.override}
-                                onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, override: e.target.value })}
-                                disabled={savingCoordinatorPrompt} placeholder={t('mesh.detail.overridePlaceholder')} />
-                        </FormField>
-                        <FormField label={t('mesh.detail.appendLabel')} hint={t('mesh.detail.appendHint')}>
-                            <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
-                                rows={4} value={coordinatorPromptDraft.append}
-                                onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, append: e.target.value })}
-                                disabled={savingCoordinatorPrompt} placeholder={t('mesh.detail.appendPlaceholder')} />
-                        </FormField>
-
-                        {/* ── Repo-committed prompt layer (.adhdev/mesh.json) ──
-                             The two fields above are MACHINE-LOCAL (meshes.json, written by
-                             update_mesh). A repo may ALSO declare coordinator prompt text in
-                             `.adhdev/mesh.json`, which the launch path stacks in — so without
-                             this an operator reads an empty Append box while real repo text
-                             ships in every coordinator prompt. Read-only on purpose: that file
-                             is repo-committed, so editing it from the dashboard would dirty the
-                             working tree. Renders nothing when the repo declares no prompt. */}
-                        <RepoMeshJsonAppendNotice
-                            daemonId={coordinatorDaemonId}
-                            workspace={selectedHostNode?.workspace || ''}
-                            sendCommand={sendCommand}
-                        />
-
-                        <details className="mt-2 text-xs text-text-muted">
-                            <summary className="cursor-pointer select-none">{t('mesh.detail.availablePlaceholders')}</summary>
-                            <p className="mt-1">{t('mesh.detail.placeholdersIntro')}</p>
-                            <div className="mt-2 overflow-x-auto">
-                                <table className="w-full text-left border-collapse">
-                                    <tbody>
-                                        {COORDINATOR_PROMPT_PLACEHOLDERS.map(p => (
-                                            <tr key={p.token} className="border-t border-border-subtle/60 align-top">
-                                                <td className="py-1 pr-3 font-mono whitespace-nowrap text-text-secondary">{`{{${p.token}}}`}</td>
-                                                <td className="py-1 pr-3">{p.description}</td>
-                                                <td className="py-1 font-mono text-text-muted/80">{p.example}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </details>
-                        <div className="mt-3 flex items-center gap-2">
-                            <button type="button" className="btn btn-primary btn-sm" onClick={onSaveCoordinatorPrompt} disabled={savingCoordinatorPrompt}>
-                                {savingCoordinatorPrompt ? t('mesh.detail.saving') : t('mesh.detail.saveCoordinatorPrompt')}
-                            </button>
-                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => onCoordinatorPromptDraftChange({ override: '', append: '' })} disabled={savingCoordinatorPrompt} title={t('mesh.detail.clearTitle')}>{t('mesh.detail.clear')}</button>
-                        </div>
-                    </div>
-                </Section>
-            )}
-            </>
-            )
-
-            const advancedTabContent = (
-            <>
-            {/* ── Missions (runtime telemetry) ── */}
-            <MeshMissionsSection
-                status={displayedMeshStatus}
-                daemonId={activeDaemonId}
-                meshId={selectedMesh.id}
-                sendCommand={sendCommand}
-            />
-
-            {/* ── Safety & Git (advanced) ── */}
-            <Section title={t('mesh.detail.safetyTitle')} collapsible defaultOpen={false}
-                badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-3xs font-medium text-text-muted">{t('mesh.detail.advanced')}</span>}
-                description={t('mesh.detail.safetyDescription')}>
+            {/* Safety & Git — every field saves on change. */}
+            <Section title={t('mesh.detail.safetyTitle')} collapsible defaultOpen={false} description={t('mesh.detail.safetyDescription')}>
                 <div className="grid gap-4 sm:grid-cols-2">
                     {[
-                        { label: t('mesh.detail.checkpointBefore'), key: 'requirePreTaskCheckpoint', opts: [['no', 'No'], ['yes', 'Yes']], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
-                        { label: t('mesh.detail.checkpointAfter'), key: 'requirePostTaskCheckpoint', opts: [['yes', 'Yes'], ['no', 'No']], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
+                        { label: t('mesh.detail.checkpointBefore'), key: 'requirePreTaskCheckpoint', opts: [['no', t('mesh.detail.optionNo')], ['yes', t('mesh.detail.optionYes')]], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
+                        { label: t('mesh.detail.checkpointAfter'), key: 'requirePostTaskCheckpoint', opts: [['yes', t('mesh.detail.optionYes')], ['no', t('mesh.detail.optionNo')]], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
                         { label: t('mesh.detail.pushApproval'), key: 'requireApprovalForPush', opts: [['required', t('mesh.detail.requireApprovalBeforePush')], ['not_required', t('mesh.detail.doNotRequireApproval')]], val: (v: any) => v ? 'required' : 'not_required', parse: (v: string) => v === 'required' },
                         { label: t('mesh.detail.uncommittedChanges'), key: 'dirtyWorkspaceBehavior', opts: [['warn', t('mesh.detail.warnAndContinue')], ['block', t('mesh.detail.blockTask')], ['checkpoint_then_continue', t('mesh.detail.checkpointThenContinue')]], val: (v: any) => v || 'warn', parse: (v: string) => v },
                         { label: t('mesh.detail.autoPublishSubmodule'), key: 'allowAutoPublishSubmoduleMainCommits', opts: [['disabled', t('mesh.detail.requireExplicitApproval')], ['enabled', t('mesh.detail.allowRefineryPublish')]], val: (v: any) => v ? 'enabled' : 'disabled', parse: (v: string) => v === 'enabled' },
                     ].map(({ label, key, opts, val, parse }) => (
                         <FormField key={key} label={label}>
-                            <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                            <select className={selectCls}
                                 value={val(policy[key])} onChange={e => onUpdatePolicy({ [key]: parse(e.target.value) })} disabled={savingPolicy}>
                                 {opts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                             </select>
                         </FormField>
                     ))}
                 </div>
-                {(() => {
-                    // Auto fast-forward is a NESTED policy object (autoFastForward.*), so its
-                    // toggles patch the whole sub-object (spread current + the changed field)
-                    // rather than a flat policy key. Defaults mirror the daemon normalizer:
-                    // enabled=true, remoteNodes=false, mode='idle'.
-                    const aff = (policy.autoFastForward && typeof policy.autoFastForward === 'object' ? policy.autoFastForward : {}) as {
-                        enabled?: boolean; remoteNodes?: boolean; mode?: string;
-                    };
-                    const affEnabled = aff.enabled !== false;
-                    const affRemote = aff.remoteNodes === true;
-                    const affMode = aff.mode === 'continuous' ? 'continuous' : 'idle';
-                    const patchAff = (change: Record<string, unknown>) =>
-                        onUpdatePolicy({ autoFastForward: { ...aff, ...change } });
-                    return (
-                        <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                            <FormField label={t('mesh.detail.autoFastForward')}>
-                                <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
-                                    value={affEnabled ? 'enabled' : 'disabled'} onChange={e => patchAff({ enabled: e.target.value === 'enabled' })} disabled={savingPolicy}>
-                                    <option value="enabled">{t('mesh.detail.ffEnabled')}</option>
-                                    <option value="disabled">{t('mesh.detail.ffDisabled')}</option>
-                                </select>
-                            </FormField>
-                            <FormField label={t('mesh.detail.includeRemoteNodes')} hint={t('mesh.detail.includeRemoteNodesHint')}>
-                                <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
-                                    value={affRemote ? 'yes' : 'no'} onChange={e => patchAff({ remoteNodes: e.target.value === 'yes' })} disabled={savingPolicy || !affEnabled}>
-                                    <option value="no">{t('mesh.detail.remoteNo')}</option>
-                                    <option value="yes">{t('mesh.detail.remoteYes')}</option>
-                                </select>
-                            </FormField>
-                            <FormField label={t('mesh.detail.detectionMode')} hint={t('mesh.detail.detectionModeHint')}>
-                                <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
-                                    value={affMode} onChange={e => patchAff({ mode: e.target.value === 'continuous' ? 'continuous' : 'idle' })} disabled={savingPolicy || !affEnabled || !affRemote}>
-                                    <option value="idle">{t('mesh.detail.idleEdgeOnly')}</option>
-                                    <option value="continuous">{t('mesh.detail.continuousScan')}</option>
-                                </select>
-                            </FormField>
-                        </div>
-                    );
-                })()}
-                <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-4">
-                    <FormField label={t('mesh.detail.sessionCleanupLabel')} hint={t('mesh.detail.sessionCleanupHint')}>
-                        <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
-                            value={policy.sessionCleanupOnNodeRemove || 'preserve'} onChange={e => onUpdatePolicy({ sessionCleanupOnNodeRemove: e.target.value })} disabled={savingPolicy}>
-                            {SESSION_CLEANUP_MODE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <FormField label={t('mesh.detail.autoFastForward')}>
+                        <select className={selectCls}
+                            value={affEnabled ? 'enabled' : 'disabled'} onChange={e => patchAff({ enabled: e.target.value === 'enabled' })} disabled={savingPolicy}>
+                            <option value="enabled">{t('mesh.detail.ffEnabled')}</option>
+                            <option value="disabled">{t('mesh.detail.ffDisabled')}</option>
                         </select>
                     </FormField>
-                    <div className="mt-2 text-xs text-text-muted">
-                        {SESSION_CLEANUP_MODE_OPTIONS.find(o => o.value === policy.sessionCleanupOnNodeRemove)?.description || SESSION_CLEANUP_MODE_OPTIONS[0].description}
-                    </div>
+                    <FormField label={t('mesh.detail.includeRemoteNodes')} hint={t('mesh.detail.includeRemoteNodesHint')}>
+                        <select className={selectCls}
+                            value={affRemote ? 'yes' : 'no'} onChange={e => patchAff({ remoteNodes: e.target.value === 'yes' })} disabled={savingPolicy || !affEnabled}>
+                            <option value="no">{t('mesh.detail.remoteNo')}</option>
+                            <option value="yes">{t('mesh.detail.remoteYes')}</option>
+                        </select>
+                    </FormField>
+                    <FormField label={t('mesh.detail.detectionMode')} hint={t('mesh.detail.detectionModeHint')}>
+                        <select className={selectCls}
+                            value={affMode} onChange={e => patchAff({ mode: e.target.value === 'continuous' ? 'continuous' : 'idle' })} disabled={savingPolicy || !affEnabled || !affRemote}>
+                            <option value="idle">{t('mesh.detail.idleEdgeOnly')}</option>
+                            <option value="continuous">{t('mesh.detail.continuousScan')}</option>
+                        </select>
+                    </FormField>
+                    <FormField label={t('mesh.detail.sessionCleanupLabel')} hint={`${t('mesh.detail.sessionCleanupHint')}\n${t(cleanupMode.descriptionKey)}`}>
+                        <select className={selectCls}
+                            value={policy.sessionCleanupOnNodeRemove || 'preserve'} onChange={e => onUpdatePolicy({ sessionCleanupOnNodeRemove: e.target.value })} disabled={savingPolicy}>
+                            {SESSION_CLEANUP_MODE_OPTIONS.map(o => <option key={o.value} value={o.value}>{t(o.labelKey)}</option>)}
+                        </select>
+                    </FormField>
                 </div>
-                {savingPolicy && <div className="mt-3 text-xs text-text-muted">{t('mesh.detail.saving')}</div>}
             </Section>
-            </>
-            )
 
-            const tabs: SettingsTab[] = [
-                { key: 'nodes', label: t('mesh.detail.tabNodes'), content: nodesTabContent },
-                // The persistent graph control plane (graphs + gates) moved to the
-                // dashboard observability surface's blueprint tab — this page is
-                // de-facto settings, and observation/gate decisions happen on the
-                // dashboard (owner decision 2026-08-24).
-                { key: 'scheduling', label: t('mesh.detail.tabScheduling'), content: schedulingTabContent },
-                { key: 'prompts', label: t('mesh.detail.tabPrompts'), content: (
-                    <>
-                        {promptsTabContent}
-                        {/* ── Integrations: Standalone Hermes MCP config ── */}
-                        {features.hermesMcpConfig && (
-                            <RepoMeshHermesMcpConfig meshId={selectedMesh.id} availableCliAgents={availableCliAgents} />
-                        )}
-                        {/* ── Integrations: Cloud MCP hint ── */}
-                        {features.meshHostDaemonSection && (
-                            <AlertBanner variant="info" className="mt-4">
-                                <strong>{t('mesh.detail.mcpMode')}</strong>{' '}
-                                <code className="bg-bg-secondary px-1 rounded text-xs">adhdev mcp --repo-mesh {selectedMesh.id}</code>
-                                {' '}{t('mesh.detail.mcpDescription')}
-                            </AlertBanner>
-                        )}
-                    </>
-                ) },
-                { key: 'advanced', label: t('mesh.detail.tabAdvanced'), content: advancedTabContent },
-            ]
+            {/* Coordinator prompt — stored in this mesh's coordinator config
+                (systemPromptOverride / systemPromptAppend) via update_mesh. Text
+                areas keep an explicit Save. The default base prompt is rendered
+                read-only above the Override field so "leave empty to keep the
+                default" is never a blank guess. There is deliberately no "copy
+                default into Override" button: the preview is the fully-expanded
+                prompt, and copying it would freeze a snapshot that stops tracking
+                node/policy changes. */}
+            {features.coordinatorPrompt && (
+                <Section title={t('mesh.detail.coordinatorPromptTitle')} collapsible defaultOpen={false}
+                    description={t('mesh.detail.thisMeshHint', { name: selectedMesh.name })}>
+                    <CoordinatorPromptDefaultPreview
+                        daemonId={activeDaemonId}
+                        meshId={selectedMesh.id}
+                        cliType={coordinatorCliType}
+                        sendCommand={sendCommand}
+                        defaultOpen
+                    />
 
-            return (
-                <>
-                    <SettingsTabs tabs={tabs} ariaLabel={t('mesh.detail.tabsAriaLabel')} className="flex flex-col gap-4" />
+                    <FormField label={t('mesh.detail.overrideLabel')} hint={t('mesh.detail.overrideHint')} className="mt-3">
+                        <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
+                            rows={6} value={coordinatorPromptDraft.override}
+                            onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, override: e.target.value })}
+                            disabled={savingCoordinatorPrompt} placeholder={t('mesh.detail.overridePlaceholder')} />
+                    </FormField>
+                    <FormField label={t('mesh.detail.appendLabel')} hint={t('mesh.detail.appendHint')}>
+                        <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
+                            rows={4} value={coordinatorPromptDraft.append}
+                            onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, append: e.target.value })}
+                            disabled={savingCoordinatorPrompt} placeholder={t('mesh.detail.appendPlaceholder')} />
+                    </FormField>
 
-                    {/* ── Observability dialog (launched from the Observability section) ── */}
-                    {graphDialogOpen && canLaunchGraphDialog && (
-                        <DashboardMeshGraphDialog
-                            activeConv={buildMeshGraphLaunchConversation({ meshId: selectedMesh.id, daemonId: activeDaemonId, meshName: selectedMesh.name })}
-                            sendDaemonCommand={sendCommand}
-                            onClose={() => setGraphDialogOpen(false)}
-                        />
-                    )}
-                </>
-            )
-            })()}
+                    {/* Repo-committed prompt layer (.adhdev/mesh.json) — the two fields
+                        above are MACHINE-LOCAL; a repo may ALSO declare coordinator prompt
+                        text that the launch path stacks in. Read-only on purpose. Renders
+                        nothing when the repo declares no prompt. */}
+                    <RepoMeshJsonAppendNotice
+                        daemonId={coordinatorDaemonId}
+                        workspace={selectedHostNode?.workspace || ''}
+                        sendCommand={sendCommand}
+                    />
+
+                    <details className="mt-2 text-xs text-text-muted">
+                        <summary className="cursor-pointer select-none inline-flex items-center gap-1">
+                            {t('mesh.detail.availablePlaceholders')}
+                            <InfoTip content={t('mesh.detail.placeholdersIntro')} size={12} />
+                        </summary>
+                        <div className="mt-2 overflow-x-auto">
+                            <table className="w-full text-left border-collapse">
+                                <tbody>
+                                    {COORDINATOR_PROMPT_PLACEHOLDERS.map(p => (
+                                        <tr key={p.token} className="border-t border-border-subtle/60 align-top">
+                                            <td className="py-1 pr-3 font-mono whitespace-nowrap text-text-secondary">{`{{${p.token}}}`}</td>
+                                            <td className="py-1 pr-3">{p.description}</td>
+                                            <td className="py-1 font-mono text-text-muted/80">{p.example}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </details>
+                    {/* Save bar — text areas only. */}
+                    <div className="mt-3 flex items-center gap-2">
+                        <button type="button" className="btn btn-primary btn-sm" onClick={onSaveCoordinatorPrompt} disabled={savingCoordinatorPrompt}>
+                            {savingCoordinatorPrompt ? t('mesh.detail.saving') : t('mesh.detail.saveCoordinatorPrompt')}
+                        </button>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => onCoordinatorPromptDraftChange({ override: '', append: '' })} disabled={savingCoordinatorPrompt} title={t('mesh.detail.clearTitle')}>{t('mesh.detail.clear')}</button>
+                    </div>
+                </Section>
+            )}
+
+            {/* Coordinator notes — manual CRUD of the coordinator's operating notes
+                (was a tab in the graph dialog; it is configuration, so it lives here). */}
+            <Section title={t('mesh.notes.tab')} collapsible defaultOpen={false} description={t('mesh.notes.sectionHint')}>
+                <MeshGraphThemeContext.Provider value={meshTheme}>
+                    <MeshNotesTab meshId={selectedMesh.id} daemonId={activeDaemonId} sendDaemonCommand={sendCommand} />
+                </MeshGraphThemeContext.Provider>
+            </Section>
+
+            {/* Integrations */}
+            {features.hermesMcpConfig && (
+                <RepoMeshHermesMcpConfig meshId={selectedMesh.id} availableCliAgents={availableCliAgents} />
+            )}
+            {features.meshHostDaemonSection && (
+                <Section title={t('mesh.detail.useFromCli')} collapsible defaultOpen={false} description={t('mesh.detail.mcpDescription')}>
+                    <code className="block overflow-x-auto rounded-lg bg-bg-secondary px-3 py-2 text-xs">adhdev mcp --repo-mesh {selectedMesh.id}</code>
+                </Section>
+            )}
+        </>
+    )
+
+    const tabs: SettingsTab[] = [
+        { key: 'general', icon: <IconSettings size={14} />, label: t('mesh.detail.tabGeneral'), content: generalTabContent },
+        { key: 'advanced', icon: <IconWrench size={14} />, label: t('mesh.detail.tabAdvanced'), content: advancedTabContent },
+    ]
+
+    return (
+        <AppPage
+            icon={<IconMesh />}
+            title={selectedMesh.name}
+            subtitle={selectedMesh.repoIdentity || (selectedMesh as any).repo_identity || 'Repo Mesh'}
+            subtitleInline
+            widthClassName="max-w-5xl"
+            contentClassName="gap-4"
+            actions={
+                <div className="flex gap-2">
+                    <button className="btn btn-secondary btn-sm" onClick={onBack}>{t('mesh.detail.back')}</button>
+                    <button
+                        type="button"
+                        className="btn btn-primary btn-sm inline-flex items-center gap-1.5"
+                        onClick={() => setGraphDialogOpen(true)}
+                        disabled={!canLaunchGraphDialog}
+                        title={canLaunchGraphDialog ? t('mesh.detail.observabilityOpenTitle') : t('mesh.detail.observabilityDisabledTitle')}
+                    >
+                        <IconMesh size={14} />{t('mesh.detail.observabilityOpen')}
+                    </button>
+                    <button className="btn btn-danger btn-sm" onClick={() => onDelete(selectedMesh.id)}>{t('mesh.detail.delete')}</button>
+                </div>
+            }
+        >
+            {error && <AlertBanner variant="error" onDismiss={onDismissError}>{error}</AlertBanner>}
+            {graphError && <AlertBanner variant="warning">{graphError}</AlertBanner>}
+
+            {/* Same frame as the account page: underline tabs with icons flush
+                against the top of one card. */}
+            <div className="overflow-hidden rounded-2xl border border-border-subtle bg-bg-card/30">
+                <SettingsTabs
+                    variant="underline"
+                    tabs={tabs}
+                    tabIdPrefix="mesh-settings-tab"
+                    ariaLabel={t('mesh.detail.tabsAriaLabel')}
+                    panelClassName="p-4 md:p-6"
+                />
+            </div>
+
+            {graphDialogOpen && canLaunchGraphDialog && (
+                <DashboardMeshGraphDialog
+                    activeConv={buildMeshGraphLaunchConversation({ meshId: selectedMesh.id, daemonId: activeDaemonId, meshName: selectedMesh.name })}
+                    sendDaemonCommand={sendCommand}
+                    onClose={() => setGraphDialogOpen(false)}
+                />
+            )}
         </AppPage>
     )
 }

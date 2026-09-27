@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ActiveConversation, CliConversationViewMode } from './types';
 import { isCliConv, isCliTerminalConv, isAcpConv } from './types';
-import { IconBell, IconChat, IconScroll, IconMonitor, IconEyeOff, IconX, IconPlus, IconMesh } from '../Icons';
+import { IconBell, IconChat, IconEyeOff, IconX, IconPlus } from '../Icons';
 import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import CliViewModeToggle from './CliViewModeToggle';
 import { getConversationMetaText, getConversationTitle } from './conversation-presenters';
@@ -19,7 +19,8 @@ import { formatRelativeTime } from '../../utils/time';
 import type { DashboardNotificationRecord } from '../../utils/dashboard-notifications';
 import GitStatusPill from '../git/GitStatusPill';
 import LoadingSpinner from '../ui/LoadingSpinner';
-import { preloadDashboardMeshGraphDialog } from './LazyDashboardMeshGraphDialog';
+import ConversationActionsMenu from './ConversationActionsMenu';
+import { Tooltip } from '../ui/InfoTip';
 
 export interface DashboardHeaderProps {
     activeConv: ActiveConversation | undefined;
@@ -262,7 +263,6 @@ export default function DashboardHeader({
     const { ides, p2pStates = {}, usesP2P = true } = useBaseDaemons();
     const isCliActive = !!activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
     const isAcpActive = !!activeConv && isAcpConv(activeConv);
-    const meshGraphAvailable = !!activeConv?.daemonId && !!activeConv?.coordinator?.meshId
     const effectiveCliViewMode = activeCliViewMode || (activeConv ? (isCliTerminalConv(activeConv) ? 'terminal' : 'chat') : null);
     const [isHiddenDropTarget, setIsHiddenDropTarget] = useState(false);
     const [hiddenSpawnAnim, setHiddenSpawnAnim] = useState(false);
@@ -398,25 +398,17 @@ export default function DashboardHeader({
                         <span className="header-title-mobile">
                             {activeConv ? getConversationTitle(activeConv) : t('dashboard.header.title')}
                         </span>
-                        <span
-                            title={connectionTitle}
-                            aria-label={connectionTitle}
-                            className="header-title-status-dot"
-                            style={{ background: dotColor, boxShadow: dotGlow }}
-                        />
-                        <span className="header-count-mobile text-3xs font-semibold opacity-60 ml-2 tracking-wide">
+                        <Tooltip content={statusText ? `${connectionTitle} · ${statusText}` : connectionTitle} className="ml-0.5">
                             <span
-                                className="inline-block w-[6px] h-[6px] rounded-full align-middle"
+                                role="img"
+                                aria-label={connectionTitle}
+                                data-connection-tone={connectionState.tone}
+                                className="header-title-status-dot"
                                 style={{ background: dotColor, boxShadow: dotGlow }}
                             />
-                        </span>
+                        </Tooltip>
                         </h1>
                         <div className="header-subtitle flex items-center">
-                            {statusText && (
-                                <span className="header-subtitle-status mr-2">
-                                    · {statusText}
-                                </span>
-                            )}
                             {onOpenNewSession && (
                                 <button
                                     type="button"
@@ -445,78 +437,41 @@ export default function DashboardHeader({
                         {guideNudgeVisible && <span>{t('dashboard.header.guideShort')}</span>}
                     </button>
                 )}
-                {activeConv && (isCliActive || isAcpActive || !isAcpConv(activeConv)) && (
-                    <div className="dashboard-header-actions-group">
-                        <span
-                            className="dashboard-header-action-target"
-                            title={getConversationMetaText(activeConv) || getConversationTitle(activeConv)}
-                        >
-                            {getConversationTitle(activeConv)}
-                        </span>
-                        {onOpenGitDialog && activeConv.git && activeConv.daemonId && activeConv.workspacePath ? (
-                            <button
-                                type="button"
-                                className="appearance-none bg-transparent border-0 p-0 cursor-pointer"
-                                title={t('dashboard.header.openGitStatus')}
-                                onClick={() => onOpenGitDialog(activeConv.daemonId!, activeConv.workspacePath!)}
-                            >
-                                <GitStatusPill git={activeConv.git} compact className="max-w-[8rem] shrink-0" />
-                            </button>
-                        ) : (
-                            <GitStatusPill git={activeConv.git} compact className="max-w-[8rem] shrink-0" />
+                {activeConv && (
+                    /* One pane toolbar: the git state (glanceable), the CLI view
+                       toggle, Stop as the only always-visible action, and every
+                       other per-conversation action in the "…" overflow. The
+                       conversation title is not repeated here — the active tab
+                       already names it. */
+                    <div className="dashboard-header-actions-group" data-testid="dashboard-pane-toolbar">
+                        <GitStatusPill git={activeConv.git} compact className="max-w-[8rem] shrink-0" />
+                        {isCliActive && onSetCliViewMode && effectiveCliViewMode && (
+                            <CliViewModeToggle mode={effectiveCliViewMode} onChange={onSetCliViewMode} compact />
                         )}
-                        {meshGraphAvailable && onOpenMeshGraph && (
-                            <button
-                                type="button"
-                                onClick={() => onOpenMeshGraph(activeConv)}
-                                // Warm the lazily loaded graph chunk on intent.
-                                onPointerEnter={() => { void preloadDashboardMeshGraphDialog() }}
-                                onFocus={() => { void preloadDashboardMeshGraphDialog() }}
-                                className="btn btn-secondary btn-sm dashboard-header-mesh-button"
-                                title={t('dashboard.header.openMeshGraph')}
-                            >
-                                <IconMesh size={14} />
-                                <span className="hidden lg:inline">{t('dashboard.header.meshGraph')}</span>
-                            </button>
-                        )}
-
                         {(isCliActive || isAcpActive) && onStopCli && (
-                            <>
-                                {isCliActive && onSetCliViewMode && effectiveCliViewMode && (
-                                    <CliViewModeToggle mode={effectiveCliViewMode} onChange={onSetCliViewMode} compact />
-                                )}
-                                <button
-                                    onClick={() => onStopCli(activeConv)}
-                                    className="btn btn-secondary btn-sm"
-                                    title={isAcpActive ? t('dashboard.header.stopAcpSession') : t('dashboard.header.stopCliProcess')}
-                                    style={{
-                                        color: 'var(--status-error, #ef4444)',
-                                        borderColor: 'color-mix(in srgb, var(--status-error, #ef4444) 25%, transparent)',
-                                    }}
-                                >
-                                    <IconX size={14} />
-                                </button>
-                            </>
-                        )}
-
-                        {!isAcpConv(activeConv) && (
                             <button
-                                onClick={() => onOpenHistory(activeConv)}
+                                type="button"
+                                onClick={() => onStopCli(activeConv)}
                                 className="btn btn-secondary btn-sm"
-                                title={t('dashboard.header.chatHistory')}
+                                title={isAcpActive ? t('dashboard.header.stopAcpSession') : t('dashboard.header.stopCliProcess')}
+                                aria-label={isAcpActive ? t('dashboard.header.stopAcpSession') : t('dashboard.header.stopCliProcess')}
+                                data-testid="dashboard-pane-stop"
+                                style={{
+                                    color: 'var(--status-error, #ef4444)',
+                                    borderColor: 'color-mix(in srgb, var(--status-error, #ef4444) 25%, transparent)',
+                                }}
                             >
-                                <IconScroll size={14} />
+                                <IconX size={14} />
                             </button>
                         )}
-                        {!isCliActive && !isAcpConv(activeConv) && (
-                            <button
-                                onClick={onOpenRemote}
-                                className="btn btn-secondary btn-sm"
-                                title={t('dashboard.header.remoteControl')}
-                            >
-                                <IconMonitor size={14} />
-                            </button>
-                        )}
+                        <ConversationActionsMenu
+                            conversation={activeConv}
+                            onOpenHistory={onOpenHistory}
+                            onOpenRemote={onOpenRemote ? () => onOpenRemote() : undefined}
+                            onOpenGit={onOpenGitDialog}
+                            onOpenMeshGraph={onOpenMeshGraph}
+                            iconSize={14}
+                        />
                     </div>
                 )}
                 <div className="dashboard-header-inbox" ref={inboxRef}>

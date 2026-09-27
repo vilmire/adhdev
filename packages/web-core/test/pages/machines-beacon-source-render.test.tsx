@@ -94,9 +94,13 @@ describe('machines page — per-machine Beacon diagnostic source', () => {
             machine('daemon_mach_beta', 'daemon_mach_beta', beacon(19, 2)),
         ])
 
-        expect(html).toContain('title="sole:7:1"')
-        expect(html).toContain('title="sole:19:2"')
-        expect(occurrences(html, 'data-testid="beacon-sole-copy-badge"')).toBe(2)
+        // The card has ONE status dot; the Beacon advisory is folded into its
+        // tooltip (no separate badge chips on the card any more).
+        expect(occurrences(html, 'data-testid="machine-status-dot"')).toBe(2)
+        expect(occurrences(html, 'data-status="attention"')).toBe(2)
+        expect(html).toContain('sole:7:1')
+        expect(html).toContain('sole:19:2')
+        expect(occurrences(html, 'data-testid="beacon-sole-copy-badge"')).toBe(0)
     })
 
     it('does not repeat one coordinator-local diagnostic on cards whose payload identity does not match', async () => {
@@ -109,7 +113,9 @@ describe('machines page — per-machine Beacon diagnostic source', () => {
             machine('daemon_mach_remote_c', coordinatorId, coordinatorBeacon),
         ])
 
-        expect(occurrences(html, 'title="sole:431:4"')).toBe(1)
-        expect(occurrences(html, 'data-testid="beacon-sole-copy-badge"')).toBe(1)
+        // Only the producer's own card carries the advisory (in its dot tooltip).
+        expect(occurrences(html, 'sole:431:4')).toBe(1)
+        expect(occurrences(html, 'data-status="attention"')).toBe(1)
+        expect(occurrences(html, 'data-status="online"')).toBe(3)
     })
 })

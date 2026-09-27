@@ -4,7 +4,6 @@
  * section list replaces the fused ELK canvas:
  *
  *   [ BlueprintStatusBar + caller extras ]   Active 3 | Blocked 2 | …
- *   [ BlueprintScopeChips ]                  Running / Blocked / By mission / History
  *   Running   — full-colour rows, pinned on top
  *   Blocked   — amber/rose rows (tasks + coordinator gates)
  *   Recent    — newest 10 terminal rows, muted (History scope)
@@ -23,7 +22,7 @@ import { buildTaskDag } from './taskDagViewModel'
 import { buildGraphMiniDag, buildQueueMiniDag, type MiniDagModel } from './miniDagViewModel'
 import MeshMiniDag from './MeshMiniDag'
 import BlueprintStatusBar from './BlueprintStatusBar'
-import BlueprintScopeChips, { DEFAULT_BLUEPRINT_SCOPE, type BlueprintScope } from './BlueprintScopeChips'
+import { DEFAULT_BLUEPRINT_SCOPE, type BlueprintScope } from './BlueprintScopeChips'
 import { MeshBlueprintGateRowView, MeshBlueprintTaskRowView, type GateActionHandlers } from './MeshBlueprintRow'
 import { useBlueprintGateCommands } from './useBlueprintGateCommands'
 import {
@@ -200,7 +199,6 @@ export default function MeshBlueprintList({ tasks, status, graphs, meshTheme, no
                 <BlueprintStatusBar counts={groups.counts} scope={scope} onToggle={toggleScope} meshTheme={meshTheme} />
                 {headerExtras && <div className="ml-auto flex min-w-0 flex-wrap items-center gap-1.5">{headerExtras}</div>}
             </div>
-            <BlueprintScopeChips scope={scope} onToggle={toggleScope} meshTheme={meshTheme} />
 
             <div className="min-h-0 flex-1 overflow-y-auto">
                 {tasks.length === 0 && groups.blocked.length === 0 ? (

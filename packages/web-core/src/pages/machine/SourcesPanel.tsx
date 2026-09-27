@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import Card from '../../components/Card'
-import { IconSpinner } from '../../components/Icons'
+import { InfoTip } from '../../components/ui/InfoTip'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 
 interface Source {
@@ -32,13 +32,15 @@ interface SourcesPanelProps {
     machineId: string
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
     onChange?: () => void
+    /** Bumped by the tab's single Refresh button to reload this list. */
+    reloadToken?: number
 }
 
 function unwrap(raw: any) {
     return (raw && typeof raw === 'object' && raw.result && typeof raw.result === 'object') ? raw.result : raw
 }
 
-export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }: SourcesPanelProps) {
+export default function SourcesPanel({ machineId, sendDaemonCommand, onChange, reloadToken = 0 }: SourcesPanelProps) {
     const { t } = useTranslation('common')
     const { confirm, confirmDialog } = useConfirmDialog()
     const [sources, setSources] = useState<Source[]>([])
@@ -72,7 +74,7 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
         }
     }, [machineId, sendDaemonCommand, t])
 
-    useEffect(() => { void load() }, [load])
+    useEffect(() => { void load() }, [load, reloadToken])
 
     const add = async () => {
         if (!addUrl.trim()) return
@@ -137,14 +139,12 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
     return (
         <Card padding="none" className="px-4.5 py-3.5">
             <div className="flex items-center justify-between gap-3 mb-3">
-                <div>
-                    <div className="text-2xs font-semibold uppercase tracking-wider text-sky-400">{t('machine.sourcesPanel.title')}</div>
-                    <div className="text-2xs text-text-muted mt-1">
-                        {t('machine.sourcesPanel.description')}
-                    </div>
+                <div className="flex items-center gap-1 text-2xs font-semibold uppercase tracking-wider text-sky-400">
+                    {t('machine.sourcesPanel.title')}
+                    <InfoTip content={t('machine.sourcesPanel.description')} size={12} />
+                    {loading && <span className="ml-1 normal-case tracking-normal font-normal text-text-muted">…</span>}
                 </div>
                 <div className="flex gap-1.5">
-                    <button onClick={() => void load()} disabled={loading} className="machine-btn text-3xs">{loading ? <IconSpinner size={11} /> : '↻'} {t('machine.sourcesPanel.refresh')}</button>
                     <button onClick={() => setAddOpen(true)} className="machine-btn text-3xs bg-sky-500/[0.08] border-sky-500/20 text-sky-300 hover:bg-sky-500/[0.14]">{t('machine.sourcesPanel.addSource')}</button>
                 </div>
             </div>
@@ -181,9 +181,9 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
 
             {conflicts.length > 0 && (
                 <div className="mt-3 rounded border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2">
-                    <div className="text-2xs font-semibold text-amber-300 mb-1.5">{t('machine.sourcesPanel.conflictsTitle')}</div>
-                    <div className="text-3xs text-text-muted mb-2">
-                        {t('machine.sourcesPanel.conflictsDescription')}
+                    <div className="mb-2 flex items-center gap-1 text-2xs font-semibold text-amber-300">
+                        {t('machine.sourcesPanel.conflictsTitle')}
+                        <InfoTip content={t('machine.sourcesPanel.conflictsDescription')} size={12} />
                     </div>
                     <ul className="flex flex-col gap-1.5">
                         {conflicts.map(c => (

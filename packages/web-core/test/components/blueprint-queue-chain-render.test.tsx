@@ -107,7 +107,9 @@ describe('Blueprint — queue depends_on chain (no graph rows)', () => {
     it('R4: "By mission" groups the chain under a chain header that opens the anchor task', () => {
         const onTaskOpen = vi.fn()
         const { container, unmount } = mountList({ tasks: chainTasks(), onTaskOpen })
-        const chip = [...container.querySelectorAll('button')].find(button => button.textContent === 'By mission') as HTMLButtonElement
+        // The status bar's "N missions" segment is the By-mission toggle (the
+        // duplicate chip row was removed).
+        const chip = [...container.querySelectorAll('button')].find(button => /^\d+ missions?$/.test(button.textContent ?? '')) as HTMLButtonElement
         act(() => { chip.click() })
         const header = [...container.querySelectorAll('button')].find(button => button.textContent?.includes('⛓')) as HTMLButtonElement
         expect(header?.textContent).toContain('Chain: Build the parser')

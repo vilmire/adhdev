@@ -75,6 +75,32 @@ export function getMeshGraphCalloutText(node: MeshGraphNode): string | null {
     return node.nextStepHint ?? node.branchConvergence?.nextStep ?? null
 }
 
+type HintTranslator = (key: string, options?: Record<string, unknown>) => string
+
+const DAEMON_HINT_KEYS: Record<string, string> = {
+    blocked_review: 'mesh.hint.daemon.blockedReview',
+    pushed_feature_branch_needs_merge: 'mesh.hint.daemon.needsMerge',
+    cleanup_candidate: 'mesh.hint.daemon.cleanup',
+    not_mergeable: 'mesh.hint.daemon.notMergeable',
+    merged_to_main: 'mesh.hint.daemon.merged',
+}
+
+/**
+ * The card/panel hint in the dashboard's language. Dashboard-authored hints
+ * translate from their key; a daemon-authored next step (free English prose)
+ * becomes a short localized label for the node's convergence state, with the
+ * daemon's own sentence kept as `detail` for a tooltip.
+ */
+export function localizeMeshGraphHint(node: MeshGraphNode, t: HintTranslator): { text: string; detail: string | null } | null {
+    const raw = getMeshGraphCalloutText(node)
+    if (!raw) return null
+    const i18n = node.nextStepHintI18n
+    if (i18n) return { text: t(i18n.key, i18n.params), detail: i18n.detail ?? null }
+    const status = node.branchConvergence?.status
+    const key = (status && DAEMON_HINT_KEYS[status]) || 'mesh.hint.daemon.followUp'
+    return { text: t(key), detail: raw }
+}
+
 export function shouldShowMeshGraphCallout(node: MeshGraphNode): boolean {
     if (!getMeshGraphCalloutText(node)) return false
     if (node.type === 'defaultBranchNode') return false

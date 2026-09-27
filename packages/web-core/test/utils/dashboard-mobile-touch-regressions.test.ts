@@ -79,14 +79,16 @@ describe('dashboard mobile/touch regressions', () => {
     expect(inboxSource).toContain('mobile-inbox-mesh-button')
     expect(inboxSource).toContain("title={t('mobileInbox.openLiveMeshGraph')}")
     expect(inboxSource).toContain('onOpenMeshGraph?: (conversation: ActiveConversation) => void')
-    expect(roomSource).toContain('const meshGraphAvailable = !!selectedConversation.daemonId')
-    // Title is localized (i18n sweep 2026-09-25); the button is still pinned by its key.
-    expect(roomSource).toContain("title={t('mesh.openLiveGraph')}")
+    // The room header's secondary actions (history, remote, mesh graph, mute,
+    // info) share the desktop pane toolbar's "…" menu, which lists the mesh
+    // graph whenever the conversation is a coordinator.
+    expect(roomSource).toContain('<ConversationActionsMenu')
+    expect(roomSource).toContain('onOpenMeshGraph={onOpenMeshGraph}')
     expect(modeSource).toContain('onOpenMeshGraph={onOpenMeshGraph}')
     expect(mainViewSource).toContain('onOpenMeshGraph={handleOpenMeshGraph}')
   })
 
-  it('keeps mobile hidden chats collapsed and makes row hide an explicit confirmed action under the left chat icon', () => {
+  it('keeps mobile hidden chats collapsed and makes row hide immediate with an Undo toast (no confirm dialog)', () => {
     const inboxSource = readSource('components/dashboard/DashboardMobileChatInbox.tsx')
     const modeSource = readSource('components/dashboard/DashboardMobileChatMode.tsx')
     const mainViewSource = readSource('components/dashboard/DashboardMainView.tsx')
@@ -94,22 +96,16 @@ describe('dashboard mobile/touch regressions', () => {
     expect(inboxSource).toContain('onHideConversation?: (conversation: ActiveConversation) => void')
     expect(inboxSource).toContain('mobile-inbox-leading-rail')
     expect(inboxSource).toContain('mobile-inbox-hide-button')
-    expect(inboxSource).toContain('setHideConfirmConversation(item.conversation)')
-    expect(inboxSource).toContain('HideConversationConfirmDialog')
-    // Hide confirm dialog now matches the CliStopDialog style (title "Hide {name}?",
-    // card fade-in mobile-compact-dialog, no top-right X, stacked full-width buttons).
-    expect(inboxSource).toContain("t('mobileInbox.hideTitle', { title })")
-    expect(inboxSource).toContain('card fade-in mobile-compact-dialog')
-    expect(inboxSource).toContain('max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] flex flex-col')
-    expect(inboxSource).toContain('onHideConversation?.(hideConfirmConversation)')
-    expect(inboxSource).not.toContain('onHideConversation(item.conversation)')
-    expect(inboxSource).not.toContain('className="flex justify-end px-4 pb-3 -mt-1"')
-    expect(inboxSource).toContain("t('mobileInbox.hideDescription')")
+    expect(inboxSource).toContain('hideConversationWithUndo(item.conversation)')
+    expect(inboxSource).not.toContain('HideConversationConfirmDialog')
+    expect(inboxSource).toContain("t('mobileInbox.undo')")
     expect(inboxSource).toContain("t('mobileInbox.collapsedCount', { count: hiddenConversations.length })")
     expect(inboxSource).not.toContain('hiddenConversations.map((conversation')
     expect(inboxSource).not.toContain('Tap to restore and open')
     expect(modeSource).toContain('onHideConversation={onHideConversation}')
+    expect(modeSource).toContain('onShowHiddenConversation={onShowHiddenConversation}')
     expect(mainViewSource).toContain('onHideConversation={onHideConversation}')
+    expect(mainViewSource).toContain('onShowHiddenConversation={handleShowHiddenConversationWithRestore}')
   })
 
   it('makes dashboard tab drag handles non-text-selectable on touch devices', () => {

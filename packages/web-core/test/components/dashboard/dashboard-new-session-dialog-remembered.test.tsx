@@ -117,7 +117,10 @@ function allButtons(): HTMLButtonElement[] {
 }
 
 function findTargetButton(label: string): HTMLButtonElement {
+    // Provider rows are one grouped list now: the name is the row's first
+    // span and a small protocol hint (CLI/ACP/IDE) follows it.
     const btn = allButtons().find(button => button.textContent?.trim() === label)
+        ?? allButtons().find(button => button.getAttribute('role') === 'radio' && button.querySelector('span')?.textContent?.trim() === label)
     if (!btn) throw new Error(`target button "${label}" not found`)
     return btn
 }

@@ -15,6 +15,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { InfoTip } from '../../components/ui/InfoTip'
 import { MESH_TASK_DIFFICULTIES, type MeshTaskDifficulty, type NodeCapabilitySlot } from '@adhdev/mesh-shared'
 import { buildProviderOptionMap, type AvailableCliProviderOption } from '../../utils/provider-priority'
 import { IconX, IconPlus } from '../../components/Icons'
@@ -130,8 +131,9 @@ export default function NodeSlotEditor({ slots, availableProviders, saving, onSa
     return (
         <div className="flex flex-col gap-2" onClick={e => e.stopPropagation()}>
             {drafts.length === 0 && (
-                <div className="text-xs text-text-muted">
-                    {t('mesh.slotEditor.empty')}
+                <div className="flex items-center gap-1 text-xs text-text-muted">
+                    <span>{t('mesh.slotEditor.empty')}</span>
+                    <InfoTip content={t('mesh.slotEditor.emptyHint')} size={12} />
                 </div>
             )}
             {drafts.map((d, i) => (

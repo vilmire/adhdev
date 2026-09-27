@@ -67,6 +67,14 @@ export interface MeshGraphBranchConvergence {
     hasConflicts: boolean
 }
 
+/** A dashboard-authored hint as an i18n key + params (+ optional raw detail for a tooltip). */
+export interface MeshGraphHintI18n {
+    key: string
+    params?: Record<string, string | number>
+    /** Raw text that stays untranslated (a daemon error string), shown as detail. */
+    detail?: string
+}
+
 export interface MeshGraphNode {
     id: string
     type: MeshGraphNodeType
@@ -107,6 +115,13 @@ export interface MeshGraphNode {
     isOrphan: boolean
     orphanReasons: string[]
     nextStepHint?: string
+    /**
+     * Localizable form of `nextStepHint` for hints the DASHBOARD authors
+     * (snapshot/orphan/submodule/default-branch prose). Absent when the hint
+     * is daemon-authored free text (branchConvergence.nextStep) — the card
+     * then shows a localized status label with that text as detail.
+     */
+    nextStepHintI18n?: MeshGraphHintI18n | null
     error?: string
     parentNodeId?: string | null
     clonedFromNodeId?: string | null
@@ -415,38 +430,41 @@ function inferDefaultBranch(nodes: RepoMeshNodeStatus[]): string | null {
     return fallback ?? null
 }
 
-function detectOrphanReasons(node: RepoMeshNodeStatus, defaultBranch: string | null): string[] {
-    const reasons: string[] = []
+function detectOrphanReasonEntries(node: RepoMeshNodeStatus, defaultBranch: string | null): { text: string; hint: MeshGraphHintI18n }[] {
+    const reasons: { text: string; hint: MeshGraphHintI18n }[] = []
     const git = node.git
 
     if (!git) {
-        reasons.push('No git status available')
+        reasons.push({ text: 'No git status available', hint: { key: 'mesh.hint.noGitStatus' } })
         return reasons
     }
 
     if (!git.isGitRepo) {
-        reasons.push('Not a git repository')
+        reasons.push({ text: 'Not a git repository', hint: { key: 'mesh.hint.notGitRepo' } })
         return reasons
     }
 
     if (!git.branch && git.headCommit) {
-        reasons.push('Detached HEAD')
+        reasons.push({ text: 'Detached HEAD', hint: { key: 'mesh.hint.detachedHead' } })
     }
 
     if (git.hasConflicts) {
-        reasons.push('Merge conflicts need resolution')
+        reasons.push({ text: 'Merge conflicts need resolution', hint: { key: 'mesh.hint.mergeConflicts' } })
     }
 
     if (git.branch && defaultBranch && git.branch !== defaultBranch && !git.upstream) {
-        reasons.push(`No upstream tracking for ${git.branch}`)
+        reasons.push({ text: `No upstream tracking for ${git.branch}`, hint: { key: 'mesh.hint.noUpstream', params: { branch: git.branch } } })
     }
 
     if (git.upstream && git.upstreamStatus && git.upstreamStatus !== 'fresh') {
-        reasons.push(`Upstream freshness unverified for ${git.branch ?? 'workspace'}`)
+        reasons.push({
+            text: `Upstream freshness unverified for ${git.branch ?? 'workspace'}`,
+            hint: { key: 'mesh.hint.upstreamUnverified', params: { branch: git.branch ?? '' } },
+        })
     }
 
     if (node.error) {
-        reasons.push(node.error)
+        reasons.push({ text: node.error, hint: { key: 'mesh.hint.nodeError', detail: node.error } })
     }
 
     return reasons
@@ -683,18 +701,23 @@ function assessSnapshotCompleteness(args: {
 }): {
     snapshotCompleteness: MeshGraphNode['snapshotCompleteness']
     snapshotWarnings: string[]
+    /** Localizable twin of snapshotWarnings, same order. */
+    snapshotWarningHints: MeshGraphHintI18n[]
 } {
     const { nodeStatus, expectedSubmodulePaths, refreshedAtMs } = args
     const snapshotWarnings: string[] = []
+    const snapshotWarningHints: MeshGraphHintI18n[] = []
     const label = nodeStatus.machineLabel || nodeStatus.nodeId
     const git = nodeStatus.git
 
     if (!git) {
         if (isPendingPeerGitSnapshot(nodeStatus)) {
             snapshotWarnings.push(`${label} is still waiting for a live peer git snapshot from the selected coordinator.`)
+            snapshotWarningHints.push({ key: 'mesh.hint.waitingForGit' })
             return {
                 snapshotCompleteness: 'pending_git',
                 snapshotWarnings,
+                snapshotWarningHints,
             }
         }
         const looksOnline = nodeStatus.health === 'online'
@@ -706,9 +729,11 @@ function assessSnapshotCompleteness(args: {
                 ? `${label} is online but no peer git snapshot is visible yet.`
                 : `${label} has no peer git snapshot visible yet.`,
         )
+        snapshotWarningHints.push({ key: looksOnline ? 'mesh.hint.noGitYetOnline' : 'mesh.hint.noGitYet' })
         return {
             snapshotCompleteness: 'missing_git',
             snapshotWarnings,
+            snapshotWarningHints,
         }
     }
 
@@ -719,6 +744,7 @@ function assessSnapshotCompleteness(args: {
             snapshotWarnings.push(
                 `${label} is missing submodule visibility for ${missingPaths.join(', ')} even though another peer reported it.`,
             )
+            snapshotWarningHints.push({ key: 'mesh.hint.missingSubmodule', params: { paths: missingPaths.join(', ') } })
         }
     }
 
@@ -727,9 +753,11 @@ function assessSnapshotCompleteness(args: {
             const ageMs = refreshedAtMs - git.lastCheckedAt
             if (ageMs > STALE_SNAPSHOT_MS) {
                 snapshotWarnings.push(`${label} is relying on a peer git snapshot older than 5m; re-probe before trusting convergence.`)
+                snapshotWarningHints.push({ key: 'mesh.hint.staleGit' })
             }
         } else {
             snapshotWarnings.push(`${label} peer git snapshot age was not measured because no check time was reported.`)
+            snapshotWarningHints.push({ key: 'mesh.hint.gitAgeUnknown' })
         }
     }
 
@@ -737,17 +765,20 @@ function assessSnapshotCompleteness(args: {
         return {
             snapshotCompleteness: 'missing_submodule_report',
             snapshotWarnings,
+            snapshotWarningHints,
         }
     }
     if (snapshotWarnings.some(warning => warning.includes('older than 5m'))) {
         return {
             snapshotCompleteness: 'stale',
             snapshotWarnings,
+            snapshotWarningHints,
         }
     }
     return {
         snapshotCompleteness: 'complete',
         snapshotWarnings,
+        snapshotWarningHints,
     }
 }
 
@@ -773,7 +804,8 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
         const branch = git?.branch ?? null
         const submoduleHealth = getParentSubmoduleHealth(git)
         const dirty = isDirty(git) || submoduleHealth === 'dirty'
-        const orphanReasons = detectOrphanReasons(nodeStatus, inferredDefaultBranch)
+        const orphanReasonEntries = detectOrphanReasonEntries(nodeStatus, inferredDefaultBranch)
+        const orphanReasons = orphanReasonEntries.map(entry => entry.text)
         const branchConvergence = evaluateBranchConvergence(nodeStatus, inferredDefaultBranch)
         const snapshotAssessment = assessSnapshotCompleteness({
             nodeStatus,
@@ -826,6 +858,8 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             orphanReasons,
             error: nodeStatus.error,
             nextStepHint: snapshotAssessment.snapshotWarnings[0] ?? orphanReasons[0] ?? branchConvergence?.nextStep ?? undefined,
+            // Localizable twin; null when the hint is the daemon's own nextStep prose.
+            nextStepHintI18n: snapshotAssessment.snapshotWarningHints[0] ?? orphanReasonEntries[0]?.hint ?? null,
             parentNodeId: null,
             clonedFromNodeId: rawClonedFromNodeId,
             worktreeBranch: nodeStatus.worktreeBranch ?? null,
@@ -888,6 +922,13 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                         : submodule.dirty
                             ? `${submodule.path} has local changes`
                             : `${submodule.path} is in sync with the parent checkout`),
+                nextStepHintI18n: submodule.error
+                    ? { key: 'mesh.hint.nodeError', detail: submodule.error }
+                    : submodule.outOfSync
+                        ? { key: 'mesh.hint.submoduleOutOfSync', params: { path: submodule.path } }
+                        : submodule.dirty
+                            ? { key: 'mesh.hint.submoduleChanged', params: { path: submodule.path } }
+                            : { key: 'mesh.hint.submoduleSynced', params: { path: submodule.path } },
                 parentNodeId: graphNode.id,
                 submodulePath: submodule.path,
                 submoduleCommit: submodule.commit,
@@ -973,6 +1014,11 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                 : branchNodes.length > 0
                     ? `${branchNodes.length} workspace(s) currently on ${inferredDefaultBranch}`
                     : 'No workspaces currently checked out to the default branch',
+            nextStepHintI18n: unresolvedBranchConvergenceCount > 0
+                ? { key: 'mesh.hint.anchorNeedsFollowUp', params: { count: unresolvedBranchConvergenceCount, branch: inferredDefaultBranch ?? '' } }
+                : branchNodes.length > 0
+                    ? { key: 'mesh.hint.anchorWorkspaces', params: { count: branchNodes.length, branch: inferredDefaultBranch ?? '' } }
+                    : { key: 'mesh.hint.anchorEmpty' },
             error: undefined,
             parentNodeId: null,
             submodulePath: null,

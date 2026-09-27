@@ -8,6 +8,7 @@ import ApprovalBanner from './ApprovalBanner'
 import CliTerminalPane from './CliTerminalPane'
 import ChatPane from './ChatPane'
 import { IconWarning } from '../Icons'
+import { InfoTip } from '../ui/InfoTip'
 import { useSessionModalSubscription } from '../../hooks/useSessionModalSubscription'
 import type { DashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
 
@@ -122,7 +123,10 @@ const PaneGroupContent = memo(function PaneGroupContent({
                 <div className="desktop-only px-3 pt-1 pb-2">
                     <div className="flex items-center gap-2.5 px-3.5 py-2 bg-yellow-500/[0.08] border border-yellow-500/20 rounded-lg text-xs text-text-secondary">
                         <span className="text-sm"><IconWarning size={14} /></span>
-                        <span className="flex-1">{t('paneGroup.cdpDisconnected')}</span>
+                        <span className="flex flex-1 items-center gap-1">
+                            <span className="font-semibold">{t('paneGroup.cdpDisconnectedShort')}</span>
+                            <InfoTip content={t('paneGroup.cdpDisconnected')} size={12} />
+                        </span>
                         <button
                             className="btn btn-sm bg-yellow-500/15 text-yellow-500 border border-yellow-500/30 text-3xs whitespace-nowrap shrink-0"
                             onClick={handleRelaunch}

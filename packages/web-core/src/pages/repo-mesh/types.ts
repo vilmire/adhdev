@@ -82,11 +82,12 @@ export interface MeshQueueSummary {
 /** Derived from mesh-shared MESH_SESSION_CLEANUP_MODES (same list the daemon and the MCP schema use). */
 export type RepoMeshSessionCleanupMode = MeshSessionCleanupMode
 
-export const SESSION_CLEANUP_MODE_OPTIONS: Array<{ value: RepoMeshSessionCleanupMode; label: string; description: string }> = [
-    { value: 'preserve', label: 'Preserve history and runtimes', description: 'Keep completed chat history and leave live runtimes alone.' },
-    { value: 'stop', label: 'Stop live runtimes only', description: 'Release running session processes, but keep chat records/transcripts.' },
-    { value: 'delete_stopped', label: 'Delete stopped sessions only', description: 'Clean completed/stopped chat clutter without killing live runtimes.' },
-    { value: 'stop_and_delete', label: 'Stop and delete sessions', description: 'Stop matching runtimes, then remove their session records/transcripts.' },
+/** Labels/descriptions are i18n keys (mesh.sessionCleanup.*). */
+export const SESSION_CLEANUP_MODE_OPTIONS: Array<{ value: RepoMeshSessionCleanupMode; labelKey: string; descriptionKey: string }> = [
+    { value: 'preserve', labelKey: 'mesh.sessionCleanup.preserve', descriptionKey: 'mesh.sessionCleanup.preserveHint' },
+    { value: 'stop', labelKey: 'mesh.sessionCleanup.stop', descriptionKey: 'mesh.sessionCleanup.stopHint' },
+    { value: 'delete_stopped', labelKey: 'mesh.sessionCleanup.deleteStopped', descriptionKey: 'mesh.sessionCleanup.deleteStoppedHint' },
+    { value: 'stop_and_delete', labelKey: 'mesh.sessionCleanup.stopAndDelete', descriptionKey: 'mesh.sessionCleanup.stopAndDeleteHint' },
 ]
 
 /** Mesh-wide tie-break strategy for distributing untargeted queue work. Mirrors
@@ -103,9 +104,10 @@ export type MeshSchedulingStrategy = 'first_eligible' | 'least_loaded' | 'round_
  */
 export type MeshDistribution = 'smart' | 'in_order'
 
-export const DISTRIBUTION_OPTIONS: Array<{ value: MeshDistribution; labelKey: string; descriptionKey: string }> = [
-    { value: 'smart', labelKey: 'mesh.detail.distributionSmart', descriptionKey: 'mesh.detail.distributionSmartDescription' },
-    { value: 'in_order', labelKey: 'mesh.detail.distributionInOrder', descriptionKey: 'mesh.detail.distributionInOrderDescription' },
+/** `summaryKey` is the one visible line; `descriptionKey` is the full explanation (ⓘ). */
+export const DISTRIBUTION_OPTIONS: Array<{ value: MeshDistribution; labelKey: string; summaryKey: string; descriptionKey: string }> = [
+    { value: 'smart', labelKey: 'mesh.detail.distributionSmart', summaryKey: 'mesh.detail.distributionSmartSummary', descriptionKey: 'mesh.detail.distributionSmartDescription' },
+    { value: 'in_order', labelKey: 'mesh.detail.distributionInOrder', summaryKey: 'mesh.detail.distributionInOrderSummary', descriptionKey: 'mesh.detail.distributionInOrderDescription' },
 ]
 
 /** Map a distribution mode to the raw scheduling strategy persisted in policy. */

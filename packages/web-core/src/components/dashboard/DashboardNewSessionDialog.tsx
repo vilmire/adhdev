@@ -8,9 +8,8 @@ import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
 import { collectBrowsePathCandidates, getDefaultBrowseStartPath, type BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { getRecentLaunchArgs, pushRecentLaunchArgs } from '../../utils/recentLaunchArgs'
 import { readRememberedChoice, writeRememberedChoice } from '../../utils/remembered-choice'
-import HistoryModal from './HistoryModal'
-import type { ActiveConversation } from './types'
-import { createSavedHistoryFilterState, type SavedHistoryFilterState } from '../../utils/saved-history-filter-state'
+import SavedHistoryInlinePanel from './SavedHistoryInlinePanel'
+import { InfoTip } from '../ui/InfoTip'
 import { shouldRefreshSavedHistoryOnModalOpen } from '../../utils/saved-history-load-state'
 import SavedHistoryLaunchSection from '../SavedHistoryLaunchSection'
 import LaunchSectionCard from '../LaunchSectionCard'
@@ -106,52 +105,6 @@ interface DashboardNewSessionDialogProps {
     // to preselect the mesh rooted at that workspace.
     initialLaunchMode?: WorkspaceLaunchMode | null
     initialMeshWorkspacePath?: string | null
-}
-
-interface LaunchCategorySelectorProps {
-    workspaceMode: WorkspaceLaunchMode
-    activeKind: LaunchKind | null
-    cliEnabled: boolean
-    ideEnabled: boolean
-    acpEnabled: boolean
-    busy: boolean
-    onSelect: (kind: LaunchKind) => void
-}
-
-export function LaunchCategorySelector({
-    workspaceMode,
-    activeKind,
-    cliEnabled,
-    ideEnabled,
-    acpEnabled,
-    busy,
-    onSelect,
-}: LaunchCategorySelectorProps) {
-    const { t } = useTranslation()
-    if (workspaceMode === 'mesh') return null
-
-    return (
-        <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
-            <div className="text-3xs uppercase tracking-[0.08em] text-text-muted mb-2">{t('newSession.category')}</div>
-            <div className="flex flex-wrap gap-2">
-                {([
-                    { id: 'cli', label: LAUNCH_CATEGORY_LABELS.cli, enabled: cliEnabled },
-                    { id: 'ide', label: LAUNCH_CATEGORY_LABELS.ide, enabled: ideEnabled },
-                    { id: 'acp', label: LAUNCH_CATEGORY_LABELS.acp, enabled: acpEnabled },
-                ] as const).map(kind => (
-                    <button
-                        key={kind.id}
-                        type="button"
-                        className={`btn btn-sm ${activeKind === kind.id ? 'btn-primary' : 'btn-secondary'}`}
-                        onClick={() => onSelect(kind.id)}
-                        disabled={!kind.enabled || busy}
-                    >
-                        {kind.label}
-                    </button>
-                ))}
-            </div>
-        </div>
-    )
 }
 
 function isLaunchKindAvailable(machine: DaemonData | undefined, kind: LaunchKind): boolean {
@@ -303,7 +256,6 @@ export default function DashboardNewSessionDialog({
     const [savedSessionsLoaded, setSavedSessionsLoaded] = useState(false)
     const [savedSessionsError, setSavedSessionsError] = useState('')
     const [resumeHistoryOpen, setResumeHistoryOpen] = useState(false)
-    const [resumeHistoryFilters, setResumeHistoryFilters] = useState<SavedHistoryFilterState>(() => createSavedHistoryFilterState())
     const [resumingSavedSessionId, setResumingSavedSessionId] = useState<string | null>(null)
     const [busy, setBusy] = useState(false)
     const [message, setMessage] = useState('')
@@ -414,6 +366,16 @@ export default function DashboardNewSessionDialog({
                 : ideTargets,
         [acpProviders, activeKind, cliProviders, ideTargets],
     )
+    // One grouped provider list (CLI, then ACP, then IDE) instead of a category
+    // chip row + a per-category list: picking a row sets kind and target together,
+    // and the protocol is only a small hint on the row. Mesh coordinators are CLI-only.
+    const launchTargets = useMemo(() => {
+        const cli = cliProviders.map(provider => ({ kind: 'cli' as const, id: provider.type, label: provider.displayName || provider.type, meta: '' }))
+        if (workspaceMode === 'mesh') return cli
+        const acp = acpProviders.map(provider => ({ kind: 'acp' as const, id: provider.type, label: provider.displayName || provider.type, meta: '' }))
+        const ide = ideTargets.map(target => ({ kind: 'ide' as const, ...target }))
+        return [...cli, ...acp, ...ide]
+    }, [acpProviders, cliProviders, ideTargets, workspaceMode])
 
     const selectedMesh = useMemo(
         () => meshOptions.find(mesh => mesh.id === selectedMeshId) || null,
@@ -551,7 +513,7 @@ export default function DashboardNewSessionDialog({
             setSavedSessions([])
             setSavedSessionsLoaded(false)
             setSavedSessionsError('')
-            setResumeHistoryFilters(createSavedHistoryFilterState())
+            setResumeHistoryOpen(false)
             setMessage('')
             setMeshManualSetup(null)
             return
@@ -754,7 +716,7 @@ export default function DashboardNewSessionDialog({
     useEffect(() => {
         savedSessionsRequestSeqRef.current += 1
         setSelectedResumeSessionId('')
-        setResumeHistoryFilters(createSavedHistoryFilterState())
+        setResumeHistoryOpen(false)
         if (!selectedMachine || !selectedTarget || activeKind === 'ide') {
             setRecentArgsOptions([])
         } else {
@@ -833,30 +795,48 @@ export default function DashboardNewSessionDialog({
         [savedSessions, selectedResumeSessionId],
     )
 
-    const resumeHistoryConversation = useMemo<ActiveConversation | null>(() => {
-        if (activeKind !== 'cli' || !selectedMachine || !selectedTarget) return null
-        const providerLabel = cliProviders.find(provider => provider.type === selectedTarget)?.displayName || selectedTarget
-        return {
-            routeId: selectedMachine.id,
-            daemonId: selectedMachine.id,
-            providerSessionId: selectedResumeSessionId || undefined,
-            transport: 'pty',
-            mode: 'chat',
-            agentName: providerLabel,
-            agentType: selectedTarget,
-            status: 'idle',
-            title: providerLabel,
-            messages: [],
-            ideType: selectedTarget,
-            workspaceName: resolvedWorkspacePath,
-            workspacePath: resolvedWorkspacePath,
-            displayPrimary: providerLabel,
-            displaySecondary: 'CLI',
-            streamSource: 'native',
-            tabKey: `dashboard:new-session:resume-history:${selectedMachine.id}:${selectedTarget}`,
-            machineName: getMachineDisplayName(selectedMachine, { fallbackId: selectedMachine.id }),
-        }
-    }, [activeKind, cliProviders, resolvedWorkspacePath, selectedMachine, selectedResumeSessionId, selectedTarget])
+
+    const resumeSavedSession = useCallback((session: SavedSessionOption) => {
+        if (!selectedMachine || !selectedTarget || resumingSavedSessionId || !session.canResume) return
+        const launchTarget = resolveSavedSessionLaunchTarget(session)
+        setSelectedResumeSessionId(session.providerSessionId)
+        applySavedSessionWorkspace(session)
+        setResumingSavedSessionId(session.providerSessionId)
+        setResumeHistoryOpen(false)
+        setBusy(true)
+        setMessage('')
+        void onLaunchProvider(selectedMachine.id, 'cli', selectedTarget, {
+            workspaceId: launchTarget.workspaceId,
+            workspacePath: launchTarget.workspacePath,
+            useHome: launchTarget.useHome,
+            resumeSessionId: session.providerSessionId,
+            settings: launchAutoApproveSettings,
+        }).then((result) => {
+            if (!result.ok) {
+                setMessageTone('error')
+                setMessage(result.code === 'WORKSPACE_LAUNCH_CONTEXT_REQUIRED'
+                    ? t('newSession.errorWorkspaceContextRequired')
+                    : (result.error || t('newSession.errorResumeSession')))
+                return
+            }
+            onClose()
+        }).finally(() => {
+            setBusy(false)
+            setResumingSavedSessionId(current => (
+                current === session.providerSessionId ? null : current
+            ))
+        })
+    }, [applySavedSessionWorkspace, launchAutoApproveSettings, onClose, onLaunchProvider, resolveSavedSessionLaunchTarget, resumingSavedSessionId, selectedMachine, selectedTarget, t])
+
+    const selectedAutoApproveModeLabel = autoApproveModes?.modes.find(mode => mode.id === selectedAutoApproveModeId)?.label || ''
+    const advancedSummary = [
+        launchArgs.trim(),
+        initialModel.trim(),
+        initialThinkingLevel.trim(),
+        activeKind === 'cli' || workspaceMode === 'mesh'
+            ? (autoApproveModes ? selectedAutoApproveModeLabel : (legacyAutoApprove ? t('newSession.autoApproveLegacy') : ''))
+            : '',
+    ].filter(Boolean).join(' · ')
 
     const openBrowseDialog = useCallback(() => {
         if (!selectedMachine) return
@@ -1225,7 +1205,26 @@ export default function DashboardNewSessionDialog({
                                             ? t('newSession.launchWithoutWorkspace')
                                             : resolvedWorkspacePath || t('newSession.selectWorkspaceFolder')}
                                     </div>
-                                    {workspaceChoice === '__custom__' && resolvedWorkspacePath && (
+                                    {browseDialogOpen && (
+                                        <WorkspaceBrowseDialog
+                                            inline
+                                            title={t('newSession.selectWorkspaceTitle')}
+                                            description=""
+                                            currentPath={browseCurrentPath}
+                                            directories={browseDirectories}
+                                            busy={browseBusy}
+                                            error={browseError}
+                                            onClose={() => setBrowseDialogOpen(false)}
+                                            onNavigate={navigateBrowsePath}
+                                            onConfirm={(path) => {
+                                                setCustomWorkspacePath(path)
+                                                setBrowseCurrentPath(path)
+                                                setWorkspaceChoice('__custom__')
+                                                setBrowseDialogOpen(false)
+                                            }}
+                                        />
+                                    )}
+                                    {!browseDialogOpen && workspaceChoice === '__custom__' && resolvedWorkspacePath && (
                                         <div className="mt-3 flex flex-wrap gap-2">
                                             <button
                                                 type="button"
@@ -1258,8 +1257,9 @@ export default function DashboardNewSessionDialog({
                                         </div>
                                     )}
                                     {!meshLoading && !meshError && meshOptions.length === 0 && (
-                                        <div className="rounded-lg border border-border-subtle bg-bg-secondary/40 px-3 py-2 text-sm text-text-muted">
-                                            {t('newSession.noMeshes')}
+                                        <div className="flex items-center gap-1 rounded-lg border border-border-subtle bg-bg-secondary/40 px-3 py-2 text-sm text-text-muted">
+                                            {t('newSession.noMeshesShort')}
+                                            <InfoTip content={t('newSession.noMeshes')} />
                                         </div>
                                     )}
                                     {meshOptions.length > 0 && (
@@ -1293,50 +1293,48 @@ export default function DashboardNewSessionDialog({
                             )}
                         </LaunchSectionCard>
 
-                        <LaunchCategorySelector
-                            workspaceMode={workspaceMode}
-                            activeKind={activeKind}
-                            cliEnabled={cliProviders.length > 0}
-                            ideEnabled={ideTargets.length > 0}
-                            acpEnabled={acpProviders.length > 0}
-                            busy={busy}
-                            onSelect={(kind) => {
-                                // Manual pick wins over any not-yet-applied remembered kind/target.
-                                pendingRememberedKindRef.current = null
-                                pendingRememberedTargetRef.current = null
-                                setActiveKind(kind)
-                            }}
-                        />
-
-                        <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
-                            <div className="text-3xs uppercase tracking-[0.08em] text-text-muted mb-2">
-                                {activeKind === 'ide' ? t('newSession.chooseIde') : activeKind === 'cli' ? t('newSession.chooseCliProvider') : t('newSession.chooseAcpProvider')}
-                            </div>
-                            <div className="grid grid-cols-1 gap-2">
-                                {providerTargets.map(target => (
-                                    <button
-                                        key={target.id}
-                                        type="button"
-                                        className={`w-full rounded-xl border px-3.5 py-3 text-left transition-colors ${selectedTarget === target.id ? 'border-accent bg-accent/10' : 'border-border-subtle bg-bg-secondary/40 hover:bg-bg-secondary/70'}`}
-                                        onClick={() => {
-                                            // Manual pick wins over any not-yet-applied remembered target.
-                                            pendingRememberedTargetRef.current = null
-                                            pendingRememberedMeshCliTypeRef.current = null
-                                            setSelectedTarget(target.id)
-                                        }}
-                                        disabled={busy}
-                                    >
-                                        <div className="text-sm font-semibold text-text-primary">{target.label}</div>
-                                        {target.meta && <div className="text-xs text-text-secondary mt-1">{target.meta}</div>}
-                                    </button>
-                                ))}
-                                {providerTargets.length === 0 && (
-                                    <div className="text-sm text-text-muted">
-                                        {t('newSession.noProviders')}
+                        <LaunchSectionCard title={t('newSession.agent')}>
+                            <div className="grid grid-cols-1 gap-1.5" role="radiogroup" aria-label={t('newSession.agent')}>
+                                {launchTargets.map(target => {
+                                    const selected = activeKind === target.kind && selectedTarget === target.id
+                                    return (
+                                        <button
+                                            key={`${target.kind}:${target.id}`}
+                                            type="button"
+                                            role="radio"
+                                            aria-checked={selected}
+                                            data-launch-kind={target.kind}
+                                            className={`flex w-full items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 text-left transition-colors ${selected ? 'border-accent bg-accent/10' : 'border-border-subtle bg-bg-secondary/40 hover:bg-bg-secondary/70'}`}
+                                            onClick={() => {
+                                                // Manual pick wins over any not-yet-applied remembered kind/target.
+                                                pendingRememberedKindRef.current = null
+                                                pendingRememberedTargetRef.current = null
+                                                pendingRememberedMeshCliTypeRef.current = null
+                                                setActiveKind(target.kind)
+                                                setSelectedTarget(target.id)
+                                            }}
+                                            disabled={busy}
+                                        >
+                                            <span className="min-w-0 truncate text-sm font-semibold text-text-primary">{target.label}</span>
+                                            <span className="flex shrink-0 items-center gap-2">
+                                                {target.meta && <span className="text-2xs text-text-muted">{target.meta}</span>}
+                                                {workspaceMode !== 'mesh' && (
+                                                    <span className="rounded-full border border-border-subtle px-1.5 py-px text-3xs font-semibold uppercase tracking-wide text-text-muted">
+                                                        {LAUNCH_CATEGORY_LABELS[target.kind]}
+                                                    </span>
+                                                )}
+                                            </span>
+                                        </button>
+                                    )
+                                })}
+                                {launchTargets.length === 0 && (
+                                    <div className="flex items-center gap-1 text-sm text-text-muted">
+                                        {t('newSession.noProvidersShort')}
+                                        <InfoTip content={t('newSession.noProviders')} />
                                     </div>
                                 )}
                             </div>
-                        </div>
+                        </LaunchSectionCard>
 
                         {workspaceMode === 'mesh' && visibleMeshManualSetup && (
                             <MeshCoordinatorManualSetupPanel
@@ -1345,6 +1343,20 @@ export default function DashboardNewSessionDialog({
                             />
                         )}
 
+                        {/* Args, auto-approve and model/thinking are set-once preferences:
+                            collapsed under "Advanced options" with a one-line summary of
+                            what is (or was remembered as) chosen, so the default path is
+                            Machine → Workspace → Agent → Start. */}
+                        {((workspaceMode === 'mesh' && !!selectedTarget) || (workspaceMode !== 'mesh' && activeKind !== 'ide')) && (
+                            <details className="group rounded-xl border border-border-subtle bg-bg-primary" data-testid="new-session-advanced">
+                                <summary className="flex cursor-pointer select-none list-none items-center gap-2 px-4 py-3 [&::-webkit-details-marker]:hidden">
+                                    <span className="inline-block text-text-muted transition-transform group-open:rotate-90" aria-hidden>▸</span>
+                                    <span className="text-3xs uppercase tracking-[0.08em] text-text-muted">{t('newSession.advancedOptions')}</span>
+                                    {advancedSummary && (
+                                        <span className="ml-auto min-w-0 truncate text-2xs text-text-secondary" data-testid="new-session-advanced-summary">{advancedSummary}</span>
+                                    )}
+                                </summary>
+                                <div className="space-y-3 px-3 pb-3">
                         {workspaceMode !== 'mesh' && activeKind !== 'ide' && (
                             <LaunchSectionCard title={t('newSession.startupArguments')}>
                                 <input
@@ -1375,7 +1387,7 @@ export default function DashboardNewSessionDialog({
                         )}
 
                         {((workspaceMode === 'mesh' && !!selectedTarget) || (workspaceMode !== 'mesh' && activeKind === 'cli')) && (
-                            <LaunchSectionCard title={t('newSession.autoApproveMode')}>
+                            <LaunchSectionCard title={t('newSession.autoApproveMode')} description={autoApproveModes ? t('newSession.autoApproveModeDescription') : undefined}>
                                 {autoApproveModes ? (
                                     <AutoApproveModeSelector
                                         config={autoApproveModes}
@@ -1466,18 +1478,25 @@ export default function DashboardNewSessionDialog({
                             </LaunchSectionCard>
                         )}
 
+                                </div>
+                            </details>
+                        )}
+
                         {workspaceMode !== 'mesh' && activeKind === 'cli' && (
                             <SavedHistoryLaunchSection
                                 busy={busy}
                                 savedSessionsLoading={savedSessionsLoading}
                                 savedSessionsError={savedSessionsError}
+                                savedSessionsLoaded={savedSessionsLoaded}
+                                savedSessionsCount={savedSessions.length}
                                 selectedSession={selectedSavedSession}
-                                onRefresh={() => {
-                                    if (!selectedMachine || !selectedTarget) return
-                                    void loadSavedSessions(selectedMachine.id, selectedTarget)
-                                }}
+                                historyOpen={resumeHistoryOpen}
                                 onOpenHistory={() => {
                                     if (!selectedMachine || !selectedTarget) return
+                                    if (resumeHistoryOpen) {
+                                        setResumeHistoryOpen(false)
+                                        return
+                                    }
                                     setResumeHistoryOpen(true)
                                     if (shouldRefreshSavedHistoryOnModalOpen({
                                         hasLoadedInitialResults: savedSessionsLoaded,
@@ -1487,6 +1506,21 @@ export default function DashboardNewSessionDialog({
                                     }
                                 }}
                                 onClearSelection={() => setSelectedResumeSessionId('')}
+                            />
+                        )}
+                        {workspaceMode !== 'mesh' && activeKind === 'cli' && resumeHistoryOpen && (
+                            <SavedHistoryInlinePanel
+                                sessions={savedSessions}
+                                loading={savedSessionsLoading}
+                                busy={busy}
+                                resumingSessionId={resumingSavedSessionId}
+                                fallbackWorkspacePath={resolvedWorkspacePath || null}
+                                onRefresh={() => {
+                                    if (!selectedMachine || !selectedTarget) return
+                                    void loadSavedSessions(selectedMachine.id, selectedTarget)
+                                }}
+                                onClose={() => setResumeHistoryOpen(false)}
+                                onResume={resumeSavedSession}
                             />
                         )}
 
@@ -1521,79 +1555,6 @@ export default function DashboardNewSessionDialog({
                     </div>
             </DialogShell>
 
-            {browseDialogOpen && (
-                <WorkspaceBrowseDialog
-                    title={t('newSession.selectWorkspaceTitle')}
-                    description={t('newSession.selectWorkspaceDescription')}
-                    currentPath={browseCurrentPath}
-                    directories={browseDirectories}
-                    busy={browseBusy}
-                    error={browseError}
-                    onClose={() => setBrowseDialogOpen(false)}
-                    onNavigate={navigateBrowsePath}
-                    onConfirm={(path) => {
-                        setCustomWorkspacePath(path)
-                        setBrowseCurrentPath(path)
-                        setWorkspaceChoice('__custom__')
-                        setBrowseDialogOpen(false)
-                    }}
-                />
-            )}
-            {resumeHistoryOpen && resumeHistoryConversation && (
-                <HistoryModal
-                    activeConv={resumeHistoryConversation}
-                    ides={[]}
-                    isCreatingChat={false}
-                    isRefreshingHistory={savedSessionsLoading}
-                    savedSessions={savedSessions}
-                    isSavedSessionsLoading={savedSessionsLoading}
-                    isResumingSavedSessionId={resumingSavedSessionId}
-                    savedHistoryFilters={resumeHistoryFilters}
-                    missingWorkspaceResumePath={resolvedWorkspacePath || null}
-                    onSavedHistoryFiltersChange={setResumeHistoryFilters}
-                    onClose={() => setResumeHistoryOpen(false)}
-                    onNewChat={() => {
-                        setSelectedResumeSessionId('')
-                        setResumeHistoryOpen(false)
-                    }}
-                    onSwitchSession={() => {}}
-                    onRefreshHistory={() => {
-                        if (!selectedMachine || !selectedTarget) return
-                        void loadSavedSessions(selectedMachine.id, selectedTarget)
-                    }}
-                    onResumeSavedSession={(session) => {
-                        if (!selectedMachine || !selectedTarget || resumingSavedSessionId || !session.canResume) return
-                        const launchTarget = resolveSavedSessionLaunchTarget(session)
-                        setSelectedResumeSessionId(session.providerSessionId)
-                        applySavedSessionWorkspace(session)
-                        setResumingSavedSessionId(session.providerSessionId)
-                        setResumeHistoryOpen(false)
-                        setBusy(true)
-                        setMessage('')
-                        void onLaunchProvider(selectedMachine.id, 'cli', selectedTarget, {
-                            workspaceId: launchTarget.workspaceId,
-                            workspacePath: launchTarget.workspacePath,
-                            useHome: launchTarget.useHome,
-                            resumeSessionId: session.providerSessionId,
-                            settings: launchAutoApproveSettings,
-                        }).then((result) => {
-                            if (!result.ok) {
-                                setMessageTone('error')
-                                setMessage(result.code === 'WORKSPACE_LAUNCH_CONTEXT_REQUIRED'
-                                    ? t('newSession.errorWorkspaceContextRequired')
-                                    : (result.error || t('newSession.errorResumeSession')))
-                                return
-                            }
-                            onClose()
-                        }).finally(() => {
-                            setBusy(false)
-                            setResumingSavedSessionId(current => (
-                                current === session.providerSessionId ? null : current
-                            ))
-                        })
-                    }}
-                />
-            )}
             {pendingDangerousMode && (
                 <DangerousAutoApproveModeDialog
                     mode={pendingDangerousMode}

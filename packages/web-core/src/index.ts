@@ -196,7 +196,7 @@ export {
 export type { SupportedEntry, ProviderVerification, ProviderVerificationStatus, VerificationCandidate } from './constants/supported'
 
 // ── Managers ──
-export { eventManager } from './managers/EventManager'
+export { eventManager, describeToastError } from './managers/EventManager'
 export type { StatusEventPayload, ToastConfig, ToastAction, ViewRequestRespondFn } from './managers/EventManager'
 export { subscriptionManager } from './managers/SubscriptionManager'
 export type { SubscriptionTransport } from './managers/SubscriptionManager'
@@ -225,10 +225,34 @@ export { default as Dialog, DialogShell } from './components/ui/Dialog'
 export type { DialogProps, DialogSize, DialogAlign, DialogShellProps } from './components/ui/Dialog'
 export { default as ModalPortal } from './components/ui/ModalPortal'
 export { StatusBadge } from './components/ui/StatusBadge'
-export { SettingsTabs } from './components/ui/SettingsTabs'
-export type { SettingsTab, SettingsTabsVariant } from './components/ui/SettingsTabs'
+export { SettingsTabs, SettingsTabBar } from './components/ui/SettingsTabs'
+export type { SettingsTab, SettingsTabsVariant, SettingsTabBarItem } from './components/ui/SettingsTabs'
 export { DataTable } from './components/ui/DataTable'
 export { ErrorBoundary } from './components/ui/ErrorBoundary'
+export { InfoTip, Tooltip, PopoverButton, computePopoverPosition } from './components/ui/InfoTip'
+export type { InfoTipProps, TooltipProps, PopoverButtonProps } from './components/ui/InfoTip'
+export { Switch } from './components/ui/Switch'
+export type { SwitchProps, SwitchSize } from './components/ui/Switch'
+export { RefreshButton } from './components/ui/RefreshButton'
+export type { RefreshButtonProps } from './components/ui/RefreshButton'
+export { RelativeTime } from './components/ui/RelativeTime'
+export { TechnicalDetails, CopyButton } from './components/ui/TechnicalDetails'
+export type { TechnicalDetailsProps, TechnicalDetailRow, CopyButtonProps } from './components/ui/TechnicalDetails'
+export type { RelativeTimeProps } from './components/ui/RelativeTime'
+export type { EmptyStateVariant } from './components/ui/EmptyState'
+export {
+    formatRelativeTime,
+    formatRelativeTimeLocalized,
+    formatAbsoluteTime,
+    formatDateLocalized,
+    formatClockTime,
+    formatElapsedCompact,
+    formatDurationLocalized,
+    toEpochMs,
+    resolveUiLocale,
+} from './utils/time'
+export type { TimeInput } from './utils/time'
+export { sessionStatusText, sessionRoleText, classifySessionStatusBucket } from './components/MeshGraph/MeshObservabilitySurface/meshSurfaceHelpers'
 export { default as ThemeToggle } from './components/ThemeToggle'
 export { default as LanguageSelector } from './components/LanguageSelector'
 
@@ -373,17 +397,14 @@ export type { MeshCreateFormProps } from './components/mesh-onboarding/MeshCreat
 export type { WorkspaceOption as MeshWorkspaceOption } from './components/mesh-onboarding/WorkspacePicker'
 
 // ── Setup Wizard ──
-// The wizard is now one step (create/attach) that hands off to the mesh page.
-// SlotsStep/SchedulingStep/ApprovalsStep are no longer mounted by it; they stay
-// exported for the pending port of those controls onto the mesh page.
+// The wizard is one step (create/attach) that hands off to the mesh page, which
+// owns slots, scheduling, quota and approvals. The old SlotsStep /
+// SchedulingStep / ApprovalsStep had no consumer in any package and were removed.
 export { default as QuotaPolicyStep, quotaPolicyDraftToOverrides } from './components/setup-wizard/QuotaPolicyStep'
 export type { QuotaPolicyStepProps } from './components/setup-wizard/QuotaPolicyStep'
 export { default as SetupWizard } from './components/setup-wizard/SetupWizard'
 export type { SetupWizardProps } from './components/setup-wizard/SetupWizard'
 export { default as MachinesStep } from './components/setup-wizard/MachinesStep'
-export { default as SlotsStep } from './components/setup-wizard/SlotsStep'
-export { default as SchedulingStep } from './components/setup-wizard/SchedulingStep'
-export { default as ApprovalsStep } from './components/setup-wizard/ApprovalsStep'
 export { runWizardPolicyCommit } from './components/setup-wizard/wizardCommit'
 export type {
     WizardCommitStage,

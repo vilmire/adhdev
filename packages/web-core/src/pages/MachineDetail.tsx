@@ -21,9 +21,10 @@ import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
 import { useDaemonMachineRuntimeSubscription } from '../hooks/useDaemonMachineRuntimeSubscription'
 import { useDaemonMachineRuntimeLoader } from '../hooks/useDaemonMachineRuntimeLoader'
 import type { DaemonData } from '../types'
-import { isCliEntry, isAcpEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel, getProviderSummaryLine, getProviderSummaryValue } from '../utils/daemon-utils'
+import { PLATFORM_LABELS, isCliEntry, isAcpEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel, getProviderSummaryLine, getProviderSummaryValue } from '../utils/daemon-utils'
 import { getDashboardActiveTabHref, getDashboardActiveTabKeyForConversation } from '../utils/dashboard-route-paths'
-import { IconBarChart, IconMonitor, IconSettings, IconClipboard, IconServer } from '../components/Icons'
+import { IconBarChart, IconMonitor, IconSettings } from '../components/Icons'
+import { SettingsTabBar, type SettingsTabBarItem } from '../components/ui/SettingsTabs'
 import type { ReactNode } from 'react'
 import { eventManager, type ToastConfig } from '../managers/EventManager'
 import ToastContainer from '../components/dashboard/ToastContainer'
@@ -202,11 +203,12 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                     id: toast.id, message: toast.message, type: toast.type,
                     timestamp: toast.timestamp, targetKey: toast.targetKey,
                     actions: toast.actions,
+                    details: toast.details,
                 }
                 return [...prev.slice(-4), newToast]
             })
             const dur = toast.duration || 5000
-            setTimeout(() => daemonCtx.setToasts((prev) => prev.filter(t => t.id !== toast.id)), dur)
+            setTimeout(() => daemonCtx.setToasts((prev) => prev.filter(t => t.id !== toast.id || t.pinned)), dur)
         })
         return unsubToast
     }, [daemonCtx])
@@ -312,9 +314,16 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const requestedWorkspaceCategory = locationState?.initialWorkspaceCategory
     void locationState?.initialWorkspaceId
     void locationState?.initialWorkspacePath
+    // Old deep links to the retired Hosted runtimes / Logs tabs land on System
+    // with that diagnostics section already open.
+    const initialDiagnostics = requestedMachineTab === 'session-host' ? 'hosted-runtimes' as const
+        : requestedMachineTab === 'logs' ? 'logs' as const
+            : null
     const effectiveTab: TabId = requestedMachineTab === 'ides' || requestedMachineTab === 'clis' || requestedMachineTab === 'acps'
         ? 'workspace'
-        : (requestedMachineTab || defaultTab)
+        : initialDiagnostics
+            ? 'overview'
+            : (requestedMachineTab || defaultTab)
     const initialWorkspaceCategory = requestedMachineTab === 'ides'
         ? 'ide'
         : requestedMachineTab === 'clis'
@@ -434,6 +443,14 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             await openWorkspaceFallback()
         }
         recentLaunchWorkspaceKeyRef.current = selectedKey
+        // Nothing to choose (one workspace option): relaunch/resume directly
+        // instead of asking the user to confirm a dialog with no decision in it.
+        if (options.length <= 1) {
+            const action = recentLaunchActionRef.current
+            recentLaunchActionRef.current = null
+            void action?.().catch(error => eventManager.showErrorToast(t('machine.detail.relaunchFailed'), error))
+            return
+        }
         setRecentLaunchWorkspaceKey(selectedKey)
         setRecentLaunchConfirm({
             title: session.kind === 'ide'
@@ -458,9 +475,9 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                     : getMachineLaunchBusyLabel(t, 'start-fresh'),
             workspaceOptions: options,
             details: [
-                { label: 'Mode', value: session.kind.toUpperCase() },
+                { label: t('machine.detail.launchType'), value: session.kind.toUpperCase() },
                 ...(session.providerType ? [{
-                    label: 'Provider',
+                    label: t('machine.detail.launchProvider'),
                     value: (() => {
                         const providerInfo = providers.find(p => p.type === session.providerType)
                         const providerLabel = providerInfo?.displayName || session.providerType
@@ -474,7 +491,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                 }] : []),
             ],
         })
-    }, [actions, machine, providers])
+    }, [actions, machine, providers, t])
 
     useEffect(() => {
         setActiveTab(effectiveTab)
@@ -502,16 +519,38 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
 
     const providerUpdatesAvailable = !!providerStaleness
         && (providerStaleness.staleTypes.length + providerStaleness.newTypes.length) > 0
-    const TABS: { id: TabId; label: string | ReactNode; count?: number }[] = [
-        { id: 'workspace', label: <span className="flex items-center gap-1.5"><IconMonitor size={14} /> {t('machine.detail.tabWorkspace')}</span>, count: ideSessions.length + cliSessions.length + acpSessions.length },
-        { id: 'session-host', label: <span className="flex items-center gap-1.5"><IconServer size={14} /> {t('machine.detail.tabHostedRuntimes')}</span> },
+    const sessionCount = ideSessions.length + cliSessions.length + acpSessions.length
+    // Three tabs: Sessions / Providers / System. Hosted runtimes and Logs are
+    // troubleshooting views, so they sit in System's "Diagnostics" disclosure.
+    const TABS: SettingsTabBarItem[] = [
         {
-            id: 'providers',
-            label: <span className="flex items-center gap-1.5"><IconSettings size={14} /> {t('machine.detail.tabProviders')}</span>,
+            key: 'workspace',
+            icon: <IconMonitor size={14} />,
+            label: t('machine.detail.tabSessions'),
+            trailing: sessionCount > 0 ? (
+                <span className={`px-1.5 py-px rounded-full text-3xs ${activeTab === 'workspace' ? 'bg-accent-primary/20 text-accent-primary' : 'bg-bg-glass-hover text-text-muted'}`}>
+                    {sessionCount}
+                </span>
+            ) : undefined,
         },
-        { id: 'overview', label: <span className="flex items-center gap-1.5"><IconBarChart size={14} /> {t('machine.detail.tabSystem')}</span> },
-        { id: 'logs', label: <span className="flex items-center gap-1.5"><IconClipboard size={14} /> {t('machine.detail.tabLogs')}</span> },
+        {
+            key: 'providers',
+            icon: <IconSettings size={14} />,
+            label: t('machine.detail.tabProviders'),
+            // Stale pins + never-installed channel types: a hint only — the
+            // Update buttons are per provider inside the tab.
+            trailing: providerUpdatesAvailable ? (
+                <span
+                    title={t('machine.detail.providerUpdatesAvailable')}
+                    aria-label={t('machine.detail.providerUpdatesAvailable')}
+                    data-testid="providers-update-dot"
+                    className="w-1.5 h-1.5 rounded-full bg-amber-400 ml-0.5 shrink-0"
+                />
+            ) : undefined,
+        },
+        { key: 'overview', icon: <IconBarChart size={14} />, label: t('machine.detail.tabSystem') },
     ]
+    const platformLabel = PLATFORM_LABELS[machine.platform] || machine.platform
 
     return (
         <div className="flex flex-col h-full">
@@ -558,60 +597,25 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                             </button>
                                         )}
                                     </>
-                                ) : (
-                                    <span className="w-2.5 h-2.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)] shrink-0" />
-                                )}
+                                ) : null}
                             </div>
-                            <div className="flex flex-wrap gap-x-3 gap-y-1 items-center mt-1.5 text-xs text-text-secondary opacity-80">
-                                <span className="font-mono bg-bg-glass px-1.5 py-0.5 rounded">{machine.platform} · {machine.arch}</span>
-                                <span>{t('machine.detail.coresCount', { count: machine.cpus })}</span>
-                                {machineEntry?.version && <span>v{machineEntry.version}</span>}
-                                {machine.p2p.available && (
-                                    <span>{t('machine.detail.p2pState', { state: machine.p2p.state === 'connected' ? t('machine.detail.p2pConnected') : machine.p2p.state })}</span>
-                                )}
-                                {machine.machineNickname && (
-                                    <span className="text-text-muted opacity-60 shrink-0">{machine.hostname}</span>
-                                )}
+                            {/* One short line; platform/arch/cores/version/P2P live in System. */}
+                            <div className="mt-1 text-xs text-text-secondary" data-testid="machine-detail-subtitle">
+                                {[isMachineBlocked ? t('machine.card.status.failed') : t('machine.card.status.online'), platformLabel].filter(Boolean).join(' · ')}
                             </div>
                         </div>
                     </div>
                 </div>
 
-                {/* Tabs */}
-                {/* Tabs */}
-                <div className="flex overflow-x-auto overflow-y-hidden mt-4 gap-6 px-1 border-b border-border-subtle">
-                    {TABS.map(tab => (
-                        <button
-                            key={tab.id}
-                            onClick={() => setActiveTab(tab.id)}
-                            className={`pb-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 px-1 whitespace-nowrap ${
-                                activeTab === tab.id
-                                    ? 'border-accent-primary text-accent-primary'
-                                    : 'border-transparent text-text-secondary hover:text-text-primary'
-                            }`}
-                        >
-                            {tab.label}
-                            {tab.id === 'providers' && providerUpdatesAvailable ? (
-                                // Stale pins + never-installed channel types:
-                                // a hint only — the Update buttons are per
-                                // provider inside the tab.
-                                <span
-                                    title={t('machine.detail.providerUpdatesAvailable')}
-                                    aria-label={t('machine.detail.providerUpdatesAvailable')}
-                                    data-testid="providers-update-dot"
-                                    className="w-1.5 h-1.5 rounded-full bg-amber-400 ml-0.5 shrink-0"
-                                />
-                            ) : tab.count !== undefined ? (
-                                <span className={`px-1.5 py-0.5 rounded-full text-3xs ml-1 ${
-                                    activeTab === tab.id ? 'bg-accent-primary/20 text-accent-primary' : 'bg-bg-glass-hover text-text-muted'
-                                }`}>
-                                    {tab.count}
-                                </span>
-                            ) : null}
-                        </button>
-                    ))}
-                </div>
-
+                <SettingsTabBar
+                    variant="underline"
+                    tabs={TABS}
+                    activeKey={activeTab}
+                    onSelect={(key) => setActiveTab(key as TabId)}
+                    ariaLabel={t('machine.detail.tabsAriaLabel')}
+                    className="mt-4 -mx-1 border-b-0 px-0 md:px-0"
+                    tabIdPrefix="machine-tab"
+                />
             </div>
 
             {/* ═══ Content ═══ */}
@@ -667,21 +671,21 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 ideSessions={ideSessions}
                                 cliSessions={cliSessions}
                                 acpSessions={acpSessions}
-                            />
-                        )}
-
-                        {activeTab === 'session-host' && (
-                            <SessionHostPanel
-                                machineId={machineId!}
-                                cliSessions={cliSessions}
-                                sendDaemonCommand={sendDaemonCommand}
-                            />
-                        )}
-
-                        {activeTab === 'logs' && (
-                            <LogsTab
-                                machineId={machineId!}
-                                sendDaemonCommand={sendDaemonCommand}
+                                daemonVersion={machineEntry?.version}
+                                initialDiagnostics={initialDiagnostics}
+                                renderHostedRuntimes={() => (
+                                    <SessionHostPanel
+                                        machineId={machineId!}
+                                        cliSessions={cliSessions}
+                                        sendDaemonCommand={sendDaemonCommand}
+                                    />
+                                )}
+                                renderLogs={() => (
+                                    <LogsTab
+                                        machineId={machineId!}
+                                        sendDaemonCommand={sendDaemonCommand}
+                                    />
+                                )}
                             />
                         )}
                     </div>

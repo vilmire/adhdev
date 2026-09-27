@@ -19,8 +19,8 @@ const LOCALES: Record<string, any> = { en, ko, ja, 'zh-CN': zhCN, es }
 
 /** Keys for the read-only `.adhdev/mesh.json` layer notice (mesh.detail.*). */
 const REPO_MESH_JSON_KEYS = [
+    // repoMeshJsonReadOnly was folded into the title ("From repo file (read-only)").
     'repoMeshJsonTitle',
-    'repoMeshJsonReadOnly',
     'repoMeshJsonHint',
     'repoMeshJsonOverrideLabel',
     'repoMeshJsonAppendLabel',

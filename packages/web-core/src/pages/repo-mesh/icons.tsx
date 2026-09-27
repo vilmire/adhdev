@@ -1,3 +1,7 @@
+import { useTranslation } from 'react-i18next'
+import { Tooltip } from '../../components/ui/InfoTip'
+import { nodeHealthText } from '../../components/MeshGraph/MeshObservabilitySurface/meshSurfaceHelpers'
+
 export function IconRefresh({ size = 14 }: { size?: number }) {
     return (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -37,28 +41,31 @@ export function IconPlus({ size = 14 }: { size?: number }) {
     )
 }
 
+const NODE_HEALTH_COLORS: Record<string, string> = {
+    online: '#22c55e',
+    dirty: '#f59e0b',
+    offline: '#6b7280',
+    degraded: '#ef4444',
+    enabled: '#22c55e',
+    pending: '#a855f7',
+    assigned: '#3b82f6',
+    completed: '#22c55e',
+    failed: '#ef4444',
+    unknown: '#6b7280',
+}
+
 export function NodeHealthBadge({ status }: { status: string }) {
-    const config: Record<string, { color: string; label: string; title?: string }> = {
-        online: { color: '#22c55e', label: 'Online' },
-        dirty: { color: '#f59e0b', label: 'Dirty', title: 'Workspace has uncommitted changes' },
-        offline: { color: '#6b7280', label: 'Offline' },
-        degraded: { color: '#ef4444', label: 'Degraded', title: 'P2P connection to this node is down or timed out — often transient. Wait and retry, or re-establish the node\'s connection.' },
-        enabled: { color: '#22c55e', label: 'Enabled' },
-        pending: { color: '#a855f7', label: 'Pending' },
-        assigned: { color: '#3b82f6', label: 'Assigned' },
-        completed: { color: '#22c55e', label: 'Completed' },
-        failed: { color: '#ef4444', label: 'Failed' },
-        unknown: { color: '#6b7280', label: 'Unknown' },
-    }
-    const c = config[status] || { color: '#6b7280', label: status }
-    return (
+    const { t } = useTranslation('common')
+    const color = NODE_HEALTH_COLORS[status] ?? '#6b7280'
+    const hint = status === 'degraded' ? t('mesh.nodeHealth.degradedHint') : undefined
+    const chip = (
         <span
             className="inline-flex items-center gap-1 text-3xs font-semibold px-2 py-0.5 rounded-md"
-            style={{ background: c.color + '15', color: c.color, border: `1px solid ${c.color}25` }}
-            title={c.title}
+            style={{ background: color + '15', color, border: `1px solid ${color}25` }}
         >
-            <span className="w-1.5 h-1.5 rounded-full" style={{ background: c.color }} />
-            {c.label}
+            <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
+            {nodeHealthText(status, t)}
         </span>
     )
+    return hint ? <Tooltip content={hint}>{chip}</Tooltip> : chip
 }

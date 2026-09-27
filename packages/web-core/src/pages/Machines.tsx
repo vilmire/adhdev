@@ -16,13 +16,44 @@ import {
 } from '../utils/daemon-utils'
 import { getDashboardActiveTabHref } from '../utils/dashboard-route-paths'
 import ProgressBar from '../components/ProgressBar'
-import ConnectionBadge from '../components/ConnectionBadge'
-import BeaconAdvisoryBadge from '../components/BeaconAdvisoryBadge'
-import FleetStatusPeerViewBadge from '../components/FleetStatusPeerViewBadge'
+import { buildBeaconAdvisory } from '../components/BeaconAdvisoryBadge'
+import { buildFleetPeerDivergence } from '../components/FleetStatusPeerViewBadge'
+import { Tooltip } from '../components/ui/InfoTip'
 import InstallCommand from '../components/InstallCommand'
-import { IconServer, IconMonitor, IconEyeOff, IconZap, IconShuffle, IconLink } from '../components/Icons'
-import LoadingSpinner from '../components/ui/LoadingSpinner'
+import { IconServer, IconMonitor, IconEyeOff, IconZap, IconShuffle } from '../components/Icons'
 import { ProviderLogo } from '../components/ProviderLogo'
+
+// ─── Machine status dot ─────────────────────────
+export type MachineStatusTone = 'online' | 'attention' | 'connecting' | 'failed' | 'offline'
+
+const MACHINE_STATUS_COLOR: Record<MachineStatusTone, string> = {
+    online: '#22c55e',
+    attention: 'var(--status-warning)',
+    connecting: 'var(--accent-primary-light)',
+    failed: '#ef4444',
+    offline: '#64748b',
+}
+
+/** The machine card's single status indicator; details are in the tooltip. */
+export function MachineStatusDot({ status, tooltip }: { status: MachineStatusTone; tooltip: string }) {
+    const { t } = useTranslation('common')
+    return (
+        <Tooltip content={tooltip}>
+            <span
+                role="img"
+                aria-label={t(`machine.card.status.${status}`)}
+                data-testid="machine-status-dot"
+                data-status={status}
+                className="inline-block w-2 h-2 rounded-full"
+                style={{
+                    background: MACHINE_STATUS_COLOR[status],
+                    boxShadow: status === 'online' ? '0 0 8px rgba(34,197,94,0.4)' : 'none',
+                    animation: status === 'online' || status === 'connecting' ? 'pulse-dot 2s infinite' : 'none',
+                }}
+            />
+        </Tooltip>
+    )
+}
 
 // ─── Compact Agent Row (replaces full IdeCard/CliCard) ──────────
 function AgentRow({ type, name, status, statusTone = 'idle', workspace, isActive, hidden, onClick }: {
@@ -277,13 +308,6 @@ export default function MachinesPage() {
                         const retryStatus = connectionRetryStatuses[machine.machineId]
                         const isBlocked = isOnline && !!retryStatus?.blocked
                         const isConnecting = isOnline && !isBlocked && (connState === 'new' || connState === 'connecting')
-                        const machineDotColor = connState === 'connected'
-                            ? '#22c55e'
-                            : isBlocked
-                                ? '#ef4444'
-                                : isConnecting
-                                    ? 'var(--accent-primary-light)'
-                                    : '#64748b'
                         const totalAgents = machine.ideSessions.length + machine.cliSessions.length + machine.acpSessions.length
                         // ★ A SEPARATE count for the peer-view badge only. The
                         // badge compares against a remote daemon's
@@ -315,6 +339,29 @@ export default function MachinesPage() {
                         )
                             ? machine.daemonIde.beacon
                             : undefined
+
+                        // One status dot for the card. Connection detail (P2P peers,
+                        // relay) and background sync advisories live in its tooltip
+                        // instead of four separate badges.
+                        const beaconAdvisory = buildBeaconAdvisory(machineBeacon, t)
+                        const fleetDivergence = buildFleetPeerDivergence(fleetPeerEntry, isOnline, fleetComparableCount, t)
+                        const machineStatus: MachineStatusTone = !isOnline
+                            ? 'offline'
+                            : isBlocked
+                                ? 'failed'
+                                : isConnecting
+                                    ? 'connecting'
+                                    : (beaconAdvisory || fleetDivergence)
+                                        ? 'attention'
+                                        : 'online'
+                        const machineStatusTooltip = [
+                            t(`machine.card.status.${machineStatus}`),
+                            connState === 'connected' && transport && transport !== 'unknown'
+                                ? (transport === 'relay' ? t('machine.card.transportRelay') : t('machine.card.transportDirect'))
+                                : null,
+                            beaconAdvisory?.tooltip || null,
+                            fleetDivergence,
+                        ].filter(Boolean).join('\n')
 
                         return (
                             <div
@@ -348,56 +395,29 @@ export default function MachinesPage() {
                                                     {typeof machine.system?.cpus === 'number' && typeof machine.system?.totalMem === 'number' && (
                                                         <span className="opacity-30">·</span>
                                                     )}
-                                                    {machine.system && <span>{typeof machine.system.uptime === 'number' ? formatUptime(machine.system.uptime) : t('machine.card.runtimePolling')}</span>}
+                                                    {machine.system && <span>{typeof machine.system.uptime === 'number' ? formatUptime(machine.system.uptime) : '—'}</span>}
                                                 </div>
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-1.5 shrink-0">
-                                            {machine.p2p?.available && (
-                                                <ConnectionBadge connection={{
-                                                    status: machine.p2p.state,
-                                                    label: 'P2P',
-                                                    peers: machine.p2p.peers,
-                                                }} />
+                                            {/* The one warning chip a user can act on: a relayed link is
+                                                slower, and fixing the network makes it direct. Direct links
+                                                show nothing. */}
+                                            {connState === 'connected' && transport === 'relay' && (
+                                                <Tooltip content={t('machine.card.transportRelay')}>
+                                                    <span className="inline-flex items-center gap-1 text-4xs font-semibold px-[5px] py-px rounded bg-orange-500/[0.08] border border-orange-500/20 text-orange-400">
+                                                        <IconShuffle size={10} /> {t('machine.card.slowLink')}
+                                                    </span>
+                                                </Tooltip>
                                             )}
-                                            {/* Transport type badge */}
-                                            {connState === 'connected' && transport && transport !== 'unknown' && (
-                                                <span
-                                                    className={`text-4xs font-semibold px-[5px] py-px rounded ${
-                                                        transport === 'relay'
-                                                            ? 'bg-orange-500/[0.08] border border-orange-500/20 text-orange-400'
-                                                            : 'bg-green-500/[0.08] border border-green-500/20 text-green-500'
-                                                    }`}
-                                                    title={transport === 'relay' ? t('machine.card.transportRelay') : t('machine.card.transportDirect')}
-                                                >
-                                                    {transport === 'relay' ? <><IconShuffle size={10} /> {t('machine.card.transportRelayShort')}</> : <><IconLink size={10} /> {t('machine.card.transportDirectShort')}</>}
-                                                </span>
-                                            )}
-                                            {/*
-                                              seqscribe Beacon advisory (§7.1): "behind N" / "sole copy".
-                                              Renders nothing when caught up, when no board has arrived, or
-                                              when the board is stale — so a machine with healthy replication
-                                              (and every WS-only machine, since beacon rides P2P alone) looks
-                                              exactly as it does today.
-                                            */}
-                                            <BeaconAdvisoryBadge beacon={machineBeacon} />
-                                            <FleetStatusPeerViewBadge
-                                                peer={fleetPeerEntry}
-                                                wsOnline={isOnline}
-                                                wsSessionCount={fleetComparableCount}
-                                            />
-                                            <div
-                                                className="w-2 h-2 rounded-full"
-                                                style={{
-                                                    background: machineDotColor,
-                                                    boxShadow: connState === 'connected' ? '0 0 8px rgba(34,197,94,0.4)' : 'none',
-                                                    animation: connState === 'connected' ? 'pulse-dot 2s infinite' : 'none',
-                                                }}
+                                            <MachineStatusDot
+                                                status={machineStatus}
+                                                tooltip={machineStatusTooltip}
                                             />
                                         </div>
                                     </div>
 
-                                    {/* Connection status line (blocked / connecting) */}
+                                    {/* Connection failed — the one state with an action (Reconnect). */}
                                     {isBlocked ? (
                                         <div className="flex items-center justify-between gap-2 mt-2.5 px-2.5 py-1.5 rounded-lg bg-red-500/[0.06] border border-red-500/15">
                                             <span className="text-2xs font-medium text-red-400">{t('machine.card.connectionFailed')}</span>
@@ -410,12 +430,7 @@ export default function MachinesPage() {
                                                 </button>
                                             )}
                                         </div>
-                                    ) : isConnecting && (
-                                        <div className="flex items-center gap-2 mt-2.5 px-2.5 py-1.5 rounded-lg bg-bg-secondary border border-border-subtle">
-                                            <LoadingSpinner size={12} thickness={2} />
-                                            <span className="text-2xs font-medium text-text-secondary">{t('machine.card.connecting')}</span>
-                                        </div>
-                                    )}
+                                    ) : null}
 
                                     {/* System Stats (mini bars) — always shown for consistent row height */}
                                     <div className="flex gap-3 mt-3 mb-2.5">

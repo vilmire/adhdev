@@ -59,6 +59,8 @@ interface DashboardMobileChatModeProps {
     initialDataLoaded?: boolean
     onShowAllHiddenConversations: () => void
     onHideConversation?: (conversation: ActiveConversation) => void
+    /** Restores one hidden conversation (mobile hide → Undo toast). */
+    onShowHiddenConversation?: (conversation: ActiveConversation) => void
     onOpenMeshGraph?: (conversation: ActiveConversation) => void
     onOpenNewSession?: () => void
     liveSessionInboxState: Map<string, LiveSessionInboxState>
@@ -94,6 +96,7 @@ export default function DashboardMobileChatMode({
     initialDataLoaded = true,
     onShowAllHiddenConversations,
     onHideConversation,
+    onShowHiddenConversation,
     onOpenMeshGraph,
     onOpenNewSession,
     liveSessionInboxState,
@@ -330,10 +333,7 @@ export default function DashboardMobileChatMode({
                     onOpenRecent={handleOpenRecent}
                     onOpenMachineDetails={() => navigate(`/machines/${selectedMachineEntry.id}`)}
                     onMachineUpgrade={() => machineActions.handleMachineUpgrade(selectedMachineEntry.id)}
-                    onLaunchDetectedIde={(ideType, opts) => machineActions.handleLaunchDetectedIde(selectedMachineEntry.id, ideType, opts)}
-                    onAddWorkspace={(path, opts) => machineActions.handleAddWorkspace(selectedMachineEntry.id, path, opts)}
                     onBrowseDirectory={(path) => machineActions.handleBrowseDirectory(selectedMachineEntry.id, path)}
-                    onLaunchWorkspaceProvider={(kind, providerType, opts) => machineActions.handleLaunchWorkspaceProvider(selectedMachineEntry.id, kind, providerType, opts)}
                     onListSavedSessions={(providerType) => machineActions.handleListSavedSessions(selectedMachineEntry.id, providerType)}
                 />
             ) : (
@@ -351,6 +351,7 @@ export default function DashboardMobileChatMode({
                     onOpenConversation={navigation.openConversation}
                     onShowAllHidden={onShowAllHiddenConversations}
                     onHideConversation={onHideConversation}
+                    onShowHiddenConversation={onShowHiddenConversation}
                     onOpenMeshGraph={onOpenMeshGraph}
                     onStopCli={onStopCli}
                     onOpenNewSession={onOpenNewSession}

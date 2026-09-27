@@ -228,6 +228,13 @@ export function countDaemonFleetSessions(
 /** Per-platform icon — now rendered as SVG at component level, kept for compat */
 export const PLATFORM_ICONS: Record<string, string> = {}
 
+/** OS display names ("Online · macOS"); unknown platforms pass through. */
+export const PLATFORM_LABELS: Record<string, string> = {
+    darwin: 'macOS',
+    linux: 'Linux',
+    win32: 'Windows',
+}
+
 // ─── Display Name ────────────────────────────────
 
 /**

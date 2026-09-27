@@ -4,8 +4,9 @@
  * Workspaces are handled by the dedicated Workspace tab — this view stays
  * focused on the host (uptime, memory) and session counts.
  */
+import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { formatUptime, formatBytes } from '../../utils/daemon-utils'
+import { formatUptime, formatBytes, PLATFORM_LABELS } from '../../utils/daemon-utils'
 import ProgressBar from '../../components/ProgressBar'
 import StatCard from '../../components/StatCard'
 import Card from '../../components/Card'
@@ -112,15 +113,58 @@ function PlanQuotaCard({ machine }: { machine: MachineData }) {
     )
 }
 
+export type MachineDiagnosticsSection = 'hosted-runtimes' | 'logs'
+
 interface OverviewTabProps {
     machine: MachineData
     ideSessions: IdeSessionEntry[]
     cliSessions: CliSessionEntry[]
     acpSessions: AcpSessionEntry[]
+    daemonVersion?: string
+    /** Hosted runtimes panel — mounted only once its disclosure opens. */
+    renderHostedRuntimes?: () => ReactNode
+    /** Daemon logs panel — mounted only once its disclosure opens. */
+    renderLogs?: () => ReactNode
+    /** Open this diagnostics section on first render (old deep links). */
+    initialDiagnostics?: MachineDiagnosticsSection | null
+}
+
+/**
+ * A disclosure whose body mounts only once opened (and then stays mounted so
+ * polling panels keep their state). Troubleshooting views are opt-in: they
+ * fetch nothing until someone actually looks.
+ */
+function LazyDisclosure({ title, defaultOpen = false, testId, children }: {
+    title: string
+    defaultOpen?: boolean
+    testId?: string
+    children: () => ReactNode
+}) {
+    const [open, setOpen] = useState(defaultOpen)
+    const [mounted, setMounted] = useState(defaultOpen)
+    return (
+        <details
+            className="group rounded-xl border border-border-subtle bg-bg-glass"
+            open={open}
+            data-testid={testId}
+            onToggle={(event) => {
+                const next = (event.currentTarget as HTMLDetailsElement).open
+                setOpen(next)
+                if (next) setMounted(true)
+            }}
+        >
+            <summary className="flex cursor-pointer select-none list-none items-center gap-2 px-4 py-3 text-sm font-semibold text-text-primary [&::-webkit-details-marker]:hidden">
+                <span className="inline-block text-text-muted transition-transform group-open:rotate-90" aria-hidden>▸</span>
+                {title}
+            </summary>
+            {mounted && <div className="px-4 pb-4">{children()}</div>}
+        </details>
+    )
 }
 
 export default function OverviewTab({
-    machine, ideSessions, cliSessions, acpSessions,
+    machine, ideSessions, cliSessions, acpSessions, daemonVersion,
+    renderHostedRuntimes, renderLogs, initialDiagnostics = null,
 }: OverviewTabProps) {
     const { t } = useTranslation('common')
     const hasRuntimeStats = typeof machine.uptime === 'number'
@@ -156,11 +200,61 @@ export default function OverviewTab({
             {/* Plan quota — self-hiding when this machine has reported none. */}
             <PlanQuotaCard machine={machine} />
 
+            {/* The host facts the page header used to carry. */}
+            <Card padding="lg" className="mb-5">
+                <div className="text-2xs text-text-muted font-semibold uppercase tracking-wider mb-3">
+                    {t('machine.overview.aboutMachine')}
+                </div>
+                <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-xs sm:grid-cols-2" data-testid="machine-about">
+                    <AboutRow label={t('machine.overview.hostname')} value={machine.hostname} />
+                    <AboutRow label={t('machine.overview.platform')} value={[PLATFORM_LABELS[machine.platform] || machine.platform, machine.arch].filter(Boolean).join(' · ')} />
+                    {machine.cpus > 0 && <AboutRow label={t('machine.overview.cores')} value={String(machine.cpus)} />}
+                    {daemonVersion && <AboutRow label={t('machine.overview.daemonVersion')} value={`v${daemonVersion}`} />}
+                    {machine.p2p?.available && (
+                        <AboutRow
+                            label={t('machine.overview.p2p')}
+                            value={machine.p2p.state === 'connected' ? t('machine.detail.p2pConnected') : machine.p2p.state}
+                        />
+                    )}
+                </dl>
+            </Card>
+
+            {(renderHostedRuntimes || renderLogs) && (
+                <details className="group mb-5" data-testid="machine-diagnostics" open={initialDiagnostics ? true : undefined}>
+                    <summary className="mb-3 flex cursor-pointer select-none list-none items-center gap-2 text-2xs font-semibold uppercase tracking-wider text-text-muted [&::-webkit-details-marker]:hidden">
+                        <span className="inline-block transition-transform group-open:rotate-90" aria-hidden>▸</span>
+                        {t('machine.overview.diagnostics')}
+                    </summary>
+                    <div className="flex flex-col gap-3">
+                        {renderHostedRuntimes && (
+                            <LazyDisclosure title={t('machine.detail.tabHostedRuntimes')} defaultOpen={initialDiagnostics === 'hosted-runtimes'} testId="machine-diagnostics-hosted-runtimes">
+                                {renderHostedRuntimes}
+                            </LazyDisclosure>
+                        )}
+                        {renderLogs && (
+                            <LazyDisclosure title={t('machine.detail.tabLogs')} defaultOpen={initialDiagnostics === 'logs'} testId="machine-diagnostics-logs">
+                                {renderLogs}
+                            </LazyDisclosure>
+                        )}
+                    </div>
+                </details>
+            )}
+
             {/*
               * Workspaces live in the dedicated Workspace tab. Keeping a copy
               * here in Overview duplicated the surface and made the System
               * column feel like it owned Workspaces; both were the same data.
               */}
+        </div>
+    )
+}
+
+function AboutRow({ label, value }: { label: string; value: string }) {
+    if (!value) return null
+    return (
+        <div className="flex min-w-0 items-baseline justify-between gap-3 sm:justify-start">
+            <dt className="shrink-0 text-text-muted sm:w-28">{label}</dt>
+            <dd className="m-0 min-w-0 truncate text-text-primary">{value}</dd>
         </div>
     )
 }

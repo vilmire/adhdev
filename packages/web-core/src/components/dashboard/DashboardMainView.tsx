@@ -704,6 +704,7 @@ export default function DashboardMainView({
                     initialDataLoaded={initialDataLoaded}
                     onShowAllHiddenConversations={onShowAllHiddenConversations}
                     onHideConversation={onHideConversation}
+                    onShowHiddenConversation={handleShowHiddenConversationWithRestore}
                     onOpenMeshGraph={handleOpenMeshGraph}
                     onOpenNewSession={openNewSession}
                     liveSessionInboxState={liveSessionInboxState}

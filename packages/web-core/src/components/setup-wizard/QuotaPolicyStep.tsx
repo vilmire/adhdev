@@ -23,8 +23,9 @@
  *    (percent 0..100, durations >= 0) are enforced here so the user sees a
  *    field-level message instead of a rejected round-trip.
  */
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { InfoTip } from '../ui/InfoTip'
 import type { RepoMeshQuotaRoutingPolicy } from '@adhdev/daemon-core'
 
 /** Editable draft — every field a string so a cleared input stays cleared. */
@@ -126,12 +127,19 @@ export interface QuotaPolicyStepProps {
     error?: string | null
     /** Emits the overrides object; `{}` clears every override. */
     onSave: (quotaRouting: RepoMeshQuotaRoutingPolicy) => void
+    /** The host renders its own title/description (e.g. a collapsible Section). */
+    hideHeader?: boolean
 }
 
 const inputCls = 'w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-2.5 py-1.5 text-xs'
 const errorInputCls = 'w-full rounded-lg border border-red-500/60 bg-bg-secondary text-text-primary px-2.5 py-1.5 text-xs'
 
-export default function QuotaPolicyStep({ quotaRouting, saving, error, onSave }: QuotaPolicyStepProps) {
+/**
+ * Each field saves on its own when it loses focus (single-field autosave — no
+ * Save button to forget). An invalid value shows its error inline and is not
+ * sent; a blank field means "use the default".
+ */
+export default function QuotaPolicyStep({ quotaRouting, saving, error, onSave, hideHeader = false }: QuotaPolicyStepProps) {
     const { t } = useTranslation('common')
     const [draft, setDraft] = useState<QuotaPolicyDraft>(() => policyToDraft(quotaRouting))
 
@@ -155,14 +163,25 @@ export default function QuotaPolicyStep({ quotaRouting, saving, error, onSave }:
         [draft, quotaRouting],
     )
 
-    const save = useCallback(() => {
-        if (hasErrors) return
+    // Follow the persisted policy when it changes underneath (another tab, a
+    // reload after save) unless the user is mid-edit.
+    const editingRef = useRef(false)
+    const incomingKey = JSON.stringify(policyToOverrides(quotaRouting))
+    useEffect(() => {
+        if (!editingRef.current) setDraft(policyToDraft(quotaRouting))
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [incomingKey])
+
+    const commit = useCallback(() => {
+        editingRef.current = false
+        if (hasErrors || !dirty) return
         onSave(quotaPolicyDraftToOverrides(draft))
-    }, [draft, hasErrors, onSave])
+    }, [dirty, draft, hasErrors, onSave])
 
     const resetToDefaults = useCallback(() => {
         setDraft(policyToDraft(null))
-    }, [])
+        onSave({})
+    }, [onSave])
 
     const fields: Array<{ key: FieldKey; label: string; hint: string; placeholder: number; unit: string }> = [
         {
@@ -211,57 +230,55 @@ export default function QuotaPolicyStep({ quotaRouting, saving, error, onSave }:
 
     return (
         <div className="flex flex-col gap-3">
-            <div>
-                <h3 className="text-sm font-semibold text-text-primary">{t('setupWizard.quotaPolicy.title')}</h3>
-                <p className="mt-1 text-2xs leading-relaxed text-text-muted">
-                    {t('setupWizard.quotaPolicy.description')}
-                </p>
-            </div>
+            {!hideHeader && (
+                <h3 className="flex items-center gap-1 text-sm font-semibold text-text-primary">
+                    {t('setupWizard.quotaPolicy.title')}
+                    <InfoTip content={t('setupWizard.quotaPolicy.description')} />
+                </h3>
+            )}
 
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                 {fields.map(f => {
                     const fieldError = errors[f.key]
+                    const inputId = `quota-policy-${f.key}`
                     return (
-                        <label key={f.key} className="flex flex-col gap-1">
-                            <span className="text-2xs text-text-muted">
-                                {f.label}{f.unit ? ` (${f.unit})` : ''}
+                        <div key={f.key} className="flex flex-col gap-1">
+                            <span className="flex items-center gap-1 text-2xs text-text-muted">
+                                <label htmlFor={inputId}>{f.label}{f.unit ? ` (${f.unit})` : ''}</label>
+                                <InfoTip content={f.hint} size={12} />
                             </span>
                             <input
+                                id={inputId}
                                 type="number"
                                 inputMode="decimal"
                                 className={fieldError ? errorInputCls : inputCls}
                                 value={draft[f.key]}
                                 placeholder={String(f.placeholder)}
-                                onChange={e => update(f.key, e.target.value)}
+                                aria-invalid={fieldError ? true : undefined}
+                                onChange={e => { editingRef.current = true; update(f.key, e.target.value) }}
+                                onBlur={commit}
+                                onKeyDown={e => { if (e.key === 'Enter') commit() }}
                             />
-                            <span className={`text-3xs leading-snug ${fieldError ? 'text-red-400' : 'text-text-muted'}`}>
-                                {fieldError ? t(`setupWizard.quotaPolicy.errors.${fieldError}`) : f.hint}
-                            </span>
-                        </label>
+                            {fieldError && (
+                                <span className="text-3xs leading-snug text-red-400">{t(`setupWizard.quotaPolicy.errors.${fieldError}`)}</span>
+                            )}
+                        </div>
                     )
                 })}
             </div>
-
-            <p className="text-3xs leading-relaxed text-text-muted">
-                {t('setupWizard.quotaPolicy.blankMeansDefault')}
-            </p>
 
             {error ? (
                 <p className="text-2xs text-red-400">{error}</p>
             ) : null}
 
             <div className="flex items-center gap-2">
-                <button type="button" className="btn btn-secondary btn-sm" onClick={resetToDefaults}>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={resetToDefaults} disabled={!!saving}>
                     {t('setupWizard.quotaPolicy.useDefaults')}
                 </button>
-                <button
-                    type="button"
-                    className="btn btn-primary btn-sm ml-auto"
-                    onClick={save}
-                    disabled={!!saving || hasErrors || !dirty}
-                >
-                    {saving ? t('setupWizard.quotaPolicy.saving') : t('setupWizard.quotaPolicy.save')}
-                </button>
+                <span className="flex items-center gap-1 text-3xs text-text-muted">
+                    {saving ? t('setupWizard.quotaPolicy.saving') : t('setupWizard.quotaPolicy.blankMeansDefaultShort')}
+                    {!saving && <InfoTip content={t('setupWizard.quotaPolicy.blankMeansDefault')} size={12} />}
+                </span>
             </div>
         </div>
     )

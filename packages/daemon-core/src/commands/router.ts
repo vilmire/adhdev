@@ -63,6 +63,8 @@ import { meshNodeStateSpecs } from './high-family/mesh-node-state.js';
 import { MeshNodeGitStateStore } from '../mesh/mesh-node-git-state.js';
 import { MeshNodeGitRefresher } from '../mesh/mesh-node-git-refresher.js';
 import { MeshNodeStatePusher, readMeshStateSubscription } from '../mesh/mesh-node-state-pusher.js';
+import { createFileMeshNodeStatePushPersistence } from '../mesh/mesh-node-state-push-store.js';
+import { handshakeMeshMemberDaemon, restoreMemberNodeStatePush, type MeshNodeStateLifecyclePort } from './mesh-node-state-lifecycle.js';
 import {
     collectMemberWorktreeNodes,
     persistRemoteWorktreeNodeToConfig,
@@ -556,11 +558,14 @@ export class DaemonCommandRouter {
     /** Member side: pushes this daemon's node git state to the coordinators that probed it. */
     readonly meshNodeStatePusher: MeshNodeStatePusher;
     /**
-     * Per-process id this daemon returns on every member push ack. A member that
-     * sees it change knows the coordinator restarted and re-reports the worktree
-     * nodes it owns once (member worktree reconciliation).
+     * Per-process id of this daemon. Returned on every member push ack (a member
+     * that sees it change knows the coordinator restarted and re-reports the
+     * worktree nodes it owns once — member worktree reconciliation), and carried
+     * as `daemonBootId` in this daemon's own runtime summary (a coordinator that
+     * sees it change knows this member restarted).
      */
     readonly meshCoordinatorBootId: string = randomUUID();
+    private meshNodeStatePushRestore: Promise<number> | null = null;
 
     constructor(deps: CommandRouterDeps) {
         this.deps = deps;
@@ -588,7 +593,9 @@ export class DaemonCommandRouter {
         this.meshNodeStatePusher = new MeshNodeStatePusher({
             dispatch: deps.dispatchMeshCommand,
             readGit: (workspace, opts) => getGitRepoStatus(workspace, { refreshUpstream: opts.refreshUpstream }) as unknown as Promise<Record<string, unknown> | null>,
-            readRuntime: async () => readLocalMeshNodeRuntime(this.deps),
+            readRuntime: async () => readLocalMeshNodeRuntime(this.deps, this.meshCoordinatorBootId),
+            // The subscription set survives a restart, so the new process pushes at once.
+            persistence: createFileMeshNodeStatePushPersistence(),
             // Worktree nodes this daemon owns on the mesh (inline view ∪ config), reported
             // once per coordinator boot so the coordinator can adopt any it lost.
             readWorktreeNodes: async (meshId) => {
@@ -875,6 +882,7 @@ export class DaemonCommandRouter {
             updateInlineMeshNode: this.updateInlineMeshNode.bind(this),
             seedRemoteClonedWorktreeNode: this.seedRemoteClonedWorktreeNode.bind(this),
             persistRemoteClonedWorktreeNode: this.persistRemoteClonedWorktreeNode.bind(this),
+            noteMeshMemberRestarting: this.noteMeshMemberRestarting.bind(this),
             removeInlineMeshNode: this.removeInlineMeshNode.bind(this),
             tombstoneRemovedMeshNode: this.tombstoneRemovedMeshNode.bind(this),
             normalizeMeshSessionCleanupMode: this.normalizeMeshSessionCleanupMode.bind(this),
@@ -1613,6 +1621,64 @@ export class DaemonCommandRouter {
 
     async resumePendingRefineJobsOnStartup(): Promise<void> {
         return resumePendingRefineJobsOnStartup(this);
+    }
+
+    private meshNodeStateLifecyclePort(): MeshNodeStateLifecyclePort {
+        return {
+            selfDaemonId: typeof this.deps.statusInstanceId === 'string' ? this.deps.statusInstanceId : undefined,
+            store: this.meshNodeGitState,
+            refresher: this.meshNodeGitRefresher,
+            pusher: this.meshNodeStatePusher,
+            listKnownMeshes: async () => {
+                const byId = new Map<string, any>();
+                for (const [meshId, mesh] of this.inlineMeshCache) byId.set(meshId, mesh);
+                try {
+                    const { listMeshesReadOnly } = await import('../config/mesh-config.js');
+                    for (const mesh of listMeshesReadOnly()) if (mesh?.id && !byId.has(mesh.id)) byId.set(mesh.id, mesh);
+                } catch { /* no local config */ }
+                return [...byId.values()];
+            },
+            listMeshHostRecords: () => listMeshHostRecords(),
+        };
+    }
+
+    /**
+     * Boot (member side): restore this daemon's node-state push subscriptions
+     * (persisted set + memberships derived from mesh host records). Idempotent.
+     * The pushes themselves go out on noteMeshTransportReady / a peer open, or
+     * on the pusher's next check tick when the host wires neither.
+     */
+    resumeMeshNodeStatePushOnStartup(): Promise<number> {
+        if (!this.meshNodeStatePushRestore) {
+            this.meshNodeStatePushRestore = restoreMemberNodeStatePush(this.meshNodeStateLifecyclePort()).catch(() => 0);
+        }
+        return this.meshNodeStatePushRestore;
+    }
+
+    /** Host wiring: the mesh transport is up — push restored subscriptions now. */
+    noteMeshTransportReady(): void {
+        void this.resumeMeshNodeStatePushOnStartup().then(() => { this.meshNodeStatePusher.pushNow(); });
+    }
+
+    /**
+     * Host wiring: the mesh link to peer daemon `daemonId` opened (first connect
+     * or reconnect). Member side: push to it if it coordinates any of our nodes.
+     * Coordinator side: handshake the nodes it serves — a restarted member lost
+     * its push subscription, so do not wait for its held state to go stale.
+     */
+    noteMeshPeerOpened(daemonId: string): void {
+        if (typeof daemonId !== 'string' || !daemonId.trim()) return;
+        void this.resumeMeshNodeStatePushOnStartup().then(() => { this.meshNodeStatePusher.pushNow(daemonId); });
+        void handshakeMeshMemberDaemon(this.meshNodeStateLifecyclePort(), daemonId, 'reconnect').catch(() => 0);
+    }
+
+    /**
+     * This coordinator is restarting / upgrading member daemon `daemonId`
+     * (restart_daemon_node forwarded to it): its held build is pending until the
+     * new process reports.
+     */
+    noteMeshMemberRestarting(daemonId: string): Promise<number> {
+        return handshakeMeshMemberDaemon(this.meshNodeStateLifecyclePort(), daemonId, 'restart').catch(() => 0);
     }
 
     /**

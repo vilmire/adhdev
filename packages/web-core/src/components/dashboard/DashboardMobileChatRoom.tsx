@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import type { DaemonData } from '../../types'
-import { IconChevronLeft, IconMesh, IconMonitor, IconScroll, IconX } from '../Icons'
+import { IconChevronLeft, IconX } from '../Icons'
+import ConversationActionsMenu from './ConversationActionsMenu'
 import PaneGroupContent from './PaneGroupContent'
 import ConversationMetaChips from './ConversationMetaChips'
 import type { ActiveConversation, CliConversationViewMode } from './types'
@@ -60,8 +61,6 @@ export default function DashboardMobileChatRoom({
     const interactivePrompt = useInteractivePrompt(getInteractivePromptScopeId(selectedConversation))
     const isCli = isCliConv(selectedConversation) && !isAcp
     const isCliTerminal = isCli && cliViewMode === 'terminal'
-    const meshGraphAvailable = !!selectedConversation.daemonId
-        && !!(selectedConversation.coordinator?.meshId || selectedConversation.settings?.meshCoordinatorFor)
     const headerPaddingClass = isStandalone
         ? 'px-4 pt-3.5 pb-2.5'
         : 'px-4 pt-[calc(14px+env(safe-area-inset-top,0px))] pb-2.5'
@@ -102,6 +101,7 @@ export default function DashboardMobileChatRoom({
                             onClick={() => { void onStopCli(selectedConversation) }}
                             className="btn btn-secondary btn-sm"
                             title={t('cliStop.stopProcess')}
+                            aria-label={t('cliStop.stopProcess')}
                             style={{
                                 color: 'var(--status-error, #ef4444)',
                                 borderColor: 'color-mix(in srgb, var(--status-error, #ef4444) 25%, transparent)',
@@ -110,25 +110,13 @@ export default function DashboardMobileChatRoom({
                             <IconX size={14} />
                         </button>
                     )}
-                    {meshGraphAvailable && onOpenMeshGraph && (
-                        <button
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => onOpenMeshGraph(selectedConversation)}
-                            type="button"
-                            title={t('mesh.openLiveGraph')}
-                            aria-label={t('mesh.openLiveGraph')}
-                        >
-                            <IconMesh size={14} />
-                        </button>
-                    )}
-                    <button className="btn btn-secondary btn-sm" onClick={() => onOpenHistory(selectedConversation)} type="button">
-                        <IconScroll size={14} />
-                    </button>
-                    {!isAcp && !isCli && (
-                        <button className="btn btn-secondary btn-sm" onClick={() => onOpenRemote(selectedConversation)} type="button">
-                            <IconMonitor size={14} />
-                        </button>
-                    )}
+                    <ConversationActionsMenu
+                        conversation={selectedConversation}
+                        onOpenHistory={onOpenHistory}
+                        onOpenRemote={onOpenRemote}
+                        onOpenMeshGraph={onOpenMeshGraph}
+                        iconSize={14}
+                    />
                 </div>
             </div>
             <div className="flex-1 min-h-0 flex flex-col bg-bg-primary relative">

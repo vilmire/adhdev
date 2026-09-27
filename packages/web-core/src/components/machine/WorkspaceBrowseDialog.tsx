@@ -13,6 +13,12 @@ interface WorkspaceBrowseDialogProps {
     busy?: boolean
     error?: string
     confirmLabel?: string
+    /**
+     * Render as an in-flow panel (inside another dialog) instead of a modal on
+     * top of it — the New Session dialog uses this so picking a folder never
+     * stacks a second modal.
+     */
+    inline?: boolean
     onClose: () => void
     onNavigate: (path: string) => void
     onConfirm: (path: string) => void
@@ -26,6 +32,7 @@ export default function WorkspaceBrowseDialog({
     busy = false,
     error = '',
     confirmLabel,
+    inline = false,
     onClose,
     onNavigate,
     onConfirm,
@@ -41,23 +48,18 @@ export default function WorkspaceBrowseDialog({
     const parentPath = getParentBrowsePath(currentPath)
     const trimmedPathInput = pathInput.trim()
 
-    return (
-        <ModalPortal>
-        <div
-            className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto bg-black/60 backdrop-blur-[2px] px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="workspace-browse-title"
-        >
-            <div className="w-full max-w-2xl max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] sm:max-h-[min(86vh,720px)] rounded-[24px] sm:rounded-2xl border border-border-subtle bg-bg-secondary shadow-xl overflow-hidden flex flex-col">
+    const panelBody = (
+        <>
                 <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-border-subtle">
                     <div className="min-w-0">
                         <h2 id="workspace-browse-title" className="m-0 text-base font-semibold text-text-primary">
                             {title}
                         </h2>
-                        <p className="m-0 mt-1 text-xs leading-relaxed text-text-muted">
-                            {description}
-                        </p>
+                        {description && !inline && (
+                            <p className="m-0 mt-1 text-xs leading-relaxed text-text-muted">
+                                {description}
+                            </p>
+                        )}
                     </div>
                     <button
                         type="button"
@@ -158,6 +160,32 @@ export default function WorkspaceBrowseDialog({
                         {resolvedConfirmLabel}
                     </button>
                 </div>
+        </>
+    )
+
+    if (inline) {
+        return (
+            <div
+                className="mt-3 flex max-h-[min(60vh,440px)] flex-col overflow-hidden rounded-xl border border-border-subtle bg-bg-secondary"
+                role="region"
+                aria-labelledby="workspace-browse-title"
+                data-testid="workspace-browse-inline"
+            >
+                {panelBody}
+            </div>
+        )
+    }
+
+    return (
+        <ModalPortal>
+        <div
+            className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto bg-black/60 backdrop-blur-[2px] px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="workspace-browse-title"
+        >
+            <div className="w-full max-w-2xl max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] sm:max-h-[min(86vh,720px)] rounded-[24px] sm:rounded-2xl border border-border-subtle bg-bg-secondary shadow-xl overflow-hidden flex flex-col">
+                {panelBody}
             </div>
         </div>
         </ModalPortal>

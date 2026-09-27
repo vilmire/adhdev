@@ -5,6 +5,8 @@ import type {
     AutoApproveModesConfig,
 } from '@adhdev/daemon-core'
 import LaunchConfirmDialog from '../machine/LaunchConfirmDialog'
+import { InfoTip } from '../ui/InfoTip'
+import { Switch } from '../ui/Switch'
 import { deriveAutoApproveModeRisk } from '../../utils/auto-approve-modes'
 
 interface AutoApproveModeSelectorProps {
@@ -38,9 +40,6 @@ export function AutoApproveModeSelector({
     const { t } = useTranslation()
     return (
         <div className="space-y-2">
-            <div className="text-2xs text-text-muted">
-                {t('newSession.autoApproveModeDescription')}
-            </div>
             <div className="grid grid-cols-1 gap-2" role="radiogroup" aria-label={t('newSession.autoApproveMode')}>
                 {config.modes.map(mode => {
                     const effectiveRisk = deriveAutoApproveModeRisk(mode)
@@ -82,22 +81,18 @@ export function LegacyAutoApproveToggle({
 }: LegacyAutoApproveToggleProps) {
     const { t } = useTranslation()
     return (
-        <button
-            type="button"
-            role="switch"
-            aria-checked={checked}
-            className="flex w-full items-center justify-between gap-3 rounded-xl border border-border-subtle bg-bg-secondary/40 px-3.5 py-3 text-left"
-            onClick={() => onChange(!checked)}
-            disabled={disabled}
-        >
-            <span>
-                <span className="block text-sm font-semibold text-text-primary">{t('newSession.autoApproveLegacy')}</span>
-                <span className="mt-0.5 block text-2xs text-text-muted">{t('newSession.autoApproveLegacyDescription')}</span>
+        <div className="flex w-full items-center justify-between gap-3 rounded-xl border border-border-subtle bg-bg-secondary/40 px-3.5 py-3">
+            <span className="flex min-w-0 items-center gap-1">
+                <span id="legacy-auto-approve-label" className="text-sm font-semibold text-text-primary">{t('newSession.autoApproveLegacy')}</span>
+                <InfoTip content={t('newSession.autoApproveLegacyDescription')} />
             </span>
-            <span className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? 'bg-accent-primary' : 'bg-surface-secondary'}`}>
-                <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
-            </span>
-        </button>
+            <Switch
+                checked={checked}
+                onChange={onChange}
+                disabled={disabled}
+                aria-labelledby="legacy-auto-approve-label"
+            />
+        </div>
     )
 }
 

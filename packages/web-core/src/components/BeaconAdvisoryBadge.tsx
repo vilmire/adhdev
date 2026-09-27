@@ -67,12 +67,28 @@ export interface BeaconAdvisoryBadgeProps {
     className?: string
 }
 
-export function BeaconAdvisoryBadge({ beacon, className }: BeaconAdvisoryBadgeProps) {
-    const { t } = useTranslation()
+export interface BeaconAdvisory {
+    behind: number
+    soleCopyCount: number
+    /** Number of topics with a confirmed sole copy (badge shows when > 0). */
+    soleCopyTopics: number
+    deferred: boolean
+    /** Multi-line plain-language explanation (tooltip text). */
+    tooltip: string
+}
+
+type TFn = (key: string, opts?: Record<string, unknown>) => string
+
+/**
+ * The advisory as data — shared by the badge below and the machine card's
+ * single status dot (which folds it into its tooltip instead of adding chips).
+ * Returns null when there is nothing worth saying (caught up, stale, absent).
+ */
+export function buildBeaconAdvisory(beacon: BeaconDiagnosticsSummary | undefined, t: TFn, now: number = Date.now()): BeaconAdvisory | null {
     if (!beacon) return null
 
     const boardAtMs = beacon.boardAt ? Date.parse(beacon.boardAt) : Number.NaN
-    const boardAgeMs = Number.isNaN(boardAtMs) ? null : Math.max(0, Date.now() - boardAtMs)
+    const boardAgeMs = Number.isNaN(boardAtMs) ? null : Math.max(0, now - boardAtMs)
     // No board, or one older than the daemon's own TTL. An idle daemon's board
     // is SUPPOSED to age (the beacon only pushes after an append), so this is
     // "we don't have a fresh answer", not "something is wrong" — and it is why
@@ -95,7 +111,7 @@ export function BeaconAdvisoryBadge({ beacon, className }: BeaconAdvisoryBadgePr
     // (this daemon's own board), so "last synced" always agrees with whether
     // the badge is stale enough to have been suppressed already.
     const lastSeenMs = worstPeer?.lastSeen ? Date.parse(worstPeer.lastSeen) : Number.NaN
-    const lastSyncedMinutes = Number.isNaN(lastSeenMs) ? null : Math.max(0, Math.round((Date.now() - lastSeenMs) / 60_000))
+    const lastSyncedMinutes = Number.isNaN(lastSeenMs) ? null : Math.max(0, Math.round((now - lastSeenMs) / 60_000))
     const lastSyncedTooltip =
         lastSyncedMinutes === null
             ? null
@@ -110,6 +126,7 @@ export function BeaconAdvisoryBadge({ beacon, className }: BeaconAdvisoryBadgePr
                           ? t('machine.card.beacon.lastSyncedBehindPart', { count: behind })
                           : '',
               })
+    const soleCopyCount = soleCopies.reduce((sum, c) => sum + c.unreplicated, 0)
     const tooltip = [
         behind > 0
             ? t('machine.card.beacon.behindTooltip', { count: behind })
@@ -117,8 +134,8 @@ export function BeaconAdvisoryBadge({ beacon, className }: BeaconAdvisoryBadgePr
         soleCopies.length > 0
             ? t('machine.card.beacon.soleCopyTooltip', {
                   // Pluralize on the record count the sentence talks about.
-                  count: soleCopies.reduce((sum, c) => sum + c.unreplicated, 0),
-                  entries: soleCopies.reduce((sum, c) => sum + c.unreplicated, 0),
+                  count: soleCopyCount,
+                  entries: soleCopyCount,
                   topics: soleCopies.length,
               })
             : null,
@@ -129,6 +146,14 @@ export function BeaconAdvisoryBadge({ beacon, className }: BeaconAdvisoryBadgePr
     ]
         .filter(Boolean)
         .join('\n')
+    return { behind, soleCopyCount, soleCopyTopics: soleCopies.length, deferred, tooltip }
+}
+
+export function BeaconAdvisoryBadge({ beacon, className }: BeaconAdvisoryBadgeProps) {
+    const { t } = useTranslation()
+    const advisory = buildBeaconAdvisory(beacon, t)
+    if (!advisory) return null
+    const { behind, soleCopyCount, soleCopyTopics, deferred, tooltip } = advisory
 
     return (
         <span className={cn('inline-flex items-center gap-1', className)} title={tooltip}>
@@ -140,13 +165,13 @@ export function BeaconAdvisoryBadge({ beacon, className }: BeaconAdvisoryBadgePr
                     {t('machine.card.beacon.behindLabel', { count: behind })}
                 </span>
             )}
-            {soleCopies.length > 0 && (
+            {soleCopyTopics > 0 && (
                 <span
                     className="text-4xs font-semibold px-[5px] py-px rounded bg-orange-500/[0.08] border border-orange-500/20 text-orange-400"
                     data-testid="beacon-sole-copy-badge"
                 >
                     {t('machine.card.beacon.soleCopyLabel', {
-                        count: soleCopies.reduce((sum, c) => sum + c.unreplicated, 0),
+                        count: soleCopyCount,
                     })}
                 </span>
             )}
@@ -156,7 +181,7 @@ export function BeaconAdvisoryBadge({ beacon, className }: BeaconAdvisoryBadgePr
               "can't tell" chip would just add noise — the tooltip still says the
               board was truncated either way.
             */}
-            {deferred && soleCopies.length === 0 && (
+            {deferred && soleCopyTopics === 0 && (
                 <span
                     className="text-4xs font-semibold px-[5px] py-px rounded bg-gray-500/[0.08] border border-gray-500/20 text-text-secondary"
                     data-testid="beacon-deferred-badge"

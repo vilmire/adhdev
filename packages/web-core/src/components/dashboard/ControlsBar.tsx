@@ -423,7 +423,7 @@ export default function ControlsBar({
                 const controlResult = extractControlListResult(res);
                 if (!controlResult) {
                     const errorMessage = getResponseError(res);
-                    if (errorMessage) eventManager.showToast(errorMessage, 'warning');
+                    if (errorMessage) eventManager.showErrorToast(t('controls.loadOptionsFailed', { label: ctrl.label }), errorMessage);
                     return;
                 }
                 const options = controlResult.options;
@@ -444,8 +444,7 @@ export default function ControlsBar({
                 }
                 setOpenDropdown(ctrl.id);
             } catch (error) {
-                const message = error instanceof Error ? error.message : `Could not load ${ctrl.label}`;
-                eventManager.showToast(message, 'warning');
+                eventManager.showErrorToast(t('controls.loadOptionsFailed', { label: ctrl.label }), error);
             } finally {
                 setLoadingOption(null);
             }
@@ -468,8 +467,7 @@ export default function ControlsBar({
             commitMutationResult(ctrl, value, mutationResult);
         } catch (error) {
             rollbackControlValue(ctrl, previousValue);
-            const message = error instanceof Error ? error.message : `Could not update ${ctrl.label}`;
-            eventManager.showToast(message, 'warning');
+            eventManager.showErrorToast(t('controls.updateFailed', { label: ctrl.label }), error);
         }
     };
 
@@ -496,8 +494,7 @@ export default function ControlsBar({
             commitMutationResult(ctrl, nextValue, mutationResult);
         } catch (error) {
             rollbackControlValue(ctrl, previousValue);
-            const message = error instanceof Error ? error.message : `Could not update ${ctrl.label}`;
-            eventManager.showToast(message, 'warning');
+            eventManager.showErrorToast(t('controls.updateFailed', { label: ctrl.label }), error);
         }
     };
 
@@ -519,8 +516,7 @@ export default function ControlsBar({
             commitMutationResult(ctrl, nextValue, mutationResult);
         } catch (error) {
             rollbackControlValue(ctrl, previousValue);
-            const message = error instanceof Error ? error.message : `Could not update ${ctrl.label}`;
-            eventManager.showToast(message, 'warning');
+            eventManager.showErrorToast(t('controls.updateFailed', { label: ctrl.label }), error);
         }
     };
 
@@ -546,8 +542,7 @@ export default function ControlsBar({
             }
         } catch (error) {
             rollbackControlValue(ctrl, previousValue);
-            const message = error instanceof Error ? error.message : `Could not run ${ctrl.label}`;
-            eventManager.showToast(message, 'warning');
+            eventManager.showErrorToast(t('controls.runFailed', { label: ctrl.label }), error);
         }
     };
 

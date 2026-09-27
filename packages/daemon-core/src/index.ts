@@ -750,6 +750,8 @@ export {
     installGlobalInterceptor,
     setLogLevel,
     getLogLevel,
+    setConsoleLogLevel,
+    getConsoleLogLevel,
     getRecentLogs,
     getDaemonLogDir,
     getCurrentDaemonLogPath,

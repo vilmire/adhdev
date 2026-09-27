@@ -14,6 +14,7 @@ import type { RepoMeshContextValue, RepoMeshDaemonEntry } from '../../context/Re
 import type { MeshEntry, MeshNode, NodeCapabilitySlot } from './types'
 import { readMeshPolicy } from './types'
 import { describeOnboardingPlanFailure } from '../../utils/onboarding-plan-label'
+import { eventManager } from '../../managers/EventManager'
 
 interface UseMeshNodeActionsOptions {
     /** Modal confirm injected by the page (useConfirmDialog.confirm);
@@ -239,6 +240,7 @@ export function useMeshNodeActions({
             const raw = await sendCommand(targetDaemonId, 'update_mesh', { meshId: selectedMesh.id, policy: nextPolicy })
             const result = unwrapResult(raw)
             if (result?.success === false) throw new Error(result.error || 'Policy update failed')
+            eventManager.showToast(i18next.t('common.saved'), 'success')
             await loadMeshes()
         } catch (e: any) { setError(e?.message || 'Policy update failed') }
         finally { setSavingPolicy(false) }
@@ -266,6 +268,7 @@ export function useMeshNodeActions({
             })
             const result = unwrapResult(raw)
             if (result?.success === false) { setError(result.error || 'Node slots update failed'); return }
+            eventManager.showToast(i18next.t('common.saved'), 'success')
             await loadMeshes()
         } catch (e: any) { setError(e?.message || 'Node slots update failed') }
         finally { setSavingNodeSlotsId(null) }
@@ -286,6 +289,7 @@ export function useMeshNodeActions({
             const raw = await sendCommand(targetDaemonId, 'update_mesh_node', { meshId: selectedMeshId, nodeId: node.id, capabilities: cleaned })
             const result = unwrapResult(raw)
             if (result?.success === false) { setError(result.error || 'Node tag update failed'); return }
+            eventManager.showToast(i18next.t('common.saved'), 'success')
             await loadMeshes()
         } catch (e: any) { setError(e?.message || 'Node tag update failed') }
         finally { setSavingNodeCapabilitiesId(null) }
@@ -308,6 +312,7 @@ export function useMeshNodeActions({
             const raw = await sendCommand(targetDaemonId, 'update_mesh', { meshId: selectedMeshId, coordinator: nextCoord })
             const result = unwrapResult(raw)
             if (result?.success === false) { setError(result.error || 'Coordinator prompt save failed'); return }
+            eventManager.showToast(i18next.t('common.saved'), 'success')
             await loadMeshes()
         } catch (e: any) { setError(e?.message || 'Coordinator prompt save failed') }
         finally { setSavingCoordinatorPrompt(false) }
@@ -324,6 +329,7 @@ export function useMeshNodeActions({
             const raw = await sendCommand(targetDaemonId, 'update_mesh_node', { meshId: selectedMeshId, nodeId: node.id, systemPrompt: next })
             const result = unwrapResult(raw)
             if (result?.success === false) { setError(result.error || 'Node instruction save failed'); return }
+            eventManager.showToast(i18next.t('common.saved'), 'success')
             await loadMeshes()
         } catch (e: any) { setError(e?.message || 'Node instruction save failed') }
         finally { setSavingNodeSystemPromptId(null) }
@@ -343,6 +349,18 @@ export function useMeshNodeActions({
      */
     async function handleSetMeshHost(hostDaemonId: string) {
         if (!selectedMesh || !hostDaemonId) return
+        // The pin is effectively permanent — the warning lives in this confirm,
+        // not as standing text on the page.
+        if (confirmAction) {
+            const daemon = daemons.find(d => d.id === hostDaemonId)
+            const name = daemon?.machineNickname || daemon?.nickname || daemon?.hostname || hostDaemonId
+            const ok = await confirmAction({
+                title: i18next.t('mesh.host.setHostConfirmTitle', { name }),
+                description: i18next.t('mesh.host.setHostActionHint'),
+                confirmLabel: i18next.t('mesh.host.setHostAction'),
+            })
+            if (!ok) return
+        }
         setError(null)
         setLaunchResult(null)
         try {

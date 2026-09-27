@@ -252,6 +252,12 @@ export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
     components.eventLoopMonitor = startEventLoopMonitor();
     // Re-arm persisted restart_daemon_node whenIdle schedules.
     setImmediate(() => s7.router.resumeDeferredRestartsOnStartup());
+    // Member side: restore the node-state push subscriptions this daemon held
+    // before it restarted, so its coordinators learn the new process's state
+    // (build, sessions, git) as soon as the mesh transport is up — the host's
+    // noteMeshTransportReady / peer-open pushes it; the pusher's next check tick
+    // covers a host that wires neither.
+    setImmediate(() => { void s7.router.resumeMeshNodeStatePushOnStartup(); });
     // ENTER-LOSS layer ③: one-shot composer-residue sweep.
     components.composerResidueSweep = scheduleComposerResidueSweep(components);
 
@@ -262,6 +268,7 @@ export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
         s7.poller.stop();
         s7.cdpInitializer.stop();
         stopTurnLoops(components as TurnWiredComponents);
+        try { s7.router.meshNodeStatePusher.stop(); } catch { /* noop */ }
         try { components.composerResidueSweep?.stop(); } catch { /* noop */ }
         try { components.eventLoopMonitor?.stop(); } catch { /* noop */ }
     };

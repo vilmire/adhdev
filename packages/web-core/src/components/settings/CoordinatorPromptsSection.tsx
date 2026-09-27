@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import { useTransport } from '../../context/TransportContext'
 import { SettingsTabs } from '../ui/SettingsTabs'
+import { InfoTip } from '../ui/InfoTip'
 
 interface PromptEntry {
     override: string
@@ -32,6 +33,12 @@ interface Props {
      *  hand-author an entry for a CLI we haven't shipped yet without losing
      *  it from the UI. */
     knownCliTypes?: string[]
+    /**
+     * Render the editors directly (no collapsed summary / Collapse button) —
+     * for hosts that already put this inside a collapsed "Advanced" group, so
+     * the user never has to open two nested disclosures.
+     */
+    embedded?: boolean
 }
 
 const DEFAULT_KNOWN_CLI_TYPES = [
@@ -42,7 +49,7 @@ const DEFAULT_KNOWN_CLI_TYPES = [
     'hermes-cli',
 ]
 
-export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DEFAULT_KNOWN_CLI_TYPES }: Props) {
+export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DEFAULT_KNOWN_CLI_TYPES, embedded = false }: Props) {
     const { t } = useTranslation('common')
     const { sendCommand } = useTransport()
     const [drafts, setDrafts] = useState<Record<string, PromptEntry>>({})
@@ -55,7 +62,8 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
     // used to render every provider's textareas stacked vertically, which made
     // the settings page very long), and expanded content shows one provider at
     // a time via tabs. Draft/save state above is untouched by either toggle.
-    const [expanded, setExpanded] = useState(false)
+    const [expandedState, setExpanded] = useState(false)
+    const expanded = embedded || expandedState
     const [activeKey, setActiveKey] = useState<string | null>(null)
 
     const load = useCallback(async () => {
@@ -68,7 +76,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
             // directly. See TransportContext jsdoc for the canonical warning.
             const result = (raw?.result && typeof raw.result === 'object') ? raw.result : raw
             if (!result?.success) {
-                setError(result?.error || 'Failed to load')
+                setError(result?.error || t('settings.coordinatorPrompts.loadFailed'))
                 return
             }
             const entries = (result.entries || {}) as Record<string, PromptEntry>
@@ -86,7 +94,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
         } finally {
             setLoading(false)
         }
-    }, [sendCommand, daemonId, knownCliTypes])
+    }, [sendCommand, daemonId, knownCliTypes, t])
 
     useEffect(() => { void load() }, [load])
 
@@ -99,7 +107,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
             const raw: any = await sendCommand(daemonId, 'write_coordinator_prompt', { key, kind, content })
             const result = (raw?.result && typeof raw.result === 'object') ? raw.result : raw
             if (!result?.success) {
-                setError(result?.error || 'Save failed')
+                setError(result?.error || t('settings.coordinatorPrompts.saveFailed'))
                 return
             }
             setSavedSnapshot(prev => ({ ...prev, [key]: { ...(prev[key] || { override: '', append: '' }), [kind]: content } }))
@@ -108,11 +116,17 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
         } finally {
             setSavingKey(null)
         }
-    }, [sendCommand, daemonId, drafts])
+    }, [sendCommand, daemonId, drafts, t])
 
     const dirtyOf = useMemo(() => (key: string, kind: 'override' | 'append'): boolean => {
         return (drafts[key]?.[kind] || '') !== (savedSnapshot[key]?.[kind] || '')
     }, [drafts, savedSnapshot])
+
+    /** One Save per provider: writes whichever of the two files changed. */
+    const saveProvider = useCallback(async (key: string) => {
+        if (dirtyOf(key, 'override')) await save(key, 'override')
+        if (dirtyOf(key, 'append')) await save(key, 'append')
+    }, [dirtyOf, save])
 
     /** A provider counts as customized when either file exists on disk (saved
      *  content), not merely when a draft is typed — the badge answers "does
@@ -175,27 +189,34 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
 
     return (
         <div className="flex flex-col gap-4">
-            <div className="flex items-start justify-between gap-3">
-                <div className="text-xs text-text-muted">
-                    <p>
-                        {t('settings.coordinatorPrompts.intro')} <span className="font-mono text-2xs">{dir || '~/.adhdev/coordinator-prompts/'}</span>
-                    </p>
-                    <p className="mt-1">
-                        <Trans i18nKey="settings.coordinatorPrompts.overrideDesc" ns="common" components={{ strong: <strong /> }} />
-                        {' '}
-                        <Trans i18nKey="settings.coordinatorPrompts.appendDesc" ns="common" components={{ strong: <strong /> }} />
-                        {t('settings.coordinatorPrompts.resetHint')}{' '}
-                        {t('settings.coordinatorPrompts.placeholdersHint')}{' '}
-                        <span className="font-mono">{'{{meshName}}'}, {'{{repo}}'}, {'{{nodes}}'}, {'{{rules}}'}</span>…
-                    </p>
+            <div className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-1 text-xs text-text-muted">
+                    <span className="truncate font-mono text-2xs">{dir || '~/.adhdev/coordinator-prompts/'}</span>
+                    <InfoTip
+                        content={
+                            <span>
+                                {t('settings.coordinatorPrompts.intro')} {dir || '~/.adhdev/coordinator-prompts/'}
+                                {'\n\n'}
+                                <Trans i18nKey="settings.coordinatorPrompts.overrideDesc" ns="common" components={{ strong: <strong /> }} />
+                                {' '}
+                                <Trans i18nKey="settings.coordinatorPrompts.appendDesc" ns="common" components={{ strong: <strong /> }} />
+                                {'\n\n'}
+                                {t('settings.coordinatorPrompts.resetHint')}{' '}
+                                {t('settings.coordinatorPrompts.placeholdersHint')}{' '}
+                                <span className="font-mono">{'{{meshName}}'}, {'{{repo}}'}, {'{{nodes}}'}, {'{{rules}}'}</span>…
+                            </span>
+                        }
+                    />
                 </div>
-                <button
-                    type="button"
-                    className="btn btn-secondary btn-sm shrink-0"
-                    onClick={() => setExpanded(false)}
-                >
-                    {t('settings.coordinatorPrompts.collapseLabel')}
-                </button>
+                {!embedded && (
+                    <button
+                        type="button"
+                        className="btn btn-secondary btn-sm shrink-0"
+                        onClick={() => setExpanded(false)}
+                    >
+                        {t('settings.coordinatorPrompts.collapseLabel')}
+                    </button>
+                )}
             </div>
 
             {error && <div className="text-xs text-status-error bg-status-error/10 border border-status-error/40 rounded px-3 py-2">{error}</div>}
@@ -241,17 +262,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
                                         placeholder={t('settings.coordinatorPrompts.overridePlaceholder')}
                                         disabled={savingKey === `${key}:override`}
                                     />
-                                    <div className="mt-1 mb-3 flex justify-end">
-                                        <button
-                                            type="button"
-                                            className="btn btn-secondary btn-sm"
-                                            onClick={() => void save(key, 'override')}
-                                            disabled={savingKey === `${key}:override` || !dirtyOf(key, 'override')}
-                                        >
-                                            {savingKey === `${key}:override` ? t('settings.coordinatorPrompts.saving') : dirtyOf(key, 'override') ? t('settings.coordinatorPrompts.saveOverride') : t('settings.coordinatorPrompts.saved')}
-                                        </button>
-                                    </div>
-
+                                    <div className="mb-3" />
                                     <label className="block text-2xs uppercase tracking-wide text-text-muted mb-1">{t('settings.coordinatorPrompts.appendLabel')}</label>
                                     <textarea
                                         className="w-full px-3 py-2 rounded bg-bg-secondary border border-border-subtle text-xs font-mono text-text-primary"
@@ -261,14 +272,15 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
                                         placeholder={t('settings.coordinatorPrompts.appendPlaceholder')}
                                         disabled={savingKey === `${key}:append`}
                                     />
-                                    <div className="mt-1 flex justify-end">
+                                    <div className="mt-2 flex justify-end">
                                         <button
                                             type="button"
                                             className="btn btn-secondary btn-sm"
-                                            onClick={() => void save(key, 'append')}
-                                            disabled={savingKey === `${key}:append` || !dirtyOf(key, 'append')}
+                                            data-testid="coordinator-prompt-save"
+                                            onClick={() => void saveProvider(key)}
+                                            disabled={!!savingKey?.startsWith(`${key}:`) || !keyDirty}
                                         >
-                                            {savingKey === `${key}:append` ? t('settings.coordinatorPrompts.saving') : dirtyOf(key, 'append') ? t('settings.coordinatorPrompts.saveAppend') : t('settings.coordinatorPrompts.saved')}
+                                            {savingKey?.startsWith(`${key}:`) ? t('settings.coordinatorPrompts.saving') : keyDirty ? t('settings.coordinatorPrompts.save') : t('settings.coordinatorPrompts.saved')}
                                         </button>
                                     </div>
                                 </div>

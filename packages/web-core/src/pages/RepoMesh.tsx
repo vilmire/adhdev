@@ -727,6 +727,7 @@ export default function RepoMesh() {
                 onSelectMesh={setSelectedMeshId}
                 onCreate={handleCreate}
                 onCancelCreate={cancelCreate}
+                sendCommand={sendCommand}
             />
             </>
         )

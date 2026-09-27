@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { Section } from '../../components/ui/Section'
 import { AlertBanner } from '../../components/ui/AlertBanner'
 import { FormField } from '../../components/ui/FormField'
+import { InfoTip } from '../../components/ui/InfoTip'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import type { MeshNode } from './types'
 
@@ -95,8 +96,10 @@ export function MeshHostDaemonSection({
                 {!hostOnline && (
                     <div className="mt-4">
                         <AlertBanner variant="warning" className="mb-3">
-                            <strong>{t('mesh.host.hostOffline')}</strong>{' '}
-                            {t('mesh.host.hostOfflineText')}
+                            <span className="inline-flex items-center gap-1">
+                                <strong>{t('mesh.host.hostOffline')}</strong>
+                                <InfoTip content={t('mesh.host.hostOfflineText')} />
+                            </span>
                         </AlertBanner>
                         {daemons.length > 0 ? (
                             <FormField label={t('mesh.host.reconnectToCommand')} hint={t('mesh.host.reconnectToCommandHint')}>
@@ -137,8 +140,7 @@ export function MeshHostDaemonSection({
     return (
         <Section title={t('mesh.host.title')} description={t('mesh.host.descriptionUnset')}>
             <AlertBanner variant="info" className="mb-4">
-                <strong>{t('mesh.host.setHostBanner')}</strong>{' '}
-                {t('mesh.host.setHostBannerText')}
+                <strong>{t('mesh.host.setHostBanner')}</strong>
             </AlertBanner>
             {daemons.length > 0 ? (
                 <>
@@ -167,10 +169,10 @@ export function MeshHostDaemonSection({
                     )}
                     {/* Establishing the host is its own confirmed action — the pin is
                         effectively permanent, so it must not ride along on a launch click. */}
+                    {/* The permanence warning lives in the confirm dialog the action opens. */}
                     {setHostButton && (
                         <div className="mt-3 flex flex-wrap items-center gap-2">
                             {setHostButton}
-                            <span className="text-xs text-text-muted">{t('mesh.host.setHostActionHint')}</span>
                         </div>
                     )}
                 </>

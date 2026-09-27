@@ -31,10 +31,12 @@ function loadLocale(locale: string) {
 }
 
 describe('ProvidersTab — empty-state copy references a real button', () => {
-  it('renders the toolbar with Sources / Refresh / Advanced — no "Add provider" or "Create" button', () => {
+  it('renders the toolbar with one Refresh / Advanced (Sources merged into Advanced) — no "Add provider" or "Create" button', () => {
     // Pin the actual toolbar surface so this test's premise stays true as the
-    // component evolves.
-    expect(providersTabSource).toContain("t('machine.providers.sources')")
+    // component evolves. Sources live inside the single Advanced disclosure
+    // since the 2026-09-27 UI simplification.
+    expect(providersTabSource).not.toContain("t('machine.providers.sources')")
+    expect(providersTabSource).toContain('{showAdvanced && (\n                <SourcesPanel')
     expect(providersTabSource).not.toContain("t('machine.providers.create')")
     expect(providersTabSource).not.toContain('ProviderCloneModal')
     expect(providersTabSource).toContain("t('machine.providers.refresh')")
@@ -68,8 +70,9 @@ describe('ProvidersTab — empty-state copy references a real button', () => {
     const dict = loadLocale('en')
     expect(dict.machine.providers.noProviders).not.toContain('Create')
     expect(dict.standalone.onboarding.intro).not.toContain('Create')
-    // …and name buttons that do exist (Sources toolbar button, channel Install).
-    expect(dict.machine.providers.noProviders).toContain(dict.machine.providers.sources)
+    // …and name buttons that do exist (Advanced toolbar toggle — where Sources
+    // live now — and the channel Install button).
+    expect(dict.machine.providers.noProviders).toContain(dict.machine.providers.advanced)
     expect(dict.machine.providers.noProviders).toContain(dict.machine.providers.installNewType)
   })
 
@@ -78,7 +81,7 @@ describe('ProvidersTab — empty-state copy references a real button', () => {
       const dict = loadLocale(locale)
       expect(dict?.machine?.providers?.create).toBeUndefined()
       expect(dict?.machine?.providerClone).toBeUndefined()
-      expect(dict.machine.providers.noProviders).toContain(dict.machine.providers.sources)
+      expect(dict.machine.providers.noProviders).toContain(dict.machine.providers.advanced)
     })
   }
 })

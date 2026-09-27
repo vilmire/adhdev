@@ -12,13 +12,16 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import Card from '../../components/Card'
+import { Switch } from '../../components/ui/Switch'
 import type { ProviderInfo, ProviderSettingsEntry } from './types'
 import TrustBadge, { type ProviderTrust } from './TrustBadge'
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
 import { bindQuotaDisplayModel, createQuotaTextFormatter, type QuotaChipHint } from '../../utils/quota-format'
 import { PROVIDER_CATEGORY_COLOR, type ProviderCategory } from './providerCategoryConfig'
 import { ProviderLogo } from '../../components/ProviderLogo'
-import { localizeProviderSetting } from '../../utils/provider-setting-copy'
+import { localizeProviderSetting, localizeProviderSettingOption } from '../../utils/provider-setting-copy'
+import { InfoTip } from '../../components/ui/InfoTip'
+import { formatAbsoluteTime } from '../../utils/time'
 import type { TFunction } from 'i18next'
 
 /**
@@ -79,24 +82,6 @@ const LIFECYCLE_KEYS: Record<string, string> = {
     Deprecated: 'machine.providerRow.lifecycleDeprecated',
 }
 
-/**
- * Plain-language origin line for the default (non-advanced) details view.
- * The daemon's `sourceLayer` (upstream/user/external) and manifest-tier trust
- * description are developer vocabulary; they stay visible under Advanced.
- */
-const ORIGIN_KEYS: Record<ProviderTrust, string> = {
-    'trusted': 'machine.providerRow.originOfficial',
-    'trusted-with-scripts': 'machine.providerRow.originOfficialScripts',
-    'user-custom': 'machine.providerRow.originUserFolder',
-    'external-safe': 'machine.providerRow.originExternal',
-    'external-untrusted': 'machine.providerRow.originExternalScripts',
-}
-const LAYER_ORIGIN_KEYS: Record<string, string> = {
-    upstream: 'machine.providerRow.originOfficial',
-    user: 'machine.providerRow.originUserFolder',
-    external: 'machine.providerRow.originExternal',
-}
-
 function isMachineRuntimeProvider(category: string): boolean {
     return category === 'cli' || category === 'acp'
 }
@@ -113,29 +98,7 @@ function RowSwitch({ checked, busy, label, onToggle }: {
     label: string
     onToggle: () => void
 }) {
-    return (
-        <span
-            role="switch"
-            aria-checked={checked}
-            aria-label={label}
-            onClick={(e) => {
-                e.stopPropagation()
-                if (busy) return
-                onToggle()
-            }}
-            className={`relative inline-flex items-center shrink-0 ${busy ? 'opacity-50 cursor-wait' : 'cursor-pointer'}`}
-        >
-            <span
-                className="inline-block w-[34px] h-[19px] rounded-full transition-colors duration-200 ease-in-out"
-                style={{ backgroundColor: checked ? 'var(--accent-primary)' : 'color-mix(in srgb, var(--surface-primary) 60%, var(--border-default))' }}
-            />
-            <span
-                className={`absolute left-[1.5px] top-[1.5px] w-[16px] h-[16px] bg-white rounded-full transition-transform duration-200 ease-in-out shadow-[0_1px_2px_rgba(0,0,0,0.15)] ${
-                    checked ? 'translate-x-[15px]' : 'translate-x-0'
-                }`}
-            />
-        </span>
-    )
+    return <Switch as="span" size="sm" checked={checked} busy={busy} aria-label={label} onChange={() => onToggle()} />
 }
 
 interface InstalledProviderRowProps {
@@ -347,15 +310,77 @@ export default function InstalledProviderRow({
             {/* Expanded body */}
             {expanded && (
                 <div className="border-t border-border-subtle px-4 py-3 flex flex-col gap-3">
+                    {/* Settings first — they are what people open a provider for. */}
+                    {prov.schema.length > 0 && (
+                        <div className="flex flex-col gap-1.5">
+                            {prov.schema.map(s => {
+                                const copy = localizeProviderSetting(t, s, prov.displayName)
+                                return (
+                                <div key={s.key} className="flex items-center justify-between gap-3">
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-1 text-2xs font-medium text-text-primary">
+                                            {copy.label}
+                                            {copy.description && <InfoTip content={copy.description} size={11} />}
+                                            {savingKey === `${prov.type}.${s.key}` && (
+                                                <span className="ml-1.5 text-4xs text-accent-primary">{t('machine.providerRow.saving')}</span>
+                                            )}
+                                        </div>
+
+                                    </div>
+                                    <div className="shrink-0">
+                                        {s.type === 'boolean' ? (
+                                            <Switch
+                                                checked={!!(prov.values[s.key] ?? s.default)}
+                                                busy={savingKey === `${prov.type}.${s.key}`}
+                                                aria-label={copy.label}
+                                                onChange={next => void onSetSetting(prov.type, s.key, next)}
+                                            />
+                                        ) : s.type === 'number' ? (
+                                            <input
+                                                type="number"
+                                                value={Number(prov.values[s.key] ?? s.default ?? 0) || 0}
+                                                min={s.min}
+                                                max={s.max}
+                                                onChange={e => {
+                                                    const v = parseInt(e.target.value) || 0
+                                                    if (s.min !== undefined && v < s.min) return
+                                                    if (s.max !== undefined && v > s.max) return
+                                                    void onSetSetting(prov.type, s.key, v)
+                                                }}
+                                                className="machine-input w-20 text-center text-2xs"
+                                            />
+                                        ) : s.type === 'select' && s.options ? (
+                                            <select
+                                                value={String(prov.values[s.key] ?? s.default ?? '')}
+                                                onChange={e => void onSetSetting(prov.type, s.key, e.target.value)}
+                                                className="machine-input text-2xs"
+                                            >
+                                                {s.options.map(o => <option key={o} value={o}>{localizeProviderSettingOption(t, o)}</option>)}
+                                            </select>
+                                        ) : (
+                                            <input
+                                                type="text"
+                                                defaultValue={String(prov.values[s.key] ?? s.default ?? '')}
+                                                onBlur={e => void onSetSetting(prov.type, s.key, e.target.value)}
+                                                className="machine-input w-[180px] text-2xs"
+                                            />
+                                        )}
+                                    </div>
+                                </div>
+                                )
+                            })}
+                        </div>
+                    )}
+
                     {/* Quota tracking — per-provider probe switch, independent
                         of the machine-use Enable button above. Only offered for
                         providers with a shipped fetcher; enabling claude asks
                         first because it installs the statusLine wrapper. */}
                     {onQuotaToggle && quotaEnabled !== undefined && (
                         <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                                <div className="text-2xs text-text-secondary font-medium">{t('machine.providerRow.quotaTracking')}</div>
-                                <div className="text-3xs text-text-muted">{t('machine.providerRow.quotaTrackingHint')}</div>
+                            <div className="flex min-w-0 items-center gap-1 text-2xs text-text-secondary font-medium">
+                                {t('machine.providerRow.quotaTracking')}
+                                <InfoTip content={t('machine.providerRow.quotaTrackingHint')} size={11} />
                             </div>
                             {confirmQuotaEnable ? (
                                 <div className="flex flex-col items-end gap-1.5 shrink-0">
@@ -394,9 +419,9 @@ export default function InstalledProviderRow({
                         provider cannot deliver. */}
                     {onQuotaAccountLabelToggle && quotaAccountLabelEnabled !== undefined && (
                         <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                                <div className="text-2xs text-text-secondary font-medium">{t('machine.providerRow.quotaAccountLabel')}</div>
-                                <div className="text-3xs text-text-muted">{t('machine.providerRow.quotaAccountLabelHint')}</div>
+                            <div className="flex min-w-0 items-center gap-1 text-2xs text-text-secondary font-medium">
+                                {t('machine.providerRow.quotaAccountLabel')}
+                                <InfoTip content={t('machine.providerRow.quotaAccountLabelHint')} size={11} />
                             </div>
                             <RowSwitch
                                 checked={quotaAccountLabelEnabled}
@@ -405,9 +430,11 @@ export default function InstalledProviderRow({
                             />
                         </div>
                     )}
-                    {/* Details: manifest metadata + source identity. Pulled
-                        from the daemon's status broadcast — no extra round-trip. */}
-                    <div className="grid gap-1 text-3xs text-text-muted">
+                    {/* Details: manifest metadata, spec pin, digest, source identity —
+                        developer detail, shown only with the tab's Advanced toggle.
+                        Origin is carried by the TrustBadge in the header. */}
+                    {showAdvanced && (
+                    <div className="grid gap-1 text-3xs text-text-muted" data-testid="provider-row-metadata">
                         <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelType')}</span> <span className="font-mono">{prov.type}</span></div>
                         {(providerInfo as any)?.providerVersion && (
                             <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelVersion')}</span> {(providerInfo as any).providerVersion}</div>
@@ -429,7 +456,7 @@ export default function InstalledProviderRow({
                             </div>
                         )}
                         {pin?.activatedAt && (
-                            <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelActivatedAt')}</span> {new Date(pin.activatedAt).toLocaleString()}</div>
+                            <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelActivatedAt')}</span> {formatAbsoluteTime(pin.activatedAt)}</div>
                         )}
                         {pin?.previousVersion && (
                             <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelPreviousPin')}</span> <span className="font-mono">{pin.previousVersion}</span></div>
@@ -450,18 +477,6 @@ export default function InstalledProviderRow({
                         {showAdvanced && (providerInfo as any)?.details && (
                             <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelDetails')}</span> {(providerInfo as any).details}</div>
                         )}
-                        {(() => {
-                            const info = providerInfo as any
-                            const originKey = (info?.trust && ORIGIN_KEYS[info.trust as ProviderTrust])
-                                || (info?.sourceLayer && LAYER_ORIGIN_KEYS[info.sourceLayer])
-                            if (!originKey) return null
-                            return (
-                                <div>
-                                    <span className="text-text-secondary font-medium">{t('machine.providerRow.labelOrigin')}</span>{' '}
-                                    {t(originKey, { source: info.sourceName || '' })}
-                                </div>
-                            )
-                        })()}
                         {showAdvanced && (providerInfo as any)?.sourceLayer && (
                             <div>
                                 <span className="text-text-secondary font-medium">{t('machine.providerRow.labelSource')}</span>{' '}
@@ -495,6 +510,7 @@ export default function InstalledProviderRow({
                             )
                         })()}
                     </div>
+                    )}
                     {/* Checks: a line with nothing to report ("—") is hidden unless Advanced is on. */}
                     {isRuntime && (showAdvanced || providerInfo?.lastDetection || providerInfo?.lastVerification) && (
                         <div className="grid gap-1 text-3xs text-text-muted">
@@ -504,73 +520,6 @@ export default function InstalledProviderRow({
                             {(showAdvanced || providerInfo?.lastVerification) && (
                                 <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelVerification')}</span> {formatCheck(t, providerInfo?.lastVerification)}</div>
                             )}
-                        </div>
-                    )}
-
-                    {/* Settings */}
-                    {prov.schema.length > 0 && (
-                        <div className="flex flex-col gap-1.5">
-                            {prov.schema.map(s => {
-                                const copy = localizeProviderSetting(t, s, prov.displayName)
-                                return (
-                                <div key={s.key} className="flex items-center justify-between gap-3">
-                                    <div className="flex-1 min-w-0">
-                                        <div className="text-2xs font-medium text-text-primary">
-                                            {copy.label}
-                                            {savingKey === `${prov.type}.${s.key}` && (
-                                                <span className="ml-1.5 text-4xs text-accent-primary">{t('machine.providerRow.saving')}</span>
-                                            )}
-                                        </div>
-                                        {copy.description && (
-                                            <div className="text-3xs text-text-muted mt-px">{copy.description}</div>
-                                        )}
-                                    </div>
-                                    <div className="shrink-0">
-                                        {s.type === 'boolean' ? (
-                                            <button
-                                                onClick={() => void onSetSetting(prov.type, s.key, !(prov.values[s.key] ?? s.default))}
-                                                className="w-10 h-[22px] rounded-[11px] border-none relative cursor-pointer transition-colors duration-200"
-                                                style={{ background: (prov.values[s.key] ?? s.default) ? '#8b5cf6' : 'var(--border-subtle)' }}
-                                            >
-                                                <div
-                                                    className="w-4 h-4 rounded-full bg-white absolute top-[3px] transition-[left] duration-200 shadow-[0_1px_3px_rgba(0,0,0,0.3)]"
-                                                    style={{ left: (prov.values[s.key] ?? s.default) ? 21 : 3 }}
-                                                />
-                                            </button>
-                                        ) : s.type === 'number' ? (
-                                            <input
-                                                type="number"
-                                                value={Number(prov.values[s.key] ?? s.default ?? 0) || 0}
-                                                min={s.min}
-                                                max={s.max}
-                                                onChange={e => {
-                                                    const v = parseInt(e.target.value) || 0
-                                                    if (s.min !== undefined && v < s.min) return
-                                                    if (s.max !== undefined && v > s.max) return
-                                                    void onSetSetting(prov.type, s.key, v)
-                                                }}
-                                                className="machine-input w-20 text-center text-2xs"
-                                            />
-                                        ) : s.type === 'select' && s.options ? (
-                                            <select
-                                                value={String(prov.values[s.key] ?? s.default ?? '')}
-                                                onChange={e => void onSetSetting(prov.type, s.key, e.target.value)}
-                                                className="machine-input text-2xs"
-                                            >
-                                                {s.options.map(o => <option key={o} value={o}>{o}</option>)}
-                                            </select>
-                                        ) : (
-                                            <input
-                                                type="text"
-                                                defaultValue={String(prov.values[s.key] ?? s.default ?? '')}
-                                                onBlur={e => void onSetSetting(prov.type, s.key, e.target.value)}
-                                                className="machine-input w-[180px] text-2xs"
-                                            />
-                                        )}
-                                    </div>
-                                </div>
-                                )
-                            })}
                         </div>
                     )}
 

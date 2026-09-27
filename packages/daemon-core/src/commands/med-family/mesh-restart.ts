@@ -414,6 +414,21 @@ export function rearmPersistedDeferredRestarts(deps: CommandRouterDeps): void {
     }
 }
 
+/**
+ * Whether a forwarded restart_daemon_node answer means the member daemon goes
+ * down now (a restart / upgrade was started) — not a refusal, a deferred
+ * whenIdle schedule, or a schedule query / cancel.
+ */
+function restartWillHappen(result: CommandRouterResult, args: any): boolean {
+    if (!result || result.success === false) return false;
+    if (args?.cancelWhenIdle === true || args?.whenIdleStatus === true) return false;
+    const record = result as Record<string, unknown>;
+    if (record.restarted === false) return false;
+    const deferred = record.deferredRestart as Record<string, unknown> | null | undefined;
+    if (deferred && typeof deferred === 'object' && record.restarted !== true) return false;
+    return true;
+}
+
 export const meshRestartHandlers: Record<string, MedFamilyHandler> = {
     restart_daemon_node: async (ctx: MedFamilyContext, args: any): Promise<CommandRouterResult> => {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
@@ -442,7 +457,15 @@ export const meshRestartHandlers: Record<string, MedFamilyHandler> = {
         const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent(nodeDaemonId, selfDaemonId);
         if (isRemote && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
             const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'restart_daemon_node', withMeshDirectDispatch(args, rosterEvidenceExtra(args, resolvedMesh)));
-            return unwrapMeshRelayResult(forwarded, { command: 'restart_daemon_node', peerDaemonId: nodeDaemonId }) as CommandRouterResult;
+            const result = unwrapMeshRelayResult(forwarded, { command: 'restart_daemon_node', peerDaemonId: nodeDaemonId }) as CommandRouterResult;
+            // The member is about to restart / upgrade: its held build (and sessions)
+            // are pending until the NEW process reports — taken at once when it
+            // pushes on boot or when its link comes back (reconnect handshake),
+            // instead of after the held state goes stale.
+            if (restartWillHappen(result, args)) {
+                try { await ctx.noteMeshMemberRestarting?.(nodeDaemonId!); } catch { /* best-effort */ }
+            }
+            return result;
         }
 
         // Deferred-schedule management on the owning daemon. Cancellation and

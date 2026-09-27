@@ -9,7 +9,10 @@ import { getMeshGraphTheme } from './meshGraphTheme'
 import { formatMeshConnectionSummary } from '../../utils/mesh-visualization'
 import type { MeshGraphNode } from './types'
 import { IconLightbulb } from '../Icons'
-import { sessionStatusLabelKey } from './MeshObservabilitySurface/meshSurfaceHelpers'
+import { InfoTip } from '../ui/InfoTip'
+import { localizeMeshGraphHint } from './meshGraphViewModel'
+import { sessionRoleText, sessionStatusText } from './MeshObservabilitySurface/meshSurfaceHelpers'
+import { formatElapsedCompact } from '../../utils/time'
 
 interface MeshGraphPanelProps {
     node: MeshGraphNode | null
@@ -19,12 +22,14 @@ interface MeshGraphPanelProps {
 function Field({
     label,
     value,
+    title,
     rowClass,
     labelClass,
     valueClass,
 }: {
     label: string
     value: string | number | null
+    title?: string
     rowClass: string
     labelClass: string
     valueClass: string
@@ -33,7 +38,7 @@ function Field({
     return (
         <div className={rowClass}>
             <span className={labelClass}>{label}</span>
-            <span className={valueClass}>{String(value)}</span>
+            <span className={valueClass} title={title}>{String(value)}</span>
         </div>
     )
 }
@@ -94,33 +99,12 @@ function formatUpstreamState(node: MeshGraphNode, t: TFn): string | null {
     }
 }
 
-function sessionStatusLabel(session: MeshGraphNode['sessionDetails'][number], t: TFn): string {
-    return sessionStatusLabelKey(session, t, {
-        approval: 'mesh.panel.statusAwaiting',
-        generating: 'mesh.panel.statusGenerating',
-        idle: 'mesh.panel.statusIdle',
-    })
-}
-
-function sessionRoleLabel(session: MeshGraphNode['sessionDetails'][number], t: TFn): string {
-    if (session.isSelfCoordinator) return t('mesh.panel.statusCoordinator')
-    const role = typeof session.role === 'string' ? session.role.trim() : ''
-    return role || t('mesh.panel.statusWorker')
-}
-
-function sessionElapsedLabel(session: MeshGraphNode['sessionDetails'][number], t: TFn): string {
+/** Elapsed runtime, or nothing when the daemon did not report a start time. */
+function sessionElapsedLabel(session: MeshGraphNode['sessionDetails'][number]): string {
     const startedAt = session.startedAt || session.createdAt || null
-    if (!startedAt) return t('mesh.panel.runtimeAgeNotReported')
-    const parsed = Date.parse(startedAt)
-    if (!Number.isFinite(parsed)) return t('mesh.panel.runtimeAgeNotReported')
-    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - parsed) / 1000))
-    if (elapsedSeconds < 60) return `${elapsedSeconds}s`
-    const minutes = Math.floor(elapsedSeconds / 60)
-    if (minutes < 60) return `${minutes}m`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 48) return `${hours}h ${minutes % 60}m`
-    const days = Math.floor(hours / 24)
-    return `${days}d ${hours % 24}h`
+    const parsed = startedAt ? Date.parse(startedAt) : NaN
+    if (!Number.isFinite(parsed)) return ''
+    return formatElapsedCompact(Math.max(0, Date.now() - parsed))
 }
 
 function shortSessionId(sessionId: string): string {
@@ -139,6 +123,7 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
             </div>
         )
     }
+    const panelHint = localizeMeshGraphHint(node, t)
 
     const isSubmoduleNode = node.type === 'submoduleNode'
     const headSummary = summarizeHead(node)
@@ -179,8 +164,9 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
                 <Field label={t('mesh.panel.fieldDirtyFiles')} value={node.dirtyFiles > 0 ? node.dirtyFiles : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
                 <Field label={t('mesh.panel.fieldActiveSessions')} value={node.activeSessionCount > 0 ? node.activeSessionCount : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
                 <Field label={t('mesh.panel.fieldProviders')} value={!isSubmoduleNode ? (node.providers.join(', ') || null) : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
-                <Field label={t('mesh.panel.fieldConnection')} value={connectionSummary} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
-                <Field label={t('mesh.panel.fieldLinkNote')} value={connectionSummary ? (node.connectionReason ?? null) : null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
+                {/* The link note (why this link is relayed/unknown) rides as the
+                    connection value's tooltip instead of its own row. */}
+                <Field label={t('mesh.panel.fieldConnection')} value={connectionSummary} title={connectionSummary ? (node.connectionReason ?? undefined) : undefined} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
                 <Field label={t('mesh.panel.fieldError')} value={node.error ?? null} rowClass={meshTheme.panelFieldRowClass} labelClass={meshTheme.panelFieldLabelClass} valueClass={meshTheme.panelFieldValueClass} />
             </div>
 
@@ -204,22 +190,19 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
                                 key={session.sessionId}
                                 className={meshTheme.isDark ? 'rounded-lg border border-white/8 bg-white/[0.03] px-2 py-1.5 text-3xs text-slate-300' : 'rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-3xs text-slate-600'}
                                 title={[
-                                    `Session ID: ${session.sessionId}`,
-                                    session.providerType ? `Provider: ${session.providerType}` : null,
-                                    `Status: ${sessionStatusLabel(session, t)}`,
-                                    `Role: ${sessionRoleLabel(session, t)}`,
-                                    session.startedAt || session.createdAt ? `Started: ${session.startedAt || session.createdAt}` : 'Started: not reported',
-                                    session.statusNote ? `Note: ${session.statusNote}` : null,
+                                    `${t('mesh.panel.tooltipPrefixStatus')} ${sessionStatusText(session, t)}`,
+                                    session.statusNote ? `${t('mesh.panel.tooltipPrefixNote')} ${session.statusNote}` : null,
+                                    session.sessionId,
                                 ].filter(Boolean).join('\n')}
                             >
                                 <div className="flex min-w-0 items-center justify-between gap-2">
                                     <span className="min-w-0 truncate font-mono select-text">{shortSessionId(session.sessionId)}</span>
-                                    <span>{sessionStatusLabel(session, t)}</span>
+                                    <span>{sessionStatusText(session, t)}</span>
                                 </div>
                                 <div className="mt-0.5 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5">
                                     <span className="truncate">{session.providerType || t('mesh.panel.providerUnknown')}</span>
-                                    <span>{sessionRoleLabel(session, t)}</span>
-                                    <span>{sessionElapsedLabel(session, t)}</span>
+                                    <span>{sessionRoleText(session, t)}</span>
+                                    {sessionElapsedLabel(session) && <span>{sessionElapsedLabel(session)}</span>}
                                 </div>
                                 {session.statusNote && (
                                     <div className="mt-1 leading-4">
@@ -232,9 +215,13 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
                 </div>
             )}
 
-            {node.nextStepHint && (
-                <div className={`${meshTheme.infoCalloutClass}`}>
-                    <span className="inline-flex items-start gap-1.5"><IconLightbulb size={12} className="mt-0.5 shrink-0" /><span>{node.nextStepHint}</span></span>
+            {panelHint && (
+                <div className={`${meshTheme.infoCalloutClass}`} data-testid="mesh-panel-hint">
+                    <span className="inline-flex items-start gap-1.5">
+                        <IconLightbulb size={12} className="mt-0.5 shrink-0" />
+                        <span>{panelHint.text}</span>
+                        {panelHint.detail && <InfoTip content={panelHint.detail} size={11} />}
+                    </span>
                 </div>
             )}
         </div>

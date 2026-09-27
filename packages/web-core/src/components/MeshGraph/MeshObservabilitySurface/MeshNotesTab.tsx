@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { MeshGraphThemeContext } from './meshSurfaceTheme'
 import { Badge } from './meshSurfacePrimitives'
 import { stripMarkdownSyntax } from '../../../utils/queue-task-label'
+import { RefreshButton } from '../../ui/RefreshButton'
+import { formatAbsoluteTime } from '../../../utils/time'
 
 // ─── Notes tab ───────────────────────────────────────────────────────────────
 // Manual CRUD for coordinator operating notes (runtime-accumulated lessons:
@@ -53,10 +55,7 @@ function categoryLabel(t: (k: string) => string, category?: string): string {
 }
 
 function formatCreatedAt(iso?: string): string {
-    if (!iso) return ''
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return ''
-    return d.toLocaleString()
+    return formatAbsoluteTime(iso)
 }
 
 export function MeshNotesTab({
@@ -295,14 +294,7 @@ export function MeshNotesTab({
             <div className={`${meshTheme.cardClass} rounded-2xl p-4`}>
                 <div className="mb-2 flex items-center justify-between gap-2">
                     <div className={`text-sm font-semibold ${meshTheme.textPrimary}`}>{t('mesh.notes.listTitle')}</div>
-                    <button
-                        type="button"
-                        onClick={() => { void loadNotes() }}
-                        disabled={loading || busy}
-                        className={actionClass('default')}
-                    >
-                        {t('mesh.notes.refresh')}
-                    </button>
+                    <RefreshButton onClick={() => { void loadNotes() }} refreshing={loading} disabled={busy} label={t('mesh.notes.refresh')} size={13} className="h-7 w-7" />
                 </div>
                 {loading ? (
                     <div className={`py-6 text-center text-sm ${meshTheme.textMuted}`}>{t('mesh.notes.loading')}</div>
