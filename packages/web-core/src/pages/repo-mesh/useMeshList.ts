@@ -15,6 +15,7 @@ import {
 import type { RepoMeshContextValue, RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import type { MeshEntry } from './types'
 import { resolveMeshHostDaemonId } from './host-seed'
+import { rememberMeshNames } from '../../utils/mesh-name-registry'
 
 /**
  * Merge the per-daemon `list_meshes` answers into one entry per mesh.
@@ -306,6 +307,8 @@ export function useMeshList({
     // last-good list for these daemons.
     const initialDaemonIdsKey = daemons.map(d => d.id).filter(Boolean).sort().join(',')
     const [meshes, setMeshes] = useState<MeshEntry[]>(() => meshListCache.get(initialDaemonIdsKey) ?? [])
+    // Conversation markers ("Coordinator · <mesh>") read mesh names from the registry.
+    useEffect(() => { rememberMeshNames(meshes) }, [meshes])
     const [selectedMeshId, setSelectedMeshId] = useState<string | null>(null)
     // Only show the blocking spinner when we have nothing cached to paint.
     const [loading, setLoading] = useState(() => !meshListCache.has(initialDaemonIdsKey))

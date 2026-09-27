@@ -11,6 +11,7 @@ import type { SavedSessionHistoryEntry } from '../components/dashboard/HistoryMo
 import type { DaemonData } from '../types'
 import { normalizeManualCoordinatorSetup, type MeshCoordinatorManualSetup } from '../utils/mesh-coordinator-setup'
 import { isP2PLaunchTimeout } from './useDashboardPendingLaunch'
+import { rememberMeshNames } from '../utils/mesh-name-registry'
 
 interface DashboardLaunchTracker {
   machineId: string
@@ -226,7 +227,9 @@ export function useDashboardCommandActions({
   // Cloud override: route through the selected daemon; standalone: local daemon list_meshes
   const handleListMachineMeshes = useCallback(async (machineId: string): Promise<MeshLaunchOption[]> => {
     if (meshOverrides?.listMeshes) {
-      return meshOverrides.listMeshes(machineId)
+      const meshes = await meshOverrides.listMeshes(machineId)
+      rememberMeshNames(meshes)
+      return meshes
     }
     // Standalone/local-only: query daemon's ~/.adhdev/meshes.json
     if (!machineId) return []
@@ -239,7 +242,7 @@ export function useDashboardCommandActions({
         : Array.isArray(result?.result?.meshes)
           ? result.result.meshes
           : []
-      return meshes.map((mesh: any) => ({
+      const options: MeshLaunchOption[] = meshes.map((mesh: any) => ({
         id: String(mesh?.id || ''),
         name: String(mesh?.name || mesh?.id || 'Untitled mesh'),
         repoIdentity: mesh?.repoIdentity || mesh?.repo_identity || null,
@@ -247,6 +250,9 @@ export function useDashboardCommandActions({
         nodesCount: Array.isArray(mesh?.nodes) ? mesh.nodes.length : undefined,
         status: mesh?.status || null,
       })).filter((mesh: MeshLaunchOption) => mesh.id)
+      // Conversation markers ("Coordinator · <mesh>") read names from here.
+      rememberMeshNames(options)
+      return options
     } catch (error) {
       console.error('List meshes failed', error)
       throw error

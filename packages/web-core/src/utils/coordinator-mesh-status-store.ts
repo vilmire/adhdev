@@ -22,6 +22,7 @@
  */
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import { extractRepoMeshStatus } from './repo-mesh-status'
+import { rememberMeshName } from './mesh-name-registry'
 
 export type CoordinatorMeshStatusLoader = (
     daemonId: string,
@@ -73,6 +74,8 @@ function getEntry(meshId: string): Entry {
 
 function update(meshId: string, patch: Partial<CoordinatorMeshStatusSnapshot>): void {
     const entry = getEntry(meshId)
+    // Conversation markers ("Coordinator · <mesh>") read names from here.
+    if (patch.status?.meshName) rememberMeshName(meshId, patch.status.meshName)
     entry.snapshot = { ...entry.snapshot, ...patch }
     for (const listener of [...entry.listeners]) {
         try { listener() } catch { /* a listener must never break the store */ }

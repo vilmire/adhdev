@@ -25,6 +25,7 @@ import LaunchConfirmDialog from '../machine/LaunchConfirmDialog'
 import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { buildLaunchWorkspaceOptions } from '../machine/launchWorkspaceOptions'
 import { getConversationTitle, getMachineConversationCardSubtitle } from './conversation-presenters'
+import { MeshRoleIcon, MeshRoleLabel } from './ConversationMeshRoleMarker'
 import { buildMachineRecentLaunchCardView } from '../../utils/machine-recent-launch-presenters'
 import { useDashboardMobileMachineLauncher } from './useDashboardMobileMachineLauncher'
 
@@ -152,6 +153,7 @@ export default function DashboardMobileMachineScreen({
     }), [launcher, onOpenRecent, topRecentLaunches, t])
     const conversationCards = useMemo(() => topConversationItems.map(item => ({
         key: `recent-chat:${item.conversation.tabKey}`,
+        conversation: item.conversation,
         primary: getConversationTitle(item.conversation),
         secondary: getMachineConversationCardSubtitle(item.conversation, {
             timestampLabel: item.timestamp ? formatRelativeTime(item.timestamp) : null,
@@ -202,8 +204,12 @@ export default function DashboardMobileMachineScreen({
                                     type="button"
                                     onClick={card.onClick}
                                 >
-                                    <span className="text-sm font-bold text-text-primary">{card.primary}</span>
+                                    <span className="flex items-center gap-1.5 min-w-0 text-sm font-bold text-text-primary">
+                                        <MeshRoleIcon conversation={card.conversation} size={13} />
+                                        <span className="min-w-0 truncate">{card.primary}</span>
+                                    </span>
                                     <span className="text-xs leading-relaxed text-text-secondary">
+                                        <MeshRoleLabel conversation={card.conversation} separator />
                                         {card.secondary}
                                     </span>
                                 </button>

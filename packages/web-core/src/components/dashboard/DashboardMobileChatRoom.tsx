@@ -2,6 +2,8 @@ import { useTranslation } from 'react-i18next'
 import type { DaemonData } from '../../types'
 import { IconChevronLeft, IconX } from '../Icons'
 import ConversationActionsMenu from './ConversationActionsMenu'
+import ConversationMeshGraphButton from './ConversationMeshGraphButton'
+import { MeshRoleIcon } from './ConversationMeshRoleMarker'
 import PaneGroupContent from './PaneGroupContent'
 import ConversationMetaChips from './ConversationMetaChips'
 import type { ActiveConversation, CliConversationViewMode } from './types'
@@ -78,8 +80,9 @@ export default function DashboardMobileChatRoom({
                         <IconChevronLeft size={18} />
                     </button>
                     <div className="min-w-0 flex-1 flex flex-col gap-0.5">
-                        <div className="flex items-center gap-2 text-[17px] leading-[26px] font-extrabold tracking-tight text-text-primary truncate">
-                            {getConversationTitle(selectedConversation)}
+                        <div className="flex items-center gap-1.5 min-w-0 text-[17px] leading-[26px] font-extrabold tracking-tight text-text-primary">
+                            <MeshRoleIcon conversation={selectedConversation} size={15} />
+                            <span className="min-w-0 truncate">{getConversationTitle(selectedConversation)}</span>
                         </div>
                         <div className="min-w-0 max-w-full text-xs text-text-secondary">
                             <ConversationMetaChips
@@ -110,11 +113,14 @@ export default function DashboardMobileChatRoom({
                             <IconX size={14} />
                         </button>
                     )}
+                    <ConversationMeshGraphButton
+                        conversation={selectedConversation}
+                        onOpenMeshGraph={onOpenMeshGraph}
+                    />
                     <ConversationActionsMenu
                         conversation={selectedConversation}
                         onOpenHistory={onOpenHistory}
                         onOpenRemote={onOpenRemote}
-                        onOpenMeshGraph={onOpenMeshGraph}
                         iconSize={14}
                     />
                 </div>

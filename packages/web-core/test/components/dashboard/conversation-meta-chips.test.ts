@@ -46,22 +46,26 @@ function renderChips(
 }
 
 describe('ConversationMetaChips', () => {
-    it('does not render the mesh coordinator chip below the dashboard tab bar', () => {
+    // Owner decision (2026-09-27): a coordinator is recognisable at a glance on
+    // every surface, so the mesh role chip ("Coordinator · <mesh>" /
+    // "Worker · <mesh>") renders in the mesh-only row too.
+    it('renders the coordinator role chip in the mesh-only row', () => {
         const html = renderChips(createConversation({
             settings: { meshCoordinatorFor: 'mesh-1' },
         }), { meshOnly: true })
 
-        expect(html).toBe('')
-        expect(html).not.toContain('Coordinator')
-        expect(html).not.toContain('Mesh Coordinator')
+        expect(html).toContain('mesh-role-chip is-coordinator')
+        expect(html).toContain('Coordinator · mesh-1')
+        expect(html).not.toContain('Studio Mac')
     })
 
-    it('still renders mesh node chips when the mesh-only row has node context', () => {
+    it('renders the worker role chip (not a coordinator chip) for a mesh node', () => {
         const html = renderChips(createConversation({
             settings: { meshNodeFor: 'mesh-1' },
         }), { meshOnly: true })
 
-        expect(html).toContain('Mesh Node')
+        expect(html).toContain('mesh-role-chip is-worker')
+        expect(html).toContain('Worker · mesh-1')
         expect(html).not.toContain('Coordinator')
     })
 

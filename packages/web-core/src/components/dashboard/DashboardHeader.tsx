@@ -20,6 +20,8 @@ import type { DashboardNotificationRecord } from '../../utils/dashboard-notifica
 import GitStatusPill from '../git/GitStatusPill';
 import LoadingSpinner from '../ui/LoadingSpinner';
 import ConversationActionsMenu from './ConversationActionsMenu';
+import ConversationMeshGraphButton from './ConversationMeshGraphButton';
+import { MeshRoleIcon, MeshRoleLabel } from './ConversationMeshRoleMarker';
 import { Tooltip } from '../ui/InfoTip';
 
 export interface DashboardHeaderProps {
@@ -395,6 +397,7 @@ export default function DashboardHeader({
                         <IconChat size={18} />
                         {/* Mobile: show active tab title; Desktop: "Dashboard" */}
                         <span className="header-title-desktop">{t('dashboard.header.title')}</span>
+                        {activeConv && <MeshRoleIcon conversation={activeConv} size={14} className="header-title-mobile-role" />}
                         <span className="header-title-mobile">
                             {activeConv ? getConversationTitle(activeConv) : t('dashboard.header.title')}
                         </span>
@@ -439,10 +442,11 @@ export default function DashboardHeader({
                 )}
                 {activeConv && (
                     /* One pane toolbar: the git state (glanceable), the CLI view
-                       toggle, Stop as the only always-visible action, and every
-                       other per-conversation action in the "…" overflow. The
-                       conversation title is not repeated here — the active tab
-                       already names it. */
+                       toggle, Stop, the Mesh graph button for a coordinator
+                       (its own button — opened often, and the cue that this is
+                       a coordinator), and every other per-conversation action
+                       in the "…" overflow. The conversation title is not
+                       repeated here — the active tab already names it. */
                     <div className="dashboard-header-actions-group" data-testid="dashboard-pane-toolbar">
                         <GitStatusPill git={activeConv.git} compact className="max-w-[8rem] shrink-0" />
                         {isCliActive && onSetCliViewMode && effectiveCliViewMode && (
@@ -464,12 +468,16 @@ export default function DashboardHeader({
                                 <IconX size={14} />
                             </button>
                         )}
+                        <ConversationMeshGraphButton
+                            conversation={activeConv}
+                            onOpenMeshGraph={onOpenMeshGraph}
+                            showLabel
+                        />
                         <ConversationActionsMenu
                             conversation={activeConv}
                             onOpenHistory={onOpenHistory}
                             onOpenRemote={onOpenRemote ? () => onOpenRemote() : undefined}
                             onOpenGit={onOpenGitDialog}
-                            onOpenMeshGraph={onOpenMeshGraph}
                             iconSize={14}
                         />
                     </div>
@@ -571,12 +579,14 @@ export default function DashboardHeader({
                                                     {isConversationGenerating(conversation) && (
                                                         <LoadingSpinner size={12} thickness={2} color="success" label={t('dashboard.header.generating')} />
                                                     )}
+                                                    <MeshRoleIcon conversation={conversation} size={12} />
                                                     {getConversationTitle(conversation)}
                                                 </span>
                                                 <span className="dashboard-header-inbox-item-meta">
                                                     {hiddenConversations.indexOf(conversation) < 9 ? (
                                                         <span className="dashboard-header-item-shortcut">⌥{hiddenConversations.indexOf(conversation) + 1}</span>
                                                     ) : null}
+                                                    <MeshRoleLabel conversation={conversation} separator />
                                                     {getConversationMetaText(conversation)}
                                                 </span>
                                             </button>

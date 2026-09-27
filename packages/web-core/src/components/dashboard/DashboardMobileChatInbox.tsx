@@ -6,7 +6,9 @@ import InstallCommand from '../InstallCommand'
 import { countGeneratingConversations, formatRelativeTime, getConversationViewStates, type MobileConversationListItem, type MobileMachineCard } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
 import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
-import { getConversationMetaText, getConversationStatusHint, getConversationTitle, isMeshGraphConversation } from './conversation-presenters'
+import { getConversationMetaText, getConversationStatusHint, getConversationTitle } from './conversation-presenters'
+import { isMeshGraphAvailableFor } from './conversation-mesh-role'
+import { MeshRoleIcon, MeshRoleLabel } from './ConversationMeshRoleMarker'
 import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, buildChatFrontendDebugSnapshot, copyChatDebugBundleTextToClipboard } from './chat-debug-bundle'
 import { isMobileDebugBundleEnabled } from '../../utils/debug-flags'
 import { eventManager } from '../../managers/EventManager'
@@ -264,7 +266,7 @@ function DashboardMobileChatItem({
     const previewClassName = isEarlier ? 'text-text-secondary opacity-80' : 'text-text-muted'
     const timestampClassName = isEarlier ? 'text-text-muted opacity-80' : 'text-text-muted'
     const shouldShowTimestamp = !isWorking && !isTaskComplete
-    const meshGraphAvailable = isMeshGraphConversation(item.conversation)
+    const meshGraphAvailable = isMeshGraphAvailableFor(item.conversation)
     const warningTextClassName = 'text-[color:var(--status-warning)]'
     const handleConversationContextMenu = (event: MouseEvent<HTMLButtonElement>) => {
         if (!onCollectChatDebugBundle) return
@@ -300,7 +302,7 @@ function DashboardMobileChatItem({
                     {meshGraphAvailable && onOpenMeshGraph && (
                         <button
                             type="button"
-                            className="mobile-inbox-mesh-button inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border-subtle bg-bg-primary/70 text-text-muted transition-colors hover:border-border-default hover:text-text-primary"
+                            className="mobile-inbox-mesh-button inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[color:color-mix(in_srgb,var(--mesh-coordinator)_34%,transparent)] bg-bg-primary/70 text-[color:var(--mesh-coordinator)] transition-colors hover:bg-[color:color-mix(in_srgb,var(--mesh-coordinator)_10%,transparent)]"
                             onClick={(event) => {
                                 event.preventDefault()
                                 event.stopPropagation()
@@ -319,10 +321,12 @@ function DashboardMobileChatItem({
                     onContextMenu={handleConversationContextMenu}
                     type="button"
                 >
-                    <div className="flex items-center gap-2 pr-[92px]">
+                    <div className="flex items-center gap-1.5 pr-[92px]">
+                        <MeshRoleIcon conversation={item.conversation} size={13} />
                         <span className={`text-[15px] leading-[22px] font-bold truncate tracking-tight ${titleClassName}`}>{title}</span>
                     </div>
                     <div className={`text-xs font-medium truncate flex items-center ${metaClassName}`}>
+                        <MeshRoleLabel conversation={item.conversation} separator />
                         <span className="truncate">{metaText}</span>
                         <GitStatusPill git={item.conversation.git} compact className="ml-1 max-w-[6.5rem] shrink-0" />
                         {isReconnecting ? (

@@ -125,8 +125,16 @@
         },
         "metaChips": {
             "queuePending": "等待 {{count}}",
-            "queueTooltip": "队列：等待 {{pending}}，已分配 {{assigned}}，已完成 {{completed}}，失败 {{failed}}",
-            "meshNode": "Mesh 节点"
+            "queueTooltip": "队列：等待 {{pending}}，已分配 {{assigned}}，已完成 {{completed}}，失败 {{failed}}"
+        },
+        "meshRole": {
+            "coordinator": "协调器",
+            "worker": "工作者",
+            "coordinatorFor": "{{mesh}} 的协调器",
+            "workerFor": "{{mesh}} 的工作者",
+            "coordinatorUnknownMesh": "Mesh 协调器",
+            "workerUnknownMesh": "Mesh 工作者",
+            "openMeshGraph": "打开 Mesh 图"
         },
         "versionBanner": {
             "restarting": "重启中",
@@ -1856,7 +1864,6 @@
         "hideFromDashboard": "从仪表板隐藏",
         "removeShortcut": "移除快捷键",
         "changeShortcut": "更改快捷键（{{shortcut}}）",
-        "meshChat": "Mesh 聊天",
         "dropSplitRight": "向右拆分",
         "dropMoveHere": "移到这里",
         "dropSplitLeft": "向左拆分",

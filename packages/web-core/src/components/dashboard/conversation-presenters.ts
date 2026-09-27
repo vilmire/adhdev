@@ -1,5 +1,6 @@
 import { formatIdeType } from '../../utils/daemon-utils'
 import type { ActiveConversation } from './types'
+import { isMeshGraphAvailableFor } from './conversation-mesh-role'
 import { getConversationViewStates } from './DashboardMobileChatShared'
 import {
     getConversationDisplayLabel,
@@ -19,50 +20,12 @@ export function getConversationMetaText(conversation: ActiveConversation): strin
     return getConversationMetaParts(conversation).join(' · ')
 }
 
+/**
+ * Mesh chat predicate (coordinator bound to a daemon). Kept as a named export
+ * for existing importers; the rule itself lives in conversation-mesh-role.
+ */
 export function isMeshGraphConversation(conversation: ActiveConversation): boolean {
-    // Shared mesh-chat predicate reused by the mobile inbox (inline mesh icon)
-    // and the desktop tab header (mesh icon overlay). A conversation is treated
-    // as a mesh chat when it is bound to a daemon and carries a coordinator mesh
-    // id or a settings-level mesh-coordinator marker.
-    return !!conversation.daemonId
-        && !!(conversation.coordinator?.meshId
-            || (typeof conversation.settings?.meshCoordinatorFor === 'string'
-                && conversation.settings.meshCoordinatorFor.trim().length > 0))
-}
-
-export function getConversationMeshRoleLabels(conversation: ActiveConversation): string[] {
-    const labels: string[] = []
-    const isMeshNode = typeof conversation.settings?.meshNodeFor === 'string'
-        && conversation.settings.meshNodeFor.trim().length > 0
-    const isMeshCoordinator = !!conversation.coordinator?.meshId
-        || (typeof conversation.settings?.meshCoordinatorFor === 'string'
-            && conversation.settings.meshCoordinatorFor.trim().length > 0)
-
-    if (isMeshNode) labels.push('Mesh node')
-    if (isMeshCoordinator) labels.push('Coordinator')
-    return labels
-}
-
-export function getConversationMeshRoleTitle(conversation: ActiveConversation): string {
-    const details: string[] = []
-    const meshNodeFor = typeof conversation.settings?.meshNodeFor === 'string'
-        ? conversation.settings.meshNodeFor.trim()
-        : ''
-    const coordinatorMeshId = typeof conversation.coordinator?.meshId === 'string'
-        ? conversation.coordinator.meshId.trim()
-        : ''
-    const settingsCoordinatorFor = typeof conversation.settings?.meshCoordinatorFor === 'string'
-        ? conversation.settings.meshCoordinatorFor.trim()
-        : ''
-    const coordinatorFor = coordinatorMeshId || settingsCoordinatorFor
-
-    if (meshNodeFor) details.push(`Mesh node: ${meshNodeFor}`)
-    if (coordinatorFor) details.push(`Coordinator: ${coordinatorFor}`)
-    if (conversation.meshQueueStats) {
-        const { pending, assigned, completed, failed } = conversation.meshQueueStats
-        details.push(`Queue: ${pending} pending, ${assigned} assigned, ${completed} completed, ${failed} failed`)
-    }
-    return details.join(' · ')
+    return isMeshGraphAvailableFor(conversation)
 }
 
 export function getConversationPreviewText(
