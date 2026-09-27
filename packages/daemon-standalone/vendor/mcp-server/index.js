@@ -55687,6 +55687,42 @@ ${rendered.join("\n\n")}`,
            * applies only when there is no private root, which is exactly the
            * `ADHDEV_WORKER_MCP`-off case it was kept for. See the launch-seam
            * comment in `commands/cli-delegated-launch.ts`.
+           *
+           * ─── ★The transcript trap (measured live 2026-09-27 — it applies here too) ─
+           *
+           * This spec originally imported `auth.json` and nothing else, and that single
+           * omission silently destroyed transcript collection for every codex worker.
+           * It is the identical class documented at length for antigravity and grok
+           * above, arriving through `CODEX_HOME` rather than `HOME`.
+           *
+           * The daemon's codex reader is `os.homedir()`-rooted and does not consult
+           * `envOverrides`: `codexSessionsRoot()` in
+           * `providers/native-history/codex-cli-transcript.ts` returns
+           * `os.homedir()/.codex/sessions` (feeding both `readSession` and the
+           * `listSessions` fallback), and `native-history/dispatcher.ts`'s
+           * `resolveCodexPath` globs the same root. So with a private root and no link,
+           * the worker writes rollout JSONL under
+           * `$TMPDIR/adhdev-worker-home/codex-cli-<hash>/sessions/<Y>/<M>/<D>/` while
+           * the daemon reads `~/.codex/sessions` — and every codex worker reports zero
+           * assistant messages, with no diagnostic anywhere.
+           *
+           * Measured on disk the day it was found: a live worker's private root held a
+           * 175-line rollout with 10 assistant entries, while `~/.codex/sessions` had
+           * no directory newer than eight days. The coordinator still received the
+           * worker's `report_completion` (that rides the mesh ledger and mailbox, not
+           * the transcript), so the failure presented as "summary arrives, transcript
+           * is empty" rather than as a broken worker.
+           *
+           * `sessions` is therefore SYMLINKED through to the real home, the same shape
+           * grok (`.grok/sessions`), kimi (`sessions`) and hermes (`sessions`) already
+           * use. Rewiring the reader instead was rejected for the reason given at the
+           * head of the antigravity spec — symlinks buy the same isolation with zero
+           * change to any read path.
+           *
+           * ★`history.jsonl` is deliberately NOT imported. It is the TUI's input
+           * history (what the user typed at the prompt), not a transcript: the daemon
+           * never reads it, so it carries no part of this defect, and leaving it
+           * private keeps a worker's typed input out of the owner's recall buffer.
            */
           {
             providerType: "codex-cli",
@@ -55705,7 +55741,15 @@ ${rendered.join("\n\n")}`,
               // whose entire purpose is isolation, and the exact leak measured
               // here. A host authenticating codex by API key has no `auth.json`
               // and must still get an isolated worker.
-              { relativePath: "auth.json", mode: "symlink", requireOwnerOnly: true }
+              { relativePath: "auth.json", mode: "symlink", requireOwnerOnly: true },
+              // Transcripts — linked THROUGH so the daemon's os.homedir()-rooted
+              // reader still finds what the worker writes. See the transcript-trap
+              // section above. Not `required`: a fresh machine has no sessions
+              // directory yet, and codex creates the dated subtree on first use
+              // inside the linked-through parent. A `required` entry here would
+              // abort the private root and fall back to the owner's config — the
+              // fail-OPEN this spec exists to prevent.
+              { relativePath: "sessions", mode: "symlink" }
             ]
           },
           /**

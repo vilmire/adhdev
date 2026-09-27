@@ -1552,6 +1552,67 @@ describe('codex worker config root', () => {
       realHome, baseDir: tmp('adhdev-whbase-codex-perm-'),
     })).toThrow(/insecure_source/)
   })
+
+  it('★a rollout the worker writes is visible at the path the DAEMON reads', () => {
+    // The live defect (2026-09-27). `codexSessionsRoot()` in
+    // providers/native-history/codex-cli-transcript.ts is
+    // `os.homedir()/.codex/sessions`, hard-coded — it never sees CODEX_HOME. So
+    // this asserts the end-to-end property: write through the WORKER path, read
+    // back from the REAL path. Without the symlink the worker's rollout stays in
+    // the private root and every codex worker reports zero assistant messages
+    // while still delivering its report_completion, which rides the mesh ledger
+    // rather than the transcript.
+    const realHome = fakeCodexHome()
+    mkdirSync(join(realHome, '.codex', 'sessions'), { recursive: true })
+    const spec = findWorkerPrivateHomeSpec('codex-cli')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-codex-transcript-'), sessionKey: 'task_1',
+      realHome, baseDir: tmp('adhdev-whbase-codex-transcript-'),
+    })
+
+    // codex files rollouts under a UTC-dated subtree it creates on first use.
+    const workerDated = join(prepared.home, 'sessions', '2026', '09', '27')
+    mkdirSync(workerDated, { recursive: true })
+    writeFileSync(join(workerDated, 'rollout-fixture.jsonl'), '{"role":"assistant"}\n')
+
+    expect(
+      readFileSync(join(realHome, '.codex', 'sessions', '2026', '09', '27', 'rollout-fixture.jsonl'), 'utf-8'),
+    ).toBe('{"role":"assistant"}\n')
+  })
+
+  it('★sessions is a SYMLINK, not a private directory (a copy would strand the rollout)', () => {
+    const realHome = fakeCodexHome()
+    mkdirSync(join(realHome, '.codex', 'sessions'), { recursive: true })
+    const spec = findWorkerPrivateHomeSpec('codex-cli')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-codex-sesslink-'), sessionKey: 'task_1',
+      realHome, baseDir: tmp('adhdev-whbase-codex-sesslink-'),
+    })
+
+    const workerSessions = join(prepared.home, 'sessions')
+    expect(lstatSync(workerSessions).isSymbolicLink()).toBe(true)
+    expect(realpathSync(workerSessions)).toBe(realpathSync(join(realHome, '.codex', 'sessions')))
+  })
+
+  it('launches on a host that has never run codex (sessions is not required)', () => {
+    // A `required: true` here would abort the private root on a fresh machine
+    // and fall back to the owner's config — the fail-OPEN this whole spec exists
+    // to prevent. The directory must simply be skipped.
+    const realHome = tmp('adhdev-codex-thin-home-')
+    mkdirSync(join(realHome, '.codex'), { recursive: true })
+    writeFileSync(join(realHome, '.codex', 'auth.json'), '{"tokens":{}}', { mode: 0o600 })
+
+    const spec = findWorkerPrivateHomeSpec('codex-cli')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-codex-thin-'), sessionKey: 'task_1',
+      realHome, baseDir: tmp('adhdev-whbase-codex-thin-'),
+    })
+
+    expect(prepared.imported).toContain('auth.json')
+    expect(prepared.skipped).toContain('sessions')
+    // The isolated surface still holds: no config.toml reached the worker.
+    expect(existsSync(join(prepared.home, 'config.toml'))).toBe(false)
+  })
 })
 
 describe('kimi worker config root', () => {
