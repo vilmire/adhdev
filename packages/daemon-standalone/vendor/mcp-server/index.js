@@ -3007,13 +3007,112 @@ var require_dist = __commonJS({
         this.trim();
       }
       trim() {
+        let evicted = false;
         while (this.totalBytes > this.maxBytes && this.chunks.length > 1) {
           const removed = this.chunks.shift();
           if (!removed) break;
           this.totalBytes -= removed.bytes;
+          evicted = true;
         }
+        if (evicted) this.healHead();
+      }
+      /**
+       * TRIM-BOUNDARY repair. Eviction drops whole chunks, and a chunk boundary is
+       * a PTY read boundary — an arbitrary byte offset with no relationship to the
+       * structure of the stream. So the chunk that becomes the new oldest can begin
+       * partway through something the sender wrote atomically, and `snapshot()`
+       * joins from exactly there.
+       *
+       * The consumer is the browser terminal: "Load older terminal output" asks
+       * with `sinceSeq: 0`, which makes the daemon skip the emulator viewport and
+       * hand this raw text straight to xterm (see `mergeRuntimeSnapshot`). xterm
+       * then parses a stream that starts mid-token, which is how the reported
+       * screenshot got orphaned `.` and `5` glyphs floating above the output and a
+       * large blank band at the top:
+       *
+       *   drop 5 chars  -> "[HClaude Code v2.1.220…"   the CSI introducer is gone,
+       *                                                so `[H` prints literally
+       *   drop 12 chars -> "2mClaude Code v2.1.220…"   half an SGR prints literally
+       *   drop 46 chars -> the leading `\x1b[2J\x1b[H` never arrives, so the screen
+       *                    is never cleared/homed and row placement collapses
+       *   byte cut      -> a torn 3-byte Hangul sequence decodes to U+FFFD
+       *
+       * So walk the head of the new oldest chunk forward to the first offset that
+       * is safe to start parsing at, and drop the partial prefix. Losing a few
+       * bytes of already-evicted context is strictly better than injecting literal
+       * garbage into the viewport.
+       *
+       * Two independent boundary classes have to be handled, and neither subsumes
+       * the other:
+       *
+       *  1. Character encoding. Chunks are JS strings, so a torn multi-byte UTF-8
+       *     sequence has already decayed into U+FFFD (or, for astral characters, a
+       *     lone surrogate) by the time it gets here. This mirrors the protection
+       *     `createLineParser` grew for the IPC socket path in
+       *     `ipc-line-parser-utf8.test.ts`; that layer can hold bytes back and
+       *     re-join them because it owns both sides of the split, whereas here the
+       *     other half is already gone, so dropping is the only repair available.
+       *  2. Escape sequences. A CSI/OSC/SS3 can be cut anywhere, and unlike the
+       *     encoding case the leftover bytes are all perfectly printable — which is
+       *     precisely why the corruption is visible rather than silent.
+       */
+      healHead() {
+        const head = this.chunks[0];
+        if (!head) return;
+        const repaired = stripDanglingPrefix(head.data);
+        if (repaired === head.data) return;
+        const bytes = Buffer.byteLength(repaired, "utf8");
+        this.totalBytes -= head.bytes - bytes;
+        head.data = repaired;
+        head.bytes = bytes;
       }
     };
+    var CSI_FINAL = /[\x40-\x7e]/;
+    var CSI_COMMON_FINAL = /[ABCDEFGHJKSTLMPX@mnchlsurdfgqit]/;
+    function stripDanglingPrefix(text) {
+      let i = 0;
+      while (i < text.length) {
+        const code = text.charCodeAt(i);
+        if (code === 65533) {
+          i += 1;
+          continue;
+        }
+        if (code >= 55296 && code <= 56319) {
+          const next = text.charCodeAt(i + 1);
+          if (next >= 56320 && next <= 57343) break;
+          i += 1;
+          continue;
+        }
+        if (code >= 56320 && code <= 57343) {
+          i += 1;
+          continue;
+        }
+        break;
+      }
+      const rest = text.slice(i);
+      const danglingLength = danglingEscapeTailLength(rest);
+      return danglingLength > 0 ? rest.slice(danglingLength) : rest;
+    }
+    function danglingEscapeTailLength(text) {
+      if (!text || text.charCodeAt(0) === 27) return 0;
+      let i = 0;
+      const hasIntroducer = text[0] === "[" || text[0] === "]";
+      if (hasIntroducer) i = 1;
+      const start = i;
+      while (i < text.length && /[0-9;?:<=>]/.test(text[i])) i += 1;
+      if (i >= text.length) return 0;
+      if (text[0] === "]") {
+        const bel = text.indexOf("\x07");
+        if (bel >= 0) return bel + 1;
+        return 0;
+      }
+      if (!CSI_FINAL.test(text[i])) return 0;
+      if (!hasIntroducer) {
+        if (i === start) return 0;
+        if (!CSI_COMMON_FINAL.test(text[i])) return 0;
+      }
+      return i + 1;
+    }
     var DEFAULT_SESSION_HOST_COLS = 80;
     var DEFAULT_SESSION_HOST_ROWS = 32;
     function normalizeSessionHostDimension(value, fallback) {
