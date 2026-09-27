@@ -27,6 +27,7 @@ import {
     type NodeProps,
     type NodeTypes,
 } from '@xyflow/react'
+import './meshGraph.css'
 import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from './types'
 import {
     getMeshGraphAttentionBadge,

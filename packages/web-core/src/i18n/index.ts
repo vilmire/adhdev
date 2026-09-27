@@ -7,6 +7,9 @@
  */
 export {
     initI18n,
+    whenI18nReady,
+    isI18nReady,
+    loadLocaleCatalog,
     i18next,
     getStoredLanguage,
     resolveInitialLanguage,
@@ -15,6 +18,8 @@ export {
     DEFAULT_NAMESPACE,
 } from './config'
 export { useLanguage } from './useLanguage'
+export { I18nReadyGate } from './I18nReadyGate'
+export type { I18nReadyGateProps } from './I18nReadyGate'
 export {
     SUPPORTED_LANGUAGES,
     DEFAULT_LANGUAGE,

@@ -4,7 +4,7 @@
  * Manages: meshes, selectedMeshId, loading/error, create/delete forms,
  * and daemon-picker state used during mesh creation.
  */
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import i18next from 'i18next'
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared'
 import {
@@ -44,6 +44,69 @@ export function mergeMeshListAnswers(
         const hostCopy = hostDaemonId ? copies.find(copy => daemonIdsEquivalent(copy.daemonId, hostDaemonId)) : undefined
         return (hostCopy ?? copies[0]).mesh
     })
+}
+
+export interface MeshListAnswer { daemonId: string; meshes: MeshEntry[] }
+
+export interface MeshListProgress {
+    /** Host-first merge of every answer received so far (daemon order, not arrival order). */
+    merged: MeshEntry[]
+    /** Daemons that have answered or failed. */
+    settled: number
+    total: number
+}
+
+/**
+ * Progressive variant of the `list_meshes` fan-out.
+ *
+ * The old fan-out awaited `Promise.allSettled` over EVERY connected daemon, so
+ * the /mesh list stayed on "Loading meshes…" until the slowest daemon answered
+ * (7+ s live) even though the coordinator had answered in a fraction of that.
+ * This reports a merged snapshot after each answer instead.
+ *
+ * Host precedence is unchanged because every snapshot is a fresh
+ * `mergeMeshListAnswers` over all answers held so far: a member's copy stands
+ * in only until the host's answer lands, and then the host's copy replaces it
+ * (a later member answer can never displace an already-held host copy). Answers
+ * are merged in DAEMON order regardless of arrival order, so the final list is
+ * identical to the old all-settled result. A failed daemon counts as settled
+ * with no answer, exactly as `allSettled` dropped it.
+ */
+export async function collectMeshListAnswersProgressively(
+    daemons: RepoMeshDaemonEntry[],
+    fetchAnswer: (daemon: RepoMeshDaemonEntry) => Promise<MeshListAnswer>,
+    onProgress?: (progress: MeshListProgress) => void,
+): Promise<MeshEntry[]> {
+    const answers: Array<MeshListAnswer | undefined> = new Array(daemons.length)
+    let settled = 0
+    const snapshot = () => mergeMeshListAnswers(answers.filter((a): a is MeshListAnswer => !!a), daemons)
+    await Promise.all(daemons.map(async (daemon, index) => {
+        try {
+            answers[index] = await fetchAnswer(daemon)
+        } catch {
+            // Same as allSettled: an unreachable daemon contributes nothing.
+        }
+        settled += 1
+        onProgress?.({ merged: snapshot(), settled, total: daemons.length })
+    }))
+    return snapshot()
+}
+
+/**
+ * Fold a partial (still-pending) merge into the list already on screen: entries
+ * present in `partial` are replaced/added (host-first already applied), entries
+ * not answered yet are KEPT. Removal is only ever decided by the final, complete
+ * merge — so a warm reload never flickers a mesh out and back in.
+ */
+export function upsertPartialMeshList(prev: MeshEntry[], partial: MeshEntry[]): MeshEntry[] {
+    const partialById = new Map(partial.map(mesh => [mesh.id, mesh]))
+    const seen = new Set<string>()
+    const next = prev.map(mesh => {
+        seen.add(mesh.id)
+        return partialById.get(mesh.id) ?? mesh
+    })
+    for (const mesh of partial) if (!seen.has(mesh.id)) next.push(mesh)
+    return next
 }
 
 // Module-level mesh-list cache, keyed by the sorted daemon-id set the list was
@@ -350,33 +413,53 @@ export function useMeshList({
     // load on a route re-entry that already has a cached list also doesn't block
     // (the seeded meshes are already painted). Mirrors useMeshGraph.ts's
     // `setGraphLoading(!refresh && prev===null)`.
+    // Only the latest loadMeshes() call may write: a slow answer from a superseded
+    // load must not overwrite (or re-shrink) a newer list.
+    const loadGenerationRef = useRef(0)
     const loadMeshes = useCallback(async (refresh = false) => {
+        const generation = ++loadGenerationRef.current
+        const isCurrent = () => loadGenerationRef.current === generation
         const hasDisplayable = refresh || meshListCache.has(daemonIdsKey)
         setLoading(prev => (hasDisplayable ? prev : true))
         try {
             if (features.createDaemonPicker) {
                 // Fan-out = discovery of which meshes exist; each mesh's record
                 // comes from its host/coordinator's answer (mergeMeshListAnswers).
-                const results = await Promise.allSettled(daemons.map(async daemon => {
-                    if (!daemon.id) return { daemonId: '', meshes: [] as MeshEntry[] }
-                    const raw = await sendCommand(daemon.id, 'list_meshes', {})
-                    const result = unwrapResult(raw)
-                    if (result?.success === false) throw new Error(result.error || 'Failed to load meshes')
-                    const meshes: MeshEntry[] = (Array.isArray(result?.meshes) ? result.meshes : [])
-                        .map((m: any) => normalizeMesh(m, daemon.id))
-                        .filter((m: any) => m.id)
-                    return { daemonId: daemon.id, meshes }
-                }))
-                const next = mergeMeshListAnswers(
-                    results.flatMap(r => (r.status === 'fulfilled' ? [r.value] : [])),
+                // Progressive: paint as soon as any daemon answers with meshes and
+                // merge later answers in, instead of waiting for the slowest daemon.
+                const next = await collectMeshListAnswersProgressively(
                     daemons,
+                    async daemon => {
+                        if (!daemon.id) return { daemonId: '', meshes: [] as MeshEntry[] }
+                        const raw = await sendCommand(daemon.id, 'list_meshes', {})
+                        const result = unwrapResult(raw)
+                        if (result?.success === false) throw new Error(result.error || 'Failed to load meshes')
+                        const meshes: MeshEntry[] = (Array.isArray(result?.meshes) ? result.meshes : [])
+                            .map((m: any) => normalizeMesh(m, daemon.id))
+                            .filter((m: any) => m.id)
+                        return { daemonId: daemon.id, meshes }
+                    },
+                    ({ merged, settled, total }) => {
+                        // The final snapshot is applied below as the authoritative list.
+                        if (!isCurrent() || settled >= total) return
+                        // Nothing to show yet: stay on the loading state rather than
+                        // flash the empty state while other daemons are still pending.
+                        if (merged.length === 0) return
+                        setMeshes(prev => {
+                            const partial = hasDisplayable ? upsertPartialMeshList(prev, merged) : merged
+                            return meshesEqual(prev, partial) ? prev : partial
+                        })
+                        setLoading(false)
+                    },
                 )
+                if (!isCurrent()) return
                 setMeshes(prev => (meshesEqual(prev, next) ? prev : next))
                 meshListCache.set(daemonIdsKey, next)
                 setError(null)
             } else {
                 if (!primaryDaemonId) return
                 const res: any = await sendCommand(primaryDaemonId, 'list_meshes')
+                if (!isCurrent()) return
                 if (res?.success) {
                     const next = (res.meshes || []).map((m: any) => normalizeMesh(m, primaryDaemonId))
                     setMeshes(prev => (meshesEqual(prev, next) ? prev : next))
@@ -387,9 +470,9 @@ export function useMeshList({
                 }
             }
         } catch (e: any) {
-            setError(e?.message || 'Failed to load meshes')
+            if (isCurrent()) setError(e?.message || 'Failed to load meshes')
         } finally {
-            setLoading(false)
+            if (isCurrent()) setLoading(false)
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [daemonIdsKey, primaryDaemonId, sendCommand, unwrapResult, normalizeMesh, features.createDaemonPicker])

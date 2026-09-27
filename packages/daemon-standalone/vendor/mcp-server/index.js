@@ -41997,7 +41997,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       return isMissionQueryResponse2(value) ? value : null;
     }
     function isMissionListQueryRequest(value) {
-      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "statuses", "verbose", "includeMagi", "withStats", "limit", "historyIdLimit"])) return false;
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "statuses", "verbose", "includeMagi", "withStats", "limit", "historyIdLimit", "meshStatusView"])) return false;
+      if (value.meshStatusView !== void 0 && value.meshStatusView !== "compact" && value.meshStatusView !== "verbose") return false;
       if (value.v !== TURN_IPC_PROTOCOL_VERSION2) return false;
       if (!isEvidenceIdentifier2(value.meshId)) return false;
       if (value.statuses !== void 0) {
@@ -42038,7 +42039,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       const hasGoal = "goal" in value;
       const hasPreview = "goalPreview" in value && "goalTruncated" in value;
       if (hasGoal === hasPreview) return false;
-      const baseKeys = ["id", "meshId", "title", "status", "source", "tasks", "stats", "brief"];
+      const baseKeys = ["id", "meshId", "title", "status", "source", "tasks", "stats", "brief", "createdAt", "updatedAt", "closeCandidateEmittedAt"];
       const allowed = hasGoal ? [...baseKeys, "goal"] : [...baseKeys, "goalPreview", "goalTruncated"];
       if (!hasOnlyKeys22(value, allowed)) return false;
       if (!isEvidenceIdentifier2(value.id) || !isEvidenceIdentifier2(value.meshId)) return false;
@@ -42050,6 +42051,9 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (value.brief !== void 0 && !isMissionBriefWire2(value.brief)) return false;
       if (hasGoal && typeof value.goal !== "string") return false;
       if (hasPreview && (typeof value.goalPreview !== "string" || typeof value.goalTruncated !== "boolean")) return false;
+      if (value.createdAt !== void 0 && typeof value.createdAt !== "string") return false;
+      if (value.updatedAt !== void 0 && typeof value.updatedAt !== "string") return false;
+      if (value.closeCandidateEmittedAt !== void 0 && value.closeCandidateEmittedAt !== null && typeof value.closeCandidateEmittedAt !== "string") return false;
       return true;
     }
     function isMeshMissionHistoryFoldWire2(value) {
@@ -42192,16 +42196,25 @@ ${renderWorkerProtocolFooter2(input)}`;
       return isRecordLocalResponse2(value) ? value : null;
     }
     function isQueueQueryRequest(value) {
-      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "statuses", "taskId", "view"])) return false;
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "statuses", "taskId", "view", "withCounts", "historicalOlderThanMs", "withDependencyHeads"])) return false;
       if (value.v !== TURN_IPC_PROTOCOL_VERSION2 || !isEvidenceIdentifier2(value.meshId)) return false;
       if (value.statuses !== void 0 && (!Array.isArray(value.statuses) || !value.statuses.every(isEvidenceIdentifier2))) return false;
-      return isOptionalId22(value.taskId) && isOptionalBoolean2(value.view);
+      if (value.historicalOlderThanMs !== void 0 && !isNonNegativeInt2(value.historicalOlderThanMs)) return false;
+      return isOptionalId22(value.taskId) && isOptionalBoolean2(value.view) && isOptionalBoolean2(value.withCounts) && isOptionalBoolean2(value.withDependencyHeads);
     }
     function decodeQueueQueryRequest(value) {
       return isQueueQueryRequest(value) ? value : null;
     }
+    function isQueueDependencyHeadWire2(value) {
+      return isRecord2(value) && hasOnlyKeys22(value, ["id", "status", "blockedReason", "cancelReason"]) && typeof value.id === "string" && typeof value.status === "string" && (value.blockedReason === void 0 || typeof value.blockedReason === "string") && (value.cancelReason === void 0 || typeof value.cancelReason === "string");
+    }
     function isQueueQueryResponse2(value) {
-      return isRecord2(value) && hasOnlyKeys22(value, ["entries"]) && Array.isArray(value.entries) && value.entries.every(isQueueEntryWire2);
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["entries", "counts", "oldHistoricalCount", "dependencyHeads"])) return false;
+      if (!Array.isArray(value.entries) || !value.entries.every(isQueueEntryWire2)) return false;
+      if (value.counts !== void 0 && (!isRecord2(value.counts) || !Object.values(value.counts).every(isNonNegativeInt2))) return false;
+      if (value.oldHistoricalCount !== void 0 && !isNonNegativeInt2(value.oldHistoricalCount)) return false;
+      if (value.dependencyHeads !== void 0 && (!Array.isArray(value.dependencyHeads) || !value.dependencyHeads.every(isQueueDependencyHeadWire2))) return false;
+      return true;
     }
     function decodeQueueQueryResponse2(value) {
       return isQueueQueryResponse2(value) ? value : null;
@@ -42295,7 +42308,6 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (value.nodes !== void 0 && !isRecordArray2(value.nodes)) return false;
       if (value.queue !== void 0 && !isRecordArray2(value.queue)) return false;
       if (value.recordTail !== void 0 && !isNonNegativeInt2(value.recordTail)) return false;
-      if (value.includeSchedulingRuntime === true && !isRecord2(value.mesh)) return false;
       return isOptionalBoolean2(value.includeTerminalDirect) && isOptionalBoolean2(value.compute) && isOptionalBoolean2(value.includeInputs) && isOptionalBoolean2(value.includeSummary) && isOptionalBoolean2(value.includeSchedulingRuntime) && isOptionalRecord2(value.mesh);
     }
     function decodeActiveWorkQueryRequest(value) {
@@ -42311,13 +42323,28 @@ ${renderWorkerProtocolFooter2(input)}`;
       return isActiveWorkQueryResponse2(value) ? value : null;
     }
     function isRecoveryContextQueryRequest(value) {
-      return isRecord2(value) && hasOnlyKeys22(value, ["v", "meshId", "nodeId", "sessionId", "maxRetries"]) && value.v === TURN_IPC_PROTOCOL_VERSION2 && isEvidenceIdentifier2(value.meshId) && isOptionalId22(value.nodeId) && isOptionalId22(value.sessionId) && (value.maxRetries === void 0 || isNonNegativeInt2(value.maxRetries)) && (value.nodeId !== void 0 || value.sessionId !== void 0);
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "nodeId", "sessionId", "maxRetries", "nodeIds"])) return false;
+      if (value.v !== TURN_IPC_PROTOCOL_VERSION2 || !isEvidenceIdentifier2(value.meshId)) return false;
+      if (!isOptionalId22(value.nodeId) || !isOptionalId22(value.sessionId)) return false;
+      if (value.maxRetries !== void 0 && !isNonNegativeInt2(value.maxRetries)) return false;
+      if (value.nodeIds !== void 0) {
+        if (!Array.isArray(value.nodeIds) || value.nodeIds.length === 0 || !value.nodeIds.every(isEvidenceIdentifier2)) return false;
+        return value.nodeId === void 0 && value.sessionId === void 0;
+      }
+      return value.nodeId !== void 0 || value.sessionId !== void 0;
     }
     function decodeRecoveryContextQueryRequest(value) {
       return isRecoveryContextQueryRequest(value) ? value : null;
     }
+    function isRecoveryContextWire2(value) {
+      return isRecord2(value) && typeof value.consecutiveNodeFailures === "number";
+    }
     function isRecoveryContextQueryResponse2(value) {
-      return isRecord2(value) && hasOnlyKeys22(value, ["context"]) && isRecord2(value.context) && typeof value.context.consecutiveNodeFailures === "number";
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["context", "contexts"])) return false;
+      if (value.context === void 0 && value.contexts === void 0) return false;
+      if (value.context !== void 0 && !isRecoveryContextWire2(value.context)) return false;
+      if (value.contexts !== void 0 && (!isRecord2(value.contexts) || !Object.values(value.contexts).every(isRecoveryContextWire2))) return false;
+      return true;
     }
     function decodeRecoveryContextQueryResponse2(value) {
       return isRecoveryContextQueryResponse2(value) ? value : null;
@@ -42439,13 +42466,17 @@ ${renderWorkerProtocolFooter2(input)}`;
       return isGraphViewQueryResponse2(value) ? value : null;
     }
     function isTaskStatsQueryRequest(value) {
-      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "taskIds", "missionId", "tail", "rollup"])) return false;
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "taskIds", "missionId", "tail", "rollup", "missionIds"])) return false;
       if (value.v !== TURN_IPC_PROTOCOL_VERSION2 || !isEvidenceIdentifier2(value.meshId)) return false;
       if (value.taskIds !== void 0) {
         if (!Array.isArray(value.taskIds) || value.taskIds.length === 0 || !value.taskIds.every(isEvidenceIdentifier2)) return false;
       }
       if (value.missionId !== void 0 && !isEvidenceIdentifier2(value.missionId)) return false;
       if (value.tail !== void 0 && !isNonNegativeInt2(value.tail)) return false;
+      if (value.missionIds !== void 0) {
+        if (!Array.isArray(value.missionIds) || value.missionIds.length === 0 || !value.missionIds.every(isEvidenceIdentifier2)) return false;
+        if (value.taskIds !== void 0 || value.missionId !== void 0) return false;
+      }
       if (value.rollup === true && value.missionId === void 0) return false;
       return isOptionalBoolean2(value.rollup);
     }
@@ -42453,7 +42484,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       return isTaskStatsQueryRequest(value) ? value : null;
     }
     function isTaskStatsQueryResponse2(value) {
-      return isRecord2(value) && hasOnlyKeys22(value, ["tasks", "mission"]) && isRecordArray2(value.tasks) && isOptionalRecord2(value.mission);
+      return isRecord2(value) && hasOnlyKeys22(value, ["tasks", "mission", "missions"]) && isRecordArray2(value.tasks) && isOptionalRecord2(value.mission) && (value.missions === void 0 || isRecord2(value.missions) && Object.values(value.missions).every(isRecord2));
     }
     function decodeTaskStatsQueryResponse2(value) {
       return isTaskStatsQueryResponse2(value) ? value : null;
@@ -43849,9 +43880,9 @@ ${renderWorkerProtocolFooter2(input)}`;
       return meshPolicy?.coordinatorIdlePushPolicy === "auto_silent_on_dispatch" ? "auto_silent_on_dispatch" : "always";
     }
     function resolveMagiSessionCleanupMode2(value) {
-      if (value === void 0 || value === null) return DEFAULT_MESH_POLICY.magiSessionCleanup;
+      if (value === void 0 || value === null) return DEFAULT_MESH_POLICY2.magiSessionCleanup;
       if (typeof value === "boolean") return value ? "stop_and_delete" : "preserve";
-      return value === "preserve" || value === "stop_and_delete" ? value : DEFAULT_MESH_POLICY.magiSessionCleanup;
+      return value === "preserve" || value === "stop_and_delete" ? value : DEFAULT_MESH_POLICY2.magiSessionCleanup;
     }
     function magiAutoLaunchedSessionCleanupDecision(args) {
       const marker = typeof args.recordMarker === "string" ? args.recordMarker.trim() : "";
@@ -43869,7 +43900,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function resolveMaxParallelTasks(value) {
       const n = Number(value);
-      if (!Number.isFinite(n)) return DEFAULT_MESH_POLICY.maxParallelTasks;
+      if (!Number.isFinite(n)) return DEFAULT_MESH_POLICY2.maxParallelTasks;
       return Math.max(MESH_MAX_PARALLEL_TASKS_MIN, Math.min(MESH_MAX_PARALLEL_TASKS_MAX, Math.floor(n)));
     }
     function resolveDelegatedSessionIdleTtlMinutes(value) {
@@ -43899,12 +43930,12 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function mergeAndNormalizePolicy(base, patch) {
       const autoFastForward = normalizeAutoFastForwardPolicy({
-        ...DEFAULT_MESH_POLICY.autoFastForward,
+        ...DEFAULT_MESH_POLICY2.autoFastForward,
         ...base?.autoFastForward && typeof base.autoFastForward === "object" ? base.autoFastForward : {},
         ...patch?.autoFastForward && typeof patch.autoFastForward === "object" ? patch.autoFastForward : {}
       });
       const policy = {
-        ...DEFAULT_MESH_POLICY,
+        ...DEFAULT_MESH_POLICY2,
         ...base || {},
         ...patch || {},
         autoFastForward
@@ -43922,7 +43953,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         policy.delegatedSessionIdleTtlMinutes
       );
       if (!SPAWNED_SESSION_VISIBILITY_MODES.has(policy.spawnedSessionVisibility)) {
-        policy.spawnedSessionVisibility = DEFAULT_MESH_POLICY.spawnedSessionVisibility;
+        policy.spawnedSessionVisibility = DEFAULT_MESH_POLICY2.spawnedSessionVisibility;
       }
       const normalizedStrategy = normalizeMeshSchedulingStrategy(policy.schedulingStrategy);
       if (normalizedStrategy === "first_eligible") {
@@ -44045,7 +44076,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     var MESH_DELEGATED_SESSION_IDLE_TTL_MIN_MINUTES;
     var MESH_DELEGATED_SESSION_IDLE_TTL_MAX_MINUTES;
     var DEFAULT_NODE_MAX_CONCURRENT_SESSIONS;
-    var DEFAULT_MESH_POLICY;
+    var DEFAULT_MESH_POLICY2;
     var DEFAULT_QUOTA_ROUTING_POLICY2;
     var SILENT_IDLE_PUSH_TTL_MS;
     var SESSION_CLEANUP_MODES;
@@ -44073,7 +44104,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         MESH_DELEGATED_SESSION_IDLE_TTL_MIN_MINUTES = 5;
         MESH_DELEGATED_SESSION_IDLE_TTL_MAX_MINUTES = 7 * 24 * 60;
         DEFAULT_NODE_MAX_CONCURRENT_SESSIONS = 12;
-        DEFAULT_MESH_POLICY = {
+        DEFAULT_MESH_POLICY2 = {
           requirePreTaskCheckpoint: false,
           requirePostTaskCheckpoint: true,
           requireApprovalForPush: true,
@@ -50816,11 +50847,11 @@ child.on('exit', () => process.exit(0));
     }
     function windowsExtraBinDirs() {
       const dirs = [];
-      const fs80 = require("fs");
+      const fs81 = require("fs");
       const push = (dir) => {
         if (!dir) return;
         try {
-          if (fs80.existsSync(dir)) dirs.push(dir);
+          if (fs81.existsSync(dir)) dirs.push(dir);
         } catch {
         }
       };
@@ -50836,12 +50867,12 @@ child.on('exit', () => process.exit(0));
     }
     function unixExtraBinDirs() {
       const dirs = [];
-      const fs80 = require("fs");
+      const fs81 = require("fs");
       const home = os9.homedir();
       const push = (dir) => {
         if (!dir) return;
         try {
-          if (fs80.existsSync(dir)) dirs.push(dir);
+          if (fs81.existsSync(dir)) dirs.push(dir);
         } catch {
         }
       };
@@ -50880,9 +50911,9 @@ child.on('exit', () => process.exit(0));
         for (const ext of exes) {
           const fullPath = path13.join(p, trimmed2 + ext);
           try {
-            const fs80 = require("fs");
-            if (fs80.existsSync(fullPath)) {
-              const stat2 = fs80.statSync(fullPath);
+            const fs81 = require("fs");
+            if (fs81.existsSync(fullPath)) {
+              const stat2 = fs81.statSync(fullPath);
               if (stat2.isFile() && (isWin || stat2.mode & 73)) {
                 return fullPath;
               }
@@ -50896,12 +50927,12 @@ child.on('exit', () => process.exit(0));
     function isScriptBinary(binaryPath) {
       if (!path13.isAbsolute(binaryPath)) return false;
       try {
-        const fs80 = require("fs");
-        const resolved = fs80.realpathSync(binaryPath);
+        const fs81 = require("fs");
+        const resolved = fs81.realpathSync(binaryPath);
         const head = Buffer.alloc(8);
-        const fd = fs80.openSync(resolved, "r");
-        fs80.readSync(fd, head, 0, 8, 0);
-        fs80.closeSync(fd);
+        const fd = fs81.openSync(resolved, "r");
+        fs81.readSync(fd, head, 0, 8, 0);
+        fs81.closeSync(fd);
         let i = 0;
         if (head[0] === 239 && head[1] === 187 && head[2] === 191) i = 3;
         return head[i] === 35 && head[i + 1] === 33;
@@ -50912,12 +50943,12 @@ child.on('exit', () => process.exit(0));
     function looksLikeMachOOrElf(filePath2) {
       if (!path13.isAbsolute(filePath2)) return false;
       try {
-        const fs80 = require("fs");
-        const resolved = fs80.realpathSync(filePath2);
+        const fs81 = require("fs");
+        const resolved = fs81.realpathSync(filePath2);
         const buf = Buffer.alloc(8);
-        const fd = fs80.openSync(resolved, "r");
-        fs80.readSync(fd, buf, 0, 8, 0);
-        fs80.closeSync(fd);
+        const fd = fs81.openSync(resolved, "r");
+        fs81.readSync(fd, buf, 0, 8, 0);
+        fs81.closeSync(fd);
         let i = 0;
         if (buf[0] === 239 && buf[1] === 187 && buf[2] === 191) i = 3;
         const b = buf.subarray(i);
@@ -69743,8 +69774,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return Number.isFinite(parsed) ? parsed : null;
     }
     function computeMeshTaskStats(meshId, opts) {
-      const queue = getQueue(meshId);
-      const queueById = new Map(queue.map((task) => [task.id, task]));
+      const queue = MeshRuntimeStore.getInstance().getQueueFacts(meshId);
       let targetIds;
       if (opts?.taskIds?.length) {
         targetIds = [...new Set(opts.taskIds)];
@@ -69754,8 +69784,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         targetIds = queue.map((task) => task.id);
       }
       if (targetIds.length === 0) return [];
+      return taskStatsFromFacts(queue, readTaskStatsEntries(meshId, opts?.tail ?? 1e3), targetIds);
+    }
+    function taskStatsFromFacts(queue, entries, targetIds) {
+      const queueById = new Map(queue.map((task) => [task.id, task]));
       const targetSet = new Set(targetIds);
-      const entries = readTaskStatsEntries(meshId, opts?.tail ?? 1e3);
       const dispatches = /* @__PURE__ */ new Map();
       const terminals = /* @__PURE__ */ new Map();
       for (const entry of entries) {
@@ -69796,7 +69829,27 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       });
     }
     function computeMeshMissionStats(meshId, missionId) {
-      const tasks = computeMeshTaskStats(meshId, { missionId });
+      return computeMeshMissionStatsBatch(meshId, [missionId]).get(missionId);
+    }
+    function computeMeshMissionStatsBatch(meshId, missionIds, opts) {
+      const out = /* @__PURE__ */ new Map();
+      const wanted = [...new Set(missionIds)];
+      if (wanted.length === 0) return out;
+      const queue = MeshRuntimeStore.getInstance().getQueueFacts(meshId);
+      const wantedSet = new Set(wanted);
+      const taskIdsByMission = new Map(wanted.map((id22) => [id22, []]));
+      for (const task of queue) {
+        if (task.missionId && wantedSet.has(task.missionId)) taskIdsByMission.get(task.missionId).push(task.id);
+      }
+      const anyTasks = [...taskIdsByMission.values()].some((ids) => ids.length > 0);
+      const entries = anyTasks ? readTaskStatsEntries(meshId, opts?.tail ?? 1e3) : [];
+      for (const missionId of wanted) {
+        const ids = taskIdsByMission.get(missionId);
+        out.set(missionId, rollupMissionStats(missionId, ids.length > 0 ? taskStatsFromFacts(queue, entries, ids) : []));
+      }
+      return out;
+    }
+    function rollupMissionStats(missionId, tasks) {
       const stats = {
         missionId,
         taskCount: tasks.length,
@@ -69834,12 +69887,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_topic_index();
         init_mesh_runtime_store();
         init_mesh_publisher();
-        init_mesh_work_queue();
       }
     });
     var mesh_missions_exports = {};
     __export2(mesh_missions_exports, {
-      COMPACT_STATUS_GOAL_PREVIEW_MAX: () => COMPACT_STATUS_GOAL_PREVIEW_MAX,
+      COMPACT_STATUS_GOAL_PREVIEW_MAX: () => COMPACT_STATUS_GOAL_PREVIEW_MAX2,
       GOAL_PREVIEW_MAX: () => GOAL_PREVIEW_MAX,
       MESH_MISSION_LIST_HISTORY_ID_LIMIT: () => MESH_MISSION_LIST_HISTORY_ID_LIMIT,
       MESH_MISSION_LIST_STATUS_LIMIT: () => MESH_MISSION_LIST_STATUS_LIMIT,
@@ -69855,7 +69907,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       listMeshMissionsForTool: () => listMeshMissionsForTool3,
       maybeEmitMissionCloseCandidate: () => maybeEmitMissionCloseCandidate,
       summarizeMeshMission: () => summarizeMeshMission,
+      summarizeMeshMissions: () => summarizeMeshMissions,
       summarizeMissionTasks: () => summarizeMissionTasks,
+      summarizeMissionTasksBatch: () => summarizeMissionTasksBatch,
       upsertMeshMission: () => upsertMeshMission
     });
     function summarizeGoalForLedger(goal) {
@@ -69977,38 +70031,56 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const record22 = MeshRuntimeStore.getInstance().getMission(meshId, missionId);
       return record22 ? { ...record22, status: normalizeMissionStatus(record22.status), source: normalizeMissionSource(record22.source), brief: parseStoredMissionBrief(record22.briefJson) } : null;
     }
-    function summarizeMissionTasks(meshId, missionId) {
-      const queue = getQueue(meshId);
-      const tasks = queue.filter((task) => task.missionId === missionId);
-      const statusById = new Map(queue.map((task) => [task.id, task.status]));
-      const depMetaById = new Map(queue.map((task) => [task.id, { blockedReason: task.blockedReason, cancelReason: task.cancelReason, status: task.status }]));
-      const aggregate = {
-        total: tasks.length,
-        pending: 0,
-        assigned: 0,
-        completed: 0,
-        failed: 0,
-        cancelled: 0,
-        blocked: 0,
-        lastActivityAt: null
-      };
-      for (const task of tasks) {
-        if (task.status === "pending") aggregate.pending += 1;
-        else if (task.status === "assigned") aggregate.assigned += 1;
-        else if (task.status === "completed") aggregate.completed += 1;
-        else if (task.status === "failed") aggregate.failed += 1;
-        else if (task.status === "cancelled") aggregate.cancelled += 1;
-        if (task.status === "pending" && (task.blockedReason || deriveDependencyFailures(task.dependsOn, statusById, depMetaById).length > 0)) {
-          aggregate.blocked += 1;
-        }
-        if (task.updatedAt && (!aggregate.lastActivityAt || task.updatedAt > aggregate.lastActivityAt)) {
-          aggregate.lastActivityAt = task.updatedAt;
-        }
+    function emptyMissionTaskAggregate() {
+      return { total: 0, pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0, blocked: 0, lastActivityAt: null };
+    }
+    function summarizeMissionTasksBatch(meshId, missionIds, facts = MeshRuntimeStore.getInstance().getQueueFacts(meshId)) {
+      const wanted = new Set(missionIds);
+      const out = /* @__PURE__ */ new Map();
+      for (const id22 of wanted) out.set(id22, emptyMissionTaskAggregate());
+      if (wanted.size === 0) return out;
+      const statusById = new Map(facts.map((task) => [task.id, task.status]));
+      const depMetaById = new Map(facts.map((task) => [task.id, { blockedReason: task.blockedReason, cancelReason: task.cancelReason, status: task.status }]));
+      for (const task of facts) {
+        if (!task.missionId || !wanted.has(task.missionId)) continue;
+        accumulateMissionTask(out.get(task.missionId), task, statusById, depMetaById);
       }
-      return aggregate;
+      return out;
+    }
+    function summarizeMissionTasks(meshId, missionId) {
+      return summarizeMissionTasksBatch(meshId, [missionId]).get(missionId);
+    }
+    function accumulateMissionTask(aggregate, task, statusById, depMetaById) {
+      aggregate.total += 1;
+      if (task.status === "pending") aggregate.pending += 1;
+      else if (task.status === "assigned") aggregate.assigned += 1;
+      else if (task.status === "completed") aggregate.completed += 1;
+      else if (task.status === "failed") aggregate.failed += 1;
+      else if (task.status === "cancelled") aggregate.cancelled += 1;
+      if (task.status === "pending" && (task.blockedReason || deriveDependencyFailures(task.dependsOn, statusById, depMetaById).length > 0)) {
+        aggregate.blocked += 1;
+      }
+      if (task.updatedAt && (!aggregate.lastActivityAt || task.updatedAt > aggregate.lastActivityAt)) {
+        aggregate.lastActivityAt = task.updatedAt;
+      }
     }
     function summarizeMeshMission(meshId, mission) {
       return { ...mission, tasks: summarizeMissionTasks(meshId, mission.id) };
+    }
+    function summarizeMeshMissions(meshId, missions) {
+      if (missions.length === 0) return [];
+      const aggregates = summarizeMissionTasksBatch(meshId, missions.map((m) => m.id));
+      return missions.map((mission) => ({ ...mission, tasks: aggregates.get(mission.id) }));
+    }
+    function withMissionStats(meshId, summaries) {
+      if (summaries.length === 0) return summaries;
+      let stats;
+      try {
+        stats = computeMeshMissionStatsBatch(meshId, summaries.map((s2) => s2.id));
+      } catch {
+        return summaries;
+      }
+      return summaries.map((summary) => stats.has(summary.id) ? { ...summary, stats: stats.get(summary.id) } : summary);
     }
     function isMissionAllTasksTerminal(aggregate) {
       return aggregate.total > 0 && aggregate.pending === 0 && aggregate.assigned === 0;
@@ -70060,7 +70132,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       });
     }
     function getActiveMeshMissionSummaries3(meshId) {
-      return getMeshMissions(meshId, ["active"]).map((mission) => summarizeMeshMission(meshId, mission));
+      return summarizeMeshMissions(meshId, getMeshMissions(meshId, ["active"]));
     }
     function slimMissionSummary(summary, previewMax = GOAL_PREVIEW_MAX) {
       const goal = typeof summary.goal === "string" ? summary.goal : "";
@@ -70077,17 +70149,17 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const all = getMeshMissions(meshId);
       const live = all.filter((m) => m.status === "active" || m.status === "paused");
       const history = all.filter((m) => m.status === "completed" || m.status === "abandoned").sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || "")).slice(0, historyLimit);
-      let full = [...live, ...history].map((mission) => summarizeMeshMission(meshId, mission));
+      let full = summarizeMeshMissions(meshId, [...live, ...history]);
       if (options?.withStats) {
-        full = full.map((summary) => ({ ...summary, stats: computeMeshMissionStats(meshId, summary.id) }));
+        full = withMissionStats(meshId, full);
       }
       return options?.verbose ? full : full.map((summary) => slimMissionSummary(summary));
     }
     function getMeshStatusMissionsCompact3(meshId, options) {
-      const previewMax = Math.max(0, options?.previewMax ?? COMPACT_STATUS_GOAL_PREVIEW_MAX);
+      const previewMax = Math.max(0, options?.previewMax ?? COMPACT_STATUS_GOAL_PREVIEW_MAX2);
       const historyIdLimit = Math.max(0, options?.historyIdLimit ?? 20);
       const all = getMeshMissions(meshId);
-      const live = all.filter((m) => m.status === "active" || m.status === "paused").map((mission) => slimMissionSummary(summarizeMeshMission(meshId, mission), previewMax));
+      const live = summarizeMeshMissions(meshId, all.filter((m) => m.status === "active" || m.status === "paused")).map((summary) => slimMissionSummary(summary, previewMax));
       const history = all.filter((m) => m.status === "completed" || m.status === "abandoned").sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
       let historyFold = null;
       if (history.length > 0) {
@@ -70106,7 +70178,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const statuses = options?.statuses && options.statuses.length > 0 ? options.statuses : void 0;
       const includeMagi = options?.includeMagi === true;
       const missions = getMeshMissions(meshId, statuses).filter((m) => includeMagi || !(m.source === "magi" && m.status === "completed")).sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
-      const full = missions.map((mission) => summarizeMeshMission(meshId, mission));
+      const full = summarizeMeshMissions(meshId, missions);
       return options?.verbose ? full : full.map((summary) => slimMissionSummary(summary));
     }
     function listMeshMissionsForTool3(meshId, options) {
@@ -70118,15 +70190,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const historyIdLimit = Math.max(0, options?.historyIdLimit ?? MESH_MISSION_LIST_HISTORY_ID_LIMIT);
       const passesMagi = (m) => includeMagi || !(m.source === "magi" && m.status === "completed");
       const byUpdatedDesc = (a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || "");
-      const project = (mission) => {
-        let summary = summarizeMeshMission(meshId, mission);
-        if (withStats) {
-          try {
-            summary = { ...summary, stats: computeMeshMissionStats(meshId, mission.id) };
-          } catch {
-          }
-        }
-        return verbose ? summary : slimMissionSummary(summary);
+      const project = (missions) => {
+        let summaries = summarizeMeshMissions(meshId, missions);
+        if (withStats) summaries = withMissionStats(meshId, summaries);
+        return verbose ? summaries : summaries.map((summary) => slimMissionSummary(summary));
       };
       const foldHistory = (history2) => {
         if (history2.length === 0) return null;
@@ -70144,7 +70211,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const shown2 = matched.slice(0, limit);
         const overflow2 = matched.slice(limit);
         return {
-          missions: shown2.map(project),
+          missions: project(shown2),
           historyFold: null,
           truncated: overflow2.length > 0,
           matched: matched.length,
@@ -70157,7 +70224,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const shown = live.slice(0, limit);
       const overflow = live.slice(limit);
       return {
-        missions: shown.map(project),
+        missions: project(shown),
         historyFold: foldHistory(history),
         truncated: overflow.length > 0,
         matched: live.length,
@@ -70186,7 +70253,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var LEDGER_GOAL_SUMMARY_MAX;
     var MESH_MISSION_STATUSES22;
     var GOAL_PREVIEW_MAX;
-    var COMPACT_STATUS_GOAL_PREVIEW_MAX;
+    var COMPACT_STATUS_GOAL_PREVIEW_MAX2;
     var MESH_MISSION_LIST_HISTORY_ID_LIMIT;
     var MESH_MISSION_LIST_STATUS_LIMIT;
     var init_mesh_missions = __esm2({
@@ -70195,7 +70262,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         import_crypto9 = require("crypto");
         init_logger();
         init_mesh_runtime_store();
-        init_mesh_work_queue();
         init_mesh_graph_derived_failure();
         init_mesh_task_stats();
         init_mesh_record();
@@ -70204,7 +70270,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         LEDGER_GOAL_SUMMARY_MAX = 200;
         MESH_MISSION_STATUSES22 = ["active", "paused", "completed", "abandoned"];
         GOAL_PREVIEW_MAX = 120;
-        COMPACT_STATUS_GOAL_PREVIEW_MAX = 80;
+        COMPACT_STATUS_GOAL_PREVIEW_MAX2 = 80;
         MESH_MISSION_LIST_HISTORY_ID_LIMIT = 30;
         MESH_MISSION_LIST_STATUS_LIMIT = 50;
       }
@@ -71831,7 +71897,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         };
       }
     });
-    function parseJsonObject2(text) {
+    function parseJsonObject(text) {
       if (!text) return {};
       try {
         const parsed = JSON.parse(text);
@@ -71842,7 +71908,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function parseSummary(text) {
       if (!text) return void 0;
-      const parsed = parseJsonObject2(text);
+      const parsed = parseJsonObject(text);
       return typeof parsed.topic === "string" && typeof parsed.writer === "string" && typeof parsed.seq === "number" ? { topic: parsed.topic, writer: parsed.writer, seq: parsed.seq } : void 0;
     }
     function attemptFromRow(row) {
@@ -71887,7 +71953,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           at: row.terminal_at ?? row.updated_at,
           ...summary ? { summary } : {}
         } : null,
-        data: parseJsonObject2(row.data_json)
+        data: parseJsonObject(row.data_json)
       };
     }
     function eventFromRow(row) {
@@ -71905,7 +71971,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         dedupeKey: row.dedupe_key,
         fromState: row.from_state,
         toState: row.to_state,
-        payload: parseJsonObject2(row.payload_json),
+        payload: parseJsonObject(row.payload_json),
         observedBy: row.observed_by,
         srcWriter: row.src_writer,
         srcSeq: row.src_seq,
@@ -71923,7 +71989,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         reason: row.reason,
         until: row.until_ms,
         onExpire: row.on_expire,
-        data: parseJsonObject2(row.data_json),
+        data: parseJsonObject(row.data_json),
         createdAt: row.created_at
       };
     }
@@ -72319,7 +72385,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               tombstonedAt: r.tombstoned_at,
               callerSessionId: r.caller_session_id,
               createdAt: r.created_at,
-              meta: parseJsonObject2(r.meta_json)
+              meta: parseJsonObject(r.meta_json)
             }));
           }
         };
@@ -75254,6 +75320,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       applyCachedInlineMeshNodeStatus: () => applyCachedInlineMeshNodeStatus,
       applyInlineMeshBranchConvergence: () => applyInlineMeshBranchConvergence,
       awaitWithWarmupDeadline: () => awaitWithWarmupDeadline,
+      buildFreshLocalNodeFacts: () => buildFreshLocalNodeFacts,
       buildHistoricalMeshSessions: () => buildHistoricalMeshSessions,
       buildInlineMeshTransitGitStatus: () => buildInlineMeshTransitGitStatus,
       buildLivePeerGitConnection: () => buildLivePeerGitConnection,
@@ -75693,6 +75760,18 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function readLocalReporterProviderVersions() {
       try {
         return readProviderVersionsRecord(getCachedProviderVersions());
+      } catch {
+        return null;
+      }
+    }
+    function buildFreshLocalNodeFacts() {
+      try {
+        let localNickname = null;
+        try {
+          localNickname = readStringValue(getMachineNickname()) ?? null;
+        } catch {
+        }
+        return buildLocalNodeFacts({ providerVersions: readLocalReporterProviderVersions(), machineNickname: localNickname });
       } catch {
         return null;
       }
@@ -76996,12 +77075,81 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const taskId = typeof row?.task_id === "string" ? row.task_id.trim() : "";
       return taskId || null;
     }
+    function readFactsRow(row) {
+      const facts = { id: row.id, status: row.status };
+      if (row.f === null) return facts;
+      let parts;
+      try {
+        parts = JSON.parse(row.f);
+      } catch {
+        return facts;
+      }
+      if (!Array.isArray(parts)) return facts;
+      const [missionId, dependsOn, blockedReason, cancelReason, updatedAt, dispatchTimestamp, requeueCount] = parts;
+      if (typeof missionId === "string") facts.missionId = missionId;
+      if (Array.isArray(dependsOn)) facts.dependsOn = dependsOn.filter((d) => typeof d === "string");
+      if (typeof blockedReason === "string") facts.blockedReason = blockedReason;
+      if (typeof cancelReason === "string") facts.cancelReason = cancelReason;
+      if (typeof updatedAt === "string") facts.updatedAt = updatedAt;
+      if (typeof dispatchTimestamp === "string") facts.dispatchTimestamp = dispatchTimestamp;
+      if (typeof requeueCount === "number") facts.requeueCount = requeueCount;
+      return facts;
+    }
+    function getQueueFacts(self, meshId) {
+      self.ensureLegacyQueueMigrated(meshId);
+      const rows = self.db.prepare(
+        `SELECT id, status, CASE WHEN json_valid(payload) THEN json_extract(payload, ${FACT_PATHS}) END AS f
+         FROM mesh_queue WHERE mesh_id = ? ORDER BY created_at ASC`
+      ).all(meshId);
+      return rows.map(readFactsRow);
+    }
+    function getQueueStatusCounts(self, meshId, olderThanIso) {
+      self.ensureLegacyQueueMigrated(meshId);
+      const rows = self.db.prepare(
+        `SELECT status, COUNT(*) AS n,
+                SUM(CASE WHEN ? IS NOT NULL AND status IN ('completed', 'failed', 'cancelled') AND updated_at < ? THEN 1 ELSE 0 END) AS old
+         FROM mesh_queue WHERE mesh_id = ? GROUP BY status`
+      ).all(olderThanIso ?? null, olderThanIso ?? null, meshId);
+      const counts = {};
+      let oldHistoricalCount = 0;
+      for (const row of rows) {
+        counts[row.status] = row.n;
+        oldHistoricalCount += row.old ?? 0;
+      }
+      return { counts, oldHistoricalCount };
+    }
+    function getQueueDependencyHeads(self, meshId, ids) {
+      const unique = [...new Set(ids.filter((id22) => typeof id22 === "string" && id22))];
+      if (unique.length === 0) return [];
+      self.ensureLegacyQueueMigrated(meshId);
+      const out = [];
+      for (let i = 0; i < unique.length; i += 500) {
+        const chunk = unique.slice(i, i + 500);
+        const rows = self.db.prepare(
+          `SELECT id, status,
+                    CASE WHEN json_valid(payload) THEN json_extract(payload, '$.blockedReason') END AS blocked,
+                    CASE WHEN json_valid(payload) THEN json_extract(payload, '$.cancelReason') END AS cancel
+             FROM mesh_queue WHERE mesh_id = ? AND id IN (${chunk.map(() => "?").join(", ")})`
+        ).all(meshId, ...chunk);
+        for (const row of rows) {
+          out.push({
+            id: row.id,
+            status: row.status,
+            ...typeof row.blocked === "string" ? { blockedReason: row.blocked } : {},
+            ...typeof row.cancel === "string" ? { cancelReason: row.cancel } : {}
+          });
+        }
+      }
+      return out;
+    }
     var PRE_TURN_STATES;
+    var FACT_PATHS;
     var init_mesh_runtime_store_queue_reads = __esm2({
       "src/mesh/mesh-runtime-store-queue-reads.ts"() {
         "use strict";
         init_dist();
         PRE_TURN_STATES = /* @__PURE__ */ new Set(["accepted", "delivered"]);
+        FACT_PATHS = "'$.missionId', '$.dependsOn', '$.blockedReason', '$.cancelReason', '$.updatedAt', '$.dispatchTimestamp', '$.requeueCount'";
       }
     });
     function upsertHandoffNoteText(db, row) {
@@ -78940,6 +79088,18 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           /** Column-only queue rows (id/status/assignment) — no payload parse. */
           getQueueHeads(meshId, statuses) {
             return getQueueHeads2(this, meshId, statuses);
+          }
+          /** Per-row mission/stats scalars via json_extract — no JS payload parse (see queue-reads). */
+          getQueueFacts(meshId) {
+            return getQueueFacts(this, meshId);
+          }
+          /** Whole-queue per-status counts (+ terminal rows older than `olderThanIso`) — columns only. */
+          getQueueStatusCounts(meshId, olderThanIso) {
+            return getQueueStatusCounts(this, meshId, olderThanIso);
+          }
+          /** id/status/blockedReason/cancelReason for the given row ids. */
+          getQueueDependencyHeads(meshId, ids) {
+            return getQueueDependencyHeads(this, meshId, ids);
           }
           toRow(entry) {
             return {
@@ -81319,8 +81479,8 @@ ${rendered}`, "utf-8");
         if (!(0, import_node_fs3.existsSync)(filePath2)) return;
         if (owned) {
           try {
-            const fs80 = require("fs");
-            fs80.unlinkSync(filePath2);
+            const fs81 = require("fs");
+            fs81.unlinkSync(filePath2);
           } catch {
           }
           return;
@@ -81333,8 +81493,8 @@ ${rendered}`, "utf-8");
         const remaining = (existing.slice(0, openIdx) + existing.slice(closeIdx + CLOSE.length)).replace(/^\s*\n+/, "").replace(/\n+\s*$/, "");
         if (!remaining.trim()) {
           try {
-            const fs80 = require("fs");
-            fs80.unlinkSync(filePath2);
+            const fs81 = require("fs");
+            fs81.unlinkSync(filePath2);
           } catch {
           }
         } else {
@@ -81828,7 +81988,8 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       readLocalRecords: () => readLocalRecords,
       readLocalRecordsByKind: () => readLocalRecordsByKind,
       readRefineJobRecords: () => readRefineJobRecords,
-      readTurnTerminalViews: () => readTurnTerminalViews
+      readTurnTerminalViews: () => readTurnTerminalViews,
+      recoveryContextRecords: () => recoveryContextRecords
     });
     function sinceToMs(since) {
       if (typeof since !== "string") return void 0;
@@ -82044,9 +82205,12 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         sourceOfTruth: { kind: "local_sqlite", table: "mesh_local_records", bounded: true, maxLimit: MAX_LOCAL_RECORD_SLICE_LIMIT }
       };
     }
-    function getSessionRecoveryContext(meshId, opts) {
+    function recoveryContextRecords(meshId) {
+      return readLocalRecords(meshId, { tail: 500 });
+    }
+    function getSessionRecoveryContext(meshId, opts, preloaded) {
       const maxRetries = opts.maxRetries ?? 1;
-      const entries = readLocalRecords(meshId, { tail: 500 });
+      const entries = preloaded ?? recoveryContextRecords(meshId);
       const now = Date.now();
       const recentWindow = now - RECENT_FAILURE_WINDOW_MS;
       let lastDispatch = null;
@@ -98796,8 +98960,8 @@ ${effect.notification.body || ""}`.trim();
           if ((0, import_fs21.existsSync)(bundledCli)) resolvedCli = bundledCli;
         }
         if (!resolvedCli && appPath && os41 === "win32") {
-          const { dirname: dirname37 } = await import("path");
-          const appDir = dirname37(appPath);
+          const { dirname: dirname38 } = await import("path");
+          const appDir = dirname38(appPath);
           const candidates = [
             `${appDir}\\\\bin\\\\${def.cli}.cmd`,
             `${appDir}\\\\bin\\\\${def.cli}`,
@@ -107664,7 +107828,7 @@ ${output}` : "";
     function applySpecNativeHistoryWiring(resolved, base, providerDir, currentVersion) {
       if (providerDir) {
         try {
-          const fs80 = require("fs");
+          const fs81 = require("fs");
           const path75 = require("path");
           const candidates = [];
           if (Array.isArray(base.compatibility)) {
@@ -107676,13 +107840,13 @@ ${output}` : "";
           }
           candidates.push(path75.join(providerDir, "specs", "default.json"));
           candidates.push(path75.join(providerDir, "spec.json"));
-          const specPath = candidates.find((p) => fs80.existsSync(p));
+          const specPath = candidates.find((p) => fs81.existsSync(p));
           let nh;
           if (specPath) {
             resolved._resolvedSpecPath = specPath;
             let specControls;
             try {
-              const rawSpec = JSON.parse(fs80.readFileSync(specPath, "utf8"));
+              const rawSpec = JSON.parse(fs81.readFileSync(specPath, "utf8"));
               specControls = rawSpec.control_bar;
               nh = rawSpec.native_history;
             } catch {
@@ -107725,7 +107889,7 @@ ${output}` : "";
               }
             } else if (nh.override_path) {
               const overrideFile = path75.resolve(providerDir, nh.override_path);
-              if (fs80.existsSync(overrideFile)) {
+              if (fs81.existsSync(overrideFile)) {
                 try {
                   registerProviderScriptRootSafely(path75.dirname(path75.dirname(providerDir)));
                   delete require.cache[require.resolve(overrideFile)];
@@ -110387,7 +110551,7 @@ ${result.stderr}`, result.code);
         }
       } else if (plat === "win32") {
         try {
-          const fs80 = require("fs");
+          const fs81 = require("fs");
           const appNameMap = getMacAppIdentifiers();
           const appName = appNameMap[ideId];
           if (appName) {
@@ -110396,8 +110560,8 @@ ${result.stderr}`, result.code);
               appName,
               "storage.json"
             );
-            if (fs80.existsSync(storagePath)) {
-              const data = JSON.parse(fs80.readFileSync(storagePath, "utf-8"));
+            if (fs81.existsSync(storagePath)) {
+              const data = JSON.parse(fs81.readFileSync(storagePath, "utf-8"));
               const workspaces = data?.openedPathsList?.workspaces3 || data?.openedPathsList?.entries || [];
               if (workspaces.length > 0) {
                 const recent = workspaces[0];
@@ -122816,14 +122980,14 @@ ${marker}`,
             }
           },
           list_coordinator_prompts: async (_ctx, _args) => {
-            const fs80 = await import("fs");
+            const fs81 = await import("fs");
             const path75 = await import("path");
             const { getConfigDir: getConfigDir2 } = await Promise.resolve().then(() => (init_config(), config_exports));
             const dir = path75.join(getConfigDir2(), "coordinator-prompts");
             const entries = {};
             try {
-              if (fs80.existsSync(dir)) {
-                for (const name of fs80.readdirSync(dir)) {
+              if (fs81.existsSync(dir)) {
+                for (const name of fs81.readdirSync(dir)) {
                   const matchOverride = name.match(/^([a-zA-Z0-9_.-]+)\.md$/);
                   const matchAppend = name.match(/^([a-zA-Z0-9_.-]+)\.append\.md$/);
                   const m = matchAppend || matchOverride;
@@ -122833,7 +122997,7 @@ ${marker}`,
                   const full = path75.join(dir, name);
                   let content = "";
                   try {
-                    content = fs80.readFileSync(full, "utf8");
+                    content = fs81.readFileSync(full, "utf8");
                   } catch {
                   }
                   if (!entries[key2]) entries[key2] = { override: "", append: "" };
@@ -122847,7 +123011,7 @@ ${marker}`,
             return { success: true, dir, entries };
           },
           write_coordinator_prompt: async (_ctx, args) => {
-            const fs80 = await import("fs");
+            const fs81 = await import("fs");
             const path75 = await import("path");
             const { getConfigDir: getConfigDir2 } = await Promise.resolve().then(() => (init_config(), config_exports));
             const key2 = typeof args?.key === "string" ? args.key.trim() : "";
@@ -122860,11 +123024,11 @@ ${marker}`,
             const filename = kind === "append" ? `${key2}.append.md` : `${key2}.md`;
             const full = path75.join(dir, filename);
             try {
-              fs80.mkdirSync(dir, { recursive: true });
+              fs81.mkdirSync(dir, { recursive: true });
               if (content.trim()) {
-                fs80.writeFileSync(full, content, { encoding: "utf8", mode: 384 });
-              } else if (fs80.existsSync(full)) {
-                fs80.unlinkSync(full);
+                fs81.writeFileSync(full, content, { encoding: "utf8", mode: 384 });
+              } else if (fs81.existsSync(full)) {
+                fs81.unlinkSync(full);
               }
               return { success: true, path: full, kind, key: key2 };
             } catch (error48) {
@@ -124087,7 +124251,7 @@ ${marker}`,
         payload: entry.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload) ? entry.payload : {}
       };
     }
-    function toMissionListSummaryWire(summary) {
+    function toMissionListSummaryWire(summary, withTimestamps = false) {
       const base = {
         id: summary.id,
         meshId: summary.meshId,
@@ -124096,7 +124260,12 @@ ${marker}`,
         ...summary.source !== void 0 ? { source: summary.source } : {},
         tasks: summary.tasks,
         ...summary.stats !== void 0 ? { stats: summary.stats } : {},
-        ...summary.brief !== void 0 ? { brief: summary.brief } : {}
+        // `brief` is the parsed form of the stored `briefJson`; only the parsed copy travels.
+        ...summary.brief !== void 0 ? { brief: summary.brief } : {},
+        // meshStatusView rows (mesh_status) keep the record timestamps they always showed.
+        ...withTimestamps && typeof summary.createdAt === "string" ? { createdAt: summary.createdAt } : {},
+        ...withTimestamps && typeof summary.updatedAt === "string" ? { updatedAt: summary.updatedAt } : {},
+        ...withTimestamps && (typeof summary.closeCandidateEmittedAt === "string" || summary.closeCandidateEmittedAt === null) ? { closeCandidateEmittedAt: summary.closeCandidateEmittedAt } : {}
       };
       return typeof summary.goal === "string" ? { ...base, goal: summary.goal } : { ...base, goalPreview: summary.goalPreview ?? "", goalTruncated: summary.goalTruncated === true };
     }
@@ -124141,6 +124310,26 @@ ${marker}`,
         return activeWork;
       }
     }
+    async function ownMeshRecord(ctx, meshId) {
+      try {
+        const record22 = await ctx?.getMeshForCommand?.(meshId, void 0, { preferInline: true });
+        return record22?.mesh ? record22.mesh : void 0;
+      } catch {
+        return void 0;
+      }
+    }
+    function readActiveWorkQueue(meshId) {
+      const active = getQueue(meshId, { status: ["pending", "assigned"] });
+      const terminalHeads = MeshRuntimeStore.getInstance().getQueueHeads(meshId, ["completed", "failed", "cancelled"]);
+      return [...active, ...terminalHeads.map((h) => ({ id: h.id, status: h.status }))];
+    }
+    function withLastQuotaRanking(runtime) {
+      const nodes = runtime.nodes.map((node) => {
+        const lastQuotaRanking = getLastQuotaRanking3(node.nodeId);
+        return lastQuotaRanking ? { ...node, lastQuotaRanking } : node;
+      });
+      return { ...runtime, nodes };
+    }
     var toolCallRecord2;
     var ledgerQuery2;
     var missionListQuery2;
@@ -124163,6 +124352,8 @@ ${marker}`,
         init_dist();
         init_mesh_record();
         init_mesh_local_records();
+        init_mesh_runtime_store();
+        init_mesh_quota_routing();
         init_mesh_work_queue();
         init_mesh_task_predicates();
         init_mesh_graph_provenance();
@@ -124207,6 +124398,26 @@ ${marker}`,
           const req = decodeMissionListQueryRequest(args);
           if (!req) return badRequest("mission_list_query");
           try {
+            if (req.meshStatusView === "compact") {
+              const { live, historyFold } = getMeshStatusMissionsCompact3(req.meshId, req.historyIdLimit !== void 0 ? { historyIdLimit: req.historyIdLimit } : void 0);
+              const response2 = {
+                missions: live.map((m) => toMissionListSummaryWire(m, true)),
+                historyFold: historyFold ?? null,
+                truncated: false,
+                matched: live.length
+              };
+              return { success: true, ...response2 };
+            }
+            if (req.meshStatusView === "verbose") {
+              const missions = getMeshStatusMissionSummaries3(req.meshId, { verbose: true });
+              const response2 = {
+                missions: missions.map((m) => toMissionListSummaryWire(m, true)),
+                historyFold: null,
+                truncated: false,
+                matched: missions.length
+              };
+              return { success: true, ...response2 };
+            }
             const result = listMeshMissionsForTool3(req.meshId, {
               ...req.statuses ? { statuses: [...req.statuses] } : {},
               ...req.verbose !== void 0 ? { verbose: req.verbose } : {},
@@ -124216,7 +124427,7 @@ ${marker}`,
               ...req.historyIdLimit !== void 0 ? { historyIdLimit: req.historyIdLimit } : {}
             });
             const response = {
-              missions: result.missions.map(toMissionListSummaryWire),
+              missions: result.missions.map((m) => toMissionListSummaryWire(m)),
               historyFold: result.historyFold ?? null,
               truncated: result.truncated,
               matched: result.matched,
@@ -124253,6 +124464,23 @@ ${marker}`,
             if (req.taskId) entries = entries.filter((e) => e.id === req.taskId);
             const wire = req.view ? entries.map((e) => summarizeQueueEntryInputForView2(e)) : entries;
             const response = { entries: wire };
+            const store2 = req.withCounts || req.withDependencyHeads ? MeshRuntimeStore.getInstance() : null;
+            if (store2 && req.withCounts) {
+              const olderThanIso = req.historicalOlderThanMs !== void 0 ? new Date(Date.now() - req.historicalOlderThanMs).toISOString() : void 0;
+              const { counts, oldHistoricalCount } = store2.getQueueStatusCounts(req.meshId, olderThanIso);
+              response.counts = counts;
+              if (olderThanIso) response.oldHistoricalCount = oldHistoricalCount;
+            }
+            if (store2 && req.withDependencyHeads) {
+              const returned = new Set(entries.map((e) => e.id));
+              const depIds = [];
+              for (const e of entries) {
+                for (const dep of Array.isArray(e.dependsOn) ? e.dependsOn : []) {
+                  if (typeof dep === "string" && !returned.has(dep)) depIds.push(dep);
+                }
+              }
+              response.dependencyHeads = store2.getQueueDependencyHeads(req.meshId, depIds);
+            }
             return { success: true, ...response };
           } catch (e) {
             return failure4(e);
@@ -124401,8 +124629,9 @@ ${marker}`,
           try {
             const records = readLocalRecords(req.meshId, { tail: req.recordTail ?? DEFAULT_ACTIVE_WORK_RECORD_TAIL });
             const directDispatches = getActiveDirectDispatches(req.meshId);
-            const liveQueue = req.queue || req.includeSchedulingRuntime || req.compute !== false ? getQueue(req.meshId) : [];
+            const liveQueue = req.includeSchedulingRuntime || !req.queue && req.compute !== false ? readActiveWorkQueue(req.meshId) : [];
             const queue = req.queue ? [...req.queue] : liveQueue;
+            const schedulingMesh = req.includeSchedulingRuntime ? req.mesh ?? await ownMeshRecord(_ctx, req.meshId) : void 0;
             const response = {
               ...req.compute !== false ? {
                 activeWork: withGraphGateSummary(req.meshId, buildMeshActiveWork3({
@@ -124419,7 +124648,7 @@ ${marker}`,
                 directDispatches
               } : {},
               ...req.includeSummary ? { summary: getLocalRecordSummary(req.meshId) } : {},
-              ...req.includeSchedulingRuntime && req.mesh ? { schedulingRuntime: buildMeshSchedulingRuntime3(req.mesh, liveQueue) } : {}
+              ...schedulingMesh ? { schedulingRuntime: withLastQuotaRanking(buildMeshSchedulingRuntime3(schedulingMesh, liveQueue)) } : {}
             };
             return { success: true, ...response };
           } catch (e) {
@@ -124430,6 +124659,18 @@ ${marker}`,
           const req = decodeRecoveryContextQueryRequest(args);
           if (!req) return badRequest("recovery_context_query");
           try {
+            if (req.nodeIds) {
+              const records = recoveryContextRecords(req.meshId);
+              const contexts = {};
+              for (const nodeId of new Set(req.nodeIds)) {
+                contexts[nodeId] = getSessionRecoveryContext(req.meshId, {
+                  nodeId,
+                  ...req.maxRetries !== void 0 ? { maxRetries: req.maxRetries } : {}
+                }, records);
+              }
+              const response2 = { contexts };
+              return { success: true, ...response2 };
+            }
             const context = getSessionRecoveryContext(req.meshId, {
               ...req.nodeId ? { nodeId: req.nodeId } : {},
               ...req.sessionId ? { sessionId: req.sessionId } : {},
@@ -125807,6 +126048,13 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           const req = decodeTaskStatsQueryRequest(args);
           if (!req) return badRequest2("task_stats_query");
           try {
+            if (req.missionIds) {
+              const rollups = computeMeshMissionStatsBatch(req.meshId, req.missionIds, req.tail !== void 0 ? { tail: req.tail } : void 0);
+              const missions = {};
+              for (const [missionId, rollup] of rollups) missions[missionId] = rollup;
+              const response2 = { tasks: [], missions };
+              return { success: true, ...response2 };
+            }
             const tasks = computeMeshTaskStats(req.meshId, {
               ...req.taskIds ? { taskIds: [...req.taskIds] } : {},
               ...req.missionId ? { missionId: req.missionId } : {},
@@ -125815,7 +126063,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             const response = { tasks };
             if (req.rollup && req.missionId) {
               try {
-                response.mission = computeMeshMissionStats(req.meshId, req.missionId);
+                const rollup = req.tail === void 0 ? rollupMissionStats(req.missionId, tasks) : computeMeshMissionStatsBatch(req.meshId, [req.missionId]).get(req.missionId);
+                if (rollup) response.mission = rollup;
               } catch {
               }
             }
@@ -127630,8 +127879,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             let cwd = options.cwd;
             if (cwd) {
               try {
-                const fs80 = require("fs");
-                const stat2 = fs80.statSync(cwd);
+                const fs81 = require("fs");
+                const stat2 = fs81.statSync(cwd);
                 if (!stat2.isDirectory()) cwd = os27.homedir();
               } catch {
                 cwd = os27.homedir();
@@ -148312,8 +148561,8 @@ ${ptyResult.output.slice(-2e3)}`);
                   workspace
                 };
               }
-              const { existsSync: existsSync84, readFileSync: readFileSync69, writeFileSync: writeFileSync37, copyFileSync: copyFileSync4, mkdirSync: mkdirSync44 } = await import("fs");
-              const { dirname: dirname37 } = await import("path");
+              const { existsSync: existsSync86, readFileSync: readFileSync69, writeFileSync: writeFileSync37, copyFileSync: copyFileSync4, mkdirSync: mkdirSync44 } = await import("fs");
+              const { dirname: dirname38 } = await import("path");
               const mcpConfigPath = coordinatorSetup.configPath;
               const hermesManualFallback = cliType === "hermes-cli" && configFormat === "hermes_config_yaml" ? createHermesManualMeshCoordinatorSetup(meshId, workspace) : null;
               let hermesBaseConfig = null;
@@ -148350,17 +148599,17 @@ ${ptyResult.output.slice(-2e3)}`);
                 ...mcpServerEnv ? { env: mcpServerEnv } : {}
               });
               try {
-                mkdirSync44(dirname37(mcpConfigPath), { recursive: true });
+                mkdirSync44(dirname38(mcpConfigPath), { recursive: true });
               } catch (error48) {
                 const message = `Could not prepare MCP config path for automatic setup: ${error48?.message || error48}`;
                 LOG.error("MeshCoordinator", message);
                 if (hermesManualFallback) return returnManualFallback(message);
                 return { success: false, code: "mesh_coordinator_config_write_failed", error: message, meshId, cliType, workspace };
               }
-              const hadExistingMcpConfig = existsSync84(mcpConfigPath);
+              const hadExistingMcpConfig = existsSync86(mcpConfigPath);
               let existingMcpConfig = hermesBaseConfig?.config || {};
               if (hermesBaseConfig) {
-                copyHermesCoordinatorCredentialFiles(hermesBaseConfig.sourceHome, dirname37(mcpConfigPath));
+                copyHermesCoordinatorCredentialFiles(hermesBaseConfig.sourceHome, dirname38(mcpConfigPath));
               }
               if (hadExistingMcpConfig) {
                 try {
@@ -148398,7 +148647,7 @@ ${ptyResult.output.slice(-2e3)}`);
               const cliArgs = [];
               const launchEnv = {};
               if (configFormat === "hermes_config_yaml") {
-                launchEnv.HERMES_HOME = dirname37(mcpConfigPath);
+                launchEnv.HERMES_HOME = dirname38(mcpConfigPath);
                 launchEnv.HERMES_IGNORE_USER_CONFIG = "";
               }
               let autoImportContextFilePath;
@@ -149059,6 +149308,14 @@ ${ptyResult.output.slice(-2e3)}`);
         return {};
       }
     }
+    function projectMeshStatusNodesSection(result) {
+      if (!result || typeof result !== "object" || result.success === false) return result;
+      const out = { sections: ["nodes"] };
+      for (const key2 of ["success", "meshId", "refreshedAt", "nodes", "nodeRuntimeHeld", "replication", "code", "error"]) {
+        if (result[key2] !== void 0) out[key2] = result[key2];
+      }
+      return out;
+    }
     var fs67;
     var import_os5;
     var meshStatusHandlers;
@@ -149093,6 +149350,8 @@ ${ptyResult.output.slice(-2e3)}`);
               const meshHost = resolveMeshHostStatus(recordMesh, { localDaemonId: ctx.deps.statusInstanceId });
               const refreshRequested = args?.refresh === true || args?.forceRefresh === true;
               const rebuildFromHeld = args?.rebuildFromHeld === true;
+              const nodesOnly = Array.isArray(args?.sections) && args.sections.length > 0 && args.sections.every((section) => section === "nodes");
+              const projectSections = (result) => nodesOnly ? projectMeshStatusNodesSection(result) : result;
               const heldOnly = !!ctx.deps.dispatchMeshCommand;
               const nodeStateLocality = { localMachineId: getMachineId() || "", localDaemonId: ctx.deps.statusInstanceId };
               const mesh = buildHeldRenderMesh({ meshId, mesh: recordMesh, store: ctx.meshNodeGitState, locality: nodeStateLocality, heldOnly });
@@ -149161,9 +149420,9 @@ ${ptyResult.output.slice(-2e3)}`);
                 });
               };
               if (!refreshRequested && !rebuildFromHeld && !verboseMissions && pendingCoordinatorEventCount === 0) {
-                const cachedStatus = ctx.getCachedAggregateMeshStatus(meshId, mesh, { requireDirectPeerTruth: args?.requireDirectPeerTruth === true });
+                const cachedStatus = ctx.getCachedAggregateMeshStatus(meshId, mesh, { requireDirectPeerTruth: args?.requireDirectPeerTruth === true, nodesOnly });
                 if (cachedStatus) {
-                  const returned = await attachLiveOnlyExtras(cachedStatus);
+                  const returned = projectSections(await attachLiveOnlyExtras(cachedStatus));
                   logRepoMeshStatusDebug("return_cached", {
                     meshId,
                     command: "mesh_status",
@@ -149177,7 +149436,8 @@ ${ptyResult.output.slice(-2e3)}`);
               if (!refreshRequested && !rebuildFromHeld && !verboseMissions) {
                 const staleStatus = ctx.getCachedAggregateMeshStatus(meshId, mesh, {
                   requireDirectPeerTruth: args?.requireDirectPeerTruth === true,
-                  allowStalePending: true
+                  allowStalePending: true,
+                  nodesOnly
                 });
                 if (staleStatus) {
                   if (!ctx.swrRefreshInFlight.has(meshId)) {
@@ -149193,7 +149453,7 @@ ${ptyResult.output.slice(-2e3)}`);
                       ctx.swrRefreshInFlight.delete(meshId);
                     });
                   }
-                  const returned = await attachLiveOnlyExtras(staleStatus);
+                  const returned = projectSections(await attachLiveOnlyExtras(staleStatus));
                   logRepoMeshStatusDebug("return_stale_swr", {
                     meshId,
                     command: "mesh_status",
@@ -149606,7 +149866,7 @@ ${ptyResult.output.slice(-2e3)}`);
                 durationMs: Date.now() - startedAtMs,
                 summary: summarizeRepoMeshStatusDebug(returnedStatus)
               });
-              return returnedStatus;
+              return projectSections(returnedStatus);
             } catch (e) {
               return { success: false, error: e.message };
             }
@@ -149618,7 +149878,7 @@ ${ptyResult.output.slice(-2e3)}`);
               const { deriveMeshReviewInboxItems: deriveMeshReviewInboxItems2 } = await Promise.resolve().then(() => (init_mesh_review_inbox(), mesh_review_inbox_exports));
               const { readLocalRecords: readLocalRecords2 } = await Promise.resolve().then(() => (init_mesh_local_records(), mesh_local_records_exports));
               const { getGitDiffSummary: getGitDiffSummary2 } = await Promise.resolve().then(() => (init_git_diff(), git_diff_exports));
-              const { existsSync: existsSync84 } = await import("fs");
+              const { existsSync: existsSync86 } = await import("fs");
               const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
               const mesh = meshRecord2?.mesh;
               if (!mesh) return { success: false, error: "Mesh not found" };
@@ -149637,7 +149897,7 @@ ${ptyResult.output.slice(-2e3)}`);
               const derivation = deriveMeshReviewInboxItems2({ nodes: nodeStatuses, ledgerEntries });
               for (const item of derivation.items) {
                 const workspace = item.workspace;
-                if (!workspace || !existsSync84(workspace)) continue;
+                if (!workspace || !existsSync86(workspace)) continue;
                 const baseRef = item.defaultBranch ? `origin/${item.defaultBranch}` : "origin/main";
                 try {
                   const diffResult = await getGitDiffSummary2(workspace, { baseRef, maxFiles: 100 });
@@ -153244,7 +153504,7 @@ ${e?.stderr || ""}`;
           }
         } };
       }
-      const requireApprovalForPush = mesh?.policy?.requireApprovalForPush ?? DEFAULT_MESH_POLICY.requireApprovalForPush;
+      const requireApprovalForPush = mesh?.policy?.requireApprovalForPush ?? DEFAULT_MESH_POLICY2.requireApprovalForPush;
       let pushResult;
       if (!requireApprovalForPush) {
         const pushStarted = Date.now();
@@ -154529,6 +154789,21 @@ ${e?.stderr || ""}`;
       if (typeof structuredClone === "function") return structuredClone(value);
       return JSON.parse(JSON.stringify(value));
     }
+    function cloneAggregateSnapshot(snapshot) {
+      if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return cloneJsonValue(snapshot);
+      const out = {};
+      for (const [key2, value] of Object.entries(snapshot)) {
+        out[key2] = SHARED_SNAPSHOT_KEYS.has(key2) ? value : cloneJsonValue(value);
+      }
+      return out;
+    }
+    function cloneNodesSection(snapshot) {
+      const out = {};
+      for (const key2 of NODES_SECTION_KEYS) {
+        if (snapshot[key2] !== void 0) out[key2] = cloneJsonValue(snapshot[key2]);
+      }
+      return out;
+    }
     function hydrateCachedAggregateMeshStatusFromInline(self, snapshot, mesh, options) {
       if (!mesh || typeof mesh !== "object" || !Array.isArray(mesh.nodes) || !Array.isArray(snapshot?.nodes)) return snapshot;
       const inlineNodesById = /* @__PURE__ */ new Map();
@@ -154615,7 +154890,7 @@ ${e?.stderr || ""}`;
       const cached5 = self.aggregateMeshStatusCache.get(meshId);
       if (!cached5?.snapshot || cached5.snapshot.success !== true || !Array.isArray(cached5.snapshot.nodes)) return null;
       if (cached5.queueRevision !== getMeshQueueRevision(meshId)) return null;
-      let snapshot = cloneJsonValue(cached5.snapshot);
+      let snapshot = options?.nodesOnly ? cloneNodesSection(cached5.snapshot) : cloneAggregateSnapshot(cached5.snapshot);
       snapshot = hydrateCachedAggregateMeshStatusFromInline(self, snapshot, mesh, options);
       if (!options?.allowStalePending && shouldRefreshStalePendingAggregate(snapshot, options)) return null;
       const ageMs2 = Math.max(0, Date.now() - cached5.builtAt);
@@ -154638,7 +154913,7 @@ ${e?.stderr || ""}`;
     function rememberAggregateMeshStatus(self, meshId, snapshot, refreshReason) {
       if (!snapshot || typeof snapshot !== "object" || snapshot.success !== true || !Array.isArray(snapshot.nodes)) return snapshot;
       const builtAt = Date.now();
-      const next = cloneJsonValue(snapshot);
+      const next = cloneAggregateSnapshot(snapshot);
       const sourceOfTruth = next.sourceOfTruth && typeof next.sourceOfTruth === "object" ? next.sourceOfTruth : {};
       next.sourceOfTruth = {
         ...sourceOfTruth,
@@ -154652,15 +154927,19 @@ ${e?.stderr || ""}`;
           returnedAt: new Date(builtAt).toISOString()
         }
       };
-      self.aggregateMeshStatusCache.set(meshId, { builtAt, snapshot: cloneJsonValue(next), queueRevision: getMeshQueueRevision(meshId) });
+      self.aggregateMeshStatusCache.set(meshId, { builtAt, snapshot: cloneAggregateSnapshot(next), queueRevision: getMeshQueueRevision(meshId) });
       return next;
     }
+    var SHARED_SNAPSHOT_KEYS;
+    var NODES_SECTION_KEYS;
     var init_router_aggregate_status = __esm2({
       "src/commands/router-aggregate-status.ts"() {
         "use strict";
         init_dist();
         init_mesh_work_queue();
         init_mesh_node_identity();
+        SHARED_SNAPSHOT_KEYS = /* @__PURE__ */ new Set(["queue"]);
+        NODES_SECTION_KEYS = ["success", "meshId", "refreshedAt", "sourceOfTruth", "branchConvergenceSummary", "nodes"];
       }
     });
     function resolveRemoteMeshSessionOwnerDaemonId(self, sessionId, ownerNodeIdHint) {
@@ -155962,6 +156241,58 @@ ${e?.stderr || ""}`;
         };
       }
     });
+    var mesh_membership_projection_exports = {};
+    __export2(mesh_membership_projection_exports, {
+      MEMBERSHIP_ONLY_DROPPED_NODE_KEYS: () => MEMBERSHIP_ONLY_DROPPED_NODE_KEYS,
+      isLocalMembershipNode: () => isLocalMembershipNode,
+      projectMeshMembershipOnly: () => projectMeshMembershipOnly
+    });
+    function readString14(value) {
+      return typeof value === "string" ? value.trim() : "";
+    }
+    function isLocalMembershipNode(node, locality) {
+      const daemonId = readString14(node?.daemonId);
+      if (daemonId) {
+        return Boolean(
+          locality.localMachineId && daemonIdsEquivalent4(daemonId, locality.localMachineId) || locality.localDaemonId && daemonIdsEquivalent4(daemonId, locality.localDaemonId)
+        );
+      }
+      const workspace = readString14(node?.workspace);
+      return Boolean(workspace) && fs71.existsSync(workspace);
+    }
+    function projectMeshMembershipOnly(mesh, opts) {
+      if (!mesh || typeof mesh !== "object" || !Array.isArray(mesh.nodes)) return mesh;
+      let localFacts;
+      let localFactsRead = false;
+      const nodes = mesh.nodes.map((node) => {
+        if (!node || typeof node !== "object") return node;
+        const view = { ...node };
+        for (const key2 of MEMBERSHIP_ONLY_DROPPED_NODE_KEYS) delete view[key2];
+        if (opts.localNodeFacts && isLocalMembershipNode(node, opts)) {
+          if (!localFactsRead) {
+            localFactsRead = true;
+            try {
+              localFacts = opts.localNodeFacts();
+            } catch {
+              localFacts = null;
+            }
+          }
+          if (localFacts) view.nodeFacts = localFacts;
+        }
+        return view;
+      });
+      return { ...mesh, nodes };
+    }
+    var fs71;
+    var MEMBERSHIP_ONLY_DROPPED_NODE_KEYS;
+    var init_mesh_membership_projection = __esm2({
+      "src/mesh/mesh-membership-projection.ts"() {
+        "use strict";
+        fs71 = __toESM2(require("fs"));
+        init_dist();
+        MEMBERSHIP_ONLY_DROPPED_NODE_KEYS = ["lastGit", "last_git"];
+      }
+    });
     var mesh_crud_exports = {};
     __export2(mesh_crud_exports, {
       decideOssCloneSync: () => decideOssCloneSync,
@@ -156074,6 +156405,19 @@ ${e?.stderr || ""}`;
             if (!meshRecord2?.mesh) return { success: false, error: "Mesh not found" };
             const requireDirectPeerTruth = args?.requireDirectPeerTruth === true;
             const localMachineId = getMachineId() || "";
+            if (args?.membershipOnly === true && !requireDirectPeerTruth) {
+              const { projectMeshMembershipOnly: projectMeshMembershipOnly2 } = await Promise.resolve().then(() => (init_mesh_membership_projection(), mesh_membership_projection_exports));
+              const { buildFreshLocalNodeFacts: buildFreshLocalNodeFacts2 } = await Promise.resolve().then(() => (init_mesh_node_identity(), mesh_node_identity_exports));
+              return {
+                success: true,
+                mesh: projectMeshMembershipOnly2(meshRecord2.mesh, {
+                  localMachineId,
+                  localDaemonId: ctx.deps.statusInstanceId,
+                  localNodeFacts: buildFreshLocalNodeFacts2
+                }),
+                membershipOnly: true
+              };
+            }
             if (ctx.deps.dispatchMeshCommand && ctx.meshNodeGitState) {
               hydrateMeshNodesFromGitState({
                 meshId,
@@ -156269,7 +156613,7 @@ ${e?.stderr || ""}`;
                 MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
               } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
               const { mkdirSync: mkdirSync44, writeFileSync: writeFileSync37 } = await import("fs");
-              const { dirname: dirname37, join: join85 } = await import("path");
+              const { dirname: dirname38, join: join85 } = await import("path");
               const scaffold = buildMeshJsonConfigScaffold2(mesh);
               const scaffoldJson = serializeMeshJsonConfigScaffold2(scaffold);
               const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
@@ -156309,7 +156653,7 @@ ${e?.stderr || ""}`;
                   note: "Dry-run: nothing written. Re-run with write=true to persist to the repo (commit target). meshes.json is untouched."
                 };
               }
-              mkdirSync44(dirname37(absolutePath), { recursive: true });
+              mkdirSync44(dirname38(absolutePath), { recursive: true });
               writeFileSync37(absolutePath, `${scaffoldJson}
 `, "utf-8");
               return {
@@ -156379,8 +156723,8 @@ ${e?.stderr || ""}`;
                 normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
                 MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
               } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-              const { existsSync: existsSync84, readFileSync: readFileSync69, mkdirSync: mkdirSync44, writeFileSync: writeFileSync37 } = await import("fs");
-              const { dirname: dirname37, join: join85 } = await import("path");
+              const { existsSync: existsSync86, readFileSync: readFileSync69, mkdirSync: mkdirSync44, writeFileSync: writeFileSync37 } = await import("fs");
+              const { dirname: dirname38, join: join85 } = await import("path");
               const yaml3 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
               const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
               let baseDoc = { version: 1 };
@@ -156388,7 +156732,7 @@ ${e?.stderr || ""}`;
               let existedAsYaml = false;
               for (const relative9 of MESH_JSON_CONFIG_LOCATIONS2) {
                 const candidate = join85(workspace, relative9);
-                if (!existsSync84(candidate)) continue;
+                if (!existsSync86(candidate)) continue;
                 try {
                   const text = readFileSync69(candidate, "utf-8");
                   const parsed = /\.json$/i.test(candidate) ? JSON.parse(text) : yaml3.load(text);
@@ -156444,7 +156788,7 @@ ${e?.stderr || ""}`;
                   note: "Dry-run: nothing written. Re-run with write=true to persist. Only the providerDefaults zone is merged; other repo zones are preserved."
                 };
               }
-              mkdirSync44(dirname37(absolutePath), { recursive: true });
+              mkdirSync44(dirname38(absolutePath), { recursive: true });
               writeFileSync37(absolutePath, serialized, "utf-8");
               return {
                 success: true,
@@ -158482,7 +158826,7 @@ ${e?.stderr || ""}`;
       CHAT_MESSAGE_TRANSCRIPT_VISIBILITIES: () => CHAT_MESSAGE_TRANSCRIPT_VISIBILITIES,
       CHAT_MESSAGE_VISIBILITIES: () => CHAT_MESSAGE_VISIBILITIES,
       COMMAND_PREFIX_DEFAULTS: () => COMMAND_PREFIX_DEFAULTS,
-      COMPACT_STATUS_GOAL_PREVIEW_MAX: () => COMPACT_STATUS_GOAL_PREVIEW_MAX,
+      COMPACT_STATUS_GOAL_PREVIEW_MAX: () => COMPACT_STATUS_GOAL_PREVIEW_MAX2,
       CONFIG_SETTINGS_TOPIC: () => CONFIG_SETTINGS_TOPIC,
       CTRL_C: () => CTRL_C,
       CUSTOM_PROVIDERS_DOCS_URL: () => CUSTOM_PROVIDERS_DOCS_URL,
@@ -158503,7 +158847,7 @@ ${e?.stderr || ""}`;
       DEFAULT_GIT_REFRESH_CONCURRENCY: () => DEFAULT_GIT_REFRESH_CONCURRENCY,
       DEFAULT_GIT_WORKSPACE_POLL_INTERVAL_MS: () => DEFAULT_GIT_WORKSPACE_POLL_INTERVAL_MS,
       DEFAULT_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS: () => DEFAULT_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
-      DEFAULT_MESH_POLICY: () => DEFAULT_MESH_POLICY,
+      DEFAULT_MESH_POLICY: () => DEFAULT_MESH_POLICY2,
       DEFAULT_MESH_SCHEDULING_STRATEGY: () => DEFAULT_MESH_SCHEDULING_STRATEGY,
       DEFAULT_PROVIDER_CHANNEL: () => DEFAULT_PROVIDER_CHANNEL,
       DEFAULT_QUOTA_ROUTING_POLICY: () => DEFAULT_QUOTA_ROUTING_POLICY2,
@@ -161329,7 +161673,7 @@ ${e?.stderr || ""}`;
         if (!["cli", "ide", "extension", "acp"].includes(category)) {
           return { success: false, error: `unknown category: ${category}` };
         }
-        const fs80 = require("fs");
+        const fs81 = require("fs");
         const path75 = require("path");
         try {
           const installRoot = this.getUpstreamInstallRoot();
@@ -161338,9 +161682,9 @@ ${e?.stderr || ""}`;
           if (!targetDir.startsWith(installRootResolved + path75.sep)) {
             return { success: false, error: "refusing to delete outside upstream root" };
           }
-          const hadUpstreamDir = fs80.existsSync(targetDir);
+          const hadUpstreamDir = fs81.existsSync(targetDir);
           if (hadUpstreamDir) {
-            fs80.rmSync(targetDir, { recursive: true, force: true });
+            fs81.rmSync(targetDir, { recursive: true, force: true });
           }
           let channelDeactivated = false;
           try {
@@ -161369,28 +161713,28 @@ ${e?.stderr || ""}`;
        * the UI and by the update checker.
        */
       handleListInstalledProviders(_args) {
-        const fs80 = require("fs");
+        const fs81 = require("fs");
         const path75 = require("path");
         const installRoot = this.getUpstreamInstallRoot();
-        if (!fs80.existsSync(installRoot)) return { success: true, providers: [] };
+        if (!fs81.existsSync(installRoot)) return { success: true, providers: [] };
         const CATEGORIES = ["cli", "ide", "extension", "acp"];
         const items = [];
         for (const category of CATEGORIES) {
           const categoryDir = path75.join(installRoot, category);
-          if (!fs80.existsSync(categoryDir)) continue;
+          if (!fs81.existsSync(categoryDir)) continue;
           let entries;
           try {
-            entries = fs80.readdirSync(categoryDir);
+            entries = fs81.readdirSync(categoryDir);
           } catch {
             continue;
           }
           for (const type2 of entries) {
             const v1Path = path75.join(categoryDir, type2, "provider.v1.json");
             const v0Path = path75.join(categoryDir, type2, "provider.json");
-            const manifestPath = fs80.existsSync(v1Path) ? v1Path : fs80.existsSync(v0Path) ? v0Path : null;
+            const manifestPath = fs81.existsSync(v1Path) ? v1Path : fs81.existsSync(v0Path) ? v0Path : null;
             if (!manifestPath) continue;
             try {
-              const m = JSON.parse(fs80.readFileSync(manifestPath, "utf-8"));
+              const m = JSON.parse(fs81.readFileSync(manifestPath, "utf-8"));
               const modelOptions = Array.isArray(m.modelOptions) ? m.modelOptions.filter((x) => typeof x === "string" && !!x.trim()) : [];
               const thinkingLevelOptions = Array.isArray(m.thinkingLevelOptions) ? m.thinkingLevelOptions.filter((x) => typeof x === "string" && !!x.trim()) : [];
               items.push({
@@ -161672,7 +162016,7 @@ ${e?.stderr || ""}`;
         if (!/^@[a-z0-9_-]+$/i.test(requestedName)) {
           return { success: false, error: "name must match @[a-z0-9_-]+" };
         }
-        const fs80 = require("fs");
+        const fs81 = require("fs");
         const path75 = require("path");
         const { hiddenSpawnSync: hiddenSpawnSync2 } = (init_hidden_spawn(), __toCommonJS2(hidden_spawn_exports));
         const file2 = ext.loadExternalSources();
@@ -161683,8 +162027,8 @@ ${e?.stderr || ""}`;
           return { success: false, error: `source url+ref already registered (use a different name to track another ref)` };
         }
         const sourceDir = path75.join(ext.externalRoot(), requestedName);
-        if (!fs80.existsSync(ext.externalRoot())) fs80.mkdirSync(ext.externalRoot(), { recursive: true });
-        if (fs80.existsSync(sourceDir)) {
+        if (!fs81.existsSync(ext.externalRoot())) fs81.mkdirSync(ext.externalRoot(), { recursive: true });
+        if (fs81.existsSync(sourceDir)) {
           return { success: false, error: `directory already exists: ${sourceDir} (rename or remove first)` };
         }
         const clone2 = hiddenSpawnSync2("git", ["clone", "--depth=1", "--branch", ref, "--", url2, sourceDir], {
@@ -161694,7 +162038,7 @@ ${e?.stderr || ""}`;
         });
         if (clone2.status !== 0) {
           try {
-            fs80.rmSync(sourceDir, { recursive: true, force: true });
+            fs81.rmSync(sourceDir, { recursive: true, force: true });
           } catch {
           }
           return { success: false, error: `git clone failed: ${(clone2.stderr || clone2.stdout || "").trim() || "unknown error"}` };
@@ -161738,15 +162082,15 @@ ${e?.stderr || ""}`;
         const name = typeof args?.name === "string" ? args.name.trim() : "";
         if (!name) return { success: false, error: "name is required" };
         const ext = (init_external_sources(), __toCommonJS2(external_sources_exports));
-        const fs80 = require("fs");
+        const fs81 = require("fs");
         const path75 = require("path");
         const file2 = ext.loadExternalSources();
         const match = file2.sources.find((s2) => s2.name === name);
         if (!match) return { success: false, error: `source "${name}" not registered` };
         const sourceDir = path75.join(ext.externalRoot(), name);
-        if (fs80.existsSync(sourceDir)) {
+        if (fs81.existsSync(sourceDir)) {
           try {
-            fs80.rmSync(sourceDir, { recursive: true, force: true });
+            fs81.rmSync(sourceDir, { recursive: true, force: true });
           } catch (e) {
             return { success: false, error: `failed to delete ${sourceDir}: ${e?.message || e}` };
           }
@@ -165085,12 +165429,12 @@ ${e?.stderr || ""}`;
     init_provider_source_config();
     init_io_contracts();
     init_chat_message_normalization();
-    var fs72 = __toESM2(require("fs"));
+    var fs73 = __toESM2(require("fs"));
     var path68 = __toESM2(require("path"));
     var os38 = __toESM2(require("os"));
     var import_os6 = require("os");
     init_config();
-    var fs71 = __toESM2(require("fs"));
+    var fs72 = __toESM2(require("fs"));
     var path67 = __toESM2(require("path"));
     function manifestCandidates(exeDir) {
       return [
@@ -165115,14 +165459,14 @@ ${e?.stderr || ""}`;
       if (!exePath) return null;
       let exeDir;
       try {
-        exeDir = fs71.statSync(exePath).isDirectory() ? exePath : path67.dirname(exePath);
+        exeDir = fs72.statSync(exePath).isDirectory() ? exePath : path67.dirname(exePath);
       } catch {
         exeDir = path67.dirname(exePath);
       }
       for (const candidate of manifestCandidates(exeDir)) {
         try {
-          if (!fs71.existsSync(candidate)) continue;
-          const version2 = parseVersionFromManifest(fs71.readFileSync(candidate, "utf-8"));
+          if (!fs72.existsSync(candidate)) continue;
+          const version2 = parseVersionFromManifest(fs72.readFileSync(candidate, "utf-8"));
           if (version2) return version2;
         } catch {
         }
@@ -165154,8 +165498,8 @@ ${e?.stderr || ""}`;
       }
       load() {
         try {
-          if (fs72.existsSync(getArchivePath())) {
-            this.history = JSON.parse(fs72.readFileSync(getArchivePath(), "utf-8"));
+          if (fs73.existsSync(getArchivePath())) {
+            this.history = JSON.parse(fs73.readFileSync(getArchivePath(), "utf-8"));
           }
         } catch {
           this.history = {};
@@ -165192,8 +165536,8 @@ ${e?.stderr || ""}`;
       }
       save() {
         try {
-          fs72.mkdirSync(path68.dirname(getArchivePath()), { recursive: true });
-          fs72.writeFileSync(getArchivePath(), JSON.stringify(this.history, null, 2));
+          fs73.mkdirSync(path68.dirname(getArchivePath()), { recursive: true });
+          fs73.writeFileSync(getArchivePath(), JSON.stringify(this.history, null, 2));
         } catch {
         }
       }
@@ -165218,8 +165562,8 @@ ${e?.stderr || ""}`;
         for (const ext of exes) {
           const fullPath = path68.join(p, name + ext);
           try {
-            if (fs72.existsSync(fullPath)) {
-              const stat2 = fs72.statSync(fullPath);
+            if (fs73.existsSync(fullPath)) {
+              const stat2 = fs73.statSync(fullPath);
               if (stat2.isFile() && (isWin || stat2.mode & 73)) {
                 return fullPath;
               }
@@ -165266,9 +165610,9 @@ ${e?.stderr || ""}`;
         if (p.includes("*")) {
           const home = os38.homedir();
           const resolved = p.replace(/\*/g, home.split(path68.sep).pop() || "");
-          if (fs72.existsSync(resolved)) return resolved;
+          if (fs73.existsSync(resolved)) return resolved;
         } else {
-          if (fs72.existsSync(p)) return p;
+          if (fs73.existsSync(p)) return p;
         }
       }
       return null;
@@ -165276,7 +165620,7 @@ ${e?.stderr || ""}`;
     async function getMacAppVersion(appPath) {
       if ((0, import_os6.platform)() !== "darwin" || !appPath.endsWith(".app")) return null;
       const plistPath = path68.join(appPath, "Contents", "Info.plist");
-      if (!fs72.existsSync(plistPath)) return null;
+      if (!fs73.existsSync(plistPath)) return null;
       const raw = await runCommand(`/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "${plistPath}"`);
       return raw || null;
     }
@@ -165303,7 +165647,7 @@ ${e?.stderr || ""}`;
           let resolvedBin = cliBin;
           if (!resolvedBin && appPath && currentOs === "darwin") {
             const bundled = path68.join(appPath, "Contents", "Resources", "app", "bin", provider.cli || "");
-            if (provider.cli && fs72.existsSync(bundled)) resolvedBin = bundled;
+            if (provider.cli && fs73.existsSync(bundled)) resolvedBin = bundled;
           }
           info.installed = !!(appPath || resolvedBin);
           info.path = appPath || null;
@@ -165349,7 +165693,7 @@ ${e?.stderr || ""}`;
       return results;
     }
     var http3 = __toESM2(require("http"));
-    var fs77 = __toESM2(require("fs"));
+    var fs78 = __toESM2(require("fs"));
     var path73 = __toESM2(require("path"));
     init_provider_schema();
     init_config();
@@ -165695,7 +166039,7 @@ async (params) => {
         files
       };
     }
-    var fs73 = __toESM2(require("fs"));
+    var fs74 = __toESM2(require("fs"));
     var path69 = __toESM2(require("path"));
     var CUSTOM_PROVIDERS_DOCS_URL = "https://docs.adhf.dev/guide/custom-providers";
     var INIT_SCAFFOLDABLE_CATEGORIES = /* @__PURE__ */ new Set(["cli", "acp"]);
@@ -165800,7 +166144,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       candidates.push(path69.join(manifestDir, "specs", "default.json"));
       candidates.push(path69.join(manifestDir, "spec.json"));
-      return candidates.find((p) => fs73.existsSync(p)) || null;
+      return candidates.find((p) => fs74.existsSync(p)) || null;
     }
     function buildAcpProviderV1Scaffold(options) {
       const { type: type2 } = options;
@@ -165837,7 +166181,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     init_logger();
     init_builders();
-    var fs74 = __toESM2(require("fs"));
+    var fs75 = __toESM2(require("fs"));
     var path70 = __toESM2(require("path"));
     init_logger();
     async function handleCdpEvaluate(ctx, req, res) {
@@ -166018,17 +166362,17 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       let scriptsPath = "";
       const directScripts = path70.join(dir, "scripts.js");
-      if (fs74.existsSync(directScripts)) {
+      if (fs75.existsSync(directScripts)) {
         scriptsPath = directScripts;
       } else {
         const scriptsDir = path70.join(dir, "scripts");
-        if (fs74.existsSync(scriptsDir)) {
-          const versions = fs74.readdirSync(scriptsDir).filter((d) => {
-            return fs74.statSync(path70.join(scriptsDir, d)).isDirectory();
+        if (fs75.existsSync(scriptsDir)) {
+          const versions = fs75.readdirSync(scriptsDir).filter((d) => {
+            return fs75.statSync(path70.join(scriptsDir, d)).isDirectory();
           }).sort().reverse();
           for (const ver of versions) {
             const p = path70.join(scriptsDir, ver, "scripts.js");
-            if (fs74.existsSync(p)) {
+            if (fs75.existsSync(p)) {
               scriptsPath = p;
               break;
             }
@@ -166040,7 +166384,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         return;
       }
       try {
-        const source = fs74.readFileSync(scriptsPath, "utf-8");
+        const source = fs75.readFileSync(scriptsPath, "utf-8");
         const hints = {};
         const funcRegex = /module\.exports\.(\w+)\s*=\s*function\s+\w+\s*\(params\)/g;
         let match;
@@ -166853,7 +167197,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         ctx.json(res, 500, { error: `DOM context collection failed: ${e.message}` });
       }
     }
-    var fs75 = __toESM2(require("fs"));
+    var fs76 = __toESM2(require("fs"));
     var path71 = __toESM2(require("path"));
     function slugifyFixtureName(value) {
       const normalized = String(value || "").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
@@ -166869,10 +167213,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     function readCliFixture(ctx, type2, name) {
       const fixtureDir = getCliFixtureDir(ctx, type2);
       const filePath2 = path71.join(fixtureDir, `${name}.json`);
-      if (!fs75.existsSync(filePath2)) {
+      if (!fs76.existsSync(filePath2)) {
         throw new Error(`Fixture not found: ${filePath2}`);
       }
-      return JSON.parse(fs75.readFileSync(filePath2, "utf-8"));
+      return JSON.parse(fs76.readFileSync(filePath2, "utf-8"));
     }
     function getExerciseTranscriptText(result) {
       const parts = [];
@@ -167633,7 +167977,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           return;
         }
         const fixtureDir = getCliFixtureDir(ctx, type2);
-        fs75.mkdirSync(fixtureDir, { recursive: true });
+        fs76.mkdirSync(fixtureDir, { recursive: true });
         const name = slugifyFixtureName(String(body?.name || `${type2}-${Date.now()}`));
         const result = await runCliExerciseInternal(ctx, { ...request, type: type2 });
         const fixture = {
@@ -167661,7 +168005,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           notes: typeof body?.notes === "string" ? body.notes : void 0
         };
         const filePath2 = path71.join(fixtureDir, `${name}.json`);
-        fs75.writeFileSync(filePath2, JSON.stringify(fixture, null, 2));
+        fs76.writeFileSync(filePath2, JSON.stringify(fixture, null, 2));
         ctx.json(res, 200, {
           saved: true,
           name,
@@ -167679,14 +168023,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     async function handleCliFixtureList(ctx, type2, _req, res) {
       try {
         const fixtureDir = getCliFixtureDir(ctx, type2);
-        if (!fs75.existsSync(fixtureDir)) {
+        if (!fs76.existsSync(fixtureDir)) {
           ctx.json(res, 200, { fixtures: [], count: 0 });
           return;
         }
-        const fixtures = fs75.readdirSync(fixtureDir).filter((file2) => file2.endsWith(".json")).sort((a, b) => b.localeCompare(a, void 0, { numeric: true, sensitivity: "base" })).map((file2) => {
+        const fixtures = fs76.readdirSync(fixtureDir).filter((file2) => file2.endsWith(".json")).sort((a, b) => b.localeCompare(a, void 0, { numeric: true, sensitivity: "base" })).map((file2) => {
           const fullPath = path71.join(fixtureDir, file2);
           try {
-            const raw = JSON.parse(fs75.readFileSync(fullPath, "utf-8"));
+            const raw = JSON.parse(fs76.readFileSync(fullPath, "utf-8"));
             return {
               name: raw.name || file2.replace(/\.json$/i, ""),
               path: fullPath,
@@ -167817,7 +168161,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         ctx.json(res, 500, { error: `Raw send failed: ${e.message}` });
       }
     }
-    var fs76 = __toESM2(require("fs"));
+    var fs77 = __toESM2(require("fs"));
     var path72 = __toESM2(require("path"));
     var os39 = __toESM2(require("os"));
     var import_session_host_core10 = require_dist();
@@ -167859,10 +168203,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return fallback?.type || null;
     }
     function getLatestScriptVersionDir(scriptsDir) {
-      if (!fs76.existsSync(scriptsDir)) return null;
-      const versions = fs76.readdirSync(scriptsDir).filter((d) => {
+      if (!fs77.existsSync(scriptsDir)) return null;
+      const versions = fs77.readdirSync(scriptsDir).filter((d) => {
         try {
-          return fs76.statSync(path72.join(scriptsDir, d)).isDirectory();
+          return fs77.statSync(path72.join(scriptsDir, d)).isDirectory();
         } catch {
           return false;
         }
@@ -167884,13 +168228,13 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       if (!sourceDir) {
         return { dir: null, reason: `Provider source directory not found for '${type2}'` };
       }
-      if (!fs76.existsSync(desiredDir)) {
-        fs76.mkdirSync(path72.dirname(desiredDir), { recursive: true });
-        fs76.cpSync(sourceDir, desiredDir, { recursive: true });
+      if (!fs77.existsSync(desiredDir)) {
+        fs77.mkdirSync(path72.dirname(desiredDir), { recursive: true });
+        fs77.cpSync(sourceDir, desiredDir, { recursive: true });
         ctx.log(`Auto-implement writable copy created: ${desiredDir}`);
       }
       const providerJson = path72.join(desiredDir, "provider.json");
-      if (!fs76.existsSync(providerJson)) {
+      if (!fs77.existsSync(providerJson)) {
         return { dir: null, reason: `provider.json not found in writable provider directory: ${desiredDir}` };
       }
       return { dir: desiredDir };
@@ -167898,15 +168242,15 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     function loadAutoImplReferenceScripts(ctx, referenceType) {
       if (!referenceType) return {};
       const refDir = ctx.findProviderDir(referenceType);
-      if (!refDir || !fs76.existsSync(refDir)) return {};
+      if (!refDir || !fs77.existsSync(refDir)) return {};
       const referenceScripts = {};
       const scriptsDir = path72.join(refDir, "scripts");
       const latestDir = getLatestScriptVersionDir(scriptsDir);
       if (!latestDir) return referenceScripts;
-      for (const file2 of fs76.readdirSync(latestDir)) {
+      for (const file2 of fs77.readdirSync(latestDir)) {
         if (!file2.endsWith(".js")) continue;
         try {
-          referenceScripts[file2] = fs76.readFileSync(path72.join(latestDir, file2), "utf-8");
+          referenceScripts[file2] = fs77.readFileSync(path72.join(latestDir, file2), "utf-8");
         } catch {
         }
       }
@@ -168015,15 +168359,15 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const referenceScripts = loadAutoImplReferenceScripts(ctx, resolvedReference);
         const prompt = buildAutoImplPrompt(ctx, type2, provider, providerDir, functions, domContext, referenceScripts, comment, resolvedReference, verification);
         const tmpDir = path72.join(os39.tmpdir(), "adhdev-autoimpl");
-        if (!fs76.existsSync(tmpDir)) fs76.mkdirSync(tmpDir, { recursive: true });
+        if (!fs77.existsSync(tmpDir)) fs77.mkdirSync(tmpDir, { recursive: true });
         const promptFile = path72.join(tmpDir, `prompt-${type2}-${Date.now()}.md`);
-        fs76.writeFileSync(promptFile, prompt, "utf-8");
+        fs77.writeFileSync(promptFile, prompt, "utf-8");
         ctx.log(`Auto-implement prompt written to ${promptFile} (${prompt.length} chars)`);
         const agentProvider = ctx.providerLoader.resolve(agent) || ctx.providerLoader.getMeta(agent);
         const spawn9 = agentProvider?.spawn;
         if (!spawn9?.command) {
           try {
-            fs76.unlinkSync(promptFile);
+            fs77.unlinkSync(promptFile);
           } catch {
           }
           ctx.json(res, 400, { error: `Agent '${agent}' has no spawn config. Select a CLI provider with a spawn configuration.` });
@@ -168126,7 +168470,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             } catch {
             }
             try {
-              fs76.unlinkSync(promptFile);
+              fs77.unlinkSync(promptFile);
             } catch {
             }
             ctx.log(`Auto-implement (ACP) ${success2 ? "completed" : "failed"}: ${type2} (exit: ${code})`);
@@ -168350,7 +168694,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             }
           });
           try {
-            fs76.unlinkSync(promptFile);
+            fs77.unlinkSync(promptFile);
           } catch {
           }
           ctx.log(`Auto-implement ${success2 ? "completed" : "failed"}: ${type2} (exit: ${code})${verificationSummary ? ` verify=${verificationSummary.pass ? "pass" : "fail"}` : ""}`);
@@ -168455,10 +168799,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         lines.push("## \u270F\uFE0F Target Files (EDIT THESE)");
         lines.push("These are the ONLY files you are allowed to modify. Replace the TODO stubs with working implementations.");
         lines.push("");
-        for (const file2 of fs76.readdirSync(latestScriptsDir)) {
+        for (const file2 of fs77.readdirSync(latestScriptsDir)) {
           if (file2.endsWith(".js") && targetFileNames.has(file2)) {
             try {
-              const content = fs76.readFileSync(path72.join(latestScriptsDir, file2), "utf-8");
+              const content = fs77.readFileSync(path72.join(latestScriptsDir, file2), "utf-8");
               lines.push(`### \`${file2}\` \u270F\uFE0F EDIT`);
               lines.push("```javascript");
               lines.push(content);
@@ -168468,14 +168812,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             }
           }
         }
-        const refFiles = fs76.readdirSync(latestScriptsDir).filter((f) => f.endsWith(".js") && !targetFileNames.has(f));
+        const refFiles = fs77.readdirSync(latestScriptsDir).filter((f) => f.endsWith(".js") && !targetFileNames.has(f));
         if (refFiles.length > 0) {
           lines.push("## \u{1F512} Other Scripts (REFERENCE ONLY \u2014 DO NOT EDIT)");
           lines.push("These files are shown for context only. Do NOT modify them under any circumstances.");
           lines.push("");
           for (const file2 of refFiles) {
             try {
-              const content = fs76.readFileSync(path72.join(latestScriptsDir, file2), "utf-8");
+              const content = fs77.readFileSync(path72.join(latestScriptsDir, file2), "utf-8");
               lines.push(`### \`${file2}\` \u{1F512}`);
               lines.push("```javascript");
               lines.push(content);
@@ -168520,7 +168864,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const loadGuide = (name) => {
         try {
           const p = path72.join(docsDir, name);
-          if (fs76.existsSync(p)) return fs76.readFileSync(p, "utf-8");
+          if (fs77.existsSync(p)) return fs77.readFileSync(p, "utf-8");
         } catch {
         }
         return null;
@@ -168764,11 +169108,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         lines.push("## \u270F\uFE0F Target Files (EDIT THESE)");
         lines.push("These are the ONLY files you are allowed to modify. Replace TODO or heuristic-only logic with working PTY-aware implementations.");
         lines.push("");
-        for (const file2 of fs76.readdirSync(latestScriptsDir)) {
+        for (const file2 of fs77.readdirSync(latestScriptsDir)) {
           if (!file2.endsWith(".js")) continue;
           if (!targetFileNames.has(file2)) continue;
           try {
-            const content = fs76.readFileSync(path72.join(latestScriptsDir, file2), "utf-8");
+            const content = fs77.readFileSync(path72.join(latestScriptsDir, file2), "utf-8");
             lines.push(`### \`${file2}\` \u270F\uFE0F EDIT`);
             lines.push("```javascript");
             lines.push(content);
@@ -168777,14 +169121,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           } catch {
           }
         }
-        const refFiles = fs76.readdirSync(latestScriptsDir).filter((f) => f.endsWith(".js") && !targetFileNames.has(f));
+        const refFiles = fs77.readdirSync(latestScriptsDir).filter((f) => f.endsWith(".js") && !targetFileNames.has(f));
         if (refFiles.length > 0) {
           lines.push("## \u{1F512} Other Scripts (REFERENCE ONLY \u2014 DO NOT EDIT)");
           lines.push("These files are shown for context only. Do NOT modify them under any circumstances.");
           lines.push("");
           for (const file2 of refFiles) {
             try {
-              const content = fs76.readFileSync(path72.join(latestScriptsDir, file2), "utf-8");
+              const content = fs77.readFileSync(path72.join(latestScriptsDir, file2), "utf-8");
               lines.push(`### \`${file2}\` \u{1F512}`);
               lines.push("```javascript");
               lines.push(content);
@@ -168821,7 +169165,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const loadGuide = (name) => {
         try {
           const p = path72.join(docsDir, name);
-          if (fs76.existsSync(p)) return fs76.readFileSync(p, "utf-8");
+          if (fs77.existsSync(p)) return fs77.readFileSync(p, "utf-8");
         } catch {
         }
         return null;
@@ -169563,7 +169907,7 @@ data: ${JSON.stringify(msg.data)}
           path73.join(process.cwd(), "packages/web-devconsole/dist")
         ];
         for (const dir of candidates) {
-          if (fs77.existsSync(path73.join(dir, "index.html"))) return dir;
+          if (fs78.existsSync(path73.join(dir, "index.html"))) return dir;
         }
         return null;
       }
@@ -169575,7 +169919,7 @@ data: ${JSON.stringify(msg.data)}
         }
         const htmlPath = path73.join(distDir, "index.html");
         try {
-          const html = fs77.readFileSync(htmlPath, "utf-8");
+          const html = fs78.readFileSync(htmlPath, "utf-8");
           res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
           res.end(html);
         } catch (e) {
@@ -169605,7 +169949,7 @@ data: ${JSON.stringify(msg.data)}
           return;
         }
         try {
-          const content = fs77.readFileSync(filePath2);
+          const content = fs78.readFileSync(filePath2);
           const ext = path73.extname(filePath2);
           const contentType = _DevServer.MIME_MAP[ext] || "application/octet-stream";
           res.writeHead(200, { "Content-Type": contentType, "Cache-Control": "public, max-age=31536000, immutable" });
@@ -169714,14 +170058,14 @@ data: ${JSON.stringify(msg.data)}
         const files = [];
         const scan = (d, prefix) => {
           try {
-            for (const entry of fs77.readdirSync(d, { withFileTypes: true })) {
+            for (const entry of fs78.readdirSync(d, { withFileTypes: true })) {
               if (entry.name.startsWith(".") || entry.name.endsWith(".bak")) continue;
               const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
               if (entry.isDirectory()) {
                 files.push({ path: rel, size: 0, type: "dir" });
                 scan(path73.join(d, entry.name), rel);
               } else {
-                const stat2 = fs77.statSync(path73.join(d, entry.name));
+                const stat2 = fs78.statSync(path73.join(d, entry.name));
                 files.push({ path: rel, size: stat2.size, type: "file" });
               }
             }
@@ -169749,11 +170093,11 @@ data: ${JSON.stringify(msg.data)}
           this.json(res, 403, { error: "Forbidden" });
           return;
         }
-        if (!fs77.existsSync(fullPath) || fs77.statSync(fullPath).isDirectory()) {
+        if (!fs78.existsSync(fullPath) || fs78.statSync(fullPath).isDirectory()) {
           this.json(res, 404, { error: `File not found: ${filePath2}` });
           return;
         }
-        const content = fs77.readFileSync(fullPath, "utf-8");
+        const content = fs78.readFileSync(fullPath, "utf-8");
         this.json(res, 200, { type: type2, path: filePath2, content, lines: content.split("\n").length });
       }
       /** POST /api/providers/:type/file — write a file { path, content } */
@@ -169775,9 +170119,9 @@ data: ${JSON.stringify(msg.data)}
           return;
         }
         try {
-          if (fs77.existsSync(fullPath)) fs77.copyFileSync(fullPath, fullPath + ".bak");
-          fs77.mkdirSync(path73.dirname(fullPath), { recursive: true });
-          fs77.writeFileSync(fullPath, content, "utf-8");
+          if (fs78.existsSync(fullPath)) fs78.copyFileSync(fullPath, fullPath + ".bak");
+          fs78.mkdirSync(path73.dirname(fullPath), { recursive: true });
+          fs78.writeFileSync(fullPath, content, "utf-8");
           this.log(`File saved: ${fullPath} (${content.length} chars)`);
           this.providerLoader.reload();
           this.json(res, 200, { saved: true, path: filePath2, chars: content.length });
@@ -169794,8 +170138,8 @@ data: ${JSON.stringify(msg.data)}
         }
         for (const name of ["scripts.js", "provider.json"]) {
           const p = path73.join(dir, name);
-          if (fs77.existsSync(p)) {
-            const source = fs77.readFileSync(p, "utf-8");
+          if (fs78.existsSync(p)) {
+            const source = fs78.readFileSync(p, "utf-8");
             this.json(res, 200, { type: type2, path: p, source, lines: source.split("\n").length });
             return;
           }
@@ -169814,11 +170158,11 @@ data: ${JSON.stringify(msg.data)}
           this.json(res, 404, { error: `Provider not found: ${type2}` });
           return;
         }
-        const target = fs77.existsSync(path73.join(dir, "scripts.js")) ? "scripts.js" : "provider.json";
+        const target = fs78.existsSync(path73.join(dir, "scripts.js")) ? "scripts.js" : "provider.json";
         const targetPath = path73.join(dir, target);
         try {
-          if (fs77.existsSync(targetPath)) fs77.copyFileSync(targetPath, targetPath + ".bak");
-          fs77.writeFileSync(targetPath, source, "utf-8");
+          if (fs78.existsSync(targetPath)) fs78.copyFileSync(targetPath, targetPath + ".bak");
+          fs78.writeFileSync(targetPath, source, "utf-8");
           this.log(`Saved provider: ${targetPath} (${source.length} chars)`);
           this.providerLoader.reload();
           this.json(res, 200, { saved: true, path: targetPath, chars: source.length });
@@ -169966,34 +170310,34 @@ data: ${JSON.stringify(msg.data)}
         const isV1Category = category === "cli" || category === "acp";
         const manifestFileName = isV1Category ? "provider.v1.json" : "provider.json";
         const jsonPath = path73.join(targetDir, manifestFileName);
-        if (fs77.existsSync(jsonPath)) {
+        if (fs78.existsSync(jsonPath)) {
           this.json(res, 409, { error: `Provider already exists at ${targetDir}`, path: targetDir });
           return;
         }
         try {
           const createdFiles = [];
-          fs77.mkdirSync(targetDir, { recursive: true });
+          fs78.mkdirSync(targetDir, { recursive: true });
           if (category === "cli") {
             const scaffold = buildCliProviderV1Scaffold({ type: type2, name, binary: binary2 });
-            fs77.writeFileSync(jsonPath, JSON.stringify(scaffold.manifest, null, 2) + "\n", "utf-8");
+            fs78.writeFileSync(jsonPath, JSON.stringify(scaffold.manifest, null, 2) + "\n", "utf-8");
             createdFiles.push(scaffold.manifestPath);
             const specFullPath = path73.join(targetDir, scaffold.specPath);
-            fs77.mkdirSync(path73.dirname(specFullPath), { recursive: true });
-            fs77.writeFileSync(specFullPath, JSON.stringify(scaffold.spec, null, 2) + "\n", "utf-8");
+            fs78.mkdirSync(path73.dirname(specFullPath), { recursive: true });
+            fs78.writeFileSync(specFullPath, JSON.stringify(scaffold.spec, null, 2) + "\n", "utf-8");
             createdFiles.push(scaffold.specPath);
           } else if (category === "acp") {
             const scaffold = buildAcpProviderV1Scaffold({ type: type2, name, binary: binary2 });
-            fs77.writeFileSync(jsonPath, JSON.stringify(scaffold.manifest, null, 2) + "\n", "utf-8");
+            fs78.writeFileSync(jsonPath, JSON.stringify(scaffold.manifest, null, 2) + "\n", "utf-8");
             createdFiles.push(scaffold.manifestPath);
           } else {
             const result = generateFiles(type2, name, category, { cdpPorts, cli, processName, installPath, binary: binary2, extensionId, version: version2, osPaths, processNames });
-            fs77.writeFileSync(jsonPath, result["provider.json"], "utf-8");
+            fs78.writeFileSync(jsonPath, result["provider.json"], "utf-8");
             createdFiles.push("provider.json");
             if (result.files) {
               for (const [relPath, content] of Object.entries(result.files)) {
                 const fullPath = path73.join(targetDir, relPath);
-                fs77.mkdirSync(path73.dirname(fullPath), { recursive: true });
-                fs77.writeFileSync(fullPath, content, "utf-8");
+                fs78.mkdirSync(path73.dirname(fullPath), { recursive: true });
+                fs78.writeFileSync(fullPath, content, "utf-8");
                 createdFiles.push(relPath);
               }
             }
@@ -170043,10 +170387,10 @@ data: ${JSON.stringify(msg.data)}
       }
       // ─── Phase 2: Auto-Implement Backend ───
       getLatestScriptVersionDir(scriptsDir) {
-        if (!fs77.existsSync(scriptsDir)) return null;
-        const versions = fs77.readdirSync(scriptsDir).filter((d) => {
+        if (!fs78.existsSync(scriptsDir)) return null;
+        const versions = fs78.readdirSync(scriptsDir).filter((d) => {
           try {
-            return fs77.statSync(path73.join(scriptsDir, d)).isDirectory();
+            return fs78.statSync(path73.join(scriptsDir, d)).isDirectory();
           } catch {
             return false;
           }
@@ -170068,13 +170412,13 @@ data: ${JSON.stringify(msg.data)}
         if (!sourceDir) {
           return { dir: null, reason: `Provider source directory not found for '${type2}'` };
         }
-        if (!fs77.existsSync(desiredDir)) {
-          fs77.mkdirSync(path73.dirname(desiredDir), { recursive: true });
-          fs77.cpSync(sourceDir, desiredDir, { recursive: true });
+        if (!fs78.existsSync(desiredDir)) {
+          fs78.mkdirSync(path73.dirname(desiredDir), { recursive: true });
+          fs78.cpSync(sourceDir, desiredDir, { recursive: true });
           this.log(`Auto-implement writable copy created: ${desiredDir}`);
         }
         const providerJson = path73.join(desiredDir, "provider.json");
-        if (!fs77.existsSync(providerJson)) {
+        if (!fs78.existsSync(providerJson)) {
           return { dir: null, reason: `provider.json not found in writable provider directory: ${desiredDir}` };
         }
         return { dir: desiredDir };
@@ -170888,7 +171232,7 @@ data: ${JSON.stringify(msg.data)}
     }
     var import_child_process12 = require("child_process");
     init_hidden_spawn();
-    var fs78 = __toESM2(require("fs"));
+    var fs79 = __toESM2(require("fs"));
     var os40 = __toESM2(require("os"));
     var path74 = __toESM2(require("path"));
     var import_session_host_core14 = require_dist();
@@ -170918,7 +171262,7 @@ data: ${JSON.stringify(msg.data)}
           path74.resolve(__dirname, "../../vendor/session-host-daemon/index.js")
         ];
         for (const candidate of packagedCandidates) {
-          if (fs78.existsSync(candidate)) {
+          if (fs79.existsSync(candidate)) {
             return candidate;
           }
         }
@@ -170938,8 +171282,8 @@ data: ${JSON.stringify(msg.data)}
       function getPid() {
         try {
           const pidFile = getPidFile();
-          if (!fs78.existsSync(pidFile)) return null;
-          const pid = Number.parseInt(fs78.readFileSync(pidFile, "utf8").trim(), 10);
+          if (!fs79.existsSync(pidFile)) return null;
+          const pid = Number.parseInt(fs79.readFileSync(pidFile, "utf8").trim(), 10);
           return Number.isFinite(pid) ? pid : null;
         } catch {
           return null;
@@ -170987,7 +171331,7 @@ data: ${JSON.stringify(msg.data)}
         if (markerIndex === -1) return;
         const activePrefix = entry.slice(0, markerIndex);
         const candidates = resolveConptyPrebuildCandidates(activePrefix);
-        const found = candidates.find((candidate) => fs78.existsSync(candidate));
+        const found = candidates.find((candidate) => fs79.existsSync(candidate));
         if (!found) {
           throw new Error(
             `conpty.node missing at boot despite passing the install-time gate \u2014 likely deleted post-install (checked: ${candidates.join(", ")}). Every session-host spawn would crash requiring node-pty; refusing to spawn.`
@@ -171004,8 +171348,8 @@ data: ${JSON.stringify(msg.data)}
         let logFd = null;
         if (options.spawnStdio === "logfile") {
           const logDir = path74.join(instance().configDir, "logs");
-          fs78.mkdirSync(logDir, { recursive: true });
-          logFd = fs78.openSync(path74.join(logDir, "session-host.log"), "a");
+          fs79.mkdirSync(logDir, { recursive: true });
+          logFd = fs79.openSync(path74.join(logDir, "session-host.log"), "a");
           stdio = ["ignore", logFd, logFd];
         }
         const child = (0, import_child_process12.spawn)(nodeExecutable, [entry], {
@@ -171030,7 +171374,7 @@ data: ${JSON.stringify(msg.data)}
         if (typeof child?.unref === "function") child.unref();
         if (logFd !== null) {
           try {
-            fs78.closeSync(logFd);
+            fs79.closeSync(logFd);
           } catch {
           }
         }
@@ -171040,8 +171384,8 @@ data: ${JSON.stringify(msg.data)}
         const pidFile = getPidFile();
         let keepPidFile = false;
         try {
-          if (fs78.existsSync(pidFile)) {
-            const pid = Number.parseInt(fs78.readFileSync(pidFile, "utf8").trim(), 10);
+          if (fs79.existsSync(pidFile)) {
+            const pid = Number.parseInt(fs79.readFileSync(pidFile, "utf8").trim(), 10);
             if (Number.isFinite(pid) && pid !== process.pid) {
               const managed = isManagedPid(pid);
               if (managed) {
@@ -171061,7 +171405,7 @@ data: ${JSON.stringify(msg.data)}
         } finally {
           if (!keepPidFile) {
             try {
-              fs78.unlinkSync(pidFile);
+              fs79.unlinkSync(pidFile);
             } catch {
             }
           }
@@ -171097,7 +171441,7 @@ data: ${JSON.stringify(msg.data)}
         }
         if (!reported) return;
         if (pathsEquivalent(reported, currentEntry)) return;
-        const reportedExists = fs78.existsSync(reported);
+        const reportedExists = fs79.existsSync(reported);
         LOG.warn(
           "SessionHost",
           `Reachable session-host reports it is running from ${reported}${reportedExists ? "" : " (which no longer exists)"}, but this install runs from ${currentEntry}. That host would fail every create_session loading node-pty from its own prefix; stopping it so a current one is spawned in its place.`
@@ -171326,8 +171670,8 @@ data: ${JSON.stringify(msg.data)}
           const res = await fetch(extension.vsixUrl);
           if (res.ok) {
             const buffer = Buffer.from(await res.arrayBuffer());
-            const fs80 = await import("fs");
-            fs80.writeFileSync(vsixPath, buffer);
+            const fs81 = await import("fs");
+            fs81.writeFileSync(vsixPath, buffer);
             return new Promise((resolve38) => {
               const cmd = `"${ide.cliCommand}" --install-extension "${vsixPath}" --force`;
               hiddenExec(cmd, { timeout: 6e4 }, (error48, _stdout, stderr) => {
@@ -171746,7 +172090,7 @@ data: ${JSON.stringify(msg.data)}
     );
     var V1_CONTRACT_VERSION = "1.0.0";
     init_quota();
-    var fs79 = __toESM2(require("fs"));
+    var fs80 = __toESM2(require("fs"));
     var import_chalk2 = __toESM2((init_source(), __toCommonJS(source_exports)));
     init_dist();
     var CLAUDE_NO_API_LINE = "Claude has no quota API \u2014 adhdev borrows your statusLine to read it.";
@@ -171904,7 +172248,7 @@ data: ${JSON.stringify(msg.data)}
         console.log(import_chalk2.default.gray(`  Backup: ${status.paths.backupFile}`));
         let snapshotMtimeMs = null;
         try {
-          snapshotMtimeMs = fs79.statSync(status.paths.snapshotFile).mtimeMs;
+          snapshotMtimeMs = fs80.statSync(status.paths.snapshotFile).mtimeMs;
         } catch {
         }
         console.log(import_chalk2.default.gray(
@@ -171937,8 +172281,8 @@ data: ${JSON.stringify(msg.data)}
 \u2717 ${message}
 `));
     }
-    var import_fs28 = require("fs");
-    var import_path28 = require("path");
+    var import_fs29 = require("fs");
+    var import_path29 = require("path");
     init_dist2();
     init_config();
     init_config_dir();
@@ -172049,21 +172393,240 @@ data: ${JSON.stringify(msg.data)}
       }
       LOG.info("Seqscribe", `fleet secret stored (v${version2})`);
     }
-    var import_crypto22 = require("crypto");
     var import_fs27 = require("fs");
     var import_path27 = require("path");
+    init_logger();
+    init_load_better_sqlite3();
+    var SEQSCRIBE_COMPACT_MIN_FREE_BYTES = 64 * 1024 * 1024;
+    var SEQSCRIBE_COMPACT_MIN_FREE_RATIO = 0.25;
+    var SEQSCRIBE_COMPACT_RATIO_FLOOR_BYTES = 4 * 1024 * 1024;
+    var SEQSCRIBE_COMPACT_MAX_DB_BYTES = 2 * 1024 * 1024 * 1024;
+    var SEQSCRIBE_COMPACT_FREE_DISK_MULTIPLE = 2;
+    var AUTO_VACUUM_MODES = ["none", "full", "incremental"];
+    function readAutoVacuum(db) {
+      const raw = Number(db.pragma("auto_vacuum", { simple: true }));
+      return AUTO_VACUUM_MODES[raw] ?? "none";
+    }
+    function readFreelistStats(db) {
+      const pageSize = Number(db.pragma("page_size", { simple: true }));
+      const pageCount = Number(db.pragma("page_count", { simple: true }));
+      const freelistCount = Number(db.pragma("freelist_count", { simple: true }));
+      return {
+        pageSize,
+        pageCount,
+        freelistCount,
+        fileBytes: pageCount * pageSize,
+        freeBytes: freelistCount * pageSize,
+        autoVacuum: readAutoVacuum(db)
+      };
+    }
+    function errText(error48) {
+      return error48 instanceof Error ? error48.message : String(error48);
+    }
+    function createSeqscribeDbMaintenance(db) {
+      const open = () => {
+        try {
+          return db.open;
+        } catch {
+          return false;
+        }
+      };
+      return {
+        freelistStats() {
+          if (!open()) return null;
+          try {
+            return readFreelistStats(db);
+          } catch (error48) {
+            LOG.debug("Seqscribe", `maintenance freelistStats failed: ${errText(error48)}`);
+            return null;
+          }
+        },
+        storedTopicsLike(pattern) {
+          if (!open()) return [];
+          try {
+            const rows = db.prepare("SELECT DISTINCT topic FROM sq_writers WHERE topic LIKE ?").all(pattern);
+            return rows.map((r) => r.topic).filter((t) => typeof t === "string");
+          } catch (error48) {
+            LOG.debug("Seqscribe", `maintenance storedTopicsLike failed: ${errText(error48)}`);
+            return [];
+          }
+        },
+        topicHasPrunableRows(topic, bounds) {
+          if (!open()) return false;
+          try {
+            const beyond = db.prepare("SELECT rowid FROM sq_log WHERE topic = ? LIMIT 1 OFFSET ?").get(topic, Math.max(0, Math.floor(bounds.keepNewest)));
+            if (beyond !== void 0) return true;
+            const oldest = db.prepare("SELECT MIN(hlc_l) AS minL FROM sq_log WHERE topic = ?").get(topic);
+            return oldest?.minL != null && oldest.minL < bounds.olderThanEpochMs;
+          } catch (error48) {
+            LOG.debug("Seqscribe", `maintenance topicHasPrunableRows failed topic=${topic}: ${errText(error48)}`);
+            return false;
+          }
+        },
+        incrementalVacuumStep(maxPages) {
+          if (!open()) return null;
+          try {
+            if (readAutoVacuum(db) !== "incremental") return null;
+            const before = Number(db.pragma("freelist_count", { simple: true }));
+            if (before === 0) return { freedPages: 0, remainingFreePages: 0 };
+            const pages = Math.max(1, Math.floor(maxPages));
+            db.pragma(`incremental_vacuum(${pages})`);
+            const after = Number(db.pragma("freelist_count", { simple: true }));
+            return { freedPages: Math.max(0, before - after), remainingFreePages: after };
+          } catch (error48) {
+            LOG.debug("Seqscribe", `maintenance incremental_vacuum failed: ${errText(error48)}`);
+            return null;
+          }
+        },
+        checkpoint(mode) {
+          if (!open()) return null;
+          try {
+            const rows = db.pragma(`wal_checkpoint(${mode})`);
+            return rows[0] ?? null;
+          } catch (error48) {
+            LOG.debug("Seqscribe", `maintenance checkpoint(${mode}) failed: ${errText(error48)}`);
+            return null;
+          }
+        }
+      };
+    }
+    function onDiskBytes(dbPath) {
+      let total = 0;
+      for (const p of [dbPath, `${dbPath}-wal`]) {
+        try {
+          total += (0, import_fs27.statSync)(p).size;
+        } catch {
+        }
+      }
+      return total;
+    }
+    function defaultFreeDiskBytes(dir) {
+      try {
+        const s2 = (0, import_fs27.statfsSync)(dir);
+        return Number(s2.bavail) * Number(s2.bsize);
+      } catch {
+        return null;
+      }
+    }
+    function seqscribeFreelistOverThreshold(stats, opts = {}) {
+      const minFreeBytes = opts.minFreeBytes ?? SEQSCRIBE_COMPACT_MIN_FREE_BYTES;
+      const minFreeRatio = opts.minFreeRatio ?? SEQSCRIBE_COMPACT_MIN_FREE_RATIO;
+      const ratioFloor = opts.ratioFloorBytes ?? SEQSCRIBE_COMPACT_RATIO_FLOOR_BYTES;
+      if (stats.freeBytes <= 0) return false;
+      if (stats.freeBytes >= minFreeBytes) return true;
+      return stats.fileBytes > 0 && stats.freeBytes >= ratioFloor && stats.freeBytes / stats.fileBytes >= minFreeRatio;
+    }
+    function compactSeqscribeDbAtShutdown(dbPath, opts = {}) {
+      const report = (action, reason, extra = {}) => ({
+        action,
+        reason,
+        beforeBytes: null,
+        afterBytes: null,
+        before: null,
+        after: null,
+        ...extra
+      });
+      if (!(0, import_fs27.existsSync)(dbPath)) return report("skipped", "no seqscribe.db");
+      let Database;
+      try {
+        Database = loadBetterSqlite3();
+      } catch (error48) {
+        return report("failed", `better-sqlite3 unavailable: ${errText(error48)}`);
+      }
+      let lockDb = null;
+      let db = null;
+      const beforeBytes = onDiskBytes(dbPath);
+      try {
+        try {
+          lockDb = new Database(`${dbPath}.lock`, { timeout: 0 });
+          lockDb.exec("BEGIN EXCLUSIVE");
+        } catch (error48) {
+          try {
+            lockDb?.close();
+          } catch {
+          }
+          lockDb = null;
+          return report("skipped", `owner lock held by another process (${errText(error48)})`, { beforeBytes });
+        }
+        db = new Database(dbPath, { timeout: 1e3 });
+        db.pragma("wal_checkpoint(TRUNCATE)");
+        const before = readFreelistStats(db);
+        const base = { beforeBytes, before };
+        if (!seqscribeFreelistOverThreshold(before, opts)) {
+          return report("skipped", `freelist ${formatBytes(before.freeBytes)} below threshold`, {
+            ...base,
+            afterBytes: onDiskBytes(dbPath),
+            after: before
+          });
+        }
+        const startedAt = Date.now();
+        let action;
+        if (before.autoVacuum === "incremental") {
+          db.pragma("incremental_vacuum");
+          action = "incremental";
+        } else {
+          const maxDbBytes = opts.maxDbBytes ?? SEQSCRIBE_COMPACT_MAX_DB_BYTES;
+          if (before.fileBytes > maxDbBytes) {
+            return report(
+              "skipped",
+              `file ${formatBytes(before.fileBytes)} exceeds the shutdown VACUUM cap ${formatBytes(maxDbBytes)} \u2014 run scripts/preview-data-hygiene.mjs offline`,
+              base
+            );
+          }
+          const needed = SEQSCRIBE_COMPACT_FREE_DISK_MULTIPLE * before.fileBytes;
+          const freeDisk = (opts.freeDiskBytes ?? defaultFreeDiskBytes)((0, import_path27.dirname)(dbPath));
+          if (freeDisk === null || freeDisk < needed) {
+            return report(
+              "skipped",
+              `insufficient free disk for VACUUM (free ${freeDisk === null ? "unknown" : formatBytes(freeDisk)}, need ${formatBytes(needed)})`,
+              base
+            );
+          }
+          db.pragma("auto_vacuum = INCREMENTAL");
+          db.exec("VACUUM");
+          action = "converted";
+        }
+        db.pragma("wal_checkpoint(TRUNCATE)");
+        const after = readFreelistStats(db);
+        const afterBytes = onDiskBytes(dbPath);
+        LOG.info(
+          "Seqscribe",
+          `seqscribe.db compaction (${action}) ${formatBytes(beforeBytes)} \u2192 ${formatBytes(afterBytes)} (freelist ${formatBytes(before.freeBytes)} \u2192 ${formatBytes(after.freeBytes)}, auto_vacuum ${before.autoVacuum} \u2192 ${after.autoVacuum}, ${Date.now() - startedAt} ms)`
+        );
+        return report(action, "freelist over threshold", { ...base, after, afterBytes });
+      } catch (error48) {
+        LOG.warn("Seqscribe", `seqscribe.db compaction failed (ignored): ${errText(error48)}`);
+        return report("failed", errText(error48), { beforeBytes });
+      } finally {
+        try {
+          db?.close();
+        } catch {
+        }
+        try {
+          lockDb?.exec("ROLLBACK");
+        } catch {
+        }
+        try {
+          lockDb?.close();
+        } catch {
+        }
+      }
+    }
+    var import_crypto22 = require("crypto");
+    var import_fs28 = require("fs");
+    var import_path28 = require("path");
     init_config();
     init_logger();
     var LOCAL_AUTHORITY_SECRET_FILE = "seqscribe-local-authority.json";
     function localAuthoritySecretPath(env2) {
-      return (0, import_path27.join)(getConfigDir(env2), LOCAL_AUTHORITY_SECRET_FILE);
+      return (0, import_path28.join)(getConfigDir(env2), LOCAL_AUTHORITY_SECRET_FILE);
     }
     function loadStoredLocalAuthoritySecret(env2) {
       const path75 = localAuthoritySecretPath(env2);
-      if (!(0, import_fs27.existsSync)(path75)) return null;
+      if (!(0, import_fs28.existsSync)(path75)) return null;
       let raw;
       try {
-        raw = (0, import_fs27.readFileSync)(path75, "utf-8");
+        raw = (0, import_fs28.readFileSync)(path75, "utf-8");
       } catch (err) {
         LOG.warn(
           "Seqscribe",
@@ -172086,26 +172649,26 @@ data: ${JSON.stringify(msg.data)}
         throw new Error("storeLocalAuthoritySecret requires a non-empty secret string");
       }
       const dir = getConfigDir(env2);
-      if (!(0, import_fs27.existsSync)(dir)) {
-        (0, import_fs27.mkdirSync)(dir, { recursive: true, mode: 448 });
+      if (!(0, import_fs28.existsSync)(dir)) {
+        (0, import_fs28.mkdirSync)(dir, { recursive: true, mode: 448 });
       }
-      const path75 = (0, import_path27.join)(dir, LOCAL_AUTHORITY_SECRET_FILE);
+      const path75 = (0, import_path28.join)(dir, LOCAL_AUTHORITY_SECRET_FILE);
       const tmp = `${path75}.tmp-${process.pid}`;
-      (0, import_fs27.writeFileSync)(tmp, JSON.stringify({ secret }, null, 2), {
+      (0, import_fs28.writeFileSync)(tmp, JSON.stringify({ secret }, null, 2), {
         encoding: "utf-8",
         mode: 384
       });
       try {
-        (0, import_fs27.renameSync)(tmp, path75);
+        (0, import_fs28.renameSync)(tmp, path75);
       } catch (err) {
         try {
-          (0, import_fs27.unlinkSync)(tmp);
+          (0, import_fs28.unlinkSync)(tmp);
         } catch {
         }
         throw err;
       }
       try {
-        (0, import_fs27.chmodSync)(path75, 384);
+        (0, import_fs28.chmodSync)(path75, 384);
       } catch {
       }
       LOG.info("Seqscribe", "local authority secret minted (standalone, no fleet secret configured)");
@@ -172138,14 +172701,15 @@ data: ${JSON.stringify(msg.data)}
     function getSeqscribeDbPath(env2 = process.env) {
       const suffix = env2[SEQSCRIBE_DB_SUFFIX_ENV_VAR]?.trim();
       const name = suffix ? `seqscribe-${suffix}.db` : SEQSCRIBE_DB_NAME;
-      return (0, import_path28.join)(getConfigDir(env2), name);
+      return (0, import_path29.join)(getConfigDir(env2), name);
     }
     function openSeqscribeNode(opts = {}) {
       const dbPath = opts.dbPath ?? getSeqscribeDbPath(opts.env ?? process.env);
-      const dir = (0, import_path28.dirname)(dbPath);
-      if (!(0, import_fs28.existsSync)(dir)) (0, import_fs28.mkdirSync)(dir, { recursive: true, mode: 448 });
+      const dir = (0, import_path29.dirname)(dbPath);
+      if (!(0, import_fs29.existsSync)(dir)) (0, import_fs29.mkdirSync)(dir, { recursive: true, mode: 448 });
       const Database = loadBetterSqlite3();
       const db = new Database(dbPath);
+      db.pragma("auto_vacuum = INCREMENTAL");
       db.pragma("journal_mode = WAL");
       db.pragma("synchronous = NORMAL");
       db.pragma("busy_timeout = 5000");
@@ -172290,6 +172854,7 @@ data: ${JSON.stringify(msg.data)}
         authorityEnabled: authorityHooks !== null,
         authorityIsLocal: localAuthority !== null,
         finalityLoop,
+        maintenance: createSeqscribeDbMaintenance(db),
         onClose: (fn) => {
           if (closed) {
             try {
@@ -176592,11 +177157,24 @@ ${notice.notice}${supersededHint}`;
       };
     }
     init_logger();
+    init_topics2();
+    init_transcript_revision_codec();
     var TRANSCRIPT_PRUNE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
-    var TRANSCRIPT_PRUNE_MAX_ENTRIES = 5e3;
+    var TRANSCRIPT_TAIL_WINDOW_ROWS = 500;
+    var TRANSCRIPT_PRUNE_MARGIN_ROWS = 100;
+    var TRANSCRIPT_PRUNE_MAX_ENTRIES = Math.max(TRANSCRIPT_TAIL_WINDOW_ROWS, 2 * MAX_TRANSCRIPT_REVISION_ROWS) + TRANSCRIPT_PRUNE_MARGIN_ROWS;
     var TRANSCRIPT_PRUNE_INTERVAL_MS = 60 * 60 * 1e3;
+    var TRANSCRIPT_PRUNE_INITIAL_DELAY_MS = 5 * 60 * 1e3;
+    var TRANSCRIPT_PRUNE_CONTINUATION_DELAY_MS = 30 * 1e3;
+    var TRANSCRIPT_PRUNE_STEP_ROWS = 250;
+    var TRANSCRIPT_PRUNE_SWEEP_ROW_BUDGET = 2e4;
+    var TRANSCRIPT_DISCOVERY_MAX_TOPICS_PER_SWEEP = 32;
+    var INCREMENTAL_VACUUM_PAGES_PER_STEP = 1024;
+    var INCREMENTAL_VACUUM_MAX_STEPS_PER_SWEEP = 64;
     var TRANSCRIPT_TOPIC_PREFIX = "session.";
     var TRANSCRIPT_TOPIC_SUFFIX = ".transcript";
+    var TRANSCRIPT_TOPIC_LIKE = "session.%.transcript";
+    var DISCOVERED_TRANSCRIPT_TOPIC_RE = /^session\.[a-z0-9_-]+\.transcript$/;
     function isTranscriptTopic(topic) {
       return topic.startsWith(TRANSCRIPT_TOPIC_PREFIX) && topic.endsWith(TRANSCRIPT_TOPIC_SUFFIX);
     }
@@ -176604,14 +177182,26 @@ ${notice.notice}${supersededHint}`;
     function isActiveTailSubscriberRefusal(error48) {
       return error48 instanceof Error && error48.message.includes(ACTIVE_TAIL_SUBSCRIBER_MARKER);
     }
-    var counters7 = {
-      runs: 0,
-      topicsInspected: 0,
-      overCapTopics: 0,
-      rowsPruned: 0,
-      skippedActive: 0,
-      errors: 0
-    };
+    function zeroCounters() {
+      return {
+        runs: 0,
+        topicsInspected: 0,
+        topicsDiscovered: 0,
+        overCapTopics: 0,
+        rowsPruned: 0,
+        skippedActive: 0,
+        budgetExhausted: 0,
+        vacuumedPages: 0,
+        errors: 0
+      };
+    }
+    var counters7 = zeroCounters();
+    function emptyResult() {
+      return { overCap: [], discovered: [], budgetExhausted: false, vacuumedPages: 0 };
+    }
+    function yieldToEventLoop() {
+      return new Promise((resolve38) => setImmediate(resolve38));
+    }
     async function pruneOneBound(handle, topic, bound) {
       try {
         const result = await handle.node.pruneTopic(topic, bound);
@@ -176622,48 +177212,158 @@ ${notice.notice}${supersededHint}`;
             `transcript writer-gc pruned topic=${topic} rows=${result.prunedRows} bound=${JSON.stringify(bound)}`
           );
         }
-        return "pruned";
+        return { status: "pruned", prunedRows: result.prunedRows };
       } catch (error48) {
         if (isActiveTailSubscriberRefusal(error48)) {
           LOG.debug(
             "Seqscribe",
             `transcript writer-gc skipped topic=${topic}: active tail subscriber`
           );
-          return "skippedActive";
+          return { status: "skippedActive" };
         }
         counters7.errors++;
         LOG.warn(
           "Seqscribe",
           `transcript writer-gc prune failed topic=${topic}: ${error48 instanceof Error ? error48.message : String(error48)}`
         );
-        return "error";
+        return { status: "error" };
       }
+    }
+    function discoverStoredTranscriptTopics(handle, definedTopics2, bounds, maxTopics) {
+      const maintenance = handle.maintenance;
+      if (!maintenance || !handle.authorityEnabled || maxTopics <= 0) return [];
+      const discovered = [];
+      for (const topic of maintenance.storedTopicsLike(TRANSCRIPT_TOPIC_LIKE)) {
+        if (discovered.length >= maxTopics) break;
+        if (definedTopics2.has(topic) || !DISCOVERED_TRANSCRIPT_TOPIC_RE.test(topic)) continue;
+        if (!maintenance.topicHasPrunableRows(topic, bounds)) continue;
+        try {
+          handle.node.defineTopic(topic, sessionTranscriptPolicy());
+          discovered.push(topic);
+          counters7.topicsDiscovered++;
+        } catch (error48) {
+          counters7.errors++;
+          LOG.warn(
+            "Seqscribe",
+            `transcript writer-gc could not define stored topic=${topic}: ${error48 instanceof Error ? error48.message : String(error48)}`
+          );
+        }
+      }
+      if (discovered.length > 0) {
+        LOG.info("Seqscribe", `transcript writer-gc discovered ${discovered.length} stored transcript topic(s) to prune`);
+      }
+      return discovered;
+    }
+    async function reclaimFreePages(handle, pagesPerStep, maxSteps, shouldContinue) {
+      const maintenance = handle.maintenance;
+      if (!maintenance) return 0;
+      let freed = 0;
+      for (let step = 0; step < maxSteps && shouldContinue(); step++) {
+        const result = maintenance.incrementalVacuumStep(pagesPerStep);
+        if (!result) break;
+        freed += result.freedPages;
+        if (result.remainingFreePages === 0 || result.freedPages === 0) break;
+        await yieldToEventLoop();
+      }
+      if (freed > 0) {
+        maintenance.checkpoint("TRUNCATE");
+        counters7.vacuumedPages += freed;
+        LOG.info("Seqscribe", `transcript writer-gc incremental vacuum freed ${freed} page(s)`);
+      }
+      return freed;
     }
     async function runTranscriptWriterGcSweep(handle, opts = {}) {
       const maxEntries = Math.max(1, opts.maxEntries ?? TRANSCRIPT_PRUNE_MAX_ENTRIES);
       const maxAgeMs = opts.maxAgeMs ?? TRANSCRIPT_PRUNE_MAX_AGE_MS;
-      const overCap = [];
+      const stepRows = Math.max(1, opts.stepRows ?? TRANSCRIPT_PRUNE_STEP_ROWS);
+      const now = opts.now ?? Date.now;
+      const shouldContinue = opts.shouldContinue ?? (() => true);
+      let budget = Math.max(1, opts.sweepRowBudget ?? TRANSCRIPT_PRUNE_SWEEP_ROW_BUDGET);
+      const result = emptyResult();
       counters7.runs++;
       try {
+        const definedTopics2 = new Set(Object.keys(handle.node.stats().topics));
+        result.discovered = discoverStoredTranscriptTopics(
+          handle,
+          definedTopics2,
+          { keepNewest: maxEntries, olderThanEpochMs: now() - maxAgeMs },
+          opts.maxDiscoveredTopics ?? TRANSCRIPT_DISCOVERY_MAX_TOPICS_PER_SWEEP
+        );
         const stats = handle.node.stats();
         for (const [topic, topicStats] of Object.entries(stats.topics)) {
           if (!isTranscriptTopic(topic)) continue;
+          if (!shouldContinue()) break;
           counters7.topicsInspected++;
-          const logRows = topicStats.logRows;
-          if (logRows > maxEntries) {
-            overCap.push({ topic, logRows });
+          let rows = topicStats.logRows;
+          if (rows > maxEntries) {
+            result.overCap.push({ topic, logRows: rows });
             counters7.overCapTopics++;
           }
-          const countResult = await pruneOneBound(handle, topic, { keepNewest: maxEntries });
-          if (countResult === "skippedActive") {
+          let skipped = false;
+          let countErrored = false;
+          let countDone = rows <= maxEntries;
+          if (!countDone) {
+            while (rows > maxEntries && budget > 0 && shouldContinue()) {
+              const step = Math.min(stepRows, rows - maxEntries, budget);
+              const outcome = await pruneOneBound(handle, topic, { keepNewest: rows - step });
+              if (outcome.status === "skippedActive") {
+                skipped = true;
+                break;
+              }
+              if (outcome.status === "error") {
+                countErrored = true;
+                break;
+              }
+              if (outcome.prunedRows === 0) {
+                countDone = true;
+                break;
+              }
+              rows -= outcome.prunedRows;
+              budget -= outcome.prunedRows;
+              await yieldToEventLoop();
+            }
+            if (rows <= maxEntries) countDone = true;
+          } else {
+            const outcome = await pruneOneBound(handle, topic, { keepNewest: maxEntries });
+            if (outcome.status === "skippedActive") skipped = true;
+            else if (outcome.status === "error") countErrored = true;
+            else rows -= outcome.prunedRows;
+          }
+          if (skipped) {
             counters7.skippedActive++;
             continue;
           }
-          const ageResult = await pruneOneBound(handle, topic, { olderThanMs: maxAgeMs });
-          if (ageResult === "skippedActive") {
-            counters7.skippedActive++;
+          if (!countDone && !countErrored) {
+            if (!shouldContinue()) break;
+            result.budgetExhausted = true;
+            break;
+          }
+          while (budget > 0 && shouldContinue()) {
+            const step = Math.min(stepRows, budget);
+            const bound = rows > step ? { olderThanMs: maxAgeMs, keepNewest: rows - step } : { olderThanMs: maxAgeMs };
+            const outcome = await pruneOneBound(handle, topic, bound);
+            if (outcome.status === "skippedActive") {
+              counters7.skippedActive++;
+              break;
+            }
+            if (outcome.status === "error") break;
+            rows -= outcome.prunedRows;
+            budget -= outcome.prunedRows;
+            if (outcome.prunedRows < step || !("keepNewest" in bound)) break;
+            await yieldToEventLoop();
+          }
+          if (budget <= 0) {
+            result.budgetExhausted = true;
+            break;
           }
         }
+        if (result.budgetExhausted) counters7.budgetExhausted++;
+        result.vacuumedPages = await reclaimFreePages(
+          handle,
+          Math.max(1, opts.vacuumPagesPerStep ?? INCREMENTAL_VACUUM_PAGES_PER_STEP),
+          Math.max(0, opts.vacuumMaxSteps ?? INCREMENTAL_VACUUM_MAX_STEPS_PER_SWEEP),
+          shouldContinue
+        );
       } catch (error48) {
         counters7.errors++;
         LOG.warn(
@@ -176671,29 +177371,62 @@ ${notice.notice}${supersededHint}`;
           `transcript writer-gc sweep failed: ${error48 instanceof Error ? error48.message : String(error48)}`
         );
       }
-      return { overCap };
+      return result;
     }
     var activeTimer2 = null;
+    var activeFollowUp = null;
     var activeHandle2 = null;
+    function clearFollowUp() {
+      if (activeFollowUp) clearTimeout(activeFollowUp);
+      activeFollowUp = null;
+    }
     function configureTranscriptWriterGc(handle, opts = {}) {
       if (activeTimer2) clearInterval(activeTimer2);
       activeTimer2 = null;
+      clearFollowUp();
       activeHandle2 = null;
       if (!handle) return null;
       activeHandle2 = handle;
       const ownedHandle = handle;
-      const runOnce2 = () => runTranscriptWriterGcSweep(ownedHandle, opts);
+      const stillOwned = () => activeHandle2 === ownedHandle;
+      let running = false;
+      const runOnce2 = async () => {
+        if (!stillOwned()) return emptyResult();
+        running = true;
+        try {
+          return await runTranscriptWriterGcSweep(ownedHandle, { ...opts, shouldContinue: stillOwned });
+        } finally {
+          running = false;
+        }
+      };
+      const scheduleFollowUp = (delayMs) => {
+        if (!stillOwned()) return;
+        clearFollowUp();
+        activeFollowUp = setTimeout(() => {
+          activeFollowUp = null;
+          void tick();
+        }, Math.max(1, delayMs));
+        activeFollowUp.unref?.();
+      };
+      const tick = async () => {
+        if (running || !stillOwned()) return;
+        const result = await runOnce2();
+        if (result.budgetExhausted) {
+          scheduleFollowUp(opts.continuationDelayMs ?? TRANSCRIPT_PRUNE_CONTINUATION_DELAY_MS);
+        }
+      };
       if (!opts.once) {
         activeTimer2 = setInterval(() => {
-          void runOnce2();
+          void tick();
         }, Math.max(1, opts.intervalMs ?? TRANSCRIPT_PRUNE_INTERVAL_MS));
         activeTimer2.unref?.();
+        scheduleFollowUp(opts.initialDelayMs ?? TRANSCRIPT_PRUNE_INITIAL_DELAY_MS);
       }
       LOG.info("Seqscribe", "transcript writer-gc armed");
       return {
-        runOnce: () => activeHandle2 === ownedHandle ? runOnce2() : Promise.resolve({ overCap: [] }),
+        runOnce: runOnce2,
         stop() {
-          if (activeHandle2 !== ownedHandle) return;
+          if (!stillOwned()) return;
           configureTranscriptWriterGc(null);
         }
       };
@@ -177951,8 +178684,8 @@ ${notice.notice}${supersededHint}`;
     init_mesh_events_coordinator();
     init_mesh_events_utils();
     init_mesh_reconcile_identity();
-    var import_fs29 = require("fs");
-    var import_path29 = require("path");
+    var import_fs30 = require("fs");
+    var import_path30 = require("path");
     init_config();
     init_mesh_ledger_paths();
     init_mesh_local_records();
@@ -177999,7 +178732,7 @@ ${notice.notice}${supersededHint}`;
     }
     function safeUnlink(path75) {
       try {
-        (0, import_fs29.unlinkSync)(path75);
+        (0, import_fs30.unlinkSync)(path75);
         return true;
       } catch (e) {
         LOG.warn("DiskRetention", `Failed to delete ${path75}: ${e?.message || e}`);
@@ -178007,18 +178740,18 @@ ${notice.notice}${supersededHint}`;
       }
     }
     function listDirFiles(dir) {
-      if (!(0, import_fs29.existsSync)(dir)) return [];
+      if (!(0, import_fs30.existsSync)(dir)) return [];
       const out = [];
       let names;
       try {
-        names = (0, import_fs29.readdirSync)(dir);
+        names = (0, import_fs30.readdirSync)(dir);
       } catch {
         return [];
       }
       for (const name of names) {
-        const path75 = (0, import_path29.join)(dir, name);
+        const path75 = (0, import_path30.join)(dir, name);
         try {
-          const st = (0, import_fs29.statSync)(path75);
+          const st = (0, import_fs30.statSync)(path75);
           if (st.isFile()) out.push({ path: path75, mtimeMs: st.mtimeMs });
         } catch {
         }
@@ -178044,23 +178777,23 @@ ${notice.notice}${supersededHint}`;
       return deleted;
     }
     function pruneExpiredSessionHostRuntimes(now = Date.now()) {
-      const root = (0, import_path29.join)(getConfigDir(), "session-host");
-      if (!(0, import_fs29.existsSync)(root)) return 0;
+      const root = (0, import_path30.join)(getConfigDir(), "session-host");
+      if (!(0, import_fs30.existsSync)(root)) return 0;
       let apps;
       try {
-        apps = (0, import_fs29.readdirSync)(root);
+        apps = (0, import_fs30.readdirSync)(root);
       } catch {
         return 0;
       }
       const candidates = [];
       for (const app of apps) {
-        const runtimesDir = (0, import_path29.join)(root, app, "runtimes");
-        if (!(0, import_fs29.existsSync)(runtimesDir)) continue;
+        const runtimesDir = (0, import_path30.join)(root, app, "runtimes");
+        if (!(0, import_fs30.existsSync)(runtimesDir)) continue;
         for (const f of listDirFiles(runtimesDir)) {
           if (!f.path.endsWith(".json")) continue;
           let record22 = null;
           try {
-            const parsed = JSON.parse((0, import_fs29.readFileSync)(f.path, "utf-8"));
+            const parsed = JSON.parse((0, import_fs30.readFileSync)(f.path, "utf-8"));
             const rec = parsed && typeof parsed === "object" ? parsed.record : null;
             record22 = rec && typeof rec === "object" ? rec : null;
           } catch {
@@ -179022,6 +179755,9 @@ ${notice.notice}${supersededHint}`;
           MeshRuntimeStore.getInstance().vacuum();
         } catch {
         }
+      },
+      vacuumSeqscribe: (dbPath) => {
+        compactSeqscribeDbAtShutdown(dbPath);
       }
     };
     function runDisposer(name, dispose) {
@@ -179056,9 +179792,13 @@ ${notice.notice}${supersededHint}`;
           } catch (e) {
             LOG.warn("Shutdown", `session core teardown failed (continuing): ${e?.message || e}`);
           }
+          const seqscribeDbPath = s4.seqscribe?.node?.dbPath ?? null;
           await s4.seqscribe?.close();
           s3.bus.close();
           stages.vacuum();
+          if (seqscribeDbPath && stages.vacuumSeqscribe) {
+            runDisposer("seqscribe compaction", () => stages.vacuumSeqscribe(seqscribeDbPath));
+          }
         })();
         return shutdownPromise;
       };
@@ -181046,7 +181786,7 @@ function isMissionListSummaryWire(value) {
   const hasGoal = "goal" in value;
   const hasPreview = "goalPreview" in value && "goalTruncated" in value;
   if (hasGoal === hasPreview) return false;
-  const baseKeys = ["id", "meshId", "title", "status", "source", "tasks", "stats", "brief"];
+  const baseKeys = ["id", "meshId", "title", "status", "source", "tasks", "stats", "brief", "createdAt", "updatedAt", "closeCandidateEmittedAt"];
   const allowed = hasGoal ? [...baseKeys, "goal"] : [...baseKeys, "goalPreview", "goalTruncated"];
   if (!hasOnlyKeys2(value, allowed)) return false;
   if (!isEvidenceIdentifier(value.id) || !isEvidenceIdentifier(value.meshId)) return false;
@@ -181058,6 +181798,9 @@ function isMissionListSummaryWire(value) {
   if (value.brief !== void 0 && !isMissionBriefWire(value.brief)) return false;
   if (hasGoal && typeof value.goal !== "string") return false;
   if (hasPreview && (typeof value.goalPreview !== "string" || typeof value.goalTruncated !== "boolean")) return false;
+  if (value.createdAt !== void 0 && typeof value.createdAt !== "string") return false;
+  if (value.updatedAt !== void 0 && typeof value.updatedAt !== "string") return false;
+  if (value.closeCandidateEmittedAt !== void 0 && value.closeCandidateEmittedAt !== null && typeof value.closeCandidateEmittedAt !== "string") return false;
   return true;
 }
 function isMeshMissionHistoryFoldWire(value) {
@@ -181150,8 +181893,16 @@ function isRecordLocalResponse(value) {
 function decodeRecordLocalResponse(value) {
   return isRecordLocalResponse(value) ? value : null;
 }
+function isQueueDependencyHeadWire(value) {
+  return isRecord(value) && hasOnlyKeys2(value, ["id", "status", "blockedReason", "cancelReason"]) && typeof value.id === "string" && typeof value.status === "string" && (value.blockedReason === void 0 || typeof value.blockedReason === "string") && (value.cancelReason === void 0 || typeof value.cancelReason === "string");
+}
 function isQueueQueryResponse(value) {
-  return isRecord(value) && hasOnlyKeys2(value, ["entries"]) && Array.isArray(value.entries) && value.entries.every(isQueueEntryWire);
+  if (!isRecord(value) || !hasOnlyKeys2(value, ["entries", "counts", "oldHistoricalCount", "dependencyHeads"])) return false;
+  if (!Array.isArray(value.entries) || !value.entries.every(isQueueEntryWire)) return false;
+  if (value.counts !== void 0 && (!isRecord(value.counts) || !Object.values(value.counts).every(isNonNegativeInt))) return false;
+  if (value.oldHistoricalCount !== void 0 && !isNonNegativeInt(value.oldHistoricalCount)) return false;
+  if (value.dependencyHeads !== void 0 && (!Array.isArray(value.dependencyHeads) || !value.dependencyHeads.every(isQueueDependencyHeadWire))) return false;
+  return true;
 }
 function decodeQueueQueryResponse(value) {
   return isQueueQueryResponse(value) ? value : null;
@@ -181204,8 +181955,15 @@ function isActiveWorkQueryResponse(value) {
 function decodeActiveWorkQueryResponse(value) {
   return isActiveWorkQueryResponse(value) ? value : null;
 }
+function isRecoveryContextWire(value) {
+  return isRecord(value) && typeof value.consecutiveNodeFailures === "number";
+}
 function isRecoveryContextQueryResponse(value) {
-  return isRecord(value) && hasOnlyKeys2(value, ["context"]) && isRecord(value.context) && typeof value.context.consecutiveNodeFailures === "number";
+  if (!isRecord(value) || !hasOnlyKeys2(value, ["context", "contexts"])) return false;
+  if (value.context === void 0 && value.contexts === void 0) return false;
+  if (value.context !== void 0 && !isRecoveryContextWire(value.context)) return false;
+  if (value.contexts !== void 0 && (!isRecord(value.contexts) || !Object.values(value.contexts).every(isRecoveryContextWire))) return false;
+  return true;
 }
 function decodeRecoveryContextQueryResponse(value) {
   return isRecoveryContextQueryResponse(value) ? value : null;
@@ -181268,7 +182026,7 @@ function decodeGraphViewQueryResponse(value) {
   return isGraphViewQueryResponse(value) ? value : null;
 }
 function isTaskStatsQueryResponse(value) {
-  return isRecord(value) && hasOnlyKeys2(value, ["tasks", "mission"]) && isRecordArray(value.tasks) && isOptionalRecord(value.mission);
+  return isRecord(value) && hasOnlyKeys2(value, ["tasks", "mission", "missions"]) && isRecordArray(value.tasks) && isOptionalRecord(value.mission) && (value.missions === void 0 || isRecord(value.missions) && Object.values(value.missions).every(isRecord));
 }
 function decodeTaskStatsQueryResponse(value) {
   return isTaskStatsQueryResponse(value) ? value : null;
@@ -182188,6 +182946,149 @@ async function orphanedPinNotify(transport, args) {
   return dispatch(transport, "orphaned_pin_notify", { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeOrphanedPinNotifyResponse);
 }
 
+// src/tools/mesh-daemon-reads.ts
+var ACTIVE_WORK_NODE_KEYS = [
+  "id",
+  "nodeId",
+  "node_id",
+  "sessions",
+  "activeSessions",
+  "active_sessions",
+  "activeSessionDetails",
+  "active_session_details",
+  "sessionDetails",
+  "session_details",
+  "lastProbe",
+  "last_probe",
+  "activeSession",
+  "active_session",
+  "currentSession",
+  "current_session",
+  "runtimeSession",
+  "runtime_session",
+  "session"
+];
+function slimNodesForActiveWork(nodes) {
+  return nodes.map((node) => {
+    const src = node && typeof node === "object" ? node : {};
+    const out = {};
+    for (const key of ACTIVE_WORK_NODE_KEYS) {
+      if (src[key] !== void 0) out[key] = src[key];
+    }
+    return out;
+  });
+}
+async function activeWorkQueryWithRuntime(ctx, args) {
+  const base = { meshId: ctx.mesh.id, ...args };
+  if (!args.includeSchedulingRuntime) return activeWorkQuery(ctx.transport, base);
+  try {
+    const res = await activeWorkQuery(ctx.transport, base);
+    if (res.schedulingRuntime) return res;
+  } catch {
+  }
+  return activeWorkQuery(ctx.transport, { ...base, mesh: ctx.mesh });
+}
+async function readRecoveryContexts(ctx, nodeIds) {
+  const out = /* @__PURE__ */ new Map();
+  const ids = [...new Set(nodeIds.filter(Boolean))];
+  if (ids.length === 0) return out;
+  try {
+    const res = await recoveryContextQuery(ctx.transport, { meshId: ctx.mesh.id, nodeIds: ids });
+    if (res.contexts) {
+      for (const [nodeId, context] of Object.entries(res.contexts)) out.set(nodeId, context);
+      return out;
+    }
+  } catch {
+  }
+  await Promise.all(ids.map(async (nodeId) => {
+    try {
+      const res = await recoveryContextQuery(ctx.transport, { meshId: ctx.mesh.id, nodeId });
+      if (res.context) out.set(nodeId, res.context);
+    } catch {
+    }
+  }));
+  return out;
+}
+var COMPACT_STATUS_GOAL_PREVIEW_MAX = 80;
+var LIVE_STATUSES = ["active", "paused"];
+async function readStatusMissionsCompact(ctx) {
+  try {
+    const res2 = await missionListQuery(ctx.transport, { meshId: ctx.mesh.id, meshStatusView: "compact" });
+    return { live: res2.missions, historyFold: res2.historyFold };
+  } catch {
+  }
+  const res = await missionListQuery(ctx.transport, { meshId: ctx.mesh.id, includeMagi: true, limit: 1e3 });
+  const live = res.missions.map((m) => {
+    const preview = typeof m.goalPreview === "string" ? m.goalPreview : "";
+    if (preview.length <= COMPACT_STATUS_GOAL_PREVIEW_MAX) return m;
+    return { ...m, goalPreview: preview.slice(0, COMPACT_STATUS_GOAL_PREVIEW_MAX), goalTruncated: true };
+  }).filter((m) => LIVE_STATUSES.includes(String(m.status)));
+  return { live, historyFold: res.historyFold };
+}
+async function readStatusMissionsVerbose(ctx) {
+  let missions;
+  try {
+    const res = await missionListQuery(ctx.transport, { meshId: ctx.mesh.id, meshStatusView: "verbose" });
+    missions = res.missions;
+  } catch {
+    const [live, history] = await Promise.all([
+      missionListQuery(ctx.transport, { meshId: ctx.mesh.id, statuses: [...LIVE_STATUSES], verbose: true, includeMagi: true, withStats: true, limit: 1e3 }),
+      missionListQuery(ctx.transport, { meshId: ctx.mesh.id, statuses: ["completed", "abandoned"], verbose: true, includeMagi: true, withStats: true, limit: 10 })
+    ]);
+    return [...live.missions, ...history.missions];
+  }
+  if (missions.length === 0) return missions;
+  const ids = missions.map((m) => String(m.id));
+  const rollups = await readMissionStatsBatch(ctx, ids);
+  return missions.map((m) => {
+    const stats = rollups.get(String(m.id));
+    return stats ? { ...m, stats } : m;
+  });
+}
+async function readMissionStatsBatch(ctx, missionIds) {
+  const out = /* @__PURE__ */ new Map();
+  const ids = [...new Set(missionIds.filter(Boolean))];
+  if (ids.length === 0) return out;
+  try {
+    const res = await taskStatsQuery(ctx.transport, { meshId: ctx.mesh.id, missionIds: ids });
+    if (res.missions) {
+      for (const [id2, rollup] of Object.entries(res.missions)) out.set(id2, rollup);
+      return out;
+    }
+  } catch {
+  }
+  await Promise.all(ids.map(async (missionId) => {
+    try {
+      const { mission } = await taskStatsQuery(ctx.transport, { meshId: ctx.mesh.id, missionId, rollup: true });
+      if (mission) out.set(missionId, mission);
+    } catch {
+    }
+  }));
+  return out;
+}
+var OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 6e4;
+async function readQueueActiveView(ctx) {
+  try {
+    const res = await queueQuery(ctx.transport, {
+      meshId: ctx.mesh.id,
+      statuses: ["pending", "assigned"],
+      view: true,
+      withCounts: true,
+      historicalOlderThanMs: OLD_HISTORICAL_QUEUE_RECORD_MS,
+      withDependencyHeads: true
+    });
+    if (!res.counts) return null;
+    return {
+      activeRows: res.entries,
+      counts: res.counts,
+      oldHistoricalCount: res.oldHistoricalCount ?? 0,
+      dependencyHeads: [...res.dependencyHeads ?? []]
+    };
+  } catch {
+    return null;
+  }
+}
+
 // src/tools/mesh-node-identity.ts
 var import_daemon_core4 = __toESM(require_dist3());
 function resolveCoordinatorNode(ctx) {
@@ -182950,6 +183851,11 @@ async function readCoordinatorHeldNodeState(ctx, opts = {}) {
   try {
     raw = await ctx.transport.command("mesh_status", {
       meshId: ctx.mesh.id,
+      // Only the node section is read here. Without it the daemon answers its
+      // whole dashboard payload — 97% queue rows (5.05 of 5.18 MB measured on
+      // the preview daemon) — and deep-clones it on every cache hit. An older
+      // daemon ignores the key; the node read below is the same either way.
+      sections: ["nodes"],
       ...opts.refresh === true ? { refresh: true } : {}
     });
   } catch (error48) {
@@ -183291,7 +184197,7 @@ var MESH_INPUT_BINDING_SCHEMA = {
 };
 var MESH_STATUS_TOOL = {
   name: "mesh_status",
-  description: `Get the current status of all nodes in the repo mesh \u2014 health, git state, active sessions, recovery hints, and recommended next steps. Node git is the coordinator daemon's held state (never a live remote probe); the per-node gitObservation {source, observedAt, refreshing, unreachableSince} and dataFreshness say how old it is. Use this to decide which node to send work to or how to recover from failures. Also reports the running daemon build per daemonId under top-level daemonBuilds ({commit, commitShort, version, track}); track is stable/preview when explicitly reported by that daemon and unknown for legacy peers \u2014 it is never inferred from an rc version suffix. When a live daemon was built from a commit BEHIND its workspace HEAD it adds staleDaemonBuilds[] + staleDaemonBuildWarning \u2014 meaning a just-merged refinery/mesh-tool fix is NOT yet live on that daemon (awaiting deploy/restart; a local dist rebuild does not update a cloud daemon). When a daemon has a durable failed-upgrade notice on record it adds daemonUpgradeFailures{daemonId \u2192 {summary, recordedAt, ageLabel, targetVersion, noticePath, logPath}} + daemonUpgradeFailureWarning \u2014 meaning that daemon's LAST upgrade attempt failed and was rolled back, so it is still on the PREVIOUS version (an upgrade/restart response only ever reports "scheduled", never success). Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.`,
+  description: `Get the current status of all nodes in the repo mesh \u2014 health, git state, active sessions, recovery hints, and recommended next steps. Node git is the coordinator daemon's held state (never a live remote probe); per-node gitObservation {source, observedAt, refreshing, unreachableSince} and dataFreshness say how old it is. Use this to decide which node to send work to or how to recover from failures. Also reports the running daemon build per daemonId under daemonBuilds ({commit, commitShort, version, track}; track is unknown for legacy peers, never inferred from an rc suffix). staleDaemonBuilds[]/staleDaemonBuildWarning flags a live daemon built BEHIND its workspace HEAD \u2014 a merged fix not yet live (awaiting deploy/restart; a local dist rebuild does not update a cloud daemon). daemonUpgradeFailures{daemonId \u2192 {summary, recordedAt, ageLabel, targetVersion, noticePath, logPath}}/daemonUpgradeFailureWarning flags a daemon whose LAST upgrade failed and rolled back (still on the PREVIOUS version; an upgrade/restart response only ever reports "scheduled", never success). Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.`,
   inputSchema: {
     type: "object",
     properties: {
@@ -183322,7 +184228,6 @@ var MESH_ROUTE_PREVIEW_TOOL = {
         items: { type: "string" },
         description: "Optional capability tags the hypothetical task requires."
       },
-      requiredTags: { type: "array", items: { type: "string" }, description: "CamelCase alias for required_tags." },
       readonly: {
         type: "boolean",
         description: "Whether to preview read-only scheduling semantics, including the reserved-last-slot capacity rule."
@@ -183330,8 +184235,7 @@ var MESH_ROUTE_PREVIEW_TOOL = {
       target_node_id: {
         type: "string",
         description: "Optional node pin. When omitted, preview all eligible nodes in scheduling order."
-      },
-      targetNodeId: { type: "string", description: "CamelCase alias for target_node_id." }
+      }
     }
   }
 };
@@ -183495,7 +184399,7 @@ var MESH_ENQUEUE_BATCH_TOOL = {
 };
 var MESH_GRAPH_GATE_TOOL = {
   name: "mesh_graph_gate",
-  description: "Drive a coordinator GATE \u2014 a graph step that intentionally STOPS progress until you do something the daemon must not do itself (a Refinery landing, an approval, waiting on CI, a publish, a deploy). The daemon NEVER performs a gate action and NEVER auto-passes a gate. Use it when a gate notice arrives or mesh_graph_view shows a gate blocking downstream work. Select the verb with `action` (REQUIRED):\n\u2022 claim \u2014 take the lease on a gate awaiting a coordinator. Returns a monotonically increasing leaseGeneration and an opaque fencingToken: keep both, release needs them. A lapsed lease can be taken over at a HIGHER generation; the response then sets ambiguousExternalOutcome \u2014 the previous owner may already have performed the side effect, so reconcile external evidence (did the merge/publish land?) before doing it again. Args: gate_id, lease_seconds, extend_deadline_seconds, coordinator_session_id.\n\u2022 release \u2014 pass a gate you hold: the ONLY way a gate lets downstream run. Needs lease_generation + fencing_token from claim (stale generation / wrong token \u2192 stale_fence; an EXPIRED lease never releases \u2014 re-claim and reconcile first) and your own idempotency_key (identical re-send = no-op success; same key, different payload = conflict). `outcome` and any `result`/`evidence` are readable downstream through run_if and inputs_from. A validation failure rolls the WHOLE release back. Args: gate_id, fencing_token, lease_generation, idempotency_key, outcome, result, evidence, patches.\n\u2022 abandon \u2014 give up on a gate that can never open (the work behind it was cancelled) so its graph can go terminal. NOT a pass: it materializes nothing and CANCELS every downstream task the gate held. Needs no fencing token, but a LIVE lease held by another coordinator is refused unless force=true. Re-abandoning is a no-op; a RELEASED gate can never be abandoned. Args: gate_id, reason, force, coordinator_session_id.\n\u2022 extend \u2014 push the gate DEADLINE out without taking a lease (e.g. extend_seconds=86400 for a gate that expired, or is about to, under on_timeout=hold, that you still intend to act on). Args: gate_id, extend_seconds.",
+  description: "Drive a coordinator GATE \u2014 a graph step that intentionally STOPS progress until you do something the daemon must not do itself (a Refinery landing, an approval, waiting on CI, a publish, a deploy). The daemon NEVER performs a gate action and NEVER auto-passes a gate. Use it when a gate notice arrives or mesh_graph_view shows a gate blocking downstream work. Select the verb with `action` (REQUIRED); each action accepts only its own arguments (see each property's description for which):\n\u2022 claim \u2014 take the lease on a gate awaiting a coordinator. Returns a monotonically increasing leaseGeneration and an opaque fencingToken: keep both, release needs them. A lapsed lease can be taken over at a HIGHER generation; the response then sets ambiguousExternalOutcome \u2014 the previous owner may already have performed the side effect, so reconcile external evidence (did the merge/publish land?) before doing it again.\n\u2022 release \u2014 pass a gate you hold: the ONLY way a gate lets downstream run. Needs lease_generation + fencing_token from claim (stale generation / wrong token \u2192 stale_fence; an EXPIRED lease never releases \u2014 re-claim and reconcile first) and your own idempotency_key (identical re-send = no-op success; same key, different payload = conflict). `outcome` and any `result`/`evidence` are readable downstream through run_if and inputs_from. A validation failure rolls the WHOLE release back.\n\u2022 abandon \u2014 give up on a gate that can never open (the work behind it was cancelled) so its graph can go terminal. NOT a pass: it materializes nothing and CANCELS every downstream task the gate held. Needs no fencing token, but a LIVE lease held by another coordinator is refused unless force=true. Re-abandoning is a no-op; a RELEASED gate can never be abandoned.\n\u2022 extend \u2014 push the gate DEADLINE out without taking a lease (e.g. extend_seconds=86400 for a gate that expired, or is about to, under on_timeout=hold, that you still intend to act on).",
   inputSchema: {
     type: "object",
     properties: {
@@ -183505,18 +184409,12 @@ var MESH_GRAPH_GATE_TOOL = {
         description: "Which gate verb to run (required). Each action accepts only its own arguments \u2014 see the tool description."
       },
       gate_id: { type: "string", description: "The gate (from mesh_graph_view, a gate notice, or the mesh_enqueue_batch response). All actions." },
-      gateId: { type: "string", description: "CamelCase alias for gate_id." },
       lease_seconds: { type: "number", description: "claim: how long to hold the lease. Defaults to the gate spec's lease_seconds, then 900s. Cover the real action \u2014 a lapsed lease cannot release (elapsed time is never completion evidence)." },
-      leaseSeconds: { type: "number", description: "CamelCase alias for lease_seconds." },
       extend_deadline_seconds: { type: "number", description: "claim: also push the gate DEADLINE out by this many seconds from now. The deadline is when on_timeout (hold / cancel_downstream / fail_graph) fires; reclaiming a gate that expired under hold does NOT refresh it unless you pass this." },
-      extendDeadlineSeconds: { type: "number", description: "CamelCase alias for extend_deadline_seconds." },
       extend_seconds: { type: "number", description: "extend: push the deadline out by this many seconds (positive). Takes NO lease. Extending only delays on_timeout; it is never completion evidence." },
       fencing_token: { type: "string", description: "release: the opaque token returned by claim. Required for release." },
-      fencingToken: { type: "string", description: "CamelCase alias for fencing_token." },
       lease_generation: { type: "number", description: "release: the leaseGeneration returned by claim. Required for release \u2014 a stale generation is refused." },
-      leaseGeneration: { type: "number", description: "CamelCase alias for lease_generation." },
       idempotency_key: { type: "string", description: "release: your own key for this release. Required for release." },
-      idempotencyKey: { type: "string", description: "CamelCase alias for idempotency_key." },
       outcome: { type: "string", description: "release: passed | failed | rejected, or an action-specific label. Downstream run_if reads it as /gate_outcome. Required for release." },
       result: { type: "object", description: "release: optional action-specific structured result, exposed downstream as /result/... (e.g. the merged commit sha)." },
       evidence: { type: "object", description: "release: optional evidence references/digests, exposed downstream as /evidence/... ." },
@@ -183526,36 +184424,31 @@ var MESH_GRAPH_GATE_TOOL = {
         items: {
           type: "object",
           properties: {
-            node: { type: "string", description: "Ref or node id of a DIRECT downstream node of this gate. node_id/nodeId/ref are equivalent aliases \u2014 any one resolves the target; an entry naming none of them is REJECTED (the whole release refuses) rather than silently dropped." },
+            node: { type: "string", description: "Ref or node id of a DIRECT downstream node of this gate. node_id/ref are equivalent aliases (nodeId, camelCase, is also accepted though not published) \u2014 any one resolves the target; an entry naming none of them is REJECTED (the whole release refuses) rather than silently dropped." },
             node_id: { type: "string", description: "Alias for node." },
-            nodeId: { type: "string", description: "CamelCase alias for node." },
             ref: { type: "string", description: "Alias for node \u2014 the batch-local ref of the downstream node." },
-            base_spec_patch: { type: "object", description: "Keys to merge into that node's spec. Allowed keys: run_if, on_false, inputs_from, workspace_ref." },
-            baseSpecPatch: { type: "object", description: "CamelCase alias for base_spec_patch." }
+            base_spec_patch: { type: "object", description: "Keys to merge into that node's spec. Allowed keys: run_if, on_false, inputs_from, workspace_ref." }
           },
           required: ["node"]
         }
       },
       reason: { type: "string", description: "abandon: why the gate is given up \u2014 recorded on the gate, every cancelled downstream row, and the provenance ledger. Required for abandon." },
       force: { type: "boolean", description: "abandon: abandon even though another coordinator holds a LIVE lease. Only when you know that holder is dead." },
-      coordinator_session_id: { type: "string", description: "claim / abandon: owner (claim) or recorded abandoner. Defaults to this coordinator session." },
-      coordinatorSessionId: { type: "string", description: "CamelCase alias for coordinator_session_id." }
+      coordinator_session_id: { type: "string", description: "claim / abandon: owner (claim) or recorded abandoner. Defaults to this coordinator session." }
     },
     required: ["action", "gate_id"]
   }
 };
 var MESH_GRAPH_NODE_PATCH_TOOL = {
   name: "mesh_graph_node_patch",
-  description: "Fix a graph node that could NOT be materialized, and retry it in the same call \u2014 the recovery path for a task blocked on `materialization_error:*` (seen in mesh_graph_view / as the task's blockedReason). A node's `inputs_from` / `run_if` are baked in when the batch is accepted but only resolved once every predecessor has COMPLETED, so a binding that cannot be resolved strands the one step that was meant to consume all that finished work. The graph retries such a node automatically, but it re-reads the same spec and fails identically every time \u2014 it cannot heal itself, so use this to change the spec. The patch and the retry are ONE transaction: the response tells you immediately whether the node materialized (recovered: true) or is still blocked, and with which new reason. \u2605 Only run_if, on_false, inputs_from and workspace_ref may be patched \u2014 message, routing, permissions, task mode and model are immutable, and a task that is already claimed or finished cannot be patched at all (cancel and enqueue a corrected step instead). This is a repair tool, not a way to re-task a worker. Most shape errors are now rejected up front by mesh_enqueue_batch; the case that still needs this is `required_input_missing` \u2014 a well-formed binding whose source never produced that field.",
+  description: "Fix a graph node that could NOT be materialized, and retry it in the same call \u2014 the recovery path for a task blocked on `materialization_error:*` (seen in mesh_graph_view / as the task's blockedReason). A node's `inputs_from` / `run_if` are baked in when the batch is accepted but only resolved once every predecessor has COMPLETED, so a binding that cannot be resolved strands the step; the graph retries it automatically but it re-reads the same spec and fails identically every time \u2014 it cannot heal itself, so use this to change the spec. The patch and the retry are ONE transaction: the response tells you immediately whether the node materialized (recovered: true) or is still blocked, and with which new reason. \u2605 Only run_if, on_false, inputs_from and workspace_ref may be patched \u2014 message, routing, permissions, task mode and model are immutable, and a task that is already claimed or finished cannot be patched at all (cancel and enqueue a corrected step instead). This is a repair tool, not a way to re-task a worker. Most shape errors are now rejected up front by mesh_enqueue_batch; the case that still needs this is `required_input_missing` \u2014 a well-formed binding whose source never produced that field.",
   inputSchema: {
     type: "object",
     properties: {
       node: { type: "string", description: "Node id or `ref` of the node to patch (from mesh_graph_view). A ref that matches several live graphs is refused \u2014 pass graph_id too, or the exact node id." },
-      node_id: { type: "string", description: "Alias for node." },
-      nodeId: { type: "string", description: "CamelCase alias for node_id." },
+      node_id: { type: "string", description: "Alias for node (nodeId, camelCase, is also accepted though not published)." },
       ref: { type: "string", description: "Alias for node, spelled `ref` to match mesh_graph_view's own field name for a node's human-readable ref. A ref that matches several live graphs is refused \u2014 pass graph_id too, or the exact node id." },
       graph_id: { type: "string", description: "Disambiguate which graph the ref belongs to. Optional when `node` is a node id." },
-      graphId: { type: "string", description: "CamelCase alias for graph_id." },
       base_spec_patch: {
         type: "object",
         description: "Keys to REPLACE on the node's spec. Allowed: run_if, on_false, inputs_from, workspace_ref. A replacement inputs_from is validated before anything is written, so swapping one malformed binding for another is rejected outright rather than silently re-blocking the node.",
@@ -183565,8 +184458,7 @@ var MESH_GRAPH_NODE_PATCH_TOOL = {
           on_false: { type: "string", enum: ["skip"], description: "What to do when run_if is false." },
           workspace_ref: { type: "string", description: "Replacement workspace ref." }
         }
-      },
-      baseSpecPatch: { type: "object", description: "CamelCase alias for base_spec_patch." }
+      }
     },
     required: ["node", "base_spec_patch"]
   }
@@ -183578,13 +184470,9 @@ var MESH_GRAPH_VIEW_TOOL = {
     type: "object",
     properties: {
       graph_id: { type: "string", description: "Show exactly this graph (including terminal ones)." },
-      graphId: { type: "string", description: "CamelCase alias for graph_id." },
       batch_id: { type: "string", description: "Show the graph committed under this batch_id." },
-      batchId: { type: "string", description: "CamelCase alias for batch_id." },
       include_terminal: { type: "boolean", description: "Include completed/failed/cancelled graphs. Default false (in-flight only)." },
-      includeTerminal: { type: "boolean", description: "CamelCase alias for include_terminal." },
       probe_gate_evidence: { type: "boolean", description: `Attach convergence evidence to waiting gates: whether each upstream commit is already reachable from the mesh base workspace's local origin/main. Answers "did the guarded work already land?" without claiming. Runs bounded local git probes (first 5 waiting gates, no fetch) \u2014 default false keeps the view git-free. Evidence never releases a gate.` },
-      probeGateEvidence: { type: "boolean", description: "CamelCase alias for probe_gate_evidence." },
       limit: { type: "integer", minimum: 0, description: "Max graphs to return (default 20)." }
     }
   }
@@ -183599,7 +184487,7 @@ var MESH_VIEW_QUEUE_TOOL = {
       status: {
         type: "array",
         items: { type: "string" },
-        description: "Explicit row filter by task status: pending, assigned, completed, failed, cancelled. Source-of-truth counts remain unfiltered; visible* counts describe returned rows."
+        description: "Explicit row filter by task status: pending, assigned, completed, failed, cancelled. Overall counts stay unfiltered; the visible* counts and visibleSummary (compact mode: only when a view or status filter is applied) describe the returned rows."
       },
       view: {
         type: "string",
@@ -183618,7 +184506,6 @@ var MESH_QUEUE_CANCEL_TOOL = {
     type: "object",
     properties: {
       task_id: { type: "string", description: "Queue task ID to cancel." },
-      taskId: { type: "string", description: "CamelCase alias for task_id." },
       reason: { type: "string", description: "Optional operator-visible reason for cancellation." }
     },
     required: ["task_id"]
@@ -183631,16 +184518,11 @@ var MESH_QUEUE_REQUEUE_TOOL = {
     type: "object",
     properties: {
       task_id: { type: "string", description: "Queue task ID to requeue." },
-      taskId: { type: "string", description: "CamelCase alias for task_id." },
       reason: { type: "string", description: "Optional operator-visible reason for requeueing." },
       target_node_id: { type: "string", description: "Optional replacement target node ID." },
-      targetNodeId: { type: "string", description: "CamelCase alias for target_node_id." },
       target_session_id: { type: "string", description: "Optional replacement target runtime session ID." },
-      targetSessionId: { type: "string", description: "CamelCase alias for target_session_id." },
       clear_target_node: { type: "boolean", description: "When true, remove any existing target node constraint." },
-      clearTargetNode: { type: "boolean", description: "CamelCase alias for clear_target_node." },
       keep_target_session: { type: "boolean", description: "When true, preserve an existing target session if target_session_id is not provided. Defaults false to avoid stale session targets." },
-      keepTargetSession: { type: "boolean", description: "CamelCase alias for keep_target_session." },
       force: { type: "boolean", description: "When true, bypass the retry cap and requeue even if maxRetries has been exceeded. Use only for explicit operator recovery." },
       message: { type: "string", description: "Optional REPLACEMENT instruction for the task. Use when the situation moved on while the task waited \u2014 the common case for a parked delta, e.g. the worker already finished the part your correction was about, so the original wording would now be wrong or redundant. Preserves the task id, mission linkage and dependents (unlike cancel + re-enqueue). Omitted or blank leaves the existing message untouched." }
     },
@@ -183657,20 +184539,15 @@ var MESH_SEND_TASK_TOOL = {
       session_id: { type: "string", description: "Agent session ID on the target node. Optional: when omitted the task is dispatched to the node (a remote node scopes it to its own session for this workspace; a local node routes it through the queue pull)." },
       message: { type: "string", description: "Natural-language task to send to the agent." },
       input: MESH_TASK_INPUT_SCHEMA,
-      task_mode: { ...enumOf(MESH_TASK_MODES), description: "Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before local or remote direct dispatch." },
-      taskMode: { ...enumOf(MESH_TASK_MODES), description: "CamelCase alias for task_mode." },
-      readonly: { type: "boolean", description: "Optional read-only axis (orthogonal to task_mode). When true the task runs without write isolation, is counted under the read-only cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Composable with any task_mode." },
-      read_only: { type: "boolean", description: "Snake-case alias for readonly." },
-      owned_paths: { type: "array", items: { type: "string" }, description: "H1 (path ownership); same semantics as mesh_enqueue_task. Repo-relative files/dirs this code_change task will touch (a trailing /** claims the subtree). Optional and opt-in. A direct dispatch already targets a specific node/session, so this is recorded for the same code_change overlap check against OTHER in-flight tasks (queued or direct) and for the report_completion.touched_files comparison \u2014 it is not itself a routing input." },
-      ownedPaths: { type: "array", items: { type: "string" }, description: "CamelCase alias for owned_paths." },
-      mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id, full/exact). When set, the directly dispatched task is attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for an unattributed direct dispatch. An unresolvable id is REJECTED before dispatch (mission_not_found), never silently attached." },
-      missionId: { type: "string", description: "CamelCase alias for mission_id." },
-      difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "REQUIRED task execution difficulty. Classify each task by how hard the work actually is. On a direct dispatch the target node/session is already chosen, so difficulty is not used to ROUTE \u2014 it is recorded on the task so scheduling analytics, mission aggregates and (critically) failure-recovery relaunch all see the same axis a queued task carries. A recovery relaunch inherits this value from the ledger, so an unclassified direct dispatch would silently downgrade its own retry." },
+      task_mode: { ...enumOf(MESH_TASK_MODES), description: "Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch." },
+      readonly: { type: "boolean", description: "Optional read-only axis (orthogonal to task_mode). When true, runs without write isolation, counted under the read-only cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Composable with any task_mode." },
+      owned_paths: { type: "array", items: { type: "string" }, description: "H1 (path ownership); same semantics as mesh_enqueue_task. Repo-relative files/dirs this code_change task will touch (trailing /** claims the subtree). Optional/opt-in; not a routing input \u2014 recorded for the code_change overlap check against other in-flight tasks and for report_completion.touched_files comparison." },
+      mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id, full/exact). When set, attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for unattributed. An unresolvable id is REJECTED before dispatch (mission_not_found), never silently attached." },
+      difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "REQUIRED task execution difficulty. On a direct dispatch the target node/session is already chosen, so this does not ROUTE \u2014 it is recorded so scheduling analytics, mission aggregates and failure-recovery relaunch see the same axis a queued task carries (a recovery relaunch inherits it from the ledger)." },
       delivery_mode: {
         ...enumOf(MESH_DELIVERY_MODES),
-        description: "How to deliver when the target session is BUSY. Default 'when_idle': never disturbs the running turn \u2014 the task is queued and auto-delivered the moment the session goes idle. \u2605'interrupt' ABORTS the turn currently in flight by pressing the provider's own stop control (Ctrl-C, or ESC on antigravity-cli), then delivers this task once the session settles. THE WORK IN PROGRESS IS DISCARDED \u2014 whatever the agent had not yet finished is lost, and any partial edits it was mid-way through are left as they are. Use it only when the running turn is genuinely going the wrong way and finishing it is worse than losing it. If the target provider cannot interrupt (no stop control declared, or an empty stop key), the dispatch is REJECTED rather than quietly falling back to when_idle \u2014 so a steering attempt never reports success while the session actually runs on to completion under the old instructions. Re-send with 'when_idle' if delivery-after-completion is acceptable. Has no effect on an idle session (delivered immediately either way)."
+        description: "How to deliver when the target session is BUSY. Default 'when_idle': queued, auto-delivered once the session goes idle \u2014 never disturbs the running turn. 'interrupt' ABORTS the in-flight turn via the provider's own stop control (Ctrl-C, or ESC on antigravity-cli), then delivers once settled \u2014 THE WORK IN PROGRESS IS DISCARDED, including partial edits. Use only when the running turn is going wrong and finishing it is worse than losing it. If the provider cannot interrupt (no stop control declared), the dispatch is REJECTED rather than silently falling back to when_idle. Has no effect on an idle session (delivered immediately either way)."
       },
-      deliveryMode: { ...enumOf(MESH_DELIVERY_MODES), description: "CamelCase alias for delivery_mode." },
       // GRAPH-MEASUREMENT-DIRECT — the decision record for the DIRECT surface.
       //
       // ★ WHY IT IS HERE AT ALL. This tool is the MAJORITY dispatch surface (~67%
@@ -183684,13 +184561,10 @@ var MESH_SEND_TASK_TOOL = {
       // existing caller. Omission degrades to decision_missing, never an error.
       orchestration_decision: {
         type: "object",
-        description: "Record of your dispatch decision, for adoption measurement: {decision, direct_reason, ready_worker_tasks, known_graph_steps, capability_blockers}. On this DIRECT surface, direct_reason says why dispatching into an existing session beat queueing a task \u2014 one of same_subject_continuation, investigation_handoff, idle_session_reuse, queue_bypass_urgent, new_subject, legacy_client, operator_override. These are the cases the operating rules name: same-subject continuation, the investigate\u2192fix handoff, reusing an idle session for a follow-up/retry/cleanup delta, or a deliberate queue bypass. new_subject is the one the rules do NOT endorse \u2014 a genuinely new topic should get its own task even when a session sits idle \u2014 and reporting it returns an unsanctioned_direct_dispatch advisory. Report it honestly anyway: it is recorded, never refused. Optional and never rejected: omitting it is recorded as decision_missing. Provenance only \u2014 it never changes execution."
+        description: "Record of your dispatch decision, for adoption measurement: {decision, direct_reason, ready_worker_tasks, known_graph_steps, capability_blockers}. On this DIRECT surface, direct_reason says why dispatching into an existing session beat queueing a task \u2014 one of same_subject_continuation, investigation_handoff, idle_session_reuse, queue_bypass_urgent, new_subject, legacy_client, operator_override. new_subject is the case the operating rules do NOT endorse \u2014 a genuinely new topic should get its own task even when a session sits idle \u2014 and reporting it returns an unsanctioned_direct_dispatch advisory. Report it honestly anyway: it is recorded, never refused. Optional and never rejected: omitting it is recorded as decision_missing. Provenance only \u2014 it never changes execution."
       },
-      orchestrationDecision: { type: "object", description: "CamelCase alias for orchestration_decision." },
-      allow_stale_node: { type: "boolean", description: "GIT-GATE: a non-readonly direct dispatch is refused (dirty_workspace / node_stale_behind_upstream) when the target node's git telemetry shows an uncommitted working tree or a branch behind its upstream beyond the mesh's autoFastForward.maxBehind \u2014 the same predicates the claim-time and auto-launch spawn gates apply. Set true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree). Has no effect on a readonly dispatch, which is never gated. Default: false." },
-      allowStaleNode: { type: "boolean", description: "CamelCase alias for allow_stale_node." },
-      allow_quota_exhausted: { type: "boolean", description: "QUOTA-GATE (preview rc.43 run 10): a direct dispatch that NAMES a session_id is refused when that session's provider is measurably quota-exhausted on the target node \u2014 the same fresh/measured predicate (evaluateProviderQuotaGate) the queue claim path already applies before pulling a pending task onto an idle session, now also applied here so a coordinator does not spend minutes talking to a session that cannot work (e.g. 'You've hit your session limit'). A stale/missing/unmarked snapshot always fails OPEN (dispatch proceeds) \u2014 only a fresh measured block refuses. Set true to dispatch anyway (e.g. testing the provider's own quota error). Default: false. Has no effect on a sessionless dispatch that ends up in the queue \u2014 the claim-time gate already covers that path." },
-      allowQuotaExhausted: { type: "boolean", description: "CamelCase alias for allow_quota_exhausted." }
+      allow_stale_node: { type: "boolean", description: "GIT-GATE: a non-readonly direct dispatch is refused (dirty_workspace / node_stale_behind_upstream) when the target node's git telemetry shows an uncommitted working tree or a branch behind its upstream beyond the mesh's autoFastForward.maxBehind \u2014 same predicates as the claim-time/auto-launch gates. Set true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree). No effect on a readonly dispatch. Default: false." },
+      allow_quota_exhausted: { type: "boolean", description: "QUOTA-GATE: a direct dispatch NAMING a session_id is refused when that session's provider is measurably quota-exhausted on the target node \u2014 same predicate the queue claim path applies before pulling a pending task onto an idle session. A stale/missing/unmarked snapshot fails OPEN (dispatch proceeds); only a fresh measured block refuses. Set true to dispatch anyway (e.g. testing the provider's own quota error). Default: false. No effect on a sessionless dispatch that ends up in the queue \u2014 the claim-time gate covers that." }
     },
     // session_id is deliberately NOT required: meshSendTask supports a sessionless
     // dispatch (node-scoped on the worker) and the required-arg gate enforces this list.
@@ -183823,20 +184697,20 @@ var MESH_FAST_FORWARD_NODE_TOOL = {
 };
 var MESH_RESTART_DAEMON_TOOL = {
   name: "mesh_restart_daemon",
-  description: `Restart a mesh node's daemon, optionally updating it first \u2014 the same path as the dashboard "preview update" button, exposed as a mesh command so a coordinator can roll a worker daemon without a manual restart round-trip. No agent session is launched. mode="upgrade" (default): update to the latest published version on the release channel, then restart; already-latest is a no-op (no restart, returns alreadyLatest:true). mode="restart": pure re-spawn with no reinstall \u2014 restarts even when already latest, with much shorter downtime; use it to reset wedged daemon state (memory leaks, zombie sessions). Idle-gated: a node whose daemon has an active session (generating / waiting_approval / starting) is refused with code "blocking_sessions" so an in-flight turn is never interrupted. self_only=true waives ONLY this mesh's own coordinator session (the structural self-deadlock case \u2014 the coordinator is always generating while it calls). Other sessions still refuse. force=true bypasses the gate entirely: in-flight turns die and the unpersisted pendingOutboundQueue is lost. when_idle=true schedules the restart to run automatically once the daemon goes idle (the safest path \u2014 no queue loss); cancel_when_idle=true cancels it and every response reports the schedule under deferredRestart. kill_session_host=true additionally stops the session-host process, destroying ALL hosted CLI sessions (hard refresh; this is what Windows already does on every upgrade). Default off. Note: on Windows any daemon restart/upgrade terminates all hosted sessions regardless of options; on POSIX hosted sessions survive a plain restart and rebind on next boot. Upgrade mode refuses a DOWNGRADE: if the target version resolved from the daemon's build track is OLDER than the running daemon, the call fails with code "downgrade_refused" and reports currentVersion / targetVersion / channel instead of rolling the node back. Pass allow_downgrade=true only for a deliberate rollback. The channel parameter is DEPRECATED and ignored: since Phase 3 the release channel is a build-time identity of the installed binary (stable = adhdev/@latest, preview = adhdev-preview/@next), so an upgrade always targets the daemon's own build track and can never switch channels. When you pass a channel that conflicts with the node's build track, the response now carries a channelOverride object saying so \u2014 the request is not silently honored. The response compares meshAttachedDaemon (the daemon that answered status immediately before the command) with restartTargetDaemon (the daemon process that accepted the lifecycle operation). daemonMismatch/trackMismatch=true and trackWarning surface a split but do not block the operation; null means an older/unreachable daemon did not report enough identity.`,
+  description: `Restart a mesh node's daemon, optionally updating it first \u2014 the same path as the dashboard "preview update" button. No agent session is launched. Idle-gated: a node with an active session (generating / waiting_approval / starting) is refused with code "blocking_sessions" so an in-flight turn is never interrupted \u2014 see self_only/force/when_idle to override. On Windows any restart/upgrade terminates all hosted sessions regardless of options; on POSIX hosted sessions survive a plain restart and rebind on next boot. The response compares meshAttachedDaemon (the daemon that answered status immediately before the command) with restartTargetDaemon (the daemon process that accepted the lifecycle operation). daemonMismatch/trackMismatch=true and trackWarning surface a split but do not block the operation; null means an older/unreachable daemon did not report enough identity.`,
   inputSchema: {
     type: "object",
     properties: {
       node_id: { type: "string", description: "Target node ID \u2014 the daemon that owns this node is restarted (and updated, in upgrade mode)." },
-      channel: { type: "string", enum: ["stable", "preview"], description: "DEPRECATED and ignored (upgrade mode only). Since Phase 3 the release channel is a build-time identity of the installed binary, so the daemon always upgrades on its own build track. Kept optional so older callers do not break. A value conflicting with the node's build track is reported back as channelOverride rather than silently dropped \u2014 it does NOT switch the node's channel." },
-      allow_downgrade: { type: "boolean", description: 'Permit an upgrade whose resolved target is OLDER than the running daemon (upgrade mode only). Default false: such a call is refused with code "downgrade_refused" so a mis-resolved track cannot silently roll a node back. Set true only for a deliberate rollback.' },
-      mode: { type: "string", enum: ["upgrade", "restart"], description: "upgrade (default): update to latest on channel, then restart (already-latest is a no-op). restart: pure re-spawn, no reinstall \u2014 restarts even when already latest." },
+      channel: { type: "string", enum: ["stable", "preview"], description: "DEPRECATED and ignored: the release channel is a build-time identity of the installed binary, so an upgrade always targets the daemon's own build track. Kept optional so older callers do not break; a conflicting value is reported back as channelOverride rather than silently honored." },
+      allow_downgrade: { type: "boolean", description: 'Permit an upgrade whose resolved target is OLDER than the running daemon (upgrade mode only). Default false: refused with code "downgrade_refused". Set true only for a deliberate rollback.' },
+      mode: { type: "string", enum: ["upgrade", "restart"], description: "upgrade (default): update to the latest published version on the daemon's build track, then restart; already-latest is a no-op (no restart, returns alreadyLatest:true). restart: pure re-spawn, no reinstall \u2014 restarts even when already latest, with much shorter downtime; use to reset wedged daemon state (memory leaks, zombie sessions)." },
       force: { type: "boolean", description: "Bypass the idle-gate entirely. Destructive: in-flight turns are killed and the in-memory pendingOutboundQueue is permanently lost. Default false." },
-      self_only: { type: "boolean", description: "Waive only this mesh's own coordinator session when it blocks the restart (the coordinator self-deadlock). Other nodes' active sessions still refuse. Default false." },
-      when_idle: { type: "boolean", description: "If blocked, schedule the restart to execute automatically once the daemon goes idle (safest \u2014 no pendingOutboundQueue loss). The schedule expires after timeout_ms (default 30 min). Default false." },
+      self_only: { type: "boolean", description: "Waive only this mesh's own coordinator session when it blocks the restart (the structural self-deadlock: the coordinator is always generating while it calls). Other sessions still refuse. Default false." },
+      when_idle: { type: "boolean", description: "If blocked, schedule the restart to run automatically once the daemon goes idle (safest \u2014 no pendingOutboundQueue loss). Every response reports the schedule under deferredRestart; expires after timeout_ms (default 30 min). Default false." },
       cancel_when_idle: { type: "boolean", description: "Cancel a previously scheduled when_idle restart on the owning daemon." },
       timeout_ms: { type: "number", description: "Expiry for a when_idle schedule in milliseconds (default 1800000 = 30 min, max 6 h)." },
-      kill_session_host: { type: "boolean", description: "Hard refresh: also stop the session-host process, destroying ALL hosted CLI sessions on the machine. Default false." }
+      kill_session_host: { type: "boolean", description: "Hard refresh: also stop the session-host process, destroying ALL hosted CLI sessions on the machine (this is what Windows already does on every upgrade). Default false." }
     },
     required: ["node_id"]
   }
@@ -183860,28 +184734,23 @@ var MESH_MISSION_UPSERT_TOOL = {
     type: "object",
     properties: {
       mission_id: { type: "string", description: "Full mission id (exact match) to update. Omit to create a new mission \u2014 do not guess/truncate an id to force a create. An id that does not resolve to an existing mission is REJECTED (mission_not_found), never silently created under that id \u2014 use mesh_mission_list to get a valid full id. Ignored when mission_ids is provided." },
-      missionId: { type: "string", description: "CamelCase alias for mission_id." },
       mission_ids: {
         type: "array",
         items: { type: "string" },
         description: "Bulk mode: apply `status` to every listed mission id in one call (stale cleanup). Requires `status`. Returns a per-mission { id, ok, status?, error? } result array. Overrides mission_id/title/goal."
       },
-      missionIds: { type: "array", items: { type: "string" }, description: "CamelCase alias for mission_ids." },
       title: { type: "string", description: "Short mission title. Required to create/update a single mission; ignored in bulk (mission_ids) mode." },
       goal: { type: "string", description: "Free-text mission goal/definition of done. Ignored in bulk (mission_ids) mode." },
       status: { type: "string", enum: ["active", "paused", "completed", "abandoned"], description: "Mission lifecycle status. Defaults to active on create. Required in bulk (mission_ids) mode." },
       brief: {
         type: "object",
-        description: "H2 (mission brief). Optional structured brief, rendered into every task dispatched under this mission's worker-protocol footer so a freshly launched worker sees it without a separate lookup. {goal (required \u2014 a brief with no goal is dropped, not stored empty), constraints?, doneCriteria?, handoffNotes?, ownedPaths?} \u2014 each of the four optional fields is a string array; done_criteria/handoff_notes/owned_paths snake_case aliases are also accepted. Ignored in bulk (mission_ids) mode. When a non-empty brief is dropped (no goal, or a field of the wrong type), the response carries `briefIgnored: {reason, field?}` instead of silently discarding it. This is DISTINCT from the top-level `goal` field: `goal` is the mission record's short free-text summary shown in mesh_mission_list; `brief` is the longer structured packet a worker actually reads.",
+        description: "H2 (mission brief). Optional structured brief, rendered into every task dispatched under this mission's worker-protocol footer so a freshly launched worker sees it without a separate lookup. {goal (required \u2014 a brief with no goal is dropped, not stored empty), constraints?, doneCriteria?, handoffNotes?, ownedPaths?} \u2014 each of the four optional fields is a string array; done_criteria/handoff_notes/owned_paths snake_case aliases are also accepted though not published. Ignored in bulk (mission_ids) mode. When a non-empty brief is dropped (no goal, or a field of the wrong type), the response carries `briefIgnored: {reason, field?}` instead of silently discarding it. This is DISTINCT from the top-level `goal` field: `goal` is the mission record's short free-text summary shown in mesh_mission_list; `brief` is the longer structured packet a worker actually reads.",
         properties: {
           goal: { type: "string", description: "What this mission is trying to accomplish. Required for the brief to be stored \u2014 an object with no goal is treated as no brief." },
           constraints: { type: "array", items: { type: "string" }, description: 'Hard constraints a worker must respect, e.g. "do not touch daemon-core", "no npm install".' },
           doneCriteria: { type: "array", items: { type: "string" }, description: "How to know the mission is actually done." },
-          done_criteria: { type: "array", items: { type: "string" }, description: "Snake_case alias for doneCriteria." },
           handoffNotes: { type: "array", items: { type: "string" }, description: "Standing notes for whoever picks up mission work next." },
-          handoff_notes: { type: "array", items: { type: "string" }, description: "Snake_case alias for handoffNotes." },
-          ownedPaths: { type: "array", items: { type: "string" }, description: "Paths this mission's tasks collectively own \u2014 surfaced to workers, not itself enforced (per-task owned_paths on mesh_enqueue_task/mesh_enqueue_batch/mesh_send_task is what claim-time enforcement reads)." },
-          owned_paths: { type: "array", items: { type: "string" }, description: "Snake_case alias for ownedPaths." }
+          ownedPaths: { type: "array", items: { type: "string" }, description: "Paths this mission's tasks collectively own \u2014 surfaced to workers, not itself enforced (per-task owned_paths on mesh_enqueue_task/mesh_enqueue_batch/mesh_send_task is what claim-time enforcement reads)." }
         }
       }
     },
@@ -183908,9 +184777,7 @@ var MESH_MISSION_LIST_TOOL = {
       },
       verbose: { type: "boolean", description: "Return full goal text instead of a capped preview (also attaches stats). Defaults to false (compact)." },
       include_stats: { type: "boolean", description: "Attach per-mission ledger stats (durations/attempts). Off by default; tasks aggregate is usually enough." },
-      includeStats: { type: "boolean", description: "CamelCase alias for include_stats." },
-      include_magi: { type: "boolean", description: "Include completed MAGI cross-verification missions (hidden by default). Defaults to false." },
-      includeMagi: { type: "boolean", description: "CamelCase alias for include_magi." }
+      include_magi: { type: "boolean", description: "Include completed MAGI cross-verification missions (hidden by default). Defaults to false." }
     }
   }
 };
@@ -183975,7 +184842,7 @@ var MESH_LIST_PENDING_APPROVALS_TOOL = {
 };
 var MESH_CREATE_TOOL = {
   name: "mesh_create",
-  description: 'Bootstrap a brand-new mesh for a Git repository, or (mode="plan") dry-run the onboarding plan first. Mirrors `adhdev mesh create <name>`. A mesh groups one repo\'s workspaces/nodes so the coordinator can delegate work across them.\n\u2022 mode="plan" \u2014 READ-ONLY Git-aware discovery + dry-run plan for a workspace path: Git root, normalized remotes/repo identity, current/default branch, main checkout vs linked worktree, dirty/conflict state, existing mesh/node membership. Returns a typed create+onboarding, add-existing-workspace, or clone-new-worktree plan with suggested .adhdev configs. Never fetches, writes config, or creates a mesh/node/branch/worktree. Run it before creating a mesh, adding a node (mesh_add_node) or cloning a worktree (mesh_clone_node). Args: workspace (required), mesh_id, operation, branch.\n\u2022 mode="create" (default) \u2014 a persistent write: run mode="plan" first and obtain explicit user approval. Pass workspace to auto-detect Git identity/branch/worktree through the read-only planner, or pass repo_remote_url / repo_identity explicitly. add_current:true also registers a node in the same call (workspace if given, else the daemon\'s cwd). Returns mesh_id (and node_id with add_current). Args: name (required), repo_remote_url, repo_identity, default_branch, add_current, workspace.\nBOOT-GATE: reachable in STANDARD mode (adhdev mcp, no --repo-mesh) \u2014 the no-mesh-yet bootstrap context \u2014 and in mesh mode (where create makes a SEPARATE additional mesh). `adhdev mcp --repo-mesh <id>` refuses to start without an existing meshId, so the flow is: standard-mode MCP \u2192 mesh_create \u2192 mesh_add_node \u2192 relaunch as `adhdev mcp --repo-mesh <returned mesh_id>`.',
+  description: 'Bootstrap a brand-new mesh for a Git repository, or (mode="plan") dry-run the onboarding plan first. Mirrors `adhdev mesh create <name>`. A mesh groups one repo\'s workspaces/nodes so the coordinator can delegate work across them.\n\u2022 mode="plan" \u2014 READ-ONLY Git-aware discovery + dry-run plan for a workspace path: Git root, normalized remotes/repo identity, current/default branch, main checkout vs linked worktree, dirty/conflict state, existing mesh/node membership. Returns a typed create+onboarding, add-existing-workspace, or clone-new-worktree plan with suggested .adhdev configs. Never fetches, writes config, or creates a mesh/node/branch/worktree. Run it before creating a mesh, adding a node (mesh_add_node) or cloning a worktree (mesh_clone_node).\n\u2022 mode="create" (default) \u2014 a persistent write: run mode="plan" first and obtain explicit user approval. Pass workspace to auto-detect Git identity/branch/worktree through the read-only planner, or pass repo_remote_url / repo_identity explicitly. add_current:true also registers a node in the same call (workspace if given, else the daemon\'s cwd). Returns mesh_id (and node_id with add_current).\nBOOT-GATE: reachable in STANDARD mode (adhdev mcp, no --repo-mesh) \u2014 the no-mesh-yet bootstrap context \u2014 and in mesh mode (where create makes a SEPARATE additional mesh). `adhdev mcp --repo-mesh <id>` refuses to start without an existing meshId, so the flow is: standard-mode MCP \u2192 mesh_create \u2192 mesh_add_node \u2192 relaunch as `adhdev mcp --repo-mesh <returned mesh_id>`.',
   inputSchema: {
     type: "object",
     properties: {
@@ -184062,7 +184929,7 @@ var MESH_CLEANUP_WORKTREE_NODES_TOOL = {
 };
 var MESH_CLEANUP_SESSIONS_TOOL = {
   name: "mesh_cleanup_sessions",
-  description: "Clean up delegated-session bookkeeping without removing nodes. Two families, selected by `mode` (REQUIRED):\n\u2022 preserve / stop / delete_stopped / stop_and_delete \u2014 a node's delegated session records (needs node_id). Use when a node is cluttered with finished or stuck worker sessions. Defaults should preserve reviewable history unless you choose a mode explicitly. Args: node_id, session_ids, dry_run.\n\u2022 prune_stale_direct \u2014 mesh-wide: orphaned staleDirect dispatch records (direct task dispatches whose original node/session is gone from the live mesh). Use when mesh_status keeps listing stale direct dispatches. Dry-run by default; execute=true deletes. Active/pending/assigned/generating work and fresh unacknowledged dispatch failures (node/session still live) are always preserved, and the append-only ledger history is kept. Args: execute, dry_run, include_terminal.",
+  description: "Clean up delegated-session bookkeeping without removing nodes. Two families, selected by `mode` (REQUIRED):\n\u2022 preserve / stop / delete_stopped / stop_and_delete \u2014 a node's delegated session records (needs node_id). Use when a node is cluttered with finished or stuck worker sessions. Defaults should preserve reviewable history unless you choose a mode explicitly.\n\u2022 prune_stale_direct \u2014 mesh-wide: orphaned staleDirect dispatch records (direct task dispatches whose original node/session is gone from the live mesh). Use when mesh_status keeps listing stale direct dispatches. Dry-run by default; execute=true deletes. Active/pending/assigned/generating work and fresh unacknowledged dispatch failures (node/session still live) are always preserved, and the append-only ledger history is kept.",
   inputSchema: {
     type: "object",
     properties: {
@@ -184112,7 +184979,7 @@ var MESH_LEDGER_QUERY_TOOL = {
 };
 var MESH_NOTE_TOOL = {
   name: "mesh_note",
-  description: "Record or retract a durable operating note for this mesh \u2014 a runtime-accumulated lesson every future coordinator inherits. Provider-neutral: it persists in the mesh ledger and is injected into every coordinator's system prompt at launch (codex, hermes, antigravity, claude alike). Select with `action` (REQUIRED):\n\u2022 record \u2014 when you learn something durable (a provider quirk, a pattern to avoid, a recovery lesson), and before closing a mission that taught one. Keep each note to one concrete, reusable fact; not for transient task status (use missions/checkpoints). Args: text (required), category, pinned, ttl_days, expiresAt, supersedes, subject_key.\n\u2022 forget \u2014 when an injected note is stale or wrong. Appends a tombstone so the note(s) stop riding into future prompts; history is preserved (append-only). Target by note_id (exact) or by exact text; provide at least one. Args: note_id, text, reason.",
+  description: "Record or retract a durable operating note for this mesh \u2014 a runtime-accumulated lesson every future coordinator inherits. Provider-neutral: it persists in the mesh ledger and is injected into every coordinator's system prompt at launch (codex, hermes, antigravity, claude alike). Select with `action` (REQUIRED):\n\u2022 record \u2014 when you learn something durable (a provider quirk, a pattern to avoid, a recovery lesson), and before closing a mission that taught one. Keep each note to one concrete, reusable fact; not for transient task status (use missions/checkpoints).\n\u2022 forget \u2014 when an injected note is stale or wrong. Appends a tombstone so the note(s) stop riding into future prompts; history is preserved (append-only). Target by note_id (exact) or by exact text; provide at least one.",
   inputSchema: {
     type: "object",
     properties: {
@@ -184137,9 +185004,8 @@ var MESH_NOTE_TOOL = {
       },
       expiresAt: {
         type: "string",
-        description: "record: optional explicit ISO-8601 expiry, an alternative to ttl_days. Wins over ttl_days. Ignored when pinned."
+        description: "record: optional explicit ISO-8601 expiry, an alternative to ttl_days (expires_at, snake_case, is also accepted though not published). Wins over ttl_days. Ignored when pinned."
       },
-      expires_at: { type: "string", description: "Snake_case alias for expiresAt." },
       supersedes: {
         type: "string",
         description: "record: optional version-supersede \u2014 the note_id of an earlier note this one replaces, OR a subject_key shared with earlier notes. Matching earlier LIVE notes are hidden from the prompt (ledger kept). Pinned notes are never hidden by supersede."
@@ -184149,7 +185015,6 @@ var MESH_NOTE_TOOL = {
         description: "record: optional stable subject key grouping notes about the same subject. Drives supersede targeting and read-side folding (same category AND subject_key collapse to one injected entry, newest kept). When omitted, folding falls back to a leading [tag] bracket in the text."
       },
       note_id: { type: "string", description: "forget: the ledger note id to retract (full/exact \u2014 no prefix matching). Returned by record as noteId, or visible in mesh_task_history. An id that matches no live note returns success:false, code:note_not_found \u2014 do not guess/truncate an id." },
-      noteId: { type: "string", description: "CamelCase alias for note_id." },
       reason: { type: "string", description: "forget: optional short reason, recorded on the tombstone for audit." }
     },
     required: ["action"]
@@ -184201,7 +185066,7 @@ var MESH_REFINE_BATCH_TOOL = {
 };
 var MESH_CONFIG_TOOL = {
   name: "mesh_config",
-  description: 'Repo Mesh repo-config helper. Select the config family with `kind` (REQUIRED):\n\u2022 kind="refine" \u2014 the Refinery config (read-only). Use when a refine run reports a config error or you need to know which validation commands will run. `mode` (REQUIRED): schema = the config JSON schema and supported repo-local locations (the validation authority; heuristic command detection is suggestions-only), no other args; validate = validate a node/workspace config without running validation or merging (optional node_id, optional inline `config`); suggest = scaffold a config from project context/package scripts (never executed until saved; optional node_id). Never runs validation or merges \u2014 that is mesh_refine_node / mesh_refine_plan.\n\u2022 kind="change_impact" \u2014 the Change Impact config (read-only, declarative, never executed): which package/file changes between the live daemon build and workspace HEAD need a daemon rebuild/restart vs a web-only redeploy vs nothing. Use when deciding whether a landed change needs a daemon restart. Same `mode` values: schema; validate (loads .adhdev/change-impact.{json,yaml,yml} or repo-mesh-change-impact.* unless inline `config`); suggest (web-* \u2192 web-only, others \u2192 daemon-runtime, docs/license markers \u2192 non-runtime; review and save before it takes effect).\n\u2022 kind="mesh_json" \u2014 gated WRITE of `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Use when the user wants the coordinator prompt/config committed to the repo. Dry-run by default (write=false), never clobbers an existing file unless overwrite=true, validates before writing. Overwrite silently replaces the file: present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope. Args: node_id, workspace, write, overwrite (no `mode`).',
+  description: 'Repo Mesh repo-config helper. Select the config family with `kind` (REQUIRED):\n\u2022 kind="refine" \u2014 the Refinery config (read-only). Use when a refine run reports a config error or you need to know which validation commands will run. `mode` (REQUIRED): schema = the config JSON schema and supported repo-local locations (the validation authority; heuristic command detection is suggestions-only), no other args; validate = validate a node/workspace config without running validation or merging (optional node_id, optional inline `config`); suggest = scaffold a config from project context/package scripts (never executed until saved; optional node_id). Never runs validation or merges \u2014 that is mesh_refine_node / mesh_refine_plan.\n\u2022 kind="change_impact" \u2014 the Change Impact config (read-only, declarative, never executed): which package/file changes between the live daemon build and workspace HEAD need a daemon rebuild/restart vs a web-only redeploy vs nothing. Use when deciding whether a landed change needs a daemon restart. Same `mode` values: schema; validate (loads .adhdev/change-impact.{json,yaml,yml} or repo-mesh-change-impact.* unless inline `config`); suggest (web-* \u2192 web-only, others \u2192 daemon-runtime, docs/license markers \u2192 non-runtime; review and save before it takes effect).\n\u2022 kind="mesh_json" \u2014 gated WRITE of `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Use when the user wants the coordinator prompt/config committed to the repo. Dry-run by default (write=false), never clobbers an existing file unless overwrite=true, validates before writing. Overwrite silently replaces the file: present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope; takes no `mode`.',
   inputSchema: {
     type: "object",
     properties: {
@@ -184274,17 +185139,12 @@ var MESH_MAGI_REVIEW_TOOL = {
       artifacts: { type: "array", items: { type: "string" }, description: "Inline content when not file-backed: a doc/diff, a log/error dump, or a prior single-worker RCA to refute." },
       n: { type: "number", description: "Global replica override per slot (clamped by the total-replica guard cap, default 12)." },
       task_kind: { type: "string", enum: ["claim_audit", "rca", "design", "freeform"], description: "REQUIRED. Selects (1) the SINGLE output schema injected into each replica prompt and the strict parser used at collection (no schema-on-schema conflict), AND (2) the user-configured kind-panel binding that supplies the fan-out slots (mesh settings \u2192 magiKindPanels; errors magi_kind_not_configured if that kind has no configured slots \u2014 no named-panel/inline/preset fallback). claim_audit: {claims[],top_findings[],open_questions[]}. rca: {rootCause,failsAt,mechanism,evidence[],fixDirection,confidence}. design: {recommendation,rationale,alternatives[],tradeoffs[],risks[],evidence[],confidence}. freeform: no schema \u2014 natural-language answer, parsing/evidence checks waived, cross-verification is weak. Every kind except freeform requires non-empty evidence[]; an empty-evidence or schema-invalid answer triggers ONE delta re-request before being dropped as unparseable. Do NOT also embed an output-format schema in the question \u2014 it collides with this contract (a warning is surfaced if detected)." },
-      taskKind: { type: "string", enum: ["claim_audit", "rca", "design", "freeform"], description: "CamelCase alias for task_kind." },
       mode: { type: "string", enum: ["rca", "investigation", "claim_audit", "design_review", "code_audit"], description: "Synthesis emphasis hint \u2014 affects labels only, never the agent count or schema. Distinct from task_kind (which selects the output schema)." },
       require_independent_evidence: { type: "boolean", description: "Default true \u2014 high-impact claims with no file:line/source evidence are routed to needs_verification." },
-      requireIndependentEvidence: { type: "boolean", description: "CamelCase alias for require_independent_evidence." },
       include_stale: { type: "boolean", description: "Default false. By default, panel slots whose node HEAD commit differs from the coordinator reference commit are EXCLUDED (they would investigate different code). Set true to fan out to them anyway \u2014 results will be git-skewed and a warning is surfaced. If exclusion drops the panel below 2 independent targets the call errors rather than degrading to N=1; include_stale=true is one way to recover." },
-      includeStale: { type: "boolean", description: "CamelCase alias for include_stale." },
       wait: { type: "boolean", description: "Default true \u2014 collect replica outputs and return the synthesis. Set false to dispatch async and return a consensusGroupId handle; collect later with mesh_magi_collect." },
       wait_timeout_ms: { type: "number", description: 'Max time to wait for replica completion before returning a partial "missing K of N" synthesis. Default 8 min, max 20 min.' },
-      waitTimeoutMs: { type: "number", description: "CamelCase alias for wait_timeout_ms." },
-      auto_cleanup: { type: "boolean", description: "Default = mesh policy magiSessionCleanup (ON / stop_and_delete unless overridden). Once all replicas are terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified) so repeated reviews don't accumulate idle worker sessions. Reused/coordinator/other sessions are never touched. Set false to preserve auto-launched worker sessions for inspection. No effect on a partial (non-terminal) collection." },
-      autoCleanup: { type: "boolean", description: "CamelCase alias for auto_cleanup." }
+      auto_cleanup: { type: "boolean", description: "Default = mesh policy magiSessionCleanup (ON / stop_and_delete unless overridden). Once all replicas are terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified) so repeated reviews don't accumulate idle worker sessions. Reused/coordinator/other sessions are never touched. Set false to preserve auto-launched worker sessions for inspection. No effect on a partial (non-terminal) collection." }
     },
     required: ["question", "task_kind"]
   }
@@ -184296,16 +185156,11 @@ var MESH_MAGI_COLLECT_TOOL = {
     type: "object",
     properties: {
       consensus_group_id: { type: "string", description: "The consensusGroupId returned by a wait=false mesh_magi_review." },
-      consensusGroupId: { type: "string", description: "CamelCase alias for consensus_group_id." },
       task_kind: { type: "string", enum: ["claim_audit", "rca", "design", "freeform"], description: "Optional override of the task_kind used to parse replica answers. Normally recovered automatically from the original dispatch \u2014 only set this if the dispatched ledger entry was pruned and auto-recovery falls back to claim_audit incorrectly." },
-      taskKind: { type: "string", enum: ["claim_audit", "rca", "design", "freeform"], description: "CamelCase alias for task_kind." },
       require_independent_evidence: { type: "boolean", description: "Default true \u2014 high-impact claims with no file:line/source evidence are routed to needs_verification." },
-      requireIndependentEvidence: { type: "boolean", description: "CamelCase alias for require_independent_evidence." },
       wait: { type: "boolean", description: "Default false (snapshot). Set true to block for outstanding replicas up to wait_timeout_ms before synthesizing." },
       wait_timeout_ms: { type: "number", description: "When wait=true, max time to wait for remaining replica completion. Default 8 min, max 20 min." },
-      waitTimeoutMs: { type: "number", description: "CamelCase alias for wait_timeout_ms." },
       auto_cleanup: { type: "boolean", description: "Default = mesh policy magiSessionCleanup (ON / stop_and_delete). When the collection is terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified). Reused/coordinator/other sessions are never touched. Set false to preserve them. No effect on a partial (non-terminal) snapshot." },
-      autoCleanup: { type: "boolean", description: "CamelCase alias for auto_cleanup." },
       verbose: { type: "boolean", description: "Default false. When true, each synthesis.replicas[] entry also carries rawAnswer \u2014 the replica's raw end-user answer text (capped). Omitted by default to keep the payload small; the structured clusters already carry the parsed claims." }
     },
     required: ["consensus_group_id"]
@@ -184313,7 +185168,7 @@ var MESH_MAGI_COLLECT_TOOL = {
 };
 var MESH_MAGI_KIND_PANEL_TOOL = {
   name: "mesh_magi_kind_panel",
-  description: "Read or bind the MAGI kind\u2192panel slot lists for THIS mesh (machine-local ~/.adhdev/meshes.json \u2192 `meshes[].magiKindPanels`). The binding is what `mesh_magi_review({ task_kind })` resolves to \u2014 the SOLE panel-resolution path. Use it when mesh_magi_review fails with magi_kind_not_configured, or to confirm what a task_kind resolves to before a review. SCOPE: PER MESH, machine-local (NOT repo-committed); another mesh on this machine keeps its own bindings. Select with `action` (REQUIRED):\n\u2022 list \u2014 read-only: every configured kind binding, or just `task_kind`'s. The response `scope` names the mesh. Args: task_kind.\n\u2022 set \u2014 bind `task_kind` to `slots`. WHOLESALE REPLACEMENT: the slots become the kind's COMPLETE set (prior slots dropped, not merged), so present the current-vs-new lists (the dry-run returns `currentSlots`) and get EXPLICIT user approval before write=true. Defaults to dry-run. A slot's `nodeId`, when given, MUST name a node of this mesh \u2014 a foreign/unknown id is rejected (invalid_magi_kind_panel). Args: task_kind, slots, write.",
+  description: "Read or bind the MAGI kind\u2192panel slot lists for THIS mesh (machine-local ~/.adhdev/meshes.json \u2192 `meshes[].magiKindPanels`). The binding is what `mesh_magi_review({ task_kind })` resolves to \u2014 the SOLE panel-resolution path. Use it when mesh_magi_review fails with magi_kind_not_configured, or to confirm what a task_kind resolves to before a review. SCOPE: PER MESH, machine-local (NOT repo-committed); another mesh on this machine keeps its own bindings. Select with `action` (REQUIRED):\n\u2022 list \u2014 read-only: every configured kind binding, or just `task_kind`'s. The response `scope` names the mesh.\n\u2022 set \u2014 bind `task_kind` to `slots`. WHOLESALE REPLACEMENT: the slots become the kind's COMPLETE set (prior slots dropped, not merged), so present the current-vs-new lists (the dry-run returns `currentSlots`) and get EXPLICIT user approval before write=true. Defaults to dry-run. A slot's `nodeId`, when given, MUST name a node of this mesh \u2014 a foreign/unknown id is rejected (invalid_magi_kind_panel).",
   inputSchema: {
     type: "object",
     properties: {
@@ -184345,7 +185200,7 @@ var MESH_MAGI_KIND_PANEL_TOOL = {
 };
 var MESH_NODE_SLOTS_TOOL = {
   name: "mesh_node_slots",
-  description: "Read, draft, or change a mesh node's capability slots (policy.slots) \u2014 the provider/model/thinking + difficulty + capability-tag profile that task\u2192node fitness routing and MAGI fan-out match against. Use it when routing keeps landing work on a poor-fit node, when a node has no slots, or after CLI agents were installed on a node. Select with `action` (REQUIRED):\n\u2022 list \u2014 read-only: the node's current slots. Args: node_id.\n\u2022 propose \u2014 read-only AUTO-DETECT: probes the node's installed CLI agents (get_status_metadata \u2192 availableProviders, category=cli + installed=true), maps each through a seeded provider\u2192(model/thinkingLevel/difficulty/maxParallel) table, and returns `proposedSlots` with per-slot rationale plus `droppedSlots` / `droppedProviders` / `destructive` (hand-tuned slots, tuned maxParallel, providers not on PATH are NOT preserved by the draft \u2014 present those before approving). Detects nothing \u2192 proposes nothing. Never writes. Args: node_id, include_magi.\n\u2022 set \u2014 PROPOSE (dry-run, default) or APPLY (write=true) a slot list. WHOLESALE REPLACEMENT: the `slots` you pass become the COMPLETE new list; any prior slot not in it is dropped. The dry-run returns `currentSlots` vs `proposedSlots` \u2014 present the diff and get EXPLICIT user approval before write=true. Apply goes through update_mesh_node (machine-local node policy). Args: node_id, slots, reason, write.",
+  description: "Read, draft, or change a mesh node's capability slots (policy.slots) \u2014 the provider/model/thinking + difficulty + capability-tag profile that task\u2192node fitness routing and MAGI fan-out match against. Use it when routing keeps landing work on a poor-fit node, when a node has no slots, or after CLI agents were installed on a node. Select with `action` (REQUIRED):\n\u2022 list \u2014 read-only: the node's current slots.\n\u2022 propose \u2014 read-only AUTO-DETECT: probes the node's installed CLI agents (get_status_metadata \u2192 availableProviders, category=cli + installed=true), maps each through a seeded provider\u2192(model/thinkingLevel/difficulty/maxParallel) table, and returns `proposedSlots` with per-slot rationale plus `droppedSlots` / `droppedProviders` / `destructive` (hand-tuned slots, tuned maxParallel, providers not on PATH are NOT preserved by the draft \u2014 present those before approving). Detects nothing \u2192 proposes nothing. Never writes.\n\u2022 set \u2014 PROPOSE (dry-run, default) or APPLY (write=true) a slot list. WHOLESALE REPLACEMENT: the `slots` you pass become the COMPLETE new list; any prior slot not in it is dropped. The dry-run returns `currentSlots` vs `proposedSlots` \u2014 present the diff and get EXPLICIT user approval before write=true. Apply goes through update_mesh_node (machine-local node policy).",
   inputSchema: {
     type: "object",
     properties: {
@@ -184355,7 +185210,6 @@ var MESH_NODE_SLOTS_TOOL = {
         description: "Which slot operation to run (required). Each action accepts only its own arguments \u2014 see the tool description."
       },
       node_id: { type: "string", description: "REQUIRED \u2014 the mesh node id. All actions." },
-      nodeId: { type: "string", description: "CamelCase alias for node_id." },
       slots: {
         type: "array",
         description: "set: the COMPLETE desired capability-slot list (wholesale replacement). Each slot: { provider (REQUIRED), model?, thinkingLevel?, difficulty?, capability?, maxParallel? }. Required for set.",
@@ -184374,15 +185228,14 @@ var MESH_NODE_SLOTS_TOOL = {
       },
       reason: { type: "string", description: "set: optional short rationale, echoed in the dry-run so the user sees WHY the change is suggested." },
       write: { type: "boolean", description: "set: when true, apply the slot list (wholesale replacement). Defaults false (dry-run preview of proposedSlots + currentSlots)." },
-      include_magi: { type: "boolean", description: 'propose: also draft a MAGI panel (one slot per detected provider, pinned to this node, models unpinned) for binding via mesh_magi_kind_panel action "set". Defaults false. Deliberately NOT a per-task_kind assignment \u2014 provider manifests carry no rca/design/claim_audit suitability data.' },
-      includeMagi: { type: "boolean", description: "CamelCase alias for include_magi." }
+      include_magi: { type: "boolean", description: 'propose: also draft a MAGI panel (one slot per detected provider, pinned to this node, models unpinned) for binding via mesh_magi_kind_panel action "set". Defaults false. Deliberately NOT a per-task_kind assignment \u2014 provider manifests carry no rca/design/claim_audit suitability data.' }
     },
     required: ["action", "node_id"]
   }
 };
 var MESH_COORDINATOR_PROMPT_APPEND_TOOL = {
   name: "mesh_coordinator_prompt_append",
-  description: "Read or write the user-level coordinator prompt APPEND text for a CLI type \u2014 the per-machine file ~/.adhdev/coordinator-prompts/<cli>.append.md on this MCP server's daemon, applied to every mesh this daemon coordinates. Use it only when the user asks to add a standing instruction to every coordinator on this machine. Select with `action` (REQUIRED):\n\u2022 get \u2014 read the current append text. Read it before `set` so you know what you would replace. Args: cli_type.\n\u2022 set \u2014 write (or, with empty/omitted content, clear) the append file. WHOLESALE REPLACE of the whole file, not an incremental add. Args: cli_type, content.\nAPPEND ONLY (a safety boundary, not a missing feature): this always stacks AFTER whichever base prompt wins; it can NEVER replace the daemon's base coordinator prompt (the OVERRIDE file) \u2014 that stays a dashboard-only, human-gated action, so a coordinator cannot erase its own core operating rules.",
+  description: "Read or write the user-level coordinator prompt APPEND text for a CLI type \u2014 the per-machine file ~/.adhdev/coordinator-prompts/<cli>.append.md on this MCP server's daemon, applied to every mesh this daemon coordinates. Use it only when the user asks to add a standing instruction to every coordinator on this machine. Select with `action` (REQUIRED):\n\u2022 get \u2014 read the current append text. Read it before `set` so you know what you would replace.\n\u2022 set \u2014 write (or, with empty/omitted content, clear) the append file. WHOLESALE REPLACE of the whole file, not an incremental add.\nAPPEND ONLY (a safety boundary, not a missing feature): this always stacks AFTER whichever base prompt wins; it can NEVER replace the daemon's base coordinator prompt (the OVERRIDE file) \u2014 that stays a dashboard-only, human-gated action, so a coordinator cannot erase its own core operating rules.",
   inputSchema: {
     type: "object",
     properties: {
@@ -184729,10 +185582,60 @@ function compactMagiActivityGroup(group) {
   }
   return next;
 }
+function compactDaemonQuotaSnapshots(quota) {
+  if (!quota || typeof quota !== "object" || Array.isArray(quota)) return void 0;
+  const out = {};
+  for (const [provider, snapshot] of Object.entries(quota)) {
+    if (!snapshot || typeof snapshot !== "object") continue;
+    const rest = {};
+    const sessionReset = snapshot.session?.resetsAt;
+    const weeklyReset = snapshot.weekly?.resetsAt;
+    if (sessionReset !== void 0 && sessionReset !== null) rest.sessionResetsAt = sessionReset;
+    if (weeklyReset !== void 0 && weeklyReset !== null) rest.weeklyResetsAt = weeklyReset;
+    if (typeof snapshot.status === "string" && snapshot.status !== "ok") rest.status = snapshot.status;
+    if (typeof snapshot.error === "string" && snapshot.error) rest.error = snapshot.error;
+    if (Array.isArray(snapshot.buckets) && snapshot.buckets.length > 0) rest.buckets = snapshot.buckets;
+    if (snapshot.metadata && typeof snapshot.metadata === "object") {
+      const { failureKind: _inString, lastGoodWindows: _inString2, ...meta3 } = snapshot.metadata;
+      if (Object.keys(meta3).length > 0) rest.metadata = meta3;
+    }
+    if (Object.keys(rest).length > 0) out[provider] = rest;
+  }
+  return Object.keys(out).length > 0 ? out : void 0;
+}
+function compactDaemonMachine(machine) {
+  if (!machine || typeof machine !== "object" || Array.isArray(machine)) return machine;
+  const { identityEvidence: _debugOnly, ...rest } = machine;
+  return rest;
+}
+function dedupeProviderCapabilityTags(node) {
+  if (!node || typeof node !== "object" || !Array.isArray(node.capabilityTags) || !Array.isArray(node.providerPriority)) return;
+  const listed = new Set(node.providerPriority.map((p) => `provider=${String(p)}`));
+  node.capabilityTags = node.capabilityTags.filter((tag) => !listed.has(String(tag)));
+}
+var BRANCH_CONVERGENCE_GIT_KEYS = ["branch", "upstream", "upstreamStatus", "ahead", "behind"];
+function dedupeCompactNodeGitFields(node) {
+  if (!node || typeof node !== "object") return;
+  const git = node.git && typeof node.git === "object" ? { ...node.git } : null;
+  const bc = node.branchConvergence && typeof node.branchConvergence === "object" ? { ...node.branchConvergence } : null;
+  if (git) {
+    if (bc) {
+      for (const key of BRANCH_CONVERGENCE_GIT_KEYS) {
+        if (bc[key] !== void 0 && bc[key] === git[key]) delete bc[key];
+      }
+    }
+    if (git.branch !== void 0 && git.branch === node.branch) delete git.branch;
+    if (git.dirty !== void 0 && git.dirty === node.isDirty) delete git.dirty;
+    node.git = git;
+  } else if (bc && bc.branch !== void 0 && bc.branch === node.branch) {
+    delete bc.branch;
+  }
+  if (bc) node.branchConvergence = bc;
+}
 
 // src/tools/mesh-queue-helpers.ts
 var STALE_ASSIGNED_QUEUE_MS = 30 * 6e4;
-var OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 6e4;
+var OLD_HISTORICAL_QUEUE_RECORD_MS2 = 7 * 24 * 60 * 6e4;
 var ACTIVE_QUEUE_STATUSES = /* @__PURE__ */ new Set(["pending", "assigned"]);
 var HISTORICAL_QUEUE_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
 function buildQueueLivenessIndex(mesh, liveVerifiedNodes) {
@@ -184809,6 +185712,46 @@ function buildQueueStatusSummary(queue) {
     }
   };
 }
+function buildQueueStatusSummaryFromCounts(statusCounts, activeRows, allowed) {
+  const pick2 = (status) => !allowed || allowed.has(status) ? statusCounts[status] ?? 0 : 0;
+  const counts = { pending: pick2("pending"), assigned: pick2("assigned"), completed: pick2("completed"), failed: pick2("failed"), cancelled: pick2("cancelled") };
+  let totalCount = 0;
+  for (const [status, n] of Object.entries(statusCounts)) {
+    if (!allowed || allowed.has(status)) totalCount += n;
+  }
+  let staleAssigned = 0;
+  if (!allowed || allowed.has("assigned")) {
+    for (const task of activeRows) {
+      if (task?.status === "assigned" && task?.staleAssigned === true) staleAssigned += 1;
+    }
+  }
+  const liveAssigned = Math.max(0, counts.assigned - staleAssigned);
+  return {
+    totalCount,
+    activeCount: counts.pending + liveAssigned,
+    historicalCount: counts.completed + counts.failed + counts.cancelled,
+    counts,
+    activeCounts: { pending: counts.pending, assigned: liveAssigned },
+    staleAssignedCount: staleAssigned,
+    rawActiveCounts: { pending: counts.pending, assigned: counts.assigned },
+    historicalCounts: { completed: counts.completed, failed: counts.failed, cancelled: counts.cancelled }
+  };
+}
+function queueViewStatusSet(view, statuses) {
+  if (statuses?.length) return new Set(statuses);
+  if (view === "active") return ACTIVE_QUEUE_STATUSES;
+  if (view === "historical") return HISTORICAL_QUEUE_STATUSES;
+  return void 0;
+}
+function buildQueueMaintenanceCountsReport(activeRows, historicalRecordCount, oldHistoricalRecordCount) {
+  const report = buildQueueMaintenanceReport(activeRows);
+  return {
+    ...report,
+    historicalRecordCount,
+    oldHistoricalRecordCount,
+    cleanupCandidateCount: (report.staleAssignedCount ?? 0) + oldHistoricalRecordCount
+  };
+}
 function normalizeQueueViewMode(value) {
   return value === "active" || value === "historical" || value === "all" ? value : "all";
 }
@@ -184857,7 +185800,7 @@ function buildQueueMaintenanceReport(queue) {
   const historicalTasks = queue.filter((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
   const oldHistoricalTasks = historicalTasks.filter((task) => {
     const updatedAt = new Date(task?.updatedAt).getTime();
-    return Number.isFinite(updatedAt) && now - updatedAt >= OLD_HISTORICAL_QUEUE_RECORD_MS;
+    return Number.isFinite(updatedAt) && now - updatedAt >= OLD_HISTORICAL_QUEUE_RECORD_MS2;
   }).map((task) => ({
     ...slimQueueTask(task),
     cleanupClass: "old_historical_record",
@@ -185273,7 +186216,7 @@ function hasDefinitivelyRemoteIdentity(ctx, node) {
 async function refreshMeshFromDaemon(ctx) {
   const settledNodeIds = /* @__PURE__ */ new Set();
   try {
-    const result = await ctx.transport.command("get_mesh", { meshId: ctx.mesh.id });
+    const result = await ctx.transport.command("get_mesh", { meshId: ctx.mesh.id, membershipOnly: true });
     if (!result?.success || !Array.isArray(result.mesh?.nodes)) return { settledNodeIds, ok: false };
     const refreshedNodes = result.mesh.nodes.filter((n) => n?.id).map((n) => n);
     const merged = [...refreshedNodes];
@@ -185336,21 +186279,22 @@ async function findOptionalNodeWithRefresh(ctx, nodeId) {
   return (await resolveNodeCoordinatorFirst(ctx, nodeId)).node;
 }
 async function readActiveWorkFromDaemon(ctx, opts) {
-  const res = await activeWorkQuery(ctx.transport, {
-    meshId: ctx.mesh.id,
-    ...opts.nodes ? { nodes: opts.nodes } : {},
+  const res = await activeWorkQueryWithRuntime(ctx, {
+    ...opts.nodes ? { nodes: slimNodesForActiveWork(opts.nodes) } : {},
     ...opts.queue ? { queue: opts.queue } : {},
     ...opts.recordTail !== void 0 ? { recordTail: opts.recordTail } : {},
     ...opts.includeTerminalDirect ? { includeTerminalDirect: true } : {},
     ...opts.compute === false ? { compute: false } : {},
     ...opts.includeInputs ? { includeInputs: true } : {},
-    ...opts.includeSummary ? { includeSummary: true } : {}
+    ...opts.includeSummary ? { includeSummary: true } : {},
+    ...opts.includeSchedulingRuntime ? { includeSchedulingRuntime: true } : {}
   });
   return {
     ...res.activeWork ? { activeWork: res.activeWork } : {},
     records: res.records ?? [],
     directDispatches: res.directDispatches ?? [],
-    ...res.summary ? { summary: res.summary } : {}
+    ...res.summary ? { summary: res.summary } : {},
+    ...res.schedulingRuntime ? { schedulingRuntime: res.schedulingRuntime } : {}
   };
 }
 async function readQueueFromDaemon(ctx, opts = {}) {
@@ -185604,14 +186548,6 @@ function latestActiveLaunchFailureFromEntries(entries, nodeId) {
     }
   }
   return null;
-}
-async function getLatestActiveLaunchFailureBatch(ctx, nodeIds) {
-  const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, tail: 200 });
-  const byNode = /* @__PURE__ */ new Map();
-  for (const nodeId of nodeIds) {
-    if (!byNode.has(nodeId)) byNode.set(nodeId, latestActiveLaunchFailureFromEntries(entries, nodeId));
-  }
-  return byNode;
 }
 function buildCoordinatorP2pRelayFailure(error48, context) {
   const payload = (0, import_daemon_core10.buildP2pRelayFailurePayload)(error48, {
@@ -186158,6 +187094,9 @@ function resolveRefineConfigNode(ctx, nodeId) {
   return node;
 }
 
+// src/tools/mesh-tools-status.ts
+var import_daemon_core12 = __toESM(require_dist3());
+
 // src/tools/mesh-status-held-git.ts
 function readRecord2(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -186370,21 +187309,11 @@ async function meshStatus(ctx, args = {}) {
   const compact = args.verbose === true ? false : args.compact ?? true;
   const probeOpts = args.refresh === true ? { refresh: true } : void 0;
   await refreshMeshFromDaemon(ctx);
-  const { mesh, transport } = ctx;
-  const [runtimeView, heldNodeState] = await Promise.all([
-    activeWorkQuery(transport, {
-      meshId: mesh.id,
-      compute: false,
-      includeSummary: true,
-      includeSchedulingRuntime: true,
-      mesh
-    }),
-    readCoordinatorHeldNodeState(ctx, { refresh: args.refresh === true })
+  const { mesh } = ctx;
+  const [heldNodeState, recoveryByNode] = await Promise.all([
+    readCoordinatorHeldNodeState(ctx, { refresh: args.refresh === true }),
+    readRecoveryContexts(ctx, mesh.nodes.map((n) => n.id)).catch(() => /* @__PURE__ */ new Map())
   ]);
-  const ledgerSummary = runtimeView.summary;
-  const schedulingRuntime = runtimeView.schedulingRuntime;
-  const schedulingByNode = new Map(schedulingRuntime.nodes.map((n) => [n.nodeId, n]));
-  const activeLaunchFailureByNode = await getLatestActiveLaunchFailureBatch(ctx, mesh.nodes.map((n) => n.id)).catch(() => /* @__PURE__ */ new Map());
   const results = await Promise.all(mesh.nodes.map(async (node) => {
     const entry = {
       nodeId: node.id,
@@ -186399,15 +187328,6 @@ async function meshStatus(ctx, args = {}) {
       ...getNodeLaunchReadiness(node),
       ...buildNodeCapabilityExposure(node)
     };
-    const nodeScheduling = schedulingByNode.get(node.id);
-    if (nodeScheduling) {
-      const { nodeId: _omit, ...rest } = nodeScheduling;
-      entry.scheduling = compact ? { load: rest.load, capReached: rest.capReached } : rest;
-    }
-    const lastQuotaRanking = (0, import_daemon_core11.getLastQuotaRanking)(node.id);
-    if (lastQuotaRanking) {
-      entry.scheduling = { ...entry.scheduling ?? {}, lastQuotaRanking };
-    }
     const heldNode = findHeldNodeStatus(heldNodeState, node);
     applyHeldNodeGitToEntry(entry, {
       mesh,
@@ -186415,48 +187335,6 @@ async function meshStatus(ctx, args = {}) {
       held: heldNode,
       heldStateError: heldNodeState.error
     });
-    const recoveryContext = await recoveryContextQuery(transport, { meshId: mesh.id, nodeId: node.id }).then((r) => r.context).catch(() => ({ consecutiveNodeFailures: 0 }));
-    if (recoveryContext.consecutiveNodeFailures > 0) {
-      entry.recoveryHints = {
-        consecutiveFailures: recoveryContext.consecutiveNodeFailures,
-        lastTaskMessage: typeof recoveryContext.lastTaskMessage === "string" ? recoveryContext.lastTaskMessage.slice(0, 100) + (recoveryContext.lastTaskMessage.length > 100 ? "\u2026" : "") : recoveryContext.lastTaskMessage,
-        advice: recoveryContext.advice,
-        retryRecommended: recoveryContext.retryRecommended
-      };
-    }
-    const activeLaunchFailure = activeLaunchFailureByNode.get(node.id) ?? null;
-    if (activeLaunchFailure && node.isLocalWorktree) {
-      entry.health = "degraded";
-      entry.degradedReason = "worktree_launch_failed";
-      entry.launchReady = false;
-      entry.launchBlockedReason = activeLaunchFailure.code || "mesh_launch_failed";
-      entry.launchBlockedMessage = activeLaunchFailure.error || "Previous worktree session launch failed";
-      entry.lastLaunchFailure = activeLaunchFailure;
-    }
-    const nextStepHints = [];
-    if (entry.degradedReason === "worktree_launch_failed") {
-      nextStepHints.push(`Retry mesh_launch_session(node_id: "${node.id}") after daemon mesh transport/P2P is healthy.`);
-      nextStepHints.push(`If retry is not desired, cleanup the orphan worktree node with mesh_remove_node(node_id: "${node.id}").`);
-    } else if (entry.health === "online" && node.isLocalWorktree) {
-      nextStepHints.push(`Merge worktree to base via mesh_refine_node(node_id: "${node.id}")`);
-    } else if (entry.health === "dirty") {
-      nextStepHints.push(`Commit changes via mesh_checkpoint(node_id: "${node.id}", message: "...")`);
-    } else if (entry.health === "degraded" && entry.error?.includes("git")) {
-      nextStepHints.push("Initialize git repository or check workspace path.");
-    }
-    if (entry.branchConvergence?.needsConvergence === true && entry.branchConvergence.nextStep) {
-      nextStepHints.push(String(entry.branchConvergence.nextStep));
-    }
-    if (recoveryContext.consecutiveNodeFailures > 0) {
-      if (recoveryContext.retryRecommended) {
-        nextStepHints.push(`Retry task on this node or launch a fresh session.`);
-      } else {
-        nextStepHints.push(`Consider reassigning work to a different node.`);
-      }
-    }
-    if (nextStepHints.length > 0) {
-      entry.nextStepHints = nextStepHints;
-    }
     const relatedRepos = await collectRelatedRepoStatuses(ctx, node, { localOnly: true });
     if (relatedRepos.length) entry.relatedRepos = relatedRepos;
     let statusProbe;
@@ -186517,12 +187395,32 @@ async function meshStatus(ctx, args = {}) {
     }
     return entry;
   }));
-  const activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: results, recordTail: 200, includeInputs: true });
+  const activeWorkView = await readActiveWorkFromDaemon(ctx, {
+    nodes: results,
+    recordTail: 200,
+    includeInputs: true,
+    includeSummary: true,
+    includeSchedulingRuntime: true
+  });
+  const ledgerSummary = activeWorkView.summary;
+  const schedulingRuntime = activeWorkView.schedulingRuntime ?? { nodes: [] };
+  const schedulingByNode = new Map((schedulingRuntime.nodes ?? []).map((n) => [n.nodeId, n]));
+  const recordTail = activeWorkView.records;
+  for (const entry of results) {
+    const node = mesh.nodes.find((n) => n.id === entry.nodeId);
+    if (!node) continue;
+    applyNodeSchedulingAndHints(entry, node, {
+      compact,
+      nodeScheduling: schedulingByNode.get(node.id),
+      recoveryContext: recoveryByNode.get(node.id) ?? { consecutiveNodeFailures: 0 },
+      activeLaunchFailure: latestActiveLaunchFailureFromEntries(recordTail, node.id)
+    });
+  }
   scheduleBackgroundDirectReconcile(ctx, results, activeWorkView.directDispatches, activeWorkView.records);
   const activeWorkEvidence = activeWorkView.activeWork;
   const ledgerEntries = activeWorkView.records;
   const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
-  const graphUsage = pickDaemonGraphUsage(activeWorkEvidence.summary, runtimeView.summary, runtimeView, ctx.mesh);
+  const graphUsage = pickDaemonGraphUsage(activeWorkEvidence.summary, activeWorkView.summary, activeWorkView, ctx.mesh);
   const activeWorkSummaryForResponse = withoutGraphUsage(activeWorkEvidence.summary);
   const staleDirectWorkSummary = (0, import_daemon_core11.buildCompactStaleDirectWorkSummary)(activeWorkEvidence.staleDirectWork, {
     note: activeWorkEvidence.staleDirectWorkNote,
@@ -186568,8 +187466,11 @@ async function meshStatus(ctx, args = {}) {
   for (const entry of results) {
     const daemonId = typeof entry?.daemonId === "string" && entry.daemonId ? entry.daemonId : "";
     if (!daemonId) continue;
-    if (entry?.machine && !(daemonId in daemonMachines)) daemonMachines[daemonId] = entry.machine;
-    if (entry?.quota && !(daemonId in daemonQuotas)) daemonQuotas[daemonId] = annotateQuotaSnapshotFreshness(entry.quota);
+    if (entry?.machine && !(daemonId in daemonMachines)) daemonMachines[daemonId] = compact ? compactDaemonMachine(entry.machine) : entry.machine;
+    if (entry?.quota && !(daemonId in daemonQuotas)) {
+      const grouped = compact ? compactDaemonQuotaSnapshots(entry.quota) : annotateQuotaSnapshotFreshness(entry.quota);
+      if (grouped) daemonQuotas[daemonId] = grouped;
+    }
   }
   const daemonUpgradeFailures = {};
   for (const entry of results) {
@@ -186685,10 +187586,17 @@ async function meshStatus(ctx, args = {}) {
     const out = compacted.map((n) => {
       if (!n || typeof n !== "object") return n;
       const id2 = String(n.nodeId);
-      if (detailedIds.has(id2)) return n;
+      if (detailedIds.has(id2)) {
+        dedupeCompactNodeGitFields(n);
+        dedupeProviderCapabilityTags(n);
+        return n;
+      }
       if (keptIds.has(id2)) {
         stubbedNodeCount += 1;
-        return minimalCompactNode(n);
+        const stub = minimalCompactNode(n);
+        dedupeCompactNodeGitFields(stub);
+        dedupeProviderCapabilityTags(stub);
+        return stub;
       }
       fullyFolded.push(n);
       return null;
@@ -186720,11 +187628,15 @@ async function meshStatus(ctx, args = {}) {
     return out;
   })() : results;
   const { maxParallelTasks: _omitPolicyMaxParallelTasks, ...policyForResponse } = mesh.policy || {};
+  const policyOverrides = {};
+  for (const [key, value] of Object.entries(policyForResponse)) {
+    if (JSON.stringify(value) !== JSON.stringify(import_daemon_core12.DEFAULT_MESH_POLICY[key])) policyOverrides[key] = value;
+  }
   const response = {
     meshId: mesh.id,
     meshName: mesh.name,
     repoIdentity: mesh.repoIdentity,
-    policy: policyForResponse,
+    policy: compact ? policyOverrides : policyForResponse,
     // Mesh-level scheduling rollup (strategy only — the global cap numbers are
     // deliberately not surfaced here, see the comment above). Per-node detail
     // (load/priority/provider caps/claim-block reasons) lives on each
@@ -186734,7 +187646,8 @@ async function meshStatus(ctx, args = {}) {
     },
     payloadMode: compact ? "compact" : "full",
     refreshedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    sourceOfTruth: {
+    // Static provenance prose: verbose only.
+    ...compact ? {} : { sourceOfTruth: {
       membership: "coordinator_daemon_live_mesh",
       // Git truth is the coordinator daemon's held node state (member pushes +
       // background refresh; per-node gitObservation says how old). Sessions are
@@ -186742,7 +187655,7 @@ async function meshStatus(ctx, args = {}) {
       currentStatus: "coordinator_held_git_and_live_session_probes",
       activeWork: "mesh_queue_file_and_local_ledger",
       historicalEvidenceOnly: ["recoveryHints", "ledgerSummary"]
-    },
+    } },
     ...buildNodeGitStateSummary(results, heldNodeState.error, args.refresh === true),
     nodes: nodesForResponse,
     ...compact && stubbedNodeCount > 0 ? {
@@ -186773,7 +187686,7 @@ async function meshStatus(ctx, args = {}) {
     } : {},
     activeWork: activeWorkForResponse.records,
     ...compact && activeWorkForResponse.omitted > 0 ? { activeWorkRowsOmitted: activeWorkForResponse.omitted } : {},
-    ...compact ? { activeWorkHint: `Compact activeWork rows carry a short taskTitle + dispatch scalars only; full task prompt/summary text is omitted \u2014 use mesh_task_history or mesh_status verbose=true. First ${COMPACT_MAX_ACTIVE_WORK_ROWS} rows serialized.` } : {},
+    ...compact && activeWorkForResponse.omitted > 0 ? { activeWorkHint: `Compact activeWork rows carry a short taskTitle + dispatch scalars only; full task prompt/summary text is omitted \u2014 use mesh_task_history or mesh_status verbose=true. First ${COMPACT_MAX_ACTIVE_WORK_ROWS} rows serialized.` } : {},
     staleDirectWorkSummary,
     ...args.includeStaleDirectWorkDetails === true ? { staleDirectWork: activeWorkEvidence.staleDirectWork } : {},
     // terminalDirectWork is historical (completed/failed direct dispatches) — opt-in only.
@@ -186804,7 +187717,7 @@ async function meshStatus(ctx, args = {}) {
   }
   try {
     if (compact) {
-      const { live, historyFold } = (0, import_daemon_core11.getMeshStatusMissionsCompact)(mesh.id);
+      const { live, historyFold } = await readStatusMissionsCompact(ctx);
       const ranked = [...live].sort((a, b) => String(b.tasks?.lastActivityAt ?? "").localeCompare(String(a.tasks?.lastActivityAt ?? "")));
       const kept = [];
       const overflow = [];
@@ -186831,17 +187744,8 @@ async function meshStatus(ctx, args = {}) {
       }
       if (historyFold) response.missionsHistory = historyFold;
     } else {
-      const missions = (0, import_daemon_core11.getMeshStatusMissionSummaries)(mesh.id, { verbose: true });
-      if (missions.length > 0) {
-        response.missions = await Promise.all(missions.map(async (mission) => {
-          try {
-            const { mission: rollup } = await taskStatsQuery(ctx.transport, { meshId: mesh.id, missionId: mission.id, rollup: true });
-            return { ...mission, ...rollup ? { stats: rollup } : {} };
-          } catch {
-            return mission;
-          }
-        }));
-      }
+      const missions = await readStatusMissionsVerbose(ctx);
+      if (missions.length > 0) response.missions = missions;
     }
   } catch {
   }
@@ -186893,6 +187797,54 @@ async function meshStatus(ctx, args = {}) {
   }
   return JSON.stringify(response);
 }
+function applyNodeSchedulingAndHints(entry, node, opts) {
+  if (opts.nodeScheduling) {
+    const { nodeId: _omit, lastQuotaRanking, ...rest } = opts.nodeScheduling;
+    entry.scheduling = opts.compact ? { load: rest.load, capReached: rest.capReached, ...lastQuotaRanking ? { lastQuotaRanking } : {} } : { ...rest, ...lastQuotaRanking ? { lastQuotaRanking } : {} };
+  }
+  const recoveryContext = opts.recoveryContext;
+  if (recoveryContext.consecutiveNodeFailures > 0) {
+    entry.recoveryHints = {
+      consecutiveFailures: recoveryContext.consecutiveNodeFailures,
+      lastTaskMessage: typeof recoveryContext.lastTaskMessage === "string" ? recoveryContext.lastTaskMessage.slice(0, 100) + (recoveryContext.lastTaskMessage.length > 100 ? "\u2026" : "") : recoveryContext.lastTaskMessage,
+      advice: recoveryContext.advice,
+      retryRecommended: recoveryContext.retryRecommended
+    };
+  }
+  const activeLaunchFailure = opts.activeLaunchFailure;
+  if (activeLaunchFailure && node.isLocalWorktree) {
+    entry.health = "degraded";
+    entry.degradedReason = "worktree_launch_failed";
+    entry.launchReady = false;
+    entry.launchBlockedReason = activeLaunchFailure.code || "mesh_launch_failed";
+    entry.launchBlockedMessage = activeLaunchFailure.error || "Previous worktree session launch failed";
+    entry.lastLaunchFailure = activeLaunchFailure;
+  }
+  const nextStepHints = [];
+  if (entry.degradedReason === "worktree_launch_failed") {
+    nextStepHints.push(`Retry mesh_launch_session(node_id: "${node.id}") after daemon mesh transport/P2P is healthy.`);
+    nextStepHints.push(`If retry is not desired, cleanup the orphan worktree node with mesh_remove_node(node_id: "${node.id}").`);
+  } else if (entry.health === "online" && node.isLocalWorktree) {
+    nextStepHints.push(`Merge worktree to base via mesh_refine_node(node_id: "${node.id}")`);
+  } else if (entry.health === "dirty") {
+    nextStepHints.push(`Commit changes via mesh_checkpoint(node_id: "${node.id}", message: "...")`);
+  } else if (entry.health === "degraded" && entry.error?.includes("git")) {
+    nextStepHints.push("Initialize git repository or check workspace path.");
+  }
+  if (entry.branchConvergence?.needsConvergence === true && entry.branchConvergence.nextStep) {
+    nextStepHints.push(String(entry.branchConvergence.nextStep));
+  }
+  if (recoveryContext.consecutiveNodeFailures > 0) {
+    if (recoveryContext.retryRecommended) {
+      nextStepHints.push(`Retry task on this node or launch a fresh session.`);
+    } else {
+      nextStepHints.push(`Consider reassigning work to a different node.`);
+    }
+  }
+  if (nextStepHints.length > 0) {
+    entry.nextStepHints = nextStepHints;
+  }
+}
 async function meshListNodes(ctx) {
   await refreshMeshFromDaemon(ctx);
   const { mesh } = ctx;
@@ -186930,7 +187882,7 @@ function slimSessionLaunchFields(session) {
 }
 
 // src/tools/mesh-tools-route-preview.ts
-var import_daemon_core12 = __toESM(require_dist3());
+var import_daemon_core13 = __toESM(require_dist3());
 var ROUTABLE_DIFFICULTIES = /* @__PURE__ */ new Set(["easy", "medium", "difficult", "freeform"]);
 async function meshRoutePreview(ctx, args) {
   const difficulty = typeof args?.difficulty === "string" ? args.difficulty.trim() : "";
@@ -186943,7 +187895,7 @@ async function meshRoutePreview(ctx, args) {
   }
   const requiredTags = Array.isArray(args.required_tags) ? args.required_tags : Array.isArray(args.requiredTags) ? args.requiredTags : [];
   const targetNodeId = typeof args.target_node_id === "string" ? args.target_node_id : args.targetNodeId;
-  return JSON.stringify((0, import_daemon_core12.buildMeshRoutePreview)({
+  return JSON.stringify((0, import_daemon_core13.buildMeshRoutePreview)({
     mesh: ctx.mesh,
     difficulty,
     requiredTags,
@@ -186953,7 +187905,7 @@ async function meshRoutePreview(ctx, args) {
 }
 
 // src/tools/mesh-tools-queue.ts
-var import_daemon_core13 = __toESM(require_dist3());
+var import_daemon_core14 = __toESM(require_dist3());
 
 // src/tools/mesh-tools-graph.ts
 function readGraphTaskFields(entry) {
@@ -187594,6 +188546,121 @@ var MESH_ACCEPTED_ARG_ALIASES = {
       desiredPath: "desired_path",
       cleanupOnGraphFailure: "cleanup_on_graph_failure"
     }
+  },
+  // ── Tools/list schema diet (2026-09-27) ────────────────────────────────
+  // Every table below follows the same D2 pattern as the enqueue family above:
+  // the handler already reads BOTH spellings (`args.x ?? args.xCamel`), so the
+  // camelCase/alternate spelling is accepted here and no longer published as a
+  // second schema property. This cuts ~47 duplicate property declarations from
+  // the advertised tools/list without changing what any caller can send.
+  mesh_route_preview: {
+    [TOP_LEVEL_SCOPE]: {
+      requiredTags: "required_tags",
+      targetNodeId: "target_node_id"
+    }
+  },
+  mesh_graph_gate: {
+    [TOP_LEVEL_SCOPE]: {
+      gateId: "gate_id",
+      leaseSeconds: "lease_seconds",
+      extendDeadlineSeconds: "extend_deadline_seconds",
+      fencingToken: "fencing_token",
+      leaseGeneration: "lease_generation",
+      idempotencyKey: "idempotency_key",
+      coordinatorSessionId: "coordinator_session_id"
+    },
+    patches: {
+      nodeId: "node_id",
+      baseSpecPatch: "base_spec_patch"
+    }
+  },
+  mesh_graph_node_patch: {
+    [TOP_LEVEL_SCOPE]: {
+      nodeId: "node_id",
+      graphId: "graph_id",
+      baseSpecPatch: "base_spec_patch"
+    }
+  },
+  mesh_graph_view: {
+    [TOP_LEVEL_SCOPE]: {
+      graphId: "graph_id",
+      batchId: "batch_id",
+      includeTerminal: "include_terminal",
+      probeGateEvidence: "probe_gate_evidence"
+    }
+  },
+  mesh_queue_cancel: {
+    [TOP_LEVEL_SCOPE]: {
+      taskId: "task_id"
+    }
+  },
+  mesh_queue_requeue: {
+    [TOP_LEVEL_SCOPE]: {
+      taskId: "task_id",
+      targetNodeId: "target_node_id",
+      targetSessionId: "target_session_id",
+      clearTargetNode: "clear_target_node",
+      keepTargetSession: "keep_target_session"
+    }
+  },
+  mesh_send_task: {
+    [TOP_LEVEL_SCOPE]: {
+      taskMode: "task_mode",
+      read_only: "readonly",
+      ownedPaths: "owned_paths",
+      missionId: "mission_id",
+      deliveryMode: "delivery_mode",
+      orchestrationDecision: "orchestration_decision",
+      allowStaleNode: "allow_stale_node",
+      allowQuotaExhausted: "allow_quota_exhausted"
+    }
+  },
+  mesh_mission_upsert: {
+    [TOP_LEVEL_SCOPE]: {
+      missionId: "mission_id",
+      missionIds: "mission_ids"
+    },
+    brief: {
+      done_criteria: "doneCriteria",
+      handoff_notes: "handoffNotes",
+      owned_paths: "ownedPaths"
+    }
+  },
+  mesh_mission_list: {
+    [TOP_LEVEL_SCOPE]: {
+      includeStats: "include_stats",
+      includeMagi: "include_magi"
+    }
+  },
+  mesh_note: {
+    [TOP_LEVEL_SCOPE]: {
+      expires_at: "expiresAt",
+      noteId: "note_id"
+    }
+  },
+  mesh_magi_review: {
+    [TOP_LEVEL_SCOPE]: {
+      taskKind: "task_kind",
+      requireIndependentEvidence: "require_independent_evidence",
+      includeStale: "include_stale",
+      waitTimeoutMs: "wait_timeout_ms",
+      autoCleanup: "auto_cleanup"
+    }
+  },
+  mesh_magi_collect: {
+    [TOP_LEVEL_SCOPE]: {
+      consensusGroupId: "consensus_group_id",
+      taskKind: "task_kind",
+      requireIndependentEvidence: "require_independent_evidence",
+      waitTimeoutMs: "wait_timeout_ms",
+      autoCleanup: "auto_cleanup"
+    }
+  },
+  mesh_node_slots: {
+    [TOP_LEVEL_SCOPE]: {
+      nodeId: "node_id",
+      includeMagi: "include_magi"
+    }
   }
 };
 var RETIRED_CONDITIONAL_KEYS = ["run_if", "runIf", "on_false", "onFalse", "on_upstream_skip", "onUpstreamSkip"];
@@ -187668,18 +188735,18 @@ function retiredMeshToolArgsError(name, args) {
   }
   return null;
 }
-var GATE_ID = ["gate_id", "gateId"];
-var GATE_OWNER = ["coordinator_session_id", "coordinatorSessionId"];
-var NODE_ID = ["node_id", "nodeId"];
+var GATE_ID = ["gate_id"];
+var GATE_OWNER = ["coordinator_session_id"];
+var NODE_ID = ["node_id"];
 var SESSION_CLEANUP_ARGS = { args: ["node_id", "session_ids", "dry_run"], required: ["node_id"] };
 var READ_ONLY_CONFIG_ARGS = { args: ["mode", "node_id", "config"], required: ["mode"] };
 var MESH_TOOL_ACTIONS = {
   mesh_graph_gate: {
     key: "action",
     actions: {
-      claim: { args: [...GATE_ID, "lease_seconds", "leaseSeconds", "extend_deadline_seconds", "extendDeadlineSeconds", ...GATE_OWNER], required: ["gate_id"] },
+      claim: { args: [...GATE_ID, "lease_seconds", "extend_deadline_seconds", ...GATE_OWNER], required: ["gate_id"] },
       release: {
-        args: [...GATE_ID, "fencing_token", "fencingToken", "lease_generation", "leaseGeneration", "idempotency_key", "idempotencyKey", "outcome", "result", "evidence", "patches"],
+        args: [...GATE_ID, "fencing_token", "lease_generation", "idempotency_key", "outcome", "result", "evidence", "patches"],
         required: ["gate_id", "fencing_token", "lease_generation", "idempotency_key", "outcome"]
       },
       abandon: { args: [...GATE_ID, "reason", "force", ...GATE_OWNER], required: ["gate_id", "reason"] },
@@ -187690,7 +188757,7 @@ var MESH_TOOL_ACTIONS = {
     key: "action",
     actions: {
       list: { args: [...NODE_ID], required: ["node_id"] },
-      propose: { args: [...NODE_ID, "include_magi", "includeMagi"], required: ["node_id"] },
+      propose: { args: [...NODE_ID, "include_magi"], required: ["node_id"] },
       set: { args: [...NODE_ID, "slots", "reason", "write"], required: ["node_id", "slots"] }
     }
   },
@@ -187711,8 +188778,8 @@ var MESH_TOOL_ACTIONS = {
   mesh_note: {
     key: "action",
     actions: {
-      record: { args: ["text", "category", "pinned", "ttl_days", "expiresAt", "expires_at", "supersedes", "subject_key"], required: ["text"] },
-      forget: { args: ["note_id", "noteId", "text", "reason"] }
+      record: { args: ["text", "category", "pinned", "ttl_days", "expiresAt", "supersedes", "subject_key"], required: ["text"] },
+      forget: { args: ["note_id", "text", "reason"] }
     }
   },
   mesh_config: {
@@ -187820,7 +188887,7 @@ function validateMeshToolArgs(name, rawArgs) {
 }
 
 // src/tools/mesh-tools-queue.ts
-var import_daemon_core14 = __toESM(require_dist3());
+var import_daemon_core15 = __toESM(require_dist3());
 function normalizeDedupMessage(message) {
   return (message || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
@@ -188086,11 +189153,11 @@ async function meshEnqueueBatch(ctx, args) {
       error: "mesh_enqueue_batch requires a non-empty `tasks` array."
     });
   }
-  if (rawTasks.length > import_daemon_core14.MESH_TASK_GRAPH_MAX_TASKS) {
+  if (rawTasks.length > import_daemon_core15.MESH_TASK_GRAPH_MAX_TASKS) {
     return JSON.stringify({
       success: false,
       code: "task_graph_too_large",
-      error: `mesh_enqueue_batch accepts at most ${import_daemon_core14.MESH_TASK_GRAPH_MAX_TASKS} tasks per call (got ${rawTasks.length}). Split the graph, or reconsider whether one batch really needs this many tasks.`
+      error: `mesh_enqueue_batch accepts at most ${import_daemon_core15.MESH_TASK_GRAPH_MAX_TASKS} tasks per call (got ${rawTasks.length}). Split the graph, or reconsider whether one batch really needs this many tasks.`
     });
   }
   const batchMissionId = readString(args.missionId) || readString(args.mission_id) || void 0;
@@ -188312,9 +189379,11 @@ async function meshViewQueue(ctx, args) {
     await refreshMeshFromDaemon(ctx);
     const statusFilter = sanitizeQueueStatusFilter(args.status);
     const view = normalizeQueueViewMode(args.view);
-    const rawQueue = await readQueueFromDaemon(ctx);
-    const statusById = new Map(rawQueue.map((task) => [task.id, task.status]));
-    const depMetaById = new Map(rawQueue.map((task) => [task.id, task]));
+    const activeView = compact ? await readQueueActiveView(ctx) : null;
+    const rawQueue = activeView ? activeView.activeRows : await readQueueFromDaemon(ctx);
+    const dependencyRows = activeView ? [...rawQueue, ...activeView.dependencyHeads] : rawQueue;
+    const statusById = new Map(dependencyRows.map((task) => [task.id, task.status]));
+    const depMetaById = new Map(dependencyRows.map((task) => [task.id, task]));
     const withDependencies = rawQueue.map((task) => {
       if (!Array.isArray(task.dependsOn) || task.dependsOn.length === 0) return task;
       const depState = (0, import_daemon_core11.describeTaskDependencyState)(task, statusById, depMetaById);
@@ -188323,10 +189392,16 @@ async function meshViewQueue(ctx, args) {
     const liveNodes = await collectMeshViewQueueNodesHeldOrLive(ctx, probeOpts);
     const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(withDependencies, ctx.mesh, liveNodes));
     const queue = filterQueueForView(fullQueue, view, statusFilter);
-    const summary = buildQueueStatusSummary(fullQueue);
-    const visibleSummary = buildQueueStatusSummary(queue);
-    const maintenance = buildQueueMaintenanceReport(fullQueue);
-    const activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: liveNodes, queue: fullQueue, recordTail: 200, includeInputs: true });
+    const viewStatuses = queueViewStatusSet(view, statusFilter);
+    const summary = activeView ? buildQueueStatusSummaryFromCounts(activeView.counts, fullQueue) : buildQueueStatusSummary(fullQueue);
+    const visibleSummary = activeView ? buildQueueStatusSummaryFromCounts(activeView.counts, fullQueue, viewStatuses) : buildQueueStatusSummary(queue);
+    const maintenance = activeView ? buildQueueMaintenanceCountsReport(
+      fullQueue,
+      summary.historicalCount ?? 0,
+      activeView.oldHistoricalCount
+    ) : buildQueueMaintenanceReport(fullQueue);
+    const filtered = Boolean(statusFilter?.length) || view !== "all";
+    const activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: liveNodes, recordTail: 200, includeInputs: true });
     scheduleBackgroundDirectReconcile(ctx, liveNodes, activeWorkView.directDispatches, activeWorkView.records);
     const ledgerEntries = activeWorkView.records;
     const activeWorkEvidence = activeWorkView.activeWork;
@@ -188352,7 +189427,7 @@ async function meshViewQueue(ctx, args) {
     const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
     const activeOnlyQueue = queue.filter((task) => !HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
     const compactQueueResult = compact ? compactQueueRows(activeOnlyQueue) : { rows: activeOnlyQueue, omitted: 0 };
-    const visibleQueue = (compact ? compactQueueResult.rows : queue).map((task) => (0, import_daemon_core13.summarizeQueueEntryInputForView)(task));
+    const visibleQueue = (compact ? compactQueueResult.rows : queue).map((task) => (0, import_daemon_core14.summarizeQueueEntryInputForView)(task));
     const wantActiveQueueArray = view === "active" || statusFilter?.some((status) => ACTIVE_QUEUE_STATUSES.has(status));
     const wantHistoricalQueueArray = !compact && (view === "historical" || requestedHistoricalRows);
     const activeWorkResult = compact ? compactActiveWorkRecords(activeWorkEvidence.activeWork) : { records: activeWorkEvidence.activeWork, omitted: 0 };
@@ -188373,7 +189448,7 @@ async function meshViewQueue(ctx, args) {
       filter: {
         view,
         statuses: statusFilter,
-        filtered: Boolean(statusFilter?.length) || view !== "all"
+        filtered
       },
       queue: visibleQueue,
       ...compact ? { historicalRowsOmitted: true, historicalRowsHint: "Completed/failed/cancelled rows are omitted in compact mode; see historicalCounts. Call mesh_view_queue with verbose=true (or view=historical, compact=false) for full rows." } : {},
@@ -188392,15 +189467,19 @@ async function meshViewQueue(ctx, args) {
       ...pollingGuidance ? { pollingGuidance } : {},
       ...rateResult.rateLimitExceeded ? { pollingRateAdvisory: { type: "rate_limit_exceeded", tool: "mesh_view_queue", callsInWindow: rateResult.callsInWindow, message: rateResult.advisory } } : {},
       summary,
-      visibleSummary,
+      ...!compact || filtered ? { visibleSummary } : {},
       activeCounts: summary.activeCounts,
       historicalCounts: summary.historicalCounts,
-      visibleActiveCounts: visibleSummary.activeCounts,
-      visibleHistoricalCounts: visibleSummary.historicalCounts,
+      ...!compact || filtered ? {
+        visibleActiveCounts: visibleSummary.activeCounts,
+        visibleHistoricalCounts: visibleSummary.historicalCounts
+      } : {},
       activeCount: summary.activeCount,
       historicalCount: summary.historicalCount,
-      visibleActiveCount: visibleSummary.activeCount,
-      visibleHistoricalCount: visibleSummary.historicalCount,
+      ...!compact || filtered ? {
+        visibleActiveCount: visibleSummary.activeCount,
+        visibleHistoricalCount: visibleSummary.historicalCount
+      } : {},
       ...parkedTasks.length > 0 ? {
         parkedTasks,
         parkedTaskCount: parkedTasks.length,
@@ -188409,7 +189488,8 @@ async function meshViewQueue(ctx, args) {
       staleAssignedTasks: compact ? staleAssignedTasks.slice(0, 10).map(compactQueueRow) : staleAssignedTasks,
       staleAssignedCount: maintenance.staleAssignedCount,
       queueMaintenance: maintenanceForResponse,
-      cleanupDryRun: maintenanceForResponse,
+      // Alias of queueMaintenance — verbose only (compact keeps one copy).
+      ...compact ? {} : { cleanupDryRun: maintenanceForResponse },
       ...recentDispatchFailures.length > 0 ? {
         recentDispatchFailures,
         dispatchFailureCount: recentDispatchFailures.length,
@@ -188425,8 +189505,8 @@ async function meshViewQueue(ctx, args) {
       ...wantHistoricalQueueArray ? {
         historicalQueue: queue.filter((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")))
       } : {},
-      // Back-compat alias for callers already reading the first hardening payload.
-      staleAssignments: compact ? staleAssignedTasks.slice(0, 10).map(compactQueueRow) : staleAssignedTasks
+      // Back-compat alias of staleAssignedTasks — verbose only (compact keeps one copy).
+      ...compact ? {} : { staleAssignments: staleAssignedTasks }
     }, null, 2);
   } catch (e) {
     return JSON.stringify({ success: false, error: e.message });
@@ -189099,7 +190179,7 @@ async function meshReviewInbox(ctx, args = {}) {
 }
 
 // src/tools/mesh-tools-magi.ts
-var import_daemon_core15 = __toESM(require_dist3());
+var import_daemon_core16 = __toESM(require_dist3());
 
 // src/tools/mesh-tools-magi-core.ts
 var MAGI_CLUSTER_JACCARD = 0.4;
@@ -190324,7 +191404,7 @@ function computeMagiCleanupTargets(replicaTasks) {
 function resolveMagiAutoCleanupMode(ctx, perCallOverride) {
   if (perCallOverride === true) return "stop_and_delete";
   if (perCallOverride === false) return "preserve";
-  return (0, import_daemon_core15.resolveMagiSessionCleanupMode)(ctx.mesh?.policy?.magiSessionCleanup);
+  return (0, import_daemon_core16.resolveMagiSessionCleanupMode)(ctx.mesh?.policy?.magiSessionCleanup);
 }
 async function cleanupMagiAutoLaunchedSessions(ctx, args) {
   if (args.mode === "preserve") return null;
@@ -190945,7 +192025,7 @@ async function meshNodeSlotsPropose(ctx, args = {}) {
 }
 
 // src/tools/mesh-transcript-replica-read.ts
-var import_daemon_core16 = __toESM(require_dist3());
+var import_daemon_core17 = __toESM(require_dist3());
 function unwrap2(result) {
   return unwrapOneLevel(result);
 }
@@ -190991,7 +192071,7 @@ async function readTranscriptReplicaForDisplay(transport, key) {
   }
   const snapshot = read.snapshot;
   return {
-    payload: (0, import_daemon_core16.mapTranscriptSnapshotToReadChatPayload)(snapshot, {
+    payload: (0, import_daemon_core17.mapTranscriptSnapshotToReadChatPayload)(snapshot, {
       omittedBefore: snapshot.coverage.omittedBefore,
       stale: read.stale === true
     }),
@@ -191000,9 +192080,9 @@ async function readTranscriptReplicaForDisplay(transport, key) {
 }
 
 // src/tools/mesh-tools-session.ts
-var import_daemon_core17 = __toESM(require_dist3());
 var import_daemon_core18 = __toESM(require_dist3());
 var import_daemon_core19 = __toESM(require_dist3());
+var import_daemon_core20 = __toESM(require_dist3());
 function computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, sessionId) {
   if (!sessionWasIdle || dispatchPreRecorded) return {};
   return {
@@ -191388,10 +192468,10 @@ async function meshSendTask(ctx, args) {
   }
   const allowStaleNode = args.allow_stale_node === true || args.allowStaleNode === true;
   const allowQuotaExhausted = args.allow_quota_exhausted === true || args.allowQuotaExhausted === true;
-  if (!allowStaleNode && !(0, import_daemon_core19.isTaskReadonly)({ readonly: readonly2, taskMode })) {
-    const dirty = (0, import_daemon_core19.isDirtyNode)(node);
-    const maxBehind = (0, import_daemon_core19.resolveAutoFastForwardPolicy)(ctx.mesh).maxBehind;
-    const staleBehind = !(0, import_daemon_core19.isMeshNodeFreshEnoughToLaunch)(node, { maxBehind });
+  if (!allowStaleNode && !(0, import_daemon_core20.isTaskReadonly)({ readonly: readonly2, taskMode })) {
+    const dirty = (0, import_daemon_core20.isDirtyNode)(node);
+    const maxBehind = (0, import_daemon_core20.resolveAutoFastForwardPolicy)(ctx.mesh).maxBehind;
+    const staleBehind = !(0, import_daemon_core20.isMeshNodeFreshEnoughToLaunch)(node, { maxBehind });
     if (dirty || staleBehind) {
       const behind = typeof node?.git?.behind === "number" ? node.git.behind : void 0;
       return JSON.stringify({
@@ -191485,7 +192565,7 @@ async function meshSendTask(ctx, args) {
       }
       const taskId = (0, import_node_crypto.randomUUID)();
       const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
-      const dispatchBody = (0, import_daemon_core18.resolveDispatchMessage)(
+      const dispatchBody = (0, import_daemon_core19.resolveDispatchMessage)(
         {
           id: taskId,
           message,
@@ -191756,7 +192836,7 @@ async function meshSendTask(ctx, args) {
         });
       } catch {
       }
-      const localDispatchBody = (0, import_daemon_core18.resolveDispatchMessage)(
+      const localDispatchBody = (0, import_daemon_core19.resolveDispatchMessage)(
         {
           id: taskId,
           message,
@@ -192193,7 +193273,7 @@ async function meshLaunchSession(ctx, args) {
           supportedProviders: slotProviders
         }, null, 2);
       }
-      const explicitBlock = (0, import_daemon_core17.evaluateProviderQuotaGate)(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null);
+      const explicitBlock = (0, import_daemon_core18.evaluateProviderQuotaGate)(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null);
       if (explicitBlock) {
         explicitTypeQuotaWarning = {
           quotaWarning: `Provider '${requestedType}' on node '${args.node_id}' is quota-gated (${explicitBlock.reason}; ${explicitBlock.window} window at ${explicitBlock.remainingPercent}% remaining, threshold ${explicitBlock.thresholdPercent}%). Launching anyway because the type was requested explicitly \u2014 the session may fail immediately if the provider rejects on quota.`,
@@ -192231,7 +193311,7 @@ async function meshLaunchSession(ctx, args) {
         failed.push(`${providerType}: ${detectedPayload?.error || "not detected"}`);
       }
       if (detectedCandidates.length) {
-        const ranked = (0, import_daemon_core17.rankProvidersByQuotaGate)(node, detectedCandidates, ctx.mesh.policy?.quotaRouting ?? null);
+        const ranked = (0, import_daemon_core18.rankProvidersByQuotaGate)(node, detectedCandidates, ctx.mesh.policy?.quotaRouting ?? null);
         if (ranked.clear.length) {
           resolvedProviderType = ranked.clear[0];
         } else {
@@ -193478,8 +194558,8 @@ var import_node_os2 = __toESM(require("os"));
 var import_types = require("@modelcontextprotocol/sdk/types.js");
 
 // src/transports/local.ts
-var import_daemon_core20 = __toESM(require_dist3());
-var DEFAULT_PORT = import_daemon_core20.DEFAULT_STANDALONE_PORT;
+var import_daemon_core21 = __toESM(require_dist3());
+var DEFAULT_PORT = import_daemon_core21.DEFAULT_STANDALONE_PORT;
 var STATUS_TIMEOUT_MS = 1e4;
 function describeFetchFailure(what, timeoutMs, error48) {
   const name = error48?.name;
@@ -194638,24 +195718,27 @@ function resolveMeshToolHandler(name) {
 }
 
 // src/tools/mesh-pending-events-attach.ts
-function parseJsonObject(text) {
+function parseJson(text) {
   const trimmed = text.trimStart();
-  if (!trimmed.startsWith("{")) return null;
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return void 0;
   try {
-    const parsed = JSON.parse(text);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    return JSON.parse(text);
   } catch {
-    return null;
+    return void 0;
   }
 }
+function isJsonObject(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
 async function attachPendingCoordinatorEventsToResponse(ctx, text, drainCountBefore) {
-  if ((ctx.noticeDrainCount ?? 0) !== drainCountBefore) return text;
-  const parsed = parseJsonObject(text);
-  if (!parsed || Object.prototype.hasOwnProperty.call(parsed, "pendingCoordinatorEvents")) return text;
+  const parsed = parseJson(text);
+  if (parsed === void 0) return text;
+  if ((ctx.noticeDrainCount ?? 0) !== drainCountBefore || !isJsonObject(parsed) || Object.prototype.hasOwnProperty.call(parsed, "pendingCoordinatorEvents")) {
+    return JSON.stringify(parsed);
+  }
   const events = await drainCoordinatorPendingEvents(ctx);
-  if (events.length === 0) return text;
-  const pretty = /\n/.test(text);
-  return JSON.stringify({ ...parsed, pendingCoordinatorEvents: events }, null, pretty ? 2 : void 0);
+  if (events.length === 0) return JSON.stringify(parsed);
+  return JSON.stringify({ ...parsed, pendingCoordinatorEvents: events });
 }
 async function runMeshToolWithPendingEvents(ctx, run) {
   const before = ctx.noticeDrainCount ?? 0;

@@ -22,11 +22,13 @@ test('standalone vite resolves @adhdev/web-core to the local worktree source tre
             '/^@adhdev\\/web-core$/',
             '/^@adhdev\\/web-core\\/index\\.css$/',
             '/^@adhdev\\/web-core\\/constants\\/supported$/',
+            '/^crypto$/',
         ],
     )
 
     assert.equal(entries[0]?.replacement, path.join(webCoreRoot, 'src/index.ts'))
     assert.equal(entries[1]?.replacement, path.join(webCoreRoot, 'src/index.css'))
     assert.equal(entries[2]?.replacement, path.join(webCoreRoot, 'src/constants/supported.ts'))
+    assert.equal(entries[3]?.replacement, path.join(path.dirname(webCoreRoot), 'web-standalone/src/stubs/crypto-browser-shim.ts'))
     assert.deepEqual(config.server?.fs?.allow, [workspaceRoot, webCoreRoot])
 })

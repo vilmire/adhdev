@@ -501,3 +501,86 @@ export function compactMagiActivityGroup(group: any): any {
     }
     return next;
 }
+
+// ── Compact de-duplication (read-latency pass, 2026-09-27) ──────────────────
+//
+// Each helper drops a COPY, never the only copy of a fact: the value it removes
+// is still present elsewhere in the same compact response (named per helper).
+// Verbose output is untouched.
+
+/**
+ * Compact `daemonQuotas`: only what the per-node quota string
+ * ("7d X% · 5h Y% · <age> …", summarizeNodeQuota) does not already say —
+ * window reset times, the error text, source/plan metadata, per-pool buckets,
+ * and a non-ok status. The used%, age, stale/refreshing flags and failureKind
+ * live in the node string. A provider with nothing left is omitted.
+ */
+export function compactDaemonQuotaSnapshots(quota: any): Record<string, Record<string, unknown>> | undefined {
+    if (!quota || typeof quota !== 'object' || Array.isArray(quota)) return undefined;
+    const out: Record<string, Record<string, unknown>> = {};
+    for (const [provider, snapshot] of Object.entries(quota as Record<string, any>)) {
+        if (!snapshot || typeof snapshot !== 'object') continue;
+        const rest: Record<string, unknown> = {};
+        const sessionReset = snapshot.session?.resetsAt;
+        const weeklyReset = snapshot.weekly?.resetsAt;
+        if (sessionReset !== undefined && sessionReset !== null) rest.sessionResetsAt = sessionReset;
+        if (weeklyReset !== undefined && weeklyReset !== null) rest.weeklyResetsAt = weeklyReset;
+        if (typeof snapshot.status === 'string' && snapshot.status !== 'ok') rest.status = snapshot.status;
+        if (typeof snapshot.error === 'string' && snapshot.error) rest.error = snapshot.error;
+        if (Array.isArray(snapshot.buckets) && snapshot.buckets.length > 0) rest.buckets = snapshot.buckets;
+        if (snapshot.metadata && typeof snapshot.metadata === 'object') {
+            const { failureKind: _inString, lastGoodWindows: _inString2, ...meta } = snapshot.metadata as Record<string, unknown>;
+            if (Object.keys(meta).length > 0) rest.metadata = meta;
+        }
+        if (Object.keys(rest).length > 0) out[provider] = rest;
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** Compact `daemonMachines`: identityEvidence (debug provenance) is verbose-only. */
+export function compactDaemonMachine(machine: any): any {
+    if (!machine || typeof machine !== 'object' || Array.isArray(machine)) return machine;
+    const { identityEvidence: _debugOnly, ...rest } = machine as Record<string, unknown>;
+    return rest;
+}
+
+/**
+ * `provider=<p>` capability tags whose provider is listed in the node's
+ * `providerPriority` repeat that list; drop them from the compact copy (tags
+ * for providers NOT in providerPriority, and every other tag — os/arch/converge/
+ * worktree=/operator labels — stay).
+ */
+export function dedupeProviderCapabilityTags(node: any): void {
+    if (!node || typeof node !== 'object' || !Array.isArray(node.capabilityTags) || !Array.isArray(node.providerPriority)) return;
+    const listed = new Set(node.providerPriority.map((p: unknown) => `provider=${String(p)}`));
+    node.capabilityTags = node.capabilityTags.filter((tag: unknown) => !listed.has(String(tag)));
+}
+
+const BRANCH_CONVERGENCE_GIT_KEYS = ['branch', 'upstream', 'upstreamStatus', 'ahead', 'behind'] as const;
+
+/**
+ * A detailed compact node repeats its git scalars three times: `git.*`, the
+ * top-level `branch`/`isDirty`, and `branchConvergence.{branch,upstream,
+ * upstreamStatus,ahead,behind}`. The top-level `branch`/`isDirty` stay (they are
+ * what stubs and coordinators read); `git.branch`/`git.dirty` are dropped where
+ * equal to them, and each branchConvergence scalar where equal to its git
+ * counterpart. Stubs (no `git`) drop the equal `branchConvergence.branch`.
+ */
+export function dedupeCompactNodeGitFields(node: any): void {
+    if (!node || typeof node !== 'object') return;
+    const git = node.git && typeof node.git === 'object' ? { ...node.git } : null;
+    const bc = node.branchConvergence && typeof node.branchConvergence === 'object' ? { ...node.branchConvergence } : null;
+    if (git) {
+        if (bc) {
+            for (const key of BRANCH_CONVERGENCE_GIT_KEYS) {
+                if (bc[key] !== undefined && bc[key] === git[key]) delete bc[key];
+            }
+        }
+        if (git.branch !== undefined && git.branch === node.branch) delete git.branch;
+        if (git.dirty !== undefined && git.dirty === node.isDirty) delete git.dirty;
+        node.git = git;
+    } else if (bc && bc.branch !== undefined && bc.branch === node.branch) {
+        delete bc.branch;
+    }
+    if (bc) node.branchConvergence = bc;
+}

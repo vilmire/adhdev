@@ -381,7 +381,8 @@ test('leak #2: compact activeWork drops the triple-echoed task prompt; verbose k
     assert.equal(row.nodeId, 'node-remote');
     assert.equal(row.sessionId, 'sess-direct');
     assert.equal(row.status, 'assigned');
-    assert.equal(typeof compact.activeWorkHint, 'string');
+    // The static hint rides only when rows were actually omitted.
+    assert.equal(compact.activeWorkHint, undefined, 'activeWorkHint only when activeWork rows are omitted');
     // The 5KB prompt must NOT appear anywhere in the compact payload.
     assert.equal(compactStr.includes(longPrompt), false, 'compact must not carry the full delegation prompt');
 
@@ -749,7 +750,9 @@ test('mesh_view_queue compact mode drops historical queue rows, staleDirectWork 
     assert.equal(compactObj.historicalRowsOmitted, true);
     assert.equal(compactObj.queueMaintenance.cleanupCandidates, undefined);
     assert.equal(compactObj.queueMaintenance.cleanupCandidatesOmitted, true);
-    assert.equal(compactObj.cleanupDryRun.cleanupCandidates, undefined);
+    // cleanupDryRun is an alias of queueMaintenance — compact keeps one copy.
+    assert.equal(compactObj.cleanupDryRun, undefined);
+    assert.equal(compactObj.staleAssignments, undefined);
     assert.equal(compactObj.historicalRecordCount === undefined || compactObj.queueMaintenance.historicalRecordCount === 40, true);
 
     // Verbose response retains the full detail arrays.

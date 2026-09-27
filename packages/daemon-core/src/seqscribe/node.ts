@@ -33,6 +33,7 @@ import { LOG } from '../logging/logger.js';
 import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
 import { createFleetAuthorityIfConfigured, startFleetFinalityLoop } from './authority.js';
 import { loadStoredFleetSecret } from './fleet-secret.js';
+import { createSeqscribeDbMaintenance, type SeqscribeDbMaintenance } from './db-maintenance.js';
 import { createLocalAuthority } from './local-authority.js';
 import { baseTopicDefinitions, contentTopicsFor, type TopicDefinition } from './topics.js';
 
@@ -117,6 +118,14 @@ export interface SeqscribeNodeHandle {
     /** Non-null only on the coordinator with an authority configured. */
     finalityLoop: { stop(): void } | null;
     /**
+     * Space maintenance on this node's own DB connection (freelist stats,
+     * read-only topic discovery, bounded incremental vacuum) — see
+     * db-maintenance.ts. Used by writer-gc.ts's sweep; inert after close().
+     * Optional only so hand-built test fakes of this handle stay valid;
+     * `openSeqscribeNode` always sets it.
+     */
+    maintenance?: SeqscribeDbMaintenance;
+    /**
      * Register a teardown callback to run inside `close()`, BEFORE `node.close()`.
      *
      * Exists for the Beacon transport (seqscribe/beacon.ts), which is armed
@@ -149,6 +158,11 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
 
     const Database = loadBetterSqlite3();
     const db = new Database(dbPath) as BetterSqlite3.Database;
+    // Must precede the first table creation: on a brand-new file this makes
+    // the DB incremental-vacuum capable from the start. On an existing file
+    // it is a no-op (SQLite only changes auto_vacuum through a VACUUM — that
+    // one-time migration is db-maintenance.ts#compactSeqscribeDbAtShutdown).
+    db.pragma('auto_vacuum = INCREMENTAL');
     db.pragma('journal_mode = WAL');
     db.pragma('synchronous = NORMAL');
     db.pragma('busy_timeout = 5000');
@@ -394,6 +408,7 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
         authorityEnabled: authorityHooks !== null,
         authorityIsLocal: localAuthority !== null,
         finalityLoop,
+        maintenance: createSeqscribeDbMaintenance(db),
         onClose: (fn: () => void) => {
             // A callback registered after close() has already run would never
             // fire, so run it immediately rather than silently dropping it.

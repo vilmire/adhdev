@@ -24,13 +24,14 @@ import { resolveDeliveryDecision, normalizeDeliveryMode, DEFAULT_DELIVERY_MODE }
 test('mesh_send_task schema exposes delivery_mode with exactly when_idle|interrupt', () => {
   const schema = MESH_SEND_TASK_TOOL.inputSchema as any;
   assert.deepEqual(schema.properties.delivery_mode.enum, ['when_idle', 'interrupt']);
-  assert.deepEqual(schema.properties.deliveryMode.enum, ['when_idle', 'interrupt']);
+  // 2026-09-27 tools/list schema diet: deliveryMode (camelCase) is accepted via
+  // MESH_ACCEPTED_ARG_ALIASES instead of being its own published property.
+  assert.equal(schema.properties.deliveryMode, undefined, 'camelCase alias must not be published');
 });
 
 test('delivery_mode is OPTIONAL — omitting it must remain valid (default when_idle)', () => {
   const schema = MESH_SEND_TASK_TOOL.inputSchema as any;
   assert.ok(!schema.required.includes('delivery_mode'));
-  assert.ok(!schema.required.includes('deliveryMode'));
 });
 
 test('★ the schema warns that an interrupt DISCARDS in-flight work', () => {

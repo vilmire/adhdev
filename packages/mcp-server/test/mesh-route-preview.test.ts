@@ -14,11 +14,15 @@ test('mesh_route_preview publishes the required hypothetical-routing schema', ()
 });
 
 // The handler (mesh-tools-route-preview.ts) always read camelCase requiredTags/
-// targetNodeId as aliases, but the schema declared only snake_case — so the
-// unknown-arg gate rejected a caller that used the aliases the handler itself
-// documents supporting. Pins the schema fix (camelCase properties added).
-test('mesh_route_preview schema declares the camelCase requiredTags/targetNodeId aliases the handler reads', () => {
+// targetNodeId as aliases. They used to be published as their own schema
+// properties; the 2026-09-27 tools/list schema diet moved them to
+// MESH_ACCEPTED_ARG_ALIASES instead (accepted, not published — same pattern as
+// the enqueue family) so the aliases keep working without doubling the schema.
+test('mesh_route_preview schema publishes only the canonical snake_case keys; camelCase aliases are accepted but not published', () => {
   for (const property of ['requiredTags', 'targetNodeId']) {
+    assert.equal(property in MESH_ROUTE_PREVIEW_TOOL.inputSchema.properties, false, `${property} must not be published`);
+  }
+  for (const property of ['required_tags', 'target_node_id']) {
     assert.ok(property in MESH_ROUTE_PREVIEW_TOOL.inputSchema.properties, `${property} missing from schema`);
   }
 });

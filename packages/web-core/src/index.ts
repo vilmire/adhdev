@@ -273,6 +273,9 @@ export type { Theme, ThemePreference } from './hooks/useTheme'
 // ── i18n ──
 export {
     initI18n,
+    whenI18nReady,
+    isI18nReady,
+    I18nReadyGate,
     i18next,
     useLanguage,
     getStoredLanguage,
@@ -286,7 +289,7 @@ export {
     LANG_STORAGE_KEY,
     DEFAULT_NAMESPACE,
 } from './i18n'
-export type { SupportedLanguage, LanguageOption } from './i18n'
+export type { SupportedLanguage, LanguageOption, I18nReadyGateProps } from './i18n'
 export { useDaemonMetadataLoader } from './hooks/useDaemonMetadataLoader'
 export { useDaemonMachineRuntimeLoader } from './hooks/useDaemonMachineRuntimeLoader'
 export { useDaemonMachineRuntimeSubscription } from './hooks/useDaemonMachineRuntimeSubscription'
@@ -307,9 +310,15 @@ export { default as MachineDetail } from './pages/MachineDetail'
 export { default as MachinesPage } from './pages/Machines'
 export { default as NotificationsPage } from './pages/Notifications'
 export { default as RepoMesh } from './pages/RepoMesh'
-export { MeshGraphView, MeshGraphPanel, MeshObservabilitySurface } from './components/MeshGraph'
+// The mesh graph surfaces (MeshGraphView / MeshGraphPanel / MeshObservabilitySurface)
+// are deliberately NOT re-exported from this barrel: they pull @xyflow/react and
+// elkjs (~1.5 MB raw), and any barrel edge to them puts that stack on the eager
+// critical path of every consumer route. Mount them through the lazy boundary
+// instead (components/dashboard/LazyDashboardMeshGraphDialog).
+export { default as LazyDashboardMeshGraphDialog, preloadDashboardMeshGraphDialog } from './components/dashboard/LazyDashboardMeshGraphDialog'
 export { default as ApprovalsPage } from './pages/Approvals'
-export { PendingApprovalsInbox, derivePendingApprovals } from './components/MeshGraph'
+// Imported from the module itself, not the MeshGraph index, for the same reason.
+export { default as PendingApprovalsInbox, derivePendingApprovals } from './components/MeshGraph/PendingApprovalsInbox'
 export { deriveApprovalsFromConversations, formatApprovalWait } from './components/MeshGraph/PendingApprovalsInbox'
 export type { PendingApprovalItem, PendingApprovalAction } from './components/MeshGraph'
 export type { ApprovalConversationSource } from './components/MeshGraph/PendingApprovalsInbox'

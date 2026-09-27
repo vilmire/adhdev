@@ -29,6 +29,7 @@ import {
     useStore,
     type Edge,
 } from '@xyflow/react'
+import './meshGraph.css'
 import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
 import type { MeshGraphTheme } from './meshGraphTheme'
 import {

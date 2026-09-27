@@ -19,6 +19,7 @@ import { formatRelativeTime } from '../../utils/time';
 import type { DashboardNotificationRecord } from '../../utils/dashboard-notifications';
 import GitStatusPill from '../git/GitStatusPill';
 import LoadingSpinner from '../ui/LoadingSpinner';
+import { preloadDashboardMeshGraphDialog } from './LazyDashboardMeshGraphDialog';
 
 export interface DashboardHeaderProps {
     activeConv: ActiveConversation | undefined;
@@ -468,6 +469,9 @@ export default function DashboardHeader({
                             <button
                                 type="button"
                                 onClick={() => onOpenMeshGraph(activeConv)}
+                                // Warm the lazily loaded graph chunk on intent.
+                                onPointerEnter={() => { void preloadDashboardMeshGraphDialog() }}
+                                onFocus={() => { void preloadDashboardMeshGraphDialog() }}
                                 className="btn btn-secondary btn-sm dashboard-header-mesh-button"
                                 title={t('dashboard.header.openMeshGraph')}
                             >

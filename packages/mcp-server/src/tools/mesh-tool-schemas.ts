@@ -84,7 +84,9 @@ const MESH_INPUT_BINDING_SCHEMA = {
 
 export const MESH_STATUS_TOOL = {
     name: 'mesh_status',
-    description: 'Get the current status of all nodes in the repo mesh — health, git state, active sessions, recovery hints, and recommended next steps. Node git is the coordinator daemon\'s held state (never a live remote probe); the per-node gitObservation {source, observedAt, refreshing, unreachableSince} and dataFreshness say how old it is. Use this to decide which node to send work to or how to recover from failures. Also reports the running daemon build per daemonId under top-level daemonBuilds ({commit, commitShort, version, track}); track is stable/preview when explicitly reported by that daemon and unknown for legacy peers — it is never inferred from an rc version suffix. When a live daemon was built from a commit BEHIND its workspace HEAD it adds staleDaemonBuilds[] + staleDaemonBuildWarning — meaning a just-merged refinery/mesh-tool fix is NOT yet live on that daemon (awaiting deploy/restart; a local dist rebuild does not update a cloud daemon). When a daemon has a durable failed-upgrade notice on record it adds daemonUpgradeFailures{daemonId → {summary, recordedAt, ageLabel, targetVersion, noticePath, logPath}} + daemonUpgradeFailureWarning — meaning that daemon\'s LAST upgrade attempt failed and was rolled back, so it is still on the PREVIOUS version (an upgrade/restart response only ever reports "scheduled", never success). Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.',
+    description: 'Get the current status of all nodes in the repo mesh — health, git state, active sessions, recovery hints, and recommended next steps. Node git is the coordinator daemon\'s held state (never a live remote probe); per-node gitObservation {source, observedAt, refreshing, unreachableSince} and dataFreshness say how old it is. Use this to decide which node to send work to or how to recover from failures. '
+        + 'Also reports the running daemon build per daemonId under daemonBuilds ({commit, commitShort, version, track}; track is unknown for legacy peers, never inferred from an rc suffix). staleDaemonBuilds[]/staleDaemonBuildWarning flags a live daemon built BEHIND its workspace HEAD — a merged fix not yet live (awaiting deploy/restart; a local dist rebuild does not update a cloud daemon). daemonUpgradeFailures{daemonId → {summary, recordedAt, ageLabel, targetVersion, noticePath, logPath}}/daemonUpgradeFailureWarning flags a daemon whose LAST upgrade failed and rolled back (still on the PREVIOUS version; an upgrade/restart response only ever reports "scheduled", never success). '
+        + 'Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -116,7 +118,6 @@ export const MESH_ROUTE_PREVIEW_TOOL = {
                 items: { type: 'string' as const },
                 description: 'Optional capability tags the hypothetical task requires.',
             },
-            requiredTags: { type: 'array' as const, items: { type: 'string' as const }, description: 'CamelCase alias for required_tags.' },
             readonly: {
                 type: 'boolean' as const,
                 description: 'Whether to preview read-only scheduling semantics, including the reserved-last-slot capacity rule.',
@@ -125,7 +126,6 @@ export const MESH_ROUTE_PREVIEW_TOOL = {
                 type: 'string' as const,
                 description: 'Optional node pin. When omitted, preview all eligible nodes in scheduling order.',
             },
-            targetNodeId: { type: 'string' as const, description: 'CamelCase alias for target_node_id.' },
         },
     },
 };
@@ -356,16 +356,14 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
 export const MESH_GRAPH_GATE_TOOL = {
     name: 'mesh_graph_gate',
     description: 'Drive a coordinator GATE — a graph step that intentionally STOPS progress until you do something the daemon must not do itself (a Refinery landing, an approval, waiting on CI, a publish, a deploy). '
-        + 'The daemon NEVER performs a gate action and NEVER auto-passes a gate. Use it when a gate notice arrives or mesh_graph_view shows a gate blocking downstream work. Select the verb with `action` (REQUIRED):\n'
+        + 'The daemon NEVER performs a gate action and NEVER auto-passes a gate. Use it when a gate notice arrives or mesh_graph_view shows a gate blocking downstream work. Select the verb with `action` (REQUIRED); each action accepts only its own arguments (see each property\'s description for which):\n'
         + '• claim — take the lease on a gate awaiting a coordinator. Returns a monotonically increasing leaseGeneration and an opaque fencingToken: keep both, release needs them. '
-        + 'A lapsed lease can be taken over at a HIGHER generation; the response then sets ambiguousExternalOutcome — the previous owner may already have performed the side effect, so reconcile external evidence (did the merge/publish land?) before doing it again. '
-        + 'Args: gate_id, lease_seconds, extend_deadline_seconds, coordinator_session_id.\n'
+        + 'A lapsed lease can be taken over at a HIGHER generation; the response then sets ambiguousExternalOutcome — the previous owner may already have performed the side effect, so reconcile external evidence (did the merge/publish land?) before doing it again.\n'
         + '• release — pass a gate you hold: the ONLY way a gate lets downstream run. Needs lease_generation + fencing_token from claim (stale generation / wrong token → stale_fence; an EXPIRED lease never releases — re-claim and reconcile first) and your own idempotency_key '
-        + '(identical re-send = no-op success; same key, different payload = conflict). `outcome` and any `result`/`evidence` are readable downstream through run_if and inputs_from. A validation failure rolls the WHOLE release back. '
-        + 'Args: gate_id, fencing_token, lease_generation, idempotency_key, outcome, result, evidence, patches.\n'
+        + '(identical re-send = no-op success; same key, different payload = conflict). `outcome` and any `result`/`evidence` are readable downstream through run_if and inputs_from. A validation failure rolls the WHOLE release back.\n'
         + '• abandon — give up on a gate that can never open (the work behind it was cancelled) so its graph can go terminal. NOT a pass: it materializes nothing and CANCELS every downstream task the gate held. '
-        + 'Needs no fencing token, but a LIVE lease held by another coordinator is refused unless force=true. Re-abandoning is a no-op; a RELEASED gate can never be abandoned. Args: gate_id, reason, force, coordinator_session_id.\n'
-        + '• extend — push the gate DEADLINE out without taking a lease (e.g. extend_seconds=86400 for a gate that expired, or is about to, under on_timeout=hold, that you still intend to act on). Args: gate_id, extend_seconds.',
+        + 'Needs no fencing token, but a LIVE lease held by another coordinator is refused unless force=true. Re-abandoning is a no-op; a RELEASED gate can never be abandoned.\n'
+        + '• extend — push the gate DEADLINE out without taking a lease (e.g. extend_seconds=86400 for a gate that expired, or is about to, under on_timeout=hold, that you still intend to act on).',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -375,18 +373,12 @@ export const MESH_GRAPH_GATE_TOOL = {
                 description: 'Which gate verb to run (required). Each action accepts only its own arguments — see the tool description.',
             },
             gate_id: { type: 'string', description: 'The gate (from mesh_graph_view, a gate notice, or the mesh_enqueue_batch response). All actions.' },
-            gateId: { type: 'string', description: 'CamelCase alias for gate_id.' },
             lease_seconds: { type: 'number', description: 'claim: how long to hold the lease. Defaults to the gate spec\'s lease_seconds, then 900s. Cover the real action — a lapsed lease cannot release (elapsed time is never completion evidence).' },
-            leaseSeconds: { type: 'number', description: 'CamelCase alias for lease_seconds.' },
             extend_deadline_seconds: { type: 'number', description: 'claim: also push the gate DEADLINE out by this many seconds from now. The deadline is when on_timeout (hold / cancel_downstream / fail_graph) fires; reclaiming a gate that expired under hold does NOT refresh it unless you pass this.' },
-            extendDeadlineSeconds: { type: 'number', description: 'CamelCase alias for extend_deadline_seconds.' },
             extend_seconds: { type: 'number', description: 'extend: push the deadline out by this many seconds (positive). Takes NO lease. Extending only delays on_timeout; it is never completion evidence.' },
             fencing_token: { type: 'string', description: 'release: the opaque token returned by claim. Required for release.' },
-            fencingToken: { type: 'string', description: 'CamelCase alias for fencing_token.' },
             lease_generation: { type: 'number', description: 'release: the leaseGeneration returned by claim. Required for release — a stale generation is refused.' },
-            leaseGeneration: { type: 'number', description: 'CamelCase alias for lease_generation.' },
             idempotency_key: { type: 'string', description: 'release: your own key for this release. Required for release.' },
-            idempotencyKey: { type: 'string', description: 'CamelCase alias for idempotency_key.' },
             outcome: { type: 'string', description: 'release: passed | failed | rejected, or an action-specific label. Downstream run_if reads it as /gate_outcome. Required for release.' },
             result: { type: 'object', description: 'release: optional action-specific structured result, exposed downstream as /result/... (e.g. the merged commit sha).' },
             evidence: { type: 'object', description: 'release: optional evidence references/digests, exposed downstream as /evidence/... .' },
@@ -396,12 +388,10 @@ export const MESH_GRAPH_GATE_TOOL = {
                 items: {
                     type: 'object',
                     properties: {
-                        node: { type: 'string', description: 'Ref or node id of a DIRECT downstream node of this gate. node_id/nodeId/ref are equivalent aliases — any one resolves the target; an entry naming none of them is REJECTED (the whole release refuses) rather than silently dropped.' },
+                        node: { type: 'string', description: 'Ref or node id of a DIRECT downstream node of this gate. node_id/ref are equivalent aliases (nodeId, camelCase, is also accepted though not published) — any one resolves the target; an entry naming none of them is REJECTED (the whole release refuses) rather than silently dropped.' },
                         node_id: { type: 'string', description: 'Alias for node.' },
-                        nodeId: { type: 'string', description: 'CamelCase alias for node.' },
                         ref: { type: 'string', description: 'Alias for node — the batch-local ref of the downstream node.' },
                         base_spec_patch: { type: 'object', description: 'Keys to merge into that node\'s spec. Allowed keys: run_if, on_false, inputs_from, workspace_ref.' },
-                        baseSpecPatch: { type: 'object', description: 'CamelCase alias for base_spec_patch.' },
                     },
                     required: ['node'],
                 },
@@ -409,7 +399,6 @@ export const MESH_GRAPH_GATE_TOOL = {
             reason: { type: 'string', description: 'abandon: why the gate is given up — recorded on the gate, every cancelled downstream row, and the provenance ledger. Required for abandon.' },
             force: { type: 'boolean', description: 'abandon: abandon even though another coordinator holds a LIVE lease. Only when you know that holder is dead.' },
             coordinator_session_id: { type: 'string', description: 'claim / abandon: owner (claim) or recorded abandoner. Defaults to this coordinator session.' },
-            coordinatorSessionId: { type: 'string', description: 'CamelCase alias for coordinator_session_id.' },
         },
         required: ['action', 'gate_id'],
     },
@@ -419,23 +408,18 @@ export const MESH_GRAPH_GATE_TOOL = {
 
 export const MESH_GRAPH_NODE_PATCH_TOOL = {
     name: 'mesh_graph_node_patch',
-    description: 'Fix a graph node that could NOT be materialized, and retry it in the same call — the recovery path for a task blocked on `materialization_error:*` '
-        + '(seen in mesh_graph_view / as the task\'s blockedReason). A node\'s `inputs_from` / `run_if` are baked in when the batch is accepted but only resolved once every '
-        + 'predecessor has COMPLETED, so a binding that cannot be resolved strands the one step that was meant to consume all that finished work. The graph retries such a node '
-        + 'automatically, but it re-reads the same spec and fails identically every time — it cannot heal itself, so use this to change the spec. '
+    description: 'Fix a graph node that could NOT be materialized, and retry it in the same call — the recovery path for a task blocked on `materialization_error:*` (seen in mesh_graph_view / as the task\'s blockedReason). '
+        + 'A node\'s `inputs_from` / `run_if` are baked in when the batch is accepted but only resolved once every predecessor has COMPLETED, so a binding that cannot be resolved strands the step; the graph retries it automatically but it re-reads the same spec and fails identically every time — it cannot heal itself, so use this to change the spec. '
         + 'The patch and the retry are ONE transaction: the response tells you immediately whether the node materialized (recovered: true) or is still blocked, and with which new reason. '
-        + '★ Only run_if, on_false, inputs_from and workspace_ref may be patched — message, routing, permissions, task mode and model are immutable, and a task that is already '
-        + 'claimed or finished cannot be patched at all (cancel and enqueue a corrected step instead). This is a repair tool, not a way to re-task a worker. '
+        + '★ Only run_if, on_false, inputs_from and workspace_ref may be patched — message, routing, permissions, task mode and model are immutable, and a task that is already claimed or finished cannot be patched at all (cancel and enqueue a corrected step instead). This is a repair tool, not a way to re-task a worker. '
         + 'Most shape errors are now rejected up front by mesh_enqueue_batch; the case that still needs this is `required_input_missing` — a well-formed binding whose source never produced that field.',
     inputSchema: {
         type: 'object' as const,
         properties: {
             node: { type: 'string', description: 'Node id or `ref` of the node to patch (from mesh_graph_view). A ref that matches several live graphs is refused — pass graph_id too, or the exact node id.' },
-            node_id: { type: 'string', description: 'Alias for node.' },
-            nodeId: { type: 'string', description: 'CamelCase alias for node_id.' },
+            node_id: { type: 'string', description: 'Alias for node (nodeId, camelCase, is also accepted though not published).' },
             ref: { type: 'string', description: 'Alias for node, spelled `ref` to match mesh_graph_view\'s own field name for a node\'s human-readable ref. A ref that matches several live graphs is refused — pass graph_id too, or the exact node id.' },
             graph_id: { type: 'string', description: 'Disambiguate which graph the ref belongs to. Optional when `node` is a node id.' },
-            graphId: { type: 'string', description: 'CamelCase alias for graph_id.' },
             base_spec_patch: {
                 type: 'object',
                 description: 'Keys to REPLACE on the node\'s spec. Allowed: run_if, on_false, inputs_from, workspace_ref. A replacement inputs_from is validated before anything is written, '
@@ -447,7 +431,6 @@ export const MESH_GRAPH_NODE_PATCH_TOOL = {
                     workspace_ref: { type: 'string', description: 'Replacement workspace ref.' },
                 },
             },
-            baseSpecPatch: { type: 'object', description: 'CamelCase alias for base_spec_patch.' },
         },
         required: ['node', 'base_spec_patch'],
     },
@@ -463,13 +446,9 @@ export const MESH_GRAPH_VIEW_TOOL = {
         type: 'object' as const,
         properties: {
             graph_id: { type: 'string', description: 'Show exactly this graph (including terminal ones).' },
-            graphId: { type: 'string', description: 'CamelCase alias for graph_id.' },
             batch_id: { type: 'string', description: 'Show the graph committed under this batch_id.' },
-            batchId: { type: 'string', description: 'CamelCase alias for batch_id.' },
             include_terminal: { type: 'boolean', description: 'Include completed/failed/cancelled graphs. Default false (in-flight only).' },
-            includeTerminal: { type: 'boolean', description: 'CamelCase alias for include_terminal.' },
             probe_gate_evidence: { type: 'boolean', description: 'Attach convergence evidence to waiting gates: whether each upstream commit is already reachable from the mesh base workspace\'s local origin/main. Answers "did the guarded work already land?" without claiming. Runs bounded local git probes (first 5 waiting gates, no fetch) — default false keeps the view git-free. Evidence never releases a gate.' },
-            probeGateEvidence: { type: 'boolean', description: 'CamelCase alias for probe_gate_evidence.' },
             limit: { type: 'integer', minimum: 0, description: 'Max graphs to return (default 20).' },
         },
     },
@@ -485,7 +464,7 @@ export const MESH_VIEW_QUEUE_TOOL = {
             status: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Explicit row filter by task status: pending, assigned, completed, failed, cancelled. Source-of-truth counts remain unfiltered; visible* counts describe returned rows.',
+                description: 'Explicit row filter by task status: pending, assigned, completed, failed, cancelled. Overall counts stay unfiltered; the visible* counts and visibleSummary (compact mode: only when a view or status filter is applied) describe the returned rows.',
             },
             view: {
                 type: 'string',
@@ -505,7 +484,6 @@ export const MESH_QUEUE_CANCEL_TOOL = {
         type: 'object' as const,
         properties: {
             task_id: { type: 'string', description: 'Queue task ID to cancel.' },
-            taskId: { type: 'string', description: 'CamelCase alias for task_id.' },
             reason: { type: 'string', description: 'Optional operator-visible reason for cancellation.' },
         },
         required: ['task_id'],
@@ -520,16 +498,11 @@ export const MESH_QUEUE_REQUEUE_TOOL = {
         type: 'object' as const,
         properties: {
             task_id: { type: 'string', description: 'Queue task ID to requeue.' },
-            taskId: { type: 'string', description: 'CamelCase alias for task_id.' },
             reason: { type: 'string', description: 'Optional operator-visible reason for requeueing.' },
             target_node_id: { type: 'string', description: 'Optional replacement target node ID.' },
-            targetNodeId: { type: 'string', description: 'CamelCase alias for target_node_id.' },
             target_session_id: { type: 'string', description: 'Optional replacement target runtime session ID.' },
-            targetSessionId: { type: 'string', description: 'CamelCase alias for target_session_id.' },
             clear_target_node: { type: 'boolean', description: 'When true, remove any existing target node constraint.' },
-            clearTargetNode: { type: 'boolean', description: 'CamelCase alias for clear_target_node.' },
             keep_target_session: { type: 'boolean', description: 'When true, preserve an existing target session if target_session_id is not provided. Defaults false to avoid stale session targets.' },
-            keepTargetSession: { type: 'boolean', description: 'CamelCase alias for keep_target_session.' },
             force: { type: 'boolean', description: 'When true, bypass the retry cap and requeue even if maxRetries has been exceeded. Use only for explicit operator recovery.' },
             message: { type: 'string', description: 'Optional REPLACEMENT instruction for the task. Use when the situation moved on while the task waited — the common case for a parked delta, e.g. the worker already finished the part your correction was about, so the original wording would now be wrong or redundant. Preserves the task id, mission linkage and dependents (unlike cancel + re-enqueue). Omitted or blank leaves the existing message untouched.' },
         },
@@ -547,24 +520,17 @@ export const MESH_SEND_TASK_TOOL = {
             session_id: { type: 'string', description: 'Agent session ID on the target node. Optional: when omitted the task is dispatched to the node (a remote node scopes it to its own session for this workspace; a local node routes it through the queue pull).' },
             message: { type: 'string', description: 'Natural-language task to send to the agent.' },
             input: MESH_TASK_INPUT_SCHEMA,
-            task_mode: { ...enumOf(MESH_TASK_MODES), description: 'Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before local or remote direct dispatch.' },
-            taskMode: { ...enumOf(MESH_TASK_MODES), description: 'CamelCase alias for task_mode.' },
-            readonly: { type: 'boolean', description: 'Optional read-only axis (orthogonal to task_mode). When true the task runs without write isolation, is counted under the read-only cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Composable with any task_mode.' },
-            read_only: { type: 'boolean', description: 'Snake-case alias for readonly.' },
-            owned_paths: { type: 'array', items: { type: 'string' }, description: 'H1 (path ownership); same semantics as mesh_enqueue_task. Repo-relative files/dirs this code_change task will touch (a trailing /** claims the subtree). Optional and opt-in. A direct dispatch already targets a specific node/session, so this is recorded for the same code_change overlap check against OTHER in-flight tasks (queued or direct) and for the report_completion.touched_files comparison — it is not itself a routing input.' },
-            ownedPaths: { type: 'array', items: { type: 'string' }, description: 'CamelCase alias for owned_paths.' },
-            mission_id: { type: 'string', description: 'Mission this task belongs to (mesh_mission record id, full/exact). When set, the directly dispatched task is attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for an unattributed direct dispatch. An unresolvable id is REJECTED before dispatch (mission_not_found), never silently attached.' },
-            missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
-            difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: 'REQUIRED task execution difficulty. Classify each task by how hard the work actually is. On a direct dispatch the target node/session is already chosen, so difficulty is not used to ROUTE — it is recorded on the task so scheduling analytics, mission aggregates and (critically) failure-recovery relaunch all see the same axis a queued task carries. A recovery relaunch inherits this value from the ledger, so an unclassified direct dispatch would silently downgrade its own retry.' },
+            task_mode: { ...enumOf(MESH_TASK_MODES), description: 'Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch.' },
+            readonly: { type: 'boolean', description: 'Optional read-only axis (orthogonal to task_mode). When true, runs without write isolation, counted under the read-only cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Composable with any task_mode.' },
+            owned_paths: { type: 'array', items: { type: 'string' }, description: 'H1 (path ownership); same semantics as mesh_enqueue_task. Repo-relative files/dirs this code_change task will touch (trailing /** claims the subtree). Optional/opt-in; not a routing input — recorded for the code_change overlap check against other in-flight tasks and for report_completion.touched_files comparison.' },
+            mission_id: { type: 'string', description: 'Mission this task belongs to (mesh_mission record id, full/exact). When set, attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for unattributed. An unresolvable id is REJECTED before dispatch (mission_not_found), never silently attached.' },
+            difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: 'REQUIRED task execution difficulty. On a direct dispatch the target node/session is already chosen, so this does not ROUTE — it is recorded so scheduling analytics, mission aggregates and failure-recovery relaunch see the same axis a queued task carries (a recovery relaunch inherits it from the ledger).' },
             delivery_mode: {
                 ...enumOf(MESH_DELIVERY_MODES),
-                description: "How to deliver when the target session is BUSY. Default 'when_idle': never disturbs the running turn — the task is queued and auto-delivered the moment the session goes idle. "
-                    + "★'interrupt' ABORTS the turn currently in flight by pressing the provider's own stop control (Ctrl-C, or ESC on antigravity-cli), then delivers this task once the session settles. "
-                    + 'THE WORK IN PROGRESS IS DISCARDED — whatever the agent had not yet finished is lost, and any partial edits it was mid-way through are left as they are. Use it only when the running turn is genuinely going the wrong way and finishing it is worse than losing it. '
-                    + "If the target provider cannot interrupt (no stop control declared, or an empty stop key), the dispatch is REJECTED rather than quietly falling back to when_idle — so a steering attempt never reports success while the session actually runs on to completion under the old instructions. Re-send with 'when_idle' if delivery-after-completion is acceptable. "
-                    + 'Has no effect on an idle session (delivered immediately either way).',
+                description: "How to deliver when the target session is BUSY. Default 'when_idle': queued, auto-delivered once the session goes idle — never disturbs the running turn. "
+                    + "'interrupt' ABORTS the in-flight turn via the provider's own stop control (Ctrl-C, or ESC on antigravity-cli), then delivers once settled — THE WORK IN PROGRESS IS DISCARDED, including partial edits. Use only when the running turn is going wrong and finishing it is worse than losing it. "
+                    + "If the provider cannot interrupt (no stop control declared), the dispatch is REJECTED rather than silently falling back to when_idle. Has no effect on an idle session (delivered immediately either way).",
             },
-            deliveryMode: { ...enumOf(MESH_DELIVERY_MODES), description: 'CamelCase alias for delivery_mode.' },
             // GRAPH-MEASUREMENT-DIRECT — the decision record for the DIRECT surface.
             //
             // ★ WHY IT IS HERE AT ALL. This tool is the MAJORITY dispatch surface (~67%
@@ -580,15 +546,11 @@ export const MESH_SEND_TASK_TOOL = {
                 type: 'object',
                 description: 'Record of your dispatch decision, for adoption measurement: {decision, direct_reason, ready_worker_tasks, known_graph_steps, capability_blockers}. '
                     + 'On this DIRECT surface, direct_reason says why dispatching into an existing session beat queueing a task — one of same_subject_continuation, investigation_handoff, idle_session_reuse, queue_bypass_urgent, new_subject, legacy_client, operator_override. '
-                    + 'These are the cases the operating rules name: same-subject continuation, the investigate→fix handoff, reusing an idle session for a follow-up/retry/cleanup delta, or a deliberate queue bypass. '
-                    + 'new_subject is the one the rules do NOT endorse — a genuinely new topic should get its own task even when a session sits idle — and reporting it returns an unsanctioned_direct_dispatch advisory. Report it honestly anyway: it is recorded, never refused. '
+                    + 'new_subject is the case the operating rules do NOT endorse — a genuinely new topic should get its own task even when a session sits idle — and reporting it returns an unsanctioned_direct_dispatch advisory. Report it honestly anyway: it is recorded, never refused. '
                     + 'Optional and never rejected: omitting it is recorded as decision_missing. Provenance only — it never changes execution.',
             },
-            orchestrationDecision: { type: 'object', description: 'CamelCase alias for orchestration_decision.' },
-            allow_stale_node: { type: 'boolean', description: "GIT-GATE: a non-readonly direct dispatch is refused (dirty_workspace / node_stale_behind_upstream) when the target node's git telemetry shows an uncommitted working tree or a branch behind its upstream beyond the mesh's autoFastForward.maxBehind — the same predicates the claim-time and auto-launch spawn gates apply. Set true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree). Has no effect on a readonly dispatch, which is never gated. Default: false." },
-            allowStaleNode: { type: 'boolean', description: 'CamelCase alias for allow_stale_node.' },
-            allow_quota_exhausted: { type: 'boolean', description: "QUOTA-GATE (preview rc.43 run 10): a direct dispatch that NAMES a session_id is refused when that session's provider is measurably quota-exhausted on the target node — the same fresh/measured predicate (evaluateProviderQuotaGate) the queue claim path already applies before pulling a pending task onto an idle session, now also applied here so a coordinator does not spend minutes talking to a session that cannot work (e.g. 'You've hit your session limit'). A stale/missing/unmarked snapshot always fails OPEN (dispatch proceeds) — only a fresh measured block refuses. Set true to dispatch anyway (e.g. testing the provider's own quota error). Default: false. Has no effect on a sessionless dispatch that ends up in the queue — the claim-time gate already covers that path." },
-            allowQuotaExhausted: { type: 'boolean', description: 'CamelCase alias for allow_quota_exhausted.' },
+            allow_stale_node: { type: 'boolean', description: "GIT-GATE: a non-readonly direct dispatch is refused (dirty_workspace / node_stale_behind_upstream) when the target node's git telemetry shows an uncommitted working tree or a branch behind its upstream beyond the mesh's autoFastForward.maxBehind — same predicates as the claim-time/auto-launch gates. Set true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree). No effect on a readonly dispatch. Default: false." },
+            allow_quota_exhausted: { type: 'boolean', description: "QUOTA-GATE: a direct dispatch NAMING a session_id is refused when that session's provider is measurably quota-exhausted on the target node — same predicate the queue claim path applies before pulling a pending task onto an idle session. A stale/missing/unmarked snapshot fails OPEN (dispatch proceeds); only a fresh measured block refuses. Set true to dispatch anyway (e.g. testing the provider's own quota error). Default: false. No effect on a sessionless dispatch that ends up in the queue — the claim-time gate covers that." },
         },
         // session_id is deliberately NOT required: meshSendTask supports a sessionless
         // dispatch (node-scoped on the worker) and the required-arg gate enforces this list.
@@ -744,29 +706,23 @@ export const MESH_FAST_FORWARD_NODE_TOOL = {
 
 export const MESH_RESTART_DAEMON_TOOL = {
     name: 'mesh_restart_daemon',
-    description: 'Restart a mesh node\'s daemon, optionally updating it first — the same path as the dashboard "preview update" button, exposed as a mesh command so a coordinator can roll a worker daemon without a manual restart round-trip. No agent session is launched. '
-        + 'mode="upgrade" (default): update to the latest published version on the release channel, then restart; already-latest is a no-op (no restart, returns alreadyLatest:true). mode="restart": pure re-spawn with no reinstall — restarts even when already latest, with much shorter downtime; use it to reset wedged daemon state (memory leaks, zombie sessions). '
-        + 'Idle-gated: a node whose daemon has an active session (generating / waiting_approval / starting) is refused with code "blocking_sessions" so an in-flight turn is never interrupted. '
-        + 'self_only=true waives ONLY this mesh\'s own coordinator session (the structural self-deadlock case — the coordinator is always generating while it calls). Other sessions still refuse. force=true bypasses the gate entirely: in-flight turns die and the unpersisted pendingOutboundQueue is lost. '
-        + 'when_idle=true schedules the restart to run automatically once the daemon goes idle (the safest path — no queue loss); cancel_when_idle=true cancels it and every response reports the schedule under deferredRestart. '
-        + 'kill_session_host=true additionally stops the session-host process, destroying ALL hosted CLI sessions (hard refresh; this is what Windows already does on every upgrade). Default off. '
-        + 'Note: on Windows any daemon restart/upgrade terminates all hosted sessions regardless of options; on POSIX hosted sessions survive a plain restart and rebind on next boot. '
-        + 'Upgrade mode refuses a DOWNGRADE: if the target version resolved from the daemon\'s build track is OLDER than the running daemon, the call fails with code "downgrade_refused" and reports currentVersion / targetVersion / channel instead of rolling the node back. Pass allow_downgrade=true only for a deliberate rollback. '
-        + 'The channel parameter is DEPRECATED and ignored: since Phase 3 the release channel is a build-time identity of the installed binary (stable = adhdev/@latest, preview = adhdev-preview/@next), so an upgrade always targets the daemon\'s own build track and can never switch channels. When you pass a channel that conflicts with the node\'s build track, the response now carries a channelOverride object saying so — the request is not silently honored. '
+    description: 'Restart a mesh node\'s daemon, optionally updating it first — the same path as the dashboard "preview update" button. No agent session is launched. '
+        + 'Idle-gated: a node with an active session (generating / waiting_approval / starting) is refused with code "blocking_sessions" so an in-flight turn is never interrupted — see self_only/force/when_idle to override. '
+        + 'On Windows any restart/upgrade terminates all hosted sessions regardless of options; on POSIX hosted sessions survive a plain restart and rebind on next boot. '
         + 'The response compares meshAttachedDaemon (the daemon that answered status immediately before the command) with restartTargetDaemon (the daemon process that accepted the lifecycle operation). daemonMismatch/trackMismatch=true and trackWarning surface a split but do not block the operation; null means an older/unreachable daemon did not report enough identity.',
     inputSchema: {
         type: 'object' as const,
         properties: {
             node_id: { type: 'string', description: 'Target node ID — the daemon that owns this node is restarted (and updated, in upgrade mode).' },
-            channel: { type: 'string', enum: ['stable', 'preview'], description: 'DEPRECATED and ignored (upgrade mode only). Since Phase 3 the release channel is a build-time identity of the installed binary, so the daemon always upgrades on its own build track. Kept optional so older callers do not break. A value conflicting with the node\'s build track is reported back as channelOverride rather than silently dropped — it does NOT switch the node\'s channel.' },
-            allow_downgrade: { type: 'boolean', description: 'Permit an upgrade whose resolved target is OLDER than the running daemon (upgrade mode only). Default false: such a call is refused with code "downgrade_refused" so a mis-resolved track cannot silently roll a node back. Set true only for a deliberate rollback.' },
-            mode: { type: 'string', enum: ['upgrade', 'restart'], description: 'upgrade (default): update to latest on channel, then restart (already-latest is a no-op). restart: pure re-spawn, no reinstall — restarts even when already latest.' },
+            channel: { type: 'string', enum: ['stable', 'preview'], description: 'DEPRECATED and ignored: the release channel is a build-time identity of the installed binary, so an upgrade always targets the daemon\'s own build track. Kept optional so older callers do not break; a conflicting value is reported back as channelOverride rather than silently honored.' },
+            allow_downgrade: { type: 'boolean', description: 'Permit an upgrade whose resolved target is OLDER than the running daemon (upgrade mode only). Default false: refused with code "downgrade_refused". Set true only for a deliberate rollback.' },
+            mode: { type: 'string', enum: ['upgrade', 'restart'], description: 'upgrade (default): update to the latest published version on the daemon\'s build track, then restart; already-latest is a no-op (no restart, returns alreadyLatest:true). restart: pure re-spawn, no reinstall — restarts even when already latest, with much shorter downtime; use to reset wedged daemon state (memory leaks, zombie sessions).' },
             force: { type: 'boolean', description: 'Bypass the idle-gate entirely. Destructive: in-flight turns are killed and the in-memory pendingOutboundQueue is permanently lost. Default false.' },
-            self_only: { type: 'boolean', description: 'Waive only this mesh\'s own coordinator session when it blocks the restart (the coordinator self-deadlock). Other nodes\' active sessions still refuse. Default false.' },
-            when_idle: { type: 'boolean', description: 'If blocked, schedule the restart to execute automatically once the daemon goes idle (safest — no pendingOutboundQueue loss). The schedule expires after timeout_ms (default 30 min). Default false.' },
+            self_only: { type: 'boolean', description: 'Waive only this mesh\'s own coordinator session when it blocks the restart (the structural self-deadlock: the coordinator is always generating while it calls). Other sessions still refuse. Default false.' },
+            when_idle: { type: 'boolean', description: 'If blocked, schedule the restart to run automatically once the daemon goes idle (safest — no pendingOutboundQueue loss). Every response reports the schedule under deferredRestart; expires after timeout_ms (default 30 min). Default false.' },
             cancel_when_idle: { type: 'boolean', description: 'Cancel a previously scheduled when_idle restart on the owning daemon.' },
             timeout_ms: { type: 'number', description: 'Expiry for a when_idle schedule in milliseconds (default 1800000 = 30 min, max 6 h).' },
-            kill_session_host: { type: 'boolean', description: 'Hard refresh: also stop the session-host process, destroying ALL hosted CLI sessions on the machine. Default false.' },
+            kill_session_host: { type: 'boolean', description: 'Hard refresh: also stop the session-host process, destroying ALL hosted CLI sessions on the machine (this is what Windows already does on every upgrade). Default false.' },
         },
         required: ['node_id'],
     },
@@ -795,28 +751,23 @@ export const MESH_MISSION_UPSERT_TOOL = {
         type: 'object' as const,
         properties: {
             mission_id: { type: 'string', description: 'Full mission id (exact match) to update. Omit to create a new mission — do not guess/truncate an id to force a create. An id that does not resolve to an existing mission is REJECTED (mission_not_found), never silently created under that id — use mesh_mission_list to get a valid full id. Ignored when mission_ids is provided.' },
-            missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
             mission_ids: {
                 type: 'array',
                 items: { type: 'string' },
                 description: 'Bulk mode: apply `status` to every listed mission id in one call (stale cleanup). Requires `status`. Returns a per-mission { id, ok, status?, error? } result array. Overrides mission_id/title/goal.',
             },
-            missionIds: { type: 'array', items: { type: 'string' }, description: 'CamelCase alias for mission_ids.' },
             title: { type: 'string', description: 'Short mission title. Required to create/update a single mission; ignored in bulk (mission_ids) mode.' },
             goal: { type: 'string', description: 'Free-text mission goal/definition of done. Ignored in bulk (mission_ids) mode.' },
             status: { type: 'string', enum: ['active', 'paused', 'completed', 'abandoned'], description: 'Mission lifecycle status. Defaults to active on create. Required in bulk (mission_ids) mode.' },
             brief: {
                 type: 'object',
-                description: 'H2 (mission brief). Optional structured brief, rendered into every task dispatched under this mission\'s worker-protocol footer so a freshly launched worker sees it without a separate lookup. {goal (required — a brief with no goal is dropped, not stored empty), constraints?, doneCriteria?, handoffNotes?, ownedPaths?} — each of the four optional fields is a string array; done_criteria/handoff_notes/owned_paths snake_case aliases are also accepted. Ignored in bulk (mission_ids) mode. When a non-empty brief is dropped (no goal, or a field of the wrong type), the response carries `briefIgnored: {reason, field?}` instead of silently discarding it. This is DISTINCT from the top-level `goal` field: `goal` is the mission record\'s short free-text summary shown in mesh_mission_list; `brief` is the longer structured packet a worker actually reads.',
+                description: 'H2 (mission brief). Optional structured brief, rendered into every task dispatched under this mission\'s worker-protocol footer so a freshly launched worker sees it without a separate lookup. {goal (required — a brief with no goal is dropped, not stored empty), constraints?, doneCriteria?, handoffNotes?, ownedPaths?} — each of the four optional fields is a string array; done_criteria/handoff_notes/owned_paths snake_case aliases are also accepted though not published. Ignored in bulk (mission_ids) mode. When a non-empty brief is dropped (no goal, or a field of the wrong type), the response carries `briefIgnored: {reason, field?}` instead of silently discarding it. This is DISTINCT from the top-level `goal` field: `goal` is the mission record\'s short free-text summary shown in mesh_mission_list; `brief` is the longer structured packet a worker actually reads.',
                 properties: {
                     goal: { type: 'string', description: 'What this mission is trying to accomplish. Required for the brief to be stored — an object with no goal is treated as no brief.' },
                     constraints: { type: 'array', items: { type: 'string' }, description: 'Hard constraints a worker must respect, e.g. "do not touch daemon-core", "no npm install".' },
                     doneCriteria: { type: 'array', items: { type: 'string' }, description: 'How to know the mission is actually done.' },
-                    done_criteria: { type: 'array', items: { type: 'string' }, description: 'Snake_case alias for doneCriteria.' },
                     handoffNotes: { type: 'array', items: { type: 'string' }, description: 'Standing notes for whoever picks up mission work next.' },
-                    handoff_notes: { type: 'array', items: { type: 'string' }, description: 'Snake_case alias for handoffNotes.' },
                     ownedPaths: { type: 'array', items: { type: 'string' }, description: 'Paths this mission\'s tasks collectively own — surfaced to workers, not itself enforced (per-task owned_paths on mesh_enqueue_task/mesh_enqueue_batch/mesh_send_task is what claim-time enforcement reads).' },
-                    owned_paths: { type: 'array', items: { type: 'string' }, description: 'Snake_case alias for ownedPaths.' },
                 },
             },
         },
@@ -855,9 +806,7 @@ export const MESH_MISSION_LIST_TOOL = {
             },
             verbose: { type: 'boolean', description: 'Return full goal text instead of a capped preview (also attaches stats). Defaults to false (compact).' },
             include_stats: { type: 'boolean', description: 'Attach per-mission ledger stats (durations/attempts). Off by default; tasks aggregate is usually enough.' },
-            includeStats: { type: 'boolean', description: 'CamelCase alias for include_stats.' },
             include_magi: { type: 'boolean', description: 'Include completed MAGI cross-verification missions (hidden by default). Defaults to false.' },
-            includeMagi: { type: 'boolean', description: 'CamelCase alias for include_magi.' },
         },
     },
 };
@@ -941,9 +890,8 @@ export const MESH_CREATE_TOOL = {
     name: 'mesh_create',
     description: 'Bootstrap a brand-new mesh for a Git repository, or (mode="plan") dry-run the onboarding plan first. Mirrors `adhdev mesh create <name>`. A mesh groups one repo\'s workspaces/nodes so the coordinator can delegate work across them.\n'
         + '• mode="plan" — READ-ONLY Git-aware discovery + dry-run plan for a workspace path: Git root, normalized remotes/repo identity, current/default branch, main checkout vs linked worktree, dirty/conflict state, existing mesh/node membership. '
-        + 'Returns a typed create+onboarding, add-existing-workspace, or clone-new-worktree plan with suggested .adhdev configs. Never fetches, writes config, or creates a mesh/node/branch/worktree. Run it before creating a mesh, adding a node (mesh_add_node) or cloning a worktree (mesh_clone_node). Args: workspace (required), mesh_id, operation, branch.\n'
-        + '• mode="create" (default) — a persistent write: run mode="plan" first and obtain explicit user approval. Pass workspace to auto-detect Git identity/branch/worktree through the read-only planner, or pass repo_remote_url / repo_identity explicitly. add_current:true also registers a node in the same call (workspace if given, else the daemon\'s cwd). '
-        + 'Returns mesh_id (and node_id with add_current). Args: name (required), repo_remote_url, repo_identity, default_branch, add_current, workspace.\n'
+        + 'Returns a typed create+onboarding, add-existing-workspace, or clone-new-worktree plan with suggested .adhdev configs. Never fetches, writes config, or creates a mesh/node/branch/worktree. Run it before creating a mesh, adding a node (mesh_add_node) or cloning a worktree (mesh_clone_node).\n'
+        + '• mode="create" (default) — a persistent write: run mode="plan" first and obtain explicit user approval. Pass workspace to auto-detect Git identity/branch/worktree through the read-only planner, or pass repo_remote_url / repo_identity explicitly. add_current:true also registers a node in the same call (workspace if given, else the daemon\'s cwd). Returns mesh_id (and node_id with add_current).\n'
         + 'BOOT-GATE: reachable in STANDARD mode (adhdev mcp, no --repo-mesh) — the no-mesh-yet bootstrap context — and in mesh mode (where create makes a SEPARATE additional mesh). `adhdev mcp --repo-mesh <id>` refuses to start without an existing meshId, so the flow is: standard-mode MCP → mesh_create → mesh_add_node → relaunch as `adhdev mcp --repo-mesh <returned mesh_id>`.',
     inputSchema: {
         type: 'object' as const,
@@ -1045,9 +993,9 @@ export const MESH_CLEANUP_WORKTREE_NODES_TOOL = {
 export const MESH_CLEANUP_SESSIONS_TOOL = {
     name: 'mesh_cleanup_sessions',
     description: 'Clean up delegated-session bookkeeping without removing nodes. Two families, selected by `mode` (REQUIRED):\n'
-        + '• preserve / stop / delete_stopped / stop_and_delete — a node\'s delegated session records (needs node_id). Use when a node is cluttered with finished or stuck worker sessions. Defaults should preserve reviewable history unless you choose a mode explicitly. Args: node_id, session_ids, dry_run.\n'
+        + '• preserve / stop / delete_stopped / stop_and_delete — a node\'s delegated session records (needs node_id). Use when a node is cluttered with finished or stuck worker sessions. Defaults should preserve reviewable history unless you choose a mode explicitly.\n'
         + '• prune_stale_direct — mesh-wide: orphaned staleDirect dispatch records (direct task dispatches whose original node/session is gone from the live mesh). Use when mesh_status keeps listing stale direct dispatches. '
-        + 'Dry-run by default; execute=true deletes. Active/pending/assigned/generating work and fresh unacknowledged dispatch failures (node/session still live) are always preserved, and the append-only ledger history is kept. Args: execute, dry_run, include_terminal.',
+        + 'Dry-run by default; execute=true deletes. Active/pending/assigned/generating work and fresh unacknowledged dispatch failures (node/session still live) are always preserved, and the append-only ledger history is kept.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -1104,9 +1052,8 @@ export const MESH_NOTE_TOOL = {
     name: 'mesh_note',
     description: 'Record or retract a durable operating note for this mesh — a runtime-accumulated lesson every future coordinator inherits. '
         + 'Provider-neutral: it persists in the mesh ledger and is injected into every coordinator\'s system prompt at launch (codex, hermes, antigravity, claude alike). Select with `action` (REQUIRED):\n'
-        + '• record — when you learn something durable (a provider quirk, a pattern to avoid, a recovery lesson), and before closing a mission that taught one. Keep each note to one concrete, reusable fact; not for transient task status (use missions/checkpoints). '
-        + 'Args: text (required), category, pinned, ttl_days, expiresAt, supersedes, subject_key.\n'
-        + '• forget — when an injected note is stale or wrong. Appends a tombstone so the note(s) stop riding into future prompts; history is preserved (append-only). Target by note_id (exact) or by exact text; provide at least one. Args: note_id, text, reason.',
+        + '• record — when you learn something durable (a provider quirk, a pattern to avoid, a recovery lesson), and before closing a mission that taught one. Keep each note to one concrete, reusable fact; not for transient task status (use missions/checkpoints).\n'
+        + '• forget — when an injected note is stale or wrong. Appends a tombstone so the note(s) stop riding into future prompts; history is preserved (append-only). Target by note_id (exact) or by exact text; provide at least one.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -1131,9 +1078,8 @@ export const MESH_NOTE_TOOL = {
             },
             expiresAt: {
                 type: 'string',
-                description: 'record: optional explicit ISO-8601 expiry, an alternative to ttl_days. Wins over ttl_days. Ignored when pinned.',
+                description: 'record: optional explicit ISO-8601 expiry, an alternative to ttl_days (expires_at, snake_case, is also accepted though not published). Wins over ttl_days. Ignored when pinned.',
             },
-            expires_at: { type: 'string', description: 'Snake_case alias for expiresAt.' },
             supersedes: {
                 type: 'string',
                 description: 'record: optional version-supersede — the note_id of an earlier note this one replaces, OR a subject_key shared with earlier notes. Matching earlier LIVE notes are hidden from the prompt (ledger kept). Pinned notes are never hidden by supersede.',
@@ -1143,7 +1089,6 @@ export const MESH_NOTE_TOOL = {
                 description: 'record: optional stable subject key grouping notes about the same subject. Drives supersede targeting and read-side folding (same category AND subject_key collapse to one injected entry, newest kept). When omitted, folding falls back to a leading [tag] bracket in the text.',
             },
             note_id: { type: 'string', description: 'forget: the ledger note id to retract (full/exact — no prefix matching). Returned by record as noteId, or visible in mesh_task_history. An id that matches no live note returns success:false, code:note_not_found — do not guess/truncate an id.' },
-            noteId: { type: 'string', description: 'CamelCase alias for note_id.' },
             reason: { type: 'string', description: 'forget: optional short reason, recorded on the tombstone for audit.' },
         },
         required: ['action'],
@@ -1222,7 +1167,7 @@ export const MESH_CONFIG_TOOL = {
         + '• kind="change_impact" — the Change Impact config (read-only, declarative, never executed): which package/file changes between the live daemon build and workspace HEAD need a daemon rebuild/restart vs a web-only redeploy vs nothing. Use when deciding whether a landed change needs a daemon restart. '
         + 'Same `mode` values: schema; validate (loads .adhdev/change-impact.{json,yaml,yml} or repo-mesh-change-impact.* unless inline `config`); suggest (web-* → web-only, others → daemon-runtime, docs/license markers → non-runtime; review and save before it takes effect).\n'
         + '• kind="mesh_json" — gated WRITE of `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Use when the user wants the coordinator prompt/config committed to the repo. '
-        + 'Dry-run by default (write=false), never clobbers an existing file unless overwrite=true, validates before writing. Overwrite silently replaces the file: present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope. Args: node_id, workspace, write, overwrite (no `mode`).',
+        + 'Dry-run by default (write=false), never clobbers an existing file unless overwrite=true, validates before writing. Overwrite silently replaces the file: present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope; takes no `mode`.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -1306,17 +1251,12 @@ export const MESH_MAGI_REVIEW_TOOL = {
             artifacts: { type: 'array', items: { type: 'string' }, description: 'Inline content when not file-backed: a doc/diff, a log/error dump, or a prior single-worker RCA to refute.' },
             n: { type: 'number', description: 'Global replica override per slot (clamped by the total-replica guard cap, default 12).' },
             task_kind: { type: 'string', enum: ['claim_audit', 'rca', 'design', 'freeform'], description: 'REQUIRED. Selects (1) the SINGLE output schema injected into each replica prompt and the strict parser used at collection (no schema-on-schema conflict), AND (2) the user-configured kind-panel binding that supplies the fan-out slots (mesh settings → magiKindPanels; errors magi_kind_not_configured if that kind has no configured slots — no named-panel/inline/preset fallback). claim_audit: {claims[],top_findings[],open_questions[]}. rca: {rootCause,failsAt,mechanism,evidence[],fixDirection,confidence}. design: {recommendation,rationale,alternatives[],tradeoffs[],risks[],evidence[],confidence}. freeform: no schema — natural-language answer, parsing/evidence checks waived, cross-verification is weak. Every kind except freeform requires non-empty evidence[]; an empty-evidence or schema-invalid answer triggers ONE delta re-request before being dropped as unparseable. Do NOT also embed an output-format schema in the question — it collides with this contract (a warning is surfaced if detected).' },
-            taskKind: { type: 'string', enum: ['claim_audit', 'rca', 'design', 'freeform'], description: 'CamelCase alias for task_kind.' },
             mode: { type: 'string', enum: ['rca', 'investigation', 'claim_audit', 'design_review', 'code_audit'], description: 'Synthesis emphasis hint — affects labels only, never the agent count or schema. Distinct from task_kind (which selects the output schema).' },
             require_independent_evidence: { type: 'boolean', description: 'Default true — high-impact claims with no file:line/source evidence are routed to needs_verification.' },
-            requireIndependentEvidence: { type: 'boolean', description: 'CamelCase alias for require_independent_evidence.' },
             include_stale: { type: 'boolean', description: 'Default false. By default, panel slots whose node HEAD commit differs from the coordinator reference commit are EXCLUDED (they would investigate different code). Set true to fan out to them anyway — results will be git-skewed and a warning is surfaced. If exclusion drops the panel below 2 independent targets the call errors rather than degrading to N=1; include_stale=true is one way to recover.' },
-            includeStale: { type: 'boolean', description: 'CamelCase alias for include_stale.' },
             wait: { type: 'boolean', description: 'Default true — collect replica outputs and return the synthesis. Set false to dispatch async and return a consensusGroupId handle; collect later with mesh_magi_collect.' },
             wait_timeout_ms: { type: 'number', description: 'Max time to wait for replica completion before returning a partial "missing K of N" synthesis. Default 8 min, max 20 min.' },
-            waitTimeoutMs: { type: 'number', description: 'CamelCase alias for wait_timeout_ms.' },
             auto_cleanup: { type: 'boolean', description: 'Default = mesh policy magiSessionCleanup (ON / stop_and_delete unless overridden). Once all replicas are terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified) so repeated reviews don\'t accumulate idle worker sessions. Reused/coordinator/other sessions are never touched. Set false to preserve auto-launched worker sessions for inspection. No effect on a partial (non-terminal) collection.' },
-            autoCleanup: { type: 'boolean', description: 'CamelCase alias for auto_cleanup.' },
         },
         required: ['question', 'task_kind'],
     },
@@ -1329,16 +1269,11 @@ export const MESH_MAGI_COLLECT_TOOL = {
         type: 'object' as const,
         properties: {
             consensus_group_id: { type: 'string', description: 'The consensusGroupId returned by a wait=false mesh_magi_review.' },
-            consensusGroupId: { type: 'string', description: 'CamelCase alias for consensus_group_id.' },
             task_kind: { type: 'string', enum: ['claim_audit', 'rca', 'design', 'freeform'], description: 'Optional override of the task_kind used to parse replica answers. Normally recovered automatically from the original dispatch — only set this if the dispatched ledger entry was pruned and auto-recovery falls back to claim_audit incorrectly.' },
-            taskKind: { type: 'string', enum: ['claim_audit', 'rca', 'design', 'freeform'], description: 'CamelCase alias for task_kind.' },
             require_independent_evidence: { type: 'boolean', description: 'Default true — high-impact claims with no file:line/source evidence are routed to needs_verification.' },
-            requireIndependentEvidence: { type: 'boolean', description: 'CamelCase alias for require_independent_evidence.' },
             wait: { type: 'boolean', description: 'Default false (snapshot). Set true to block for outstanding replicas up to wait_timeout_ms before synthesizing.' },
             wait_timeout_ms: { type: 'number', description: 'When wait=true, max time to wait for remaining replica completion. Default 8 min, max 20 min.' },
-            waitTimeoutMs: { type: 'number', description: 'CamelCase alias for wait_timeout_ms.' },
             auto_cleanup: { type: 'boolean', description: 'Default = mesh policy magiSessionCleanup (ON / stop_and_delete). When the collection is terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified). Reused/coordinator/other sessions are never touched. Set false to preserve them. No effect on a partial (non-terminal) snapshot.' },
-            autoCleanup: { type: 'boolean', description: 'CamelCase alias for auto_cleanup.' },
             verbose: { type: 'boolean', description: 'Default false. When true, each synthesis.replicas[] entry also carries rawAnswer — the replica\'s raw end-user answer text (capped). Omitted by default to keep the payload small; the structured clusters already carry the parsed claims.' },
         },
         required: ['consensus_group_id'],
@@ -1350,9 +1285,9 @@ export const MESH_MAGI_KIND_PANEL_TOOL = {
     name: 'mesh_magi_kind_panel',
     description: 'Read or bind the MAGI kind→panel slot lists for THIS mesh (machine-local ~/.adhdev/meshes.json → `meshes[].magiKindPanels`). The binding is what `mesh_magi_review({ task_kind })` resolves to — the SOLE panel-resolution path. '
         + 'Use it when mesh_magi_review fails with magi_kind_not_configured, or to confirm what a task_kind resolves to before a review. SCOPE: PER MESH, machine-local (NOT repo-committed); another mesh on this machine keeps its own bindings. Select with `action` (REQUIRED):\n'
-        + '• list — read-only: every configured kind binding, or just `task_kind`\'s. The response `scope` names the mesh. Args: task_kind.\n'
+        + '• list — read-only: every configured kind binding, or just `task_kind`\'s. The response `scope` names the mesh.\n'
         + '• set — bind `task_kind` to `slots`. WHOLESALE REPLACEMENT: the slots become the kind\'s COMPLETE set (prior slots dropped, not merged), so present the current-vs-new lists (the dry-run returns `currentSlots`) and get EXPLICIT user approval before write=true. Defaults to dry-run. '
-        + 'A slot\'s `nodeId`, when given, MUST name a node of this mesh — a foreign/unknown id is rejected (invalid_magi_kind_panel). Args: task_kind, slots, write.',
+        + 'A slot\'s `nodeId`, when given, MUST name a node of this mesh — a foreign/unknown id is rejected (invalid_magi_kind_panel).',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -1391,10 +1326,10 @@ export const MESH_NODE_SLOTS_TOOL = {
     name: 'mesh_node_slots',
     description: 'Read, draft, or change a mesh node\'s capability slots (policy.slots) — the provider/model/thinking + difficulty + capability-tag profile that task→node fitness routing and MAGI fan-out match against. '
         + 'Use it when routing keeps landing work on a poor-fit node, when a node has no slots, or after CLI agents were installed on a node. Select with `action` (REQUIRED):\n'
-        + '• list — read-only: the node\'s current slots. Args: node_id.\n'
+        + '• list — read-only: the node\'s current slots.\n'
         + '• propose — read-only AUTO-DETECT: probes the node\'s installed CLI agents (get_status_metadata → availableProviders, category=cli + installed=true), maps each through a seeded provider→(model/thinkingLevel/difficulty/maxParallel) table, and returns `proposedSlots` with per-slot rationale plus `droppedSlots` / `droppedProviders` / `destructive` '
-        + '(hand-tuned slots, tuned maxParallel, providers not on PATH are NOT preserved by the draft — present those before approving). Detects nothing → proposes nothing. Never writes. Args: node_id, include_magi.\n'
-        + '• set — PROPOSE (dry-run, default) or APPLY (write=true) a slot list. WHOLESALE REPLACEMENT: the `slots` you pass become the COMPLETE new list; any prior slot not in it is dropped. The dry-run returns `currentSlots` vs `proposedSlots` — present the diff and get EXPLICIT user approval before write=true. Apply goes through update_mesh_node (machine-local node policy). Args: node_id, slots, reason, write.',
+        + '(hand-tuned slots, tuned maxParallel, providers not on PATH are NOT preserved by the draft — present those before approving). Detects nothing → proposes nothing. Never writes.\n'
+        + '• set — PROPOSE (dry-run, default) or APPLY (write=true) a slot list. WHOLESALE REPLACEMENT: the `slots` you pass become the COMPLETE new list; any prior slot not in it is dropped. The dry-run returns `currentSlots` vs `proposedSlots` — present the diff and get EXPLICIT user approval before write=true. Apply goes through update_mesh_node (machine-local node policy).',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -1404,7 +1339,6 @@ export const MESH_NODE_SLOTS_TOOL = {
                 description: 'Which slot operation to run (required). Each action accepts only its own arguments — see the tool description.',
             },
             node_id: { type: 'string', description: 'REQUIRED — the mesh node id. All actions.' },
-            nodeId: { type: 'string', description: 'CamelCase alias for node_id.' },
             slots: {
                 type: 'array',
                 description: 'set: the COMPLETE desired capability-slot list (wholesale replacement). Each slot: { provider (REQUIRED), model?, thinkingLevel?, difficulty?, capability?, maxParallel? }. Required for set.',
@@ -1424,7 +1358,6 @@ export const MESH_NODE_SLOTS_TOOL = {
             reason: { type: 'string', description: 'set: optional short rationale, echoed in the dry-run so the user sees WHY the change is suggested.' },
             write: { type: 'boolean', description: 'set: when true, apply the slot list (wholesale replacement). Defaults false (dry-run preview of proposedSlots + currentSlots).' },
             include_magi: { type: 'boolean', description: 'propose: also draft a MAGI panel (one slot per detected provider, pinned to this node, models unpinned) for binding via mesh_magi_kind_panel action "set". Defaults false. Deliberately NOT a per-task_kind assignment — provider manifests carry no rca/design/claim_audit suitability data.' },
-            includeMagi: { type: 'boolean', description: 'CamelCase alias for include_magi.' },
         },
         required: ['action', 'node_id'],
     },
@@ -1438,8 +1371,8 @@ export const MESH_COORDINATOR_PROMPT_APPEND_TOOL = {
     name: 'mesh_coordinator_prompt_append',
     description: 'Read or write the user-level coordinator prompt APPEND text for a CLI type — the per-machine file ~/.adhdev/coordinator-prompts/<cli>.append.md on this MCP server\'s daemon, applied to every mesh this daemon coordinates. '
         + 'Use it only when the user asks to add a standing instruction to every coordinator on this machine. Select with `action` (REQUIRED):\n'
-        + '• get — read the current append text. Read it before `set` so you know what you would replace. Args: cli_type.\n'
-        + '• set — write (or, with empty/omitted content, clear) the append file. WHOLESALE REPLACE of the whole file, not an incremental add. Args: cli_type, content.\n'
+        + '• get — read the current append text. Read it before `set` so you know what you would replace.\n'
+        + '• set — write (or, with empty/omitted content, clear) the append file. WHOLESALE REPLACE of the whole file, not an incremental add.\n'
         + 'APPEND ONLY (a safety boundary, not a missing feature): this always stacks AFTER whichever base prompt wins; it can NEVER replace the daemon\'s base coordinator prompt (the OVERRIDE file) — that stays a dashboard-only, human-gated action, so a coordinator cannot erase its own core operating rules.',
     inputSchema: {
         type: 'object' as const,

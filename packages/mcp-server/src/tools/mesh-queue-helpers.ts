@@ -130,6 +130,65 @@ export function buildQueueStatusSummary(queue: any[]): Record<string, unknown> {
     };
 }
 
+/**
+ * buildQueueStatusSummary over (whole-queue per-status counts from the daemon) +
+ * (the annotated ACTIVE rows, which carry the staleAssigned marks) — the same shape,
+ * without reading the historical rows. `allowed` restricts it to a status subset
+ * (the visible summary of a filtered view).
+ */
+export function buildQueueStatusSummaryFromCounts(
+    statusCounts: Record<string, number>,
+    activeRows: any[],
+    allowed?: ReadonlySet<string>,
+): Record<string, unknown> {
+    const pick = (status: string) => (!allowed || allowed.has(status) ? statusCounts[status] ?? 0 : 0);
+    const counts = { pending: pick('pending'), assigned: pick('assigned'), completed: pick('completed'), failed: pick('failed'), cancelled: pick('cancelled') };
+    let totalCount = 0;
+    for (const [status, n] of Object.entries(statusCounts)) {
+        if (!allowed || allowed.has(status)) totalCount += n;
+    }
+    let staleAssigned = 0;
+    if (!allowed || allowed.has('assigned')) {
+        for (const task of activeRows) {
+            if (task?.status === 'assigned' && task?.staleAssigned === true) staleAssigned += 1;
+        }
+    }
+    const liveAssigned = Math.max(0, counts.assigned - staleAssigned);
+    return {
+        totalCount,
+        activeCount: counts.pending + liveAssigned,
+        historicalCount: counts.completed + counts.failed + counts.cancelled,
+        counts,
+        activeCounts: { pending: counts.pending, assigned: liveAssigned },
+        staleAssignedCount: staleAssigned,
+        rawActiveCounts: { pending: counts.pending, assigned: counts.assigned },
+        historicalCounts: { completed: counts.completed, failed: counts.failed, cancelled: counts.cancelled },
+    };
+}
+
+/** The status subset a view/filter shows (undefined = everything). */
+export function queueViewStatusSet(view: QueueViewMode, statuses?: string[]): ReadonlySet<string> | undefined {
+    if (statuses?.length) return new Set(statuses);
+    if (view === 'active') return ACTIVE_QUEUE_STATUSES;
+    if (view === 'historical') return HISTORICAL_QUEUE_STATUSES;
+    return undefined;
+}
+
+/**
+ * The maintenance report's counts from the annotated ACTIVE rows + daemon-side
+ * historical counts — the input buildCompactQueueMaintenanceReport reads. The
+ * per-row old-historical candidates are never listed in compact mode anyway.
+ */
+export function buildQueueMaintenanceCountsReport(activeRows: any[], historicalRecordCount: number, oldHistoricalRecordCount: number): Record<string, unknown> {
+    const report = buildQueueMaintenanceReport(activeRows) as Record<string, any>;
+    return {
+        ...report,
+        historicalRecordCount,
+        oldHistoricalRecordCount,
+        cleanupCandidateCount: (report.staleAssignedCount ?? 0) + oldHistoricalRecordCount,
+    };
+}
+
 export function normalizeQueueViewMode(value: unknown): QueueViewMode {
     return value === 'active' || value === 'historical' || value === 'all' ? value : 'all';
 }

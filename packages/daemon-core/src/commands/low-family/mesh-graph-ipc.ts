@@ -54,7 +54,7 @@ import {
     recordGraphGateReleased,
     recordGraphNodePatched,
 } from '../../mesh/mesh-graph-provenance.js';
-import { computeMeshMissionStats, computeMeshTaskStats } from '../../mesh/mesh-task-stats.js';
+import { computeMeshMissionStatsBatch, computeMeshTaskStats, rollupMissionStats } from '../../mesh/mesh-task-stats.js';
 import { pruneStaleDirectDispatches } from '../../mesh/mesh-active-work.js';
 import { getActiveDirectDispatches, getQueue } from '../../mesh/mesh-work-queue.js';
 import { readLocalRecords } from '../../mesh/mesh-local-records.js';
@@ -354,6 +354,15 @@ const taskStatsQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: an
     const req = decodeTaskStatsQueryRequest(args);
     if (!req) return badRequest('task_stats_query');
     try {
+        // Batch rollups (mesh_status verbose): ONE queue read + ONE record read for
+        // every mission, instead of one full round (twice over) per mission.
+        if (req.missionIds) {
+            const rollups = computeMeshMissionStatsBatch(req.meshId, req.missionIds, req.tail !== undefined ? { tail: req.tail } : undefined);
+            const missions: Record<string, Record<string, unknown>> = {};
+            for (const [missionId, rollup] of rollups) missions[missionId] = rollup as unknown as Record<string, unknown>;
+            const response: TaskStatsQueryResponse = { tasks: [], missions };
+            return { success: true, ...response };
+        }
         const tasks = computeMeshTaskStats(req.meshId, {
             ...(req.taskIds ? { taskIds: [...req.taskIds] } : {}),
             ...(req.missionId ? { missionId: req.missionId } : {}),
@@ -362,7 +371,13 @@ const taskStatsQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: an
         const response: TaskStatsQueryResponse = { tasks: tasks as unknown as Record<string, unknown>[] };
         if (req.rollup && req.missionId) {
             try {
-                response.mission = computeMeshMissionStats(req.meshId, req.missionId) as unknown as Record<string, unknown>;
+                // Default window: the rollup of exactly the per-task list above (same
+                // queue + record window) — was a second, identical computeMeshTaskStats
+                // pass. A caller-sized `tail` keeps the rollup on its default window.
+                const rollup = req.tail === undefined
+                    ? rollupMissionStats(req.missionId, tasks)
+                    : computeMeshMissionStatsBatch(req.meshId, [req.missionId]).get(req.missionId);
+                if (rollup) response.mission = rollup as unknown as Record<string, unknown>;
             } catch { /* rollup is an enhancement — the per-task stats still return */ }
         }
         return { success: true, ...response };

@@ -596,6 +596,22 @@ describe('turn-ipc — mission_list_query (C-W9b)', () => {
         }
         expect(decodeMissionListQueryResponse(res)).toEqual(res)
     })
+
+    it('meshStatusView: request enum + rows carrying record timestamps', () => {
+        expect(decodeMissionListQueryRequest({ v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', meshStatusView: 'compact' })).not.toBeNull()
+        expect(decodeMissionListQueryRequest({ v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', meshStatusView: 'full' })).toBeNull()
+        const res = {
+            missions: [{
+                id: 'mission-1', meshId: 'm1', title: 't', goalPreview: 'p', goalTruncated: false,
+                status: 'active' as const,
+                tasks: { total: 0, pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0, blocked: 0, lastActivityAt: null },
+                createdAt: '2026-09-27T00:00:00.000Z', updatedAt: '2026-09-27T00:00:00.000Z', closeCandidateEmittedAt: null,
+            }],
+            historyFold: null, truncated: false, matched: 1,
+        }
+        expect(decodeMissionListQueryResponse(res)).toEqual(res)
+        expect(decodeMissionListQueryResponse({ ...res, missions: [{ ...res.missions[0], briefJson: '{}' }] })).toBeNull()
+    })
 })
 
 describe('turn-ipc — C-W9a record / queue / active-work commands', () => {
@@ -616,6 +632,10 @@ describe('turn-ipc — C-W9a record / queue / active-work commands', () => {
         expect(decodeQueueQueryRequest({ v, meshId: 'm', statuses: ['has space'] })).toBeNull()
         expect(decodeQueueQueryResponse({ entries: [row] })).not.toBeNull()
         expect(decodeQueueQueryResponse({ entries: [{ status: 'pending' }] })).toBeNull()
+        expect(decodeQueueQueryRequest({ v, meshId: 'm', statuses: ['pending'], withCounts: true, historicalOlderThanMs: 1000, withDependencyHeads: true })).not.toBeNull()
+        expect(decodeQueueQueryRequest({ v, meshId: 'm', historicalOlderThanMs: -1 })).toBeNull()
+        expect(decodeQueueQueryResponse({ entries: [row], counts: { completed: 3 }, oldHistoricalCount: 1, dependencyHeads: [{ id: 'd', status: 'failed', cancelReason: 'x' }] })).not.toBeNull()
+        expect(decodeQueueQueryResponse({ entries: [row], dependencyHeads: [{ id: 'd' }] })).toBeNull()
         expect(decodeQueueEnqueueRequest({ v, meshId: 'm', message: 'do it', options: { difficulty: 'easy' }, decision: { decision: { decision: 'single' } } })).not.toBeNull()
         expect(decodeQueueEnqueueRequest({ v, meshId: 'm' })).toBeNull()
         expect(decodeQueueEnqueueResponse({ entry: row })).not.toBeNull()
@@ -647,9 +667,9 @@ describe('turn-ipc — C-W9a record / queue / active-work commands', () => {
         expect(decodeGraphAuditRecordResponse({ recorded: true })).not.toBeNull()
     })
 
-    it('active_work_query: the scheduling runtime needs a mesh snapshot; response parts are all optional records', () => {
+    it('active_work_query: the scheduling runtime may omit the mesh (the daemon reads its own); response parts are all optional records', () => {
         expect(decodeActiveWorkQueryRequest({ v, meshId: 'm', nodes: [{ id: 'n' }], includeInputs: true, recordTail: 200 })).not.toBeNull()
-        expect(decodeActiveWorkQueryRequest({ v, meshId: 'm', includeSchedulingRuntime: true })).toBeNull()
+        expect(decodeActiveWorkQueryRequest({ v, meshId: 'm', includeSchedulingRuntime: true })).not.toBeNull()
         expect(decodeActiveWorkQueryRequest({ v, meshId: 'm', includeSchedulingRuntime: true, mesh: { id: 'm', nodes: [] } })).not.toBeNull()
         expect(decodeActiveWorkQueryRequest({ v, meshId: 'm', nodes: 'x' })).toBeNull()
         expect(decodeActiveWorkQueryResponse({ activeWork: { activeWork: [] }, records: [], directDispatches: [], summary: { totalEntries: 0 } })).not.toBeNull()
@@ -661,6 +681,15 @@ describe('turn-ipc — C-W9a record / queue / active-work commands', () => {
         expect(decodeRecoveryContextQueryRequest({ v, meshId: 'm' })).toBeNull()
         expect(decodeRecoveryContextQueryResponse({ context: { consecutiveNodeFailures: 0, advice: 'free text' } })).not.toBeNull()
         expect(decodeRecoveryContextQueryResponse({ context: {} })).toBeNull()
+    })
+
+    it('recovery_context_query batch: nodeIds is exclusive with nodeId/sessionId; contexts per node', () => {
+        expect(decodeRecoveryContextQueryRequest({ v, meshId: 'm', nodeIds: ['n1', 'n2'] })).not.toBeNull()
+        expect(decodeRecoveryContextQueryRequest({ v, meshId: 'm', nodeIds: [] })).toBeNull()
+        expect(decodeRecoveryContextQueryRequest({ v, meshId: 'm', nodeIds: ['n1'], nodeId: 'n1' })).toBeNull()
+        expect(decodeRecoveryContextQueryResponse({ contexts: { n1: { consecutiveNodeFailures: 1 } } })).not.toBeNull()
+        expect(decodeRecoveryContextQueryResponse({ contexts: { n1: {} } })).toBeNull()
+        expect(decodeRecoveryContextQueryResponse({})).toBeNull()
     })
 })
 
@@ -721,6 +750,9 @@ describe('turn-ipc — C-W9c graph gate/plan/patch/view, task stats, prune, orph
         expect(decodeTaskStatsQueryRequest({ v, meshId: 'm', rollup: true })).toBeNull()
         expect(decodeTaskStatsQueryResponse({ tasks: [{ taskId: 't-1', status: 'completed' }], mission: { missionId: 'ms-1', taskCount: 1 } })).not.toBeNull()
         expect(decodeTaskStatsQueryResponse({ tasks: 'x' })).toBeNull()
+        expect(decodeTaskStatsQueryRequest({ v, meshId: 'm', missionIds: ['ms-1', 'ms-2'] })).not.toBeNull()
+        expect(decodeTaskStatsQueryRequest({ v, meshId: 'm', missionIds: ['ms-1'], missionId: 'ms-1' })).toBeNull()
+        expect(decodeTaskStatsQueryResponse({ tasks: [], missions: { 'ms-1': { missionId: 'ms-1', taskCount: 0 } } })).not.toBeNull()
     })
 
     it('prune_stale_direct: execute/includeTerminal/source are all optional', () => {

@@ -207,3 +207,108 @@ export function selectSoleActiveDirectDispatchTaskId(self: MeshRuntimeStore, mes
     const taskId = typeof row?.task_id === 'string' ? row.task_id.trim() : '';
     return taskId || null;
 }
+
+// ── Slim queue facts (MCP read-latency pass, 2026-09-27) ────────────────────
+//
+// Mission aggregates, mission/task stats, and view-side dependency annotation used
+// to `getQueue(meshId)` — JSON.parse every payload of the mesh (5 MB on the preview
+// daemon) — once PER MISSION. These reads decide on columns and pull the handful
+// of payload scalars they need with SQLite's json_extract (no JS object per row).
+
+/** The payload scalars mission aggregation + task stats read, per queue row. */
+export interface MeshQueueFacts {
+    id: string;
+    status: MeshTaskStatus;
+    missionId?: string;
+    dependsOn?: string[];
+    blockedReason?: string;
+    cancelReason?: string;
+    updatedAt?: string;
+    dispatchTimestamp?: string;
+    requeueCount?: number;
+}
+
+const FACT_PATHS = "'$.missionId', '$.dependsOn', '$.blockedReason', '$.cancelReason', '$.updatedAt', '$.dispatchTimestamp', '$.requeueCount'";
+
+function readFactsRow(row: { id: string; status: MeshTaskStatus; f: string | null }): MeshQueueFacts {
+    const facts: MeshQueueFacts = { id: row.id, status: row.status };
+    if (row.f === null) return facts;
+    let parts: unknown;
+    try { parts = JSON.parse(row.f); } catch { return facts; }
+    if (!Array.isArray(parts)) return facts;
+    const [missionId, dependsOn, blockedReason, cancelReason, updatedAt, dispatchTimestamp, requeueCount] = parts;
+    if (typeof missionId === 'string') facts.missionId = missionId;
+    if (Array.isArray(dependsOn)) facts.dependsOn = dependsOn.filter((d): d is string => typeof d === 'string');
+    if (typeof blockedReason === 'string') facts.blockedReason = blockedReason;
+    if (typeof cancelReason === 'string') facts.cancelReason = cancelReason;
+    if (typeof updatedAt === 'string') facts.updatedAt = updatedAt;
+    if (typeof dispatchTimestamp === 'string') facts.dispatchTimestamp = dispatchTimestamp;
+    if (typeof requeueCount === 'number') facts.requeueCount = requeueCount;
+    return facts;
+}
+
+/**
+ * Every queue row of a mesh as `MeshQueueFacts`, in created_at order (the same
+ * order getQueueEntries returns). A row whose payload is not valid JSON keeps its
+ * column facts only.
+ */
+export function getQueueFacts(self: MeshRuntimeStore, meshId: string): MeshQueueFacts[] {
+    self.ensureLegacyQueueMigrated(meshId);
+    const rows = self.db.prepare(
+        `SELECT id, status, CASE WHEN json_valid(payload) THEN json_extract(payload, ${FACT_PATHS}) END AS f
+         FROM mesh_queue WHERE mesh_id = ? ORDER BY created_at ASC`
+    ).all(meshId) as Array<{ id: string; status: MeshTaskStatus; f: string | null }>;
+    return rows.map(readFactsRow);
+}
+
+/** Row count per status over the whole mesh queue, plus terminal rows last updated before `olderThanIso`. */
+export function getQueueStatusCounts(
+    self: MeshRuntimeStore,
+    meshId: string,
+    olderThanIso?: string,
+): { counts: Record<string, number>; oldHistoricalCount: number } {
+    self.ensureLegacyQueueMigrated(meshId);
+    const rows = self.db.prepare(
+        `SELECT status, COUNT(*) AS n,
+                SUM(CASE WHEN ? IS NOT NULL AND status IN ('completed', 'failed', 'cancelled') AND updated_at < ? THEN 1 ELSE 0 END) AS old
+         FROM mesh_queue WHERE mesh_id = ? GROUP BY status`
+    ).all(olderThanIso ?? null, olderThanIso ?? null, meshId) as Array<{ status: string; n: number; old: number | null }>;
+    const counts: Record<string, number> = {};
+    let oldHistoricalCount = 0;
+    for (const row of rows) {
+        counts[row.status] = row.n;
+        oldHistoricalCount += row.old ?? 0;
+    }
+    return { counts, oldHistoricalCount };
+}
+
+/** id / status / blockedReason / cancelReason for the given row ids (missing ids are absent). */
+export function getQueueDependencyHeads(
+    self: MeshRuntimeStore,
+    meshId: string,
+    ids: readonly string[],
+): Array<{ id: string; status: MeshTaskStatus; blockedReason?: string; cancelReason?: string }> {
+    const unique = [...new Set(ids.filter(id => typeof id === 'string' && id))];
+    if (unique.length === 0) return [];
+    self.ensureLegacyQueueMigrated(meshId);
+    const out: Array<{ id: string; status: MeshTaskStatus; blockedReason?: string; cancelReason?: string }> = [];
+    // Chunked: SQLite's bound-parameter limit.
+    for (let i = 0; i < unique.length; i += 500) {
+        const chunk = unique.slice(i, i + 500);
+        const rows = self.db.prepare(
+            `SELECT id, status,
+                    CASE WHEN json_valid(payload) THEN json_extract(payload, '$.blockedReason') END AS blocked,
+                    CASE WHEN json_valid(payload) THEN json_extract(payload, '$.cancelReason') END AS cancel
+             FROM mesh_queue WHERE mesh_id = ? AND id IN (${chunk.map(() => '?').join(', ')})`
+        ).all(meshId, ...chunk) as Array<{ id: string; status: MeshTaskStatus; blocked: unknown; cancel: unknown }>;
+        for (const row of rows) {
+            out.push({
+                id: row.id,
+                status: row.status,
+                ...(typeof row.blocked === 'string' ? { blockedReason: row.blocked } : {}),
+                ...(typeof row.cancel === 'string' ? { cancelReason: row.cancel } : {}),
+            });
+        }
+    }
+    return out;
+}

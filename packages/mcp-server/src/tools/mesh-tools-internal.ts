@@ -98,7 +98,8 @@ import {
     collectNodeSessionIds,
     unwrapCommandPayload,
 } from './mesh-session-helpers.js';
-import { activeWorkQuery, ledgerQuery, missionQuery, queueQuery, recordLocal, toolCallRecord } from '../ipc/turn-commands.js';
+import { ledgerQuery, missionQuery, queueQuery, recordLocal, toolCallRecord } from '../ipc/turn-commands.js';
+import { activeWorkQueryWithRuntime, slimNodesForActiveWork } from './mesh-daemon-reads.js';
 import type { buildMeshActiveWork as BuildMeshActiveWorkFn, DirectDispatchRecord, MeshLedgerEntry, MeshLedgerSummary, MeshWorkQueueEntry } from '@adhdev/daemon-core';
 import {
     ACTIVE_QUEUE_STATUSES,
@@ -622,7 +623,12 @@ export async function refreshMeshFromDaemon(ctx: MeshContext): Promise<{ settled
     // removal is settled, so callers must not escalate to the owning daemon.
     const settledNodeIds = new Set<string>();
     try {
-        const result = await ctx.transport.command('get_mesh', { meshId: ctx.mesh.id }) as any;
+        // membershipOnly: this refresh reads membership (ids / workspaces / identity /
+        // policy / facts) — git truth comes from the coordinator-held state. The
+        // daemon then skips its per-call local git hydration (~300 ms cold) and the
+        // duplicated lastGit/last_git blobs. An older daemon ignores the flag and
+        // answers the full snapshot, which this merge reads the same way.
+        const result = await ctx.transport.command('get_mesh', { meshId: ctx.mesh.id, membershipOnly: true }) as any;
         if (!result?.success || !Array.isArray(result.mesh?.nodes)) return { settledNodeIds, ok: false };
         const refreshedNodes = result.mesh.nodes
             .filter((n: any) => n?.id)
@@ -749,22 +755,28 @@ export async function readActiveWorkFromDaemon(ctx: MeshContext, opts: {
     compute?: boolean;
     includeInputs?: boolean;
     includeSummary?: boolean;
-}): Promise<{ activeWork?: MeshActiveWorkEvidence; records: MeshLedgerEntry[]; directDispatches: DirectDispatchRecord[]; summary?: MeshLedgerSummary }> {
-    const res = await activeWorkQuery(ctx.transport, {
-        meshId: ctx.mesh.id,
-        ...(opts.nodes ? { nodes: opts.nodes as Record<string, unknown>[] } : {}),
+    /** Also the scheduling runtime, from the daemon's own mesh record (see activeWorkQueryWithRuntime). */
+    includeSchedulingRuntime?: boolean;
+}): Promise<{ activeWork?: MeshActiveWorkEvidence; records: MeshLedgerEntry[]; directDispatches: DirectDispatchRecord[]; summary?: MeshLedgerSummary; schedulingRuntime?: Record<string, unknown> }> {
+    // Read-latency pass: nodes are slimmed to the session lists active work reads
+    // (a full node is ~9 KB of policy/facts/git), and callers no longer pass
+    // `queue` — the daemon reads its own (they used to ship the whole 5 MB queue).
+    const res = await activeWorkQueryWithRuntime(ctx, {
+        ...(opts.nodes ? { nodes: slimNodesForActiveWork(opts.nodes) } : {}),
         ...(opts.queue ? { queue: opts.queue as Record<string, unknown>[] } : {}),
         ...(opts.recordTail !== undefined ? { recordTail: opts.recordTail } : {}),
         ...(opts.includeTerminalDirect ? { includeTerminalDirect: true } : {}),
         ...(opts.compute === false ? { compute: false } : {}),
         ...(opts.includeInputs ? { includeInputs: true } : {}),
         ...(opts.includeSummary ? { includeSummary: true } : {}),
+        ...(opts.includeSchedulingRuntime ? { includeSchedulingRuntime: true } : {}),
     });
     return {
         ...(res.activeWork ? { activeWork: res.activeWork as unknown as MeshActiveWorkEvidence } : {}),
         records: (res.records ?? []) as unknown as MeshLedgerEntry[],
         directDispatches: (res.directDispatches ?? []) as unknown as DirectDispatchRecord[],
         ...(res.summary ? { summary: res.summary as unknown as MeshLedgerSummary } : {}),
+        ...(res.schedulingRuntime ? { schedulingRuntime: res.schedulingRuntime } : {}),
     };
 }
 
@@ -1168,7 +1180,7 @@ export async function recordRecoverableLaunchFailure(
     return failure;
 }
 
-function latestActiveLaunchFailureFromEntries(entries: MeshLedgerEntry[], nodeId: string): Record<string, unknown> | null {
+export function latestActiveLaunchFailureFromEntries(entries: MeshLedgerEntry[], nodeId: string): Record<string, unknown> | null {
     for (let i = entries.length - 1; i >= 0; i -= 1) {
         const entry = entries[i];
         if (entry.nodeId !== nodeId) continue;

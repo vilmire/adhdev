@@ -102,14 +102,29 @@ test('D2: the kept surface is still published', () => {
     assert.deepEqual((batchProps.on_dependency_failure as any).enum, ['block', 'cancel']);
 });
 
+/**
+ * Resolves the JSON-schema `properties` object a scope's aliases are checked
+ * against: {@link TOP_LEVEL_SCOPE} is the tool's own top-level properties;
+ * any other scope name is a top-level array-of-objects property, and the
+ * aliases apply to ITS items' properties (`tasks[]`, `patches[]`, `brief`, …).
+ * Generic over every tool in ALL_MESH_TOOLS, so a new MESH_ACCEPTED_ARG_ALIASES
+ * entry is covered automatically instead of needing a hardcoded map entry.
+ */
+function resolveScopeProps(toolName: string, scope: string): Props | undefined {
+    const tool = ALL_MESH_TOOLS.find(t => t.name === toolName) as { inputSchema?: { properties?: Props } } | undefined;
+    const topProps = tool?.inputSchema?.properties;
+    if (!topProps) return undefined;
+    if (scope === TOP_LEVEL_SCOPE) return topProps;
+    const scopeProp = topProps[scope] as { type?: string; items?: { type?: string; properties?: Props }; properties?: Props } | undefined;
+    // `brief` (mesh_mission_upsert) is a single nested object; `tasks`/`workspaces`/
+    // `patches` are arrays-of-objects whose ITEMS carry the aliased properties.
+    return scopeProp?.items?.properties ?? scopeProp?.properties;
+}
+
 test('D2: every alias in the accepted-alias table maps onto a PUBLISHED canonical key', () => {
-    const scopeProps: Record<string, Record<string, Props>> = {
-        mesh_enqueue_task: { [TOP_LEVEL_SCOPE]: taskProps },
-        mesh_enqueue_batch: { [TOP_LEVEL_SCOPE]: batchProps, tasks: batchTaskProps, workspaces: batchWorkspaceProps },
-    };
     for (const [tool, scopes] of Object.entries(MESH_ACCEPTED_ARG_ALIASES)) {
         for (const [scope, aliases] of Object.entries(scopes)) {
-            const props = scopeProps[tool]?.[scope];
+            const props = resolveScopeProps(tool, scope);
             assert.ok(props, `${tool}/${scope || '<top>'} has no schema scope`);
             for (const [alias, canonical] of Object.entries(aliases)) {
                 assert.ok(canonical in props!, `${tool}/${scope || '<top>'}: alias ${alias} → ${canonical}, which is not published`);

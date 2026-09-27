@@ -17,6 +17,7 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Handle, MarkerType, Position, ReactFlow, type Edge, type Node, type NodeProps, type NodeTypes } from '@xyflow/react'
+import './meshGraph.css'
 import type { MeshGraphTheme } from './meshGraphTheme'
 import { layoutMiniDag, MINI_DAG_LAYOUT, type MiniDagModel, type MiniDagNode } from './miniDagViewModel'
 import type { BlueprintEdgeState } from './blueprintViewModel'

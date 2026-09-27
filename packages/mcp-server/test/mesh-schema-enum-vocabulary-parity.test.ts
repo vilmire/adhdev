@@ -62,8 +62,12 @@ const EVERY_VOCABULARY = [
  * publishing their camelCase aliases (`taskMode` + `thinkingLevel` on
  * mesh_enqueue_task and on mesh_enqueue_batch tasks[]). The aliases are still
  * accepted — and enum-checked as their canonical key — by validate-tool-args.ts.
+ * The 2026-09-27 tools/list schema diet dropped it 16→14: mesh_send_task
+ * stopped publishing its camelCase `taskMode`/`deliveryMode` aliases (same
+ * D2 pattern, now applied mesh-wide) — still accepted via
+ * MESH_ACCEPTED_ARG_ALIASES and enum-checked as their canonical key.
  */
-const EXPECTED_VOCABULARY_PROPERTY_COUNT = 16;
+const EXPECTED_VOCABULARY_PROPERTY_COUNT = 14;
 
 interface EnumSite { tool: string; path: string; leaf: string; values: unknown }
 

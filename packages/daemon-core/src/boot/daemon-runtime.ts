@@ -31,6 +31,7 @@
 
 import { LOG } from '../logging/logger.js';
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
+import { compactSeqscribeDbAtShutdown } from '../seqscribe/db-maintenance.js';
 import type { DaemonBootConfig, DaemonRuntime, Disposer } from './daemon-components.js';
 import { bootPlatform } from './stages/platform.js';
 import { bootProviders } from './stages/providers.js';
@@ -62,6 +63,12 @@ export interface DaemonBootStages {
     startLoops(s7: MeshRuntimeStage): Promise<Disposer>;
     /** Final step after the bus closes. Default: VACUUM the mesh runtime DB. */
     vacuum(): void;
+    /**
+     * After `vacuum()`: compact the (closed) seqscribe DB at `dbPath`. Optional
+     * so injected test stages need not provide it; the default runs
+     * `compactSeqscribeDbAtShutdown` (threshold-gated, size-capped, never throws).
+     */
+    vacuumSeqscribe?(dbPath: string): void;
 }
 
 export const DEFAULT_DAEMON_BOOT_STAGES: DaemonBootStages = {
@@ -78,6 +85,13 @@ export const DEFAULT_DAEMON_BOOT_STAGES: DaemonBootStages = {
         // mesh-runtime.db grew to hundreds of MB because it was never compacted.
         // Last, after every writer stopped, so nothing contends for the lock.
         try { MeshRuntimeStore.getInstance().vacuum(); } catch { /* store unavailable — nothing to vacuum */ }
+    },
+    vacuumSeqscribe: (dbPath) => {
+        // Transcript pruning (seqscribe/writer-gc.ts) DELETEs rows; this is the
+        // one place the freed pages go back to the OS for a DB still in
+        // auto_vacuum=NONE (one-time conversion to INCREMENTAL). Runs only
+        // after the node closed and released its owner lock.
+        compactSeqscribeDbAtShutdown(dbPath);
     },
 };
 
@@ -124,10 +138,15 @@ export async function bootDaemonRuntime(
             }
             // 3. Release the seqscribe node (and its DB owner lock) after its
             //    transports stopped producing work.
+            const seqscribeDbPath = s4.seqscribe?.node?.dbPath ?? null;
             await s4.seqscribe?.close();
-            // 4. No emits after this point; then compact the mesh DB last.
+            // 4. No emits after this point; then compact the mesh DB, then the
+            //    (now closed) seqscribe DB, last.
             s3.bus.close();
             stages.vacuum();
+            if (seqscribeDbPath && stages.vacuumSeqscribe) {
+                runDisposer('seqscribe compaction', () => stages.vacuumSeqscribe!(seqscribeDbPath));
+            }
         })();
         return shutdownPromise;
     };

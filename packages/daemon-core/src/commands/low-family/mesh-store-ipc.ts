@@ -53,7 +53,9 @@ import {
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import type { MeshLedgerEntry } from '../../mesh/mesh-ledger.js';
 import { meshRecord } from '../../mesh/mesh-record.js';
-import { getLocalRecordSummary, getSessionRecoveryContext, readLocalRecords } from '../../mesh/mesh-local-records.js';
+import { getLocalRecordSummary, getSessionRecoveryContext, readLocalRecords, recoveryContextRecords } from '../../mesh/mesh-local-records.js';
+import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
+import { getLastQuotaRanking } from '../../mesh/mesh-quota-routing.js';
 import {
     cancelTask,
     enqueueTask,
@@ -80,7 +82,7 @@ import {
     recordSingleEnqueueDecision,
 } from '../../mesh/mesh-graph-provenance.js';
 import { commitMeshGraphPlan, MeshGraphPlanError, type MeshGraphPlanRequest } from '../../mesh/mesh-graph-plan.js';
-import { listMeshMissionsForTool, type MeshMissionStatus } from '../../mesh/mesh-missions.js';
+import { getMeshStatusMissionSummaries, getMeshStatusMissionsCompact, listMeshMissionsForTool, type MeshMissionStatus } from '../../mesh/mesh-missions.js';
 import { buildMeshActiveWork } from '../../mesh/mesh-active-work.js';
 import { computeMeshGraphUsage, listMeshBlockedGates } from '../../mesh/mesh-graph-usage.js';
 import { buildMeshSchedulingRuntime } from '../../mesh/mesh-scheduling-runtime.js';
@@ -161,7 +163,7 @@ const ledgerQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) 
 // ─── mission_list_query (C-W9b) ─────────────────────────────────────────────
 
 /** The wire row for one mission: only the keys `isMissionListSummaryWire` allows (verbose ⇒ `goal`, slim ⇒ `goalPreview`+`goalTruncated`). */
-function toMissionListSummaryWire(summary: Record<string, unknown>): MissionListSummaryWire {
+function toMissionListSummaryWire(summary: Record<string, unknown>, withTimestamps = false): MissionListSummaryWire {
     const base = {
         id: summary.id,
         meshId: summary.meshId,
@@ -170,7 +172,13 @@ function toMissionListSummaryWire(summary: Record<string, unknown>): MissionList
         ...(summary.source !== undefined ? { source: summary.source } : {}),
         tasks: summary.tasks,
         ...(summary.stats !== undefined ? { stats: summary.stats } : {}),
+        // `brief` is the parsed form of the stored `briefJson`; only the parsed copy travels.
         ...(summary.brief !== undefined ? { brief: summary.brief } : {}),
+        // meshStatusView rows (mesh_status) keep the record timestamps they always showed.
+        ...(withTimestamps && typeof summary.createdAt === 'string' ? { createdAt: summary.createdAt } : {}),
+        ...(withTimestamps && typeof summary.updatedAt === 'string' ? { updatedAt: summary.updatedAt } : {}),
+        ...(withTimestamps && (typeof summary.closeCandidateEmittedAt === 'string' || summary.closeCandidateEmittedAt === null)
+            ? { closeCandidateEmittedAt: summary.closeCandidateEmittedAt } : {}),
     };
     return (typeof summary.goal === 'string'
         ? { ...base, goal: summary.goal }
@@ -181,6 +189,29 @@ const missionListQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: 
     const req = decodeMissionListQueryRequest(args);
     if (!req) return badRequest('mission_list_query');
     try {
+        // mesh_status's mission projection, computed here so the MCP process never
+        // opens this daemon's store (it used to call getMeshStatusMissionsCompact /
+        // getMeshStatusMissionSummaries in-process).
+        if (req.meshStatusView === 'compact') {
+            const { live, historyFold } = getMeshStatusMissionsCompact(req.meshId, req.historyIdLimit !== undefined ? { historyIdLimit: req.historyIdLimit } : undefined);
+            const response: MissionListQueryResponse = {
+                missions: (live as unknown as Record<string, unknown>[]).map(m => toMissionListSummaryWire(m, true)),
+                historyFold: historyFold ?? null,
+                truncated: false,
+                matched: live.length,
+            };
+            return { success: true, ...response };
+        }
+        if (req.meshStatusView === 'verbose') {
+            const missions = getMeshStatusMissionSummaries(req.meshId, { verbose: true }) as unknown as Record<string, unknown>[];
+            const response: MissionListQueryResponse = {
+                missions: missions.map(m => toMissionListSummaryWire(m, true)),
+                historyFold: null,
+                truncated: false,
+                matched: missions.length,
+            };
+            return { success: true, ...response };
+        }
         const result = listMeshMissionsForTool(req.meshId, {
             ...(req.statuses ? { statuses: [...req.statuses] as MeshMissionStatus[] } : {}),
             ...(req.verbose !== undefined ? { verbose: req.verbose } : {}),
@@ -199,7 +230,7 @@ const missionListQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: 
         // `response failed decode` on every mesh with ≥1 mission (found live on
         // preview, 2026-09-25 — the unit tests only ever listed an empty mesh).
         const response: MissionListQueryResponse = {
-            missions: (result.missions as unknown as Record<string, unknown>[]).map(toMissionListSummaryWire),
+            missions: (result.missions as unknown as Record<string, unknown>[]).map((m) => toMissionListSummaryWire(m)),
             historyFold: result.historyFold ?? null,
             truncated: result.truncated,
             matched: result.matched,
@@ -272,6 +303,27 @@ const queueQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) =
         if (req.taskId) entries = entries.filter((e) => e.id === req.taskId);
         const wire = (req.view ? entries.map((e) => summarizeQueueEntryInputForView(e)) : entries) as unknown as QueueEntryWire[];
         const response: QueueQueryResponse = { entries: wire };
+        const store = (req.withCounts || req.withDependencyHeads) ? MeshRuntimeStore.getInstance() : null;
+        // Whole-queue counts from columns — a view that reads only active rows can
+        // still report mesh-wide counts without moving the historical rows.
+        if (store && req.withCounts) {
+            const olderThanIso = req.historicalOlderThanMs !== undefined
+                ? new Date(Date.now() - req.historicalOlderThanMs).toISOString()
+                : undefined;
+            const { counts, oldHistoricalCount } = store.getQueueStatusCounts(req.meshId, olderThanIso);
+            response.counts = counts;
+            if (olderThanIso) response.oldHistoricalCount = oldHistoricalCount;
+        }
+        if (store && req.withDependencyHeads) {
+            const returned = new Set(entries.map((e) => e.id));
+            const depIds: string[] = [];
+            for (const e of entries) {
+                for (const dep of Array.isArray(e.dependsOn) ? e.dependsOn : []) {
+                    if (typeof dep === 'string' && !returned.has(dep)) depIds.push(dep);
+                }
+            }
+            response.dependencyHeads = store.getQueueDependencyHeads(req.meshId, depIds);
+        }
         return { success: true, ...response };
     } catch (e) {
         return failure(e);
@@ -475,14 +527,51 @@ function withGraphGateSummary<T extends { summary: object }>(meshId: string, act
 
 const DEFAULT_ACTIVE_WORK_RECORD_TAIL = 200;
 
+/** This daemon's own mesh record (inline cache, then local config); undefined when unresolvable. */
+async function ownMeshRecord(ctx: LowFamilyContext, meshId: string): Promise<Record<string, unknown> | undefined> {
+    try {
+        const record = await ctx?.getMeshForCommand?.(meshId, undefined, { preferInline: true });
+        return record?.mesh ? record.mesh as unknown as Record<string, unknown> : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * The queue view active work + the scheduling runtime read: pending/assigned rows
+ * parsed in full, every terminal row as an `{id, status}` head. buildMeshActiveWork
+ * reads a terminal row ONLY for its id (a queue task id hides a same-id direct
+ * dispatch) and buildMeshSchedulingRuntime reads assigned rows only — so the
+ * historical payloads (most of the queue's bytes) are never parsed here.
+ */
+function readActiveWorkQueue(meshId: string): MeshWorkQueueEntry[] {
+    const active = getQueue(meshId, { status: ['pending', 'assigned'] });
+    const terminalHeads = MeshRuntimeStore.getInstance().getQueueHeads(meshId, ['completed', 'failed', 'cancelled']);
+    return [...active, ...(terminalHeads.map((h) => ({ id: h.id, status: h.status })) as unknown as MeshWorkQueueEntry[])];
+}
+
+/** Stamp each scheduling-runtime node with this daemon's last quota-ranking decision (claim paths run here). */
+function withLastQuotaRanking(runtime: ReturnType<typeof buildMeshSchedulingRuntime>): Record<string, unknown> {
+    const nodes = runtime.nodes.map((node) => {
+        const lastQuotaRanking = getLastQuotaRanking(node.nodeId);
+        return lastQuotaRanking ? { ...node, lastQuotaRanking } : node;
+    });
+    return { ...runtime, nodes } as unknown as Record<string, unknown>;
+}
+
 const activeWorkQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) => {
     const req = decodeActiveWorkQueryRequest(args);
     if (!req) return badRequest('active_work_query');
     try {
         const records = readLocalRecords(req.meshId, { tail: req.recordTail ?? DEFAULT_ACTIVE_WORK_RECORD_TAIL });
         const directDispatches = getActiveDirectDispatches(req.meshId);
-        const liveQueue = req.queue || req.includeSchedulingRuntime || req.compute !== false ? getQueue(req.meshId) : [];
+        const liveQueue = req.includeSchedulingRuntime || (!req.queue && req.compute !== false) ? readActiveWorkQueue(req.meshId) : [];
         const queue = (req.queue ? [...req.queue] : liveQueue) as unknown as MeshWorkQueueEntry[];
+        // The scheduling runtime needs the mesh config: the caller's snapshot, else
+        // this daemon's own record (callers no longer ship the whole mesh over IPC).
+        const schedulingMesh = req.includeSchedulingRuntime
+            ? (req.mesh ?? await ownMeshRecord(_ctx, req.meshId))
+            : undefined;
         const response: ActiveWorkQueryResponse = {
             ...(req.compute !== false ? {
                 activeWork: withGraphGateSummary(req.meshId, buildMeshActiveWork({
@@ -499,8 +588,8 @@ const activeWorkQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: a
                 directDispatches: directDispatches as unknown as Record<string, unknown>[],
             } : {}),
             ...(req.includeSummary ? { summary: getLocalRecordSummary(req.meshId) as unknown as Record<string, unknown> } : {}),
-            ...(req.includeSchedulingRuntime && req.mesh
-                ? { schedulingRuntime: buildMeshSchedulingRuntime(req.mesh as any, liveQueue) as unknown as Record<string, unknown> }
+            ...(schedulingMesh
+                ? { schedulingRuntime: withLastQuotaRanking(buildMeshSchedulingRuntime(schedulingMesh as any, liveQueue)) }
                 : {}),
         };
         return { success: true, ...response };
@@ -515,6 +604,19 @@ const recoveryContextQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, ar
     const req = decodeRecoveryContextQueryRequest(args);
     if (!req) return badRequest('recovery_context_query');
     try {
+        // Batch (mesh_status): one context per node over ONE record read.
+        if (req.nodeIds) {
+            const records = recoveryContextRecords(req.meshId);
+            const contexts: Record<string, Record<string, unknown>> = {};
+            for (const nodeId of new Set(req.nodeIds)) {
+                contexts[nodeId] = getSessionRecoveryContext(req.meshId, {
+                    nodeId,
+                    ...(req.maxRetries !== undefined ? { maxRetries: req.maxRetries } : {}),
+                }, records) as unknown as Record<string, unknown>;
+            }
+            const response: RecoveryContextQueryResponse = { contexts };
+            return { success: true, ...response };
+        }
         const context = getSessionRecoveryContext(req.meshId, {
             ...(req.nodeId ? { nodeId: req.nodeId } : {}),
             ...(req.sessionId ? { sessionId: req.sessionId } : {}),

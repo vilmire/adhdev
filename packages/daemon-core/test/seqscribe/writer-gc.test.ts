@@ -205,7 +205,7 @@ describe('runTranscriptWriterGcSweep', () => {
             },
         } as unknown as SeqscribeNodeHandle;
 
-        await expect(runTranscriptWriterGcSweep(broken)).resolves.toEqual({ overCap: [] });
+        await expect(runTranscriptWriterGcSweep(broken)).resolves.toMatchObject({ overCap: [], discovered: [] });
         expect(transcriptWriterGcCounters().errors).toBe(1);
     });
 
@@ -267,7 +267,7 @@ describe('configureTranscriptWriterGc', () => {
         configureTranscriptWriterGc(handleB, { once: true });
 
         const staleResult = await gcA!.runOnce();
-        expect(staleResult).toEqual({ overCap: [] });
+        expect(staleResult).toMatchObject({ overCap: [], discovered: [] });
     });
 
     it('calling with null disarms and clears the active handle', () => {

@@ -34,10 +34,10 @@ function buildCtx(meshId: string): any {
     };
 }
 
-test('mesh_note schema declares expiresAt and its expires_at snake_case alias', () => {
+test('mesh_note schema declares expiresAt; its expires_at snake_case alias is accepted but not published (2026-09-27 schema diet)', () => {
     const props = MESH_NOTE_TOOL.inputSchema.properties as any;
     assert.ok('expiresAt' in props, 'expiresAt missing from schema');
-    assert.ok('expires_at' in props, 'expires_at missing from schema');
+    assert.equal('expires_at' in props, false, 'expires_at must not be published — accepted via MESH_ACCEPTED_ARG_ALIASES instead');
 });
 
 test('validateMeshToolArgs: mesh_note action=record accepts expiresAt', () => {

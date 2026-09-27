@@ -748,6 +748,16 @@ export interface MissionListQueryRequest {
     withStats?: boolean
     limit?: number
     historyIdLimit?: number
+    /**
+     * The mesh_status mission projection, computed in the daemon (the MCP no longer
+     * opens the daemon's store for it): 'compact' = `getMeshStatusMissionsCompact`
+     * (live missions goal-elided + folded history), 'verbose' =
+     * `getMeshStatusMissionSummaries({verbose: true})` (live + capped history, full
+     * goal, no stats — stats ride one batched `task_stats_query`). Rows then also
+     * carry `createdAt`/`updatedAt`/`closeCandidateEmittedAt`. When set, every other
+     * option except `historyIdLimit` is ignored. An older daemon rejects the key.
+     */
+    meshStatusView?: 'compact' | 'verbose'
 }
 
 export interface MeshMissionTaskAggregateWire {
@@ -784,6 +794,10 @@ export interface MissionListSummaryVerboseWire {
     stats?: MeshMissionStatsWire
     /** H2: absent = no brief attached. */
     brief?: MissionBriefWire
+    /** `meshStatusView` rows only. */
+    createdAt?: string
+    updatedAt?: string
+    closeCandidateEmittedAt?: string | null
 }
 
 /** Compact (default) mission row. `goalPreview`/`goalTruncated` present, `goal` absent. */
@@ -799,6 +813,10 @@ export interface MissionListSummarySlimWire {
     stats?: MeshMissionStatsWire
     /** H2: absent = no brief attached. */
     brief?: MissionBriefWire
+    /** `meshStatusView` rows only. */
+    createdAt?: string
+    updatedAt?: string
+    closeCandidateEmittedAt?: string | null
 }
 
 export type MissionListSummaryWire = MissionListSummaryVerboseWire | MissionListSummarySlimWire
@@ -819,7 +837,8 @@ export interface MissionListQueryResponse {
 }
 
 export function isMissionListQueryRequest(value: unknown): value is MissionListQueryRequest {
-    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'statuses', 'verbose', 'includeMagi', 'withStats', 'limit', 'historyIdLimit'])) return false
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'statuses', 'verbose', 'includeMagi', 'withStats', 'limit', 'historyIdLimit', 'meshStatusView'])) return false
+    if (value.meshStatusView !== undefined && value.meshStatusView !== 'compact' && value.meshStatusView !== 'verbose') return false
     if (value.v !== TURN_IPC_PROTOCOL_VERSION) return false
     if (!isEvidenceIdentifier(value.meshId)) return false
     if (value.statuses !== undefined) {
@@ -864,7 +883,7 @@ function isMissionListSummaryWire(value: unknown): value is MissionListSummaryWi
     const hasGoal = 'goal' in value
     const hasPreview = 'goalPreview' in value && 'goalTruncated' in value
     if (hasGoal === hasPreview) return false // exactly one of the two shapes
-    const baseKeys = ['id', 'meshId', 'title', 'status', 'source', 'tasks', 'stats', 'brief'] as const
+    const baseKeys = ['id', 'meshId', 'title', 'status', 'source', 'tasks', 'stats', 'brief', 'createdAt', 'updatedAt', 'closeCandidateEmittedAt'] as const
     const allowed = hasGoal ? [...baseKeys, 'goal'] : [...baseKeys, 'goalPreview', 'goalTruncated']
     if (!hasOnlyKeys(value, allowed)) return false
     if (!isEvidenceIdentifier(value.id) || !isEvidenceIdentifier(value.meshId)) return false
@@ -876,6 +895,9 @@ function isMissionListSummaryWire(value: unknown): value is MissionListSummaryWi
     if (value.brief !== undefined && !isMissionBriefWire(value.brief)) return false
     if (hasGoal && typeof value.goal !== 'string') return false
     if (hasPreview && (typeof value.goalPreview !== 'string' || typeof value.goalTruncated !== 'boolean')) return false
+    if (value.createdAt !== undefined && typeof value.createdAt !== 'string') return false
+    if (value.updatedAt !== undefined && typeof value.updatedAt !== 'string') return false
+    if (value.closeCandidateEmittedAt !== undefined && value.closeCandidateEmittedAt !== null && typeof value.closeCandidateEmittedAt !== 'string') return false
     return true
 }
 
@@ -1288,25 +1310,67 @@ export interface QueueQueryRequest {
     taskId?: string
     /** Project for a VIEW surface: the persisted input envelope → `inputSummary` (summarizeQueueEntryInputForView). */
     view?: boolean
+    /**
+     * Also return the per-status row counts of the WHOLE mesh queue (columns only,
+     * no payload parse) — lets a view read only the rows it shows yet report
+     * mesh-wide counts. An older daemon rejects the key.
+     */
+    withCounts?: boolean
+    /** With `withCounts`: also count terminal rows whose `updated_at` is older than this age. */
+    historicalOlderThanMs?: number
+    /**
+     * Also return `dependencyHeads`: id/status/blockedReason/cancelReason of every
+     * row the returned entries list in `dependsOn` that is not itself returned —
+     * enough to annotate dependency state without reading the whole queue.
+     */
+    withDependencyHeads?: boolean
+}
+
+/** A dependency row reduced to the fields dependency-state annotation reads. */
+export interface QueueDependencyHeadWire {
+    id: string
+    status: string
+    blockedReason?: string
+    cancelReason?: string
 }
 
 export interface QueueQueryResponse {
     entries: readonly QueueEntryWire[]
+    /** `withCounts`: row count per status over the whole mesh queue. */
+    counts?: Record<string, number>
+    /** `withCounts` + `historicalOlderThanMs`: terminal rows older than that age. */
+    oldHistoricalCount?: number
+    /** `withDependencyHeads`. */
+    dependencyHeads?: readonly QueueDependencyHeadWire[]
 }
 
 export function isQueueQueryRequest(value: unknown): value is QueueQueryRequest {
-    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'statuses', 'taskId', 'view'])) return false
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'statuses', 'taskId', 'view', 'withCounts', 'historicalOlderThanMs', 'withDependencyHeads'])) return false
     if (value.v !== TURN_IPC_PROTOCOL_VERSION || !isEvidenceIdentifier(value.meshId)) return false
     if (value.statuses !== undefined && (!Array.isArray(value.statuses) || !value.statuses.every(isEvidenceIdentifier))) return false
+    if (value.historicalOlderThanMs !== undefined && !isNonNegativeInt(value.historicalOlderThanMs)) return false
     return isOptionalId(value.taskId) && isOptionalBoolean(value.view)
+        && isOptionalBoolean(value.withCounts) && isOptionalBoolean(value.withDependencyHeads)
 }
 
 export function decodeQueueQueryRequest(value: unknown): QueueQueryRequest | null {
     return isQueueQueryRequest(value) ? value : null
 }
 
+function isQueueDependencyHeadWire(value: unknown): value is QueueDependencyHeadWire {
+    return isRecord(value) && hasOnlyKeys(value, ['id', 'status', 'blockedReason', 'cancelReason'])
+        && typeof value.id === 'string' && typeof value.status === 'string'
+        && (value.blockedReason === undefined || typeof value.blockedReason === 'string')
+        && (value.cancelReason === undefined || typeof value.cancelReason === 'string')
+}
+
 export function isQueueQueryResponse(value: unknown): value is QueueQueryResponse {
-    return isRecord(value) && hasOnlyKeys(value, ['entries']) && Array.isArray(value.entries) && value.entries.every(isQueueEntryWire)
+    if (!isRecord(value) || !hasOnlyKeys(value, ['entries', 'counts', 'oldHistoricalCount', 'dependencyHeads'])) return false
+    if (!Array.isArray(value.entries) || !value.entries.every(isQueueEntryWire)) return false
+    if (value.counts !== undefined && (!isRecord(value.counts) || !Object.values(value.counts).every(isNonNegativeInt))) return false
+    if (value.oldHistoricalCount !== undefined && !isNonNegativeInt(value.oldHistoricalCount)) return false
+    if (value.dependencyHeads !== undefined && (!Array.isArray(value.dependencyHeads) || !value.dependencyHeads.every(isQueueDependencyHeadWire))) return false
+    return true
 }
 
 export function decodeQueueQueryResponse(value: unknown): QueueQueryResponse | null {
@@ -1592,7 +1656,12 @@ export interface ActiveWorkQueryRequest {
     includeInputs?: boolean
     includeSummary?: boolean
     includeSchedulingRuntime?: boolean
-    /** The caller's mesh snapshot (required for the scheduling runtime), JSON passthrough. */
+    /**
+     * The caller's mesh snapshot for the scheduling runtime, JSON passthrough.
+     * Optional since the daemon resolves its own mesh record when it is absent;
+     * an older daemon rejects `includeSchedulingRuntime` without it (the caller's
+     * feature-detect signal to resend with the mesh).
+     */
     mesh?: Record<string, unknown>
 }
 
@@ -1612,7 +1681,6 @@ export function isActiveWorkQueryRequest(value: unknown): value is ActiveWorkQue
     if (value.nodes !== undefined && !isRecordArray(value.nodes)) return false
     if (value.queue !== undefined && !isRecordArray(value.queue)) return false
     if (value.recordTail !== undefined && !isNonNegativeInt(value.recordTail)) return false
-    if (value.includeSchedulingRuntime === true && !isRecord(value.mesh)) return false
     return isOptionalBoolean(value.includeTerminalDirect) && isOptionalBoolean(value.compute) && isOptionalBoolean(value.includeInputs)
         && isOptionalBoolean(value.includeSummary) && isOptionalBoolean(value.includeSchedulingRuntime) && isOptionalRecord(value.mesh)
 }
@@ -1643,27 +1711,46 @@ export interface RecoveryContextQueryRequest {
     nodeId?: string
     sessionId?: string
     maxRetries?: number
+    /**
+     * Batch: one context per node id, computed over ONE record read (answers
+     * `contexts`). Exclusive with `nodeId`/`sessionId`. An older daemon rejects it.
+     */
+    nodeIds?: readonly string[]
 }
 
 export interface RecoveryContextQueryResponse {
-    context: Record<string, unknown>
+    /** Single mode (nodeId/sessionId). */
+    context?: Record<string, unknown>
+    /** Batch mode (`nodeIds`): context per node id. */
+    contexts?: Record<string, Record<string, unknown>>
 }
 
 export function isRecoveryContextQueryRequest(value: unknown): value is RecoveryContextQueryRequest {
-    return isRecord(value) && hasOnlyKeys(value, ['v', 'meshId', 'nodeId', 'sessionId', 'maxRetries'])
-        && value.v === TURN_IPC_PROTOCOL_VERSION && isEvidenceIdentifier(value.meshId)
-        && isOptionalId(value.nodeId) && isOptionalId(value.sessionId)
-        && (value.maxRetries === undefined || isNonNegativeInt(value.maxRetries))
-        && (value.nodeId !== undefined || value.sessionId !== undefined)
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'nodeId', 'sessionId', 'maxRetries', 'nodeIds'])) return false
+    if (value.v !== TURN_IPC_PROTOCOL_VERSION || !isEvidenceIdentifier(value.meshId)) return false
+    if (!isOptionalId(value.nodeId) || !isOptionalId(value.sessionId)) return false
+    if (value.maxRetries !== undefined && !isNonNegativeInt(value.maxRetries)) return false
+    if (value.nodeIds !== undefined) {
+        if (!Array.isArray(value.nodeIds) || value.nodeIds.length === 0 || !value.nodeIds.every(isEvidenceIdentifier)) return false
+        return value.nodeId === undefined && value.sessionId === undefined
+    }
+    return value.nodeId !== undefined || value.sessionId !== undefined
 }
 
 export function decodeRecoveryContextQueryRequest(value: unknown): RecoveryContextQueryRequest | null {
     return isRecoveryContextQueryRequest(value) ? value : null
 }
 
+function isRecoveryContextWire(value: unknown): boolean {
+    return isRecord(value) && typeof value.consecutiveNodeFailures === 'number'
+}
+
 export function isRecoveryContextQueryResponse(value: unknown): value is RecoveryContextQueryResponse {
-    return isRecord(value) && hasOnlyKeys(value, ['context']) && isRecord(value.context)
-        && typeof value.context.consecutiveNodeFailures === 'number'
+    if (!isRecord(value) || !hasOnlyKeys(value, ['context', 'contexts'])) return false
+    if (value.context === undefined && value.contexts === undefined) return false
+    if (value.context !== undefined && !isRecoveryContextWire(value.context)) return false
+    if (value.contexts !== undefined && (!isRecord(value.contexts) || !Object.values(value.contexts).every(isRecoveryContextWire))) return false
+    return true
 }
 
 export function decodeRecoveryContextQueryResponse(value: unknown): RecoveryContextQueryResponse | null {
@@ -1967,6 +2054,12 @@ export interface TaskStatsQueryRequest {
     tail?: number
     /** Also compute `computeMeshMissionStats` — requires `missionId`. */
     rollup?: boolean
+    /**
+     * Batch rollups: `computeMeshMissionStats` for every id, over ONE queue read and
+     * ONE record read (answers `missions`, `tasks` empty). Exclusive with
+     * `taskIds`/`missionId`. An older daemon rejects the key.
+     */
+    missionIds?: readonly string[]
 }
 
 export interface TaskStatsQueryResponse {
@@ -1974,16 +2067,22 @@ export interface TaskStatsQueryResponse {
     tasks: readonly Record<string, unknown>[]
     /** `MeshMissionStats`, JSON passthrough; present only when `rollup: true` was requested and satisfiable. */
     mission?: Record<string, unknown>
+    /** Batch mode: `MeshMissionStats` per requested mission id, JSON passthrough. */
+    missions?: Record<string, Record<string, unknown>>
 }
 
 export function isTaskStatsQueryRequest(value: unknown): value is TaskStatsQueryRequest {
-    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'taskIds', 'missionId', 'tail', 'rollup'])) return false
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'taskIds', 'missionId', 'tail', 'rollup', 'missionIds'])) return false
     if (value.v !== TURN_IPC_PROTOCOL_VERSION || !isEvidenceIdentifier(value.meshId)) return false
     if (value.taskIds !== undefined) {
         if (!Array.isArray(value.taskIds) || value.taskIds.length === 0 || !value.taskIds.every(isEvidenceIdentifier)) return false
     }
     if (value.missionId !== undefined && !isEvidenceIdentifier(value.missionId)) return false
     if (value.tail !== undefined && !isNonNegativeInt(value.tail)) return false
+    if (value.missionIds !== undefined) {
+        if (!Array.isArray(value.missionIds) || value.missionIds.length === 0 || !value.missionIds.every(isEvidenceIdentifier)) return false
+        if (value.taskIds !== undefined || value.missionId !== undefined) return false
+    }
     if (value.rollup === true && value.missionId === undefined) return false
     return isOptionalBoolean(value.rollup)
 }
@@ -1993,7 +2092,8 @@ export function decodeTaskStatsQueryRequest(value: unknown): TaskStatsQueryReque
 }
 
 export function isTaskStatsQueryResponse(value: unknown): value is TaskStatsQueryResponse {
-    return isRecord(value) && hasOnlyKeys(value, ['tasks', 'mission']) && isRecordArray(value.tasks) && isOptionalRecord(value.mission)
+    return isRecord(value) && hasOnlyKeys(value, ['tasks', 'mission', 'missions']) && isRecordArray(value.tasks) && isOptionalRecord(value.mission)
+        && (value.missions === undefined || (isRecord(value.missions) && Object.values(value.missions).every(isRecord)))
 }
 
 export function decodeTaskStatsQueryResponse(value: unknown): TaskStatsQueryResponse | null {

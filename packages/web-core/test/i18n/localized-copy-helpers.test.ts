@@ -3,10 +3,16 @@
 // language once a `t` is supplied. Uses getFixedT so the global test language
 // (pinned to `en` in test/setup.ts) is never switched.
 import i18next from 'i18next'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { LOCALIZED_PROVIDER_SETTING_KEYS, localizeProviderSetting } from '../../src/utils/provider-setting-copy'
 import { buildQuotaDisplayModel, createQuotaTextFormatter, formatQuotaFreshness, QUOTA_WINDOW_RESET_TEXT } from '../../src/utils/quota-format'
 import { SUPPORTED_LANGUAGES } from '../../src/i18n/languages'
+
+// Only `en` is bundled; the other catalogs load on demand (src/i18n/config.ts
+// lazyLocaleBackend). Load them up front without switching the active language.
+beforeAll(async () => {
+    await i18next.loadLanguages([...SUPPORTED_LANGUAGES])
+})
 
 const ko = i18next.getFixedT('ko', 'common')
 const en = i18next.getFixedT('en', 'common')

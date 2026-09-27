@@ -136,6 +136,11 @@ export function ensureSessionTranscriptTopic(
         return { ok: true, topic };
     }
 
+    // The topic may already be defined on the library node WITHOUT being in
+    // `node.topics`: writer-gc.ts's sweep bare-defines on-disk-only transcript
+    // topics to prune them (no claim, no push, no announce). `defineTopic`
+    // with the identical policy is idempotent in the library, so this path
+    // still pushes and announces exactly once.
     try {
         const policy = sessionTranscriptPolicy();
         node.node.defineTopic(topic, policy);

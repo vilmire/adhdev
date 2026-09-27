@@ -141,11 +141,11 @@ test('mesh_enqueue_batch per-task schema exposes owned_paths; the camelCase alia
   assert.deepEqual(MESH_ENQUEUE_BATCH_TOOL.inputSchema.properties.tasks.items.required, ['message', 'difficulty']);
 });
 
-test('mesh_send_task schema exposes owned_paths and its camelCase alias, required list unchanged', () => {
+test('mesh_send_task schema exposes owned_paths; the camelCase alias is accepted but unpublished (2026-09-27 schema diet), required list unchanged', () => {
   const props = MESH_SEND_TASK_TOOL.inputSchema.properties as any;
   assert.equal(props.owned_paths.type, 'array');
   assert.equal(props.owned_paths.items.type, 'string');
-  assert.equal(props.ownedPaths.type, 'array');
+  assert.equal(props.ownedPaths, undefined);
   // node_id/message/difficulty stays the required set — owned_paths never becomes mandatory.
   assert.deepEqual(MESH_SEND_TASK_TOOL.inputSchema.required, ['node_id', 'message', 'difficulty']);
 });

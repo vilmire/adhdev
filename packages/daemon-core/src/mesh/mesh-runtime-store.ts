@@ -24,6 +24,8 @@ import {
     findAssignedBySession as findAssignedBySessionImpl, getQueueHeads as getQueueHeadsImpl,
     pruneTerminalQueueEntries as pruneTerminalQueueEntriesImpl, selectActiveDirectDispatches, selectSoleActiveDirectDispatchTaskId, type DirectDispatchView,
     type MeshQueueHead,
+    getQueueFacts as getQueueFactsImpl, getQueueStatusCounts as getQueueStatusCountsImpl,
+    getQueueDependencyHeads as getQueueDependencyHeadsImpl, type MeshQueueFacts,
 } from './mesh-runtime-store-queue-reads.js';
 import { upsertHandoffNoteText, selectHandoffNoteText, deleteHandoffNoteTextOlderThan, type HandoffNoteTextRow } from './mesh-handoff-note-text.js';
 // Pure move (file-size gate): the schema DDL + column migrations live in
@@ -1107,6 +1109,21 @@ export class MeshRuntimeStore {
     /** Column-only queue rows (id/status/assignment) — no payload parse. */
     getQueueHeads(meshId: string, statuses?: MeshTaskStatus[]): MeshQueueHead[] {
         return getQueueHeadsImpl(this, meshId, statuses);
+    }
+
+    /** Per-row mission/stats scalars via json_extract — no JS payload parse (see queue-reads). */
+    getQueueFacts(meshId: string): MeshQueueFacts[] {
+        return getQueueFactsImpl(this, meshId);
+    }
+
+    /** Whole-queue per-status counts (+ terminal rows older than `olderThanIso`) — columns only. */
+    getQueueStatusCounts(meshId: string, olderThanIso?: string): { counts: Record<string, number>; oldHistoricalCount: number } {
+        return getQueueStatusCountsImpl(this, meshId, olderThanIso);
+    }
+
+    /** id/status/blockedReason/cancelReason for the given row ids. */
+    getQueueDependencyHeads(meshId: string, ids: readonly string[]): Array<{ id: string; status: MeshTaskStatus; blockedReason?: string; cancelReason?: string }> {
+        return getQueueDependencyHeadsImpl(this, meshId, ids);
     }
 
     private toRow(entry: MeshWorkQueueEntry): Record<string, unknown> {

@@ -198,7 +198,10 @@ test('mesh_send_task exposes orchestration_decision and does NOT require it', ()
     const tool = ALL_MESH_TOOLS.find(t => t.name === 'mesh_send_task')!;
     const props = (tool.inputSchema as any).properties;
     assert.ok(props.orchestration_decision, 'mesh_send_task must expose orchestration_decision');
-    assert.ok(props.orchestrationDecision, 'and its camelCase alias, like every other field here');
+    // 2026-09-27 tools/list schema diet: orchestrationDecision (camelCase) is
+    // accepted via MESH_ACCEPTED_ARG_ALIASES instead of being its own published
+    // property (same pattern as the enqueue family's D2 diet).
+    assert.equal(props.orchestrationDecision, undefined, 'camelCase alias must not be published — accepted via MESH_ACCEPTED_ARG_ALIASES');
 
     // ★ The optionality is the contract. Requiring it would break every existing caller,
     // and phase E measures rather than enforces.

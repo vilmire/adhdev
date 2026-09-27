@@ -317,6 +317,121 @@ export const MESH_ACCEPTED_ARG_ALIASES: Readonly<Record<string, Readonly<Record<
             cleanupOnGraphFailure: 'cleanup_on_graph_failure',
         },
     },
+    // ── Tools/list schema diet (2026-09-27) ────────────────────────────────
+    // Every table below follows the same D2 pattern as the enqueue family above:
+    // the handler already reads BOTH spellings (`args.x ?? args.xCamel`), so the
+    // camelCase/alternate spelling is accepted here and no longer published as a
+    // second schema property. This cuts ~47 duplicate property declarations from
+    // the advertised tools/list without changing what any caller can send.
+    mesh_route_preview: {
+        [TOP_LEVEL_SCOPE]: {
+            requiredTags: 'required_tags',
+            targetNodeId: 'target_node_id',
+        },
+    },
+    mesh_graph_gate: {
+        [TOP_LEVEL_SCOPE]: {
+            gateId: 'gate_id',
+            leaseSeconds: 'lease_seconds',
+            extendDeadlineSeconds: 'extend_deadline_seconds',
+            fencingToken: 'fencing_token',
+            leaseGeneration: 'lease_generation',
+            idempotencyKey: 'idempotency_key',
+            coordinatorSessionId: 'coordinator_session_id',
+        },
+        patches: {
+            nodeId: 'node_id',
+            baseSpecPatch: 'base_spec_patch',
+        },
+    },
+    mesh_graph_node_patch: {
+        [TOP_LEVEL_SCOPE]: {
+            nodeId: 'node_id',
+            graphId: 'graph_id',
+            baseSpecPatch: 'base_spec_patch',
+        },
+    },
+    mesh_graph_view: {
+        [TOP_LEVEL_SCOPE]: {
+            graphId: 'graph_id',
+            batchId: 'batch_id',
+            includeTerminal: 'include_terminal',
+            probeGateEvidence: 'probe_gate_evidence',
+        },
+    },
+    mesh_queue_cancel: {
+        [TOP_LEVEL_SCOPE]: {
+            taskId: 'task_id',
+        },
+    },
+    mesh_queue_requeue: {
+        [TOP_LEVEL_SCOPE]: {
+            taskId: 'task_id',
+            targetNodeId: 'target_node_id',
+            targetSessionId: 'target_session_id',
+            clearTargetNode: 'clear_target_node',
+            keepTargetSession: 'keep_target_session',
+        },
+    },
+    mesh_send_task: {
+        [TOP_LEVEL_SCOPE]: {
+            taskMode: 'task_mode',
+            read_only: 'readonly',
+            ownedPaths: 'owned_paths',
+            missionId: 'mission_id',
+            deliveryMode: 'delivery_mode',
+            orchestrationDecision: 'orchestration_decision',
+            allowStaleNode: 'allow_stale_node',
+            allowQuotaExhausted: 'allow_quota_exhausted',
+        },
+    },
+    mesh_mission_upsert: {
+        [TOP_LEVEL_SCOPE]: {
+            missionId: 'mission_id',
+            missionIds: 'mission_ids',
+        },
+        brief: {
+            done_criteria: 'doneCriteria',
+            handoff_notes: 'handoffNotes',
+            owned_paths: 'ownedPaths',
+        },
+    },
+    mesh_mission_list: {
+        [TOP_LEVEL_SCOPE]: {
+            includeStats: 'include_stats',
+            includeMagi: 'include_magi',
+        },
+    },
+    mesh_note: {
+        [TOP_LEVEL_SCOPE]: {
+            expires_at: 'expiresAt',
+            noteId: 'note_id',
+        },
+    },
+    mesh_magi_review: {
+        [TOP_LEVEL_SCOPE]: {
+            taskKind: 'task_kind',
+            requireIndependentEvidence: 'require_independent_evidence',
+            includeStale: 'include_stale',
+            waitTimeoutMs: 'wait_timeout_ms',
+            autoCleanup: 'auto_cleanup',
+        },
+    },
+    mesh_magi_collect: {
+        [TOP_LEVEL_SCOPE]: {
+            consensusGroupId: 'consensus_group_id',
+            taskKind: 'task_kind',
+            requireIndependentEvidence: 'require_independent_evidence',
+            waitTimeoutMs: 'wait_timeout_ms',
+            autoCleanup: 'auto_cleanup',
+        },
+    },
+    mesh_node_slots: {
+        [TOP_LEVEL_SCOPE]: {
+            nodeId: 'node_id',
+            includeMagi: 'include_magi',
+        },
+    },
 };
 
 const RETIRED_CONDITIONAL_KEYS = ['run_if', 'runIf', 'on_false', 'onFalse', 'on_upstream_skip', 'onUpstreamSkip'] as const;
@@ -465,8 +580,12 @@ export function retiredMeshToolArgsError(name: string, args: Record<string, unkn
 // different action is refused with the action(s) it belongs to, and each
 // action's own required keys are enforced.
 //
-// `args` lists every accepted key for the action, camelCase aliases included
-// (they are declared schema properties, not MESH_ACCEPTED_ARG_ALIASES entries).
+// `args` lists every accepted key for the action, in its CANONICAL (published)
+// spelling only. A camelCase/alternate spelling is renamed to its canonical key
+// by `canonicalizeMeshToolArgs` (via MESH_ACCEPTED_ARG_ALIASES) before this table
+// is ever consulted (both rejectUnknownMeshToolArgs and validateMeshToolArgs call
+// `meshToolActionArgsError` on the already-canonicalized `args`), so listing an
+// alias here would be dead — it can never appear in `args` by the time this runs.
 // `defaultAction` is used when the caller omits the discriminator (mesh_init,
 // mesh_create keep their pre-merge default behaviour).
 
@@ -476,9 +595,9 @@ export interface MeshActionSpec {
     readonly actions: Readonly<Record<string, { readonly args: readonly string[]; readonly required?: readonly string[] }>>;
 }
 
-const GATE_ID = ['gate_id', 'gateId'] as const;
-const GATE_OWNER = ['coordinator_session_id', 'coordinatorSessionId'] as const;
-const NODE_ID = ['node_id', 'nodeId'] as const;
+const GATE_ID = ['gate_id'] as const;
+const GATE_OWNER = ['coordinator_session_id'] as const;
+const NODE_ID = ['node_id'] as const;
 const SESSION_CLEANUP_ARGS = { args: ['node_id', 'session_ids', 'dry_run'], required: ['node_id'] } as const;
 const READ_ONLY_CONFIG_ARGS = { args: ['mode', 'node_id', 'config'], required: ['mode'] } as const;
 
@@ -486,9 +605,9 @@ export const MESH_TOOL_ACTIONS: Readonly<Record<string, MeshActionSpec>> = {
     mesh_graph_gate: {
         key: 'action',
         actions: {
-            claim: { args: [...GATE_ID, 'lease_seconds', 'leaseSeconds', 'extend_deadline_seconds', 'extendDeadlineSeconds', ...GATE_OWNER], required: ['gate_id'] },
+            claim: { args: [...GATE_ID, 'lease_seconds', 'extend_deadline_seconds', ...GATE_OWNER], required: ['gate_id'] },
             release: {
-                args: [...GATE_ID, 'fencing_token', 'fencingToken', 'lease_generation', 'leaseGeneration', 'idempotency_key', 'idempotencyKey', 'outcome', 'result', 'evidence', 'patches'],
+                args: [...GATE_ID, 'fencing_token', 'lease_generation', 'idempotency_key', 'outcome', 'result', 'evidence', 'patches'],
                 required: ['gate_id', 'fencing_token', 'lease_generation', 'idempotency_key', 'outcome'],
             },
             abandon: { args: [...GATE_ID, 'reason', 'force', ...GATE_OWNER], required: ['gate_id', 'reason'] },
@@ -499,7 +618,7 @@ export const MESH_TOOL_ACTIONS: Readonly<Record<string, MeshActionSpec>> = {
         key: 'action',
         actions: {
             list: { args: [...NODE_ID], required: ['node_id'] },
-            propose: { args: [...NODE_ID, 'include_magi', 'includeMagi'], required: ['node_id'] },
+            propose: { args: [...NODE_ID, 'include_magi'], required: ['node_id'] },
             set: { args: [...NODE_ID, 'slots', 'reason', 'write'], required: ['node_id', 'slots'] },
         },
     },
@@ -520,8 +639,8 @@ export const MESH_TOOL_ACTIONS: Readonly<Record<string, MeshActionSpec>> = {
     mesh_note: {
         key: 'action',
         actions: {
-            record: { args: ['text', 'category', 'pinned', 'ttl_days', 'expiresAt', 'expires_at', 'supersedes', 'subject_key'], required: ['text'] },
-            forget: { args: ['note_id', 'noteId', 'text', 'reason'] },
+            record: { args: ['text', 'category', 'pinned', 'ttl_days', 'expiresAt', 'supersedes', 'subject_key'], required: ['text'] },
+            forget: { args: ['note_id', 'text', 'reason'] },
         },
     },
     mesh_config: {

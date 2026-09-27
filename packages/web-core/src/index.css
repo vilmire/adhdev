@@ -1,6 +1,8 @@
 @layer theme, base, components, utilities;
 @import "dockview/dist/styles/dockview.css";
-@import "@xyflow/react/dist/style.css";
+/* @xyflow/react CSS is NOT imported here: it ships with the lazily loaded mesh
+   graph code (components/MeshGraph/meshGraph.css), so routes that never open a
+   graph do not download it. */
 @import "tailwindcss/theme.css" layer(theme);
 /* NOTE: Preflight (tailwindcss/preflight.css) intentionally excluded —
    it conflicts with our existing CSS reset and component styles */
@@ -4446,9 +4448,9 @@
  * the final state still keeps every colour and dash pattern, so no state the
  * animation encoded is lost; only the motion stops. */
 @media (prefers-reduced-motion: reduce) {
-    .react-flow__edge.animated path {
-        animation: none;
-    }
+    /* The matching `.react-flow__edge.animated path` override lives in
+       components/MeshGraph/meshGraph.css, AFTER the lazily loaded @xyflow
+       stylesheet: at equal specificity it must come later to win. */
     .mesh-node-generating {
         animation: none;
     }
