@@ -2,7 +2,7 @@
  * Coordinator / worker markers — one visual language for "this conversation
  * is part of a Repo Mesh", shared by every surface that lists conversations.
  *
- *   coordinator → violet mesh icon before the title + violet
+ *   coordinator → mesh icon before the title (neutral text colour; amber stays the only accent) +
  *                 "Coordinator · <mesh>" at the head of the subtitle
  *   worker      → the same shapes in muted text: "Worker · <mesh>"
  *
