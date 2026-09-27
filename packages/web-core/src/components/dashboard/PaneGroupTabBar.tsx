@@ -5,13 +5,10 @@ import { useTabShortcuts } from '../../hooks/useTabShortcuts'
 import type { ActiveConversation } from './types'
 import { getConversationViewStates } from './DashboardMobileChatShared'
 import {
-    getConversationMeshRoleLabels,
-    getConversationMeshRoleTitle,
     getConversationTabMetaText,
     getConversationTitle,
-    isMeshGraphConversation,
 } from './conversation-presenters'
-import { IconMesh } from '../Icons'
+import { MeshRoleIcon, MeshRoleLabel, useConversationMeshRoleTitle } from './ConversationMeshRoleMarker'
 import GitStatusPill from '../git/GitStatusPill'
 import ModalPortal from '../ui/ModalPortal'
 import LoadingSpinner from '../ui/LoadingSpinner'
@@ -91,14 +88,11 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
     longPressTimer,
     isGroupActive,
 }: PaneGroupTabBarItemProps) {
-    const { t } = useTranslation('common')
     const viewStates = getConversationViewStates(conv)
     const tabClass = viewStates.isGenerating ? 'agent-tab-generating'
         : viewStates.isWaiting ? 'agent-tab-waiting' : ''
     const isReconnecting = viewStates.isReconnecting
-    const meshRoleLabels = getConversationMeshRoleLabels(conv)
-    const meshRoleTitle = getConversationMeshRoleTitle(conv)
-    const isMeshGraph = isMeshGraphConversation(conv)
+    const meshRoleTitle = useConversationMeshRoleTitle(conv)
 
     const handleDragStart = useCallback((e: React.DragEvent<HTMLDivElement>) => {
         draggingTabRef.current = conv.tabKey
@@ -194,15 +188,6 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
                 opacity: isDraggedTab ? 0.4 : undefined,
             }}
         >
-            {isMeshGraph && (
-                <span
-                    className="adhdev-dockview-tab-mesh-badge pointer-events-none absolute top-0.5 right-0.5 text-text-muted"
-                    title={t('paneGroup.meshChat')}
-                    aria-label={t('paneGroup.meshChat')}
-                >
-                    <IconMesh size={11} />
-                </span>
-            )}
             {isTaskCompleteUnread && <span className="adhdev-dockview-tab-unread-dot" aria-hidden="true" />}
             <div className="adhdev-dockview-tab-status">
                 {viewStates.isGenerating ? (
@@ -219,14 +204,11 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
                     <span className="adhdev-dockview-tab-status-text is-idle">○</span>
                 )}
             </div>
-            {meshRoleLabels.length > 0 && (
-                <span className="adhdev-dockview-tab-mesh-role" title={meshRoleTitle} aria-label={meshRoleTitle || meshRoleLabels.join(' · ')}>
-                    {meshRoleLabels.join(' · ')}
-                </span>
-            )}
+            <MeshRoleIcon conversation={conv} size={12} />
             <div className="adhdev-dockview-tab-copy">
-                <span className="adhdev-dockview-tab-primary" title={getConversationTitle(conv)}>{getConversationTitle(conv)}</span>
+                <span className="adhdev-dockview-tab-primary" title={meshRoleTitle ? `${getConversationTitle(conv)} · ${meshRoleTitle}` : getConversationTitle(conv)}>{getConversationTitle(conv)}</span>
                 <span className="adhdev-dockview-tab-meta inline-flex min-w-0 items-center gap-1">
+                    <MeshRoleLabel conversation={conv} />
                     {isReconnecting ? (
                         <span className="adhdev-dockview-tab-reconnecting truncate">{getConversationTabMetaText(conv)}</span>
                     ) : viewStates.isConnecting ? (

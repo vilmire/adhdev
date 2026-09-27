@@ -8,6 +8,7 @@ import type { ActiveConversation } from '../../components/dashboard/types'
 import type { MachineRecentLaunch, ProviderInfo } from './types'
 import { getConversationActivityAt } from '../../components/dashboard/conversation-sort'
 import { getConversationMetaText, getConversationTitle } from '../../components/dashboard/conversation-presenters'
+import { MeshRoleIcon, MeshRoleLabel } from '../../components/dashboard/ConversationMeshRoleMarker'
 import { buildMachineRecentLaunchCardView } from '../../utils/machine-recent-launch-presenters'
 import { buildDaemonUpdateStatusView } from '../../utils/daemon-update-status'
 import { InfoTip, Tooltip } from '../../components/ui/InfoTip'
@@ -86,8 +87,11 @@ export default function MachineCommandCenter({
                                             {/* min-w-0: flex item's default min-width:auto floors the row at the
                                                 title's content width, letting a long title push past the
                                                 shrink-0 timestamp badge instead of truncating. */}
-                                            <span className="text-sm font-semibold text-text-primary truncate min-w-0 group-hover:text-accent-primary transition-colors">
-                                                {getConversationTitle(conversation)}
+                                            <span className="flex items-center gap-1.5 min-w-0">
+                                                <MeshRoleIcon conversation={conversation} size={12} />
+                                                <span className="text-sm font-semibold text-text-primary truncate min-w-0 group-hover:text-accent-primary transition-colors">
+                                                    {getConversationTitle(conversation)}
+                                                </span>
                                             </span>
                                             {activityAt > 0 && (
                                                 <span className="text-2xs text-text-muted shrink-0">
@@ -96,6 +100,7 @@ export default function MachineCommandCenter({
                                             )}
                                         </div>
                                         <span className="text-xs text-text-secondary truncate w-full opacity-80">
+                                            <MeshRoleLabel conversation={conversation} separator />
                                             {getConversationMetaText(conversation)}
                                         </span>
                                     </button>

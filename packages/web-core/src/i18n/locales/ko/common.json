@@ -125,8 +125,16 @@
         },
         "metaChips": {
             "queuePending": "대기 {{count}}",
-            "queueTooltip": "대기열: 대기 {{pending}}, 배정 {{assigned}}, 완료 {{completed}}, 실패 {{failed}}",
-            "meshNode": "Mesh 노드"
+            "queueTooltip": "대기열: 대기 {{pending}}, 배정 {{assigned}}, 완료 {{completed}}, 실패 {{failed}}"
+        },
+        "meshRole": {
+            "coordinator": "코디네이터",
+            "worker": "워커",
+            "coordinatorFor": "{{mesh}}의 코디네이터",
+            "workerFor": "{{mesh}}의 워커",
+            "coordinatorUnknownMesh": "메시 코디네이터",
+            "workerUnknownMesh": "메시 워커",
+            "openMeshGraph": "메시 그래프 열기"
         },
         "versionBanner": {
             "restarting": "재시작 중",
@@ -1856,7 +1864,6 @@
         "hideFromDashboard": "대시보드에서 숨기기",
         "removeShortcut": "단축키 삭제",
         "changeShortcut": "단축키 변경 ({{shortcut}})",
-        "meshChat": "메시 채팅",
         "dropSplitRight": "오른쪽으로 분할",
         "dropMoveHere": "여기로 이동",
         "dropSplitLeft": "왼쪽으로 분할",

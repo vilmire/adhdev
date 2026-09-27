@@ -125,8 +125,16 @@
         },
         "metaChips": {
             "queuePending": "{{count}} en espera",
-            "queueTooltip": "Cola: {{pending}} en espera, {{assigned}} asignadas, {{completed}} completadas, {{failed}} fallidas",
-            "meshNode": "Nodo Mesh"
+            "queueTooltip": "Cola: {{pending}} en espera, {{assigned}} asignadas, {{completed}} completadas, {{failed}} fallidas"
+        },
+        "meshRole": {
+            "coordinator": "Coordinador",
+            "worker": "Trabajador",
+            "coordinatorFor": "Coordinador de {{mesh}}",
+            "workerFor": "Trabajador de {{mesh}}",
+            "coordinatorUnknownMesh": "Coordinador de mesh",
+            "workerUnknownMesh": "Trabajador de mesh",
+            "openMeshGraph": "Abrir el grafo de mesh"
         },
         "versionBanner": {
             "restarting": "reiniciando",
@@ -1859,7 +1867,6 @@
         "hideFromDashboard": "Ocultar del panel",
         "removeShortcut": "Quitar atajo",
         "changeShortcut": "Cambiar atajo ({{shortcut}})",
-        "meshChat": "Chat de mesh",
         "dropSplitRight": "Dividir a la derecha",
         "dropMoveHere": "Mover aquí",
         "dropSplitLeft": "Dividir a la izquierda",

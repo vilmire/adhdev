@@ -1,12 +1,14 @@
 /**
  * ConversationActionsMenu — the "…" overflow for one conversation.
  *
- * The pane toolbar keeps only the primary action (Stop) visible; everything
+ * The pane toolbar keeps the primary actions visible — Stop, and for a mesh
+ * coordinator its dedicated Mesh graph button (ConversationMeshGraphButton:
+ * opened often, and the visible cue that this is a coordinator). Everything
  * else a user occasionally needs — history, remote control, mute, session
- * info, git status, mesh graph — lives here, in one place, on desktop and on
- * the mobile chat header alike. Items that do not apply to the conversation
- * (no git, not a mesh coordinator, CLI/ACP without a remote view) are simply
- * not listed, so the menu never offers a dead action.
+ * info, git status — lives here, in one place, on desktop and on the mobile
+ * chat header alike. Items that do not apply to the conversation (no git,
+ * CLI/ACP without a remote view) are simply not listed, so the menu never
+ * offers a dead action.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
@@ -14,10 +16,9 @@ import { useTranslation } from 'react-i18next'
 import { useBaseDaemons } from '../../context/BaseDaemonContext'
 import { useTransport } from '../../context/TransportContext'
 import { cn } from '../../lib/utils'
-import { IconBell, IconBellOff, IconGitBranch, IconInfo, IconMesh, IconMonitor, IconMoreHorizontal, IconScroll } from '../Icons'
+import { IconBell, IconBellOff, IconGitBranch, IconInfo, IconMonitor, IconMoreHorizontal, IconScroll } from '../Icons'
 import SessionInfoDialog from './SessionInfoDialog'
 import { resolveConversationTargetEntry } from './conversation-selectors'
-import { preloadDashboardMeshGraphDialog } from './LazyDashboardMeshGraphDialog'
 import type { ActiveConversation } from './types'
 import { isAcpConv, isCliConv } from './types'
 import { useConversationMute } from './useConversationMute'
@@ -28,7 +29,6 @@ export interface ConversationActionsMenuProps {
     /** Remote control view — only offered for IDE (non CLI/ACP) conversations. */
     onOpenRemote?: (conversation: ActiveConversation) => void
     onOpenGit?: (daemonId: string, workspace: string) => void
-    onOpenMeshGraph?: (conversation: ActiveConversation) => void
     /** Button classes (the host toolbar's button style). */
     className?: string
     iconSize?: number
@@ -44,17 +44,14 @@ interface MenuItem {
 
 const MENU_WIDTH = 220
 
-export function isMeshGraphAvailableFor(conversation: ActiveConversation): boolean {
-    return !!conversation.daemonId
-        && !!(conversation.coordinator?.meshId || conversation.settings?.meshCoordinatorFor)
-}
+// Re-exported for existing importers; the rule lives in conversation-mesh-role.
+export { isMeshGraphAvailableFor } from './conversation-mesh-role'
 
 export default function ConversationActionsMenu({
     conversation,
     onOpenHistory,
     onOpenRemote,
     onOpenGit,
-    onOpenMeshGraph,
     className,
     iconSize = 16,
 }: ConversationActionsMenuProps) {
@@ -86,9 +83,6 @@ export default function ConversationActionsMenu({
     }
     if (onOpenRemote && !isCli && !isAcp) {
         items.push({ key: 'remote', label: t('dashboard.header.remoteControl'), icon: <IconMonitor size={15} />, onSelect: () => onOpenRemote(conversation) })
-    }
-    if (onOpenMeshGraph && isMeshGraphAvailableFor(conversation)) {
-        items.push({ key: 'mesh', label: t('dashboard.header.meshGraph'), icon: <IconMesh size={15} />, onSelect: () => onOpenMeshGraph(conversation) })
     }
     if (onOpenGit && conversation.git && conversation.daemonId && conversation.workspacePath) {
         const daemonId = conversation.daemonId
@@ -172,7 +166,6 @@ export default function ConversationActionsMenu({
                 aria-haspopup="menu"
                 aria-expanded={open}
                 onClick={() => setOpen(value => !value)}
-                onPointerEnter={() => { if (onOpenMeshGraph && isMeshGraphAvailableFor(conversation)) void preloadDashboardMeshGraphDialog() }}
                 className={className ?? 'btn btn-secondary btn-sm'}
                 style={{ pointerEvents: 'auto' }}
             >

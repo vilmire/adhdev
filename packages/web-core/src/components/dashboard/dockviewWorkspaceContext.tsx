@@ -25,6 +25,7 @@ import PaneGroupEmptyState from './PaneGroupEmptyState'
 import { areConversationsLoaded } from './dashboard-mobile-chat-mode-helpers'
 import type { DashboardDockviewPanelParams, DashboardDockviewRemotePanelParams } from './dockviewWorkspaceLayout'
 import LoadingSpinner from '../ui/LoadingSpinner'
+import { MeshRoleIcon, MeshRoleLabel, useConversationMeshRoleTitle } from './ConversationMeshRoleMarker'
 
 export interface DashboardDockviewContextValue {
     actionLogs: { routeId: string; text: string; timestamp: number }[]
@@ -168,6 +169,7 @@ export function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardD
         getTypingSnapshot,
         getTypingSnapshot,
     )
+    const meshRoleTitle = useConversationMeshRoleTitle(conversationForTypingLookup)
 
     if (props.params.kind === 'remote') {
         const remoteConversation = getPreferredConversationForIde([...ctx.conversationsByTabKey.values()], props.params.routeId)
@@ -243,7 +245,7 @@ export function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardD
     return (
         <div
             className={`adhdev-dockview-tab${isActive ? ' is-active' : ''}${isGroupActive ? ' is-group-active' : ''}${isReconnecting ? ' is-reconnecting' : ''}`}
-            title={getConversationTitle(conversation)}
+            title={meshRoleTitle ? `${getConversationTitle(conversation)} · ${meshRoleTitle}` : getConversationTitle(conversation)}
             data-tab-key={props.params.tabKey}
             onMouseDown={activatePanel}
             onTouchStart={activatePanel}
@@ -274,9 +276,11 @@ export function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardD
                     <span className="adhdev-dockview-tab-status-text is-idle">○</span>
                 )}
             </div>
+            <MeshRoleIcon conversation={conversation} size={12} />
             <div className="adhdev-dockview-tab-copy">
                 <div className="adhdev-dockview-tab-primary">{getConversationTitle(conversation)}</div>
                 <div className="adhdev-dockview-tab-meta">
+                    <MeshRoleLabel conversation={conversation} separator />
                     {isReconnecting ? (
                         <span className="adhdev-dockview-tab-reconnecting">{getConversationTabMetaText(conversation)}</span>
                     ) : isConnecting ? (

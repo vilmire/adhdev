@@ -2,7 +2,8 @@
 //
 // UI simplification (2026-09-27): the pane toolbar keeps Stop visible and moves
 // every other per-conversation action (history, remote, mute, session info,
-// git, mesh graph) into one "…" overflow. This pins that the overflow offers
+// git) into one "…" overflow. Owner follow-up (same day): Mesh graph is a
+// dedicated, visible button for coordinators again — never a menu item. This pins that the overflow offers
 // exactly the actions that apply, that each item still reaches its handler
 // (nothing lost by hiding it), and that the menu behaves like a menu.
 import { act } from 'react'
@@ -68,14 +69,13 @@ describe('ConversationActionsMenu — the pane toolbar "…" overflow', () => {
     const menuItems = () => Array.from(document.body.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'))
     const itemKeys = () => menuItems().map(item => item.dataset.menuItem)
 
-    it('is closed until clicked, then lists only the actions that apply to a CLI coordinator', () => {
+    it('is closed until clicked, then lists only the actions that apply to a CLI coordinator (mesh graph is not a menu item)', () => {
         render(
             <ConversationActionsMenu
                 conversation={conversation()}
                 onOpenHistory={() => {}}
                 onOpenRemote={() => {}}
                 onOpenGit={() => {}}
-                onOpenMeshGraph={() => {}}
             />,
         )
         expect(trigger().getAttribute('aria-expanded')).toBe('false')
@@ -84,9 +84,9 @@ describe('ConversationActionsMenu — the pane toolbar "…" overflow', () => {
         act(() => trigger().click())
         expect(trigger().getAttribute('aria-expanded')).toBe('true')
         // No "remote" for a CLI (terminal) conversation — only IDE chats have a screen.
-        expect(itemKeys()).toEqual(['history', 'mesh', 'git', 'mute', 'info'])
+        expect(itemKeys()).toEqual(['history', 'git', 'mute', 'info'])
         expect(menuItems().map(item => item.textContent)).toEqual([
-            'Chat History', 'Mesh graph', 'Open git status', 'Mute this chat', 'Session info',
+            'Chat History', 'Open git status', 'Mute this chat', 'Session info',
         ])
     })
 
@@ -97,7 +97,6 @@ describe('ConversationActionsMenu — the pane toolbar "…" overflow', () => {
                 onOpenHistory={() => {}}
                 onOpenRemote={() => {}}
                 onOpenGit={() => {}}
-                onOpenMeshGraph={() => {}}
             />,
         )
         act(() => trigger().click())
@@ -106,11 +105,10 @@ describe('ConversationActionsMenu — the pane toolbar "…" overflow', () => {
 
     it('every item still reaches its action, and choosing one closes the menu', () => {
         const onOpenHistory = vi.fn()
-        const onOpenMeshGraph = vi.fn()
         const onOpenGit = vi.fn()
         const conv = conversation()
         render(
-            <ConversationActionsMenu conversation={conv} onOpenHistory={onOpenHistory} onOpenGit={onOpenGit} onOpenMeshGraph={onOpenMeshGraph} />,
+            <ConversationActionsMenu conversation={conv} onOpenHistory={onOpenHistory} onOpenGit={onOpenGit} />,
         )
         const choose = (key: string) => {
             act(() => trigger().click())
@@ -120,8 +118,6 @@ describe('ConversationActionsMenu — the pane toolbar "…" overflow', () => {
         }
         choose('history')
         expect(onOpenHistory).toHaveBeenCalledWith(conv)
-        choose('mesh')
-        expect(onOpenMeshGraph).toHaveBeenCalledWith(conv)
         choose('git')
         expect(onOpenGit).toHaveBeenCalledWith('machine-1', '/work/repo')
         choose('mute')

@@ -206,6 +206,8 @@
         --status-busy: #f97316;
         --status-error: #ef4444;
         --status-offline: #71717a;
+        /* Repo Mesh coordinator marker (tabs, header, lists) — distinct from the amber accent. */
+        --mesh-coordinator: #a78bfa;
 
         /* ── Semantic event colors ──────────────────────
            Meaning-keyed palette for audit/activity rows and scope chips, where
@@ -264,6 +266,7 @@
         --status-busy: #ea580c;
         --status-error: #dc2626;
         --status-offline: #a1a1aa;
+        --mesh-coordinator: #7c3aed;
 
         /* Semantic event colors — darkened for contrast on light backgrounds,
            matching the shift --status-* makes above. */
@@ -313,6 +316,7 @@
             --status-busy: #ea580c;
             --status-error: #dc2626;
             --status-offline: #a1a1aa;
+            --mesh-coordinator: #7c3aed;
 
             /* Semantic event colors — must mirror the :root[data-theme="light"]
                block above; this branch covers system-preference light mode. */
@@ -632,18 +636,62 @@
         color: var(--text-muted);
     }
 
-    .adhdev-dockview-tab-mesh-role {
-        flex: 0 1 auto;
-        max-width: 9rem;
+    /* ── Repo Mesh role markers (ConversationMeshRoleMarker) ── */
+    .mesh-role-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        line-height: 0;
+    }
+
+    .mesh-role-icon.is-coordinator {
+        color: var(--mesh-coordinator);
+    }
+
+    .mesh-role-icon.is-worker {
+        color: var(--text-muted);
+        opacity: 0.85;
+    }
+
+    /* Keeps "Coordinator · <mesh>" readable: the rest of the subtitle truncates first. */
+    .mesh-role-label {
+        flex: 0 0 auto;
+        max-width: 65%;
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        color: var(--text-secondary);
-        font-size: 11px;
+    }
+
+    /* The trailing " · " must survive at the end of a flex item. */
+    .mesh-role-label-sep,
+    .mesh-role-label-mesh {
+        white-space: pre;
+    }
+
+    .mesh-role-label.is-coordinator .mesh-role-label-role {
+        color: var(--mesh-coordinator);
         font-weight: 700;
-        line-height: 1;
-        opacity: 0.62;
+    }
+
+    .mesh-role-label.is-worker .mesh-role-label-role {
+        font-weight: 600;
+    }
+
+    .conversation-meta-chip.mesh-role-chip.is-coordinator {
+        color: var(--mesh-coordinator);
+        border-color: color-mix(in srgb, var(--mesh-coordinator) 38%, transparent);
+        background: color-mix(in srgb, var(--mesh-coordinator) 9%, transparent);
+    }
+
+    .dashboard-header-mesh-button {
+        color: var(--mesh-coordinator) !important;
+        border-color: color-mix(in srgb, var(--mesh-coordinator) 34%, transparent) !important;
+    }
+
+    .dashboard-header-mesh-button:hover {
+        background: color-mix(in srgb, var(--mesh-coordinator) 10%, transparent) !important;
     }
 
     .adhdev-dockview-tab-unread-dot {
@@ -2565,6 +2613,11 @@
         flex: 1 1 auto;
     }
 
+    /* Coordinator / worker marker beside the mobile title (desktop shows "Dashboard"). */
+    .header-title-mobile-role {
+        display: none;
+    }
+
     .header-subtitle {
         display: flex;
         align-items: center;
@@ -3476,6 +3529,10 @@
 
         .header-title-mobile {
             display: inline !important;
+        }
+
+        .header-title-mobile-role {
+            display: inline-flex !important;
         }
 
         /* Compact buttons in header */

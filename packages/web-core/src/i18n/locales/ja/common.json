@@ -125,8 +125,16 @@
         },
         "metaChips": {
             "queuePending": "待機 {{count}}",
-            "queueTooltip": "キュー：待機 {{pending}}、割り当て済み {{assigned}}、完了 {{completed}}、失敗 {{failed}}",
-            "meshNode": "Mesh ノード"
+            "queueTooltip": "キュー：待機 {{pending}}、割り当て済み {{assigned}}、完了 {{completed}}、失敗 {{failed}}"
+        },
+        "meshRole": {
+            "coordinator": "コーディネーター",
+            "worker": "ワーカー",
+            "coordinatorFor": "{{mesh}} のコーディネーター",
+            "workerFor": "{{mesh}} のワーカー",
+            "coordinatorUnknownMesh": "メッシュのコーディネーター",
+            "workerUnknownMesh": "メッシュのワーカー",
+            "openMeshGraph": "メッシュグラフを開く"
         },
         "versionBanner": {
             "restarting": "再起動中",
@@ -1856,7 +1864,6 @@
         "hideFromDashboard": "ダッシュボードから隠す",
         "removeShortcut": "ショートカットを削除",
         "changeShortcut": "ショートカットを変更（{{shortcut}}）",
-        "meshChat": "メッシュチャット",
         "dropSplitRight": "右に分割",
         "dropMoveHere": "ここに移動",
         "dropSplitLeft": "左に分割",

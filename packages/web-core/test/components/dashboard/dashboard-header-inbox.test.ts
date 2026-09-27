@@ -307,7 +307,7 @@ describe('DashboardHeader inbox notifications', () => {
     expect(mainViewSource).not.toContain('fixed right-4 bottom-24')
   })
 
-  it('collapses per-conversation actions into one pane toolbar: Stop + the "…" overflow, one status dot, no duplicate title', () => {
+  it('collapses per-conversation actions into one pane toolbar: Stop + Mesh graph (coordinator) + the "…" overflow, one status dot, no duplicate title', () => {
     const html = renderHeader({
       activeConv: createConversation({
         daemonId: 'daemon-1',
@@ -322,8 +322,8 @@ describe('DashboardHeader inbox notifications', () => {
     expect(html).toContain('data-testid="dashboard-pane-stop"')
     expect(html).toContain('data-testid="conversation-actions-menu"')
     expect(html).toContain('aria-label="More actions"')
-    // History / remote / mesh graph are menu items now, not header buttons.
-    expect(html).not.toContain('dashboard-header-mesh-button')
+    // Mesh graph is a dedicated button for a coordinator; history / remote are menu items.
+    expect(html).toContain('dashboard-header-mesh-button')
     expect(html).not.toContain('title="Chat History"')
     // The active tab already names the conversation — no second title chip.
     expect(html).not.toContain('dashboard-header-action-target')

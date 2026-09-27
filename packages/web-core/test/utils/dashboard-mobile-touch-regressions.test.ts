@@ -79,10 +79,12 @@ describe('dashboard mobile/touch regressions', () => {
     expect(inboxSource).toContain('mobile-inbox-mesh-button')
     expect(inboxSource).toContain("title={t('mobileInbox.openLiveMeshGraph')}")
     expect(inboxSource).toContain('onOpenMeshGraph?: (conversation: ActiveConversation) => void')
-    // The room header's secondary actions (history, remote, mesh graph, mute,
-    // info) share the desktop pane toolbar's "…" menu, which lists the mesh
-    // graph whenever the conversation is a coordinator.
+    // The room header shows the coordinator's dedicated Mesh graph button
+    // (owner decision 2026-09-27) next to the shared "…" menu, which holds the
+    // remaining secondary actions (history, remote, mute, info).
     expect(roomSource).toContain('<ConversationActionsMenu')
+    expect(roomSource).toContain('<ConversationMeshGraphButton')
+    expect(roomSource).toContain('<MeshRoleIcon conversation={selectedConversation}')
     expect(roomSource).toContain('onOpenMeshGraph={onOpenMeshGraph}')
     expect(modeSource).toContain('onOpenMeshGraph={onOpenMeshGraph}')
     expect(mainViewSource).toContain('onOpenMeshGraph={handleOpenMeshGraph}')

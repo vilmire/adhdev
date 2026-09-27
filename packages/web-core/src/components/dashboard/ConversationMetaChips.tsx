@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import type { ActiveConversation } from './types'
 import { IconMonitor, IconPlug, IconServer, IconLayers } from '../Icons'
+import { getConversationMeshRole } from './conversation-mesh-role'
+import { MeshRoleChip } from './ConversationMeshRoleMarker'
 import {
     getConversationIdeChipLabel,
     getConversationMachineId,
@@ -38,9 +40,9 @@ export default function ConversationMetaChips({
     const showProviderChip = !meshOnly && !showExtensionChip && (conversation.transport === 'pty' || conversation.transport === 'acp')
     const providerChipLabel = getConversationProviderLabel(conversation)
     const ideChipLabel = getConversationIdeChipLabel(conversation)
-    const isMeshNode = conversation.settings?.meshNodeFor;
+    const meshRole = getConversationMeshRole(conversation).role;
     const meshQueueStats = conversation.meshQueueStats;
-    const isMeshCoordinator = conversation.coordinator?.meshId || conversation.settings?.meshCoordinatorFor;
+    const isMeshCoordinator = meshRole === 'coordinator';
 
     // All hooks must be called unconditionally to keep React's hook-order
     // invariant. The empty-state short-circuit lives below the hook block.
@@ -63,12 +65,13 @@ export default function ConversationMetaChips({
         navigate(getDashboardActiveTabHref(targetKey))
     }, [conversation, navigate, onOpenNativeConversation])
 
-    if (!showIdeChip && !showExtensionChip && !showProviderChip && !machineLabel && !isMeshNode && !meshQueueStats) {
+    if (!showIdeChip && !showExtensionChip && !showProviderChip && !machineLabel && !meshRole && !meshQueueStats) {
         return null;
     }
 
     return (
         <div className={`conversation-meta-chips ${className}`.trim()}>
+            <MeshRoleChip conversation={conversation} />
             {showIdeChip && (
                 interactive ? (
                     <button
@@ -116,12 +119,6 @@ export default function ConversationMetaChips({
                         <span>{machineLabel}</span>
                     </span>
                 )
-            )}
-            {isMeshNode && (
-                <span className="conversation-meta-chip" title={t('dashboard.metaChips.meshNode')}>
-                    <IconServer size={12} />
-                    <span>{t('dashboard.metaChips.meshNode')}</span>
-                </span>
             )}
             {isMeshCoordinator && meshQueueStats && (
                 <span 
