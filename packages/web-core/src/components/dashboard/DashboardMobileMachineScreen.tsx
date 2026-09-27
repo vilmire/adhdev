@@ -25,7 +25,7 @@ import LaunchConfirmDialog from '../machine/LaunchConfirmDialog'
 import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { buildLaunchWorkspaceOptions } from '../machine/launchWorkspaceOptions'
 import { getConversationTitle, getMachineConversationCardSubtitle } from './conversation-presenters'
-import { MeshRoleIcon, MeshRoleLabel } from './ConversationMeshRoleMarker'
+import { MeshRoleIcon } from './ConversationMeshRoleMarker'
 import { buildMachineRecentLaunchCardView } from '../../utils/machine-recent-launch-presenters'
 import { useDashboardMobileMachineLauncher } from './useDashboardMobileMachineLauncher'
 
@@ -209,7 +209,6 @@ export default function DashboardMobileMachineScreen({
                                         <span className="min-w-0 truncate">{card.primary}</span>
                                     </span>
                                     <span className="text-xs leading-relaxed text-text-secondary">
-                                        <MeshRoleLabel conversation={card.conversation} separator />
                                         {card.secondary}
                                     </span>
                                 </button>

@@ -4,7 +4,6 @@ import { useNavigate } from 'react-router-dom'
 import type { ActiveConversation } from './types'
 import { IconMonitor, IconPlug, IconServer, IconLayers } from '../Icons'
 import { getConversationMeshRole } from './conversation-mesh-role'
-import { MeshRoleChip } from './ConversationMeshRoleMarker'
 import {
     getConversationIdeChipLabel,
     getConversationMachineId,
@@ -71,7 +70,6 @@ export default function ConversationMetaChips({
 
     return (
         <div className={`conversation-meta-chips ${className}`.trim()}>
-            <MeshRoleChip conversation={conversation} />
             {showIdeChip && (
                 interactive ? (
                     <button

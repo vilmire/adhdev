@@ -46,26 +46,27 @@ function renderChips(
 }
 
 describe('ConversationMetaChips', () => {
-    // Owner decision (2026-09-27): a coordinator is recognisable at a glance on
-    // every surface, so the mesh role chip ("Coordinator · <mesh>" /
-    // "Worker · <mesh>") renders in the mesh-only row too.
-    it('renders the coordinator role chip in the mesh-only row', () => {
+    // Owner decision (2026-09-27): coordinator/worker is carried by the mesh
+    // icon alone (MeshRoleIcon) on every surface. The chip row itself never
+    // renders a role chip ("Coordinator · <mesh>" / "Worker · <mesh>") — that
+    // text label and the chip variant were removed entirely.
+    it('does not render a role chip in the mesh-only row for a coordinator', () => {
         const html = renderChips(createConversation({
             settings: { meshCoordinatorFor: 'mesh-1' },
         }), { meshOnly: true })
 
-        expect(html).toContain('mesh-role-chip is-coordinator')
-        expect(html).toContain('Coordinator · mesh-1')
+        expect(html).not.toContain('mesh-role-chip')
+        expect(html).not.toContain('Coordinator · mesh-1')
         expect(html).not.toContain('Studio Mac')
     })
 
-    it('renders the worker role chip (not a coordinator chip) for a mesh node', () => {
+    it('does not render a role chip in the mesh-only row for a worker', () => {
         const html = renderChips(createConversation({
             settings: { meshNodeFor: 'mesh-1' },
         }), { meshOnly: true })
 
-        expect(html).toContain('mesh-role-chip is-worker')
-        expect(html).toContain('Worker · mesh-1')
+        expect(html).not.toContain('mesh-role-chip')
+        expect(html).not.toContain('Worker · mesh-1')
         expect(html).not.toContain('Coordinator')
     })
 

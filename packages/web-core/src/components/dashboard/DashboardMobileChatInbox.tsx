@@ -8,7 +8,7 @@ import type { ActiveConversation } from './types'
 import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
 import { getConversationMetaText, getConversationStatusHint, getConversationTitle } from './conversation-presenters'
 import { isMeshGraphAvailableFor } from './conversation-mesh-role'
-import { MeshRoleIcon, MeshRoleLabel } from './ConversationMeshRoleMarker'
+import { MeshRoleIcon } from './ConversationMeshRoleMarker'
 import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, buildChatFrontendDebugSnapshot, copyChatDebugBundleTextToClipboard } from './chat-debug-bundle'
 import { isMobileDebugBundleEnabled } from '../../utils/debug-flags'
 import { eventManager } from '../../managers/EventManager'
@@ -326,7 +326,6 @@ function DashboardMobileChatItem({
                         <span className={`text-[15px] leading-[22px] font-bold truncate tracking-tight ${titleClassName}`}>{title}</span>
                     </div>
                     <div className={`text-xs font-medium truncate flex items-center ${metaClassName}`}>
-                        <MeshRoleLabel conversation={item.conversation} separator />
                         <span className="truncate">{metaText}</span>
                         <GitStatusPill git={item.conversation.git} compact className="ml-1 max-w-[6.5rem] shrink-0" />
                         {isReconnecting ? (
