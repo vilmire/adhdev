@@ -334,7 +334,29 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
           cursorStyle: 'bar',
           cursorWidth: 8,
           fontSize,
-          fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+          // CJK-FALLBACK: the four latin families below carry no Hangul/CJK
+          // glyphs and nothing is bundled (@font-face count in this repo is 0),
+          // so on a phone every wide character fell through to the generic
+          // `monospace` and then to whatever CJK face the OS happened to pick.
+          // xterm sizes the cell grid from the *latin* charWidth and reserves
+          // two cells per wide character; when the OS-picked CJK face's advance
+          // width is narrower than 2x that, the glyph is drawn inside a wider
+          // reserved slot and the slack reads as a space between every
+          // character ("워 커 폴 더 에"). ASCII was unaffected because it never
+          // left the first font — that asymmetry is what identified this.
+          // Naming CJK monospace faces explicitly, *after* the latin four so
+          // latin priority is unchanged and *before* generic `monospace` so the
+          // OS never gets to guess, keeps advance widths predictable at +0 KB.
+          // Order within the CJK group is by how fixed-pitch the face is:
+          // D2Coding (developer-installed Hangul monospace, exact 2:1 metrics)
+          // > Noto Sans Mono CJK KR (linux/android monospace CJK) > the two
+          // system UI faces (Apple SD Gothic Neo on darwin/iOS, Malgun Gothic
+          // on win32) which are proportional but are the only faces guaranteed
+          // present on those platforms.
+          fontFamily:
+            "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', "
+            + "'D2Coding', 'Noto Sans Mono CJK KR', 'Apple SD Gothic Neo', 'Malgun Gothic', "
+            + 'monospace',
           fontWeight: '400',
           letterSpacing: 0,
           lineHeight: 1.2,

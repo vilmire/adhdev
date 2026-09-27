@@ -42,7 +42,14 @@ export const CHAT_FONT_PRESET_OPTIONS: StandaloneFontPresetOption[] = [
 ]
 
 export const MONO_FONT_PRESET_OPTIONS: StandaloneFontPresetOption[] = [
-  { id: 'default', label: 'Default mono', labelKey: 'standalone.fonts.presets.defaultMono', family: 'ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace', description: 'Current monospace stack' },
+  // CJK-FALLBACK: "Default mono" must mirror web-core's --chat-terminal-font-family
+  // exactly. It previously stopped at the latin families, so a standalone user who
+  // never opened font settings got the pre-fix stack back (no Hangul/CJK glyph in
+  // any named face, nothing bundled) and wide characters rendered with the same
+  // mismatched advance width. The named presets below intentionally stay
+  // latin-only: those are explicit user choices, and each already ends in
+  // `monospace`, which now resolves through the same OS faces.
+  { id: 'default', label: 'Default mono', labelKey: 'standalone.fonts.presets.defaultMono', family: 'ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", "D2Coding", "Noto Sans Mono CJK KR", "Apple SD Gothic Neo", "Malgun Gothic", monospace', description: 'Current monospace stack' },
   { id: 'jetbrains-mono', label: 'JetBrains Mono', labelKey: null, family: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace', description: 'Readable coding font with strong punctuation' },
   { id: 'fira-code', label: 'Fira Code', labelKey: null, family: '"Fira Code", ui-monospace, "SF Mono", Menlo, Consolas, monospace', description: 'Popular ligature-friendly code font' },
   { id: 'cascadia-code', label: 'Cascadia Code', labelKey: null, family: '"Cascadia Code", "Cascadia Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace', description: 'Windows-friendly modern coding font' },
