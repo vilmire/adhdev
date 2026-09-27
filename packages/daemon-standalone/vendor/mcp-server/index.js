@@ -78157,7 +78157,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const sub = readRecord5(entry) ?? {};
         return [sub.path ?? null, sub.commit ?? null, sub.dirty ?? null, sub.outOfSync ?? null, sub.error ?? null];
       }) : [];
-      return JSON.stringify([head, submodules]);
+      const buildBehind = readRecord5(record22.daemonBuildBehind);
+      const buildKey = buildBehind ? [buildBehind.buildCommit ?? null, buildBehind.head ?? null] : null;
+      return JSON.stringify([head, submodules, buildKey]);
     }
     function carryUpstreamFreshness(prev, next, now, maxAgeMs = UPSTREAM_FRESHNESS_CARRY_MAX_AGE_MS) {
       if (next.upstreamStatus !== "unchecked" || !prev || !next.upstream) return next;
@@ -188318,6 +188320,9 @@ function resolveRefineConfigNode(ctx, nodeId) {
 var import_daemon_core12 = __toESM(require_dist3());
 
 // src/tools/mesh-status-held-git.ts
+function nonEmptyString(value) {
+  return typeof value === "string" && value ? value : void 0;
+}
 function readRecord2(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
@@ -188400,7 +188405,10 @@ function applyHeldNodeGitToEntry(entry, args) {
     entry.uncommittedChanges = uncommittedChanges;
     entry.branchConvergence = daemonBranchConvergence ?? buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
     const buildBehind = readRecord2(status.daemonBuildBehind) ?? readRecord2(held?.staleDaemonBuild);
-    if (buildBehind) entry.staleDaemonBuild = buildBehind;
+    const runningCommit = nonEmptyString(readRecord2(readRecord2(held?.heldRuntime)?.daemonBuild)?.commit);
+    const verdictCommit = buildBehind ? nonEmptyString(buildBehind.buildCommit) : void 0;
+    const verdictIsForOtherProcess = !!(runningCommit && verdictCommit && runningCommit !== verdictCommit);
+    if (buildBehind && !verdictIsForOtherProcess) entry.staleDaemonBuild = buildBehind;
     const policy = node.policy ?? {};
     const submodules = policy.autoDiscoverSubmodules === false ? void 0 : extractSubmodules({ status }, policy.submoduleIgnorePaths || []);
     if (submodules && submodules.some((s) => s?.outOfSync)) {

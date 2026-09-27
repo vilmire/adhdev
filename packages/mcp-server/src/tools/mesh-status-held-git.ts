@@ -63,6 +63,10 @@ export type {
     NodeStatusProbe,
 } from './mesh-held-node-state.js';
 
+function nonEmptyString(value: unknown): string | undefined {
+    return typeof value === 'string' && value ? value : undefined;
+}
+
 function readRecord(value: unknown): Record<string, any> | null {
     return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : null;
 }
@@ -204,7 +208,14 @@ export function applyHeldNodeGitToEntry(entry: Record<string, any>, args: {
         entry.uncommittedChanges = uncommittedChanges;
         entry.branchConvergence = daemonBranchConvergence ?? buildBranchConvergence(mesh as any, node, status, dirty, uncommittedChanges);
         const buildBehind = readRecord(status.daemonBuildBehind) ?? readRecord(held?.staleDaemonBuild);
-        if (buildBehind) entry.staleDaemonBuild = buildBehind;
+        // The verdict was computed by the process that pushed this git snapshot. If
+        // the daemon has since restarted on another build (held runtime reports the
+        // running commit), the verdict describes a process that no longer exists —
+        // drop it rather than report a live, up-to-date daemon as stale.
+        const runningCommit = nonEmptyString(readRecord(readRecord(held?.heldRuntime)?.daemonBuild)?.commit);
+        const verdictCommit = buildBehind ? nonEmptyString(buildBehind.buildCommit) : undefined;
+        const verdictIsForOtherProcess = !!(runningCommit && verdictCommit && runningCommit !== verdictCommit);
+        if (buildBehind && !verdictIsForOtherProcess) entry.staleDaemonBuild = buildBehind;
         const policy = (node.policy as any) ?? {};
         const submodules = policy.autoDiscoverSubmodules === false
             ? undefined
