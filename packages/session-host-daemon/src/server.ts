@@ -260,9 +260,9 @@ export class SessionHostServer extends EventEmitter {
           return { success: true, result: record };
         }
         case 'get_snapshot':
-          return { success: true, result: this.getSnapshot(request.payload.sessionId, request.payload.sinceSeq) };
+          return { success: true, result: await this.getSnapshotForRequest(request.payload.sessionId, request.payload.sinceSeq) };
         case 'get_terminal_snapshot':
-          return { success: true, result: this.requireRuntime(request.payload.sessionId).getTerminalSnapshot() };
+          return { success: true, result: await this.requireRuntime(request.payload.sessionId).getTerminalSnapshot() };
         case 'get_host_diagnostics':
           return { success: true, result: this.getHostDiagnostics(request.payload) };
         case 'clear_session_buffer': {
@@ -706,12 +706,30 @@ export class SessionHostServer extends EventEmitter {
     }
   }
 
+  // Synchronous, best-effort variant for background/periodic persistence
+  // (persistNow, called from many sync contexts). Uses getSnapshotTextSync()
+  // rather than waiting for in-flight PTY writes to flush — see that method's
+  // doc. Interactive requests must use getSnapshotForRequest() instead.
   private getSnapshot(sessionId: string, sinceSeq?: number) {
     const snapshot = this.registry.getSnapshot(sessionId, sinceSeq);
     const record = this.registry.getSession(sessionId);
     const runtimeText = typeof sinceSeq === 'number'
       ? ''
-      : (this.runtimes.get(sessionId)?.getSnapshotText?.() || '');
+      : (this.runtimes.get(sessionId)?.getSnapshotTextSync?.() || '');
+    return mergeRuntimeSnapshot(snapshot, record, { sinceSeq, runtimeText });
+  }
+
+  // Flush-aware variant for the interactive `get_snapshot` IPC request (the
+  // dashboard's runtime_snapshot seed). Awaits any PTY chunk still queued in
+  // the xterm mirror's WriteBuffer before reading, so the response reflects
+  // everything written so far rather than racing an in-flight parse. See
+  // PtySessionRuntime.flushPendingWrites() for why that race existed.
+  private async getSnapshotForRequest(sessionId: string, sinceSeq?: number) {
+    const snapshot = this.registry.getSnapshot(sessionId, sinceSeq);
+    const record = this.registry.getSession(sessionId);
+    const runtimeText = typeof sinceSeq === 'number'
+      ? ''
+      : ((await this.runtimes.get(sessionId)?.getSnapshotText?.()) || '');
     return mergeRuntimeSnapshot(snapshot, record, { sinceSeq, runtimeText });
   }
 

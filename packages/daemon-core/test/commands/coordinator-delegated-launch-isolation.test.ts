@@ -312,21 +312,29 @@ describe('worker-MCP gate ON ⇒ provider-specific worker delivery is active', (
     // coordinator's mcp_config.json, i.e. the feature would be silently inert.
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateon-home-'))
     __tmpDirsToClean.push(workspace)
-    const result = buildCoordinatorDelegatedCliLaunchOptions({
-      cliType: 'antigravity-cli',
-      workspace,
-      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '~/.gemini/config/mcp_config.json' },
-      sessionKey: 'task_home_export',
-    })
-
-    // The real machine's ~/.gemini may or may not be present; when the auth
-    // import is unavailable the resolver degrades without a private HOME and
-    // says so. Assert the pairing: a private HOME implies HOME is exported.
-    if (result.workerIsolation?.workerHome) {
-      expect(result.env.HOME).toBe(result.workerIsolation.workerHome)
+    // The real machine's ~/.gemini may or may not be present; when a REQUIRED
+    // auth import is unavailable the private HOME cannot be built and the
+    // launch is refused outright (fail closed, 2026-09-27) — it used to
+    // proceed on the real HOME, i.e. with the coordinator's MCP servers.
+    // Assert the pairing: a private HOME implies HOME is exported; no private
+    // HOME implies no launch at all.
+    let result: ReturnType<typeof buildCoordinatorDelegatedCliLaunchOptions> | undefined
+    let launchError: unknown
+    try {
+      result = buildCoordinatorDelegatedCliLaunchOptions({
+        cliType: 'antigravity-cli',
+        workspace,
+        mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '~/.gemini/config/mcp_config.json' },
+        sessionKey: 'task_home_export',
+      })
+    } catch (err) {
+      launchError = err
+    }
+    if (result) {
+      expect(result.workerIsolation?.workerHome).toBeTruthy()
+      expect(result.env.HOME).toBe(result.workerIsolation!.workerHome)
     } else {
-      expect(result.env.HOME).toBeUndefined()
-      expect(result.workerIsolation!.notes.join(' ')).toMatch(/private HOME unavailable/)
+      expect(String((launchError as Error)?.message)).toMatch(/worker_private_home_failed/)
     }
   })
 

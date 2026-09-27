@@ -38,6 +38,7 @@ import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
 import { readMeshNodeDaemonId } from '../../mesh/mesh-node-identity.js';
 import { currentMeshAttemptRef } from '../../providers/cli-provider-mesh-assignment.js';
 import { LOG } from '../../logging/logger.js';
+import { normalizeWorkerDeliveryId, recallWorkerDelivery, rememberWorkerDelivery } from '../../mesh/worker-report-idempotency.js';
 import type {
     ForwardedReportSender,
     ForwardedWorkerReportClaim,
@@ -187,7 +188,9 @@ function toReportResponse(result: WorkerReportResult): Record<string, unknown> &
                     ? 'Fix the touchedFiles list to match the task mode and call again.'
                     : result.refusal === 'storage_failed'
                         ? 'Nothing was recorded — call again.'
-                        : 'The completion was refused by the turn ledger; the task state is authoritative.',
+                        : result.refusal === 'stale_report'
+                            ? 'This report was written for an earlier task of this session and can no longer be filed against it; nothing was recorded.'
+                            : 'The completion was refused by the turn ledger; the task state is authoritative.',
         };
     }
     return {
@@ -418,16 +421,33 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
                 return { success: false, error: 'invalid_report', validationErrors: errors };
             }
             const credential = { token: args?.token, bind: args?.bind };
+            // Durable delivery (mcp-server outbox): a re-send of a report this daemon
+            // already accepted — the transport timed out on the answer, not the work —
+            // gets the same answer back instead of being processed a second time.
+            const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
+            const replay = recallWorkerDelivery('report', credential, deliveryId);
+            if (replay) {
+                LOG.info('WorkerReport', `Report delivery ${deliveryId} re-sent after it was already accepted (task ${String(replay.taskId ?? '?')}) — answered from the replay record`);
+                return { ...replay, success: true, duplicate: true };
+            }
+            const reportedAtMs = args?.reportedAtMs;
             // F7: the task may be owned by a REMOTE coordinator daemon (queue row,
             // attempt and token all live there). No local identity + a valid
             // assignment stamp naming another owner ⇒ relay to that owner; nothing
             // is written here.
             const isSelfDaemon = selfDaemonPredicate(_ctx);
-            if (!hasLocalWorkerIdentity(credential, { isSelfDaemon })) {
+            let response: Record<string, unknown> & { success: boolean };
+            if (!hasLocalWorkerIdentity(credential, { isSelfDaemon, reportedAtMs })) {
                 const remote = await resolveRemoteWorker(_ctx, args);
-                if (remote) return await forwardReportToOwner(_ctx, remote, report);
+                if (remote) {
+                    response = await forwardReportToOwner(_ctx, remote, report);
+                    rememberWorkerDelivery('report', credential, deliveryId, response);
+                    return response;
+                }
             }
-            return toReportResponse(acceptWorkerCompletionReport(credential, report, { isSelfDaemon }));
+            response = toReportResponse(acceptWorkerCompletionReport(credential, report, { isSelfDaemon, reportedAtMs }));
+            rememberWorkerDelivery('report', credential, deliveryId, response);
+            return response;
         } catch (e: any) {
             return { success: false, error: e?.message || String(e) };
         }
@@ -479,14 +499,27 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
         try {
             const { acceptWorkerProgressUpdate, hasLocalWorkerIdentity } = await import('../../mesh/worker-report.js');
             const credential = { token: args?.token, bind: args?.bind };
+            // Durable delivery: an already-accepted note re-sent after a transport timeout
+            // is answered from the replay record — it must not page the coordinator twice.
+            const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
+            const replay = recallWorkerDelivery('progress', credential, deliveryId);
+            if (replay) return { ...replay, success: true, duplicate: true };
+            const reportedAtMs = args?.reportedAtMs;
+            let response: Record<string, unknown> & { success: boolean };
             // F7 (progress axis): same routing as the completion report — no
             // local task + an assignment stamp naming another owner ⇒ relay the
             // note to that owner (it holds the attempt the row hangs off).
-            if (!hasLocalWorkerIdentity(credential, { isSelfDaemon: selfDaemonPredicate(_ctx) })) {
+            if (!hasLocalWorkerIdentity(credential, { isSelfDaemon: selfDaemonPredicate(_ctx), reportedAtMs })) {
                 const remote = await resolveRemoteWorker(_ctx, args);
-                if (remote) return await forwardToOwner(_ctx, remote, WORKER_PROGRESS_FORWARD_COMMAND, { note }, 'progress note');
+                if (remote) {
+                    response = await forwardToOwner(_ctx, remote, WORKER_PROGRESS_FORWARD_COMMAND, { note }, 'progress note');
+                    rememberWorkerDelivery('progress', credential, deliveryId, response);
+                    return response;
+                }
             }
-            return toProgressResponse(acceptWorkerProgressUpdate(credential, note));
+            response = toProgressResponse(acceptWorkerProgressUpdate(credential, note, { reportedAtMs }));
+            rememberWorkerDelivery('progress', credential, deliveryId, response);
+            return response;
         } catch (e: any) {
             return { success: false, error: e?.message || String(e) };
         }

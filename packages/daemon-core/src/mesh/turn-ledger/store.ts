@@ -253,6 +253,18 @@ export class TurnStore {
         return row ? { attempt: attemptFromRow(row), updatedAt: row.updated_at } : null;
     }
 
+    /**
+     * The MESH attempt a session was working on at `atMs`: the latest one accepted at or
+     * before that instant. Worker-report delivery (durable outbox) uses it to attribute a
+     * report written BEFORE the session was handed its current task to the attempt that was
+     * live when the report was written, instead of to whatever the session holds now.
+     */
+    findMeshAttemptForSessionAt(sessionId: string, atMs: number): TurnAttempt | null {
+        const row = this.stmt(`SELECT * FROM turn_attempts WHERE session_id = ? AND scope != 'plain' AND accepted_at <= ?
+            ORDER BY accepted_at DESC, attempt_no DESC LIMIT 1`).get(sessionId, atMs) as AttemptRow | undefined;
+        return row ? attemptFromRow(row) : null;
+    }
+
     /** Stage 6 presentation read (C-W8): a task's latest attempt with its `updated_at` stamp. */
     findPresentationAttemptForTask(meshId: string, taskId: string): { attempt: TurnAttempt; updatedAt: number } | null {
         const row = this.stmt('SELECT * FROM turn_attempts WHERE mesh_id = ? AND task_id = ? ORDER BY attempt_no DESC LIMIT 1')

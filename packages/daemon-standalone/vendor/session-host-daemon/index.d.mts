@@ -51,6 +51,7 @@ declare class SessionHostServer extends EventEmitter {
     private waitForRuntimeExit;
     private resolveExitWaiters;
     private getSnapshot;
+    private getSnapshotForRequest;
     flushAllPersistence(): void;
     private restartRuntime;
     private pruneDuplicateSessions;

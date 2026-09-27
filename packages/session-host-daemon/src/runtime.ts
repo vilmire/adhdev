@@ -11,7 +11,14 @@ import {
 } from '@adhdev/session-host-core';
 
 type TerminalMirrorHandle = {
-  write(data: string | Uint8Array): void;
+  // `onProcessed` fires once this chunk has actually been parsed into the
+  // buffer. xterm.js's write() is asynchronous (WriteBuffer defers to a
+  // setTimeout/microtask — see @xterm/xterm's common/input/WriteBuffer.ts):
+  // without waiting for this callback, a snapshot read that races an
+  // in-flight write observes a buffer that is missing the just-written data
+  // (stale, not corrupted) rather than the just-appended text. See
+  // PtySessionRuntime.flushPendingWrites().
+  write(data: string | Uint8Array, onProcessed?: () => void): void;
   resize(cols: number, rows: number): void;
   formatVT(): string;
   formatPlainText(): string;
@@ -20,7 +27,7 @@ type TerminalMirrorHandle = {
 };
 
 type GhosttyTerminalHandle = {
-  write(data: string | Uint8Array): void;
+  write(data: string | Uint8Array, onProcessed?: () => void): void;
   resize(cols: number, rows: number): void;
   formatVT(): string;
   formatPlainText(options?: { trim?: boolean }): string;
@@ -177,9 +184,14 @@ function createXtermMirror(options: { cols: number; rows: number; scrollback: nu
   const serializer = createXtermSerializeAddon(terminal);
 
   return {
-    write(data: string | Uint8Array): void {
-      if (!data) return;
-      terminal.write(typeof data === 'string' ? data : Buffer.from(data).toString('utf8'));
+    write(data: string | Uint8Array, onProcessed?: () => void): void {
+      if (!data) {
+        // Nothing to parse, but the caller (PtySessionRuntime.flushPendingWrites)
+        // still needs its completion signal so an empty chunk cannot wedge a flush.
+        onProcessed?.();
+        return;
+      }
+      terminal.write(typeof data === 'string' ? data : Buffer.from(data).toString('utf8'), onProcessed);
     },
     resize(cols: number, rows: number): void {
       currentRows = Math.max(1, rows | 0);
@@ -221,9 +233,14 @@ function normalizeGhosttyBinding(mod: any): GhosttyBinding | null {
       const handle = raw.createTerminal(options) as any;
       const viewportSnapshot = createXtermMirror(options);
       return {
-        write(data: string | Uint8Array): void {
+        write(data: string | Uint8Array, onProcessed?: () => void): void {
+          // `handle` (native ghostty) writes synchronously; `viewportSnapshot`
+          // (xterm mirror) is the one whose write is asynchronous and is also
+          // the sole source of formatVT()/formatPlainText() output above — so
+          // completion must be reported only once ITS write has been parsed,
+          // not immediately after this call returns.
           handle.write(data);
-          viewportSnapshot.write(data);
+          viewportSnapshot.write(data, onProcessed);
         },
         resize(cols: number, rows: number): void {
           handle.resize(cols, rows);
@@ -300,6 +317,10 @@ export class PtySessionRuntime {
   private scrollRegion: { top: number; bot: number };
   private onDataCallback: (data: string) => void;
   private onExitCallback: (exitCode: number | null, signal: number | null) => void;
+  /** Count of screenMirror.write() calls whose completion callback has not fired yet. */
+  private pendingWriteCount = 0;
+  /** Resolved (and cleared) once pendingWriteCount reaches 0. See flushPendingWrites(). */
+  private snapshotWaiters: Array<() => void> = [];
 
   constructor(options: PtyRuntimeOptions) {
     this.sessionId = options.sessionId;
@@ -344,10 +365,34 @@ export class PtySessionRuntime {
     });
 
     this.ptyProcess.onData((data: string) => {
-      this.screenMirror?.write(data);
       this.trackTerminalModes(data);
-      this.respondToTerminalQueries(data);
       this.onDataCallback(data);
+      // `screenMirror.write()` is backed by xterm.js's WriteBuffer (see
+      // TerminalMirrorHandle's `write` doc), which is asynchronous: it defers
+      // parsing to a later tick even though this call returns immediately.
+      // Reads that depend on `data` having been fully parsed must wait for the
+      // completion callback rather than running synchronously right after
+      // write():
+      //   - getSnapshotText()/getTerminalSnapshot() (formatVT/formatPlainText)
+      //     always read the xterm mirror, ghostty-backed or not, so an
+      //     in-flight get_snapshot IPC request racing a queued write got a
+      //     STALE/incomplete viewport (missing the just-written tail).
+      //   - respondToTerminalQueries()'s DSR (`\x1b[6n`) reply reads
+      //     getCursorPosition(), which is the (synchronous) native ghostty
+      //     cursor when that backend is active, but falls back to the same
+      //     async xterm mirror when it is not (see normalizeGhosttyBinding
+      //     below). On the xterm-only fallback, replying synchronously here
+      //     reported a STALE cursor column to the PTY process for any DSR
+      //     query issued while a write was still queued — plausibly drifting
+      //     a CLI's own redraw math out of sync with the real terminal column
+      //     position (each wide/CJK cell advances the cursor by 2, so a stale
+      //     reply skews layout most visibly around wide characters).
+      this.pendingWriteCount += 1;
+      this.screenMirror?.write(data, () => {
+        this.pendingWriteCount = Math.max(0, this.pendingWriteCount - 1);
+        this.respondToTerminalQueries(data);
+        this.flushSnapshotWaiters();
+      });
     });
 
     this.ptyProcess.onExit(({ exitCode, signal }) => {
@@ -356,6 +401,10 @@ export class PtySessionRuntime {
       this.screenMirror = null;
       this.pendingQueryScanTail = '';
       this.terminalModeScanTail = '';
+      this.pendingWriteCount = 0;
+      // No more write() callbacks will ever fire for a disposed mirror — release
+      // any waiter now so flushPendingWrites() cannot hang past process exit.
+      this.flushSnapshotWaiters();
       // Preserve the nullable/unknown exitCode and signal exactly as node-pty
       // reports them: a signal-terminated process arrives as exitCode=null and
       // must stay distinguishable from a clean exit 0.
@@ -406,11 +455,52 @@ export class PtySessionRuntime {
     }
   }
 
-  getSnapshotText(): string {
+  /**
+   * Resolves once every screenMirror.write() call made so far has had its
+   * completion callback fire (i.e. the xterm mirror's WriteBuffer has fully
+   * parsed all currently-queued PTY chunks). Callers that read the mirror's
+   * text/cursor state — getSnapshotText(), getTerminalSnapshot() — must await
+   * this first, otherwise they can observe a buffer missing the most recently
+   * written chunk (stale/incomplete text, not corrupted text: see
+   * TerminalMirrorHandle's `write` doc for why the read races the write).
+   */
+  flushPendingWrites(): Promise<void> {
+    if (this.pendingWriteCount <= 0) return Promise.resolve();
+    return new Promise((resolve) => {
+      this.snapshotWaiters.push(resolve);
+    });
+  }
+
+  private flushSnapshotWaiters(): void {
+    if (this.pendingWriteCount > 0 || this.snapshotWaiters.length === 0) return;
+    const waiters = this.snapshotWaiters;
+    this.snapshotWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+
+  async getSnapshotText(): Promise<string> {
+    await this.flushPendingWrites();
     return this.screenMirror?.formatVT() || '';
   }
 
-  getTerminalSnapshot(): SessionTerminalSnapshot {
+  /**
+   * Best-effort, non-flushing read of the same text as getSnapshotText(),
+   * for callers that persist periodically in the background (persistNow) and
+   * must stay synchronous rather than awaiting in-flight PTY writes. A
+   * restore-on-restart read of this can be briefly behind the live viewport
+   * by at most one already-queued chunk; that trade-off is acceptable for a
+   * background persistence snapshot but not for an interactive get_snapshot
+   * request, which should use getSnapshotText() instead.
+   */
+  getSnapshotTextSync(): string {
+    return this.screenMirror?.formatVT() || '';
+  }
+
+  async getTerminalSnapshot(): Promise<SessionTerminalSnapshot> {
+    if (!this.ptyProcess || !this.screenMirror) {
+      throw new Error(`Session not running: ${this.sessionId}`);
+    }
+    await this.flushPendingWrites();
     if (!this.ptyProcess || !this.screenMirror) {
       throw new Error(`Session not running: ${this.sessionId}`);
     }

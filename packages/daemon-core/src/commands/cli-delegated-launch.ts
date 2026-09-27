@@ -268,6 +268,22 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
             : {}),
     }, input.runtimeEnv || process.env);
 
+    // ★Fail CLOSED when the provider's private HOME/config root could not be
+    // established (release blocker, 2026-09-27). Launching anyway would point
+    // the CLI at the REAL home, where it reads the coordinator's MCP servers —
+    // the exact leak worker isolation exists to close. Per-import failures
+    // (e.g. one win32 directory link) do NOT reach here: they are skipped with
+    // a WARN and the private root is kept. What reaches here is a failure of
+    // the isolation core itself; see `WorkerMcpIsolation.privateHomeError`.
+    // The throw propagates out of the CLI launch as an explicit error.
+    if (workerIsolation?.privateHomeError) {
+        throw new Error(
+            `worker_private_home_failed: ${input.cliType}: ${workerIsolation.privateHomeError}`
+            + ' — refusing to launch the worker without its private HOME (it would inherit the'
+            + " coordinator's MCP config). Fix the cause, or set ADHDEV_WORKER_MCP=off to opt out of worker isolation.",
+        );
+    }
+
     // TRUST-PROVENANCE C: private HOME/imports must exist before the grant is
     // ledgered. The driver receives this already-absolute plan and materializes
     // it into the per-worker copy immediately before PTY spawn.

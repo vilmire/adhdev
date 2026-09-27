@@ -204,3 +204,112 @@ export function clearClaimDeferralForNode(meshId: string, nodeId: string): void 
 export function __resetClaimDeferralForTests(): void {
     claimDeferredByFastForward.clear();
 }
+
+// ── ORPHAN-SPAWN-DEADLOCK (mission 1b2f2bb6) ─────────────────────────────────────────────
+// Per-(mesh, session) memory of the LAST store-level claim refusal, read by the auto-launch
+// spawn gate (`nodeHasLiveSessionPendingClaim`). This is the one place a refusal reason
+// affects anything beyond diagnostics — and it still never changes whether a CLAIM succeeds;
+// it only stops a session that cannot claim from being counted as "about to claim".
+//
+// The deadlock it closes: an idle, unassigned session (typically an auto-launch race loser)
+// is refused every ~4s drain tick with `parallel_cap_reached`, while the spawn gate — which
+// only asks "is there a live, unassigned, provider/difficulty-compatible session?" — keeps
+// answering yes and skipping every launch with `node_has_live_session_pending_claim`. The
+// claim never happens (the cap is full) and no launch happens either (the gate trusts the
+// session), so the task waited for manual cleanup or the 30-min idle TTL reaper.
+//
+// Releasing the gate does NOT loosen the cap: the auto-launch path re-checks the same
+// (daemon, provider) and per-slot maxParallel caps before spawning
+// (`max_provider_parallel_reached` / the slot-model guard), so a launch of the SAME capped
+// provider still waits. What becomes possible is a launch of a different, uncapped provider
+// on the node — and, once the cap frees, the next drain tick either claims with this session
+// (clearing the record) or records a different reason (overwriting it).
+
+/** A session's most recent store-level claim refusal. */
+export interface RecentSessionClaimRefusal {
+    reason: MeshClaimRefusalReason;
+    /** The deepest refused candidate, when known (diagnostic only — see below). */
+    taskId?: string;
+    atMs: number;
+}
+
+/**
+ * Refusal reasons under which a live idle session must NOT suppress an auto-launch.
+ *
+ * `parallel_cap_reached` is the only member on purpose. It is reached only after every
+ * earlier per-candidate gate (tags, dependencies, target pin, difficulty …) passed for the
+ * deepest candidate, and it applies to the session's provider/slot as a whole, so the session
+ * cannot claim ANY pending task until an assignment of that provider ends — independent of
+ * which task id happened to be deepest. Other reasons either already have their own spawn-gate
+ * mirror (provider tags, difficulty floor) or describe the task/node rather than the session
+ * (a dirty node or an owned-paths conflict would refuse a freshly launched session too).
+ */
+export const SPAWN_GATE_RELEASING_CLAIM_REFUSALS: ReadonlySet<MeshClaimRefusalReason> = new Set(['parallel_cap_reached']);
+
+/**
+ * How long a recorded refusal is trusted. The idle drain re-runs the claim every ~4s, so a
+ * live refusal is refreshed long before this expires; a record older than this means the
+ * session stopped being drained (stopped, reassigned, or the loop stalled) and must not keep
+ * releasing the gate on stale evidence.
+ */
+export const SESSION_CLAIM_REFUSAL_FRESH_MS = 30_000;
+
+const SESSION_CLAIM_REFUSAL_MAX_ENTRIES = 2000;
+const recentSessionClaimRefusals = new Map<string, RecentSessionClaimRefusal>();
+
+function sessionRefusalKey(meshId: string, sessionId: string): string {
+    return `${meshId}::${sessionId}`;
+}
+
+/**
+ * Record (or, with `null`, clear) a session's latest claim verdict. Called from the single
+ * claim funnel (`tryAssignQueueTask`): a refusal records its reason, a successful claim or an
+ * empty queue (`no_pending_candidates`) clears it.
+ */
+export function noteSessionClaimRefusal(
+    meshId: string,
+    sessionId: string,
+    refusal: { reason: MeshClaimRefusalReason; taskId?: string; atMs?: number } | null,
+): void {
+    if (!meshId || !sessionId) return;
+    const key = sessionRefusalKey(meshId, sessionId);
+    if (!refusal || refusal.reason === 'no_pending_candidates') {
+        recentSessionClaimRefusals.delete(key);
+        return;
+    }
+    // Re-insert so the Map's insertion order tracks recency for the bound below.
+    recentSessionClaimRefusals.delete(key);
+    recentSessionClaimRefusals.set(key, {
+        reason: refusal.reason,
+        ...(refusal.taskId ? { taskId: refusal.taskId } : {}),
+        atMs: refusal.atMs ?? Date.now(),
+    });
+    if (recentSessionClaimRefusals.size > SESSION_CLAIM_REFUSAL_MAX_ENTRIES) {
+        const oldest = recentSessionClaimRefusals.keys().next().value;
+        if (oldest !== undefined) recentSessionClaimRefusals.delete(oldest);
+    }
+}
+
+/** The session's fresh refusal record, if any. */
+export function readRecentSessionClaimRefusal(meshId: string, sessionId: string, nowMs = Date.now()): RecentSessionClaimRefusal | null {
+    if (!meshId || !sessionId) return null;
+    const record = recentSessionClaimRefusals.get(sessionRefusalKey(meshId, sessionId));
+    if (!record) return null;
+    const age = nowMs - record.atMs;
+    if (!(age >= 0 && age <= SESSION_CLAIM_REFUSAL_FRESH_MS)) return null;
+    return record;
+}
+
+/**
+ * Should this live session stop counting as a pending claimer for the auto-launch spawn gate?
+ * True only for a FRESH refusal whose reason is in {@link SPAWN_GATE_RELEASING_CLAIM_REFUSALS}.
+ */
+export function sessionClaimRefusalReleasesSpawnGate(meshId: string, sessionId: string, nowMs = Date.now()): boolean {
+    const record = readRecentSessionClaimRefusal(meshId, sessionId, nowMs);
+    return !!record && SPAWN_GATE_RELEASING_CLAIM_REFUSALS.has(record.reason);
+}
+
+/** @internal Test-only: reset the per-session refusal memory between cases. */
+export function __resetSessionClaimRefusalsForTests(): void {
+    recentSessionClaimRefusals.clear();
+}
