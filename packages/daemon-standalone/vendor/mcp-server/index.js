@@ -41390,7 +41390,7 @@ var require_dist3 = __commonJS({
       if (value.length <= max) return value;
       return `${value.slice(0, max - 1).trimEnd()}\u2026`;
     }
-    function normalizeStringList(value, field2, truncated) {
+    function normalizeStringList(value, field3, truncated) {
       if (value === void 0 || value === null) return void 0;
       if (!Array.isArray(value)) return void 0;
       const items = [];
@@ -41402,9 +41402,9 @@ var require_dist3 = __commonJS({
         if (trimmed2.length > LIST_ITEM_MAX) itemTruncated = true;
         items.push(truncateString2(trimmed2, LIST_ITEM_MAX));
       }
-      if (itemTruncated) truncated.push({ field: field2, reason: "item_too_long" });
+      if (itemTruncated) truncated.push({ field: field3, reason: "item_too_long" });
       if (items.length > LIST_MAX_ITEMS) {
-        truncated.push({ field: field2, reason: "list_too_long" });
+        truncated.push({ field: field3, reason: "list_too_long" });
         return items.slice(0, LIST_MAX_ITEMS);
       }
       return items.length > 0 ? items : void 0;
@@ -63713,6 +63713,20 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           fullTail(topic, limit) {
             return this.store.entriesTailByRowid(topic, limit).map((r) => r.entry);
           }
+          // Newest-first backward page over the same window fullTail()/ringTail()
+          // serve (tail-snapshot selectors). Ring entries have no rowid, so their
+          // 1-based ring position stands in for it — the only property a caller may
+          // rely on is "strictly decreasing, usable as the next `beforeRowid`".
+          tailPage(topic, ring, beforeRowid, limit) {
+            if (!ring)
+              return this.store.entriesTailPage(topic, beforeRowid, limit);
+            const tail = this.rings.get(topic) ?? [];
+            const end = beforeRowid === null ? tail.length : Math.min(tail.length, beforeRowid - 1);
+            const out = [];
+            for (let i = end - 1; i >= 0 && out.length < limit; i--)
+              out.push({ entry: tail[i], rowid: i + 1 });
+            return out;
+          }
           entries(topic, writer, fromSeq, toSeq) {
             return this.store.entriesRange(topic, writer, fromSeq, toSeq).map((r) => r.entry);
           }
@@ -65066,23 +65080,41 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
     });
     function b64encode(bytes) {
-      let out = "";
-      for (let i = 0; i < bytes.length; i += 3) {
-        const a = bytes[i];
-        const b = bytes[i + 1];
-        const c = bytes[i + 2];
-        out += B64[a >> 2] + B64[(a & 3) << 4 | (b ?? 0) >> 4];
-        out += b === void 0 ? "=" : B64[(b & 15) << 2 | (c ?? 0) >> 6];
-        out += c === void 0 ? "=" : B64[c & 63];
+      const n = bytes.length;
+      const out = new Uint8Array(Math.ceil(n / 3) * 4);
+      let o = 0;
+      let i = 0;
+      for (; i + 2 < n; i += 3) {
+        const x = bytes[i] << 16 | bytes[i + 1] << 8 | bytes[i + 2];
+        out[o++] = B64_CODES[x >> 18];
+        out[o++] = B64_CODES[x >> 12 & 63];
+        out[o++] = B64_CODES[x >> 6 & 63];
+        out[o++] = B64_CODES[x & 63];
       }
-      return out;
+      if (i < n) {
+        const a = bytes[i];
+        const b = i + 1 < n ? bytes[i + 1] : void 0;
+        out[o++] = B64_CODES[a >> 2];
+        out[o++] = B64_CODES[(a & 3) << 4 | (b ?? 0) >> 4];
+        out[o++] = b === void 0 ? PAD : B64_CODES[(b & 15) << 2];
+        out[o++] = PAD;
+      }
+      return textDec2.decode(out);
     }
     function b64decode(s2) {
-      const clean2 = s2.replace(/=+$/, "");
-      const out = new Uint8Array(Math.floor(clean2.length * 3 / 4));
+      let end = s2.length;
+      while (end > 0 && s2.charCodeAt(end - 1) === PAD)
+        end--;
+      const at = (i) => {
+        if (i >= end)
+          return 0;
+        const c = s2.charCodeAt(i);
+        return c < 256 ? B64_REV[c] : 0;
+      };
+      const out = new Uint8Array(Math.floor(end * 3 / 4));
       let o = 0;
-      for (let i = 0; i < clean2.length; i += 4) {
-        const n = (B64REV.get(clean2[i]) ?? 0) << 18 | (B64REV.get(clean2[i + 1] ?? "A") ?? 0) << 12 | (B64REV.get(clean2[i + 2] ?? "A") ?? 0) << 6 | (B64REV.get(clean2[i + 3] ?? "A") ?? 0);
+      for (let i = 0; i < end; i += 4) {
+        const n = at(i) << 18 | at(i + 1) << 12 | at(i + 2) << 6 | at(i + 3);
         if (o < out.length)
           out[o++] = n >> 16 & 255;
         if (o < out.length)
@@ -65105,7 +65137,9 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       return null;
     }
     var B64;
-    var B64REV;
+    var B64_CODES;
+    var B64_REV;
+    var PAD;
     var FULL_TAIL_DEFAULT;
     var textEnc;
     var textDec2;
@@ -65116,7 +65150,11 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         init_encoding();
         init_errors3();
         B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        B64REV = new Map([...B64].map((c, i) => [c, i]));
+        B64_CODES = Uint8Array.from(B64, (c) => c.charCodeAt(0));
+        B64_REV = new Uint8Array(256);
+        for (let i = 0; i < 64; i++)
+          B64_REV[B64.charCodeAt(i)] = i;
+        PAD = 61;
         FULL_TAIL_DEFAULT = 500;
         textEnc = new globalThis.TextEncoder();
         textDec2 = new globalThis.TextDecoder();
@@ -65128,7 +65166,22 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           ringEpochs = /* @__PURE__ */ new Map();
           clientSubs = /* @__PURE__ */ new Map();
           // `${peerId} ${subId}`
+          serves = /* @__PURE__ */ new Map();
+          tailSelector = null;
           nextSubId = 1;
+          counters = {
+            snapsStarted: 0,
+            snapsCompleted: 0,
+            snapsAbandoned: 0,
+            snapBytes: 0,
+            snapChunksSent: 0,
+            snapCacheHits: 0,
+            resyncs: 0,
+            resyncsBackpressure: 0,
+            resyncsOversized: 0,
+            resyncWritesCoalesced: 0,
+            deltasSent: 0
+          };
           constructor(deps) {
             this.deps = deps;
             deps.views.onViewChange((c) => this.onViewChange(c));
@@ -65138,6 +65191,27 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             if (this.families.has(name))
               throw misuse(`serveView name already registered: ${name}`);
             this.families.set(name, resolver);
+          }
+          setTailSnapshotSelector(sel) {
+            this.tailSelector = sel;
+            for (const g3 of this.groups.values())
+              if (g3.ringTopic !== null && g3.viewName === null)
+                g3.snapCache = null;
+          }
+          stats() {
+            let subscribers = 0;
+            let resyncPending = 0;
+            let snapsInFlight = 0;
+            for (const bySub of this.serves.values()) {
+              for (const s2 of bySub.values()) {
+                subscribers++;
+                if (s2.pending)
+                  resyncPending++;
+                if (s2.snap)
+                  snapsInFlight++;
+              }
+            }
+            return { subscribers, resyncPending, snapsInFlight, ...this.counters };
           }
           // ---- server: wire handlers ----
           handleSub(session, m) {
@@ -65154,6 +65228,9 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               session.sendControl({ t: "SUB_ERR", subId: m.subId, code: "ERR_ACL_DENIED" });
               return;
             }
+            const existing = this.serves.get(session)?.get(m.subId);
+            if (existing && existing.group === group && (existing.pending || existing.snap))
+              return;
             const cursor = m.fromCursor !== void 0 ? decodeCursor(m.fromCursor) : null;
             if (cursor && cursor.e === group.epoch) {
               if (cursor.d > group.deltaSeq) {
@@ -65162,32 +65239,50 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               }
               const oldest = group.journal[0]?.seq ?? group.deltaSeq + 1;
               if (cursor.d + 1 >= oldest) {
-                this.addSubscriber(group, session, m.subId);
+                const serve2 = this.addSubscriber(group, session, m.subId);
                 for (const j of group.journal) {
                   if (j.seq > cursor.d)
-                    this.sendDelta(group, session, m.subId, j.changes, j.seq);
+                    this.deliverDelta(serve2, j);
+                  if (serve2.pending || serve2.snap)
+                    break;
                 }
                 return;
               }
             }
-            this.addSubscriber(group, session, m.subId);
-            this.sendSnap(group, session, m.subId, true);
+            const serve = this.addSubscriber(group, session, m.subId);
+            serve.pending = true;
+            this.tryStartSnap(serve);
           }
           handleUnsub(session, m) {
-            for (const group of this.groups.values()) {
-              const set3 = group.subs.get(session);
-              if (set3?.delete(m.subId) && set3.size === 0)
-                group.subs.delete(session);
-            }
+            const serve = this.serves.get(session)?.get(m.subId);
+            if (serve)
+              this.removeServe(serve);
           }
           handleSessionClosed(session) {
-            for (const group of this.groups.values())
-              group.subs.delete(session);
+            for (const serve of [...this.serves.get(session)?.values() ?? []])
+              this.removeServe(serve);
+            this.serves.delete(session);
             for (const [key2, sub] of [...this.clientSubs]) {
               if (sub.session === session) {
                 sub.closed = true;
                 this.clientSubs.delete(key2);
               }
+            }
+          }
+          // The session's data-lane queue drained below SEND_QUEUE_CAP (an ACK
+          // advanced). This is the drain signal pending resyncs and paced SNAPs wait
+          // on; a backoff timer covers the case where it never comes.
+          handleCapacity(session) {
+            const bySub = this.serves.get(session);
+            if (!bySub)
+              return;
+            for (const serve of [...bySub.values()]) {
+              if (serve.closed)
+                continue;
+              if (serve.snap)
+                this.pumpSnap(serve);
+              else if (serve.pending)
+                this.tryStartSnap(serve);
             }
           }
           // register materialization rewrote the built-in table — SNAP-reset the group
@@ -65198,10 +65293,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             group.epoch = this.mintEpoch();
             group.deltaSeq = 0;
             group.journal = [];
-            for (const [session, subIds] of group.subs) {
-              for (const subId of subIds)
-                this.sendSnap(group, session, subId, true);
-            }
+            this.resetGroup(group);
           }
           registerKey(topic) {
             return `register\0${jcs({ topic })}`;
@@ -65257,7 +65349,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                 deltaSeq: 0,
                 journal: [],
                 subs: /* @__PURE__ */ new Map(),
-                rowsProvider: () => registers.tableRowsSorted(topic)
+                rowsProvider: () => registers.tableRowsSorted(topic),
+                snapCache: null
               };
               this.groups.set(group2.key, group2);
               return group2;
@@ -65277,7 +65370,9 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                 epoch = this.mintEpoch();
                 this.ringEpochs.set(topic, epoch);
               }
-              const rowsProvider = mode === "ring" ? () => this.deps.core.ringTail(topic).map((e) => this.ringRow(e)) : () => this.deps.core.fullTail(topic, FULL_TAIL_DEFAULT).map((e) => this.ringRow(e));
+              const defaultLimit = mode === "ring" ? policy.retention.size ?? this.deps.constants.RING_DEFAULT : FULL_TAIL_DEFAULT;
+              const defaultRows = mode === "ring" ? () => this.deps.core.ringTail(topic) : () => this.deps.core.fullTail(topic, FULL_TAIL_DEFAULT);
+              const rowsProvider = () => (this.selectTail(topic, mode, defaultLimit) ?? defaultRows()).map((e) => this.ringRow(e));
               const group2 = {
                 key: this.ringKey(topic),
                 viewName: null,
@@ -65286,7 +65381,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                 deltaSeq: 0,
                 journal: [],
                 subs: /* @__PURE__ */ new Map(),
-                rowsProvider
+                rowsProvider,
+                snapCache: null
               };
               this.groups.set(group2.key, group2);
               return group2;
@@ -65308,13 +65404,30 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               deltaSeq: 0,
               journal: [],
               subs: /* @__PURE__ */ new Map(),
-              rowsProvider: () => this.deps.views.tableRowsSorted(handle.name)
+              rowsProvider: () => this.deps.views.tableRowsSorted(handle.name),
+              snapCache: null
             };
             this.groups.set(key2, group);
             const list = this.groupsByView.get(handle.name) ?? [];
             list.push(group);
             this.groupsByView.set(handle.name, list);
             return group;
+          }
+          selectTail(topic, mode, defaultLimit) {
+            const sel = this.tailSelector;
+            if (!sel)
+              return null;
+            const core2 = this.deps.core;
+            try {
+              return sel({
+                topic,
+                retention: mode,
+                defaultLimit,
+                page: (beforeRowid, limit) => core2.tailPage(topic, mode === "ring", beforeRowid, limit)
+              }) ?? null;
+            } catch {
+              return null;
+            }
           }
           ringKey(topic) {
             return `tail\0${jcs({ topic })}`;
@@ -65331,9 +65444,53 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             };
           }
           addSubscriber(group, session, subId) {
-            const set3 = group.subs.get(session) ?? /* @__PURE__ */ new Set();
-            set3.add(subId);
-            group.subs.set(session, set3);
+            const existing = this.serves.get(session)?.get(subId);
+            if (existing && existing.group === group)
+              return existing;
+            if (existing)
+              this.removeServe(existing);
+            const serve = {
+              group,
+              session,
+              subId,
+              pending: false,
+              snap: null,
+              timer: null,
+              backoffMs: 0,
+              closed: false
+            };
+            const inGroup = group.subs.get(session) ?? /* @__PURE__ */ new Map();
+            inGroup.set(subId, serve);
+            group.subs.set(session, inGroup);
+            const bySub = this.serves.get(session) ?? /* @__PURE__ */ new Map();
+            bySub.set(subId, serve);
+            this.serves.set(session, bySub);
+            return serve;
+          }
+          removeServe(serve) {
+            serve.closed = true;
+            if (serve.timer !== null) {
+              this.deps.timers.clearTimeout(serve.timer);
+              serve.timer = null;
+            }
+            const inGroup = serve.group.subs.get(serve.session);
+            if (inGroup?.get(serve.subId) === serve) {
+              inGroup.delete(serve.subId);
+              if (inGroup.size === 0)
+                serve.group.subs.delete(serve.session);
+            }
+            if (serve.group.subs.size === 0)
+              serve.group.snapCache = null;
+            const bySub = this.serves.get(serve.session);
+            if (bySub?.get(serve.subId) === serve) {
+              bySub.delete(serve.subId);
+              if (bySub.size === 0)
+                this.serves.delete(serve.session);
+            }
+          }
+          *servesOf(group) {
+            for (const inGroup of [...group.subs.values()])
+              yield* [...inGroup.values()];
           }
           onViewChange(c) {
             for (const group of this.groupsByView.get(c.view) ?? []) {
@@ -65341,64 +65498,223 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                 group.epoch = c.epoch;
                 group.deltaSeq = 0;
                 group.journal = [];
-                for (const [session, subIds] of group.subs) {
-                  for (const subId of subIds)
-                    this.sendSnap(group, session, subId, true);
-                }
+                this.resetGroup(group);
               } else {
                 this.publish(group, { upserts: c.upserts, deletes: c.deletes });
               }
             }
           }
+          // Epoch reset: any SNAP still being paced carries a dead cursor — abandon it
+          // (the client discards a partial reassembly when the cursor changes) and
+          // resync everyone from the new epoch.
+          resetGroup(group) {
+            group.snapCache = null;
+            for (const serve of this.servesOf(group)) {
+              if (serve.snap) {
+                serve.snap = null;
+                this.counters.snapsAbandoned++;
+              }
+              serve.pending = true;
+              this.tryStartSnap(serve);
+            }
+          }
           // compute once, broadcast within the group (§10)
           publish(group, changes) {
             group.deltaSeq++;
-            group.journal.push({ seq: group.deltaSeq, changes });
+            group.snapCache = null;
+            const j = {
+              seq: group.deltaSeq,
+              changes,
+              bytes: utf8ByteLength(JSON.stringify(changes))
+            };
+            group.journal.push(j);
             if (group.journal.length > this.deps.constants.SUB_DELTA_RETAIN)
               group.journal.shift();
-            for (const [session, subIds] of group.subs) {
-              for (const subId of subIds)
-                this.sendDelta(group, session, subId, changes, group.deltaSeq);
-            }
+            for (const serve of this.servesOf(group))
+              this.deliverDelta(serve, j);
           }
-          sendDelta(group, session, subId, changes, seq2) {
-            const cursor = encodeCursor({ e: group.epoch, d: seq2 });
-            const probe = { t: "DELTA", mid: 0, subId, changes, cursor };
-            if (utf8ByteLength(JSON.stringify(probe)) > this.deps.constants.MAX_FRAME_BYTES) {
-              this.sendSnap(group, session, subId, true);
+          // Worst-case envelope around `changes` in a DELTA frame: the fixed keys,
+          // a mid of up to 16 digits, a subId, and the cursor. Over-estimating only
+          // means a DELTA within a few dozen bytes of MAX_FRAME_BYTES resyncs instead.
+          deltaFrameBytes(j, cursor) {
+            return j.bytes + utf8ByteLength(cursor) + 96;
+          }
+          deliverDelta(serve, j) {
+            if (serve.pending || serve.snap) {
+              this.counters.resyncWritesCoalesced++;
               return;
             }
-            const ok = session.sendData((mid) => ({ ...probe, mid }));
-            if (!ok)
-              this.sendSnap(group, session, subId, true);
-          }
-          sendSnap(group, session, subId, reset) {
-            let rows;
-            try {
-              rows = group.rowsProvider();
-            } catch {
-              session.sendControl({ t: "SUB_ERR", subId, code: "ERR_STORAGE" });
+            const cursor = encodeCursor({ e: serve.group.epoch, d: j.seq });
+            if (this.deltaFrameBytes(j, cursor) > this.deps.constants.MAX_FRAME_BYTES) {
+              this.enterResync(serve, "oversized");
               return;
             }
-            const cursor = encodeCursor({ e: group.epoch, d: group.deltaSeq });
-            const body = textEnc.encode(jcs(rows));
-            const rawBudget = Math.floor(this.deps.constants.MAX_FRAME_BYTES / 2 * 0.75);
-            const of = Math.max(1, Math.ceil(body.length / rawBudget));
-            const totalHash = void 0;
-            void totalHash;
-            for (let chunk = 1; chunk <= of; chunk++) {
-              const slice = body.subarray((chunk - 1) * rawBudget, chunk * rawBudget);
-              const data = b64encode(slice);
-              session.sendData((mid) => ({
+            const subId = serve.subId;
+            const changes = j.changes;
+            const ok = serve.session.sendData((mid) => ({ t: "DELTA", mid, subId, changes, cursor }));
+            if (!ok) {
+              this.enterResync(serve, "backpressure");
+              return;
+            }
+            this.counters.deltasSent++;
+          }
+          enterResync(serve, reason) {
+            if (serve.pending || serve.snap) {
+              this.counters.resyncWritesCoalesced++;
+              return;
+            }
+            serve.pending = true;
+            this.counters.resyncs++;
+            if (reason === "backpressure")
+              this.counters.resyncsBackpressure++;
+            else
+              this.counters.resyncsOversized++;
+            const g3 = serve.group;
+            const topic = g3.ringTopic ?? this.deps.views.get(g3.viewName).topic;
+            this.deps.emitAnomaly?.({
+              kind: "sub_resync",
+              topic,
+              peerId: serve.session.peerId,
+              view: g3.viewName ?? (g3.key.startsWith("register\0") ? "register" : "tail"),
+              reason
+            });
+            this.schedule(serve, 0);
+          }
+          // Room to START a SNAP: the data lane has drained to half its cap. Pacing
+          // (pumpSnap) then keeps at most that many of this SNAP's chunks queued, so
+          // a large body never tail-drops its own chunks and other traffic keeps the
+          // remaining headroom.
+          snapWindow() {
+            return Math.max(1, Math.floor(this.deps.constants.SEND_QUEUE_CAP / 2));
+          }
+          hasRoom(session) {
+            return session.hasSendCapacity() && session.queuedData() < this.snapWindow();
+          }
+          schedule(serve, delayMs) {
+            if (serve.timer !== null || serve.closed)
+              return;
+            serve.timer = this.deps.timers.setTimeout(() => {
+              serve.timer = null;
+              if (serve.closed)
+                return;
+              if (serve.snap)
+                this.pumpSnap(serve);
+              else if (serve.pending)
+                this.tryStartSnap(serve);
+            }, delayMs);
+          }
+          // Backoff for when no drain signal arrives (handleCapacity is the fast
+          // path): 50 ms doubling to CONTROL_RETRY_MS. A peer that never drains is
+          // closed by the §5.2 stall check, which tears this state down.
+          backoff(serve) {
+            serve.backoffMs = Math.min(Math.max(50, serve.backoffMs * 2), Math.max(50, this.deps.constants.CONTROL_RETRY_MS));
+            this.schedule(serve, serve.backoffMs);
+          }
+          tryStartSnap(serve) {
+            if (serve.closed || !serve.pending || serve.snap)
+              return;
+            if (!this.hasRoom(serve.session)) {
+              this.backoff(serve);
+              return;
+            }
+            if (serve.timer !== null) {
+              this.deps.timers.clearTimeout(serve.timer);
+              serve.timer = null;
+            }
+            const g3 = serve.group;
+            let body;
+            const cached5 = g3.snapCache;
+            if (cached5 && cached5.epoch === g3.epoch && cached5.seq === g3.deltaSeq) {
+              body = cached5.body;
+              this.counters.snapCacheHits++;
+            } else {
+              let rows;
+              try {
+                rows = g3.rowsProvider();
+              } catch {
+                serve.pending = false;
+                serve.session.sendControl({ t: "SUB_ERR", subId: serve.subId, code: "ERR_STORAGE" });
+                return;
+              }
+              body = textEnc.encode(jcs(rows));
+              g3.snapCache = { epoch: g3.epoch, seq: g3.deltaSeq, body };
+            }
+            const rawBudget = this.rawChunkBudget();
+            serve.pending = false;
+            serve.snap = {
+              body,
+              of: Math.max(1, Math.ceil(body.length / rawBudget)),
+              next: 1,
+              cursor: encodeCursor({ e: g3.epoch, d: g3.deltaSeq }),
+              epoch: g3.epoch,
+              seq: g3.deltaSeq
+            };
+            this.counters.snapsStarted++;
+            this.counters.snapBytes += body.length;
+            this.pumpSnap(serve);
+          }
+          rawChunkBudget() {
+            return Math.floor(this.deps.constants.MAX_FRAME_BYTES / 2 * 0.75);
+          }
+          // Enqueue this SNAP's next chunks while the lane has room. base64 is done
+          // per chunk as it is enqueued, so a large body is encoded across ACK-driven
+          // turns rather than in one blocking pass.
+          pumpSnap(serve) {
+            const s2 = serve.snap;
+            if (!s2 || serve.closed)
+              return;
+            const rawBudget = this.rawChunkBudget();
+            const subId = serve.subId;
+            while (s2.next <= s2.of && this.hasRoom(serve.session)) {
+              const chunk = s2.next;
+              const data = b64encode(s2.body.subarray((chunk - 1) * rawBudget, chunk * rawBudget));
+              const ok = serve.session.sendData((mid) => ({
                 t: "SNAP",
                 mid,
                 subId,
                 chunk,
-                of,
+                of: s2.of,
                 data,
-                cursor,
-                reset
+                cursor: s2.cursor,
+                reset: true
               }));
+              if (!ok)
+                break;
+              s2.next++;
+              this.counters.snapChunksSent++;
+            }
+            if (s2.next <= s2.of) {
+              this.backoff(serve);
+              return;
+            }
+            serve.snap = null;
+            serve.backoffMs = 0;
+            this.counters.snapsCompleted++;
+            this.catchUp(serve, s2);
+          }
+          // After a SNAP is fully enqueued: deltas published while it was paced are
+          // replayed from the journal (the data lane is ordered, so they land after
+          // the SNAP). A journal that no longer reaches back is another resync.
+          catchUp(serve, s2) {
+            const g3 = serve.group;
+            if (g3.epoch !== s2.epoch) {
+              serve.pending = true;
+              this.schedule(serve, 0);
+              return;
+            }
+            if (g3.deltaSeq === s2.seq)
+              return;
+            const oldest = g3.journal[0]?.seq ?? g3.deltaSeq + 1;
+            if (s2.seq + 1 < oldest) {
+              this.enterResync(serve, "backpressure");
+              return;
+            }
+            for (const j of g3.journal) {
+              if (j.seq <= s2.seq)
+                continue;
+              this.deliverDelta(serve, j);
+              if (serve.pending || serve.snap)
+                return;
             }
           }
           // ---- client ----
@@ -65893,6 +66209,13 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             ]).map(rowToEntry);
             rows.reverse();
             return rows;
+          }
+          // Newest-first page of `topic`'s rows strictly below `beforeRowid` (null =
+          // from the head). The backward walk a tail-snapshot selector uses to find a
+          // window boundary without materializing the whole FULL_TAIL_DEFAULT tail.
+          entriesTailPage(topic, beforeRowid, limit) {
+            const rows = beforeRowid === null ? this.db.all("SELECT rowid, * FROM sq_log WHERE topic = ? ORDER BY rowid DESC LIMIT ?", [topic, limit]) : this.db.all("SELECT rowid, * FROM sq_log WHERE topic = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?", [topic, beforeRowid, limit]);
+            return rows.map(rowToEntry);
           }
           // Total-order iteration (§1): entries strictly after `after` in
           // (hlc_l, hlc_c, writer, seq) order; after=null starts from the beginning.
@@ -67083,6 +67406,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               onControl: (s2, m) => this.onControl(s2, m),
               onData: (s2, m) => this.onData(s2, m),
               onCapacity: (s2) => {
+                this.subHub?.handleCapacity(s2);
                 const ps2 = this.peers.get(s2);
                 if (ps2)
                   this.pumpDirty(ps2);
@@ -68322,7 +68646,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         emitAnomaly,
         authority: opts.authority
       });
-      const subs = new SubHub({ views, core: core2, topics, constants: constants2, timers, rng, registers });
+      const subs = new SubHub({ views, core: core2, topics, constants: constants2, timers, rng, registers, emitAnomaly });
       sync.setSubHub(subs);
       registers.onChange((topic) => subs.handleRegisterChanged(topic));
       core2.setActivityChecks({
@@ -68490,7 +68814,12 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       };
       const stats = () => {
         const interval = sync.readIntervalStats();
-        const out = { topics: {}, peers: sync.peerStats(), syncHotspots: interval.hotspots };
+        const out = {
+          topics: {},
+          peers: sync.peerStats(),
+          syncHotspots: interval.hotspots,
+          subs: subs.stats()
+        };
         const now = clock();
         for (const topic of topics.list()) {
           const cert = core2.getCert(topic);
@@ -68535,6 +68864,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             topics2[t] = c;
           return { topics: topics2, syncHotspots: i.hotspots };
         },
+        setTailSnapshotSelector: (sel) => subs.setTailSnapshotSelector(sel),
         resetConsumer: (topic, consumer, o) => consumers.resetConsumer(topic, consumer, o),
         deleteConsumer: (topic, consumer) => consumers.deleteConsumer(topic, consumer),
         listConsumers: (topic) => consumers.listConsumers(topic),
@@ -82741,26 +83071,26 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         errors: []
       };
     }
-    function validateStringList(value, field2, max, errors) {
+    function validateStringList(value, field3, max, errors) {
       if (value === void 0) return void 0;
       if (!Array.isArray(value)) {
-        errors.push({ field: field2, message: `${field2} must be an array of strings` });
+        errors.push({ field: field3, message: `${field3} must be an array of strings` });
         return void 0;
       }
       if (value.length > max) {
-        errors.push({ field: field2, message: `${field2} has ${value.length} entries, over the ${max} limit` });
+        errors.push({ field: field3, message: `${field3} has ${value.length} entries, over the ${max} limit` });
         return void 0;
       }
       const out = [];
       for (const item of value) {
         if (typeof item !== "string") {
-          errors.push({ field: field2, message: `${field2} must contain only strings` });
+          errors.push({ field: field3, message: `${field3} must contain only strings` });
           return void 0;
         }
         const trimmed2 = item.trim();
         if (!trimmed2) continue;
         if (trimmed2.length > WORKER_LIST_ITEM_MAX_CHARS) {
-          errors.push({ field: field2, message: `${field2} contains an entry over the ${WORKER_LIST_ITEM_MAX_CHARS} char limit` });
+          errors.push({ field: field3, message: `${field3} contains an entry over the ${WORKER_LIST_ITEM_MAX_CHARS} char limit` });
           return void 0;
         }
         out.push(trimmed2);
@@ -101144,10 +101474,10 @@ ${effect.notification.body || ""}`.trim();
         if (!["safe", "caution", "dangerous"].includes(String(risk))) {
           errors.push(`${prefix}.risk must be one of: safe, caution, dangerous`);
         }
-        for (const field2 of ["launchArgs", "removeArgs"]) {
-          const value = mode[field2];
+        for (const field3 of ["launchArgs", "removeArgs"]) {
+          const value = mode[field3];
           if (value !== void 0 && (!Array.isArray(value) || value.some((arg) => typeof arg !== "string" || !arg.trim()))) {
-            errors.push(`${prefix}.${field2} must be an array of non-empty strings when provided`);
+            errors.push(`${prefix}.${field3} must be an array of non-empty strings when provided`);
           }
         }
         if (strategy === "launch-args" && (!Array.isArray(mode.launchArgs) || mode.launchArgs.length === 0)) {
@@ -101205,11 +101535,11 @@ ${effect.notification.body || ""}`.trim();
               if (typeof entry.mediaType !== "string" || !VALID_CAPABILITY_MEDIA_TYPES.has(entry.mediaType)) {
                 errors.push(`capabilities.input.strategies.mediaType must only include: ${Array.from(VALID_CAPABILITY_MEDIA_TYPES).join(", ")}`);
               }
-              for (const field2 of ["strategies", "degradation"]) {
-                const values = entry[field2];
+              for (const field3 of ["strategies", "degradation"]) {
+                const values = entry[field3];
                 if (values === void 0) continue;
                 if (!Array.isArray(values) || values.some((value) => typeof value !== "string" || !VALID_INPUT_STRATEGIES2.has(value))) {
-                  errors.push(`capabilities.input.strategies.${field2} must only include: ${Array.from(VALID_INPUT_STRATEGIES2).join(", ")}`);
+                  errors.push(`capabilities.input.strategies.${field3} must only include: ${Array.from(VALID_INPUT_STRATEGIES2).join(", ")}`);
                 }
               }
               if (entry.native !== void 0 && typeof entry.native !== "boolean") {
@@ -106247,19 +106577,19 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const [key2, afterKey] = readVarint(buf, i);
         if (afterKey === i) break;
         i = afterKey;
-        const field2 = Math.floor(key2 / 8);
+        const field3 = Math.floor(key2 / 8);
         const wireType = key2 & 7;
-        if (field2 <= 0) break;
+        if (field3 <= 0) break;
         if (wireType === 0) {
           const [value, next] = readVarint(buf, i);
           if (next === i) break;
           i = next;
-          fields.push({ field: field2, wireType, varint: value });
+          fields.push({ field: field3, wireType, varint: value });
         } else if (wireType === 2) {
           const [len, afterLen] = readVarint(buf, i);
           i = afterLen;
           if (len < 0 || i + len > buf.length) break;
-          fields.push({ field: field2, wireType, bytes: buf.subarray(i, i + len) });
+          fields.push({ field: field3, wireType, bytes: buf.subarray(i, i + len) });
           i += len;
         } else if (wireType === 5) {
           i += 4;
@@ -106271,9 +106601,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return fields;
     }
-    function firstLenField(buf, field2) {
+    function firstLenField(buf, field3) {
       for (const f of decodeProtoFields(buf)) {
-        if (f.field === field2 && f.wireType === 2 && f.bytes) return f.bytes;
+        if (f.field === field3 && f.wireType === 2 && f.bytes) return f.bytes;
       }
       return null;
     }
@@ -106349,16 +106679,16 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return best;
     }
-    function allLenFields(buf, field2) {
+    function allLenFields(buf, field3) {
       const out = [];
       for (const f of decodeProtoFields(buf)) {
-        if (f.field === field2 && f.wireType === 2 && f.bytes) out.push(f.bytes);
+        if (f.field === field3 && f.wireType === 2 && f.bytes) out.push(f.bytes);
       }
       return out;
     }
-    function textField(buf, field2) {
+    function textField(buf, field3) {
       if (!buf) return null;
-      const bytes = firstLenField(buf, field2);
+      const bytes = firstLenField(buf, field3);
       if (!bytes || bytes.length === 0 || !looksLikeText(bytes)) return null;
       return bytes.toString("utf-8");
     }
@@ -106384,18 +106714,18 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const [key2, afterKey] = readVarint(buf, i);
         if (afterKey === i || afterKey > buf.length) return null;
         i = afterKey;
-        const field2 = Math.floor(key2 / 8);
+        const field3 = Math.floor(key2 / 8);
         const wireType = key2 & 7;
-        if (field2 <= 0 || field2 > 1e3) return null;
+        if (field3 <= 0 || field3 > 1e3) return null;
         if (wireType === 0) {
           const [value, next] = readVarint(buf, i);
           if (next === i || next > buf.length || (buf[next - 1] & 128) !== 0) return null;
           i = next;
-          fields.push({ field: field2, wireType, varint: value });
+          fields.push({ field: field3, wireType, varint: value });
         } else if (wireType === 2) {
           const [len, afterLen] = readVarint(buf, i);
           if (afterLen === i || afterLen + len > buf.length) return null;
-          fields.push({ field: field2, wireType, bytes: buf.subarray(afterLen, afterLen + len) });
+          fields.push({ field: field3, wireType, bytes: buf.subarray(afterLen, afterLen + len) });
           i = afterLen + len;
         } else if (wireType === 5 && i + 4 <= buf.length) {
           i += 4;
@@ -108262,8 +108592,8 @@ ${output}` : "";
     }
     function passesFilter(record22, filter) {
       if (!filter) return true;
-      for (const [field2, expected] of Object.entries(filter)) {
-        if (record22[field2] !== expected) return false;
+      for (const [field3, expected] of Object.entries(filter)) {
+        if (record22[field3] !== expected) return false;
       }
       return true;
     }
@@ -166924,25 +167254,25 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const dotRegex = /params\?\.([a-zA-Z_]+)|params\.([a-zA-Z_]+)/g;
           let dm;
           while ((dm = dotRegex.exec(funcBody)) !== null) {
-            const field2 = dm[1] || dm[2];
-            if (field2 === "length") continue;
-            if (!(field2 in paramFields)) {
-              if (/index|count|port|timeout/i.test(field2)) paramFields[field2] = 0;
-              else if (/action|text|title|message|model|mode|button|name|filter/i.test(field2)) paramFields[field2] = "";
-              else paramFields[field2] = "";
+            const field3 = dm[1] || dm[2];
+            if (field3 === "length") continue;
+            if (!(field3 in paramFields)) {
+              if (/index|count|port|timeout/i.test(field3)) paramFields[field3] = 0;
+              else if (/action|text|title|message|model|mode|button|name|filter/i.test(field3)) paramFields[field3] = "";
+              else paramFields[field3] = "";
             }
           }
           const typeofRegex = /typeof params === 'string' \? params : params\?\.([a-zA-Z_]+)/g;
           let tm;
           while ((tm = typeofRegex.exec(funcBody)) !== null) {
-            const field2 = tm[1];
-            if (!(field2 in paramFields)) paramFields[field2] = "";
+            const field3 = tm[1];
+            if (!(field3 in paramFields)) paramFields[field3] = "";
           }
           const numRegex = /typeof params === 'number' \? params : params\?\.([a-zA-Z_]+)/g;
           let nm;
           while ((nm = numRegex.exec(funcBody)) !== null) {
-            const field2 = nm[1];
-            if (!(field2 in paramFields)) paramFields[field2] = 0;
+            const field3 = nm[1];
+            if (!(field3 in paramFields)) paramFields[field3] = 0;
           }
           const descriptions = {
             readChat: "No params required",
@@ -169784,7 +170114,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/exercise \\`);
       lines.push('  -H "Content-Type: application/json" \\');
       lines.push(`  -d '${exerciseJson}' > "$EXERCISE_JSON"`);
-      lines.push(`jq '{timedOut,statusesSeen,approvalsResolved,inspect:{${verificationInspectFields.map((field2, index) => `f${index + 1}: .${field2}`).join(", ")}}}' "$EXERCISE_JSON"`);
+      lines.push(`jq '{timedOut,statusesSeen,approvalsResolved,inspect:{${verificationInspectFields.map((field3, index) => `f${index + 1}: .${field3}`).join(", ")}}}' "$EXERCISE_JSON"`);
       lines.push("```");
       lines.push("");
       if (verificationMustContainAny.length > 0 || verificationMustNotContainAny.length > 0 || verificationMustMatchAny.length > 0 || verificationMustNotMatchAny.length > 0 || verificationLastAssistantMustContainAny.length > 0 || verificationLastAssistantMustNotContainAny.length > 0 || verificationLastAssistantMustMatchAny.length > 0 || verificationLastAssistantMustNotMatchAny.length > 0) {
@@ -173222,6 +173552,91 @@ data: ${JSON.stringify(msg.data)}
       return { hooks: authority, local: true };
     }
     init_topics2();
+    var SUB_RESYNC_WARN_WINDOW_MS = 6e4;
+    var MAX_KEYS = 512;
+    function createSubResyncWarner(warn, clock = () => Date.now(), windowMs = SUB_RESYNC_WARN_WINDOW_MS) {
+      const last = /* @__PURE__ */ new Map();
+      return (e, node) => {
+        const key2 = `${e.topic ?? "?"}\0${e.peerId ?? "?"}`;
+        const now = clock();
+        const prev = last.get(key2);
+        if (prev && now - prev.at < windowMs) {
+          prev.suppressed++;
+          return;
+        }
+        if (!prev && last.size >= MAX_KEYS) {
+          const oldest = last.keys().next().value;
+          if (oldest !== void 0) last.delete(oldest);
+        }
+        const suppressed = prev?.suppressed ?? 0;
+        last.delete(key2);
+        last.set(key2, { at: now, suppressed: 0 });
+        warn(
+          `sub resync node=${node}` + (e.topic ? ` topic=${e.topic}` : "") + (e.peerId ? ` peer=${e.peerId}` : "") + (e.view ? ` view=${e.view}` : "") + ` reason=${e.reason ?? "unknown"}` + (suppressed > 0 ? ` (+${suppressed} more in the last ${Math.round(windowMs / 1e3)}s)` : "") + " \u2014 subscriber stopped taking DELTAs; one coalesced SNAP is sent once its lane drains"
+        );
+      };
+    }
+    init_transcript_revision_codec();
+    var PAGE_ROWS = 64;
+    function isSessionTranscriptTopic(topic) {
+      return topic.startsWith("session.") && topic.endsWith(".transcript") && topic.length > "session..transcript".length;
+    }
+    function field2(payload, name) {
+      return payload !== null && typeof payload === "object" && !Array.isArray(payload) ? payload[name] : void 0;
+    }
+    function revisionKeyOf(entry) {
+      const producerEpoch = field2(entry.payload, "producerEpoch");
+      const revision = field2(entry.payload, "revision");
+      const chunks = field2(entry.payload, "chunks");
+      if (typeof producerEpoch !== "string" || typeof revision !== "number" || typeof chunks !== "number") return null;
+      return { writer: entry.writer, producerEpoch, revision, chunks };
+    }
+    function sameRevision(a, b) {
+      return a.writer === b.writer && a.producerEpoch === b.producerEpoch && a.revision === b.revision && a.chunks === b.chunks;
+    }
+    function selectTranscriptTailSnapshot(src) {
+      const newestFirst = [];
+      let target = null;
+      let seenChunks = /* @__PURE__ */ new Set();
+      let before = null;
+      const limit = Math.min(src.defaultLimit, 2 * MAX_TRANSCRIPT_REVISION_ROWS + 20);
+      while (newestFirst.length < limit) {
+        const page = src.page(before, Math.min(PAGE_ROWS, limit - newestFirst.length));
+        if (page.length === 0) return null;
+        for (const { entry, rowid } of page) {
+          before = rowid;
+          newestFirst.push(entry);
+          if (target === null) {
+            if (entry.kind === TRANSCRIPT_REVISION_COMMIT_KIND) {
+              target = revisionKeyOf(entry);
+              seenChunks = /* @__PURE__ */ new Set();
+            }
+            continue;
+          }
+          const key2 = revisionKeyOf(entry);
+          if (entry.kind === TRANSCRIPT_REVISION_CHUNK_KIND) {
+            const index = field2(entry.payload, "index");
+            if (key2 && sameRevision(key2, target) && typeof index === "number") seenChunks.add(index);
+            continue;
+          }
+          if (entry.kind === TRANSCRIPT_REVISION_BEGIN_KIND && key2 && sameRevision(key2, target)) {
+            if (seenChunks.size === target.chunks) return newestFirst.reverse();
+            target = null;
+            continue;
+          }
+          if (entry.kind === TRANSCRIPT_REVISION_COMMIT_KIND) {
+            target = revisionKeyOf(entry);
+            seenChunks = /* @__PURE__ */ new Set();
+          }
+        }
+      }
+      return null;
+    }
+    function installTranscriptTailSnapshotSelector(node) {
+      node.setTailSnapshotSelector(
+        (src) => isSessionTranscriptTopic(src.topic) ? selectTranscriptTailSnapshot(src) : null
+      );
+    }
     var SEQSCRIBE_DB_NAME = "seqscribe.db";
     var WRITER_ID_PREFIX = "adhdev";
     function getSeqscribeDbPath(env2 = process.env) {
@@ -173281,6 +173696,14 @@ data: ${JSON.stringify(msg.data)}
         }
         throw err;
       }
+      try {
+        installTranscriptTailSnapshotSelector(node);
+      } catch (err) {
+        LOG.warn(
+          "Seqscribe",
+          `transcript tail selector unavailable: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
       const allDefs = baseTopicDefinitions(opts.meshIds ?? []);
       const defs = authorityHooks ? allDefs : allDefs.filter((d) => d.policy.finalityAuthority === void 0);
       if (!authorityHooks) {
@@ -173303,11 +173726,14 @@ data: ${JSON.stringify(msg.data)}
         intervalMs: opts.finalityIntervalMs
       }) : null;
       let unsubAnomaly = null;
+      const warnSubResync = createSubResyncWarner((message) => LOG.warn("Seqscribe", message));
       try {
         unsubAnomaly = node.onAnomaly((anomaly) => {
           try {
             const subject = (anomaly.topic ? ` topic=${anomaly.topic}` : "") + (anomaly.peerId ? ` peer=${anomaly.peerId}` : "") + (anomaly.writer ? ` writer=${anomaly.writer}` : "") + (anomaly.view ? ` view=${anomaly.view}` : "") + (anomaly.consumer ? ` consumer=${anomaly.consumer}` : "");
-            if (anomaly.kind === "sync_stalled") {
+            if (anomaly.kind === "sub_resync") {
+              warnSubResync(anomaly, writerId);
+            } else if (anomaly.kind === "sync_stalled") {
               LOG.warn(
                 "Seqscribe",
                 `sync stalled node=${writerId}${subject} \u2014 WANT rounds toward a peer stopped progressing`
@@ -174072,6 +174498,7 @@ data: ${JSON.stringify(msg.data)}
             }
           } : {},
           ...opts.meshDelivery ? { meshDelivery: { ...opts.meshDelivery } } : {},
+          ...stats.subs ? { subDelivery: { ...stats.subs } } : {},
           ...opts.transcriptTransportSelection ? {
             transcriptTransportSelection: {
               replicaSelected: opts.transcriptTransportSelection.replicaSelected,
@@ -176877,6 +177304,7 @@ ${notice.notice}${supersededHint}`;
       });
       let current2 = null;
       let lastAt = null;
+      let lastSubs = null;
       let stopped = false;
       const collect = () => {
         if (stopped) return current2;
@@ -176911,6 +177339,21 @@ ${notice.notice}${supersededHint}`;
             "info",
             `sync ${intervalMs / 1e3}s: served=${totals.servedEntries}e/${fmtBytes(totals.servedBytes)} applied=${totals.appliedEntries}e/${fmtBytes(totals.appliedBytes)} want=${totals.wantRoundsRequested}req/${totals.wantRoundsServed}served` + (top ? ` hot=${top.topic}@${top.peerId}/${fmtBytes(top.bytes)}` : "")
           );
+        }
+        const subs = stats.subs;
+        if (subs) {
+          const prev = lastSubs;
+          lastSubs = { ...subs };
+          const d = (k) => Math.max(0, num(subs[k]) - num(prev?.[k]));
+          const snaps = d("snapsStarted");
+          const resyncs = d("resyncs");
+          const coalesced = d("resyncWritesCoalesced");
+          if (snaps > 0 || resyncs > 0 || coalesced > 0) {
+            log(
+              resyncs > 0 ? "warn" : "info",
+              `subs ${intervalMs / 1e3}s: snaps=${snaps}/${fmtBytes(d("snapBytes"))} chunks=${d("snapChunksSent")} deltas=${d("deltasSent")} resyncs=${resyncs} (backpressure=${d("resyncsBackpressure")} oversized=${d("resyncsOversized")}) coalesced=${coalesced} pending=${num(subs.resyncPending)} inFlight=${num(subs.snapsInFlight)}`
+            );
+          }
         }
         return snapshot;
       };

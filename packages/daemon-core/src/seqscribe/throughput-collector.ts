@@ -221,6 +221,9 @@ export function startSeqscribeThroughputCollector(
 
     let current: SeqscribeThroughputSnapshot | null = null;
     let lastAt: number | null = null;
+    // Previous tick's cumulative SUB serving counters (NodeStats.subs), for the
+    // per-interval `subs` line below.
+    let lastSubs: NonNullable<NodeStats['subs']> | null = null;
     let stopped = false;
 
     const collect = (): SeqscribeThroughputSnapshot | null => {
@@ -270,6 +273,31 @@ export function startSeqscribeThroughputCollector(
                     `want=${totals.wantRoundsRequested}req/${totals.wantRoundsServed}served` +
                     (top ? ` hot=${top.topic}@${top.peerId}/${fmtBytes(top.bytes)}` : ''),
             );
+        }
+
+        // SUB serving line — per-interval deltas of the vendor's cumulative
+        // counters, logged only when a SNAP or resync happened. The
+        // 2026-09-27 resync storm (one full-tail SNAP per applied write) was
+        // invisible here: the sync line counts ENTRIES, not SUB traffic.
+        const subs = stats.subs;
+        if (subs) {
+            // Counters are cumulative since node open, which precedes the
+            // collector — so the first tick's baseline is zero, not skipped.
+            const prev = lastSubs;
+            lastSubs = { ...subs };
+            const d = (k: keyof typeof subs): number => Math.max(0, num(subs[k]) - num(prev?.[k]));
+            const snaps = d('snapsStarted');
+            const resyncs = d('resyncs');
+            const coalesced = d('resyncWritesCoalesced');
+            if (snaps > 0 || resyncs > 0 || coalesced > 0) {
+                log(
+                    resyncs > 0 ? 'warn' : 'info',
+                    `subs ${intervalMs / 1000}s: snaps=${snaps}/${fmtBytes(d('snapBytes'))} ` +
+                        `chunks=${d('snapChunksSent')} deltas=${d('deltasSent')} ` +
+                        `resyncs=${resyncs} (backpressure=${d('resyncsBackpressure')} oversized=${d('resyncsOversized')}) ` +
+                        `coalesced=${coalesced} pending=${num(subs.resyncPending)} inFlight=${num(subs.snapsInFlight)}`,
+                );
+            }
         }
 
         return snapshot;

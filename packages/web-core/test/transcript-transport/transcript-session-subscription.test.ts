@@ -11,7 +11,7 @@
 import { encodeTranscriptRevision } from '@adhdev/daemon-core/seqscribe/transcript-revision-codec'
 import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core/seqscribe/transcript-projection'
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm'
-import type { Channel, SqliteWasmDbLike } from 'seqscribe'
+import type { Channel, LogEntry, SqliteWasmDbLike } from 'seqscribe'
 import { sqliteWasmHandle } from 'seqscribe'
 import { describe, expect, it } from 'vitest'
 import { sessionTranscriptPolicy, sessionTranscriptTopic } from '../../src/transcript-transport/topic-addressing.js'
@@ -399,6 +399,84 @@ describe('subscribeSessionTranscript (live worker feed)', () => {
 
             expect(seen).toHaveLength(1)
             expect(sub.latest()?.snapshot.revision).toBe(2)
+        } finally {
+            await r.close()
+        }
+    })
+
+    // The daemon installs a tail-SNAP selector for transcript topics
+    // (daemon-core seqscribe/transcript-tail-snapshot.ts): a reset SNAP carries
+    // only the newest complete revision plus the in-flight one — a SUFFIX of
+    // the old 500-row window. This pins that the browser consumer accepts that
+    // shape: one emission with the newest revision, and an in-flight revision
+    // whose begin/chunks rode the SNAP completes when its commit arrives as a
+    // DELTA.
+    it('accepts a suffix-trimmed reset SNAP (daemon tail selector shape) and completes the in-flight revision by DELTA', async () => {
+        const r = await rig()
+        try {
+            // Same selection the daemon makes: from the newest commit's begin on.
+            r.producer.node.setTailSnapshotSelector((src) => {
+                const picked: LogEntry[] = []
+                let before: number | null = null
+                let target: number | null = null
+                for (;;) {
+                    const page = src.page(before, 16)
+                    if (page.length === 0) return null
+                    for (const { entry, rowid } of page) {
+                        before = rowid
+                        picked.push(entry)
+                        const rev = (entry.payload as { revision?: number }).revision
+                        if (target === null && entry.kind === 'transcript.revision.commit.v1') target = rev ?? null
+                        else if (target !== null && entry.kind === 'transcript.revision.begin.v1' && rev === target)
+                            return picked.reverse()
+                    }
+                }
+            })
+            for (let i = 1; i <= 5; i++) await publishRevision(r.producer, snapshotFixture(i, `m${i}`))
+            const next = snapshotFixture(6, 'in flight')
+            const encoded = encodeTranscriptRevision(next, {
+                sessionId: next.sessionId,
+                producerDaemonId: next.producerDaemonId,
+                producerWriterId: next.producerWriterId,
+                producerEpoch: next.producerEpoch,
+                revision: next.revision,
+            })
+            if (!encoded.ok) throw new Error('fixture oversize')
+            const log = r.producer.node.log(TOPIC)
+            await log.append('transcript.revision.begin.v1', encoded.begin as never)
+            for (const chunk of encoded.chunks) await log.append('transcript.revision.chunk.v1', chunk as never)
+
+            const snapRows: number[] = []
+            const probe = r.consumer.subscribe(r.consumerPeer, { view: 'tail', params: { topic: TOPIC } })
+            probe.onSnapshot((rows) => snapRows.push(rows.length))
+            const seen: { revision: number; omittedBefore: boolean }[] = []
+            const rejected: string[] = []
+            const sub = subscribeSessionTranscript(r.consumer, {
+                sessionId: SESSION_ID,
+                peer: r.consumerPeer,
+                ownerWriterId: PRODUCER_WRITER,
+                onSnapshot: ({ snapshot, omittedBefore }) => seen.push({ revision: snapshot.revision, omittedBefore }),
+                onRejected: (reason) => rejected.push(reason),
+            })
+            await waitFor(() => seen.length > 0 && snapRows.length > 0)
+            await new Promise((res) => setTimeout(res, 100))
+
+            // revision 5 (begin + chunk + commit) + revision 6's begin + chunk
+            expect(snapRows[0]).toBe(3 + 1 + encoded.chunks.length)
+            expect(seen).toHaveLength(1)
+            expect(seen[0].revision).toBe(5)
+            // Accepted consequence (documented in the daemon selector): the
+            // trimmed SNAP no longer reaches the writer's seq 1, so the
+            // diagnostic-only `omittedBefore` flag reads true.
+            expect(seen[0].omittedBefore).toBe(true)
+
+            await log.append('transcript.revision.commit.v1', encoded.commit as never)
+            await waitFor(() => seen.length > 1)
+            expect(seen[1].revision).toBe(6)
+            expect(sub.latest()?.snapshot.messages[0].content).toBe('in flight')
+            expect(rejected).toEqual([])
+            sub.close()
+            r.consumer.unsubscribe(probe)
         } finally {
             await r.close()
         }

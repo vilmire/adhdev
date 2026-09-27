@@ -557,6 +557,24 @@ describe('cloud status seqscribe boundary', () => {
                 legacySelected: 5,
                 zombieRecovered: 2,
             },
+            // Vendor SubHub serving counters (2026-09-27 resync storm):
+            // raw monotonic counters — local-only for the dedup reason.
+            subDelivery: {
+                subscribers: 3,
+                resyncPending: 1,
+                snapsInFlight: 0,
+                snapsStarted: 7,
+                snapsCompleted: 6,
+                snapsAbandoned: 0,
+                snapBytes: 987_654_321,
+                snapChunksSent: 44,
+                snapCacheHits: 2,
+                resyncs: 4,
+                resyncsBackpressure: 3,
+                resyncsOversized: 1,
+                resyncWritesCoalesced: 555,
+                deltasSent: 1234,
+            },
         } as any);
 
         expect(payload.seqscribe).toEqual(healthy);
@@ -569,6 +587,7 @@ describe('cloud status seqscribe boundary', () => {
             'transcriptParityDetail',
             'transcriptLatencyDetail',
             'transcriptTransportSelection',
+            'subDelivery',
         ]) {
             expect(payload.seqscribe).not.toHaveProperty(local);
         }
@@ -595,6 +614,8 @@ describe('cloud status seqscribe boundary', () => {
         expect(wire).not.toContain('trigger_to_publish');
         expect(wire).not.toContain('3019.5');
         expect(wire).not.toContain('notMeasurable');
+        expect(wire).not.toContain('987654321');
+        expect(wire).not.toContain('resyncWritesCoalesced');
     });
 });
 

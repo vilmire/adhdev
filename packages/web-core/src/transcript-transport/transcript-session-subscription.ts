@@ -196,6 +196,18 @@ function rowIsForRevision(row: Row, revision: number): boolean {
     return rowRevision === revision;
 }
 
+/**
+ * Index of the last COMMIT row for `revision` in `rows`, or -1. Everything
+ * after it is the in-flight tail (see `inFlightFrom` in `ingest`).
+ */
+function lastCommitIndex(rows: readonly Row[], revision: number): number {
+    for (let i = rows.length - 1; i >= 0; i--) {
+        const row = rows[i]!;
+        if (row.kind === TRANSCRIPT_REVISION_COMMIT_KIND && rowIsForRevision(row, revision)) return i;
+    }
+    return -1;
+}
+
 function ringCoversWriterStart(rows: readonly Row[], ownerWriterId: string | undefined): boolean {
     if (ownerWriterId === undefined) return false;
     for (const row of rows) {
@@ -312,9 +324,22 @@ export function subscribeSessionTranscript(
         // the replay — the net set of reported reasons therefore matches the
         // unfiltered behaviour, just possibly in a different order.
         const offered = new Set<Row>();
+        // ── The in-flight tail rides along unfiltered ──────────────────────
+        // Rows AFTER the target revision's commit are the producer's next,
+        // still-uncommitted revision (the daemon's transcript tail selector
+        // ships exactly "newest complete revision + in-flight rows"). They
+        // must reach the assembler: the rest of that revision (its commit,
+        // maybe more chunks) arrives by DELTA, and an assembler that never saw
+        // its begin rejects the commit (`commit_without_begin`) and drops a
+        // revision the SNAP had already delivered half of. Offering them
+        // AFTER the target completes only arms the assembler's in-flight
+        // buffer — they cannot displace `best`, which is settled by then.
+        const inFlightFrom = targetRevision !== null ? lastCommitIndex(rows, targetRevision) + 1 : rows.length;
         const scan = (candidateRows: readonly Row[], filterToRevision: number | null): void => {
-            for (const row of candidateRows) {
-                if (filterToRevision !== null && !rowIsForRevision(row, filterToRevision)) continue;
+            for (const [index, row] of candidateRows.entries()) {
+                if (filterToRevision !== null && index < inFlightFrom && !rowIsForRevision(row, filterToRevision)) {
+                    continue;
+                }
                 const revisionRow = toRevisionRow(row);
                 if (!revisionRow) continue;
                 const alreadyOffered = offered.has(row);
