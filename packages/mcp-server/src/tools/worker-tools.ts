@@ -39,6 +39,7 @@ import { annotateAll, type ToolBehaviorAnnotations } from './tool-annotations.js
 import { GIT_STATUS_TOOL } from './git-status.js';
 import { GIT_LOG_TOOL } from './git-log.js';
 import { GIT_DIFF_TOOL } from './git-diff.js';
+import { WORKER_OUTBOX_MAX_AGE_MS, type WorkerDeliveryKind, type WorkerReportDelivery, type WorkerSubmitOutcome } from './worker-report-outbox.js';
 
 /**
  * Credentials read once at startup from the environment the MCP config supplied.
@@ -70,7 +71,8 @@ export const REPORT_COMPLETION_TOOL = {
     + 'knows which task you hold. On a code-changing task, outcome \'completed\' requires `touched_files` — send '
     + '`[]` if you changed nothing; omitting the field is what gets refused, not an empty list. If the call is '
     + 'refused, the response carries `validationErrors` (or a `hint`) naming exactly what to fix — correct that '
-    + 'field and call again; a refusal records nothing.',
+    + 'field and call again; a refusal records nothing. If the daemon is slow to answer, the report is saved and '
+    + 'delivered automatically — a "queued for delivery" response is not a failure; do not call again.',
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -303,32 +305,80 @@ export interface WorkerToolResult {
   isError?: boolean;
 }
 
+/**
+ * Deliver a completion report. With a `delivery` (production worker mode) the report is
+ * durable: written to the outbox first, retried on transport failure, and — if the daemon
+ * still has not answered — reported to the worker as QUEUED rather than as an error
+ * (worker-report-outbox.ts). Without one, a single direct send (tests, and any caller that
+ * has no outbox).
+ */
 export async function reportCompletion(
   transport: CommandTransport,
   credentials: WorkerCredentials,
   args: Record<string, any>,
+  delivery?: WorkerReportDelivery,
 ): Promise<WorkerToolResult> {
   const { report, ignoredHandoffKeys } = toDaemonReport(args);
+  if (delivery) {
+    const outcome = await delivery.submit('report', { report });
+    if (outcome.status === 'queued') return { text: renderQueued('report', outcome, ignoredHandoffKeys) };
+    return renderReportResult(outcome.result, ignoredHandoffKeys);
+  }
   const result: any = await transport.command('worker_report_completion', {
     ...credentials,
     report,
   });
+  return renderReportResult(result, ignoredHandoffKeys);
+}
 
+function ignoredKeysWarning(ignoredHandoffKeys: string[]): string {
+  return `WARNING: handoff_notes had unrecognized key(s) that were ignored: ${ignoredHandoffKeys.join(', ')}. `
+    + `Recognized keys: intent, conflict_guidance, touched_files, follow_ups (camelCase also accepted).`;
+}
+
+/**
+ * The worker-facing text for a report/note the daemon has not answered yet. Deliberately
+ * NOT an error: the report is saved and will be delivered; an error here is what made a
+ * worker conclude its work was lost (2026-09-27, three consecutive IPC timeouts).
+ */
+function renderQueued(kind: WorkerDeliveryKind, outcome: Extract<WorkerSubmitOutcome, { status: 'queued' }>, ignoredHandoffKeys: string[] = []): string {
+  const windowMin = Math.round(WORKER_OUTBOX_MAX_AGE_MS / 60_000);
+  const lines = kind === 'report'
+    ? [
+      `Report saved and QUEUED for delivery (${outcome.entryId}) — the daemon did not answer in time `
+        + `(${outcome.attempts} attempt(s); last error: ${outcome.error}).`,
+      `It is re-sent automatically in the background and on your next tool call, for up to ${windowMin} min; `
+        + 'the daemon ignores duplicate deliveries. Your work is NOT lost. Do not call report_completion again for '
+        + 'this report — if you make another tool call, its response will say when the report landed.',
+    ]
+    : [
+      `Progress note saved and queued for delivery (${outcome.entryId}) — the daemon did not answer in time `
+        + `(last error: ${outcome.error}). It is re-sent automatically; no need to repeat it.`,
+    ];
+  if (ignoredHandoffKeys.length) lines.push(ignoredKeysWarning(ignoredHandoffKeys));
+  return lines.join('\n');
+}
+
+/** Render a daemon answer to a completion report (inline, or from a background delivery). */
+export function renderReportResult(result: any, ignoredHandoffKeys: string[] = []): WorkerToolResult {
   if (result?.success === true) {
     const lines = [
       result.duplicate
         ? `Completion already recorded for task ${result.taskId} — this repeat was accepted as a duplicate.`
         : `Completion recorded for task ${result.taskId} (${result.outcome}).`,
     ];
+    if (result.late) {
+      lines.push(
+        `The task had already been closed as ${result.terminalOutcome ?? 'terminal'} before this report arrived; `
+        + 'it was recorded as the authoritative summary and forwarded to the coordinator.',
+      );
+    }
     if (ignoredHandoffKeys.length) {
       // Typed warning instead of a silent drop: a worker whose handoff_notes
       // key was misspelled or unrecognized (neither the documented snake_case
       // nor the daemon's camelCase) previously had it vanish before this point,
       // with no signal that anything was lost.
-      lines.push(
-        `WARNING: handoff_notes had unrecognized key(s) that were ignored: ${ignoredHandoffKeys.join(', ')}. `
-        + `Recognized keys: intent, conflict_guidance, touched_files, follow_ups (camelCase also accepted).`,
-      );
+      lines.push(ignoredKeysWarning(ignoredHandoffKeys));
     }
     if (result.ownedPathsMismatch) {
       const { undeclaredTouched } = result.ownedPathsMismatch;
@@ -376,11 +426,22 @@ export async function progressUpdate(
   transport: CommandTransport,
   credentials: WorkerCredentials,
   args: Record<string, any>,
+  delivery?: WorkerReportDelivery,
 ): Promise<WorkerToolResult> {
   const note = typeof args?.note === 'string' ? args.note.trim() : '';
   if (!note) return { text: 'progress_update requires a non-empty `note`.', isError: true };
 
+  if (delivery) {
+    const outcome = await delivery.submit('progress', { note });
+    if (outcome.status === 'queued') return { text: renderQueued('progress', outcome) };
+    return renderProgressResult(outcome.result);
+  }
   const result: any = await transport.command('worker_progress_update', { ...credentials, note });
+  return renderProgressResult(result);
+}
+
+/** Render a daemon answer to a progress note (inline, or from a background delivery). */
+export function renderProgressResult(result: any): WorkerToolResult {
   if (result?.success === true) {
     // ★F3: say whether this note actually reached the coordinator. The channel
     // is deliberately filtered (milestones, not a log tail), so "recorded but
@@ -451,4 +512,9 @@ export async function drainMailbox(
   } catch {
     return null;
   }
+}
+
+/** How a background-delivered answer is described in the worker's next tool response. */
+export function describeWorkerDeliveryAnswer(kind: WorkerDeliveryKind, result: any): string {
+  return kind === 'report' ? renderReportResult(result).text : renderProgressResult(result).text;
 }

@@ -9,11 +9,11 @@ import { buildMeshNodeCapabilityTags, claimNextTask, updateTaskStatus, getQueue,
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evidence.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { clearClaimDeferralForNode, noteClaimDeferredForNode, type MeshClaimRefusal } from './mesh-claim-refusal.js';
+import { clearClaimDeferralForNode, noteClaimDeferredForNode, noteSessionClaimRefusal, type MeshClaimRefusal } from './mesh-claim-refusal.js';
 import { traceMeshEventDrop, traceMeshEventStage } from '../shared/mesh-event-trace.js';
 import { buildRedriveProvenance, describeRedriveProviderFlip } from './mesh-redrive-provenance.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
-import { delegatedWorkerAutoApproveSettings, resolveProviderMaxParallel, resolveSlotMaxParallel, resolveNodeSchedulingPriority, resolveCoordinatorIdlePushPolicy } from '../repo-mesh-types.js';
+import { delegatedWorkerAutoApproveSettings, resolveProviderMaxParallel, resolveSlotMaxParallel, resolveNodeSchedulingPriority, resolveCoordinatorIdlePushPolicy, resolveDelegatedSessionIdleTtlMinutes } from '../repo-mesh-types.js';
 import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
 import type { RepoMeshDeclarativeConfig } from '../config/mesh-json-config.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, sanitizeRefusalCode, type MeshNodeIdentified } from '@adhdev/mesh-shared';
@@ -1356,6 +1356,8 @@ export function tryAssignQueueTask(
     });
     if (!task) {
         const refusalReason = claimRefusal.reason || 'no_pending_candidates';
+        // ORPHAN-SPAWN-DEADLOCK: the auto-launch spawn gate reads this (see mesh-claim-refusal.ts).
+        noteSessionClaimRefusal(meshId, sessionId, { reason: refusalReason, ...(claimRefusal.taskId ? { taskId: claimRefusal.taskId } : {}) });
         recordClaimRefusal(meshId, {
             nodeId,
             sessionId,
@@ -1374,6 +1376,7 @@ export function tryAssignQueueTask(
     // has demonstrably claimed. Both are keyed so a stale entry cannot outlive the
     // condition it describes.
     clearClaimRefusalState(meshId, nodeId, sessionId);
+    noteSessionClaimRefusal(meshId, sessionId, null);
     clearClaimDeferralForNode(meshId, nodeId);
     recordLastQuotaRankingOutcome(nodeId, 'claimed');
 
@@ -1732,7 +1735,7 @@ export {
 export { AUTO_LAUNCH_AWAIT_CLAIM_MS };
 // AUTOLAUNCH-DEFERRED-CLAIM state lives in mesh-claim-refusal (this file is a frozen
 // file-size baseline entry). Re-exported here, which is the path tests import from.
-export { __resetClaimDeferralForTests } from './mesh-claim-refusal.js';
+export { __resetClaimDeferralForTests, __resetSessionClaimRefusalsForTests } from './mesh-claim-refusal.js';
 export { __seedAutoLaunchAwaitClaimBackoffForTests } from './mesh-autolaunch-integrity.js';
 
 // Canonical mesh node-id normalization. A node may arrive from the local config
@@ -1994,7 +1997,9 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
     ]);
     // AUTOLAUNCH-ORPHAN-SWEEP: run AFTER the drain + auto-launch so it reads post-claim
     // assignment state (a session that just won its claim must not be reported as an orphan).
-    sweepAutoLaunchOrphanSessions(components, meshId);
+    sweepAutoLaunchOrphanSessions(components, meshId, {
+        idleTtlMinutes: resolveDelegatedSessionIdleTtlMinutes(mesh.policy?.delegatedSessionIdleTtlMinutes),
+    });
     // IPC load audit #10: heads-only read (id/status/assignedNodeId/assignedSessionId) — this
     // block never needs payload fields off the full queue entries.
     const afterHeads = getQueueHeads(meshId, { status: ['pending', 'assigned'] });

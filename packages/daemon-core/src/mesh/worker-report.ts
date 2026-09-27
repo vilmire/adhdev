@@ -510,7 +510,15 @@ export type WorkerReportRefusal =
      * code-changing task. Carried as a refusal rather than a validation error
      * because the read-only bit is only knowable after identity resolution.
      */
-    | 'invalid_for_task_mode';
+    | 'invalid_for_task_mode'
+    /**
+     * Durable delivery: the report carries a `reportedAtMs` that predates every attempt
+     * this session could still take it for — it was written before the session's
+     * CURRENT task was dispatched, and the attempt it belonged to is no longer within the
+     * late-report window (or the report is older than the delivery window). Refused
+     * rather than filed against the wrong task.
+     */
+    | 'stale_report';
 
 export type WorkerReportResult =
     | {
@@ -681,16 +689,75 @@ function checkReportAgainstTaskMode(
 export function acceptWorkerCompletionReport(
     credential: { token?: unknown; bind?: unknown },
     report: WorkerCompletionReport,
-    opts: { nowMs?: number; isSelfDaemon?: (daemonId: string) => boolean } = {},
+    opts: { nowMs?: number; isSelfDaemon?: (daemonId: string) => boolean; reportedAtMs?: unknown } = {},
 ): WorkerReportResult {
-    const identity = resolveWorkerIdentity(credential);
-    if (identity) return acceptWorkerCompletionReportForIdentity(identity, report, opts);
+    const nowMs = opts.nowMs ?? Date.now();
+    const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs);
+    if (reportedAt === 'too_old') {
+        return {
+            accepted: false,
+            refusal: 'stale_report',
+            detail: `the report was written more than ${Math.round(WORKER_REPORT_MAX_DELIVERY_DELAY_MS / 60_000)} min ago`,
+        };
+    }
+    const live = resolveWorkerIdentity(credential);
+    // Durable delivery: a report written before the session was handed its CURRENT task
+    // belongs to the attempt that was live when it was written — never to the current one.
+    const liveIsNewer = !!live && reportedAt !== undefined && workerIdentityPostdates(live, reportedAt);
+    if (live && !liveIsNewer) return acceptWorkerCompletionReportForIdentity(live, report, { ...opts, nowMs });
     // F7b: the task went terminal before the report arrived (a completion flush
     // that beat a pending MCP call). A recently-terminal attempt still takes it.
-    const nowMs = opts.nowMs ?? Date.now();
-    const late = resolveLateWorkerIdentity(credential, nowMs, opts.isSelfDaemon);
+    const late = resolveLateWorkerIdentity(credential, nowMs, opts.isSelfDaemon, reportedAt);
     if (late) return acceptLateWorkerCompletionReport(late, report, nowMs);
+    if (liveIsNewer) {
+        return {
+            accepted: false,
+            refusal: 'stale_report',
+            detail: `the report predates task ${live!.taskId}, which this session holds now, and the attempt it was written for is no longer open to a late report`,
+        };
+    }
     return { accepted: false, refusal: 'unauthenticated' };
+}
+
+/**
+ * How long after it was WRITTEN a queued worker report is still accepted. The mcp-server's
+ * durable outbox (mcp-server worker-report-outbox.ts, same value) stops retrying at this
+ * age, so the two sides agree on when a report is abandoned. Two hours spans a daemon
+ * overload or restart-free stall many times over while staying short of the point where a
+ * report is more likely a confused replay than a delayed delivery.
+ */
+export const WORKER_REPORT_MAX_DELIVERY_DELAY_MS = 2 * 60 * 60 * 1000;
+
+/** Tolerated clock drift for a client-stamped `reportedAtMs` in the future (same machine in practice). */
+const WORKER_REPORT_CLOCK_SKEW_MS = 5_000;
+
+/**
+ * Normalize the client-stamped creation time of a report/note. `undefined` = absent or
+ * unusable (an older client, a non-number, a time in the future) — the caller then behaves
+ * exactly as before this field existed. `'too_old'` = beyond the delivery window.
+ *
+ * ★The value is caller-asserted. That is acceptable for the same reason the bind is: it can
+ * only move a report between attempts of the caller's OWN session, and only toward the
+ * attempt that was live at the claimed time — it cannot reach another session's task.
+ */
+export function normalizeWorkerReportedAtMs(raw: unknown, nowMs: number): number | undefined | 'too_old' {
+    if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return undefined;
+    if (raw > nowMs + WORKER_REPORT_CLOCK_SKEW_MS) return undefined;
+    if (nowMs - raw > WORKER_REPORT_MAX_DELIVERY_DELAY_MS) return 'too_old';
+    return raw;
+}
+
+/** Was this identity's attempt dispatched AFTER `atMs` (so a report written at `atMs` cannot be for it)? */
+function workerIdentityPostdates(identity: WorkerTokenExchangeResult, atMs: number): boolean {
+    try {
+        const turns = MeshRuntimeStore.getInstance().turnStore();
+        const attempt = identity.attemptId
+            ? turns.getAttempt(identity.attemptId)
+            : turns.findLatestAttemptForTask(identity.meshId, identity.taskId);
+        return !!attempt && attempt.acceptedAt > atMs;
+    } catch {
+        return false;
+    }
 }
 
 /**
@@ -699,10 +766,12 @@ export function acceptWorkerCompletionReport(
  */
 export function hasLocalWorkerIdentity(
     credential: { token?: unknown; bind?: unknown },
-    opts: { nowMs?: number; isSelfDaemon?: (daemonId: string) => boolean } = {},
+    opts: { nowMs?: number; isSelfDaemon?: (daemonId: string) => boolean; reportedAtMs?: unknown } = {},
 ): boolean {
+    const nowMs = opts.nowMs ?? Date.now();
+    const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs);
     return !!resolveWorkerIdentity(credential)
-        || !!resolveLateWorkerIdentity(credential, opts.nowMs ?? Date.now(), opts.isSelfDaemon);
+        || !!resolveLateWorkerIdentity(credential, nowMs, opts.isSelfDaemon, reportedAt === 'too_old' ? undefined : reportedAt);
 }
 
 /**
@@ -998,16 +1067,26 @@ function resolveRecentlyTerminalAttempt(
     sessionId: string,
     nowMs: number,
     isSelfDaemon?: (daemonId: string) => boolean,
+    reportedAtMs?: number,
 ): { attemptId: string; taskId: string; nodeId?: string; terminalOutcome: string; terminalAtMs: number } | null {
     try {
         const turns = MeshRuntimeStore.getInstance().turnStore();
-        const found = turns.findPresentationAttemptForSession(sessionId);
-        const attempt = found?.attempt;
+        // Durable delivery: with a creation time, the attempt is the one the session was on
+        // WHEN THE REPORT WAS WRITTEN (it may since have been handed another task), and the
+        // grace is measured from that moment — a report written before or shortly after the
+        // terminal is late only in delivery, which the outbox window bounds separately.
+        const attempt = reportedAtMs !== undefined
+            ? turns.findMeshAttemptForSessionAt(sessionId, reportedAtMs)
+            : turns.findPresentationAttemptForSession(sessionId)?.attempt;
         if (!attempt?.terminal || attempt.meshId !== meshId || !attempt.taskId) return null;
         if (!sessionIdsEquivalent(attempt.sessionId, sessionId)) return null;
         if (isSelfDaemon && !isSelfDaemon(attempt.ownerDaemonId)) return null;
-        const age = nowMs - attempt.terminal.at;
-        if (!(age >= 0 && age <= WORKER_LATE_REPORT_GRACE_MS)) return null;
+        if (reportedAtMs !== undefined) {
+            if (reportedAtMs - attempt.terminal.at > WORKER_LATE_REPORT_GRACE_MS) return null;
+        } else {
+            const age = nowMs - attempt.terminal.at;
+            if (!(age >= 0 && age <= WORKER_LATE_REPORT_GRACE_MS)) return null;
+        }
         if (turns.findLatestAttemptForTask(meshId, attempt.taskId)?.attemptId !== attempt.attemptId) return null;
         return {
             attemptId: attempt.attemptId,
@@ -1029,10 +1108,11 @@ export function resolveLateWorkerIdentity(
     credential: { bind?: unknown },
     nowMs = Date.now(),
     isSelfDaemon?: (daemonId: string) => boolean,
+    reportedAtMs?: number,
 ): LateWorkerIdentity | null {
     const binding = verifyWorkerSessionBind(credential.bind);
     if (!binding) return null;
-    const attempt = resolveRecentlyTerminalAttempt(binding.meshId, binding.sessionId, nowMs, isSelfDaemon);
+    const attempt = resolveRecentlyTerminalAttempt(binding.meshId, binding.sessionId, nowMs, isSelfDaemon, reportedAtMs);
     if (!attempt) return null;
     const nodeId = attempt.nodeId || binding.nodeId;
     return {
@@ -1505,10 +1585,21 @@ export function acceptForwardedWorkerCompletionReport(
 export function acceptWorkerProgressUpdate(
     credential: { token?: unknown; bind?: unknown },
     note: string,
-    opts: { nowMs?: number } = {},
+    opts: { nowMs?: number; reportedAtMs?: unknown } = {},
 ): WorkerProgressUpdateResult {
     const identity = resolveWorkerIdentity(credential);
     if (!identity) return { accepted: false, refusal: 'unauthenticated' };
+    // Durable delivery: a queued note written before this session's CURRENT task was
+    // dispatched belongs to a finished task — never file it against the new one.
+    const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, opts.nowMs ?? Date.now());
+    if (reportedAt === 'too_old' || (reportedAt !== undefined && workerIdentityPostdates(identity, reportedAt))) {
+        return {
+            accepted: false,
+            taskId: identity.taskId,
+            refusal: 'stale_report',
+            detail: `the note was written before task ${identity.taskId} was dispatched to this session (or is past the delivery window) — not recorded`,
+        };
+    }
     return acceptWorkerProgressUpdateForIdentity(identity, note, opts);
 }
 

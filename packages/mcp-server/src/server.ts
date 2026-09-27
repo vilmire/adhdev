@@ -52,7 +52,9 @@ import { retiredMeshToolError } from '@adhdev/mesh-shared';
 import { annotateAll } from './tools/tool-annotations.js';
 import {
   resolveWorkerModeTools, readWorkerCredentials, reportCompletion, progressUpdate, peerContextPull, drainMailbox,
+  describeWorkerDeliveryAnswer,
 } from './tools/worker-tools.js';
+import { WorkerReportDelivery } from './tools/worker-report-outbox.js';
 import type { WorkerTool } from '@adhdev/mesh-shared';
 
 /**
@@ -157,6 +159,16 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       { capabilities: { tools: {} } },
     );
 
+    // Durable report delivery (worker-report-outbox.ts): a report/note the daemon does not
+    // answer in time is kept and re-sent instead of being lost. Entries a previous MCP
+    // process for this same worker left behind are flushed right away.
+    const delivery = new WorkerReportDelivery({ transport, credentials, describeAnswer: describeWorkerDeliveryAnswer });
+    delivery.kick();
+    server.onclose = () => {
+      // Best-effort final attempt; anything still undelivered stays on disk for a successor.
+      void delivery.flush().finally(() => delivery.dispose());
+    };
+
     server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: workerTools }));
 
     // E-T0 (design §7.1): every worker tool response — whichever tool was
@@ -170,14 +182,28 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     async function withMailboxPiggyback(
       response: { content: Array<{ type: 'text'; text: string }>; isError?: boolean },
     ): Promise<typeof response> {
-      const mailboxText = await drainMailbox(transport, credentials);
+      // Outcomes of queued reports delivered in the background ride on the same response.
+      const deliveryNotices = delivery.takeNotices();
+      if (deliveryNotices.length) {
+        response = appendText(response, `\n\n---\n\n## Queued report delivery\n\n${deliveryNotices.join('\n\n')}\n`);
+      }
+      // While the daemon is not answering, skip the optional mailbox round trip — it would
+      // only add another full IPC timeout to a response the worker is already waiting on.
+      const mailboxText = delivery.daemonRecentlyUnreachable() ? null : await drainMailbox(transport, credentials);
       if (!mailboxText) return response;
+      return appendText(response, mailboxText);
+    }
+
+    function appendText(
+      response: { content: Array<{ type: 'text'; text: string }>; isError?: boolean },
+      extra: string,
+    ): typeof response {
       const content = [...response.content];
       const last = content[content.length - 1];
       if (last && last.type === 'text') {
-        content[content.length - 1] = { ...last, text: last.text + mailboxText };
+        content[content.length - 1] = { ...last, text: last.text + extra };
       } else {
-        content.push({ type: 'text', text: mailboxText.trimStart() });
+        content.push({ type: 'text', text: extra.trimStart() });
       }
       return { ...response, content };
     }
@@ -188,8 +214,8 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     const asResponse = (result: { text: string; isError?: boolean }): WorkerToolResponse =>
       ({ content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) });
     const workerHandlers: Record<WorkerTool, (a: Record<string, any>) => Promise<WorkerToolResponse>> = {
-      report_completion: async (a) => asResponse(await reportCompletion(transport, credentials, a)),
-      progress_update: async (a) => asResponse(await progressUpdate(transport, credentials, a)),
+      report_completion: async (a) => asResponse(await reportCompletion(transport, credentials, a, delivery)),
+      progress_update: async (a) => asResponse(await progressUpdate(transport, credentials, a, delivery)),
       peer_context_pull: async (a) => asResponse(await peerContextPull(transport, credentials, a)),
       git_status: async (a) => asResponse({ text: await gitStatus(transport, { workspace: a.workspace, include_diff: a.include_diff, format: a.format }) }),
       git_log: async (a) => asResponse({ text: await gitLog(transport, { workspace: a.workspace, limit: a.limit, file: a.file, since: a.since, until: a.until, format: a.format }) }),
@@ -199,6 +225,8 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const { name, arguments: args } = req.params;
       const a = (args ?? {}) as Record<string, any>;
+      // Every worker tool call is also a delivery opportunity for anything still queued.
+      delivery.kick();
 
       const workerTool = workerToolByName.get(name);
       if (workerTool) {

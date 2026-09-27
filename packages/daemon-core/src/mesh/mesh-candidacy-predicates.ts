@@ -36,6 +36,7 @@ import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable } from './mesh-node-identity.js';
 import { shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
 import { inWindowAutoLaunchSessionIdsForNode } from './mesh-autolaunch-integrity.js';
+import { sessionClaimRefusalReleasesSpawnGate } from './mesh-claim-refusal.js';
 import { nodeHasActiveAssignment } from './mesh-scheduling-fitness.js';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { allowedClassifiedDifficultiesForSession, readSessionModel, taskMeetsSessionDifficultyFloor } from './mesh-difficulty-floor.js';
@@ -308,7 +309,9 @@ export function nodeHasLiveSessionPendingClaim(components: DaemonComponents, mes
     // its way to claim — even when that session is REMOTE and thus invisible to the local
     // instanceManager scan below. Treat it as a live pending-claim session so a duplicate launch
     // is suppressed and no ghost accumulates every ~90s.
-    if (inWindowAutoLaunchSessionIdsForNode(meshId, nodeId).length > 0) return true;
+    // ORPHAN-SPAWN-DEADLOCK: an in-window session whose own claims are being refused for a
+    // reason it cannot overcome (parallel_cap_reached) is not on its way to claim anything.
+    if (inWindowAutoLaunchSessionIdsForNode(meshId, nodeId).some(sid => !sessionClaimRefusalReleasesSpawnGate(meshId, sid))) return true;
     // Session ids currently holding an assigned queue task on this node — those are busy,
     // not pending claimers, so they must NOT suppress a (read-only) launch.
     const busySessionIds = new Set(
@@ -356,6 +359,14 @@ export function nodeHasLiveSessionPendingClaim(components: DaemonComponents, mes
         }
         const allowance = allowedClassifiedDifficultiesForSession(node, resolveNodeCapabilitySlots(node, meshId), sessionProviderType, readSessionModel(state));
         if (!taskMeetsSessionDifficultyFloor(task, allowance)) return false;
+        // ORPHAN-SPAWN-DEADLOCK (mission 1b2f2bb6): propagate the claim path's refusal. A
+        // session the idle drain just refused with `parallel_cap_reached` cannot claim this
+        // (or any) task until its provider's cap frees, so it is not a pending claimer. Without
+        // this it blocked every launch while being refused itself — a stalemate only the
+        // 30-min idle TTL reaper or a manual cleanup broke. The cap itself is still enforced:
+        // the launch path re-checks the same provider/slot caps before spawning, so only an
+        // uncapped provider can launch (full rationale: mesh-claim-refusal.ts).
+        if (sessionId && sessionClaimRefusalReleasesSpawnGate(meshId, sessionId)) return false;
         return true; // live + unassigned + provider-capable → will claim the pending task itself
     });
 }

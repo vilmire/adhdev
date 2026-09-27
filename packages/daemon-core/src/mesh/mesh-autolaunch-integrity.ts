@@ -43,6 +43,7 @@ import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, recordAutoLaunchEvent } from './mesh-queue-observability.js';
 import { sessionHasActiveAssignment } from './mesh-scheduling-fitness.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES } from '../repo-mesh-types.js';
 
 // See the AUTOLAUNCH-CLAIM-CHURN block in mesh-queue-assignment for why the await-claim window
 // exists. Defined here (not imported) so this module stays free of a back-import cycle;
@@ -182,7 +183,36 @@ export function __seedAutoLaunchOrphanFirstSeenForTests(meshId: string, sessionI
 // later pending task can legitimately claim it through the normal idle drain), and killing a
 // session on an inference about a race would be a destructive action taken on incomplete
 // evidence. The coordinator gets the ids and decides.
-export function sweepAutoLaunchOrphanSessions(components: DaemonComponents, meshId: string): void {
+/**
+ * The accurate "who reclaims this" sentence for the orphan notice. It used to say "nothing
+ * reclaims it on its own", which was only true of the orphan sweep itself — the idle
+ * delegated-session reaper (mesh-idle-session-reaper.ts, 5-min cadence) stops any
+ * coordinator-launched session idle past the mesh's TTL. Overstating it made coordinators
+ * run manual cleanups they did not need (mission 1b2f2bb6). `undefined` = the caller did not
+ * resolve the policy; fall back to the default TTL, which is what an unconfigured mesh uses.
+ */
+/**
+ * The idle reaper's cadence, as the notice states it. Mirrors
+ * `IDLE_SESSION_REAP_INTERVAL_MS` (mesh-housekeeping-tick.ts) rather than importing it:
+ * that module imports the queue drain, which imports this one, so the import would cycle.
+ * A test pins the two equal.
+ */
+export const ORPHAN_NOTICE_REAP_CADENCE_MS = 5 * 60 * 1000;
+
+export function describeOrphanReclaim(idleTtlMinutes: number | undefined): string {
+    const ttl = idleTtlMinutes ?? DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES;
+    if (!(ttl > 0)) {
+        return 'The idle-session reaper is disabled for this mesh (delegatedSessionIdleTtlMinutes: 0), so nothing stops it automatically.';
+    }
+    const cadenceMinutes = Math.round(ORPHAN_NOTICE_REAP_CADENCE_MS / 60_000);
+    return `If it stays idle, the idle-session reaper stops it once it has been idle for ${ttl} min (checked every ${cadenceMinutes} min, so up to ~${ttl + cadenceMinutes} min).`;
+}
+
+export function sweepAutoLaunchOrphanSessions(
+    components: DaemonComponents,
+    meshId: string,
+    opts: { idleTtlMinutes?: number } = {},
+): void {
     let sessions: any[];
     try {
         sessions = components.instanceManager?.getByCategory?.('cli') || [];
@@ -258,7 +288,8 @@ export function sweepAutoLaunchOrphanSessions(components: DaemonComponents, mesh
             nodeId,
             sessionId,
         });
-        LOG.warn('MeshQueue', `AUTOLAUNCH-ORPHAN-SWEEP: session ${sessionId}${nodeId ? ` on node ${nodeId}` : ''} (mesh ${meshId}) was auto-launched for task ${originTaskId} but ${detail}; it is idle with no work and will not self-recover.`);
+        const reclaim = describeOrphanReclaim(opts.idleTtlMinutes);
+        LOG.warn('MeshQueue', `AUTOLAUNCH-ORPHAN-SWEEP: session ${sessionId}${nodeId ? ` on node ${nodeId}` : ''} (mesh ${meshId}) was auto-launched for task ${originTaskId} but ${detail}; it is idle with no work. ${reclaim}`);
         try {
             notifyMeshCoordinator({
                 event: 'mesh:dispatch_blocked',
@@ -271,7 +302,7 @@ export function sweepAutoLaunchOrphanSessions(components: DaemonComponents, mesh
                     sessionId,
                     reason: 'auto_launch_orphan_session_detected',
                 },
-                coordinatorMessage: `[System] Mesh session ${sessionId}${nodeId ? ` on node ${nodeId}` : ''} was auto-launched for task ${originTaskId}, but ${detail}. The session is idle with no work assigned and nothing reclaims it on its own. Reuse it for other queued work or stop it.`,
+                coordinatorMessage: `[System] Mesh session ${sessionId}${nodeId ? ` on node ${nodeId}` : ''} was auto-launched for task ${originTaskId}, but ${detail}. The session is idle with no work assigned; it can still claim other queued work through the normal idle drain. ${reclaim} Stop it sooner only if you do not want it held until then.`,
                 queuedAt: Date.now(),
                 ...(readNonEmptyString(originTask?.sourceCoordinatorSessionId)
                     ? { targetCoordinatorSessionId: readNonEmptyString(originTask!.sourceCoordinatorSessionId) }

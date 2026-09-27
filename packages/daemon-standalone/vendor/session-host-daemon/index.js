@@ -134,9 +134,12 @@ function createXtermMirror(options) {
   });
   const serializer = createXtermSerializeAddon(terminal);
   return {
-    write(data) {
-      if (!data) return;
-      terminal.write(typeof data === "string" ? data : Buffer.from(data).toString("utf8"));
+    write(data, onProcessed) {
+      if (!data) {
+        onProcessed?.();
+        return;
+      }
+      terminal.write(typeof data === "string" ? data : Buffer.from(data).toString("utf8"), onProcessed);
     },
     resize(cols, rows) {
       currentRows = Math.max(1, rows | 0);
@@ -170,9 +173,9 @@ function normalizeGhosttyBinding(mod) {
       const handle = raw.createTerminal(options);
       const viewportSnapshot = createXtermMirror(options);
       return {
-        write(data) {
+        write(data, onProcessed) {
           handle.write(data);
-          viewportSnapshot.write(data);
+          viewportSnapshot.write(data, onProcessed);
         },
         resize(cols, rows) {
           handle.resize(cols, rows);
@@ -238,6 +241,10 @@ var PtySessionRuntime = class {
   scrollRegion;
   onDataCallback;
   onExitCallback;
+  /** Count of screenMirror.write() calls whose completion callback has not fired yet. */
+  pendingWriteCount = 0;
+  /** Resolved (and cleared) once pendingWriteCount reaches 0. See flushPendingWrites(). */
+  snapshotWaiters = [];
   constructor(options) {
     this.sessionId = options.sessionId;
     this.payload = options.payload;
@@ -274,10 +281,14 @@ var PtySessionRuntime = class {
       scrollback: 32768
     });
     this.ptyProcess.onData((data) => {
-      this.screenMirror?.write(data);
       this.trackTerminalModes(data);
-      this.respondToTerminalQueries(data);
       this.onDataCallback(data);
+      this.pendingWriteCount += 1;
+      this.screenMirror?.write(data, () => {
+        this.pendingWriteCount = Math.max(0, this.pendingWriteCount - 1);
+        this.respondToTerminalQueries(data);
+        this.flushSnapshotWaiters();
+      });
     });
     this.ptyProcess.onExit(({ exitCode, signal }) => {
       this.ptyProcess = null;
@@ -285,6 +296,8 @@ var PtySessionRuntime = class {
       this.screenMirror = null;
       this.pendingQueryScanTail = "";
       this.terminalModeScanTail = "";
+      this.pendingWriteCount = 0;
+      this.flushSnapshotWaiters();
       this.onExitCallback(
         typeof exitCode === "number" ? exitCode : null,
         typeof signal === "number" ? signal : null
@@ -325,10 +338,48 @@ var PtySessionRuntime = class {
       throw new Error(`Unsupported signal for runtime ${this.sessionId}: ${normalized}`);
     }
   }
-  getSnapshotText() {
+  /**
+   * Resolves once every screenMirror.write() call made so far has had its
+   * completion callback fire (i.e. the xterm mirror's WriteBuffer has fully
+   * parsed all currently-queued PTY chunks). Callers that read the mirror's
+   * text/cursor state — getSnapshotText(), getTerminalSnapshot() — must await
+   * this first, otherwise they can observe a buffer missing the most recently
+   * written chunk (stale/incomplete text, not corrupted text: see
+   * TerminalMirrorHandle's `write` doc for why the read races the write).
+   */
+  flushPendingWrites() {
+    if (this.pendingWriteCount <= 0) return Promise.resolve();
+    return new Promise((resolve2) => {
+      this.snapshotWaiters.push(resolve2);
+    });
+  }
+  flushSnapshotWaiters() {
+    if (this.pendingWriteCount > 0 || this.snapshotWaiters.length === 0) return;
+    const waiters = this.snapshotWaiters;
+    this.snapshotWaiters = [];
+    for (const resolve2 of waiters) resolve2();
+  }
+  async getSnapshotText() {
+    await this.flushPendingWrites();
     return this.screenMirror?.formatVT() || "";
   }
-  getTerminalSnapshot() {
+  /**
+   * Best-effort, non-flushing read of the same text as getSnapshotText(),
+   * for callers that persist periodically in the background (persistNow) and
+   * must stay synchronous rather than awaiting in-flight PTY writes. A
+   * restore-on-restart read of this can be briefly behind the live viewport
+   * by at most one already-queued chunk; that trade-off is acceptable for a
+   * background persistence snapshot but not for an interactive get_snapshot
+   * request, which should use getSnapshotText() instead.
+   */
+  getSnapshotTextSync() {
+    return this.screenMirror?.formatVT() || "";
+  }
+  async getTerminalSnapshot() {
+    if (!this.ptyProcess || !this.screenMirror) {
+      throw new Error(`Session not running: ${this.sessionId}`);
+    }
+    await this.flushPendingWrites();
     if (!this.ptyProcess || !this.screenMirror) {
       throw new Error(`Session not running: ${this.sessionId}`);
     }
@@ -875,9 +926,9 @@ var SessionHostServer = class extends import_events.EventEmitter {
           return { success: true, result: record };
         }
         case "get_snapshot":
-          return { success: true, result: this.getSnapshot(request.payload.sessionId, request.payload.sinceSeq) };
+          return { success: true, result: await this.getSnapshotForRequest(request.payload.sessionId, request.payload.sinceSeq) };
         case "get_terminal_snapshot":
-          return { success: true, result: this.requireRuntime(request.payload.sessionId).getTerminalSnapshot() };
+          return { success: true, result: await this.requireRuntime(request.payload.sessionId).getTerminalSnapshot() };
         case "get_host_diagnostics":
           return { success: true, result: this.getHostDiagnostics(request.payload) };
         case "clear_session_buffer": {
@@ -1263,10 +1314,25 @@ var SessionHostServer = class extends import_events.EventEmitter {
       }
     }
   }
+  // Synchronous, best-effort variant for background/periodic persistence
+  // (persistNow, called from many sync contexts). Uses getSnapshotTextSync()
+  // rather than waiting for in-flight PTY writes to flush — see that method's
+  // doc. Interactive requests must use getSnapshotForRequest() instead.
   getSnapshot(sessionId, sinceSeq) {
     const snapshot = this.registry.getSnapshot(sessionId, sinceSeq);
     const record = this.registry.getSession(sessionId);
-    const runtimeText = typeof sinceSeq === "number" ? "" : this.runtimes.get(sessionId)?.getSnapshotText?.() || "";
+    const runtimeText = typeof sinceSeq === "number" ? "" : this.runtimes.get(sessionId)?.getSnapshotTextSync?.() || "";
+    return mergeRuntimeSnapshot(snapshot, record, { sinceSeq, runtimeText });
+  }
+  // Flush-aware variant for the interactive `get_snapshot` IPC request (the
+  // dashboard's runtime_snapshot seed). Awaits any PTY chunk still queued in
+  // the xterm mirror's WriteBuffer before reading, so the response reflects
+  // everything written so far rather than racing an in-flight parse. See
+  // PtySessionRuntime.flushPendingWrites() for why that race existed.
+  async getSnapshotForRequest(sessionId, sinceSeq) {
+    const snapshot = this.registry.getSnapshot(sessionId, sinceSeq);
+    const record = this.registry.getSession(sessionId);
+    const runtimeText = typeof sinceSeq === "number" ? "" : await this.runtimes.get(sessionId)?.getSnapshotText?.() || "";
     return mergeRuntimeSnapshot(snapshot, record, { sinceSeq, runtimeText });
   }
   flushAllPersistence() {
