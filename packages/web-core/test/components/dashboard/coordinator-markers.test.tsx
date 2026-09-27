@@ -4,10 +4,12 @@
 //  1. Mesh graph is a visible, dedicated button for coordinator conversations
 //     again (opened often; the cue that "this is a coordinator") — not a "…"
 //     menu item.
-//  2. Coordinator/worker conversations are recognisable at a glance on every
-//     surface via the mesh icon (MeshRoleIcon) alone — neutral colour, no
-//     visible text label and no chip. The role/mesh name live in the icon's
-//     accessible name (aria-label) and native tooltip (title) only.
+//  2. A worker looked identical to a coordinator (same mesh icon), so the
+//     icon (MeshRoleIcon) is now coordinator-only and themed in the accent
+//     colour — that alone is the "this is the coordinator" cue. Workers
+//     render no icon, no visible text label, and no chip on any surface.
+//     The role/mesh name live in the icon's accessible name (aria-label)
+//     and native tooltip (title) only.
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -135,16 +137,17 @@ describe('coordinator / worker markers across dashboard surfaces', () => {
         expect(container.querySelector('.header-title-mobile-role.is-coordinator')?.getAttribute('aria-label')).toBe('Coordinator for adhdev mesh')
     })
 
-    it('header: no Mesh graph button for a worker or a plain chat', () => {
+    it('header: no Mesh graph button and no mesh icon for a worker or a plain chat', () => {
         renderHeader(worker())
         expect(meshButton()).toBeNull()
-        expect(container.querySelector('.header-title-mobile-role.is-worker')).not.toBeNull()
+        expect(container.querySelector('.header-title-mobile-role.is-worker')).toBeNull()
+        expect(container.querySelector('.mesh-role-icon')).toBeNull()
         renderHeader(conversation())
         expect(meshButton()).toBeNull()
         expect(container.querySelector('.mesh-role-icon')).toBeNull()
     })
 
-    it('header hidden list: hidden coordinator / worker rows carry their markers', () => {
+    it('header hidden list: only the hidden coordinator row carries the mesh icon', () => {
         renderHeader(conversation(), {
             hiddenOpen: true,
             hiddenConversations: [coordinator({ tabKey: 'tab-c' }), worker()],
@@ -155,9 +158,7 @@ describe('coordinator / worker markers across dashboard surfaces', () => {
         expect(coordinatorIcon).not.toBeNull()
         expect(coordinatorIcon?.getAttribute('aria-label')).toBe('Coordinator for mesh-1')
         expect(rows[0].querySelector('.mesh-role-label')).toBeNull()
-        const workerIcon = rows[1].querySelector('.mesh-role-icon.is-worker')
-        expect(workerIcon).not.toBeNull()
-        expect(workerIcon?.getAttribute('aria-label')).toBe('Worker for mesh-1')
+        expect(rows[1].querySelector('.mesh-role-icon')).toBeNull()
         expect(rows[1].querySelector('.mesh-role-label')).toBeNull()
     })
 
@@ -217,9 +218,9 @@ describe('coordinator / worker markers across dashboard surfaces', () => {
         expect(sendCommand).not.toHaveBeenCalled()
     })
 
-    it('dockview tab: worker gets the subtler worker marker; plain chats get none', () => {
+    it('dockview tab: worker and plain chats get no mesh icon', () => {
         const workerTab = renderDockviewTab(worker())
-        expect(workerTab.querySelector('.mesh-role-icon.is-worker')?.getAttribute('aria-label')).toBe('Worker for mesh-1')
+        expect(workerTab.querySelector('.mesh-role-icon')).toBeNull()
         expect(workerTab.querySelector('.is-coordinator')).toBeNull()
         const plainTab = renderDockviewTab(conversation())
         expect(plainTab.querySelector('.mesh-role-icon')).toBeNull()
@@ -227,7 +228,7 @@ describe('coordinator / worker markers across dashboard surfaces', () => {
         expect(plainTab.getAttribute('title')).toBe('adhdev')
     })
 
-    it('mobile inbox rows: coordinator row has the icon (no subtitle label) and the mesh graph button', () => {
+    it('mobile inbox rows: only the coordinator row has the icon (no subtitle label) and the mesh graph button', () => {
         const item = (conv: ActiveConversation): MobileConversationListItem => ({
             conversation: conv, timestamp: Date.now(), preview: 'preview', unread: false,
             requiresAction: false, isWorking: false, inboxBucket: 'idle',
@@ -245,7 +246,7 @@ describe('coordinator / worker markers across dashboard surfaces', () => {
             />,
         )
         expect(container.querySelectorAll('.mesh-role-icon.is-coordinator')).toHaveLength(1)
-        expect(container.querySelectorAll('.mesh-role-icon.is-worker')).toHaveLength(1)
+        expect(container.querySelectorAll('.mesh-role-icon.is-worker')).toHaveLength(0)
         expect(container.querySelectorAll('.mobile-inbox-mesh-button')).toHaveLength(1)
         expect(container.querySelectorAll('.mesh-role-label')).toHaveLength(0)
     })

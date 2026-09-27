@@ -206,8 +206,8 @@
         --status-busy: #f97316;
         --status-error: #ef4444;
         --status-offline: #71717a;
-        /* Repo Mesh coordinator marker (tabs, header, lists) — neutral: the icon is the cue; amber stays the only accent. */
-        --mesh-coordinator: var(--text-secondary);
+        /* Repo Mesh coordinator marker (tabs, header, lists) — themed: the icon is coordinator-only, coloured to double as the "this is the coordinator" cue. */
+        --mesh-coordinator: var(--accent-primary);
 
         /* ── Semantic event colors ──────────────────────
            Meaning-keyed palette for audit/activity rows and scope chips, where
@@ -266,7 +266,7 @@
         --status-busy: #ea580c;
         --status-error: #dc2626;
         --status-offline: #a1a1aa;
-        --mesh-coordinator: var(--text-secondary);
+        --mesh-coordinator: var(--accent-primary);
 
         /* Semantic event colors — darkened for contrast on light backgrounds,
            matching the shift --status-* makes above. */
@@ -316,7 +316,7 @@
             --status-busy: #ea580c;
             --status-error: #dc2626;
             --status-offline: #a1a1aa;
-            --mesh-coordinator: var(--text-secondary);
+            --mesh-coordinator: var(--accent-primary);
 
             /* Semantic event colors — must mirror the :root[data-theme="light"]
                block above; this branch covers system-preference light mode. */
@@ -636,7 +636,7 @@
         color: var(--text-muted);
     }
 
-    /* ── Repo Mesh role markers (ConversationMeshRoleMarker) ── */
+    /* ── Repo Mesh coordinator marker (ConversationMeshRoleMarker) — coordinator-only, themed ── */
     .mesh-role-icon {
         display: inline-flex;
         align-items: center;
@@ -647,11 +647,6 @@
 
     .mesh-role-icon.is-coordinator {
         color: var(--mesh-coordinator);
-    }
-
-    .mesh-role-icon.is-worker {
-        color: var(--text-muted);
-        opacity: 0.85;
     }
 
     .adhdev-dockview-tab-unread-dot {
@@ -2573,7 +2568,7 @@
         flex: 1 1 auto;
     }
 
-    /* Coordinator / worker marker beside the mobile title (desktop shows "Dashboard"). */
+    /* Coordinator marker beside the mobile title (desktop shows "Dashboard"). */
     .header-title-mobile-role {
         display: none;
     }
