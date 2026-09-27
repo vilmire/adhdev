@@ -4103,7 +4103,7 @@
             "rowLandsMain": "완료 작업을 main에 착지",
             "rowLandsMainLocalCli": "게이트 실행과 머지를 직접 해야 합니다",
             "rowLandsMainDesktop": "작업을 병렬화한 후 브랜치를 검토하도록 넘겨줍니다",
-            "rowLandsMainAdhdev": "Refinery가 레포의 게이트를 실행하고, 패치 동등성을 확인하고, main을 fast-forward합니다 — 자동, force-push 없음",
+            "rowLandsMainAdhdev": "Refinery가 레포의 게이트를 실행하고, 패치 동등성을 확인하고, main이 움직이지 않았을 때만 리베이스 후 병합합니다 — 자동, force-push 없음",
             "rowSubmodules": "git 서브모듈 안전 처리",
             "rowSubmodulesLocalCli": "서브모듈을 인식하는 머지 자동화 없음",
             "rowSubmodulesDesktop": "워크트리 병렬화는 있지만 머지는 직접 해야 합니다",
