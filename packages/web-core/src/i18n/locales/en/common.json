@@ -4103,7 +4103,7 @@
             "rowLandsMain": "Lands finished work on main",
             "rowLandsMainLocalCli": "You run the gates and merge by hand",
             "rowLandsMainDesktop": "Parallelizes the work, then hands you the branches to review",
-            "rowLandsMainAdhdev": "The Refinery runs your repo's gates, checks patch equivalence, and fast-forwards main — unattended, no force-push",
+            "rowLandsMainAdhdev": "The Refinery runs your repo's gates, checks patch equivalence, and rebases + merges onto main only if it hasn't moved — unattended, no force-push",
             "rowSubmodules": "Safe with git submodules",
             "rowSubmodulesLocalCli": "No merge automation to be aware of them",
             "rowSubmodulesDesktop": "Worktree parallelism, but the merge is yours to get right",

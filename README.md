@@ -12,7 +12,7 @@
 
 AI coding agents have become long-running background workers. ADHDev is the control plane for them: launch, watch, approve, and steer agent sessions from a web or mobile dashboard — Claude Code, Codex, Kimi, Cursor CLI, Antigravity CLI side by side, across every machine you own — and hand off convergence to an unattended pipeline that merges finished work into `main`.
 
-**Parallel agents without the collisions.** Every task runs in its own git worktree; the Refinery gates, verifies, and fast-forwards finished work home — no merge-day hangover.
+**Parallel agents without the collisions.** Every task runs in its own git worktree; the Refinery gates, verifies, and rebases finished work onto main, merging only if main hasn't moved — no merge-day hangover.
 
 Website: **[adhf.dev](https://adhf.dev)** · Docs: **[docs.adhf.dev](https://docs.adhf.dev)**
 
@@ -66,7 +66,7 @@ A mesh is bound to one git repository and owns the moving parts you'd otherwise 
 You talk to one place. The coordinator orchestrates every worker and machine asynchronously — it waits on events, you don't. No session babysitting. Instead of sitting in front of each agent window watching for it to finish, you hand work to a single coordinator that drives all the workers in parallel and reacts only when a completion, approval, or status event actually arrives — no polling, no blocking waits. One conversation for you; a non-blocking event loop underneath.
 
 ### 🚢 Refinery — unattended landing on `main`
-Parallelism only pays off if the work actually merges. The Refinery converges finished tasks with per-repo validation gates, patch-equivalence checks, submodule-aware fast-forward merges, and automatic worktree cleanup — unattended. Agents finish; the Refinery lands them. The mesh board above surfaces the whole pipeline live: the ledger's `DIRECT FAST FORWARD` entries are landed tasks, and `REFINE JOBS` tracks convergence in flight.
+Parallelism only pays off if the work actually merges. The Refinery converges finished tasks with per-repo validation gates, patch-equivalence checks, submodule-aware rebase-and-merge (only if main hasn't moved), and automatic worktree cleanup — unattended. Agents finish; the Refinery lands them. The mesh board above surfaces the whole pipeline live: the ledger's `DIRECT FAST FORWARD` entries are landed tasks, and `REFINE JOBS` tracks convergence in flight.
 
 ### 🧩 Submodule-aware convergence — works on real monorepos
 Parallel worktrees and unattended merges get fragile the moment git submodules enter the picture. ADHDev handles that case head-on — this very project is a submodule monorepo (a root repo plus the AGPL engine and provider catalog as submodules), and we dogfood the mesh and Refinery on it every day. The Refinery treats submodules as first-class during convergence:
@@ -131,7 +131,7 @@ mesh_enqueue_task  →  SQLite queue (pending)
                    →  an idle node claims it (assigned)
                    →  worker agent runs in its own git worktree
                    →  completed / failed  →  append-only ledger
-                   →  Refinery: repo's own gates → patch equivalence → ff-only merge → cleanup
+                   →  Refinery: repo's own gates → patch equivalence → rebase → merge (main unchanged) → cleanup
 ```
 
 Four properties that shape everything else:
@@ -194,7 +194,7 @@ Canonical self-hosted docs:
 2. **Launch a session.** Pick a provider (say Claude Code), pick a working directory, and start it. You now have a real agent session you can drive from chat *or* watch as a raw terminal — toggle between the two.
 3. **Send work and walk away.** Type a task. When the agent hits a permission prompt, it shows up as an approval in the dashboard's activity inbox instead of blocking a terminal you're not looking at. (Push-to-phone for those approvals is a cloud feature.)
 4. **Paste a screenshot into the chat** when a description isn't enough — it goes into the agent's context directly.
-5. **Try the mesh on one machine.** Open `/mesh`, create a mesh bound to your repo, and clone a worktree node. Queue a task to it and watch the ledger: dispatch → completion → Refinery → fast-forward into `main`. This all works self-hosted; only crossing to a *second machine* needs the cloud edition.
+5. **Try the mesh on one machine.** Open `/mesh`, create a mesh bound to your repo, and clone a worktree node. Queue a task to it and watch the ledger: dispatch → completion → Refinery → rebase and merge into `main`. This all works self-hosted; only crossing to a *second machine* needs the cloud edition.
 
 Stuck? The [self-hosted setup guide](docs/self-hosted/setup.md) covers ports, LAN exposure, and provider detection problems.
 
