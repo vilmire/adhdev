@@ -155,7 +155,14 @@ export function computeMeshNodeGitSignature(git: Record<string, unknown> | null 
             return [sub.path ?? null, sub.commit ?? null, sub.dirty ?? null, sub.outOfSync ?? null, sub.error ?? null];
         })
         : [];
-    return JSON.stringify([head, submodules]);
+    // The deploy-lag verdict (daemonBuildBehind) is part of what the coordinator
+    // renders, and it changes when the daemon restarts on a new build while the
+    // worktree itself does not. Without it here, a restarted member never
+    // re-pushed git and the coordinator kept the previous process's "build is
+    // behind HEAD" verdict (seen live after the rc.65 fleet restart).
+    const buildBehind = readRecord(record.daemonBuildBehind);
+    const buildKey = buildBehind ? [buildBehind.buildCommit ?? null, buildBehind.head ?? null] : null;
+    return JSON.stringify([head, submodules, buildKey]);
 }
 
 /**
