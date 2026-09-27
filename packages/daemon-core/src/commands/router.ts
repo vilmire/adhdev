@@ -665,7 +665,7 @@ export class DaemonCommandRouter {
     private getCachedAggregateMeshStatus(
         meshId: string,
         mesh?: any,
-        options?: { requireDirectPeerTruth?: boolean; allowStalePending?: boolean },
+        options?: { requireDirectPeerTruth?: boolean; allowStalePending?: boolean; nodesOnly?: boolean },
     ): any | null {
         return getCachedAggregateMeshStatus(this, meshId, mesh, options);
     }

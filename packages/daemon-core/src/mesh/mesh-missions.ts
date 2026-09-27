@@ -15,9 +15,9 @@
 import { randomUUID } from 'crypto';
 import { LOG } from '../logging/logger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { getQueue } from './mesh-work-queue.js';
+import type { MeshQueueFacts } from './mesh-runtime-store-queue-reads.js';
 import { deriveDependencyFailures } from './mesh-graph-derived-failure.js';
-import { computeMeshMissionStats, type MeshMissionStats } from './mesh-task-stats.js';
+import { computeMeshMissionStatsBatch, type MeshMissionStats } from './mesh-task-stats.js';
 import { meshRecord } from './mesh-record.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { normalizeMissionBrief, type MissionBrief } from '@adhdev/mesh-shared';
@@ -313,45 +313,87 @@ export function getMeshMission(meshId: string, missionId: string): MeshMissionRe
     return record ? { ...record, status: normalizeMissionStatus(record.status), source: normalizeMissionSource(record.source), brief: parseStoredMissionBrief(record.briefJson) } : null;
 }
 
-/** Aggregate task statuses for a mission at query time (no stored progress). */
-export function summarizeMissionTasks(meshId: string, missionId: string): MeshMissionTaskAggregate {
-    const queue = getQueue(meshId);
-    const tasks = queue.filter(task => task.missionId === missionId);
+function emptyMissionTaskAggregate(): MeshMissionTaskAggregate {
+    return { total: 0, pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0, blocked: 0, lastActivityAt: null };
+}
+
+/**
+ * Task aggregates for several missions from ONE slim queue read (`getQueueFacts` —
+ * json_extract of the few payload scalars, no JS parse of whole payloads).
+ * Before 2026-09-27 every mission summary re-read and re-parsed the WHOLE queue
+ * (`getQueue`), so a mesh_status / mission list over M missions parsed the queue
+ * M times (O(missions × queue bytes); ~250 ms on the preview daemon's 5 MB queue).
+ * Every requested id gets an entry (a mission with no tasks → all zeros).
+ */
+export function summarizeMissionTasksBatch(
+    meshId: string,
+    missionIds: readonly string[],
+    facts: readonly MeshQueueFacts[] = MeshRuntimeStore.getInstance().getQueueFacts(meshId),
+): Map<string, MeshMissionTaskAggregate> {
+    const wanted = new Set(missionIds);
+    const out = new Map<string, MeshMissionTaskAggregate>();
+    for (const id of wanted) out.set(id, emptyMissionTaskAggregate());
+    if (wanted.size === 0) return out;
     // Dependency status lookup spans the whole queue: a mission task may depend
     // on a task outside the mission.
-    const statusById = new Map(queue.map(task => [task.id, task.status] as const));
-    const depMetaById = new Map(queue.map(task => [task.id, { blockedReason: task.blockedReason, cancelReason: task.cancelReason, status: task.status }] as const));
-    const aggregate: MeshMissionTaskAggregate = {
-        total: tasks.length,
-        pending: 0,
-        assigned: 0,
-        completed: 0,
-        failed: 0,
-        cancelled: 0,
-        blocked: 0,
-        lastActivityAt: null,
-    };
-    for (const task of tasks) {
-        if (task.status === 'pending') aggregate.pending += 1;
-        else if (task.status === 'assigned') aggregate.assigned += 1;
-        else if (task.status === 'completed') aggregate.completed += 1;
-        else if (task.status === 'failed') aggregate.failed += 1;
-        else if (task.status === 'cancelled') aggregate.cancelled += 1;
-        // C3: 'block' no longer writes blockedReason — a failed/cancelled
-        // predecessor is derived at view time (design :522-533).
-        if (task.status === 'pending'
-            && (task.blockedReason || deriveDependencyFailures(task.dependsOn, statusById, depMetaById).length > 0)) {
-            aggregate.blocked += 1;
-        }
-        if (task.updatedAt && (!aggregate.lastActivityAt || task.updatedAt > aggregate.lastActivityAt)) {
-            aggregate.lastActivityAt = task.updatedAt;
-        }
+    const statusById = new Map(facts.map(task => [task.id, task.status] as const));
+    const depMetaById = new Map(facts.map(task => [task.id, { blockedReason: task.blockedReason, cancelReason: task.cancelReason, status: task.status }] as const));
+    for (const task of facts) {
+        if (!task.missionId || !wanted.has(task.missionId)) continue;
+        accumulateMissionTask(out.get(task.missionId)!, task, statusById, depMetaById);
     }
-    return aggregate;
+    return out;
+}
+
+/** Aggregate task statuses for a mission at query time (no stored progress). */
+export function summarizeMissionTasks(meshId: string, missionId: string): MeshMissionTaskAggregate {
+    return summarizeMissionTasksBatch(meshId, [missionId]).get(missionId)!;
+}
+
+function accumulateMissionTask(
+    aggregate: MeshMissionTaskAggregate,
+    task: MeshQueueFacts,
+    statusById: ReadonlyMap<string, string>,
+    depMetaById: ReadonlyMap<string, { blockedReason?: string; cancelReason?: string; status?: string }>,
+): void {
+    aggregate.total += 1;
+    if (task.status === 'pending') aggregate.pending += 1;
+    else if (task.status === 'assigned') aggregate.assigned += 1;
+    else if (task.status === 'completed') aggregate.completed += 1;
+    else if (task.status === 'failed') aggregate.failed += 1;
+    else if (task.status === 'cancelled') aggregate.cancelled += 1;
+    // C3: 'block' no longer writes blockedReason — a failed/cancelled
+    // predecessor is derived at view time (design :522-533).
+    if (task.status === 'pending'
+        && (task.blockedReason || deriveDependencyFailures(task.dependsOn, statusById, depMetaById).length > 0)) {
+        aggregate.blocked += 1;
+    }
+    if (task.updatedAt && (!aggregate.lastActivityAt || task.updatedAt > aggregate.lastActivityAt)) {
+        aggregate.lastActivityAt = task.updatedAt;
+    }
 }
 
 export function summarizeMeshMission(meshId: string, mission: MeshMissionRecord): MeshMissionSummary {
     return { ...mission, tasks: summarizeMissionTasks(meshId, mission.id) };
+}
+
+/** `summarizeMeshMission` for several missions over ONE queue read (see summarizeMissionTasksBatch). */
+export function summarizeMeshMissions(meshId: string, missions: readonly MeshMissionRecord[]): MeshMissionSummary[] {
+    if (missions.length === 0) return [];
+    const aggregates = summarizeMissionTasksBatch(meshId, missions.map(m => m.id));
+    return missions.map(mission => ({ ...mission, tasks: aggregates.get(mission.id)! }));
+}
+
+/** Attach the stats rollup to each summary, computed in ONE pass (computeMeshMissionStatsBatch). */
+function withMissionStats<T extends { id: string }>(meshId: string, summaries: T[]): Array<T & { stats?: MeshMissionStats }> {
+    if (summaries.length === 0) return summaries;
+    let stats: Map<string, MeshMissionStats>;
+    try {
+        stats = computeMeshMissionStatsBatch(meshId, summaries.map(s => s.id));
+    } catch {
+        return summaries; // stats optional — omit on failure
+    }
+    return summaries.map(summary => (stats.has(summary.id) ? { ...summary, stats: stats.get(summary.id)! } : summary));
 }
 
 /**
@@ -466,7 +508,7 @@ function emitMissionCloseCandidateEvent(
 
 /** Active mission summaries for mesh_status / coordinator prompt injection. */
 export function getActiveMeshMissionSummaries(meshId: string): MeshMissionSummary[] {
-    return getMeshMissions(meshId, ['active']).map(mission => summarizeMeshMission(meshId, mission));
+    return summarizeMeshMissions(meshId, getMeshMissions(meshId, ['active']));
 }
 
 /** Project a full mission summary down to the slim (goal-elided) shape. */
@@ -505,14 +547,15 @@ export function getMeshStatusMissionSummaries(
         .filter(m => m.status === 'completed' || m.status === 'abandoned')
         .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
         .slice(0, historyLimit);
-    let full = [...live, ...history].map(mission => summarizeMeshMission(meshId, mission));
+    let full = summarizeMeshMissions(meshId, [...live, ...history]);
     // Operational stats (durations / attempts) are an opt-in projection: each
     // mission's rollup scans a bounded ledger tail, so we only compute it for
     // the bounded set we are about to return (live + capped history), not for
     // every mission in the mesh. The dashboard graph opts in so mission detail
-    // can show wall-clock / retries without a second round trip.
+    // can show wall-clock / retries without a second round trip. One pass for
+    // all of them (computeMeshMissionStatsBatch), not one queue+ledger read each.
     if (options?.withStats) {
-        full = full.map(summary => ({ ...summary, stats: computeMeshMissionStats(meshId, summary.id) }));
+        full = withMissionStats(meshId, full);
     }
     return options?.verbose ? full : full.map(summary => slimMissionSummary(summary));
 }
@@ -563,9 +606,8 @@ export function getMeshStatusMissionsCompact(
     const previewMax = Math.max(0, options?.previewMax ?? COMPACT_STATUS_GOAL_PREVIEW_MAX);
     const historyIdLimit = Math.max(0, options?.historyIdLimit ?? 20);
     const all = getMeshMissions(meshId);
-    const live = all
-        .filter(m => m.status === 'active' || m.status === 'paused')
-        .map(mission => slimMissionSummary(summarizeMeshMission(meshId, mission), previewMax));
+    const live = summarizeMeshMissions(meshId, all.filter(m => m.status === 'active' || m.status === 'paused'))
+        .map(summary => slimMissionSummary(summary, previewMax));
     const history = all
         .filter(m => m.status === 'completed' || m.status === 'abandoned')
         .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
@@ -614,7 +656,7 @@ export function listMeshMissionSummaries(
         // (source undefined) missions and in-progress MAGI missions always pass.
         .filter(m => includeMagi || !(m.source === 'magi' && m.status === 'completed'))
         .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
-    const full = missions.map(mission => summarizeMeshMission(meshId, mission));
+    const full = summarizeMeshMissions(meshId, missions);
     return options?.verbose ? full : full.map(summary => slimMissionSummary(summary));
 }
 
@@ -675,14 +717,11 @@ export function listMeshMissionsForTool(
     const passesMagi = (m: MeshMissionRecord) => includeMagi || !(m.source === 'magi' && m.status === 'completed');
     const byUpdatedDesc = (a: MeshMissionRecord, b: MeshMissionRecord) => (b.updatedAt || '').localeCompare(a.updatedAt || '');
 
-    const project = (mission: MeshMissionRecord): MeshMissionSummary | MeshMissionSlimSummary => {
-        let summary = summarizeMeshMission(meshId, mission);
-        if (withStats) {
-            try {
-                summary = { ...summary, stats: computeMeshMissionStats(meshId, mission.id) };
-            } catch { /* stats optional — omit on failure */ }
-        }
-        return verbose ? summary : slimMissionSummary(summary);
+    // One queue read (and, withStats, one stats pass) for the whole shown set.
+    const project = (missions: MeshMissionRecord[]): MeshMissionSummary[] | MeshMissionSlimSummary[] => {
+        let summaries: MeshMissionSummary[] = summarizeMeshMissions(meshId, missions);
+        if (withStats) summaries = withMissionStats(meshId, summaries);
+        return verbose ? summaries : summaries.map(summary => slimMissionSummary(summary));
     };
 
     const foldHistory = (history: MeshMissionRecord[]): MeshStatusMissionsHistoryFold | null => {
@@ -705,7 +744,7 @@ export function listMeshMissionsForTool(
         const shown = matched.slice(0, limit);
         const overflow = matched.slice(limit);
         return {
-            missions: shown.map(project) as MeshMissionSummary[] | MeshMissionSlimSummary[],
+            missions: project(shown),
             historyFold: null,
             truncated: overflow.length > 0,
             matched: matched.length,
@@ -724,7 +763,7 @@ export function listMeshMissionsForTool(
     const shown = live.slice(0, limit);
     const overflow = live.slice(limit);
     return {
-        missions: shown.map(project) as MeshMissionSummary[] | MeshMissionSlimSummary[],
+        missions: project(shown),
         historyFold: foldHistory(history),
         truncated: overflow.length > 0,
         matched: live.length,

@@ -92,6 +92,26 @@ describe('bootDaemonRuntime', () => {
     ])
   })
 
+  it('compacts the seqscribe DB (by its path) after the node closed and after the mesh VACUUM', async () => {
+    const log: string[] = []
+    const { stages, seqscribe } = recordingStages(log)
+    ;(seqscribe as any).node = { dbPath: '/tmp/fake/seqscribe.db' }
+    stages.vacuumSeqscribe = (dbPath: string) => { log.push(`vacuumSeqscribe:${dbPath}`) }
+    const runtime = await bootDaemonRuntime({ sessionHost: {} }, stages)
+    log.length = 0
+    await runtime.shutdown()
+    expect(log.slice(-4)).toEqual(['dispose:S4.close', 'bus.close', 'vacuum', 'vacuumSeqscribe:/tmp/fake/seqscribe.db'])
+  })
+
+  it('a throwing seqscribe compaction never fails shutdown', async () => {
+    const log: string[] = []
+    const { stages, seqscribe } = recordingStages(log)
+    ;(seqscribe as any).node = { dbPath: '/tmp/fake/seqscribe.db' }
+    stages.vacuumSeqscribe = () => { throw new Error('disk gone') }
+    const runtime = await bootDaemonRuntime({ sessionHost: {} }, stages)
+    await expect(runtime.shutdown()).resolves.toBeUndefined()
+  })
+
   it('shutdown is idempotent and a throwing disposer does not stop the rest', async () => {
     const log: string[] = []
     const { stages } = recordingStages(log)

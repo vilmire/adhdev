@@ -337,6 +337,17 @@ export function readLocalRecordSlice(meshId: string, opts: ReadLedgerSliceOption
  * Build recovery context for a failed session.
  * Looks up the ledger to find the original task, count failures, and advise on retry.
  */
+/**
+ * The record window getSessionRecoveryContext scans. tail:500 is sufficient —
+ * task_dispatched is never archived (only terminal kinds are), so dispatch history
+ * is always present. The 30-min failure window means we never need more than a few
+ * dozen recent entries for consecutiveNodeFailures. Bounding to 500 avoids a full
+ * O(n) scan for meshes with many historical entries.
+ */
+export function recoveryContextRecords(meshId: string): MeshLedgerEntry[] {
+    return readLocalRecords(meshId, { tail: 500 });
+}
+
 export function getSessionRecoveryContext(
     meshId: string,
     opts: {
@@ -344,13 +355,11 @@ export function getSessionRecoveryContext(
         nodeId?: string;
         maxRetries?: number;
     },
+    /** A batch caller's shared `recoveryContextRecords(meshId)` read (one read for many nodes). */
+    preloaded?: MeshLedgerEntry[],
 ): SessionRecoveryContext {
     const maxRetries = opts.maxRetries ?? 1;
-    // tail:500 is sufficient — task_dispatched is never archived (only terminal kinds are),
-    // so dispatch history is always present. The 30-min failure window means we never need
-    // more than a few dozen recent entries for consecutiveNodeFailures. Bounding to 500
-    // avoids a full O(n) scan for meshes with many historical entries.
-    const entries = readLocalRecords(meshId, { tail: 500 });
+    const entries = preloaded ?? recoveryContextRecords(meshId);
 
     // Single backward pass: find last task_dispatched AND count consecutive recent failures.
     const now = Date.now();

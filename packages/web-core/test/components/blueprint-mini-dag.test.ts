@@ -179,8 +179,9 @@ describe('never-ending canvas animations respect reduced motion', () => {
     it('never animates an edge — the canvas must settle for capture and a11y', () => {
         expect(source).toContain('animated: false')
         expect(source).not.toMatch(/animated:\s*true/)
-        // The @xyflow dashdraw override survives in the shared stylesheet.
-        const css = fs.readFileSync(path.join(import.meta.dirname, '../../src/index.css'), 'utf8')
+        // The @xyflow dashdraw override survives in the mesh graph stylesheet
+        // (loaded with the lazy graph chunk, after the @xyflow CSS it overrides).
+        const css = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/MeshGraph/meshGraph.css'), 'utf8')
         expect(css).toMatch(/\.react-flow__edge\.animated path\s*\{\s*animation: none/)
     })
 })

@@ -57,7 +57,7 @@ export interface HighFamilyContext {
     getCachedAggregateMeshStatus: (
         meshId: string,
         mesh?: any,
-        options?: { requireDirectPeerTruth?: boolean; allowStalePending?: boolean },
+        options?: { requireDirectPeerTruth?: boolean; allowStalePending?: boolean; nodesOnly?: boolean },
     ) => any | null;
 
     /** Bound `DaemonCommandRouter.rememberAggregateMeshStatus`. */

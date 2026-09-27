@@ -53,6 +53,8 @@ import {
 // the response needs (see mesh-status-background.ts) — moved off the request
 // path the same way mesh_status already runs it.
 import { collectMeshViewQueueNodesHeldOrLive } from './mesh-status-held-git.js';
+import { readQueueActiveView } from './mesh-daemon-reads.js';
+import { buildQueueMaintenanceCountsReport, buildQueueStatusSummaryFromCounts, queueViewStatusSet } from './mesh-queue-helpers.js';
 import { scheduleBackgroundDirectReconcile } from './mesh-status-background.js';
 // MESH-IMAGE-DISPATCH: view-surface projection — not (yet) re-exported through mesh-tools-internal.ts,
 // imported directly from the package like the other daemon-core symbols
@@ -955,10 +957,21 @@ export async function meshViewQueue(
         await refreshMeshFromDaemon(ctx);
         const statusFilter = sanitizeQueueStatusFilter(args.status);
         const view = normalizeQueueViewMode(args.view);
-        const rawQueue = await readQueueFromDaemon(ctx);
+        // Compact never emits historical rows, so it reads only the ACTIVE rows plus
+        // the daemon's whole-queue counts and the dependency heads those rows point
+        // at (read-latency pass 2026-09-27: was the whole queue — 5 MB, 1,567 of
+        // 1,568 rows historical on the preview daemon). Verbose, or an older daemon
+        // (null), reads the full queue as before.
+        const activeView = compact ? await readQueueActiveView(ctx) : null;
+        const rawQueue = activeView
+            ? activeView.activeRows as unknown as MeshWorkQueueEntry[]
+            : await readQueueFromDaemon(ctx);
         // M1: annotate dependency state (waitingOn, dependenciesSatisfied) at view time.
-        const statusById = new Map(rawQueue.map(task => [task.id, task.status]));
-        const depMetaById = new Map(rawQueue.map(task => [task.id, task] as const));
+        const dependencyRows: Array<{ id: string; status: string; blockedReason?: string; cancelReason?: string }> = activeView
+            ? [...rawQueue, ...activeView.dependencyHeads]
+            : rawQueue;
+        const statusById = new Map(dependencyRows.map(task => [task.id, task.status]));
+        const depMetaById = new Map(dependencyRows.map(task => [task.id, task] as const)) as unknown as Map<string, MeshWorkQueueEntry>;
         const withDependencies = rawQueue.map(task => {
             if (!Array.isArray(task.dependsOn) || task.dependsOn.length === 0) return task;
             const depState = describeTaskDependencyState(task, statusById, depMetaById);
@@ -978,16 +991,33 @@ export async function meshViewQueue(
         const liveNodes = await collectMeshViewQueueNodesHeldOrLive(ctx, probeOpts);
         const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(withDependencies, ctx.mesh, liveNodes));
         const queue = filterQueueForView(fullQueue, view, statusFilter);
-        const summary = buildQueueStatusSummary(fullQueue);
-        const visibleSummary = buildQueueStatusSummary(queue);
-        const maintenance = buildQueueMaintenanceReport(fullQueue);
+        const viewStatuses = queueViewStatusSet(view, statusFilter);
+        const summary = activeView
+            ? buildQueueStatusSummaryFromCounts(activeView.counts, fullQueue)
+            : buildQueueStatusSummary(fullQueue);
+        const visibleSummary = activeView
+            ? buildQueueStatusSummaryFromCounts(activeView.counts, fullQueue, viewStatuses)
+            : buildQueueStatusSummary(queue);
+        const maintenance = activeView
+            ? buildQueueMaintenanceCountsReport(
+                fullQueue,
+                (summary.historicalCount as number) ?? 0,
+                activeView.oldHistoricalCount,
+            )
+            : buildQueueMaintenanceReport(fullQueue);
+        // Without a view/status filter `visibleSummary` IS `summary`: compact emits
+        // the visible* copies only for a filtered view.
+        const filtered = Boolean(statusFilter?.length) || view !== 'all';
         // C-W9a: active work is computed in the daemon over the open direct dispatches
         // (mesh_direct attempts) and its records (+ turn outcomes), for THIS view's
         // annotated queue; the inputs come back for the dispatch-failure list below.
         // The direct-dispatch transcript reconcile is a WRITE-side nudge the response
         // does not need (see mesh-status-background.ts) — kicked in the background,
         // same as mesh_status, instead of blocking this read on a live read_chat.
-        const activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: liveNodes, queue: fullQueue, recordTail: 200, includeInputs: true });
+        // No `queue` argument: the daemon reads its own (it used to receive this
+        // view's whole annotated queue back — 5.3 MB out). Active work reads no
+        // view annotation.
+        const activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: liveNodes, recordTail: 200, includeInputs: true });
         scheduleBackgroundDirectReconcile(ctx, liveNodes, activeWorkView.directDispatches, activeWorkView.records);
         const ledgerEntries = activeWorkView.records;
         const activeWorkEvidence = activeWorkView.activeWork!;
@@ -1080,7 +1110,7 @@ export async function meshViewQueue(
             filter: {
                 view,
                 statuses: statusFilter,
-                filtered: Boolean(statusFilter?.length) || view !== 'all',
+                filtered,
             },
             queue: visibleQueue,
             ...(compact ? { historicalRowsOmitted: true, historicalRowsHint: 'Completed/failed/cancelled rows are omitted in compact mode; see historicalCounts. Call mesh_view_queue with verbose=true (or view=historical, compact=false) for full rows.' } : {}),
@@ -1099,15 +1129,19 @@ export async function meshViewQueue(
             ...(pollingGuidance ? { pollingGuidance } : {}),
             ...(rateResult.rateLimitExceeded ? { pollingRateAdvisory: { type: 'rate_limit_exceeded', tool: 'mesh_view_queue', callsInWindow: rateResult.callsInWindow, message: rateResult.advisory } } : {}),
             summary,
-            visibleSummary,
+            ...(!compact || filtered ? { visibleSummary } : {}),
             activeCounts: summary.activeCounts,
             historicalCounts: summary.historicalCounts,
-            visibleActiveCounts: visibleSummary.activeCounts,
-            visibleHistoricalCounts: visibleSummary.historicalCounts,
+            ...(!compact || filtered ? {
+                visibleActiveCounts: visibleSummary.activeCounts,
+                visibleHistoricalCounts: visibleSummary.historicalCounts,
+            } : {}),
             activeCount: summary.activeCount,
             historicalCount: summary.historicalCount,
-            visibleActiveCount: visibleSummary.activeCount,
-            visibleHistoricalCount: visibleSummary.historicalCount,
+            ...(!compact || filtered ? {
+                visibleActiveCount: visibleSummary.activeCount,
+                visibleHistoricalCount: visibleSummary.historicalCount,
+            } : {}),
             ...(parkedTasks.length > 0 ? {
                 parkedTasks,
                 parkedTaskCount: parkedTasks.length,
@@ -1119,7 +1153,8 @@ export async function meshViewQueue(
             staleAssignedTasks: compact ? staleAssignedTasks.slice(0, 10).map(compactQueueRow) : staleAssignedTasks,
             staleAssignedCount: (maintenance as any).staleAssignedCount,
             queueMaintenance: maintenanceForResponse,
-            cleanupDryRun: maintenanceForResponse,
+            // Alias of queueMaintenance — verbose only (compact keeps one copy).
+            ...(compact ? {} : { cleanupDryRun: maintenanceForResponse }),
             ...(recentDispatchFailures.length > 0 ? {
                 recentDispatchFailures,
                 dispatchFailureCount: recentDispatchFailures.length,
@@ -1135,8 +1170,8 @@ export async function meshViewQueue(
             ...(wantHistoricalQueueArray ? {
                 historicalQueue: queue.filter((task: any) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || ''))),
             } : {}),
-            // Back-compat alias for callers already reading the first hardening payload.
-            staleAssignments: compact ? staleAssignedTasks.slice(0, 10).map(compactQueueRow) : staleAssignedTasks,
+            // Back-compat alias of staleAssignedTasks — verbose only (compact keeps one copy).
+            ...(compact ? {} : { staleAssignments: staleAssignedTasks }),
         }, null, 2);
     } catch (e: any) {
         return JSON.stringify({ success: false, error: e.message });

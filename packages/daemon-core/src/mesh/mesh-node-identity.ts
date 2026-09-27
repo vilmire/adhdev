@@ -647,6 +647,22 @@ function readLocalReporterProviderVersions(): Record<string, string> | null {
     }
 }
 
+/**
+ * The facts bundle recordInlineMeshDirectGitTruth stamps on a LOCAL node after a
+ * git read (same producer + inputs), without the git read — for get_mesh
+ * `membershipOnly`, which skips the git hydration but must still hand callers
+ * current local facts (quota gate reads nodeFacts.quota). Cheap, synchronous.
+ */
+export function buildFreshLocalNodeFacts(): import('@adhdev/mesh-shared').MeshNodeFacts | null {
+    try {
+        let localNickname: string | null = null;
+        try { localNickname = readStringValue(getMachineNickname()) ?? null; } catch { /* best-effort */ }
+        return buildLocalNodeFacts({ providerVersions: readLocalReporterProviderVersions(), machineNickname: localNickname });
+    } catch {
+        return null;
+    }
+}
+
 /** This daemon's own build version (see readLocalReporterProviderVersions). */
 function readLocalReporterDaemonBuildVersion(): string | null {
     try {

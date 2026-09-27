@@ -14,7 +14,7 @@
 import { meshTopicIndexFor, readOwnTaskLifecycle, type MeshIndexView } from './mesh-topic-index.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { meshPublisherWriterId } from '../seqscribe/mesh-publisher.js';
-import { getQueue } from './mesh-work-queue.js';
+import type { MeshQueueFacts } from './mesh-runtime-store-queue-reads.js';
 
 type ProjectedLedgerView = MeshIndexView;
 
@@ -78,8 +78,9 @@ function parseTime(value: string | null | undefined): number | null {
  * stats are an operational view of recent work, not a full historical report.
  */
 export function computeMeshTaskStats(meshId: string, opts?: { taskIds?: string[]; missionId?: string; tail?: number }): MeshTaskStats[] {
-    const queue = getQueue(meshId);
-    const queueById = new Map(queue.map(task => [task.id, task]));
+    // Slim queue read (json_extract of the scalars below) — not getQueue(), which
+    // JSON.parses every payload of the mesh (MCP read-latency pass, 2026-09-27).
+    const queue = MeshRuntimeStore.getInstance().getQueueFacts(meshId);
 
     let targetIds: string[];
     if (opts?.taskIds?.length) {
@@ -90,9 +91,13 @@ export function computeMeshTaskStats(meshId: string, opts?: { taskIds?: string[]
         targetIds = queue.map(task => task.id);
     }
     if (targetIds.length === 0) return [];
-    const targetSet = new Set(targetIds);
+    return taskStatsFromFacts(queue, readTaskStatsEntries(meshId, opts?.tail ?? 1000), targetIds);
+}
 
-    const entries = readTaskStatsEntries(meshId, opts?.tail ?? 1000);
+/** Per-task stats for `targetIds` from an already-read queue + record window (no I/O). */
+function taskStatsFromFacts(queue: readonly MeshQueueFacts[], entries: readonly ProjectedLedgerView[], targetIds: string[]): MeshTaskStats[] {
+    const queueById = new Map(queue.map(task => [task.id, task]));
+    const targetSet = new Set(targetIds);
     const dispatches = new Map<string, { first: string; count: number }>();
     const terminals = new Map<string, { at: string; kind: 'task_completed' | 'task_failed' }>();
     for (const entry of entries) {
@@ -146,7 +151,38 @@ export function computeMeshTaskStats(meshId: string, opts?: { taskIds?: string[]
 
 /** Mission rollup — derived from per-task stats, no stored aggregates. */
 export function computeMeshMissionStats(meshId: string, missionId: string): MeshMissionStats {
-    const tasks = computeMeshTaskStats(meshId, { missionId });
+    return computeMeshMissionStatsBatch(meshId, [missionId]).get(missionId)!;
+}
+
+/**
+ * Mission rollups for several missions in ONE pass: one slim queue read and ONE
+ * record-window read shared by every mission. Before 2026-09-27 each rollup did
+ * its own full `getQueue` parse + record read (twice, when task_stats_query also
+ * computed the per-task list), and mesh_status verbose / the dashboard mission
+ * list asked for one rollup per mission — O(missions × queue) daemon work,
+ * measured at multiple seconds on the preview daemon. Every id gets an entry.
+ */
+export function computeMeshMissionStatsBatch(meshId: string, missionIds: readonly string[], opts?: { tail?: number }): Map<string, MeshMissionStats> {
+    const out = new Map<string, MeshMissionStats>();
+    const wanted = [...new Set(missionIds)];
+    if (wanted.length === 0) return out;
+    const queue = MeshRuntimeStore.getInstance().getQueueFacts(meshId);
+    const wantedSet = new Set(wanted);
+    const taskIdsByMission = new Map<string, string[]>(wanted.map(id => [id, [] as string[]]));
+    for (const task of queue) {
+        if (task.missionId && wantedSet.has(task.missionId)) taskIdsByMission.get(task.missionId)!.push(task.id);
+    }
+    const anyTasks = [...taskIdsByMission.values()].some(ids => ids.length > 0);
+    const entries = anyTasks ? readTaskStatsEntries(meshId, opts?.tail ?? 1000) : [];
+    for (const missionId of wanted) {
+        const ids = taskIdsByMission.get(missionId)!;
+        out.set(missionId, rollupMissionStats(missionId, ids.length > 0 ? taskStatsFromFacts(queue, entries, ids) : []));
+    }
+    return out;
+}
+
+/** Mission rollup from its per-task stats (pure). */
+export function rollupMissionStats(missionId: string, tasks: readonly MeshTaskStats[]): MeshMissionStats {
     const stats: MeshMissionStats = {
         missionId,
         taskCount: tasks.length,

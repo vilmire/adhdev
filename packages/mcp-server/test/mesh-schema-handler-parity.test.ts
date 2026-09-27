@@ -137,7 +137,16 @@ const queueHandlerSrc = readFileSync(join(here, '../src/tools/mesh-tools-queue.t
 const slotsHandlerSrc = readFileSync(join(here, '../src/tools/mesh-tools-slots.ts'), 'utf8');
 const slotAutodetectHandlerSrc = readFileSync(join(here, '../src/tools/mesh-tools-slot-autodetect.ts'), 'utf8');
 
-test('D2#4: mesh_magi_review accepts every camelCase alias its handler reads', () => {
+// 2026-09-27 tools/list schema diet: every camelCase alias in this file used to be
+// its own published schema property (D2#4, below). They are now accepted via
+// MESH_ACCEPTED_ARG_ALIASES (canonicalized to the snake_case key before the
+// unknown-arg gate runs) instead of published — same pattern the enqueue family
+// already used (rc.37#1: "aliases are accepted, not published"). The acceptance
+// behavior these tests were written to pin (rejectUnknownMeshToolArgs returns
+// null for the alias spelling) is unchanged; only the "and it's a published
+// property" half of each assertion flips to "and it's NOT a published property".
+
+test('D2#4: mesh_magi_review accepts every camelCase alias its handler reads (unpublished)', () => {
     assert.equal(rejectUnknownMeshToolArgs('mesh_magi_review', {
         question: 'q',
         taskKind: 'rca',
@@ -148,13 +157,13 @@ test('D2#4: mesh_magi_review accepts every camelCase alias its handler reads', (
     }), null);
     const props = MESH_MAGI_REVIEW_TOOL.inputSchema.properties as Record<string, unknown>;
     for (const key of ['taskKind', 'includeStale', 'requireIndependentEvidence', 'waitTimeoutMs', 'autoCleanup']) {
-        assert.ok(key in props, `mesh_magi_review schema must declare ${key}`);
+        assert.equal(key in props, false, `mesh_magi_review schema must not publish ${key}`);
     }
     assert.match(magiFullSrc, /args\.task_kind\s*\?\?\s*args\.taskKind/);
     assert.match(magiFullSrc, /args\.include_stale\s*\?\?\s*args\.includeStale/);
 });
 
-test('D2#4: mesh_magi_collect accepts every camelCase alias its handler reads', () => {
+test('D2#4: mesh_magi_collect accepts every camelCase alias its handler reads (unpublished)', () => {
     assert.equal(rejectUnknownMeshToolArgs('mesh_magi_collect', {
         consensusGroupId: 'magi_x',
         taskKind: 'rca',
@@ -165,43 +174,43 @@ test('D2#4: mesh_magi_collect accepts every camelCase alias its handler reads', 
     }), null);
     const props = MESH_MAGI_COLLECT_TOOL.inputSchema.properties as Record<string, unknown>;
     for (const key of ['consensusGroupId', 'taskKind', 'requireIndependentEvidence', 'waitTimeoutMs', 'autoCleanup']) {
-        assert.ok(key in props, `mesh_magi_collect schema must declare ${key}`);
+        assert.equal(key in props, false, `mesh_magi_collect schema must not publish ${key}`);
     }
     assert.match(magiFullSrc, /readString\(args\.consensus_group_id\)\s*\|\|\s*readString\(args\.consensusGroupId\)/);
 });
 
-test('D2#4: mesh_mission_upsert accepts missionId and missionIds', () => {
+test('D2#4: mesh_mission_upsert accepts missionId and missionIds (unpublished)', () => {
     assert.equal(rejectUnknownMeshToolArgs('mesh_mission_upsert', { missionId: 'm_x', title: 't' }), null);
     assert.equal(rejectUnknownMeshToolArgs('mesh_mission_upsert', { missionIds: ['a', 'b'], status: 'completed' }), null);
     const props = MESH_MISSION_UPSERT_TOOL.inputSchema.properties as Record<string, unknown>;
-    assert.ok('missionId' in props);
-    assert.ok('missionIds' in props);
+    assert.equal('missionId' in props, false);
+    assert.equal('missionIds' in props, false);
     assert.match(missionHandlerSrc, /args\.mission_ids\s*\?\?\s*args\.missionIds/);
     assert.match(missionHandlerSrc, /readString\(args\.mission_id\)\s*\|\|\s*readString\(args\.missionId\)/);
 });
 
-test('D2#4: mesh_mission_list accepts includeMagi and includeStats', () => {
+test('D2#4: mesh_mission_list accepts includeMagi and includeStats (unpublished)', () => {
     assert.equal(rejectUnknownMeshToolArgs('mesh_mission_list', { includeMagi: true, includeStats: true }), null);
     const props = MESH_MISSION_LIST_TOOL.inputSchema.properties as Record<string, unknown>;
-    assert.ok('includeMagi' in props);
-    assert.ok('includeStats' in props);
+    assert.equal('includeMagi' in props, false);
+    assert.equal('includeStats' in props, false);
     assert.match(missionHandlerSrc, /args\.include_magi\s*\?\?\s*args\.includeMagi/);
     assert.match(missionHandlerSrc, /args\.include_stats\s*\?\?\s*args\.includeStats/);
 });
 
-test('D2#4: mesh_note action=forget accepts noteId', () => {
+test('D2#4: mesh_note action=forget accepts noteId (unpublished)', () => {
     assert.equal(rejectUnknownMeshToolArgs('mesh_note', { action: 'forget', noteId: 'n_x' }), null);
-    assert.ok('noteId' in (MESH_NOTE_TOOL.inputSchema.properties as object));
+    assert.equal('noteId' in (MESH_NOTE_TOOL.inputSchema.properties as object), false);
     assert.match(missionHandlerSrc, /readString\(args\.note_id\)\s*\|\|\s*readString\(args\.noteId\)/);
 });
 
-test('D2#4: mesh_queue_cancel accepts taskId', () => {
+test('D2#4: mesh_queue_cancel accepts taskId (unpublished)', () => {
     assert.equal(rejectUnknownMeshToolArgs('mesh_queue_cancel', { taskId: 't_x' }), null);
-    assert.ok('taskId' in (MESH_QUEUE_CANCEL_TOOL.inputSchema.properties as object));
+    assert.equal('taskId' in (MESH_QUEUE_CANCEL_TOOL.inputSchema.properties as object), false);
     assert.match(queueHandlerSrc, /args\.task_id\s*\|\|\s*args\.taskId/);
 });
 
-test('D2#4: mesh_queue_requeue accepts every camelCase alias its handler reads', () => {
+test('D2#4: mesh_queue_requeue accepts every camelCase alias its handler reads (unpublished)', () => {
     assert.equal(rejectUnknownMeshToolArgs('mesh_queue_requeue', {
         taskId: 't_x',
         targetNodeId: 'n_x',
@@ -211,18 +220,18 @@ test('D2#4: mesh_queue_requeue accepts every camelCase alias its handler reads',
     }), null);
     const props = MESH_QUEUE_REQUEUE_TOOL.inputSchema.properties as Record<string, unknown>;
     for (const key of ['taskId', 'targetNodeId', 'targetSessionId', 'clearTargetNode', 'keepTargetSession']) {
-        assert.ok(key in props, `mesh_queue_requeue schema must declare ${key}`);
+        assert.equal(key in props, false, `mesh_queue_requeue schema must not publish ${key}`);
     }
     assert.match(queueHandlerSrc, /args\.target_node_id\s*\|\|\s*args\.targetNodeId/);
 });
 
-test('D2#4: mesh_node_slots set / list / propose accept nodeId (and propose accepts includeMagi)', () => {
+test('D2#4: mesh_node_slots set / list / propose accept nodeId (and propose accepts includeMagi), unpublished', () => {
     assert.equal(rejectUnknownMeshToolArgs('mesh_node_slots', { action: 'set', nodeId: 'n_x', slots: [{ provider: 'claude-cli' }] }), null);
     assert.equal(rejectUnknownMeshToolArgs('mesh_node_slots', { action: 'list', nodeId: 'n_x' }), null);
     assert.equal(rejectUnknownMeshToolArgs('mesh_node_slots', { action: 'propose', nodeId: 'n_x', includeMagi: true }), null);
     const proposeProps = MESH_NODE_SLOTS_TOOL.inputSchema.properties as Record<string, unknown>;
-    assert.ok('nodeId' in proposeProps);
-    assert.ok('includeMagi' in proposeProps);
+    assert.equal('nodeId' in proposeProps, false);
+    assert.equal('includeMagi' in proposeProps, false);
     assert.match(slotsHandlerSrc, /String\(args\.node_id\s*\|\|\s*args\.nodeId\s*\|\|\s*''\)/);
     assert.match(slotAutodetectHandlerSrc, /String\(args\.node_id\s*\|\|\s*args\.nodeId\s*\|\|\s*''\)/);
 });
@@ -540,11 +549,16 @@ test('rc.37: every mesh_enqueue_task schema property is read by the handler (no 
  * released gate can never be re-released. Fixed by accepting the same aliases and
  * REJECTING (not silently dropping) a patch entry that resolves to no node.
  */
-test('rc.37#2: mesh_graph_gate action=release patches[] accepts node_id/nodeId/ref aliases (schema)', () => {
+// 2026-09-27 tools/list schema diet: nodeId (camelCase) is now accepted via
+// MESH_ACCEPTED_ARG_ALIASES (mesh_graph_gate.patches scope) instead of being
+// its own published property — node/node_id/ref stay published as genuinely
+// distinct aliases (see the tool's own property descriptions).
+test('rc.37#2: mesh_graph_gate action=release patches[] accepts node_id/nodeId/ref aliases (nodeId unpublished)', () => {
     const patchItemProps = (MESH_GRAPH_GATE_TOOL.inputSchema.properties as any).patches.items.properties as Record<string, unknown>;
-    for (const key of ['node', 'node_id', 'nodeId', 'ref']) {
+    for (const key of ['node', 'node_id', 'ref']) {
         assert.ok(key in patchItemProps, `mesh_graph_gate patches[] schema must declare ${key}`);
     }
+    assert.equal('nodeId' in patchItemProps, false, 'nodeId must not be published');
     for (const key of ['node_id', 'nodeId', 'ref']) {
         assert.equal(rejectUnknownMeshToolArgs('mesh_graph_gate', {
             action: 'release', gate_id: 'g', fencing_token: 'f', lease_generation: 1, idempotency_key: 'k', outcome: 'passed',

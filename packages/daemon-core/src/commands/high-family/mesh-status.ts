@@ -93,6 +93,19 @@ import {
 } from './mesh-status-node-state.js';
 import { defineCommandSpecs } from '../command-registry.js';
 
+/**
+ * The `sections: ['nodes']` answer: node statuses (+ the held-runtime marker and
+ * the envelope fields a reader checks). A failure result passes through whole.
+ */
+export function projectMeshStatusNodesSection(result: any): any {
+    if (!result || typeof result !== 'object' || result.success === false) return result;
+    const out: Record<string, unknown> = { sections: ['nodes'] };
+    for (const key of ['success', 'meshId', 'refreshedAt', 'nodes', 'nodeRuntimeHeld', 'replication', 'code', 'error']) {
+        if (result[key] !== undefined) out[key] = result[key];
+    }
+    return out;
+}
+
 export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
     mesh_status: async (ctx: HighFamilyContext, args: any) => {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
@@ -117,6 +130,13 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     // skip the memory cache and rebuild from what is held — without the
                     // explicit-refresh nudge to every member.
                     const rebuildFromHeld = args?.rebuildFromHeld === true;
+                    // `sections: ['nodes']` (the MCP's held-node-state read): answer only
+                    // the node section — the full payload is ~97% queue rows the reader
+                    // never looks at (5.05 of 5.18 MB on the preview daemon). A cache hit
+                    // then clones just the nodes. An older daemon ignores the key.
+                    const nodesOnly = Array.isArray(args?.sections) && args.sections.length > 0
+                        && args.sections.every((section: unknown) => section === 'nodes');
+                    const projectSections = (result: any) => (nodesOnly ? projectMeshStatusNodesSection(result) : result);
                     // COORDINATOR-HELD NODE STATE: the request path never contacts a
                     // remote peer. A node served by another daemon renders from the
                     // coordinator-held store only (member pushes; the background
@@ -237,9 +257,9 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     // coordinator events — a coordinator that has events waiting gets at
                     // least the SWR path below, which re-attaches them fresh.
                     if (!refreshRequested && !rebuildFromHeld && !verboseMissions && pendingCoordinatorEventCount === 0) {
-                        const cachedStatus = ctx.getCachedAggregateMeshStatus(meshId, mesh, { requireDirectPeerTruth: args?.requireDirectPeerTruth === true });
+                        const cachedStatus = ctx.getCachedAggregateMeshStatus(meshId, mesh, { requireDirectPeerTruth: args?.requireDirectPeerTruth === true, nodesOnly });
                         if (cachedStatus) {
-                            const returned = await attachLiveOnlyExtras(cachedStatus);
+                            const returned = projectSections(await attachLiveOnlyExtras(cachedStatus));
                             logRepoMeshStatusDebug('return_cached', {
                                 meshId,
                                 command: 'mesh_status',
@@ -269,6 +289,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         const staleStatus = ctx.getCachedAggregateMeshStatus(meshId, mesh, {
                             requireDirectPeerTruth: args?.requireDirectPeerTruth === true,
                             allowStalePending: true,
+                            nodesOnly,
                         });
                         if (staleStatus) {
                             if (!ctx.swrRefreshInFlight.has(meshId)) {
@@ -288,7 +309,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                     .catch(() => {})
                                     .finally(() => { ctx.swrRefreshInFlight.delete(meshId); });
                             }
-                            const returned = await attachLiveOnlyExtras(staleStatus);
+                            const returned = projectSections(await attachLiveOnlyExtras(staleStatus));
                             logRepoMeshStatusDebug('return_stale_swr', {
                                 meshId,
                                 command: 'mesh_status',
@@ -890,7 +911,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         durationMs: Date.now() - startedAtMs,
                         summary: summarizeRepoMeshStatusDebug(returnedStatus),
                     });
-                    return returnedStatus;
+                    return projectSections(returnedStatus);
                 } catch (e: any) {
                     return { success: false, error: e.message };
                 }

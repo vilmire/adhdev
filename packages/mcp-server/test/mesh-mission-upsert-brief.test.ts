@@ -121,9 +121,17 @@ test('mesh_mission_upsert: a brief field of the wrong type is dropped WITH a bri
     }
 });
 
-test('mesh_mission_upsert schema declares the snake_case brief field aliases', () => {
+// 2026-09-27 tools/list schema diet: the snake_case brief aliases are now
+// accepted via MESH_ACCEPTED_ARG_ALIASES (mesh_mission_upsert.brief scope)
+// instead of being published as their own schema properties — the camelCase
+// spelling (doneCriteria/handoffNotes/ownedPaths) is the published canonical
+// here. Acceptance is proven end-to-end by the snake_case test above.
+test('mesh_mission_upsert schema publishes only camelCase brief fields; snake_case aliases are unpublished', () => {
     const briefProps = (MESH_MISSION_UPSERT_TOOL.inputSchema.properties as any).brief.properties;
     for (const field of ['done_criteria', 'handoff_notes', 'owned_paths']) {
+        assert.equal(field in briefProps, false, `${field} must not be published`);
+    }
+    for (const field of ['doneCriteria', 'handoffNotes', 'ownedPaths']) {
         assert.ok(field in briefProps, `${field} missing from brief schema`);
     }
 });

@@ -112,8 +112,10 @@ test('mesh_status compact mode (default) still surfaces capabilityTags per node'
   const nodes = Array.isArray(status.nodes) ? status.nodes : [];
   const main = nodes.find((n: any) => n.nodeId === 'node-main');
   assert.ok(main, 'node-main present in compact mesh_status');
-  assert.ok(
-    Array.isArray(main.capabilityTags) && main.capabilityTags.includes('provider=claude-cli'),
-    'compact node retains capabilityTags for routing planning',
-  );
+  assert.ok(Array.isArray(main.capabilityTags), 'compact node retains capabilityTags for routing planning');
+  // provider=<p> tags for providers already listed in providerPriority are one
+  // copy of that list: compact keeps providerPriority and drops the repeat.
+  assert.ok(main.providerPriority.includes('claude-cli'), 'providerPriority carries the provider');
+  assert.ok(!main.capabilityTags.includes('provider=claude-cli'), 'compact drops the provider tag repeating providerPriority');
+  assert.ok(main.capabilityTags.includes('converge=fast_forward'), 'non-provider tags survive');
 });

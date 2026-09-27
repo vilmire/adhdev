@@ -1,0 +1,22 @@
+/* Mesh graph stylesheet — loaded with the lazy mesh graph chunk.
+ *
+ * @xyflow/react's base CSS used to be @imported globally from web-core
+ * index.css, so every route (/terms, /login, …) shipped it. It now travels
+ * with the modules that actually render a <ReactFlow> canvas (MeshGraphView,
+ * MeshBlueprintGraph, MeshMiniDag), all of which sit behind the lazily loaded
+ * DashboardMeshGraphDialog.
+ *
+ * Cascade: this sheet stays UNLAYERED exactly like before, so it still beats
+ * the layered Tailwind utilities regardless of load order. It is appended
+ * after index.css at runtime, so any unlayered override of an xyflow rule at
+ * equal specificity has to live HERE, after the import — not in index.css. */
+@import "@xyflow/react/dist/style.css";
+
+/* Honor OS reduced-motion on the mesh canvases: @xyflow's `dashdraw` on an
+ * edge marked `animated` is a 0.5s linear infinite animation. See the
+ * matching `.mesh-node-generating` rule in index.css for the rationale. */
+@media (prefers-reduced-motion: reduce) {
+    .react-flow__edge.animated path {
+        animation: none;
+    }
+}

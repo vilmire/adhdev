@@ -34,6 +34,39 @@ export function cloneJsonValue<T>(value: T): T {
     return JSON.parse(JSON.stringify(value)) as T;
 }
 
+/**
+ * Snapshot keys that are SHARED (not cloned) between the aggregate cache and
+ * every copy handed out. `queue` is the whole mesh queue (`queue.tasks` — 5 MB on
+ * the preview daemon, 1,567 of 1,568 rows historical) and was deep-cloned three
+ * times per rebuild and once per cache hit. It is rebuilt only when the queue
+ * revision changes (a revision mismatch refuses the cache) and no reader mutates
+ * it — every consumer (dashboard render, IPC/P2P serialization) only reads.
+ * INVARIANT: never mutate `snapshot.queue` of a mesh_status result in place.
+ */
+const SHARED_SNAPSHOT_KEYS: ReadonlySet<string> = new Set(['queue']);
+
+/** Keys a `nodesOnly` read needs from the snapshot (the held-node-state readers). */
+const NODES_SECTION_KEYS = ['success', 'meshId', 'refreshedAt', 'sourceOfTruth', 'branchConvergenceSummary', 'nodes'] as const;
+
+/** Deep-clone a snapshot except the SHARED_SNAPSHOT_KEYS (key order preserved). */
+export function cloneAggregateSnapshot(snapshot: any): any {
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return cloneJsonValue(snapshot);
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(snapshot)) {
+        out[key] = SHARED_SNAPSHOT_KEYS.has(key) ? value : cloneJsonValue(value);
+    }
+    return out;
+}
+
+/** The nodes section of a snapshot, deep-cloned — nothing else is touched. */
+function cloneNodesSection(snapshot: any): any {
+    const out: Record<string, unknown> = {};
+    for (const key of NODES_SECTION_KEYS) {
+        if (snapshot[key] !== undefined) out[key] = cloneJsonValue(snapshot[key]);
+    }
+    return out;
+}
+
 export function hydrateCachedAggregateMeshStatusFromInline(
     self: DaemonCommandRouter,
     snapshot: any,
@@ -142,7 +175,7 @@ export function getCachedAggregateMeshStatus(
     self: DaemonCommandRouter,
     meshId: string,
     mesh?: any,
-    options?: { requireDirectPeerTruth?: boolean; allowStalePending?: boolean },
+    options?: { requireDirectPeerTruth?: boolean; allowStalePending?: boolean; nodesOnly?: boolean },
 ): any | null {
         const cached = self.aggregateMeshStatusCache.get(meshId);
         if (!cached?.snapshot || cached.snapshot.success !== true || !Array.isArray(cached.snapshot.nodes)) return null;
@@ -150,7 +183,9 @@ export function getCachedAggregateMeshStatus(
         // revision, so a stale-revision snapshot is never served (even under the
         // SWR allowStalePending path below).
         if (cached.queueRevision !== getMeshQueueRevision(meshId)) return null;
-        let snapshot = cloneJsonValue(cached.snapshot);
+        // nodesOnly (mesh_status sections:['nodes']): clone only what the held-node
+        // readers read. Otherwise everything but the shared queue section.
+        let snapshot = options?.nodesOnly ? cloneNodesSection(cached.snapshot) : cloneAggregateSnapshot(cached.snapshot);
         snapshot = hydrateCachedAggregateMeshStatusFromInline(self, snapshot, mesh, options);
         // SWR: allowStalePending lets the interactive detail-open serve a snapshot
         // that still has pending peer-git nodes (would otherwise miss here) so the
@@ -188,7 +223,7 @@ export function rememberAggregateMeshStatus(
 ): any {
         if (!snapshot || typeof snapshot !== 'object' || snapshot.success !== true || !Array.isArray(snapshot.nodes)) return snapshot;
         const builtAt = Date.now();
-        const next = cloneJsonValue(snapshot);
+        const next = cloneAggregateSnapshot(snapshot);
         const sourceOfTruth = next.sourceOfTruth && typeof next.sourceOfTruth === 'object'
             ? next.sourceOfTruth
             : {};
@@ -204,6 +239,6 @@ export function rememberAggregateMeshStatus(
                 returnedAt: new Date(builtAt).toISOString(),
             },
         };
-        self.aggregateMeshStatusCache.set(meshId, { builtAt, snapshot: cloneJsonValue(next), queueRevision: getMeshQueueRevision(meshId) });
+        self.aggregateMeshStatusCache.set(meshId, { builtAt, snapshot: cloneAggregateSnapshot(next), queueRevision: getMeshQueueRevision(meshId) });
         return next;
 }

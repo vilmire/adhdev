@@ -300,10 +300,18 @@ test('mesh_status groups daemon-wide machine/quota without dropping the per-node
         Object.keys(payload.daemonMachines ?? {}).sort(), ['daemon-A', 'daemon-B', 'daemon-C'],
         'daemonMachines must be keyed by daemonId',
       );
-      assert.deepEqual(
-        Object.keys(payload.daemonQuotas ?? {}).sort(), ['daemon-A', 'daemon-B', 'daemon-C'],
-        'daemonQuotas must be keyed by daemonId',
-      );
+    }
+    assert.deepEqual(
+      Object.keys(verbose.daemonQuotas ?? {}).sort(), ['daemon-A', 'daemon-B', 'daemon-C'],
+      'verbose daemonQuotas must be keyed by daemonId',
+    );
+    // Compact daemonQuotas carries only what the per-node quota string lacks (reset
+    // times, error text, metadata, buckets); this fixture's snapshots have nothing
+    // beyond used% + status ok, so the compact copy is omitted entirely.
+    assert.equal(compact.daemonQuotas, undefined, 'compact daemonQuotas must not repeat the per-node quota strings');
+    // Compact daemonMachines drops the debug identityEvidence (verbose keeps it).
+    for (const m of Object.values(compact.daemonMachines ?? {}) as any[]) {
+      assert.equal(m.identityEvidence, undefined, 'compact daemonMachines must not carry identityEvidence');
     }
 
     // Additive rollout: the per-node fields must NOT be removed yet, since an LLM

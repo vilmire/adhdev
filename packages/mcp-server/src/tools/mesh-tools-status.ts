@@ -14,7 +14,6 @@ import {
     buildMeshMagiActivity,
     compactMagiActivityGroup,
     summarizeMeshMagiActivity,
-    getLastQuotaRanking,
     buildNodeCapabilityExposure,
     buildNodeMachineIdentity,
     collectLiveStatusProbe,
@@ -23,10 +22,8 @@ import {
     compactMeshStatusNode,
     compactNodeSeverity,
     drainCoordinatorPendingEvents,
-    getLatestActiveLaunchFailureBatch,
+    latestActiveLaunchFailureFromEntries,
     summarizeMeshUsage,
-    getMeshStatusMissionSummaries,
-    getMeshStatusMissionsCompact,
     getNodeLaunchReadiness,
     isNoteworthyCompactNode,
     pinnedRepresentativeNodeIds,
@@ -48,7 +45,10 @@ import type {
 // mesh-tools-internal.ts, imported directly from the package like the other
 // daemon-core symbols mesh-tools-internal.ts itself imports.
 import type { MeshLedgerSummary as MeshLedgerSummaryView, MeshSchedulingRuntime, SessionRecoveryContext } from '@adhdev/daemon-core';
-import { activeWorkQuery, recoveryContextQuery, taskStatsQuery } from '../ipc/turn-commands.js';
+import { readRecoveryContexts, readStatusMissionsCompact, readStatusMissionsVerbose } from './mesh-daemon-reads.js';
+import { compactDaemonMachine, compactDaemonQuotaSnapshots, dedupeCompactNodeGitFields, dedupeProviderCapabilityTags } from './mesh-compact.js';
+import { DEFAULT_MESH_POLICY } from '@adhdev/daemon-core';
+import type { LocalMeshNodeEntry } from '@adhdev/daemon-core';
 import {
     applyHeldNodeGitToEntry,
     buildNodeGitStateSummary,
@@ -138,39 +138,21 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     const probeOpts = args.refresh === true ? { refresh: true } : undefined;
 
     await refreshMeshFromDaemon(ctx);
-    const { mesh, transport } = ctx;
+    const { mesh } = ctx;
 
-    // C-W9a: the record summary and the scheduling runtime are computed in the
-    // daemon (`active_work_query`) — the queue and the records never leave it.
     // ONE local read of the coordinator daemon's held node state (git, submodules,
-    // gitObservation, freshness, remote nodes' runtime) runs alongside it. Never
-    // waits on a remote peer; `refresh` only kicks the daemon's background refresh
-    // (see mesh-status-held-git.ts).
-    const [runtimeView, heldNodeState] = await Promise.all([
-        activeWorkQuery(transport, {
-            meshId: mesh.id,
-            compute: false,
-            includeSummary: true,
-            includeSchedulingRuntime: true,
-            mesh: mesh as unknown as Record<string, unknown>,
-        }),
+    // gitObservation, freshness, remote nodes' runtime — `sections: ['nodes']`),
+    // alongside ONE batched recovery-context read for every node. Never waits on a
+    // remote peer; `refresh` only kicks the daemon's background refresh (see
+    // mesh-status-held-git.ts). The record summary, the scheduling runtime and
+    // active work come from ONE active_work_query after the node assembly below
+    // (read-latency pass 2026-09-27: was two active_work_query calls — one shipping
+    // the whole mesh — plus a duplicate ledger_query tail and one
+    // recovery_context_query per node).
+    const [heldNodeState, recoveryByNode] = await Promise.all([
         readCoordinatorHeldNodeState(ctx, { refresh: args.refresh === true }),
+        readRecoveryContexts(ctx, mesh.nodes.map(n => n.id)).catch(() => new Map<string, Record<string, unknown>>()),
     ]);
-    const ledgerSummary = runtimeView.summary as unknown as MeshLedgerSummaryView;
-
-    // Scheduling-runtime projection (load-balancer's live view): tie-break strategy,
-    // global parallel caps + consumption, and per-node load / priority / provider caps
-    // with structured "why this node can't take more write work" reasons. Derived from
-    // the mesh config + a queue snapshot (read-only) — never drives a scheduling
-    // decision, only exposes the picture the claim path acts on. Computed once so each
-    // node entry below can attach its slice and the response can carry the mesh rollup.
-    const schedulingRuntime = runtimeView.schedulingRuntime as unknown as MeshSchedulingRuntime;
-    const schedulingByNode = new Map(schedulingRuntime.nodes.map(n => [n.nodeId, n]));
-
-    // MESH-STATUS-LOCAL-CHATTER: one ledgerQuery(tail: 200), shared by every node's
-    // launch-failure check below, instead of each node in the Promise.all issuing
-    // its own identical tail-200 query (getLatestActiveLaunchFailureBatch).
-    const activeLaunchFailureByNode = await getLatestActiveLaunchFailureBatch(ctx, mesh.nodes.map(n => n.id)).catch(() => new Map<string, Record<string, unknown> | null>());
 
     // Assemble all nodes in parallel — held git (above) + session collection per node.
     //
@@ -207,44 +189,6 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             ...buildNodeCapabilityExposure(node),
         };
 
-        // Per-node scheduling runtime (load, priority, provider caps, claim-block reasons).
-        // Full detail is a dashboard/verbose concern; in compact mode it repeats per node
-        // and would inflate the LLM payload past its byte budget, so compact keeps only the
-        // two scalars a coordinator needs to reason about load (current load + cap-reached).
-        // The mesh-level scheduling rollup (strategy/global caps) is always present below.
-        const nodeScheduling = schedulingByNode.get(node.id);
-        if (nodeScheduling) {
-            // Drop the redundant nodeId — the entry already carries it.
-            const { nodeId: _omit, ...rest } = nodeScheduling;
-            entry.scheduling = compact
-                ? { load: rest.load, capReached: rest.capReached }
-                : rest;
-        }
-
-        // OBSERVABILITY (quota-ranking): the mesh's last quota-ranking decision
-        // for this node, overwritten on every claim — so a coordinator who was
-        // not tailing logs at dispatch time can still see WHY the current
-        // provider won (or that this claim ADOPTED an existing session without
-        // ranking anything — the idle-drain/event-driven claim paths never run
-        // the ranking loop; see mesh-quota-routing.ts LastQuotaRankingRecord).
-        // Present in both compact and verbose: it is one small object, already
-        // bounded to the mesh's node count, not a per-call cost like the
-        // scheduling projection above.
-        //
-        // ★Since 2026-08-20 this also carries `taskId` and `rationale` — the
-        // winner's fitness score plus each beaten candidate and why it lost.
-        // Before that, the quota ORDER was visible here but the fitness scores
-        // behind it were not, and they existed only in the task_dispatched
-        // ledger payload that just one tool (mesh_task_history) reads. Asked
-        // "what were the scores and why?", a coordinator had nothing to read
-        // and answered from a back-derived estimate — twice, wrongly. The
-        // rationale is a bounded summary (<=4 losers), not a copy of the
-        // ledger's full selectionTrajectory, so the per-node cost stays small.
-        const lastQuotaRanking = getLastQuotaRanking(node.id);
-        if (lastQuotaRanking) {
-            entry.scheduling = { ...(entry.scheduling ?? {}), lastQuotaRanking };
-        }
-
         // COORDINATOR-HELD NODE GIT (owner principle 2026-09-26): this tool no longer
         // probes each node's git_status over P2P on the request path. Git, submodules,
         // quota facts and freshness come from the coordinator daemon's held node
@@ -257,59 +201,6 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             held: heldNode,
             heldStateError: heldNodeState.error,
         });
-
-        // Recovery Hints & Next-step reporting
-        const recoveryContext = await recoveryContextQuery(transport, { meshId: mesh.id, nodeId: node.id })
-            .then((r) => r.context as unknown as SessionRecoveryContext)
-            .catch(() => ({ consecutiveNodeFailures: 0 } as SessionRecoveryContext));
-        if (recoveryContext.consecutiveNodeFailures > 0) {
-            entry.recoveryHints = {
-                consecutiveFailures: recoveryContext.consecutiveNodeFailures,
-                lastTaskMessage: typeof recoveryContext.lastTaskMessage === 'string'
-                    ? recoveryContext.lastTaskMessage.slice(0, 100) + (recoveryContext.lastTaskMessage.length > 100 ? '…' : '')
-                    : recoveryContext.lastTaskMessage,
-                advice: recoveryContext.advice,
-                retryRecommended: recoveryContext.retryRecommended,
-            };
-        }
-
-        const activeLaunchFailure = activeLaunchFailureByNode.get(node.id) ?? null;
-        if (activeLaunchFailure && node.isLocalWorktree) {
-            entry.health = 'degraded';
-            entry.degradedReason = 'worktree_launch_failed';
-            entry.launchReady = false;
-            entry.launchBlockedReason = activeLaunchFailure.code || 'mesh_launch_failed';
-            entry.launchBlockedMessage = activeLaunchFailure.error || 'Previous worktree session launch failed';
-            entry.lastLaunchFailure = activeLaunchFailure;
-        }
-
-        const nextStepHints: string[] = [];
-        if (entry.degradedReason === 'worktree_launch_failed') {
-            nextStepHints.push(`Retry mesh_launch_session(node_id: "${node.id}") after daemon mesh transport/P2P is healthy.`);
-            nextStepHints.push(`If retry is not desired, cleanup the orphan worktree node with mesh_remove_node(node_id: "${node.id}").`);
-        } else if (entry.health === 'online' && node.isLocalWorktree) {
-            nextStepHints.push(`Merge worktree to base via mesh_refine_node(node_id: "${node.id}")`);
-        } else if (entry.health === 'dirty') {
-            nextStepHints.push(`Commit changes via mesh_checkpoint(node_id: "${node.id}", message: "...")`);
-        } else if (entry.health === 'degraded' && entry.error?.includes('git')) {
-            nextStepHints.push('Initialize git repository or check workspace path.');
-        }
-
-        if (entry.branchConvergence?.needsConvergence === true && entry.branchConvergence.nextStep) {
-            nextStepHints.push(String(entry.branchConvergence.nextStep));
-        }
-
-        if (recoveryContext.consecutiveNodeFailures > 0) {
-            if (recoveryContext.retryRecommended) {
-                nextStepHints.push(`Retry task on this node or launch a fresh session.`);
-            } else {
-                nextStepHints.push(`Consider reassigning work to a different node.`);
-            }
-        }
-
-        if (nextStepHints.length > 0) {
-            entry.nextStepHints = nextStepHints;
-        }
 
         // Related repos are not part of the coordinator-held state: a remote node's
         // related repo is listed without a live probe (mesh_git_status reads it live).
@@ -406,7 +297,34 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     // dispatches and records (+ turn outcomes); the inputs come back only for the
     // transcript-reconcile pass below. buildMeshActiveWork never reads `task.input`
     // (MESH-IMAGE-DISPATCH), and no queue row reaches this response from here.
-    const activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: results, recordTail: 200, includeInputs: true });
+    const activeWorkView = await readActiveWorkFromDaemon(ctx, {
+        nodes: results,
+        recordTail: 200,
+        includeInputs: true,
+        includeSummary: true,
+        includeSchedulingRuntime: true,
+    });
+    const ledgerSummary = activeWorkView.summary as unknown as MeshLedgerSummaryView;
+    // Scheduling-runtime projection (load-balancer's live view): tie-break strategy,
+    // global parallel caps + consumption, and per-node load / priority / provider caps
+    // with structured "why this node can't take more write work" reasons. Derived in
+    // the daemon from the mesh config + its queue (read-only) — never drives a
+    // scheduling decision, only exposes the picture the claim path acts on.
+    const schedulingRuntime = (activeWorkView.schedulingRuntime ?? { nodes: [] }) as unknown as MeshSchedulingRuntime;
+    const schedulingByNode = new Map((schedulingRuntime.nodes ?? []).map(n => [n.nodeId, n]));
+    // The same record tail (200) the launch-failure check used to re-read with its
+    // own ledger_query — one window, shared.
+    const recordTail = activeWorkView.records;
+    for (const entry of results as any[]) {
+        const node = mesh.nodes.find(n => n.id === entry.nodeId);
+        if (!node) continue;
+        applyNodeSchedulingAndHints(entry, node, {
+            compact,
+            nodeScheduling: schedulingByNode.get(node.id),
+            recoveryContext: (recoveryByNode.get(node.id) ?? { consecutiveNodeFailures: 0 }) as unknown as SessionRecoveryContext,
+            activeLaunchFailure: latestActiveLaunchFailureFromEntries(recordTail, node.id),
+        });
+    }
     // Idle direct dispatches: transcript evidence is gathered in the BACKGROUND
     // (mesh-status-background.ts) — it may read a remote worker's transcript, and
     // its only effect is a terminal the daemon's turn ledger commits, which the
@@ -421,7 +339,7 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     // activeWork.summary), passed through untouched — verbose only, as its own
     // top-level block. Hoisted OUT of activeWorkSummary in both modes so the
     // compact poll does not carry it and verbose does not carry it twice.
-    const graphUsage = pickDaemonGraphUsage(activeWorkEvidence.summary, runtimeView.summary, runtimeView, ctx.mesh);
+    const graphUsage = pickDaemonGraphUsage(activeWorkEvidence.summary, activeWorkView.summary, activeWorkView, ctx.mesh);
     const activeWorkSummaryForResponse = withoutGraphUsage(activeWorkEvidence.summary);
     const staleDirectWorkSummary = buildCompactStaleDirectWorkSummary(activeWorkEvidence.staleDirectWork, {
         note: activeWorkEvidence.staleDirectWorkNote,
@@ -525,13 +443,20 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     for (const entry of results as any[]) {
         const daemonId = typeof entry?.daemonId === 'string' && entry.daemonId ? entry.daemonId : '';
         if (!daemonId) continue;
-        if (entry?.machine && !(daemonId in daemonMachines)) daemonMachines[daemonId] = entry.machine;
+        // identityEvidence is debug provenance: verbose only.
+        if (entry?.machine && !(daemonId in daemonMachines)) daemonMachines[daemonId] = compact ? compactDaemonMachine(entry.machine) : entry.machine;
         // Pure-additive freshness annotation: the raw snapshot keeps every field
         // (updatedAt included) and gains computed ageMs/stale so a coordinator
         // never has to subtract epoch ms itself — it doesn't, and a stale
         // boot-refresh snapshot then reads as the current value. `stale` uses
         // the routing gate's own threshold (see mesh-compact.ts).
-        if (entry?.quota && !(daemonId in daemonQuotas)) daemonQuotas[daemonId] = annotateQuotaSnapshotFreshness(entry.quota);
+        // Compact keeps only what the per-node quota string lacks (reset times,
+        // error text, metadata, buckets — compactDaemonQuotaSnapshots); the raw
+        // snapshots + freshness annotation are verbose.
+        if (entry?.quota && !(daemonId in daemonQuotas)) {
+            const grouped = compact ? compactDaemonQuotaSnapshots(entry.quota) : annotateQuotaSnapshotFreshness(entry.quota);
+            if (grouped) daemonQuotas[daemonId] = grouped;
+        }
     }
 
     // Per-daemon failed-upgrade fold. A detached daemon upgrade answers
@@ -715,10 +640,20 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
                 .map((n: any) => {
                     if (!n || typeof n !== 'object') return n;
                     const id = String(n.nodeId);
-                    if (detailedIds.has(id)) return n;
+                    // Final compact de-dup (after ranking/budgeting, which read the
+                    // duplicated fields): keep one copy of each git scalar and drop
+                    // provider tags that repeat providerPriority (mesh-compact.ts).
+                    if (detailedIds.has(id)) {
+                        dedupeCompactNodeGitFields(n);
+                        dedupeProviderCapabilityTags(n);
+                        return n;
+                    }
                     if (keptIds.has(id)) {
                         stubbedNodeCount += 1;
-                        return minimalCompactNode(n);
+                        const stub = minimalCompactNode(n);
+                        dedupeCompactNodeGitFields(stub);
+                        dedupeProviderCapabilityTags(stub);
+                        return stub;
                     }
                     fullyFolded.push(n);
                     return null;
@@ -763,11 +698,17 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     // Exposure-only: buildMeshSchedulingRuntime still computes these internally for
     // maybeAutoLaunchOneQueueSession's own gating; only the response surface changed.
     const { maxParallelTasks: _omitPolicyMaxParallelTasks, ...policyForResponse } = (mesh.policy || {}) as unknown as Record<string, unknown>;
+    // Compact: only the policy keys that differ from the defaults (DEFAULT_MESH_POLICY)
+    // — the rest is the same static block on every poll. Verbose: the full policy.
+    const policyOverrides: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(policyForResponse)) {
+        if (JSON.stringify(value) !== JSON.stringify((DEFAULT_MESH_POLICY as unknown as Record<string, unknown>)[key])) policyOverrides[key] = value;
+    }
     const response: Record<string, unknown> = {
         meshId: mesh.id,
         meshName: mesh.name,
         repoIdentity: mesh.repoIdentity,
-        policy: policyForResponse,
+        policy: compact ? policyOverrides : policyForResponse,
         // Mesh-level scheduling rollup (strategy only — the global cap numbers are
         // deliberately not surfaced here, see the comment above). Per-node detail
         // (load/priority/provider caps/claim-block reasons) lives on each
@@ -777,7 +718,8 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         },
         payloadMode: compact ? 'compact' : 'full',
         refreshedAt: new Date().toISOString(),
-        sourceOfTruth: {
+        // Static provenance prose: verbose only.
+        ...(compact ? {} : { sourceOfTruth: {
             membership: 'coordinator_daemon_live_mesh',
             // Git truth is the coordinator daemon's held node state (member pushes +
             // background refresh; per-node gitObservation says how old). Sessions are
@@ -785,7 +727,7 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             currentStatus: 'coordinator_held_git_and_live_session_probes',
             activeWork: 'mesh_queue_file_and_local_ledger',
             historicalEvidenceOnly: ['recoveryHints', 'ledgerSummary'],
-        },
+        } }),
         ...buildNodeGitStateSummary(results, heldNodeState.error, args.refresh === true),
         nodes: nodesForResponse,
         ...(compact && stubbedNodeCount > 0
@@ -828,7 +770,7 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         ...(compact && activeWorkForResponse.omitted > 0
             ? { activeWorkRowsOmitted: activeWorkForResponse.omitted }
             : {}),
-        ...(compact
+        ...(compact && activeWorkForResponse.omitted > 0
             ? { activeWorkHint: `Compact activeWork rows carry a short taskTitle + dispatch scalars only; full task prompt/summary text is omitted — use mesh_task_history or mesh_status verbose=true. First ${COMPACT_MAX_ACTIVE_WORK_ROWS} rows serialized.` }
             : {}),
         staleDirectWorkSummary,
@@ -888,7 +830,10 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     // stats rollup, and full-detail history) — the backward-compatible escape hatch.
     try {
         if (compact) {
-            const { live, historyFold } = getMeshStatusMissionsCompact(mesh.id);
+            // Computed in the daemon (mission_list_query meshStatusView) — this
+            // process no longer opens the daemon's store to re-read the whole queue
+            // once per live mission.
+            const { live, historyFold } = await readStatusMissionsCompact(ctx);
             // Bound the live-mission detail by byte budget, newest-active first.
             // Overflow folds into foldedMissions so every live id stays addressable.
             const ranked = [...live].sort((a, b) =>
@@ -918,19 +863,11 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             }
             if (historyFold) response.missionsHistory = historyFold;
         } else {
-            const missions = getMeshStatusMissionSummaries(mesh.id, { verbose: true });
-            if (missions.length > 0) {
-                // C-W9c: was in-process `computeMeshMissionStats` per mission; now one
-                // `task_stats_query` IPC round trip per mission (computed in the daemon).
-                response.missions = await Promise.all(missions.map(async mission => {
-                    try {
-                        const { mission: rollup } = await taskStatsQuery(ctx.transport, { meshId: mesh.id, missionId: mission.id, rollup: true });
-                        return { ...mission, ...(rollup ? { stats: rollup } : {}) };
-                    } catch {
-                        return mission;
-                    }
-                }));
-            }
+            // Rows from the daemon's projection; every stats rollup from ONE batched
+            // task_stats_query (was one IPC round trip — and one full queue + record
+            // pass in the daemon — per mission).
+            const missions = await readStatusMissionsVerbose(ctx);
+            if (missions.length > 0) response.missions = missions;
         }
     } catch { /* mission read is best-effort */ }
 
@@ -1023,6 +960,87 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     // blown past it. Budget accounting and final serialization must use the SAME
     // format; keep them in sync if either changes.
     return JSON.stringify(response);
+}
+
+/**
+ * Per-node fields that depend on the daemon's active-work read (scheduling
+ * slice, last quota ranking) and on the record tail / recovery contexts
+ * (launch-failure degradation, recovery hints, next-step hints). Applied after
+ * the node assembly so ONE active_work_query serves all of them.
+ */
+export function applyNodeSchedulingAndHints(entry: any, node: LocalMeshNodeEntry, opts: {
+    compact: boolean;
+    nodeScheduling?: Record<string, any>;
+    recoveryContext: SessionRecoveryContext;
+    activeLaunchFailure: Record<string, unknown> | null;
+}): void {
+    // Per-node scheduling runtime (load, priority, provider caps, claim-block reasons).
+    // Full detail is a dashboard/verbose concern; in compact mode it repeats per node
+    // and would inflate the LLM payload past its byte budget, so compact keeps only the
+    // two scalars a coordinator needs to reason about load (current load + cap-reached).
+    //
+    // OBSERVABILITY (quota-ranking): `lastQuotaRanking` is the mesh's last
+    // quota-ranking decision for this node, overwritten on every claim (winner,
+    // fitness rationale, adopted/claimed/refused outcome — see mesh-quota-routing.ts
+    // LastQuotaRankingRecord). It is recorded by the DAEMON's claim path, so it comes
+    // from the daemon's scheduling runtime; this process's own map was always empty
+    // (the field never appeared before 2026-09-27). Present in both modes.
+    if (opts.nodeScheduling) {
+        const { nodeId: _omit, lastQuotaRanking, ...rest } = opts.nodeScheduling;
+        entry.scheduling = opts.compact
+            ? { load: rest.load, capReached: rest.capReached, ...(lastQuotaRanking ? { lastQuotaRanking } : {}) }
+            : { ...rest, ...(lastQuotaRanking ? { lastQuotaRanking } : {}) };
+    }
+
+    const recoveryContext = opts.recoveryContext;
+    if (recoveryContext.consecutiveNodeFailures > 0) {
+        entry.recoveryHints = {
+            consecutiveFailures: recoveryContext.consecutiveNodeFailures,
+            lastTaskMessage: typeof recoveryContext.lastTaskMessage === 'string'
+                ? recoveryContext.lastTaskMessage.slice(0, 100) + (recoveryContext.lastTaskMessage.length > 100 ? '…' : '')
+                : recoveryContext.lastTaskMessage,
+            advice: recoveryContext.advice,
+            retryRecommended: recoveryContext.retryRecommended,
+        };
+    }
+
+    const activeLaunchFailure = opts.activeLaunchFailure;
+    if (activeLaunchFailure && node.isLocalWorktree) {
+        entry.health = 'degraded';
+        entry.degradedReason = 'worktree_launch_failed';
+        entry.launchReady = false;
+        entry.launchBlockedReason = activeLaunchFailure.code || 'mesh_launch_failed';
+        entry.launchBlockedMessage = activeLaunchFailure.error || 'Previous worktree session launch failed';
+        entry.lastLaunchFailure = activeLaunchFailure;
+    }
+
+    const nextStepHints: string[] = [];
+    if (entry.degradedReason === 'worktree_launch_failed') {
+        nextStepHints.push(`Retry mesh_launch_session(node_id: "${node.id}") after daemon mesh transport/P2P is healthy.`);
+        nextStepHints.push(`If retry is not desired, cleanup the orphan worktree node with mesh_remove_node(node_id: "${node.id}").`);
+    } else if (entry.health === 'online' && node.isLocalWorktree) {
+        nextStepHints.push(`Merge worktree to base via mesh_refine_node(node_id: "${node.id}")`);
+    } else if (entry.health === 'dirty') {
+        nextStepHints.push(`Commit changes via mesh_checkpoint(node_id: "${node.id}", message: "...")`);
+    } else if (entry.health === 'degraded' && entry.error?.includes('git')) {
+        nextStepHints.push('Initialize git repository or check workspace path.');
+    }
+
+    if (entry.branchConvergence?.needsConvergence === true && entry.branchConvergence.nextStep) {
+        nextStepHints.push(String(entry.branchConvergence.nextStep));
+    }
+
+    if (recoveryContext.consecutiveNodeFailures > 0) {
+        if (recoveryContext.retryRecommended) {
+            nextStepHints.push(`Retry task on this node or launch a fresh session.`);
+        } else {
+            nextStepHints.push(`Consider reassigning work to a different node.`);
+        }
+    }
+
+    if (nextStepHints.length > 0) {
+        entry.nextStepHints = nextStepHints;
+    }
 }
 
 export async function meshListNodes(ctx: MeshContext): Promise<string> {

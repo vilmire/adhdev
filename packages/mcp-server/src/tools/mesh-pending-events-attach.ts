@@ -1,6 +1,7 @@
 /**
  * Mesh-mode CallTool post-processing: coordinator notices on EVERY mesh tool
- * response.
+ * response, AND the single choke point that minifies every mesh tool's JSON
+ * text before it goes out over stdio.
  *
  * Coordinator notices (worker completion / failure / blocked / late report /
  * false idle / stall …) are durable `turn.notify` rows on the daemon; an
@@ -16,36 +17,58 @@
  * result is a JSON object without the field, drains once and merges the events
  * in. Non-JSON results are never drained: an acked notice with nowhere to go
  * would be consumed unseen.
+ *
+ * ★Minification (2026-09-27 tools/list context-cost diet): individual tool
+ * handlers across ~25 files build their own response text with
+ * `JSON.stringify(x, null, 2)` (pretty-printed, historically for human
+ * readability when this was debugged by eye). Since EVERY mesh tool response
+ * passes through this wrapper (server.ts's mesh-mode CallTool handler calls
+ * only `runMeshToolWithPendingEvents`, never returns a handler's text
+ * directly — see the "server.ts routes every tool through" test below), this
+ * is the one place a blanket re-serialize can normalize the wire format
+ * without touching those ~25 handler files. Any text that parses as a JSON
+ * object or array is re-stringified with NO indentation (cuts the transmitted
+ * bytes by roughly a third to a half versus 2-space indentation); anything
+ * that fails to parse (plain text, an error string) is passed through
+ * unchanged, exactly as the pre-existing "non-JSON is never touched" rule for
+ * event-attachment already required.
  */
 import { drainCoordinatorPendingEvents, type MeshContext } from './mesh-tools-internal.js';
 
-function parseJsonObject(text: string): Record<string, unknown> | null {
+function parseJson(text: string): unknown {
     const trimmed = text.trimStart();
-    if (!trimmed.startsWith('{')) return null;
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return undefined;
     try {
-        const parsed = JSON.parse(text);
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+        return JSON.parse(text);
     } catch {
-        return null;
+        return undefined;
     }
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 /**
  * Merge drained coordinator events into `text` unless the tool already drained
  * during this call (`drainCountBefore` differs) or already carries the field.
+ * Also minifies `text` when it parses as JSON (object or array), whether or
+ * not events are attached — see the module doc comment.
  */
 export async function attachPendingCoordinatorEventsToResponse(
     ctx: MeshContext,
     text: string,
     drainCountBefore: number,
 ): Promise<string> {
-    if ((ctx.noticeDrainCount ?? 0) !== drainCountBefore) return text;
-    const parsed = parseJsonObject(text);
-    if (!parsed || Object.prototype.hasOwnProperty.call(parsed, 'pendingCoordinatorEvents')) return text;
+    const parsed = parseJson(text);
+    if (parsed === undefined) return text; // not JSON — never touched (nowhere to attach, nothing to minify)
+    if ((ctx.noticeDrainCount ?? 0) !== drainCountBefore || !isJsonObject(parsed) || Object.prototype.hasOwnProperty.call(parsed, 'pendingCoordinatorEvents')) {
+        // No event-attachment for this call, but still minify.
+        return JSON.stringify(parsed);
+    }
     const events = await drainCoordinatorPendingEvents(ctx);
-    if (events.length === 0) return text;
-    const pretty = /\n/.test(text);
-    return JSON.stringify({ ...parsed, pendingCoordinatorEvents: events }, null, pretty ? 2 : undefined);
+    if (events.length === 0) return JSON.stringify(parsed);
+    return JSON.stringify({ ...parsed, pendingCoordinatorEvents: events });
 }
 
 /** Run one mesh tool and attach undrained coordinator notices to its result. */

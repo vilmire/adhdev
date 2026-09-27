@@ -65,6 +65,11 @@ export async function readCoordinatorHeldNodeState(
     try {
         raw = await ctx.transport.command('mesh_status', {
             meshId: ctx.mesh.id,
+            // Only the node section is read here. Without it the daemon answers its
+            // whole dashboard payload — 97% queue rows (5.05 of 5.18 MB measured on
+            // the preview daemon) — and deep-clones it on every cache hit. An older
+            // daemon ignores the key; the node read below is the same either way.
+            sections: ['nodes'],
             ...(opts.refresh === true ? { refresh: true } : {}),
         });
     } catch (error: any) {

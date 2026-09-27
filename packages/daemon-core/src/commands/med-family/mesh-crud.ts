@@ -223,6 +223,23 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
 
         const requireDirectPeerTruth = args?.requireDirectPeerTruth === true;
         const localMachineId = getMachineId() || '';
+        // MCP read-latency pass: a membership-only read (the MCP's per-tool-call
+        // snapshot refresh) skips the local git hydration and the per-node git blob
+        // entirely — see mesh/mesh-membership-projection.ts. Not combinable with a
+        // direct-truth requirement (that IS a git question), which keeps the full path.
+        if (args?.membershipOnly === true && !requireDirectPeerTruth) {
+            const { projectMeshMembershipOnly } = await import('../../mesh/mesh-membership-projection.js');
+            const { buildFreshLocalNodeFacts } = await import('../../mesh/mesh-node-identity.js');
+            return {
+                success: true,
+                mesh: projectMeshMembershipOnly(meshRecord.mesh, {
+                    localMachineId,
+                    localDaemonId: ctx.deps.statusInstanceId,
+                    localNodeFacts: buildFreshLocalNodeFacts,
+                }),
+                membershipOnly: true,
+            };
+        }
         // Remote nodes carry the coordinator-HELD git (member pushes), never a live
         // fan-out: `refresh` / `forceRefresh` no longer probe peers here — a member
         // pushes its state to the coordinator, which answers from the store.
