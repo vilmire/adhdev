@@ -730,6 +730,7 @@ function mergeRuntimeSnapshot(base, record, opts) {
   if (typeof opts.sinceSeq === "number" || !opts.runtimeText) {
     return {
       ...base,
+      text: withReplayResyncPreamble(base.text, opts.sinceSeq),
       cols,
       rows
     };
@@ -741,6 +742,13 @@ function mergeRuntimeSnapshot(base, record, opts) {
     cols,
     rows
   };
+}
+var REPLAY_RESYNC_PREAMBLE = "\x1B[2J\x1B[H";
+function withReplayResyncPreamble(text, sinceSeq) {
+  if (typeof sinceSeq === "number" && sinceSeq > 0) return text;
+  if (!text) return text;
+  if (text.startsWith(REPLAY_RESYNC_PREAMBLE)) return text;
+  return `${REPLAY_RESYNC_PREAMBLE}${text}`;
 }
 
 // src/server.ts
