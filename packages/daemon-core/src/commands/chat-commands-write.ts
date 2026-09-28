@@ -211,6 +211,42 @@ async function submitCliChat(h: CommandHelpers, args: any, input: InputEnvelope,
         // bubble by TEXT; find the id this service parked that text under.
         messageId = await service.findParkedMessageIdByText(sessionKey, input.textFallback);
         if (messageId) LOG.debug('Command', `[send_chat] legacy text-keyed ${policy.mode} resolved to parked ${messageId}`);
+        else {
+            // ★ DUPLICATE-GATE-REARM (live 2026-09-24, darwin): do NOT fall
+            // through to a freshly minted id here. An out-of-band policy means
+            // "deliver the body the owner is already looking at" — it is a
+            // RESUBMIT under a new policy, never a new logical send. Minting a
+            // new identity for it bypasses every dedupe layer at once, because
+            // all three are keyed by `messageId`: the settled map has never
+            // seen the new id (so the `delivered` check in `run()` cannot
+            // fire), the driver FIFO does not hold it (so `parked` is false),
+            // and `splitWrite` therefore takes the NOT-parked branch and writes
+            // a FRESH body — while the original entry stays parked and the idle
+            // drain writes it again seconds later. That is the observed
+            // "send suppressed — duplicate" followed 4s later by a second
+            // mid-generation write of the same body: one press, two turns.
+            //
+            // Failing closed is the correct answer and costs nothing real. The
+            // only way to reach here is an out-of-band press whose body this
+            // daemon has no record of parking — the FIFO entry was already
+            // drained, discarded by a session teardown, or belongs to a daemon
+            // that has since restarted. In every one of those cases there is no
+            // parked body to promote, so the honest outcome is to say so rather
+            // than to invent one. A caller that genuinely wants a NEW message
+            // sent says so by using `queue` (or by minting its own id), and
+            // that path is untouched below.
+            LOG.info(
+                'Command',
+                `[send_chat] ${policy.mode} refused — no parked body matched (session ${sessionKey}); `
+                + 'refusing rather than minting a new messageId, which would bypass the messageId dedupe and double-send',
+            );
+            return {
+                success: false,
+                sent: false,
+                reason: 'not_parked',
+                error: 'That message is no longer waiting to be sent — it was already delivered or the queue was cleared.',
+            };
+        }
     }
     if (!messageId) messageId = mintLegacyMessageId();
     const outcome = await service.submit({
