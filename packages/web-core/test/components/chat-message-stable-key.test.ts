@@ -300,3 +300,35 @@ describe('buildChatMessageStableKeys — same-content sibling collision', () => 
         expect(after).toEqual(before.slice(1))
     })
 })
+
+/**
+ * Daemon message identity (design 2026-09-28 §3.3): read_chat bubbles carry an
+ * opaque, ledger-issued `messageId`. It is unique per bubble and stable across
+ * streaming growth, so it must be the WHOLE key — two sibling bubbles of one
+ * turn that look identical must not collide, and a growing bubble must not
+ * change key (which would remount it on every tick).
+ */
+describe('getChatMessageStableKey — daemon messageId', () => {
+    const TURN = 'claude-cli:native-turn:sess:3'
+
+    it('keys two identical-looking sibling bubbles of one turn apart by messageId', () => {
+        const a = { role: 'assistant', content: 'ok', _turnKey: TURN, receivedAt: 1000, messageId: 'd.abc123.7' }
+        const b = { role: 'assistant', content: 'ok', _turnKey: TURN, receivedAt: 1000, messageId: 'd.abc123.8' }
+        const keys = buildChatMessageStableKeys([a, b] as unknown as ChatMessage[])
+        expect(keys[0]).not.toBe(keys[1])
+        expect(keys.some((key) => key.includes('|dup:'))).toBe(false)
+    })
+
+    it('keeps the key of a streaming bubble while its content grows', () => {
+        const base = { role: 'assistant', _turnKey: TURN, messageId: 'n.1a2b3c4d.12.0', bubbleId: 'bubble:v3:hash-changes-every-tick' }
+        const early = getChatMessageStableKey({ ...base, content: 'Work' } as unknown as ChatMessage, 0)
+        const later = getChatMessageStableKey({ ...base, content: 'Working on it', bubbleId: 'bubble:v3:other-hash' } as unknown as ChatMessage, 5)
+        expect(later).toBe(early)
+        expect(early).toBe('mid:n.1a2b3c4d.12.0')
+    })
+
+    it('leaves messages without a messageId on the existing composite', () => {
+        const legacy = { role: 'assistant', content: 'x', id: 'abc' } as ChatMessage
+        expect(getChatMessageStableKey(legacy, 0)).toBe('id:abc')
+    })
+})

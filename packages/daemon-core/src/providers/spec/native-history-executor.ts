@@ -45,6 +45,7 @@ import {
 } from '../native-history/transcript-claim-registry.js';
 import type { NativeTurnTerminalMarker } from '../../chat/native-turn-signal.js';
 import { readJsonlLines } from './native-history-jsonl-cache.js';
+import { recordBlockSource } from '../../chat/message-source-address.js';
 import {
     projectToolBlock as projectToolBlockImpl,
     TOOL_CALL_SUMMARY_MAX,
@@ -510,7 +511,7 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
         }
         const shape = shapes.pick(rec);
         if (!shape) continue;
-        for (const msg of projectMessages(rec, shape.map, i, lines.length, mtime)) {
+        for (const msg of projectMessages(rec, shape.map, i, lines.length, mtime, providerSessionId || requested || sourcePath)) {
             if (transcriptWorkspace) msg.workspace = transcriptWorkspace;
             messages.push(msg);
         }
@@ -2066,7 +2067,20 @@ export function jsonPathGet(record: any, expr: string): unknown {
  * or tool-result content block. Without `tools`, behaviour is identical to
  * the old single-message projection: text-only, tool blocks dropped.
  */
-function projectMessages(record: any, map: NativeHistoryMessageMap, index: number, total: number, sourceMtimeMs: number): NativeHistoryMessage[] {
+function projectMessages(
+    record: any,
+    map: NativeHistoryMessageMap,
+    index: number,
+    total: number,
+    sourceMtimeMs: number,
+    /**
+     * Lineage (history session id) for `_src` stamping — passed only by the
+     * jsonl transcript reader, whose `index` is an append-stable record index.
+     * Omitted (no stamping) for summaries and for sqlite rows, whose position
+     * is a query-order ordinal.
+     */
+    sourceLineage?: string,
+): NativeHistoryMessage[] {
     const roleRaw = jsonPathGet(record, map.role);
     const role = normalizeRole(roleRaw);
 
@@ -2103,7 +2117,7 @@ function projectMessages(record: any, map: NativeHistoryMessageMap, index: numbe
             blockIndex: -1,
         });
         if (recordTool) {
-            out.push({ ...recordTool, receivedAt });
+            out.push(withRecordSource({ ...recordTool, receivedAt }, sourceLineage, index, -1));
             return out;
         }
     }
@@ -2118,7 +2132,14 @@ function projectMessages(record: any, map: NativeHistoryMessageMap, index: numbe
 
     const contentRaw = jsonPathGet(record, map.content);
     const content = cleanContent(stringifyContent(contentRaw), map);
-    if (content) out.push(workspace ? { role, content, receivedAt, kind, workspace } : { role, content, receivedAt, kind });
+    if (content) {
+        out.push(withRecordSource(
+            workspace ? { role, content, receivedAt, kind, workspace } : { role, content, receivedAt, kind },
+            sourceLineage,
+            index,
+            -1,
+        ));
+    }
 
     // Block-nested tool bubbles are ordered just after the text bubble of the
     // same record by nudging receivedAt forward a millisecond per bubble, so a
@@ -2136,13 +2157,24 @@ function projectMessages(record: any, map: NativeHistoryMessageMap, index: numbe
                 blockIndex,
             });
             if (tool) {
-                out.push({ ...tool, receivedAt: receivedAt + nudge });
+                out.push(withRecordSource({ ...tool, receivedAt: receivedAt + nudge }, sourceLineage, index, blockIndex));
                 nudge += 1;
             }
         }
     }
 
     return out;
+}
+
+/**
+ * Stamp the identity ledger's native address (`n.<L>.<recordIndex>.<blockIndex+1>`)
+ * when a lineage is known. The text bubble of a record is part 0, exactly like a
+ * record-level tool bubble — the two are mutually exclusive per record.
+ */
+function withRecordSource(message: NativeHistoryMessage, lineage: string | undefined, recordIndex: number, blockIndex: number): NativeHistoryMessage {
+    if (!lineage) return message;
+    const src = recordBlockSource(lineage, recordIndex, blockIndex);
+    return src ? { ...message, _src: src } : message;
 }
 
 /** Apply content_strip / content_unwrap tag surgery and trim. */

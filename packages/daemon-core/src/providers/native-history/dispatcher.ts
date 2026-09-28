@@ -33,6 +33,7 @@ import {
     isAntigravityConversationClaimedByOther,
 } from './antigravity-claim-registry.js';
 import { isSafeFilename } from './fs-utils.js';
+import { type MessageSourceAddress, readMessageSourceAddress } from '../../chat/message-source-address.js';
 
 export type ReaderId = 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'hermes-cli' | 'grok-cli';
 
@@ -83,6 +84,12 @@ export interface NativeHistoryResult {
          * name into `content` instead.
          */
         toolName?: string;
+        /**
+         * Daemon-internal source address for the message identity ledger,
+         * stamped by the reader (`chat/message-source-address.ts`). Carried by
+         * name like `toolBlockRef`; never leaves the daemon.
+         */
+        _src?: MessageSourceAddress;
     }>;
     providerSessionId?: string;
     sourcePath: string;
@@ -147,6 +154,12 @@ function toNativeHistoryMessage(m: any, workspace: string): NativeHistoryResult[
         // wire by accident.
         ...(typeof m.senderName === 'string' && m.senderName ? { senderName: m.senderName } : {}),
         ...(typeof m.toolName === 'string' && m.toolName ? { toolName: m.toolName } : {}),
+        // The reader's source address for the message identity ledger. Same
+        // allow-list rule: re-read shape-checked, never spread.
+        ...(() => {
+            const src = readMessageSourceAddress(m._src);
+            return src ? { _src: src } : {};
+        })(),
     };
 }
 

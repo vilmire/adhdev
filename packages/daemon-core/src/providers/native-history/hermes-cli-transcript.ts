@@ -21,6 +21,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { loadBetterSqlite3 } from '../../system/load-better-sqlite3.js';
 import { oneLine, TOOL_CALL_SUMMARY_MAX, TOOL_RESULT_SUMMARY_MAX } from '../spec/native-history-tool-blocks.js';
+import { type MessageSourceAddress, nativeSourceAddress, rowIdAddress } from '../../chat/message-source-address.js';
 import {
     foldUsageRecords,
     makeUsage,
@@ -36,6 +37,12 @@ export interface NativeHistoryMessage {
     kind?: string;
     /** TOOL-LABEL: the tool(s) a tool-call bubble invoked — the dashboard card label. */
     toolName?: string;
+    /**
+     * Daemon-internal source address for the message identity ledger
+     * (`chat/message-source-address.ts`): `n.<L>.h<messages.id>.0`, one bubble
+     * per row. Never leaves the daemon.
+     */
+    _src?: MessageSourceAddress;
 }
 
 export interface NativeHistorySession {
@@ -147,6 +154,12 @@ function loadMessagesForSession(db: any, sessionId: string): NativeHistoryMessag
          ORDER BY timestamp ASC, id ASC`,
     ).all(...clusterIds);
     const out: NativeHistoryMessage[] = [];
+    // The lineage is the pinned anchor: row ids are unique across the whole
+    // cluster, so every sub-session's rows address under one lineage.
+    const rowSource = (rowId: unknown): { _src?: MessageSourceAddress } => {
+        const src = nativeSourceAddress(sessionId, rowIdAddress(rowId, 0));
+        return src ? { _src: src } : {};
+    };
     for (const r of rows) {
         const role = normalizeHermesRole(r.role);
         const receivedAt = Math.floor(Number(r.timestamp) * 1000);
@@ -161,6 +174,7 @@ function loadMessagesForSession(db: any, sessionId: string): NativeHistoryMessag
             if (!projected) continue;
             out.push({
                 id: String(r.id),
+                ...rowSource(r.id),
                 role: 'assistant',
                 content: projected.content,
                 receivedAt,
@@ -178,6 +192,7 @@ function loadMessagesForSession(db: any, sessionId: string): NativeHistoryMessag
             if (!result) continue;
             out.push({
                 id: String(r.id),
+                ...rowSource(r.id),
                 role: 'assistant',
                 content: `↘ ${result}`,
                 receivedAt,
@@ -187,6 +202,7 @@ function loadMessagesForSession(db: any, sessionId: string): NativeHistoryMessag
         }
         out.push({
             id: String(r.id),
+            ...rowSource(r.id),
             role,
             content: text,
             receivedAt,

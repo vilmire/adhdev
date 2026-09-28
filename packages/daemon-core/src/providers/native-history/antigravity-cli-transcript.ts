@@ -86,6 +86,7 @@ import {
   TOOL_RESULT_SUMMARY_MAX,
 } from '../spec/native-history-tool-blocks.js';
 import type { NativeHistoryToolBlockRef } from '../spec/native-history-types.js';
+import { type MessageSourceAddress, recordBlockSource } from '../../chat/message-source-address.js';
 
 export interface NativeHistoryMessage {
   ts: string;
@@ -110,6 +111,14 @@ export interface NativeHistoryMessage {
    * `readAntigravityToolBlockAt`.
    */
   toolBlockRef?: NativeHistoryToolBlockRef;
+  /**
+   * Daemon-internal source address for the message identity ledger
+   * (`chat/message-source-address.ts`). Stamped on the .db path only:
+   * `n.<L>.<steps.idx>.<part>` (prose part 0, tool call k → part k+1). The
+   * .pb / history.jsonl / brain fallbacks have no stable address and fall to
+   * the aligner. Never leaves the daemon.
+   */
+  _src?: MessageSourceAddress;
 }
 
 export interface NativeHistorySession {
@@ -1197,6 +1206,10 @@ function parseConversationDb(
       msg.toolBlockRef = { sourceMtimeMs: sealMtimeMs, recordIndex, blockIndex };
     }
     if (normalizedWorkspace) msg.workspace = normalizedWorkspace;
+    // A step row grows in place (status 8→3) under the SAME idx, which is
+    // exactly why its address, not its content, is the identity.
+    const src = recordBlockSource(sessionId, recordIndex, blockIndex);
+    if (src) msg._src = src;
     messages.push(msg);
   };
 
@@ -1244,6 +1257,8 @@ function parseConversationDb(
         historySessionId: sessionId,
       };
       if (normalizedWorkspace) msg.workspace = normalizedWorkspace;
+      const userSrc = recordBlockSource(sessionId, row.idx, -1);
+      if (userSrc) msg._src = userSrc;
       messages.push(msg);
     } else if (row.step_type === AGY_STEP_TYPE_MODEL) {
       // (AGY-TOOL-BUBBLES) A model step that calls tools carries them at
@@ -1309,6 +1324,8 @@ function parseConversationDb(
         historySessionId: sessionId,
       };
       if (normalizedWorkspace) msg.workspace = normalizedWorkspace;
+      const answerSrc = recordBlockSource(sessionId, row.idx, -1);
+      if (answerSrc) msg._src = answerSrc;
       messages.push(msg);
       emitToolCalls();
     } else if (includeTools) {

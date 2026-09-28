@@ -205,7 +205,18 @@ export function getToolExpandStateKey(message: ChatMessage): string | null {
  */
 export function getChatMessageStableKey(message: ChatMessage, index: number): string {
     void index;
-    const dashboardMessage = message as ChatMessage & { _localId?: string; _turnKey?: string }
+    const dashboardMessage = message as ChatMessage & { _localId?: string; _turnKey?: string; messageId?: string }
+
+    // ★ The daemon's message identity ledger (daemon-core
+    // `chat/message-identity-ledger.ts`, design 2026-09-28 §3.3) stamps every
+    // read_chat bubble with an opaque `messageId` that is unique per bubble
+    // within the session and stable across re-reads, streaming growth, PTY
+    // re-wraps and source handoffs. When present it IS the key — no composite,
+    // no turn-grained fallback — which is what retires the turnKey collision
+    // described above for the live lane.
+    if (typeof dashboardMessage.messageId === 'string' && dashboardMessage.messageId) {
+        return `mid:${dashboardMessage.messageId}`
+    }
     const content = stringifyTextContent(message.content, { joiner: '\n' });
 
     // Position-independent stable identity, most-authoritative first.

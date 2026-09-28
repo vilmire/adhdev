@@ -25,6 +25,7 @@ import type { InputEnvelope } from './contracts.js';
 import { buildCliInputAckText } from './cli-provider-input-prompt.js';
 import { shortHash } from '../system/hash.js';
 import { USER_INPUT_ACK_DEDUP_WINDOW_MS } from './cli-provider-instance-types.js';
+import { runtimeSourceAddress } from '../chat/message-source-address.js';
 
 /** The narrow surface of CliProviderInstance this cluster reads/writes. */
 export interface RuntimeMessagesHost {
@@ -100,9 +101,13 @@ export function appendRuntimeMessage(
     if (!normalizedContent && (!Array.isArray(normalizedMessage.content) || normalizedMessage.content.length === 0)) return;
     if (host.runtimeMessages.some((entry) => entry.key === dedupKey)) return;
 
+    // Runtime rows are addressed by their local dedup key (design 2026-09-28
+    // §3.1): the identity ledger mints a `d.*` id for the row once, and hands
+    // it to the native user record that replaces a runtime echo (§3.4).
+    const src = runtimeSourceAddress(dedupKey);
     host.runtimeMessages.push({
         key: dedupKey,
-        message: normalizedMessage,
+        message: src ? { ...normalizedMessage, _src: src } : normalizedMessage,
     });
 
     if (normalizedContent) {

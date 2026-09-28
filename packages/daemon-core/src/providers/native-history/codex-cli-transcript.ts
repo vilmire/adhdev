@@ -62,6 +62,7 @@ import {
   TOOL_RESULT_SUMMARY_MAX,
 } from '../spec/native-history-tool-blocks.js';
 import type { NativeHistoryToolBlockRef } from '../spec/native-history-types.js';
+import { type MessageSourceAddress, nativeSourceAddress, recordBlockSource, SESSION_START_ADDRESS } from '../../chat/message-source-address.js';
 
 export interface NativeHistoryMessage {
   ts: string;
@@ -85,6 +86,11 @@ export interface NativeHistoryMessage {
    * uses for this shape).
    */
   toolBlockRef?: NativeHistoryToolBlockRef;
+  /**
+   * Daemon-internal source address for the message identity ledger
+   * (`chat/message-source-address.ts`). Never leaves the daemon.
+   */
+  _src?: MessageSourceAddress;
 }
 
 export interface NativeHistorySession {
@@ -310,6 +316,7 @@ function pushAssistantStandardMessage(
   receivedAt: number,
   content: string,
   workspace?: string,
+  recordIndex = -1,
 ): void {
   const text = content.trim();
   if (!text) return;
@@ -325,6 +332,9 @@ function pushAssistantStandardMessage(
     historySessionId: sessionId,
   };
   if (workspace) msg.workspace = workspace;
+  // One bubble per record (§3.1): `n.<L>.<recordIndex>.0`.
+  const src = recordBlockSource(sessionId, recordIndex, -1);
+  if (src) msg._src = src;
   records.push(msg);
 }
 
@@ -498,6 +508,7 @@ function parseSessionFile(
           agent: 'codex-cli',
           historySessionId: sessionId,
           workspace: detectedWorkspace,
+          _src: nativeSourceAddress(sessionId, SESSION_START_ADDRESS),
         });
       }
       continue;
@@ -536,6 +547,7 @@ function parseSessionFile(
           receivedAt,
           flattenCodexContent(payload.last_agent_message),
           detectedWorkspace,
+          recordIndex,
         );
       } else if (payloadType === 'agent_message' && String(payload.phase ?? '').trim() === 'final_answer') {
         pushAssistantStandardMessage(
@@ -544,6 +556,7 @@ function parseSessionFile(
           receivedAt,
           flattenCodexContent(payload.message),
           detectedWorkspace,
+          recordIndex,
         );
       } else if (payloadType === 'token_count') {
         const usageRecord = extractCodexUsage(payload, receivedAt);
@@ -572,6 +585,7 @@ function parseSessionFile(
         historySessionId: sessionId,
       };
       if (detectedWorkspace) msg.workspace = detectedWorkspace;
+      msg._src = recordBlockSource(sessionId, recordIndex, -1);
       records.push(msg);
     } else if (payloadType === 'function_call' || payloadType === 'custom_tool_call') {
       const { content, truncated, toolName } = summarizeToolCall(payload);
@@ -592,6 +606,7 @@ function parseSessionFile(
       if (truncated && sourceMtimeMs > 0) {
         msg.toolBlockRef = { sourceMtimeMs, recordIndex, blockIndex: -1 };
       }
+      msg._src = recordBlockSource(sessionId, recordIndex, -1);
       records.push(msg);
     } else if (payloadType === 'function_call_output' || payloadType === 'custom_tool_call_output') {
       const { content, truncated } = extractToolOutputContent(payload);
@@ -611,6 +626,7 @@ function parseSessionFile(
       if (truncated && sourceMtimeMs > 0) {
         msg.toolBlockRef = { sourceMtimeMs, recordIndex, blockIndex: -1 };
       }
+      msg._src = recordBlockSource(sessionId, recordIndex, -1);
       records.push(msg);
     }
   }
