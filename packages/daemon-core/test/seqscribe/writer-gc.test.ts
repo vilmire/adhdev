@@ -193,6 +193,53 @@ describe('runTranscriptWriterGcSweep', () => {
         unsub();
     });
 
+    it('★ a watched topic over the default cap is pruned down to it while subscribed (incident 2026-09-28)', async () => {
+        // Before: the vendor refused EVERY prune while a tail subscriber was
+        // attached, so a session with a permanently open viewer grew without
+        // bound (160k rows / 2.3 GB measured on one topic). Now the sweep's
+        // count-bound steps (always keeping >= TRANSCRIPT_PRUNE_MAX_ENTRIES >
+        // the 500-row tail window) proceed on a watched topic.
+        const server = openNode('watched-server');
+        const client = openNode('watched-client');
+        const topic = sessionTranscriptTopic('sess-watched');
+        server.node.defineTopic(topic, sessionTranscriptPolicy());
+        client.node.defineTopic(topic, sessionTranscriptPolicy());
+        const total = TRANSCRIPT_PRUNE_MAX_ENTRIES + 300;
+        const log = server.node.log(topic);
+        await Promise.all(Array.from({ length: total }, (_, i) => log.append('adhdev.test.entry', { i })));
+
+        const [chS, chC] = channelPair();
+        const peerS = server.node.attach(chS, {
+            peerId: 'watched-client',
+            peerClass: 'content',
+            grants: { [topic]: 'serve' },
+        });
+        const peerC = client.node.attach(chC, {
+            peerId: 'watched-server',
+            peerClass: 'content',
+            grants: { [topic]: 'none' },
+        });
+        await waitFor(
+            () => peerS.state() === 'ready' && peerC.state() === 'ready',
+            'server/client handshake',
+        );
+        const sub = client.node.subscribe(peerC, { view: 'tail', params: { topic } });
+        let snaps = 0;
+        const unsub = sub.onSnapshot(() => { snaps++; });
+        await waitFor(() => snaps > 0, 'tail SNAP');
+
+        const result = await runTranscriptWriterGcSweep(server, { stepRows: 100 });
+
+        expect(result.overCap).toEqual([{ topic, logRows: total }]);
+        const counters = transcriptWriterGcCounters();
+        expect(counters.skippedActive).toBe(0);
+        expect(counters.errors).toBe(0);
+        expect(counters.rowsPruned).toBe(300);
+        expect(server.node.stats().topics[topic]?.logRows).toBe(TRANSCRIPT_PRUNE_MAX_ENTRIES);
+
+        unsub();
+    });
+
     it('a sweep failure (stats() throws) is swallowed and counted, never thrown', async () => {
         const handle = openNode('sweep-error');
         const broken = {

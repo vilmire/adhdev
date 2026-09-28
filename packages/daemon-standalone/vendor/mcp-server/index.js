@@ -63556,6 +63556,775 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         };
       }
     });
+    function b64encode(bytes) {
+      const n = bytes.length;
+      const out = new Uint8Array(Math.ceil(n / 3) * 4);
+      let o = 0;
+      let i = 0;
+      for (; i + 2 < n; i += 3) {
+        const x = bytes[i] << 16 | bytes[i + 1] << 8 | bytes[i + 2];
+        out[o++] = B64_CODES[x >> 18];
+        out[o++] = B64_CODES[x >> 12 & 63];
+        out[o++] = B64_CODES[x >> 6 & 63];
+        out[o++] = B64_CODES[x & 63];
+      }
+      if (i < n) {
+        const a = bytes[i];
+        const b = i + 1 < n ? bytes[i + 1] : void 0;
+        out[o++] = B64_CODES[a >> 2];
+        out[o++] = B64_CODES[(a & 3) << 4 | (b ?? 0) >> 4];
+        out[o++] = b === void 0 ? PAD : B64_CODES[(b & 15) << 2];
+        out[o++] = PAD;
+      }
+      return textDec2.decode(out);
+    }
+    function b64decode(s2) {
+      let end = s2.length;
+      while (end > 0 && s2.charCodeAt(end - 1) === PAD)
+        end--;
+      const at = (i) => {
+        if (i >= end)
+          return 0;
+        const c = s2.charCodeAt(i);
+        return c < 256 ? B64_REV[c] : 0;
+      };
+      const out = new Uint8Array(Math.floor(end * 3 / 4));
+      let o = 0;
+      for (let i = 0; i < end; i += 4) {
+        const n = at(i) << 18 | at(i + 1) << 12 | at(i + 2) << 6 | at(i + 3);
+        if (o < out.length)
+          out[o++] = n >> 16 & 255;
+        if (o < out.length)
+          out[o++] = n >> 8 & 255;
+        if (o < out.length)
+          out[o++] = n & 255;
+      }
+      return out;
+    }
+    function encodeCursor(c) {
+      return JSON.stringify(c);
+    }
+    function decodeCursor(s2) {
+      try {
+        const v = JSON.parse(s2);
+        if (typeof v.e === "string" && Number.isSafeInteger(v.d))
+          return v;
+      } catch {
+      }
+      return null;
+    }
+    var B64;
+    var B64_CODES;
+    var B64_REV;
+    var PAD;
+    var FULL_TAIL_DEFAULT;
+    var textEnc;
+    var textDec2;
+    var SubHub;
+    var init_subs = __esm2({
+      "../../vendor/seqscribe/dist/subs.js"() {
+        "use strict";
+        init_encoding();
+        init_errors3();
+        B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        B64_CODES = Uint8Array.from(B64, (c) => c.charCodeAt(0));
+        B64_REV = new Uint8Array(256);
+        for (let i = 0; i < 64; i++)
+          B64_REV[B64.charCodeAt(i)] = i;
+        PAD = 61;
+        FULL_TAIL_DEFAULT = 500;
+        textEnc = new globalThis.TextEncoder();
+        textDec2 = new globalThis.TextDecoder();
+        SubHub = class {
+          deps;
+          families = /* @__PURE__ */ new Map();
+          groups = /* @__PURE__ */ new Map();
+          groupsByView = /* @__PURE__ */ new Map();
+          ringEpochs = /* @__PURE__ */ new Map();
+          clientSubs = /* @__PURE__ */ new Map();
+          // `${peerId} ${subId}`
+          serves = /* @__PURE__ */ new Map();
+          tailSelector = null;
+          nextSubId = 1;
+          counters = {
+            snapsStarted: 0,
+            snapsCompleted: 0,
+            snapsAbandoned: 0,
+            snapBytes: 0,
+            snapChunksSent: 0,
+            snapCacheHits: 0,
+            resyncs: 0,
+            resyncsBackpressure: 0,
+            resyncsOversized: 0,
+            resyncWritesCoalesced: 0,
+            deltasSent: 0
+          };
+          constructor(deps) {
+            this.deps = deps;
+            deps.views.onViewChange((c) => this.onViewChange(c));
+          }
+          // ---- server: registration ----
+          serveView(name, resolver) {
+            if (this.families.has(name))
+              throw misuse(`serveView name already registered: ${name}`);
+            this.families.set(name, resolver);
+          }
+          setTailSnapshotSelector(sel) {
+            this.tailSelector = sel;
+            for (const g3 of this.groups.values())
+              if (g3.ringTopic !== null && g3.viewName === null)
+                g3.snapCache = null;
+          }
+          stats() {
+            let subscribers = 0;
+            let resyncPending = 0;
+            let snapsInFlight = 0;
+            for (const bySub of this.serves.values()) {
+              for (const s2 of bySub.values()) {
+                subscribers++;
+                if (s2.pending)
+                  resyncPending++;
+                if (s2.snap)
+                  snapsInFlight++;
+              }
+            }
+            return { subscribers, resyncPending, snapsInFlight, ...this.counters };
+          }
+          // ---- server: wire handlers ----
+          handleSub(session, m) {
+            let group;
+            try {
+              group = this.resolveGroup(m.view, m.params);
+            } catch (e) {
+              const code = e instanceof SeqscribeError ? e.code : "ERR_UNKNOWN_VIEW";
+              session.sendControl({ t: "SUB_ERR", subId: m.subId, code });
+              return;
+            }
+            const topic = group.ringTopic ?? this.deps.views.get(group.viewName).topic;
+            if (!session.peerMaySub(topic)) {
+              session.sendControl({ t: "SUB_ERR", subId: m.subId, code: "ERR_ACL_DENIED" });
+              return;
+            }
+            const existing = this.serves.get(session)?.get(m.subId);
+            if (existing && existing.group === group && (existing.pending || existing.snap))
+              return;
+            const cursor = m.fromCursor !== void 0 ? decodeCursor(m.fromCursor) : null;
+            if (cursor && cursor.e === group.epoch) {
+              if (cursor.d > group.deltaSeq) {
+                session.sendControl({ t: "SUB_ERR", subId: m.subId, code: "ERR_FUTURE_CURSOR" });
+                return;
+              }
+              const oldest = group.journal[0]?.seq ?? group.deltaSeq + 1;
+              if (cursor.d + 1 >= oldest) {
+                const serve2 = this.addSubscriber(group, session, m.subId);
+                for (const j of group.journal) {
+                  if (j.seq > cursor.d)
+                    this.deliverDelta(serve2, j);
+                  if (serve2.pending || serve2.snap)
+                    break;
+                }
+                return;
+              }
+            }
+            const serve = this.addSubscriber(group, session, m.subId);
+            serve.pending = true;
+            this.tryStartSnap(serve);
+          }
+          handleUnsub(session, m) {
+            const serve = this.serves.get(session)?.get(m.subId);
+            if (serve)
+              this.removeServe(serve);
+          }
+          handleSessionClosed(session) {
+            for (const serve of [...this.serves.get(session)?.values() ?? []])
+              this.removeServe(serve);
+            this.serves.delete(session);
+            for (const [key2, sub] of [...this.clientSubs]) {
+              if (sub.session === session) {
+                sub.closed = true;
+                this.clientSubs.delete(key2);
+              }
+            }
+          }
+          // The session's data-lane queue drained below SEND_QUEUE_CAP (an ACK
+          // advanced). This is the drain signal pending resyncs and paced SNAPs wait
+          // on; a backoff timer covers the case where it never comes.
+          handleCapacity(session) {
+            const bySub = this.serves.get(session);
+            if (!bySub)
+              return;
+            for (const serve of [...bySub.values()]) {
+              if (serve.closed)
+                continue;
+              if (serve.snap)
+                this.pumpSnap(serve);
+              else if (serve.pending)
+                this.tryStartSnap(serve);
+            }
+          }
+          // register materialization rewrote the built-in table — SNAP-reset the group
+          handleRegisterChanged(topic) {
+            const group = this.groups.get(this.registerKey(topic));
+            if (!group)
+              return;
+            group.epoch = this.mintEpoch();
+            group.deltaSeq = 0;
+            group.journal = [];
+            this.resetGroup(group);
+          }
+          registerKey(topic) {
+            return `register\0${jcs({ topic })}`;
+          }
+          // Live DELTA feed for "tail" groups — ring topics (rowid-null applies,
+          // node.ts's `else` branch) AND full-retention subscribe-only topics
+          // (durable applies, rowid !== null) share this: both are keyed by
+          // `ringKey(topic)` in resolveGroup above, so one lookup covers either
+          // shape and a subscriber sees the identical DELTA wire message regardless
+          // of which retention mode its topic uses.
+          handleTailApplied(e) {
+            const group = this.groups.get(this.ringKey(e.topic));
+            if (!group)
+              return;
+            const row = this.ringRow(e);
+            this.publish(group, { upserts: [row], deletes: [] });
+          }
+          // Writer-row GC precondition (retireTopic/gcWriters, C7-7): true if any
+          // session currently holds an active SUB on `topic`'s ring tail group. Ring
+          // topics (retireTopic's only target — full-sync topics are refused before
+          // this check runs) are served exclusively through the "tail" group keyed
+          // by ringTopic, never through a named view, so scanning `groups` for a
+          // matching `ringTopic` with a non-empty `subs` map is complete for that
+          // case. `groups` has no topic-keyed index (it's keyed by `view\0params`),
+          // so this is a linear scan — acceptable here: called once per candidate
+          // topic in a boot-time sweep, not per-request.
+          hasActiveSubscribersFor(topic) {
+            for (const group of this.groups.values()) {
+              if (group.ringTopic === topic && group.subs.size > 0)
+                return true;
+            }
+            return false;
+          }
+          // ---- server: internals ----
+          resolveGroup(view, params) {
+            const key2 = `${view}\0${jcs(params ?? null)}`;
+            const existing = this.groups.get(key2);
+            if (existing)
+              return existing;
+            if (view === "register") {
+              const topic = params?.topic;
+              if (typeof topic !== "string")
+                throw new SeqscribeError("ERR_UNKNOWN_VIEW", "register needs {topic}");
+              if (this.deps.topics.get(topic).policy.kind !== "register" || !this.deps.registers)
+                throw new SeqscribeError("ERR_UNKNOWN_VIEW", `not a register topic (${topic})`);
+              const registers = this.deps.registers;
+              const group2 = {
+                key: this.registerKey(topic),
+                viewName: null,
+                ringTopic: topic,
+                // reuses the ring slot: "the topic this group serves"
+                epoch: this.mintEpoch(),
+                deltaSeq: 0,
+                journal: [],
+                subs: /* @__PURE__ */ new Map(),
+                rowsProvider: () => registers.tableRowsSorted(topic),
+                snapCache: null
+              };
+              this.groups.set(group2.key, group2);
+              return group2;
+            }
+            if (view === "tail") {
+              const topic = params?.topic;
+              if (typeof topic !== "string")
+                throw new SeqscribeError("ERR_UNKNOWN_VIEW", "tail needs {topic}");
+              const policy = this.deps.topics.get(topic).policy;
+              const mode = policy.retention.mode;
+              if (mode !== "ring" && mode !== "full")
+                throw new SeqscribeError("ERR_UNKNOWN_VIEW", `tail serves ring or full subscribe-only topics only (${topic})`);
+              if (mode === "full" && policy.replication !== "subscribe-only")
+                throw new SeqscribeError("ERR_UNKNOWN_VIEW", `tail on a full-retention topic requires subscribe-only replication (${topic})`);
+              let epoch = this.ringEpochs.get(topic);
+              if (epoch === void 0) {
+                epoch = this.mintEpoch();
+                this.ringEpochs.set(topic, epoch);
+              }
+              const defaultLimit = mode === "ring" ? policy.retention.size ?? this.deps.constants.RING_DEFAULT : FULL_TAIL_DEFAULT;
+              const defaultRows = mode === "ring" ? () => this.deps.core.ringTail(topic) : () => this.deps.core.fullTail(topic, FULL_TAIL_DEFAULT);
+              const rowsProvider = () => (this.selectTail(topic, mode, defaultLimit) ?? defaultRows()).map((e) => this.ringRow(e));
+              const group2 = {
+                key: this.ringKey(topic),
+                viewName: null,
+                ringTopic: topic,
+                epoch,
+                deltaSeq: 0,
+                journal: [],
+                subs: /* @__PURE__ */ new Map(),
+                rowsProvider,
+                snapCache: null
+              };
+              this.groups.set(group2.key, group2);
+              return group2;
+            }
+            let handle;
+            const family = this.families.get(view);
+            if (family)
+              handle = family(params);
+            else if (this.deps.views.has(view) && (params === null || params === void 0))
+              handle = { name: view };
+            else
+              throw new SeqscribeError("ERR_UNKNOWN_VIEW", view);
+            const meta3 = this.deps.views.get(handle.name);
+            const group = {
+              key: key2,
+              viewName: handle.name,
+              ringTopic: null,
+              epoch: meta3.epoch,
+              deltaSeq: 0,
+              journal: [],
+              subs: /* @__PURE__ */ new Map(),
+              rowsProvider: () => this.deps.views.tableRowsSorted(handle.name),
+              snapCache: null
+            };
+            this.groups.set(key2, group);
+            const list = this.groupsByView.get(handle.name) ?? [];
+            list.push(group);
+            this.groupsByView.set(handle.name, list);
+            return group;
+          }
+          selectTail(topic, mode, defaultLimit) {
+            const sel = this.tailSelector;
+            if (!sel)
+              return null;
+            const core2 = this.deps.core;
+            try {
+              return sel({
+                topic,
+                retention: mode,
+                defaultLimit,
+                page: (beforeRowid, limit) => core2.tailPage(topic, mode === "ring", beforeRowid, limit)
+              }) ?? null;
+            } catch {
+              return null;
+            }
+          }
+          ringKey(topic) {
+            return `tail\0${jcs({ topic })}`;
+          }
+          ringRow(e) {
+            return {
+              key: `${e.writer}:${e.seq}`,
+              writer: e.writer,
+              seq: e.seq,
+              hlc_l: e.hlc.l,
+              hlc_c: e.hlc.c,
+              kind: e.kind,
+              payload: JSON.stringify(e.payload)
+            };
+          }
+          addSubscriber(group, session, subId) {
+            const existing = this.serves.get(session)?.get(subId);
+            if (existing && existing.group === group)
+              return existing;
+            if (existing)
+              this.removeServe(existing);
+            const serve = {
+              group,
+              session,
+              subId,
+              pending: false,
+              snap: null,
+              timer: null,
+              backoffMs: 0,
+              closed: false
+            };
+            const inGroup = group.subs.get(session) ?? /* @__PURE__ */ new Map();
+            inGroup.set(subId, serve);
+            group.subs.set(session, inGroup);
+            const bySub = this.serves.get(session) ?? /* @__PURE__ */ new Map();
+            bySub.set(subId, serve);
+            this.serves.set(session, bySub);
+            return serve;
+          }
+          removeServe(serve) {
+            serve.closed = true;
+            if (serve.timer !== null) {
+              this.deps.timers.clearTimeout(serve.timer);
+              serve.timer = null;
+            }
+            const inGroup = serve.group.subs.get(serve.session);
+            if (inGroup?.get(serve.subId) === serve) {
+              inGroup.delete(serve.subId);
+              if (inGroup.size === 0)
+                serve.group.subs.delete(serve.session);
+            }
+            if (serve.group.subs.size === 0)
+              serve.group.snapCache = null;
+            const bySub = this.serves.get(serve.session);
+            if (bySub?.get(serve.subId) === serve) {
+              bySub.delete(serve.subId);
+              if (bySub.size === 0)
+                this.serves.delete(serve.session);
+            }
+          }
+          *servesOf(group) {
+            for (const inGroup of [...group.subs.values()])
+              yield* [...inGroup.values()];
+          }
+          onViewChange(c) {
+            for (const group of this.groupsByView.get(c.view) ?? []) {
+              if (c.reset) {
+                group.epoch = c.epoch;
+                group.deltaSeq = 0;
+                group.journal = [];
+                this.resetGroup(group);
+              } else {
+                this.publish(group, { upserts: c.upserts, deletes: c.deletes });
+              }
+            }
+          }
+          // Epoch reset: any SNAP still being paced carries a dead cursor — abandon it
+          // (the client discards a partial reassembly when the cursor changes) and
+          // resync everyone from the new epoch.
+          resetGroup(group) {
+            group.snapCache = null;
+            for (const serve of this.servesOf(group)) {
+              if (serve.snap) {
+                serve.snap = null;
+                this.counters.snapsAbandoned++;
+              }
+              serve.pending = true;
+              this.tryStartSnap(serve);
+            }
+          }
+          // compute once, broadcast within the group (§10)
+          publish(group, changes) {
+            group.deltaSeq++;
+            group.snapCache = null;
+            const j = {
+              seq: group.deltaSeq,
+              changes,
+              bytes: utf8ByteLength(JSON.stringify(changes))
+            };
+            group.journal.push(j);
+            if (group.journal.length > this.deps.constants.SUB_DELTA_RETAIN)
+              group.journal.shift();
+            for (const serve of this.servesOf(group))
+              this.deliverDelta(serve, j);
+          }
+          // Worst-case envelope around `changes` in a DELTA frame: the fixed keys,
+          // a mid of up to 16 digits, a subId, and the cursor. Over-estimating only
+          // means a DELTA within a few dozen bytes of MAX_FRAME_BYTES resyncs instead.
+          deltaFrameBytes(j, cursor) {
+            return j.bytes + utf8ByteLength(cursor) + 96;
+          }
+          deliverDelta(serve, j) {
+            if (serve.pending || serve.snap) {
+              this.counters.resyncWritesCoalesced++;
+              return;
+            }
+            const cursor = encodeCursor({ e: serve.group.epoch, d: j.seq });
+            if (this.deltaFrameBytes(j, cursor) > this.deps.constants.MAX_FRAME_BYTES) {
+              this.enterResync(serve, "oversized");
+              return;
+            }
+            const subId = serve.subId;
+            const changes = j.changes;
+            const ok = serve.session.sendData((mid) => ({ t: "DELTA", mid, subId, changes, cursor }));
+            if (!ok) {
+              this.enterResync(serve, "backpressure");
+              return;
+            }
+            this.counters.deltasSent++;
+          }
+          enterResync(serve, reason) {
+            if (serve.pending || serve.snap) {
+              this.counters.resyncWritesCoalesced++;
+              return;
+            }
+            serve.pending = true;
+            this.counters.resyncs++;
+            if (reason === "backpressure")
+              this.counters.resyncsBackpressure++;
+            else
+              this.counters.resyncsOversized++;
+            const g3 = serve.group;
+            const topic = g3.ringTopic ?? this.deps.views.get(g3.viewName).topic;
+            this.deps.emitAnomaly?.({
+              kind: "sub_resync",
+              topic,
+              peerId: serve.session.peerId,
+              view: g3.viewName ?? (g3.key.startsWith("register\0") ? "register" : "tail"),
+              reason
+            });
+            this.schedule(serve, 0);
+          }
+          // Room to START a SNAP: the data lane has drained to half its cap. Pacing
+          // (pumpSnap) then keeps at most that many of this SNAP's chunks queued, so
+          // a large body never tail-drops its own chunks and other traffic keeps the
+          // remaining headroom.
+          snapWindow() {
+            return Math.max(1, Math.floor(this.deps.constants.SEND_QUEUE_CAP / 2));
+          }
+          hasRoom(session) {
+            return session.hasSendCapacity() && session.queuedData() < this.snapWindow();
+          }
+          schedule(serve, delayMs) {
+            if (serve.timer !== null || serve.closed)
+              return;
+            serve.timer = this.deps.timers.setTimeout(() => {
+              serve.timer = null;
+              if (serve.closed)
+                return;
+              if (serve.snap)
+                this.pumpSnap(serve);
+              else if (serve.pending)
+                this.tryStartSnap(serve);
+            }, delayMs);
+          }
+          // Backoff for when no drain signal arrives (handleCapacity is the fast
+          // path): 50 ms doubling to CONTROL_RETRY_MS. A peer that never drains is
+          // closed by the §5.2 stall check, which tears this state down.
+          backoff(serve) {
+            serve.backoffMs = Math.min(Math.max(50, serve.backoffMs * 2), Math.max(50, this.deps.constants.CONTROL_RETRY_MS));
+            this.schedule(serve, serve.backoffMs);
+          }
+          tryStartSnap(serve) {
+            if (serve.closed || !serve.pending || serve.snap)
+              return;
+            if (!this.hasRoom(serve.session)) {
+              this.backoff(serve);
+              return;
+            }
+            if (serve.timer !== null) {
+              this.deps.timers.clearTimeout(serve.timer);
+              serve.timer = null;
+            }
+            const g3 = serve.group;
+            let body;
+            const cached5 = g3.snapCache;
+            if (cached5 && cached5.epoch === g3.epoch && cached5.seq === g3.deltaSeq) {
+              body = cached5.body;
+              this.counters.snapCacheHits++;
+            } else {
+              let rows;
+              try {
+                rows = g3.rowsProvider();
+              } catch {
+                serve.pending = false;
+                serve.session.sendControl({ t: "SUB_ERR", subId: serve.subId, code: "ERR_STORAGE" });
+                return;
+              }
+              body = textEnc.encode(jcs(rows));
+              g3.snapCache = { epoch: g3.epoch, seq: g3.deltaSeq, body };
+            }
+            const rawBudget = this.rawChunkBudget();
+            serve.pending = false;
+            serve.snap = {
+              body,
+              of: Math.max(1, Math.ceil(body.length / rawBudget)),
+              next: 1,
+              cursor: encodeCursor({ e: g3.epoch, d: g3.deltaSeq }),
+              epoch: g3.epoch,
+              seq: g3.deltaSeq
+            };
+            this.counters.snapsStarted++;
+            this.counters.snapBytes += body.length;
+            this.pumpSnap(serve);
+          }
+          rawChunkBudget() {
+            return Math.floor(this.deps.constants.MAX_FRAME_BYTES / 2 * 0.75);
+          }
+          // Enqueue this SNAP's next chunks while the lane has room. base64 is done
+          // per chunk as it is enqueued, so a large body is encoded across ACK-driven
+          // turns rather than in one blocking pass.
+          pumpSnap(serve) {
+            const s2 = serve.snap;
+            if (!s2 || serve.closed)
+              return;
+            const rawBudget = this.rawChunkBudget();
+            const subId = serve.subId;
+            while (s2.next <= s2.of && this.hasRoom(serve.session)) {
+              const chunk = s2.next;
+              const data = b64encode(s2.body.subarray((chunk - 1) * rawBudget, chunk * rawBudget));
+              const ok = serve.session.sendData((mid) => ({
+                t: "SNAP",
+                mid,
+                subId,
+                chunk,
+                of: s2.of,
+                data,
+                cursor: s2.cursor,
+                reset: true
+              }));
+              if (!ok)
+                break;
+              s2.next++;
+              this.counters.snapChunksSent++;
+            }
+            if (s2.next <= s2.of) {
+              this.backoff(serve);
+              return;
+            }
+            serve.snap = null;
+            serve.backoffMs = 0;
+            this.counters.snapsCompleted++;
+            this.catchUp(serve, s2);
+          }
+          // After a SNAP is fully enqueued: deltas published while it was paced are
+          // replayed from the journal (the data lane is ordered, so they land after
+          // the SNAP). A journal that no longer reaches back is another resync.
+          catchUp(serve, s2) {
+            const g3 = serve.group;
+            if (g3.epoch !== s2.epoch) {
+              serve.pending = true;
+              this.schedule(serve, 0);
+              return;
+            }
+            if (g3.deltaSeq === s2.seq)
+              return;
+            const oldest = g3.journal[0]?.seq ?? g3.deltaSeq + 1;
+            if (s2.seq + 1 < oldest) {
+              this.enterResync(serve, "backpressure");
+              return;
+            }
+            for (const j of g3.journal) {
+              if (j.seq <= s2.seq)
+                continue;
+              this.deliverDelta(serve, j);
+              if (serve.pending || serve.snap)
+                return;
+            }
+          }
+          // ---- client ----
+          subscribe(session, o) {
+            const subId = this.nextSubId++;
+            const sub = {
+              session,
+              subId,
+              cursor: o.fromCursor,
+              snapshotCbs: /* @__PURE__ */ new Set(),
+              deltaCbs: /* @__PURE__ */ new Set(),
+              view: o.view,
+              params: o.params,
+              chunks: /* @__PURE__ */ new Map(),
+              chunksOf: 0,
+              chunkBytes: 0,
+              chunkCursor: "",
+              chunkReset: false,
+              closed: false
+            };
+            this.clientSubs.set(`${session.peerId} ${subId}`, sub);
+            this.sendSubRequest(sub);
+            const self = this;
+            return {
+              onSnapshot(cb) {
+                sub.snapshotCbs.add(cb);
+                return () => sub.snapshotCbs.delete(cb);
+              },
+              onDelta(cb) {
+                sub.deltaCbs.add(cb);
+                return () => sub.deltaCbs.delete(cb);
+              },
+              get cursor() {
+                return sub.cursor;
+              },
+              set cursor(_v) {
+                throw misuse("cursor is read-only");
+              },
+              close() {
+                if (sub.closed)
+                  return;
+                sub.closed = true;
+                self.clientSubs.delete(`${session.peerId} ${subId}`);
+                session.satisfyRequest(`SUB:${subId}`);
+                session.sendControl({ t: "UNSUB", subId });
+              }
+            };
+          }
+          sendSubRequest(sub) {
+            sub.session.request(`SUB:${sub.subId}`, () => {
+              const m = { t: "SUB", subId: sub.subId, view: sub.view, params: sub.params };
+              if (sub.cursor !== void 0)
+                m.fromCursor = sub.cursor;
+              return m;
+            });
+          }
+          handleSnap(session, m) {
+            const sub = this.clientSubs.get(`${session.peerId} ${m.subId}`);
+            if (!sub)
+              return;
+            session.satisfyRequest(`SUB:${m.subId}`);
+            if (m.of !== sub.chunksOf || m.cursor !== sub.chunkCursor) {
+              sub.chunks.clear();
+              sub.chunkBytes = 0;
+              sub.chunksOf = m.of;
+              sub.chunkCursor = m.cursor;
+              sub.chunkReset = m.reset;
+            }
+            sub.chunkBytes += m.data.length - (sub.chunks.get(m.chunk)?.length ?? 0);
+            if (sub.chunkBytes > this.deps.constants.MAX_REASSEMBLY_BYTES) {
+              sub.chunks.clear();
+              sub.chunksOf = 0;
+              sub.chunkBytes = 0;
+              session.sendControl({
+                t: "ERR",
+                code: session.violationCode(),
+                // P38
+                detail: `SNAP reassembly exceeds MAX_REASSEMBLY_BYTES (subId ${m.subId})`
+              });
+              session.close("protocol");
+              return;
+            }
+            sub.chunks.set(m.chunk, m.data);
+            if (sub.chunks.size < m.of)
+              return;
+            const parts = [];
+            for (let i = 1; i <= m.of; i++)
+              parts.push(b64decode(sub.chunks.get(i) ?? ""));
+            const total = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+            let off = 0;
+            for (const p of parts) {
+              total.set(p, off);
+              off += p.length;
+            }
+            sub.chunks.clear();
+            sub.chunksOf = 0;
+            sub.chunkBytes = 0;
+            const rows = JSON.parse(textDec2.decode(total));
+            if (!Array.isArray(rows))
+              throw new SeqscribeError("ERR_ENTRY_ENCODING", "SNAP body is not a row array");
+            sub.cursor = m.cursor;
+            for (const cb of sub.snapshotCbs)
+              cb(rows, sub.chunkReset);
+          }
+          handleDelta(session, m) {
+            const sub = this.clientSubs.get(`${session.peerId} ${m.subId}`);
+            if (!sub)
+              return;
+            session.satisfyRequest(`SUB:${m.subId}`);
+            sub.cursor = m.cursor;
+            for (const cb of sub.deltaCbs)
+              cb(m.changes);
+          }
+          handleSubErr(session, m) {
+            const sub = this.clientSubs.get(`${session.peerId} ${m.subId}`);
+            if (!sub)
+              return;
+            if (m.code === "ERR_FUTURE_CURSOR") {
+              sub.cursor = void 0;
+              this.sendSubRequest(sub);
+              return;
+            }
+            session.satisfyRequest(`SUB:${sub.subId}`);
+          }
+          mintEpoch() {
+            let s2 = "";
+            for (let i = 0; i < 4; i++)
+              s2 += Math.floor(this.deps.rng() * 65536).toString(16).padStart(4, "0");
+            return s2;
+          }
+        };
+      }
+    });
     var HLC_META_KEY;
     var LogCore;
     var init_log = __esm2({
@@ -63565,6 +64334,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         init_encoding();
         init_errors3();
         init_hlc();
+        init_subs();
         HLC_META_KEY = "hlc_state";
         LogCore = class {
           store;
@@ -64184,17 +64954,26 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             let cursorFloor = Number.MAX_SAFE_INTEGER;
             for (const c of this.store.cursorsForTopic(topic))
               cursorFloor = Math.min(cursorFloor, c.lastRowid);
-            if (this.hasActiveSubscriber?.(topic)) {
-              settle.push(() => item.reject(misuse(`pruneTopic: topic has an active tail subscriber (${topic})`)));
-              return;
-            }
             let keepNewestFloor = Number.MAX_SAFE_INTEGER;
             if (item.keepNewest !== void 0) {
-              const rows = this.store.entriesTailByRowid(topic, item.keepNewest);
-              keepNewestFloor = rows.length > 0 ? rows[0].rowid : Number.MAX_SAFE_INTEGER;
+              const keep = Math.floor(item.keepNewest);
+              if (keep === 0) {
+                keepNewestFloor = Number.MAX_SAFE_INTEGER;
+              } else if (keep < 0) {
+                keepNewestFloor = 0;
+              } else {
+                keepNewestFloor = this.store.rowidAtTailOffset(topic, keep) ?? 0;
+              }
             }
             const belowRowid = Math.min(cursorFloor, keepNewestFloor) - 1;
             const hlcBefore = item.olderThanMs !== void 0 ? this.clock() - item.olderThanMs : null;
+            if (belowRowid >= 1 && this.hasActiveSubscriber?.(topic)) {
+              const windowFloor = this.store.rowidAtTailOffset(topic, FULL_TAIL_DEFAULT);
+              if (windowFloor === null || belowRowid >= windowFloor) {
+                settle.push(() => item.reject(misuse(`pruneTopic: topic has an active tail subscriber (${topic})`)));
+                return;
+              }
+            }
             if (belowRowid < 1) {
               settle.push(() => item.resolve({ prunedRows: 0 }));
               return;
@@ -65224,775 +66003,6 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         };
       }
     });
-    function b64encode(bytes) {
-      const n = bytes.length;
-      const out = new Uint8Array(Math.ceil(n / 3) * 4);
-      let o = 0;
-      let i = 0;
-      for (; i + 2 < n; i += 3) {
-        const x = bytes[i] << 16 | bytes[i + 1] << 8 | bytes[i + 2];
-        out[o++] = B64_CODES[x >> 18];
-        out[o++] = B64_CODES[x >> 12 & 63];
-        out[o++] = B64_CODES[x >> 6 & 63];
-        out[o++] = B64_CODES[x & 63];
-      }
-      if (i < n) {
-        const a = bytes[i];
-        const b = i + 1 < n ? bytes[i + 1] : void 0;
-        out[o++] = B64_CODES[a >> 2];
-        out[o++] = B64_CODES[(a & 3) << 4 | (b ?? 0) >> 4];
-        out[o++] = b === void 0 ? PAD : B64_CODES[(b & 15) << 2];
-        out[o++] = PAD;
-      }
-      return textDec2.decode(out);
-    }
-    function b64decode(s2) {
-      let end = s2.length;
-      while (end > 0 && s2.charCodeAt(end - 1) === PAD)
-        end--;
-      const at = (i) => {
-        if (i >= end)
-          return 0;
-        const c = s2.charCodeAt(i);
-        return c < 256 ? B64_REV[c] : 0;
-      };
-      const out = new Uint8Array(Math.floor(end * 3 / 4));
-      let o = 0;
-      for (let i = 0; i < end; i += 4) {
-        const n = at(i) << 18 | at(i + 1) << 12 | at(i + 2) << 6 | at(i + 3);
-        if (o < out.length)
-          out[o++] = n >> 16 & 255;
-        if (o < out.length)
-          out[o++] = n >> 8 & 255;
-        if (o < out.length)
-          out[o++] = n & 255;
-      }
-      return out;
-    }
-    function encodeCursor(c) {
-      return JSON.stringify(c);
-    }
-    function decodeCursor(s2) {
-      try {
-        const v = JSON.parse(s2);
-        if (typeof v.e === "string" && Number.isSafeInteger(v.d))
-          return v;
-      } catch {
-      }
-      return null;
-    }
-    var B64;
-    var B64_CODES;
-    var B64_REV;
-    var PAD;
-    var FULL_TAIL_DEFAULT;
-    var textEnc;
-    var textDec2;
-    var SubHub;
-    var init_subs = __esm2({
-      "../../vendor/seqscribe/dist/subs.js"() {
-        "use strict";
-        init_encoding();
-        init_errors3();
-        B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        B64_CODES = Uint8Array.from(B64, (c) => c.charCodeAt(0));
-        B64_REV = new Uint8Array(256);
-        for (let i = 0; i < 64; i++)
-          B64_REV[B64.charCodeAt(i)] = i;
-        PAD = 61;
-        FULL_TAIL_DEFAULT = 500;
-        textEnc = new globalThis.TextEncoder();
-        textDec2 = new globalThis.TextDecoder();
-        SubHub = class {
-          deps;
-          families = /* @__PURE__ */ new Map();
-          groups = /* @__PURE__ */ new Map();
-          groupsByView = /* @__PURE__ */ new Map();
-          ringEpochs = /* @__PURE__ */ new Map();
-          clientSubs = /* @__PURE__ */ new Map();
-          // `${peerId} ${subId}`
-          serves = /* @__PURE__ */ new Map();
-          tailSelector = null;
-          nextSubId = 1;
-          counters = {
-            snapsStarted: 0,
-            snapsCompleted: 0,
-            snapsAbandoned: 0,
-            snapBytes: 0,
-            snapChunksSent: 0,
-            snapCacheHits: 0,
-            resyncs: 0,
-            resyncsBackpressure: 0,
-            resyncsOversized: 0,
-            resyncWritesCoalesced: 0,
-            deltasSent: 0
-          };
-          constructor(deps) {
-            this.deps = deps;
-            deps.views.onViewChange((c) => this.onViewChange(c));
-          }
-          // ---- server: registration ----
-          serveView(name, resolver) {
-            if (this.families.has(name))
-              throw misuse(`serveView name already registered: ${name}`);
-            this.families.set(name, resolver);
-          }
-          setTailSnapshotSelector(sel) {
-            this.tailSelector = sel;
-            for (const g3 of this.groups.values())
-              if (g3.ringTopic !== null && g3.viewName === null)
-                g3.snapCache = null;
-          }
-          stats() {
-            let subscribers = 0;
-            let resyncPending = 0;
-            let snapsInFlight = 0;
-            for (const bySub of this.serves.values()) {
-              for (const s2 of bySub.values()) {
-                subscribers++;
-                if (s2.pending)
-                  resyncPending++;
-                if (s2.snap)
-                  snapsInFlight++;
-              }
-            }
-            return { subscribers, resyncPending, snapsInFlight, ...this.counters };
-          }
-          // ---- server: wire handlers ----
-          handleSub(session, m) {
-            let group;
-            try {
-              group = this.resolveGroup(m.view, m.params);
-            } catch (e) {
-              const code = e instanceof SeqscribeError ? e.code : "ERR_UNKNOWN_VIEW";
-              session.sendControl({ t: "SUB_ERR", subId: m.subId, code });
-              return;
-            }
-            const topic = group.ringTopic ?? this.deps.views.get(group.viewName).topic;
-            if (!session.peerMaySub(topic)) {
-              session.sendControl({ t: "SUB_ERR", subId: m.subId, code: "ERR_ACL_DENIED" });
-              return;
-            }
-            const existing = this.serves.get(session)?.get(m.subId);
-            if (existing && existing.group === group && (existing.pending || existing.snap))
-              return;
-            const cursor = m.fromCursor !== void 0 ? decodeCursor(m.fromCursor) : null;
-            if (cursor && cursor.e === group.epoch) {
-              if (cursor.d > group.deltaSeq) {
-                session.sendControl({ t: "SUB_ERR", subId: m.subId, code: "ERR_FUTURE_CURSOR" });
-                return;
-              }
-              const oldest = group.journal[0]?.seq ?? group.deltaSeq + 1;
-              if (cursor.d + 1 >= oldest) {
-                const serve2 = this.addSubscriber(group, session, m.subId);
-                for (const j of group.journal) {
-                  if (j.seq > cursor.d)
-                    this.deliverDelta(serve2, j);
-                  if (serve2.pending || serve2.snap)
-                    break;
-                }
-                return;
-              }
-            }
-            const serve = this.addSubscriber(group, session, m.subId);
-            serve.pending = true;
-            this.tryStartSnap(serve);
-          }
-          handleUnsub(session, m) {
-            const serve = this.serves.get(session)?.get(m.subId);
-            if (serve)
-              this.removeServe(serve);
-          }
-          handleSessionClosed(session) {
-            for (const serve of [...this.serves.get(session)?.values() ?? []])
-              this.removeServe(serve);
-            this.serves.delete(session);
-            for (const [key2, sub] of [...this.clientSubs]) {
-              if (sub.session === session) {
-                sub.closed = true;
-                this.clientSubs.delete(key2);
-              }
-            }
-          }
-          // The session's data-lane queue drained below SEND_QUEUE_CAP (an ACK
-          // advanced). This is the drain signal pending resyncs and paced SNAPs wait
-          // on; a backoff timer covers the case where it never comes.
-          handleCapacity(session) {
-            const bySub = this.serves.get(session);
-            if (!bySub)
-              return;
-            for (const serve of [...bySub.values()]) {
-              if (serve.closed)
-                continue;
-              if (serve.snap)
-                this.pumpSnap(serve);
-              else if (serve.pending)
-                this.tryStartSnap(serve);
-            }
-          }
-          // register materialization rewrote the built-in table — SNAP-reset the group
-          handleRegisterChanged(topic) {
-            const group = this.groups.get(this.registerKey(topic));
-            if (!group)
-              return;
-            group.epoch = this.mintEpoch();
-            group.deltaSeq = 0;
-            group.journal = [];
-            this.resetGroup(group);
-          }
-          registerKey(topic) {
-            return `register\0${jcs({ topic })}`;
-          }
-          // Live DELTA feed for "tail" groups — ring topics (rowid-null applies,
-          // node.ts's `else` branch) AND full-retention subscribe-only topics
-          // (durable applies, rowid !== null) share this: both are keyed by
-          // `ringKey(topic)` in resolveGroup above, so one lookup covers either
-          // shape and a subscriber sees the identical DELTA wire message regardless
-          // of which retention mode its topic uses.
-          handleTailApplied(e) {
-            const group = this.groups.get(this.ringKey(e.topic));
-            if (!group)
-              return;
-            const row = this.ringRow(e);
-            this.publish(group, { upserts: [row], deletes: [] });
-          }
-          // Writer-row GC precondition (retireTopic/gcWriters, C7-7): true if any
-          // session currently holds an active SUB on `topic`'s ring tail group. Ring
-          // topics (retireTopic's only target — full-sync topics are refused before
-          // this check runs) are served exclusively through the "tail" group keyed
-          // by ringTopic, never through a named view, so scanning `groups` for a
-          // matching `ringTopic` with a non-empty `subs` map is complete for that
-          // case. `groups` has no topic-keyed index (it's keyed by `view\0params`),
-          // so this is a linear scan — acceptable here: called once per candidate
-          // topic in a boot-time sweep, not per-request.
-          hasActiveSubscribersFor(topic) {
-            for (const group of this.groups.values()) {
-              if (group.ringTopic === topic && group.subs.size > 0)
-                return true;
-            }
-            return false;
-          }
-          // ---- server: internals ----
-          resolveGroup(view, params) {
-            const key2 = `${view}\0${jcs(params ?? null)}`;
-            const existing = this.groups.get(key2);
-            if (existing)
-              return existing;
-            if (view === "register") {
-              const topic = params?.topic;
-              if (typeof topic !== "string")
-                throw new SeqscribeError("ERR_UNKNOWN_VIEW", "register needs {topic}");
-              if (this.deps.topics.get(topic).policy.kind !== "register" || !this.deps.registers)
-                throw new SeqscribeError("ERR_UNKNOWN_VIEW", `not a register topic (${topic})`);
-              const registers = this.deps.registers;
-              const group2 = {
-                key: this.registerKey(topic),
-                viewName: null,
-                ringTopic: topic,
-                // reuses the ring slot: "the topic this group serves"
-                epoch: this.mintEpoch(),
-                deltaSeq: 0,
-                journal: [],
-                subs: /* @__PURE__ */ new Map(),
-                rowsProvider: () => registers.tableRowsSorted(topic),
-                snapCache: null
-              };
-              this.groups.set(group2.key, group2);
-              return group2;
-            }
-            if (view === "tail") {
-              const topic = params?.topic;
-              if (typeof topic !== "string")
-                throw new SeqscribeError("ERR_UNKNOWN_VIEW", "tail needs {topic}");
-              const policy = this.deps.topics.get(topic).policy;
-              const mode = policy.retention.mode;
-              if (mode !== "ring" && mode !== "full")
-                throw new SeqscribeError("ERR_UNKNOWN_VIEW", `tail serves ring or full subscribe-only topics only (${topic})`);
-              if (mode === "full" && policy.replication !== "subscribe-only")
-                throw new SeqscribeError("ERR_UNKNOWN_VIEW", `tail on a full-retention topic requires subscribe-only replication (${topic})`);
-              let epoch = this.ringEpochs.get(topic);
-              if (epoch === void 0) {
-                epoch = this.mintEpoch();
-                this.ringEpochs.set(topic, epoch);
-              }
-              const defaultLimit = mode === "ring" ? policy.retention.size ?? this.deps.constants.RING_DEFAULT : FULL_TAIL_DEFAULT;
-              const defaultRows = mode === "ring" ? () => this.deps.core.ringTail(topic) : () => this.deps.core.fullTail(topic, FULL_TAIL_DEFAULT);
-              const rowsProvider = () => (this.selectTail(topic, mode, defaultLimit) ?? defaultRows()).map((e) => this.ringRow(e));
-              const group2 = {
-                key: this.ringKey(topic),
-                viewName: null,
-                ringTopic: topic,
-                epoch,
-                deltaSeq: 0,
-                journal: [],
-                subs: /* @__PURE__ */ new Map(),
-                rowsProvider,
-                snapCache: null
-              };
-              this.groups.set(group2.key, group2);
-              return group2;
-            }
-            let handle;
-            const family = this.families.get(view);
-            if (family)
-              handle = family(params);
-            else if (this.deps.views.has(view) && (params === null || params === void 0))
-              handle = { name: view };
-            else
-              throw new SeqscribeError("ERR_UNKNOWN_VIEW", view);
-            const meta3 = this.deps.views.get(handle.name);
-            const group = {
-              key: key2,
-              viewName: handle.name,
-              ringTopic: null,
-              epoch: meta3.epoch,
-              deltaSeq: 0,
-              journal: [],
-              subs: /* @__PURE__ */ new Map(),
-              rowsProvider: () => this.deps.views.tableRowsSorted(handle.name),
-              snapCache: null
-            };
-            this.groups.set(key2, group);
-            const list = this.groupsByView.get(handle.name) ?? [];
-            list.push(group);
-            this.groupsByView.set(handle.name, list);
-            return group;
-          }
-          selectTail(topic, mode, defaultLimit) {
-            const sel = this.tailSelector;
-            if (!sel)
-              return null;
-            const core2 = this.deps.core;
-            try {
-              return sel({
-                topic,
-                retention: mode,
-                defaultLimit,
-                page: (beforeRowid, limit) => core2.tailPage(topic, mode === "ring", beforeRowid, limit)
-              }) ?? null;
-            } catch {
-              return null;
-            }
-          }
-          ringKey(topic) {
-            return `tail\0${jcs({ topic })}`;
-          }
-          ringRow(e) {
-            return {
-              key: `${e.writer}:${e.seq}`,
-              writer: e.writer,
-              seq: e.seq,
-              hlc_l: e.hlc.l,
-              hlc_c: e.hlc.c,
-              kind: e.kind,
-              payload: JSON.stringify(e.payload)
-            };
-          }
-          addSubscriber(group, session, subId) {
-            const existing = this.serves.get(session)?.get(subId);
-            if (existing && existing.group === group)
-              return existing;
-            if (existing)
-              this.removeServe(existing);
-            const serve = {
-              group,
-              session,
-              subId,
-              pending: false,
-              snap: null,
-              timer: null,
-              backoffMs: 0,
-              closed: false
-            };
-            const inGroup = group.subs.get(session) ?? /* @__PURE__ */ new Map();
-            inGroup.set(subId, serve);
-            group.subs.set(session, inGroup);
-            const bySub = this.serves.get(session) ?? /* @__PURE__ */ new Map();
-            bySub.set(subId, serve);
-            this.serves.set(session, bySub);
-            return serve;
-          }
-          removeServe(serve) {
-            serve.closed = true;
-            if (serve.timer !== null) {
-              this.deps.timers.clearTimeout(serve.timer);
-              serve.timer = null;
-            }
-            const inGroup = serve.group.subs.get(serve.session);
-            if (inGroup?.get(serve.subId) === serve) {
-              inGroup.delete(serve.subId);
-              if (inGroup.size === 0)
-                serve.group.subs.delete(serve.session);
-            }
-            if (serve.group.subs.size === 0)
-              serve.group.snapCache = null;
-            const bySub = this.serves.get(serve.session);
-            if (bySub?.get(serve.subId) === serve) {
-              bySub.delete(serve.subId);
-              if (bySub.size === 0)
-                this.serves.delete(serve.session);
-            }
-          }
-          *servesOf(group) {
-            for (const inGroup of [...group.subs.values()])
-              yield* [...inGroup.values()];
-          }
-          onViewChange(c) {
-            for (const group of this.groupsByView.get(c.view) ?? []) {
-              if (c.reset) {
-                group.epoch = c.epoch;
-                group.deltaSeq = 0;
-                group.journal = [];
-                this.resetGroup(group);
-              } else {
-                this.publish(group, { upserts: c.upserts, deletes: c.deletes });
-              }
-            }
-          }
-          // Epoch reset: any SNAP still being paced carries a dead cursor — abandon it
-          // (the client discards a partial reassembly when the cursor changes) and
-          // resync everyone from the new epoch.
-          resetGroup(group) {
-            group.snapCache = null;
-            for (const serve of this.servesOf(group)) {
-              if (serve.snap) {
-                serve.snap = null;
-                this.counters.snapsAbandoned++;
-              }
-              serve.pending = true;
-              this.tryStartSnap(serve);
-            }
-          }
-          // compute once, broadcast within the group (§10)
-          publish(group, changes) {
-            group.deltaSeq++;
-            group.snapCache = null;
-            const j = {
-              seq: group.deltaSeq,
-              changes,
-              bytes: utf8ByteLength(JSON.stringify(changes))
-            };
-            group.journal.push(j);
-            if (group.journal.length > this.deps.constants.SUB_DELTA_RETAIN)
-              group.journal.shift();
-            for (const serve of this.servesOf(group))
-              this.deliverDelta(serve, j);
-          }
-          // Worst-case envelope around `changes` in a DELTA frame: the fixed keys,
-          // a mid of up to 16 digits, a subId, and the cursor. Over-estimating only
-          // means a DELTA within a few dozen bytes of MAX_FRAME_BYTES resyncs instead.
-          deltaFrameBytes(j, cursor) {
-            return j.bytes + utf8ByteLength(cursor) + 96;
-          }
-          deliverDelta(serve, j) {
-            if (serve.pending || serve.snap) {
-              this.counters.resyncWritesCoalesced++;
-              return;
-            }
-            const cursor = encodeCursor({ e: serve.group.epoch, d: j.seq });
-            if (this.deltaFrameBytes(j, cursor) > this.deps.constants.MAX_FRAME_BYTES) {
-              this.enterResync(serve, "oversized");
-              return;
-            }
-            const subId = serve.subId;
-            const changes = j.changes;
-            const ok = serve.session.sendData((mid) => ({ t: "DELTA", mid, subId, changes, cursor }));
-            if (!ok) {
-              this.enterResync(serve, "backpressure");
-              return;
-            }
-            this.counters.deltasSent++;
-          }
-          enterResync(serve, reason) {
-            if (serve.pending || serve.snap) {
-              this.counters.resyncWritesCoalesced++;
-              return;
-            }
-            serve.pending = true;
-            this.counters.resyncs++;
-            if (reason === "backpressure")
-              this.counters.resyncsBackpressure++;
-            else
-              this.counters.resyncsOversized++;
-            const g3 = serve.group;
-            const topic = g3.ringTopic ?? this.deps.views.get(g3.viewName).topic;
-            this.deps.emitAnomaly?.({
-              kind: "sub_resync",
-              topic,
-              peerId: serve.session.peerId,
-              view: g3.viewName ?? (g3.key.startsWith("register\0") ? "register" : "tail"),
-              reason
-            });
-            this.schedule(serve, 0);
-          }
-          // Room to START a SNAP: the data lane has drained to half its cap. Pacing
-          // (pumpSnap) then keeps at most that many of this SNAP's chunks queued, so
-          // a large body never tail-drops its own chunks and other traffic keeps the
-          // remaining headroom.
-          snapWindow() {
-            return Math.max(1, Math.floor(this.deps.constants.SEND_QUEUE_CAP / 2));
-          }
-          hasRoom(session) {
-            return session.hasSendCapacity() && session.queuedData() < this.snapWindow();
-          }
-          schedule(serve, delayMs) {
-            if (serve.timer !== null || serve.closed)
-              return;
-            serve.timer = this.deps.timers.setTimeout(() => {
-              serve.timer = null;
-              if (serve.closed)
-                return;
-              if (serve.snap)
-                this.pumpSnap(serve);
-              else if (serve.pending)
-                this.tryStartSnap(serve);
-            }, delayMs);
-          }
-          // Backoff for when no drain signal arrives (handleCapacity is the fast
-          // path): 50 ms doubling to CONTROL_RETRY_MS. A peer that never drains is
-          // closed by the §5.2 stall check, which tears this state down.
-          backoff(serve) {
-            serve.backoffMs = Math.min(Math.max(50, serve.backoffMs * 2), Math.max(50, this.deps.constants.CONTROL_RETRY_MS));
-            this.schedule(serve, serve.backoffMs);
-          }
-          tryStartSnap(serve) {
-            if (serve.closed || !serve.pending || serve.snap)
-              return;
-            if (!this.hasRoom(serve.session)) {
-              this.backoff(serve);
-              return;
-            }
-            if (serve.timer !== null) {
-              this.deps.timers.clearTimeout(serve.timer);
-              serve.timer = null;
-            }
-            const g3 = serve.group;
-            let body;
-            const cached5 = g3.snapCache;
-            if (cached5 && cached5.epoch === g3.epoch && cached5.seq === g3.deltaSeq) {
-              body = cached5.body;
-              this.counters.snapCacheHits++;
-            } else {
-              let rows;
-              try {
-                rows = g3.rowsProvider();
-              } catch {
-                serve.pending = false;
-                serve.session.sendControl({ t: "SUB_ERR", subId: serve.subId, code: "ERR_STORAGE" });
-                return;
-              }
-              body = textEnc.encode(jcs(rows));
-              g3.snapCache = { epoch: g3.epoch, seq: g3.deltaSeq, body };
-            }
-            const rawBudget = this.rawChunkBudget();
-            serve.pending = false;
-            serve.snap = {
-              body,
-              of: Math.max(1, Math.ceil(body.length / rawBudget)),
-              next: 1,
-              cursor: encodeCursor({ e: g3.epoch, d: g3.deltaSeq }),
-              epoch: g3.epoch,
-              seq: g3.deltaSeq
-            };
-            this.counters.snapsStarted++;
-            this.counters.snapBytes += body.length;
-            this.pumpSnap(serve);
-          }
-          rawChunkBudget() {
-            return Math.floor(this.deps.constants.MAX_FRAME_BYTES / 2 * 0.75);
-          }
-          // Enqueue this SNAP's next chunks while the lane has room. base64 is done
-          // per chunk as it is enqueued, so a large body is encoded across ACK-driven
-          // turns rather than in one blocking pass.
-          pumpSnap(serve) {
-            const s2 = serve.snap;
-            if (!s2 || serve.closed)
-              return;
-            const rawBudget = this.rawChunkBudget();
-            const subId = serve.subId;
-            while (s2.next <= s2.of && this.hasRoom(serve.session)) {
-              const chunk = s2.next;
-              const data = b64encode(s2.body.subarray((chunk - 1) * rawBudget, chunk * rawBudget));
-              const ok = serve.session.sendData((mid) => ({
-                t: "SNAP",
-                mid,
-                subId,
-                chunk,
-                of: s2.of,
-                data,
-                cursor: s2.cursor,
-                reset: true
-              }));
-              if (!ok)
-                break;
-              s2.next++;
-              this.counters.snapChunksSent++;
-            }
-            if (s2.next <= s2.of) {
-              this.backoff(serve);
-              return;
-            }
-            serve.snap = null;
-            serve.backoffMs = 0;
-            this.counters.snapsCompleted++;
-            this.catchUp(serve, s2);
-          }
-          // After a SNAP is fully enqueued: deltas published while it was paced are
-          // replayed from the journal (the data lane is ordered, so they land after
-          // the SNAP). A journal that no longer reaches back is another resync.
-          catchUp(serve, s2) {
-            const g3 = serve.group;
-            if (g3.epoch !== s2.epoch) {
-              serve.pending = true;
-              this.schedule(serve, 0);
-              return;
-            }
-            if (g3.deltaSeq === s2.seq)
-              return;
-            const oldest = g3.journal[0]?.seq ?? g3.deltaSeq + 1;
-            if (s2.seq + 1 < oldest) {
-              this.enterResync(serve, "backpressure");
-              return;
-            }
-            for (const j of g3.journal) {
-              if (j.seq <= s2.seq)
-                continue;
-              this.deliverDelta(serve, j);
-              if (serve.pending || serve.snap)
-                return;
-            }
-          }
-          // ---- client ----
-          subscribe(session, o) {
-            const subId = this.nextSubId++;
-            const sub = {
-              session,
-              subId,
-              cursor: o.fromCursor,
-              snapshotCbs: /* @__PURE__ */ new Set(),
-              deltaCbs: /* @__PURE__ */ new Set(),
-              view: o.view,
-              params: o.params,
-              chunks: /* @__PURE__ */ new Map(),
-              chunksOf: 0,
-              chunkBytes: 0,
-              chunkCursor: "",
-              chunkReset: false,
-              closed: false
-            };
-            this.clientSubs.set(`${session.peerId} ${subId}`, sub);
-            this.sendSubRequest(sub);
-            const self = this;
-            return {
-              onSnapshot(cb) {
-                sub.snapshotCbs.add(cb);
-                return () => sub.snapshotCbs.delete(cb);
-              },
-              onDelta(cb) {
-                sub.deltaCbs.add(cb);
-                return () => sub.deltaCbs.delete(cb);
-              },
-              get cursor() {
-                return sub.cursor;
-              },
-              set cursor(_v) {
-                throw misuse("cursor is read-only");
-              },
-              close() {
-                if (sub.closed)
-                  return;
-                sub.closed = true;
-                self.clientSubs.delete(`${session.peerId} ${subId}`);
-                session.satisfyRequest(`SUB:${subId}`);
-                session.sendControl({ t: "UNSUB", subId });
-              }
-            };
-          }
-          sendSubRequest(sub) {
-            sub.session.request(`SUB:${sub.subId}`, () => {
-              const m = { t: "SUB", subId: sub.subId, view: sub.view, params: sub.params };
-              if (sub.cursor !== void 0)
-                m.fromCursor = sub.cursor;
-              return m;
-            });
-          }
-          handleSnap(session, m) {
-            const sub = this.clientSubs.get(`${session.peerId} ${m.subId}`);
-            if (!sub)
-              return;
-            session.satisfyRequest(`SUB:${m.subId}`);
-            if (m.of !== sub.chunksOf || m.cursor !== sub.chunkCursor) {
-              sub.chunks.clear();
-              sub.chunkBytes = 0;
-              sub.chunksOf = m.of;
-              sub.chunkCursor = m.cursor;
-              sub.chunkReset = m.reset;
-            }
-            sub.chunkBytes += m.data.length - (sub.chunks.get(m.chunk)?.length ?? 0);
-            if (sub.chunkBytes > this.deps.constants.MAX_REASSEMBLY_BYTES) {
-              sub.chunks.clear();
-              sub.chunksOf = 0;
-              sub.chunkBytes = 0;
-              session.sendControl({
-                t: "ERR",
-                code: session.violationCode(),
-                // P38
-                detail: `SNAP reassembly exceeds MAX_REASSEMBLY_BYTES (subId ${m.subId})`
-              });
-              session.close("protocol");
-              return;
-            }
-            sub.chunks.set(m.chunk, m.data);
-            if (sub.chunks.size < m.of)
-              return;
-            const parts = [];
-            for (let i = 1; i <= m.of; i++)
-              parts.push(b64decode(sub.chunks.get(i) ?? ""));
-            const total = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-            let off = 0;
-            for (const p of parts) {
-              total.set(p, off);
-              off += p.length;
-            }
-            sub.chunks.clear();
-            sub.chunksOf = 0;
-            sub.chunkBytes = 0;
-            const rows = JSON.parse(textDec2.decode(total));
-            if (!Array.isArray(rows))
-              throw new SeqscribeError("ERR_ENTRY_ENCODING", "SNAP body is not a row array");
-            sub.cursor = m.cursor;
-            for (const cb of sub.snapshotCbs)
-              cb(rows, sub.chunkReset);
-          }
-          handleDelta(session, m) {
-            const sub = this.clientSubs.get(`${session.peerId} ${m.subId}`);
-            if (!sub)
-              return;
-            session.satisfyRequest(`SUB:${m.subId}`);
-            sub.cursor = m.cursor;
-            for (const cb of sub.deltaCbs)
-              cb(m.changes);
-          }
-          handleSubErr(session, m) {
-            const sub = this.clientSubs.get(`${session.peerId} ${m.subId}`);
-            if (!sub)
-              return;
-            if (m.code === "ERR_FUTURE_CURSOR") {
-              sub.cursor = void 0;
-              this.sendSubRequest(sub);
-              return;
-            }
-            session.satisfyRequest(`SUB:${sub.subId}`);
-          }
-          mintEpoch() {
-            let s2 = "";
-            for (let i = 0; i < 4; i++)
-              s2 += Math.floor(this.deps.rng() * 65536).toString(16).padStart(4, "0");
-            return s2;
-          }
-        };
-      }
-    });
     var textEnc2;
     var textDec3;
     var SnapshotHub;
@@ -66238,6 +66248,7 @@ CREATE TABLE IF NOT EXISTS sq_log (
   UNIQUE (topic, writer, seq));
 CREATE INDEX IF NOT EXISTS sq_log_order ON sq_log (topic, hlc_l, hlc_c, writer, seq);
 CREATE INDEX IF NOT EXISTS sq_log_key ON sq_log (topic, key) WHERE key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS sq_log_topic_rowid ON sq_log (topic);
 
 CREATE TABLE IF NOT EXISTS sq_pending (topic TEXT, writer TEXT, seq INTEGER, entry TEXT,
   PRIMARY KEY (topic, writer, seq));
@@ -66338,7 +66349,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             ]).map(rowToEntry);
           }
           entriesForTopicFromRowid(topic, afterRowid, limit) {
-            return this.db.all("SELECT rowid, * FROM sq_log WHERE topic = ? AND rowid > ? ORDER BY rowid LIMIT ?", [topic, afterRowid, limit]).map(rowToEntry);
+            return this.db.all("SELECT rowid, * FROM sq_log INDEXED BY sq_log_topic_rowid WHERE topic = ? AND rowid > ? ORDER BY rowid LIMIT ?", [topic, afterRowid, limit]).map(rowToEntry);
           }
           // SubHub's `tail` view on a `full`-retention topic (rowid order == insertion
           // order == append order, same as the ring tail's push order): last `limit`
@@ -66347,19 +66358,36 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           // does not reliably use the `sq_log` rowid ordering for a wrapped subquery
           // ORDER BY without a matching index hint, and this method runs on every
           // fresh/reset SUB — worth the second round trip to keep the plan obvious.
+          // Every per-topic rowid-ordered read here names INDEXED BY
+          // sq_log_topic_rowid: without it the planner may pick the (topic, writer,
+          // seq) autoindex + a TEMP B-TREE sort of the whole topic, or (with ANALYZE
+          // stats) a PK range walk across every other topic's rows — both
+          // topic-size-proportional for a LIMIT-bounded page. init() always creates
+          // the index, so the hint can never name a missing one.
           entriesTailByRowid(topic, limit) {
-            const rows = this.db.all("SELECT rowid, * FROM sq_log WHERE topic = ? ORDER BY rowid DESC LIMIT ?", [
-              topic,
-              limit
-            ]).map(rowToEntry);
+            const rows = this.db.all("SELECT rowid, * FROM sq_log INDEXED BY sq_log_topic_rowid WHERE topic = ? ORDER BY rowid DESC LIMIT ?", [topic, limit]).map(rowToEntry);
             rows.reverse();
             return rows;
+          }
+          // Rowid of the `n`-th newest row of `topic` (n >= 1), or null when the topic
+          // holds fewer than `n` rows. A rowid-only walk of sq_log_topic_rowid — never
+          // reads a payload — so pruneTopic's keepNewest floor costs O(n) index
+          // entries instead of materializing (and JSON-parsing) the n newest rows the
+          // way entriesTailByRowid(topic, n) would. keepNewest is routinely "all but
+          // the oldest few hundred rows" (writer-gc steps down from the current row
+          // count), so that materialization was a whole-topic read: on a 160k-row /
+          // 2.3 GB transcript topic it exhausted the V8 heap (daemon OOM, 2026-09-28).
+          rowidAtTailOffset(topic, n) {
+            if (!Number.isSafeInteger(n) || n < 1)
+              return null;
+            const r = this.db.get("SELECT rowid FROM sq_log INDEXED BY sq_log_topic_rowid WHERE topic = ? ORDER BY rowid DESC LIMIT 1 OFFSET ?", [topic, n - 1]);
+            return r ? r.rowid : null;
           }
           // Newest-first page of `topic`'s rows strictly below `beforeRowid` (null =
           // from the head). The backward walk a tail-snapshot selector uses to find a
           // window boundary without materializing the whole FULL_TAIL_DEFAULT tail.
           entriesTailPage(topic, beforeRowid, limit) {
-            const rows = beforeRowid === null ? this.db.all("SELECT rowid, * FROM sq_log WHERE topic = ? ORDER BY rowid DESC LIMIT ?", [topic, limit]) : this.db.all("SELECT rowid, * FROM sq_log WHERE topic = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?", [topic, beforeRowid, limit]);
+            const rows = beforeRowid === null ? this.db.all("SELECT rowid, * FROM sq_log INDEXED BY sq_log_topic_rowid WHERE topic = ? ORDER BY rowid DESC LIMIT ?", [topic, limit]) : this.db.all("SELECT rowid, * FROM sq_log INDEXED BY sq_log_topic_rowid WHERE topic = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?", [topic, beforeRowid, limit]);
             return rows.map(rowToEntry);
           }
           // Total-order iteration (§1): entries strictly after `after` in
@@ -116191,15 +116219,29 @@ ${marker}`,
       };
     }
     function hashTranscriptObservation(observation) {
-      return sha256HexUtf8(jcs(observation));
+      const projected = encodeTranscriptSnapshot(
+        stampTranscriptObservation(observation, DEDUP_HASH_IDENTITY, DEDUP_HASH_OBSERVED_AT)
+      );
+      return sha256HexUtf8(jcs(projected));
     }
     function isEmptyTranscriptObservation(observation) {
       return observation.messages.length === 0 && !observation.title && !observation.activeModal && !observation.activeInteractivePrompt;
     }
+    var DEDUP_HASH_IDENTITY;
+    var DEDUP_HASH_OBSERVED_AT;
     var init_transcript_observation = __esm2({
       "src/seqscribe/transcript-observation.ts"() {
         "use strict";
         init_dist2();
+        init_transcript_projection();
+        DEDUP_HASH_IDENTITY = {
+          sessionId: "",
+          producerDaemonId: "",
+          producerWriterId: "",
+          producerEpoch: "",
+          revision: 0
+        };
+        DEDUP_HASH_OBSERVED_AT = "";
       }
     });
     function warnOnce2(message) {

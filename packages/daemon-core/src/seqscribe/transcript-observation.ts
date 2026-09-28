@@ -28,6 +28,7 @@
  */
 
 import { jcs, sha256HexUtf8, type JsonValue } from 'seqscribe';
+import { encodeTranscriptSnapshot } from './transcript-projection.js';
 import type {
     TranscriptSnapshotCandidate,
     TranscriptSnapshotCandidateCoverage,
@@ -90,16 +91,42 @@ export function stampTranscriptObservation(
 }
 
 /**
- * Canonical content hash over the observation ONLY — never over the stamped
- * candidate. This is what makes design §3.4's rule implementable: "snapshot
- * hash가 직전 complete hash와 같으면 append하지 않는다" ("if the snapshot hash
- * matches the previous complete hash, do not append") is about CONTENT being
- * unchanged, not about the revision counter or observedAt timestamp being
- * unchanged — those always differ across two calls by construction, so hashing
- * them in would make every observation "new" and defeat the dedup entirely.
+ * Fixed identity/timestamp the dedup hash stamps onto every observation, so
+ * the only thing that can move the hash is CONTENT.
+ */
+const DEDUP_HASH_IDENTITY: TranscriptRevisionIdentity = {
+    sessionId: '',
+    producerDaemonId: '',
+    producerWriterId: '',
+    producerEpoch: '',
+    revision: 0,
+};
+const DEDUP_HASH_OBSERVED_AT = '';
+
+/**
+ * Canonical content hash for design §3.4's rule — "snapshot hash가 직전
+ * complete hash와 같으면 append하지 않는다" ("if the snapshot hash matches the
+ * previous complete hash, do not append"). That rule is about the CONTENT a
+ * subscriber would receive being unchanged, not about the revision counter or
+ * observedAt timestamp — those always differ across two calls by construction,
+ * so they are stamped with fixed values here.
+ *
+ * ★ Hashed over the WIRE projection (`encodeTranscriptSnapshot`), never over
+ * the raw observation. The observation carries producer-side fields the
+ * allow-list encoder drops — `provenance.messageSource` is a whole object
+ * whose `staleness.sourceMtimeAgeMs` is `Date.now() - mtime` and so changes
+ * on EVERY read, plus per-message `meta` of which only `streaming` travels.
+ * Hashing the raw observation made every PTY-throttled read (350 ms) look
+ * "new": measured 2026-09-28 on a preview daemon, ~95% of one session's
+ * revisions differed from their predecessor only in `revision`/`observedAt`
+ * — 41,928 revisions in 27.7 h, ~55 KB each, 2.3 GB of sq_log. Hashing the
+ * projection dedups exactly the revisions no reader could tell apart.
  */
 export function hashTranscriptObservation(observation: TranscriptObservation): string {
-    return sha256HexUtf8(jcs(observation as unknown as JsonValue));
+    const projected = encodeTranscriptSnapshot(
+        stampTranscriptObservation(observation, DEDUP_HASH_IDENTITY, DEDUP_HASH_OBSERVED_AT),
+    );
+    return sha256HexUtf8(jcs(projected as unknown as JsonValue));
 }
 
 /**

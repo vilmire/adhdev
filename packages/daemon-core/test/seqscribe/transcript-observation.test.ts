@@ -48,6 +48,44 @@ describe('hashTranscriptObservation — dedup hash excludes identity/revision/ob
     });
 });
 
+describe('hashTranscriptObservation — hashes the wire projection, not producer-only fields (incident 2026-09-28)', () => {
+    // read_chat's provenance object carries `staleness.sourceMtimeAgeMs`
+    // (Date.now() - mtime), which changes on every read but is dropped by the
+    // allow-list wire encoder. Hashing the raw observation minted a new,
+    // wire-identical revision on every 350 ms PTY-throttled read.
+    function withProvenance(ageMs: number, label: string, selected = 'native-history'): TranscriptObservation {
+        return observation({
+            provenance: {
+                messageSource: {
+                    selected,
+                    provider: 'claude-cli',
+                    staleness: { sourceMtimeMs: 1_790_000_000_000, sourceMtimeAgeMs: ageMs, freshEnough: true },
+                    coverage: { nativeMessageCount: 1, ptyMessageCount: 0 },
+                },
+            },
+            messages: [{ role: 'assistant', kind: 'standard', content: 'hello', meta: { label, streaming: false } }],
+        });
+    }
+
+    it('is stable when only fields the wire encoder drops change', () => {
+        const a = withProvenance(120, 'Read');
+        const b = withProvenance(470, 'Write');
+        expect(hashTranscriptObservation(a)).toBe(hashTranscriptObservation(b));
+    });
+
+    it('still changes when a projected provenance scalar changes', () => {
+        const a = withProvenance(120, 'Read', 'native-history');
+        const b = withProvenance(120, 'Read', 'pty-parser');
+        expect(hashTranscriptObservation(a)).not.toBe(hashTranscriptObservation(b));
+    });
+
+    it('still changes when the projected meta.streaming flag changes', () => {
+        const a = observation({ messages: [{ role: 'assistant', kind: 'standard', content: 'hi', meta: { streaming: true } }] });
+        const b = observation({ messages: [{ role: 'assistant', kind: 'standard', content: 'hi', meta: { streaming: false } }] });
+        expect(hashTranscriptObservation(a)).not.toBe(hashTranscriptObservation(b));
+    });
+});
+
 describe('stampTranscriptObservation', () => {
     it('merges observation + identity + observedAt into an encodable candidate', () => {
         const identity = { sessionId: 'sess-1', producerDaemonId: 'daemon-a', producerWriterId: 'writer-a', producerEpoch: 'epoch-1', revision: 3 };
