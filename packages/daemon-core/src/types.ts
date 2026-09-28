@@ -40,6 +40,19 @@ export interface ChatMessage {
   content: string | MessagePart[];
   kind?: ChatMessageKind;      // built-ins: standard | thought | tool | terminal | system; custom kinds allowed
   id?: string;
+  /**
+   * Stable, opaque per-bubble identity minted by the read_chat choke point's
+   * message identity ledger (`chat/message-identity-ledger.ts`): `n.*` for a
+   * native source address, `d.*` for a daemon-issued one. Never derived from
+   * content. Outgoing read_chat messages carry it and mirror it into `id`.
+   */
+  messageId?: string;
+  /**
+   * DAEMON-INTERNAL source address a reader stamps for the identity ledger
+   * (`chat/message-source-address.ts`). Stripped at the read_chat choke point;
+   * must never reach the replica wire (`check:message-projection-parity`).
+   */
+  _src?: MessageSourceAddress;
   /** Stable daemon-owned bubble identity when available. */
   bubbleId?: string;
   /** Stable provider-local unit identity used to reconcile legacy providers during migration. */
@@ -98,6 +111,7 @@ export interface ChatMessage {
 
 // Re-export from contracts for convenience
 import type { MessagePart, ProviderCategory, ToolCallInfo } from './providers/contracts.js';
+import type { MessageSourceAddress } from './chat/message-source-address.js';
 
 // ── Extension Info ──
 

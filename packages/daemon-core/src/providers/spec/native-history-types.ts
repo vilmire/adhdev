@@ -7,6 +7,8 @@
  * cycle. Types only — no runtime code belongs here.
  */
 
+import type { MessageSourceAddress } from '../../chat/message-source-address.js';
+
 /**
  * Content-free address of one tool block inside its native-history source.
  *
@@ -55,4 +57,12 @@ export interface NativeHistoryMessage {
      * fetch" from "not addressable" without a round trip.
      */
     toolBlockRef?: NativeHistoryToolBlockRef;
+    /**
+     * Daemon-internal source address for the message identity ledger
+     * (`chat/message-source-address.ts`). Stamped by the jsonl path only
+     * (`n.<L>.<recordIndex>.<blockIndex+1>`); sqlite rows have no stable
+     * address without a declared id column and fall to the aligner. Never
+     * leaves the daemon.
+     */
+    _src?: MessageSourceAddress;
 }

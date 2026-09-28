@@ -836,6 +836,7 @@ export class ChatHistoryWriter {
  * @message-projection-excludes toolBlockRef: sealed by sourceMtimeMs, so a ref
  * persisted to disk is dead on the next read (expandToolBlock fails closed with
  * `source_changed`). Re-stamped by the native parser on each read instead.
+ * @message-projection-excludes _src: the identity ledger's reader address is re-stamped by the native reader on every read; a persisted copy would pin a stale lineage.
  *
  * The incremental-append lane. Read-back is a passthrough, so a field omitted
  * here is unrecoverable — see the note on the pushed record below.

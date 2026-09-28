@@ -22,6 +22,12 @@ import {
 } from './read-chat-message-filters.js';
 import { buildTranscriptObservationFromReadChat } from './transcript-observation-builder.js';
 import { notifyTranscriptObservation } from '../seqscribe/transcript-publisher.js';
+import type { MessageIdentityCoverage } from '../chat/message-identity-ledger.js';
+import {
+    assignReadChatMessageIds,
+    resolveReadChatIdentityCoverage,
+    withMessageIdentity,
+} from './read-chat-message-identity.js';
 
 function shouldPreserveReadChatPayloadField(key: string): boolean {
     return key === 'messageSource' || key === 'transcriptProvenance';
@@ -227,7 +233,21 @@ export function collapseAdjacentDuplicateChatMessages(messages: ChatMessage[]): 
     return result;
 }
 
-export function buildReadChatCommandResult(payload: Record<string, any>, args: any, h?: CommandHelpers): CommandResult {
+export interface ReadChatPresentationOptions {
+    /**
+     * Force the identity ledger's coverage for this read. IDE / extension DOM
+     * reads pass `'window'`: their scrollback is virtualized, so a bubble that
+     * left the DOM scrolled out of view rather than being deleted (design §3.5).
+     */
+    readonly identityCoverage?: MessageIdentityCoverage;
+}
+
+export function buildReadChatCommandResult(
+    payload: Record<string, any>,
+    args: any,
+    h?: CommandHelpers,
+    presentation: ReadChatPresentationOptions = {},
+): CommandResult {
     let validatedPayload: Record<string, any>;
     const debugReadChat = payload?.debugReadChat && typeof payload.debugReadChat === 'object'
         ? payload.debugReadChat
@@ -325,6 +345,28 @@ export function buildReadChatCommandResult(payload: Record<string, any>, args: a
     const observationMessages = filteredMessages.filter((m) => isUserFacingChatMessage(m)
         || (isActivityChatMessage(m) && isWireSafeActivityKind(m.kind)));
 
+    // ── Message identity (design 2026-09-28 §3.3) ──────────────────────────
+    // Every bubble this read observed gets its stable, opaque `messageId` from
+    // the session's identity ledger BEFORE tail slicing, so the id never depends
+    // on the caller's tailLimit. The ledger sees the caller-independent superset
+    // (user-facing + activity rows, before the coordinator-prompt filter, whose
+    // outcome depends on this caller's args): the visible slice, the observation
+    // and the tail below are all subsets of it and share its message objects.
+    // Runs synchronously and must never break the read — on any failure the
+    // messages go out without ids, exactly as before this existed.
+    let messageIds: Map<ChatMessage, string> | null = null;
+    try {
+        const identityScope = messages.filter((m) => isUserFacingChatMessage(m) || isActivityChatMessage(m));
+        const ledgerKey = presentationSessionIdHint || `provider:${providerHint || 'unknown'}`;
+        messageIds = assignReadChatMessageIds(
+            ledgerKey,
+            identityScope,
+            resolveReadChatIdentityCoverage(validatedPayload.coverage, presentation.identityCoverage),
+        ).ids;
+    } catch {
+        messageIds = null;
+    }
+
     const sync = buildFullTail(visibleMessages, normalizeReadChatTailLimit(args));
     const hiddenMsgCount = Math.max(0, messages.length - visibleMessages.length);
     const preservedPayloadFields = Object.fromEntries(Object.entries(payload).filter(([key]) => shouldPreserveReadChatPayloadField(key)));
@@ -388,7 +430,7 @@ export function buildReadChatCommandResult(payload: Record<string, any>, args: a
         success: true,
         ...validatedPayload,
         ...preservedPayloadFields,
-        messages: sync.messages,
+        messages: sync.messages.map((message) => withMessageIdentity(message, messageIds?.get(message))),
         totalMessages: sync.totalMessages,
         // PROJECTION-SELF-REFERENCE (turn-completion deadlock): the provider's OWN
         // status verdict, BEFORE the Stage 6 projection overrides it above.

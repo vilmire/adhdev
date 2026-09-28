@@ -56,6 +56,7 @@ import {
   TOOL_RESULT_SUMMARY_MAX,
 } from '../spec/native-history-tool-blocks.js';
 import type { NativeHistoryToolBlockRef } from '../spec/native-history-types.js';
+import { type MessageSourceAddress, recordBlockSource } from '../../chat/message-source-address.js';
 
 export interface GrokNativeHistoryMessage {
   ts: string;
@@ -74,6 +75,11 @@ export interface GrokNativeHistoryMessage {
    * from, present only when a cap actually dropped text.
    */
   toolBlockRef?: NativeHistoryToolBlockRef;
+  /**
+   * Daemon-internal source address for the message identity ledger
+   * (`chat/message-source-address.ts`). Never leaves the daemon.
+   */
+  _src?: MessageSourceAddress;
 }
 
 export interface GrokNativeHistorySession {
@@ -404,6 +410,13 @@ export function readSession(
       historySessionId: sessionId || providerSessionId,
       ...(workspace ? { workspace } : {}),
       providerUnitKey: `${providerSessionId}:${index}`,
+      // Records are append-only and one record is one bubble (§3.1):
+      // `n.<L>.<recordIndex>.0`. The surviving-message `index` above shifts
+      // when a dropped record type changes, so the record index is used.
+      ...(() => {
+        const src = recordBlockSource(sessionId || providerSessionId, message.recordIndex, -1);
+        return src ? { _src: src } : {};
+      })(),
       // grok records ARE the tool block (no content array to index into), so
       // blockIndex is -1 — the same record-level convention codex uses.
       ...(message.kind === 'tool' && message.truncated && sourceMtimeMs > 0

@@ -71,6 +71,7 @@ import type { ChatMessage } from '../types.js';
 import { emitStatusEdge, forwardProviderEvent, type SessionEventPort } from './provider-event-port.js';
 import { emitTurnStarted, emitTurnEnd, emitSuspension, emitProcessExit, type TurnEvidencePort } from './turn-evidence-port.js';
 import type { TurnAttemptRef } from '@adhdev/mesh-shared';
+import { acpSourceAddress } from '../chat/message-source-address.js';
 
 // ─── Internal Display Types (for dashboard) ────────────────────────────
 
@@ -295,6 +296,15 @@ export class AcpProviderInstance implements ProviderInstance {
     private partialBlocks: ContentBlock[] = [];
     /** Tool calls collected during current turn */
     private turnToolCalls: ToolCallInfo[] = [];
+    /**
+     * Local ids for the message identity ledger's `acp` source class (design
+     * 2026-09-28 §3.4). Every pushed message gets `m<n>`; a turn's streaming
+     * thought/answer partials use `t<turn>.thought` / `t<turn>.answer` and the
+     * finalized messages REUSE those ids, so the ledger keeps one bubble id
+     * from first partial to final. Tool bubbles use the protocol toolCallId.
+     */
+    private acpMessageSeq = 0;
+    private acpTurnSeq = 0;
  /** Guard: prevent concurrent sendPrompt calls from racing on shared state */
     private _sendPromptInFlight = false;
 
@@ -380,18 +390,18 @@ export class AcpProviderInstance implements ProviderInstance {
 
         if (this.currentStatus === 'generating') {
             const partialThoughtMessage = this.buildPartialThoughtMessage(Date.now());
-            if (partialThoughtMessage) recentMessages.push(partialThoughtMessage as ChatMessage);
+            if (partialThoughtMessage) recentMessages.push(this.withAcpSource(partialThoughtMessage, this.turnSourceId('thought')) as ChatMessage);
         }
 
  // generating during partial response add
         if (this.currentStatus === 'generating' && (this.partialContent || this.partialBlocks.length > 0)) {
             const blocks = this.buildPartialBlocks();
             if (blocks.length > 0) {
-                recentMessages.push(buildAssistantChatMessage({
+                recentMessages.push(this.withAcpSource(buildAssistantChatMessage({
                     content: blocks,
                     timestamp: Date.now(),
                     toolCalls: this.turnToolCalls.length > 0 ? [...this.turnToolCalls] : undefined,
-                }));
+                }), this.turnSourceId('answer')));
             }
         }
 
@@ -1156,10 +1166,11 @@ export class AcpProviderInstance implements ProviderInstance {
             : [{ type: 'text', text }];
 
  // Add user message locally (store as ContentBlock[])
-        this.messages.push(buildUserChatMessage({
+        this.acpTurnSeq += 1;
+        this.messages.push(this.withAcpSource(buildUserChatMessage({
             content: contentBlocks && contentBlocks.length > 0 ? contentBlocks : text,
             timestamp: Date.now(),
-        }));
+        }), this.nextMessageSourceId()));
 
         this.currentStatus = 'generating';
         this.partialContent = '';
@@ -1398,11 +1409,11 @@ export class AcpProviderInstance implements ProviderInstance {
             }
 
             if (content.trim()) {
-                this.messages.push(buildChatMessage({
+                this.messages.push(this.withAcpSource(buildChatMessage({
                     role: m.role || 'assistant',
                     content: content.trim(),
                     timestamp: Date.now(),
-                }));
+                }), this.nextMessageSourceId()));
                 this.partialContent = '';
             }
         }
@@ -1452,6 +1463,22 @@ export class AcpProviderInstance implements ProviderInstance {
     }
 
  // ─── Rich Content Helpers ────────────────────────────
+
+    private nextMessageSourceId(): string {
+        this.acpMessageSeq += 1;
+        return `m${this.acpMessageSeq}`;
+    }
+
+    private turnSourceId(slot: string): string {
+        return `t${this.acpTurnSeq}.${slot}`;
+    }
+
+    /** Stamp the identity ledger's `acp` source address (daemon-internal `_src`). */
+    private withAcpSource<T extends object | null>(message: T, localId: string): T {
+        if (!message) return message;
+        const src = acpSourceAddress(localId);
+        return src ? { ...message, _src: src } : message;
+    }
 
     /** Build ContentBlock[] from current partial state */
     private buildPartialBlocks(): ContentBlock[] {
@@ -1516,33 +1543,35 @@ export class AcpProviderInstance implements ProviderInstance {
 
     private buildTurnToolCallMessages(timestamp = Date.now()): AcpMessage[] {
         return this.turnToolCalls
-            .map((toolCall) => {
-                const content = this.summarizeToolCallBubbleContent(toolCall);
-                if (!content) return null;
-                const isRunning = toolCall.status === 'pending' || toolCall.status === 'in_progress';
-                const label = toolCall.title || undefined;
-                const kind = this.buildToolCallBubbleKind(toolCall);
-                if (kind === 'thought') {
-                    return buildThoughtChatMessage({
-                        content,
-                        timestamp,
-                        meta: { label: label || 'Thought', isRunning },
-                    });
-                }
-                if (kind === 'terminal') {
-                    return buildTerminalChatMessage({
-                        content,
-                        timestamp,
-                        meta: { label: label || 'Ran command', isRunning },
-                    });
-                }
-                return buildToolChatMessage({
-                    content,
-                    timestamp,
-                    meta: { label: label || 'Tool call', isRunning },
-                });
-            })
+            .map((toolCall, index) => this.withAcpSource(this.buildTurnToolCallMessage(toolCall, timestamp), this.turnSourceId(`tool.${toolCall.toolCallId || index}`)))
             .filter(Boolean) as AcpMessage[];
+    }
+
+    private buildTurnToolCallMessage(toolCall: ToolCallInfo, timestamp: number): AcpMessage | null {
+        const content = this.summarizeToolCallBubbleContent(toolCall);
+        if (!content) return null;
+        const isRunning = toolCall.status === 'pending' || toolCall.status === 'in_progress';
+        const label = toolCall.title || undefined;
+        const kind = this.buildToolCallBubbleKind(toolCall);
+        if (kind === 'thought') {
+            return buildThoughtChatMessage({
+                content,
+                timestamp,
+                meta: { label: label || 'Thought', isRunning },
+            });
+        }
+        if (kind === 'terminal') {
+            return buildTerminalChatMessage({
+                content,
+                timestamp,
+                meta: { label: label || 'Ran command', isRunning },
+            });
+        }
+        return buildToolChatMessage({
+            content,
+            timestamp,
+            meta: { label: label || 'Tool call', isRunning },
+        });
     }
 
     /** Finalize streaming content into an assistant message */
@@ -1550,7 +1579,7 @@ export class AcpProviderInstance implements ProviderInstance {
         const timestamp = Date.now();
         const thoughtMessage = this.buildPartialThoughtMessage(timestamp);
         if (thoughtMessage) {
-            this.messages.push(thoughtMessage);
+            this.messages.push(this.withAcpSource(thoughtMessage, this.turnSourceId('thought')));
         }
 
         const toolCallMessages = this.buildTurnToolCallMessages(timestamp);
@@ -1568,13 +1597,13 @@ export class AcpProviderInstance implements ProviderInstance {
         }).filter(b => b.type !== 'text' || (b.type === 'text' && b.text.trim()));
 
         if (finalBlocks.length > 0) {
-            this.messages.push(buildAssistantChatMessage({
+            this.messages.push(this.withAcpSource(buildAssistantChatMessage({
                 content: finalBlocks.length === 1 && finalBlocks[0].type === 'text'
                     ? (finalBlocks[0] as {type: 'text', text: string}).text   // single text → string (backward compat)
                     : finalBlocks,
                 timestamp: Date.now(),
                 toolCalls: this.turnToolCalls.length > 0 ? [...this.turnToolCalls] : undefined,
-            }));
+            }), this.turnSourceId('answer')));
         }
         this.partialContent = '';
         this.partialThoughtContent = '';
@@ -1707,10 +1736,10 @@ export class AcpProviderInstance implements ProviderInstance {
     private appendSystemMessage(content: string, timestamp = Date.now()): void {
         const normalizedContent = String(content || '').trim();
         if (!normalizedContent) return;
-        this.messages.push(buildRuntimeSystemChatMessage({
+        this.messages.push(this.withAcpSource(buildRuntimeSystemChatMessage({
             content: normalizedContent,
             timestamp,
-        }));
+        }), this.nextMessageSourceId()));
         if (this.messages.length > 200) {
             this.messages = this.messages.slice(-100);
         }

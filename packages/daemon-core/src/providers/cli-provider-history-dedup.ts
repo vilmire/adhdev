@@ -10,6 +10,7 @@
 
 import { flattenContent } from './contracts.js';
 import { recordProjectionCarry } from '../shared/projection-carry-counters.js';
+import type { MessageSourceAddress } from '../chat/message-source-address.js';
 
 export type PersistableCliHistoryMessage = {
     role: string;
@@ -27,6 +28,12 @@ export type PersistableCliHistoryMessage = {
      * to ask for.
      */
     toolBlockRef?: { sourceMtimeMs: number; recordIndex: number; blockIndex: number };
+    /**
+     * Daemon-internal source address for the message identity ledger
+     * (`chat/message-source-address.ts`) — rides with `toolBlockRef` on the
+     * in-memory hops (`carryMessageRefs`), never persisted, never on a wire.
+     */
+    _src?: MessageSourceAddress;
     /**
      * (TOOL-EXPAND) Producer-minted bubble identity, carried for the same reason
      * as `toolBlockRef`: these rows are projected straight into
@@ -112,7 +119,8 @@ export function carryBubbleIdentity(message: BubbleIdentityFields): BubbleIdenti
  */
 export function carryMessageRefs(message: BubbleIdentityFields & {
     toolBlockRef?: { sourceMtimeMs: number; recordIndex: number; blockIndex: number };
-}): Partial<Pick<PersistableCliHistoryMessage, 'toolBlockRef'>> & BubbleIdentityFields {
+    _src?: MessageSourceAddress;
+}): Partial<Pick<PersistableCliHistoryMessage, 'toolBlockRef' | '_src'>> & BubbleIdentityFields {
     const carriedToolBlockRef = Boolean(message?.toolBlockRef);
     // (G1) Measured HERE rather than inside `carryBubbleIdentity`, even though
     // that is the deeper helper: this function calls it, so instrumenting both
@@ -123,6 +131,9 @@ export function carryMessageRefs(message: BubbleIdentityFields & {
     try {
         return {
             ...(carriedToolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}),
+            // The source address rides the same in-memory hops as the ref:
+            // both are native addresses the persisted writer must not keep.
+            ...(message?._src ? { _src: message._src } : {}),
             ...carryBubbleIdentity(message),
         };
     } finally {

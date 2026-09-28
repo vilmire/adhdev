@@ -33,6 +33,7 @@ import {
   TOOL_RESULT_SUMMARY_MAX,
 } from '../spec/native-history-tool-blocks.js';
 import type { NativeHistoryToolBlockRef } from '../spec/native-history-types.js';
+import { type MessageSourceAddress, nativeSourceAddress, recordBlockSource, SESSION_START_ADDRESS } from '../../chat/message-source-address.js';
 
 export interface NativeHistoryMessage {
   ts: string;
@@ -54,6 +55,11 @@ export interface NativeHistoryMessage {
    * see `stampClaudeToolRef`.
    */
   toolBlockRef?: NativeHistoryToolBlockRef;
+  /**
+   * Daemon-internal source address for the message identity ledger
+   * (`chat/message-source-address.ts`). Never leaves the daemon.
+   */
+  _src?: MessageSourceAddress;
 }
 
 export interface NativeHistorySession {
@@ -482,6 +488,7 @@ function parseTranscriptFile(
         agent: 'claude-cli',
         historySessionId: sessionId,
         workspace: detectedWorkspace,
+        _src: nativeSourceAddress(sessionId, SESSION_START_ADDRESS),
       });
     }
 
@@ -531,6 +538,10 @@ function parseTranscriptFile(
         if (part.toolName) msg.toolName = part.toolName;
         if (detectedWorkspace) msg.workspace = detectedWorkspace;
         stampToolBlockRef(msg, part, recordIndex, sourceMtimeMs);
+        // (§3.2) `n.<L>.<recordIndex>.<blockIndex+1>`: records are append-only
+        // and recordIndex counts parsed lines (skipped isMeta ones included),
+        // so the address never renumbers as the file grows.
+        msg._src = recordBlockSource(sessionId, recordIndex, part.blockIndex);
         records.push(msg);
       }
     } else if (type === 'assistant') {
@@ -548,6 +559,10 @@ function parseTranscriptFile(
         if (part.toolName) msg.toolName = part.toolName;
         if (detectedWorkspace) msg.workspace = detectedWorkspace;
         stampToolBlockRef(msg, part, recordIndex, sourceMtimeMs);
+        // (§3.2) `n.<L>.<recordIndex>.<blockIndex+1>`: records are append-only
+        // and recordIndex counts parsed lines (skipped isMeta ones included),
+        // so the address never renumbers as the file grows.
+        msg._src = recordBlockSource(sessionId, recordIndex, part.blockIndex);
         records.push(msg);
       }
     }

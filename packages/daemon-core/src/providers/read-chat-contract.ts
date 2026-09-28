@@ -1,6 +1,7 @@
 import type { MessagePart, ModalInfo, ReadChatResult } from './contracts.js'
 import { normalizeMessageParts } from './contracts.js'
 import type { NativeTurnTerminalMarker } from '../chat/native-turn-signal.js'
+import { readMessageSourceAddress } from '../chat/message-source-address.js'
 import type { ChatBubbleState, ChatMessage } from '../types.js'
 import {
   CHAT_CONTRACT_VERSION_V1,
@@ -105,6 +106,11 @@ function validateMessage(message: unknown, source: string, index: number): ChatM
       }
     }
   }
+  // Daemon-internal source address for the message identity ledger — re-read
+  // shape-checked (never forwarded as-is) and stripped again at the read_chat
+  // choke point, so it can ride this hop without ever leaving the daemon.
+  const src = readMessageSourceAddress(message._src)
+  if (src) normalized._src = src
   if (Array.isArray(message.toolCalls)) normalized.toolCalls = message.toolCalls as ChatMessage['toolCalls']
   if (isPlainObject(message.meta)) normalized.meta = message.meta as ChatMessage['meta']
   if (typeof message.senderName === 'string') normalized.senderName = message.senderName

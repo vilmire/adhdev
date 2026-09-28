@@ -53,6 +53,7 @@ export interface BuildTranscriptObservationInput {
  * @message-projection-excludes bubbleId: same reason; the wire has no consumer
  * for per-bubble daemon identity, and `sequence` + `turnKey` carry what readers
  * actually need.
+ * @message-projection-excludes _src: daemon-internal reader address for the message identity ledger; it must never reach the replica wire.
  *
  * The single observation publisher's narrowing. Widening the downstream wire
  * encoder's allow-list alone is NOT enough — a field has to survive here first

@@ -62364,6 +62364,14 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         throw misuse(`${topic} uses "owned" but verifyTakeover/verifyWriterDirective are absent`);
       if (p.hintKeys !== void 0 && p.hintKeys !== "plain" && p.hintKeys !== "hash")
         throw misuse(`bad hintKeys for ${topic}`);
+      if (p.keyed !== void 0) {
+        if (p.kind !== "append" || mode !== "full" || p.replication !== "subscribe-only")
+          throw misuse(`keyed requires kind "append", retention "full" and replication "subscribe-only" (${topic})`);
+        const k = p.keyed;
+        const tk = typeof k === "object" && k !== null ? k.tombstoneKind : void 0;
+        if (typeof tk !== "string" || tk.length === 0)
+          throw misuse(`bad keyed.tombstoneKind for ${topic}`);
+      }
       if (p.flushThrottleMs !== void 0 && (!Number.isSafeInteger(p.flushThrottleMs) || p.flushThrottleMs < 0))
         throw misuse(`bad flushThrottleMs for ${topic}`);
     }
@@ -63797,6 +63805,18 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           // case. `groups` has no topic-keyed index (it's keyed by `view\0params`),
           // so this is a linear scan — acceptable here: called once per candidate
           // topic in a boot-time sweep, not per-request.
+          // Serving subscribers of `topic`'s built-in "tail" group (0 when none) —
+          // host-guide §4.7 `tailSubscriberCount`. Unlike hasActiveSubscribersFor it
+          // does not count a register topic's "register" group.
+          tailSubscriberCount(topic) {
+            const group = this.groups.get(this.ringKey(topic));
+            if (!group)
+              return 0;
+            let n = 0;
+            for (const inGroup of group.subs.values())
+              n += inGroup.size;
+            return n;
+          }
           hasActiveSubscribersFor(topic) {
             for (const group of this.groups.values()) {
               if (group.ringTopic === topic && group.subs.size > 0)
@@ -63848,8 +63868,9 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                 this.ringEpochs.set(topic, epoch);
               }
               const defaultLimit = mode === "ring" ? policy.retention.size ?? this.deps.constants.RING_DEFAULT : FULL_TAIL_DEFAULT;
-              const defaultRows = mode === "ring" ? () => this.deps.core.ringTail(topic) : () => this.deps.core.fullTail(topic, FULL_TAIL_DEFAULT);
-              const rowsProvider = () => (this.selectTail(topic, mode, defaultLimit) ?? defaultRows()).map((e) => this.ringRow(e));
+              const keyed = policy.keyed !== void 0;
+              const defaultRows = mode === "ring" ? () => this.deps.core.ringTail(topic) : keyed ? () => this.deps.core.latestPerKey(topic, null).map((r) => r.entry) : () => this.deps.core.fullTail(topic, FULL_TAIL_DEFAULT);
+              const rowsProvider = () => (this.selectTail(topic, mode, defaultLimit, keyed) ?? defaultRows()).map((e) => this.ringRow(e));
               const group2 = {
                 key: this.ringKey(topic),
                 viewName: null,
@@ -63890,7 +63911,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             this.groupsByView.set(handle.name, list);
             return group;
           }
-          selectTail(topic, mode, defaultLimit) {
+          selectTail(topic, mode, defaultLimit, keyed) {
             const sel = this.tailSelector;
             if (!sel)
               return null;
@@ -63900,7 +63921,11 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                 topic,
                 retention: mode,
                 defaultLimit,
-                page: (beforeRowid, limit) => core2.tailPage(topic, mode === "ring", beforeRowid, limit)
+                page: (beforeRowid, limit) => core2.tailPage(topic, mode === "ring", beforeRowid, limit),
+                keyed,
+                latestPerKey: (uptoRowid) => core2.latestPerKey(topic, uptoRowid),
+                rowsAfter: (rowid) => core2.rowsAfter(topic, rowid),
+                keyHead: (key2) => core2.keyHead(topic, key2)
               }) ?? null;
             } catch {
               return null;
@@ -64325,6 +64350,9 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         };
       }
     });
+    var PRUNE_SUPERSEDED_DEFAULT_MAX_ROWS;
+    var PRUNE_SUPERSEDED_MAX_ROWS_CAP;
+    var KEYED_READ_PAGE;
     var HLC_META_KEY;
     var LogCore;
     var init_log = __esm2({
@@ -64335,6 +64363,9 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         init_errors3();
         init_hlc();
         init_subs();
+        PRUNE_SUPERSEDED_DEFAULT_MAX_ROWS = 250;
+        PRUNE_SUPERSEDED_MAX_ROWS_CAP = 1e4;
+        KEYED_READ_PAGE = 500;
         HLC_META_KEY = "hlc_state";
         LogCore = class {
           store;
@@ -64528,6 +64559,98 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               });
             });
           }
+          // Keyed-append compaction (host-guide §4.7). Deletes, in one queue item:
+          //   (a) every row at or below the floor that a NEWER row of the same key at
+          //       or below `uptoRowid` supersedes;
+          //   (b) every tombstone (`keyed.tombstoneKind`) at or below the floor that
+          //       is then the only row of its key at or below `uptoRowid`;
+          //   (c) with supersedeOtherWriters, every row at or below the floor authored
+          //       by a writer other than this node's (a writer change: the new
+          //       writer's base frame has rewritten every live key).
+          // floor = min(uptoRowid, every registered onEntry cursor) — a row an
+          // onEntry consumer has not read is never deleted. Supersession is judged at
+          // `uptoRowid` (the host's commit watermark): a row newer than it never
+          // causes an older row to be deleted, so the last committed version of a key
+          // an in-flight frame is rewriting survives. Unlike pruneTopic this is
+          // ALLOWED while "tail" subscribers are attached: a keyed topic's SNAP is
+          // built newest-per-key, so no reader ever re-reads a superseded row. At
+          // most `maxRows` rows go per call — a result equal to maxRows means more
+          // may remain.
+          pruneSuperseded(topic, o) {
+            try {
+              if (this.closed)
+                throw new SeqscribeError("ERR_MISUSE", "node is closed");
+              const entry = this.topics.get(topic);
+              if (entry.policy.keyed === void 0)
+                throw misuse(`pruneSuperseded: requires a keyed topic (${topic})`);
+              if (!Number.isSafeInteger(o?.uptoRowid) || o.uptoRowid < 0)
+                throw misuse(`pruneSuperseded: uptoRowid must be a non-negative safe integer`);
+              if (o.maxRows !== void 0 && (!Number.isSafeInteger(o.maxRows) || o.maxRows < 1))
+                throw misuse(`pruneSuperseded: maxRows must be a positive safe integer`);
+            } catch (e) {
+              return Promise.reject(e);
+            }
+            return new Promise((resolve38, reject) => {
+              this.push({
+                t: "pruneSuperseded",
+                topic,
+                uptoRowid: o.uptoRowid,
+                maxRows: Math.min(o.maxRows ?? PRUNE_SUPERSEDED_DEFAULT_MAX_ROWS, PRUNE_SUPERSEDED_MAX_ROWS_CAP),
+                supersedeOtherWriters: o.supersedeOtherWriters === true,
+                resolve: resolve38,
+                reject
+              });
+            });
+          }
+          // ---- keyed-append reads (host-guide §4.7) ----
+          // Keyed topics only; ERR_MISUSE otherwise. A register topic also carries
+          // keys, but its current value is a causal fold (§11), never "newest row".
+          assertKeyed(topic, op) {
+            if (this.topics.get(topic).policy.keyed === void 0)
+              throw misuse(`${op}: requires a keyed topic (${topic})`);
+          }
+          // One rowid-ordered page of the newest row per key (see
+          // Store.latestPerKeyPage) — the bounded read behind scanLatestPerKey.
+          latestPerKeyPage(topic, uptoRowid, afterRowid, limit) {
+            this.assertKeyed(topic, "latestPerKey");
+            return this.store.latestPerKeyPage(topic, uptoRowid, afterRowid, limit);
+          }
+          // The whole newest-per-key set at or below `uptoRowid` (null = all rows),
+          // rowid order — a keyed "tail" SNAP body. Read page by page; the result is
+          // the live state (one row per key), never the superseded history.
+          latestPerKey(topic, uptoRowid) {
+            this.assertKeyed(topic, "latestPerKey");
+            const out = [];
+            let after = 0;
+            for (; ; ) {
+              const page = this.store.latestPerKeyPage(topic, uptoRowid, after, KEYED_READ_PAGE);
+              for (const r of page)
+                out.push(r);
+              if (page.length < KEYED_READ_PAGE)
+                return out;
+              after = page[page.length - 1].rowid;
+            }
+          }
+          // Every row strictly after `afterRowid`, rowid order (the in-flight suffix
+          // above a keyed topic's watermark). Any full-retention topic.
+          rowsAfter(topic, afterRowid) {
+            if (this.topics.get(topic).policy.retention.mode !== "full")
+              throw misuse(`rowsAfter: requires retention "full" (${topic})`);
+            const out = [];
+            let after = afterRowid;
+            for (; ; ) {
+              const page = this.store.entriesForTopicFromRowid(topic, after, KEYED_READ_PAGE);
+              for (const r of page)
+                out.push(r);
+              if (page.length < KEYED_READ_PAGE)
+                return out;
+              after = page[page.length - 1].rowid;
+            }
+          }
+          keyHead(topic, key2) {
+            this.assertKeyed(topic, "keyHead");
+            return this.store.keyHead(topic, key2) ?? null;
+          }
           recoveryTarget(topic, writer) {
             return this.recoveries.get(`${topic} ${writer}`);
           }
@@ -64715,8 +64838,10 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                     this.processAdopt(item, settle);
                   else if (item.t === "retireTopic")
                     this.processRetireTopic(item, settle);
-                  else
+                  else if (item.t === "pruneTopic")
                     this.processPruneTopic(item, settle);
+                  else
+                    this.processPruneSuperseded(item, settle);
                 }
                 this.store.metaSet(HLC_META_KEY, JSON.stringify(this.hlcState));
               });
@@ -64967,6 +65092,10 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             }
             const belowRowid = Math.min(cursorFloor, keepNewestFloor) - 1;
             const hlcBefore = item.olderThanMs !== void 0 ? this.clock() - item.olderThanMs : null;
+            if (belowRowid >= 1 && entry.policy.keyed !== void 0 && this.hasActiveSubscriber?.(topic)) {
+              settle.push(() => item.reject(misuse(`pruneTopic: keyed topic has an active tail subscriber \u2014 use pruneSuperseded (${topic})`)));
+              return;
+            }
             if (belowRowid >= 1 && this.hasActiveSubscriber?.(topic)) {
               const windowFloor = this.store.rowidAtTailOffset(topic, FULL_TAIL_DEFAULT);
               if (windowFloor === null || belowRowid >= windowFloor) {
@@ -64980,6 +65109,37 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             }
             const prunedRows = this.store.deleteLogRowsUpToRowid(topic, belowRowid, hlcBefore);
             settle.push(() => item.resolve({ prunedRows }));
+          }
+          // pruneSuperseded's flush-handler half — see pruneSuperseded() for the
+          // semantics. Order inside the one transaction: (c), then (a), then (b), so
+          // (b)'s "only row of its key" probe sees the other two steps' deletions;
+          // each step takes what is left of the maxRows budget.
+          processPruneSuperseded(item, settle) {
+            const { topic } = item;
+            const keyed = this.topics.get(topic).policy.keyed;
+            if (keyed === void 0) {
+              settle.push(() => item.reject(misuse(`pruneSuperseded: requires a keyed topic (${topic})`)));
+              return;
+            }
+            let floor = item.uptoRowid;
+            for (const c of this.store.cursorsForTopic(topic))
+              floor = Math.min(floor, c.lastRowid);
+            let budget = item.maxRows;
+            let pruned = 0;
+            const drop = (rowids) => {
+              this.store.deleteLogRowids(topic, rowids);
+              budget -= rowids.length;
+              pruned += rowids.length;
+            };
+            if (floor >= 1) {
+              if (item.supersedeOtherWriters && budget > 0)
+                drop(this.store.otherWriterRowids(topic, this.writerId, floor, budget));
+              if (budget > 0)
+                drop(this.store.supersededRowids(topic, floor, item.uptoRowid, budget));
+              if (budget > 0)
+                drop(this.store.loneTombstoneRowids(topic, keyed.tombstoneKind, floor, item.uptoRowid, budget));
+            }
+            settle.push(() => item.resolve({ prunedRows: pruned }));
           }
           recoveryIngest(head, e, target, applied, anomalies, via, done) {
             const now = new Date(this.clock()).toISOString();
@@ -66389,6 +66549,82 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           entriesTailPage(topic, beforeRowid, limit) {
             const rows = beforeRowid === null ? this.db.all("SELECT rowid, * FROM sq_log INDEXED BY sq_log_topic_rowid WHERE topic = ? ORDER BY rowid DESC LIMIT ?", [topic, limit]) : this.db.all("SELECT rowid, * FROM sq_log INDEXED BY sq_log_topic_rowid WHERE topic = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?", [topic, beforeRowid, limit]);
             return rows.map(rowToEntry);
+          }
+          // ---- keyed append topics (TopicPolicy.keyed, host-guide §4.7) ----
+          //
+          // Every query below is an index walk: the outer loop names its index
+          // (sq_log_topic_rowid for rowid-ordered pages, sq_log_key for per-key
+          // work), and the correlated per-key probe is a seek on sq_log_key, whose
+          // trailing rowid makes "a newer row of this key at or below W" a range
+          // check inside one (topic, key) run. sq_log_key is PARTIAL (key IS NOT
+          // NULL); every probe carries an explicit `key IS NOT NULL` so the planner
+          // can prove the index usable without relying on implied-not-null
+          // inference. No query here sorts (no TEMP B-TREE) or materializes a topic:
+          // callers page with LIMIT and resume by rowid.
+          // One page of the newest row per key, in rowid order, restricted to rows
+          // with afterRowid < rowid <= uptoRowid (null = no upper bound). A row is
+          // "newest" when no row of the same key exists in (rowid, uptoRowid] — so
+          // supersession is judged AT the watermark: a row newer than uptoRowid never
+          // hides an older one. Key-less rows (never produced on a keyed topic) are
+          // their own key and always qualify. Superseded rows are skipped inside the
+          // index walk (their key column is read, their payload is not parsed).
+          latestPerKeyPage(topic, uptoRowid, afterRowid, limit) {
+            const upto = uptoRowid ?? Number.MAX_SAFE_INTEGER;
+            return this.db.all(`SELECT a.* FROM sq_log AS a INDEXED BY sq_log_topic_rowid
+         WHERE a.topic = ? AND a.rowid > ? AND a.rowid <= ?
+           AND (a.key IS NULL OR NOT EXISTS (
+             SELECT 1 FROM sq_log AS b INDEXED BY sq_log_key
+             WHERE b.topic = ? AND b.key IS NOT NULL AND b.key = a.key
+               AND b.rowid > a.rowid AND b.rowid <= ?))
+         ORDER BY a.rowid LIMIT ?`, [topic, afterRowid, upto, topic, upto, limit]).map(rowToEntry);
+          }
+          // Newest row of one key (any rowid), or undefined. A single descending
+          // seek on sq_log_key — how a host finds its commit watermark W.
+          keyHead(topic, key2) {
+            const r = this.db.get(`SELECT * FROM sq_log INDEXED BY sq_log_key
+       WHERE topic = ? AND key IS NOT NULL AND key = ? ORDER BY rowid DESC LIMIT 1`, [topic, key2]);
+            return r ? rowToEntry(r) : void 0;
+          }
+          // pruneSuperseded (a): rows at or below `floorRowid` that a NEWER row of
+          // the same key at or below `uptoRowid` supersedes. Walks sq_log_key in
+          // (key, rowid) order — index-only for the candidate AND the probe.
+          supersededRowids(topic, floorRowid, uptoRowid, limit) {
+            return this.db.all(`SELECT a.rowid AS rowid FROM sq_log AS a INDEXED BY sq_log_key
+         WHERE a.topic = ? AND a.key IS NOT NULL AND a.rowid <= ?
+           AND EXISTS (
+             SELECT 1 FROM sq_log AS b INDEXED BY sq_log_key
+             WHERE b.topic = ? AND b.key IS NOT NULL AND b.key = a.key
+               AND b.rowid > a.rowid AND b.rowid <= ?)
+         LIMIT ?`, [topic, floorRowid, topic, uptoRowid, limit]).map((r) => r.rowid);
+          }
+          // pruneSuperseded (b): tombstones (`kind = tombstoneKind`) at or below
+          // `floorRowid` that are the ONLY row of their key at or below `uptoRowid`.
+          // An older row of the key still present (e.g. held by a consumer cursor)
+          // keeps its tombstone — deleting it would resurrect that row. Rows of the
+          // key newer than uptoRowid (an uncommitted re-creation) do not block.
+          loneTombstoneRowids(topic, tombstoneKind, floorRowid, uptoRowid, limit) {
+            return this.db.all(`SELECT a.rowid AS rowid FROM sq_log AS a INDEXED BY sq_log_key
+         WHERE a.topic = ? AND a.key IS NOT NULL AND a.rowid <= ? AND a.kind = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM sq_log AS b INDEXED BY sq_log_key
+             WHERE b.topic = ? AND b.key IS NOT NULL AND b.key = a.key
+               AND b.rowid <> a.rowid AND b.rowid <= ?)
+         LIMIT ?`, [topic, floorRowid, tombstoneKind, topic, uptoRowid, limit]).map((r) => r.rowid);
+          }
+          // pruneSuperseded with supersedeOtherWriters: rows at or below `floorRowid`
+          // authored by any writer other than `writer`, oldest first.
+          otherWriterRowids(topic, writer, floorRowid, limit) {
+            return this.db.all(`SELECT rowid FROM sq_log INDEXED BY sq_log_topic_rowid
+         WHERE topic = ? AND rowid <= ? AND writer <> ? ORDER BY rowid LIMIT ?`, [topic, floorRowid, writer, limit]).map((r) => r.rowid);
+          }
+          // Delete exactly these rows of `topic` — rowids the caller just selected in
+          // the same transaction, so each exists (the count is not read from
+          // run().changes, which the wasm/DO adapters do not report).
+          deleteLogRowids(topic, rowids) {
+            for (const rowid of rowids)
+              this.db.run("DELETE FROM sq_log WHERE rowid = ? AND topic = ?", [rowid, topic]);
+            if (rowids.length > 0)
+              this.logCounts.delete(topic);
           }
           // Total-order iteration (§1): entries strictly after `after` in
           // (hlc_l, hlc_c, writer, seq) order; after=null starts from the beginning.
@@ -68885,7 +69121,17 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             append(kind, payload, o) {
               if (topics.has(topic) && topics.get(topic).policy.kind === "register")
                 throw misuse(`raw append on register topic ${topic} \u2014 use register(topic) helpers`);
-              return core2.append(topic, kind, payload, o?.ref ? { ref: o.ref } : void 0);
+              const keyed = topics.has(topic) && topics.get(topic).policy.keyed !== void 0;
+              if (keyed && o?.key === void 0)
+                return Promise.reject(misuse(`append on keyed topic ${topic} requires a key`));
+              if (!keyed && o?.key !== void 0 && topics.has(topic))
+                return Promise.reject(misuse(`append key requires a keyed topic (${topic})`));
+              const co = {};
+              if (o?.ref)
+                co.ref = o.ref;
+              if (o?.key !== void 0)
+                co.key = o.key;
+              return core2.append(topic, kind, payload, co);
             }
           };
         },
@@ -69063,6 +69309,34 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           return { retired, skipped };
         },
         scanEntries,
+        pruneSuperseded: (topic, o) => core2.pruneSuperseded(topic, o),
+        scanLatestPerKey: (topic, o = {}) => {
+          if (closed)
+            throw misuse("node is closed");
+          topics.get(topic);
+          const limit = Math.min(Math.max(1, Math.floor(o.limit ?? SCAN_DEFAULT_LIMIT)), SCAN_MAX_LIMIT);
+          const after = o.afterRowid ?? 0;
+          if (!Number.isSafeInteger(after) || after < 0)
+            throw misuse("scanLatestPerKey: afterRowid must be a non-negative safe integer");
+          if (o.uptoRowid !== void 0 && (!Number.isSafeInteger(o.uptoRowid) || o.uptoRowid < 0))
+            throw misuse("scanLatestPerKey: uptoRowid must be a non-negative safe integer");
+          const fetched = core2.latestPerKeyPage(topic, o.uptoRowid ?? null, after, limit + 1);
+          const entries = fetched.slice(0, limit);
+          const complete = fetched.length <= limit;
+          const r = { entries, complete };
+          if (!complete)
+            r.nextAfterRowid = entries[entries.length - 1].rowid;
+          return r;
+        },
+        keyHead: (topic, key2) => {
+          if (closed)
+            throw misuse("node is closed");
+          return core2.keyHead(topic, key2);
+        },
+        tailSubscriberCount: (topic) => {
+          topics.get(topic);
+          return subs.tailSubscriberCount(topic);
+        },
         headOrder: (topic) => {
           if (closed)
             throw misuse("node is closed");
@@ -85837,10 +86111,10 @@ ${upstream}`;
     }
     function resolveBuiltinOrAliasKind(kind) {
       if (typeof kind !== "string") return null;
-      const normalizedKind = canonicalizeKindHint(kind);
-      if (!normalizedKind) return null;
-      if (KNOWN_CHAT_MESSAGE_KINDS.has(normalizedKind)) return normalizedKind;
-      return CHAT_MESSAGE_KIND_ALIASES[normalizedKind] || null;
+      const normalizedKind2 = canonicalizeKindHint(kind);
+      if (!normalizedKind2) return null;
+      if (KNOWN_CHAT_MESSAGE_KINDS.has(normalizedKind2)) return normalizedKind2;
+      return CHAT_MESSAGE_KIND_ALIASES[normalizedKind2] || null;
     }
     function inferHintKind(value) {
       const direct = resolveBuiltinOrAliasKind(value);
@@ -85887,8 +86161,8 @@ ${upstream}`;
     function normalizeChatMessageKind(kind, role) {
       const resolvedKind = resolveBuiltinOrAliasKind(kind);
       if (resolvedKind) return resolvedKind;
-      const normalizedRole = typeof role === "string" ? role.trim().toLowerCase() : "";
-      return normalizedRole === "system" ? "system" : "standard";
+      const normalizedRole2 = typeof role === "string" ? role.trim().toLowerCase() : "";
+      return normalizedRole2 === "system" ? "system" : "standard";
     }
     function resolveChatMessageKind(message) {
       const explicitKind = resolveBuiltinOrAliasKind(message?.kind);
@@ -86262,6 +86536,9 @@ ${upstream}`;
       try {
         return {
           ...carriedToolBlockRef ? { toolBlockRef: message.toolBlockRef } : {},
+          // The source address rides the same in-memory hops as the ref:
+          // both are native addresses the persisted writer must not keep.
+          ...message?._src ? { _src: message._src } : {},
           ...carryBubbleIdentity(message)
         };
       } finally {
@@ -86318,6 +86595,107 @@ ${upstream}`;
         suppressCarryCounting = false;
       }
     });
+    function lineageToken(historySessionId) {
+      return (0, import_crypto14.createHash)("sha256").update(String(historySessionId)).digest("hex").slice(0, 8);
+    }
+    function recordBlockAddress(recordIndex, blockIndex) {
+      if (!Number.isInteger(recordIndex) || recordIndex < 0) return void 0;
+      if (!Number.isInteger(blockIndex) || blockIndex < -1) return void 0;
+      return `${recordIndex}.${blockIndex + 1}`;
+    }
+    function rowIdAddress(rowId, part = 0) {
+      const token = normalizeNativeIdToken(rowId);
+      if (!token || !Number.isInteger(part) || part < 0) return void 0;
+      return `h${token}.${part}`;
+    }
+    function keyedNativeAddress(nativeId, part = 0) {
+      const token = normalizeNativeIdToken(nativeId);
+      if (!token || !Number.isInteger(part) || part < 0) return void 0;
+      return `k${token}.${part}`;
+    }
+    function normalizeNativeIdToken(raw) {
+      if (typeof raw !== "string" && typeof raw !== "number") return "";
+      const text = String(raw).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "_");
+      return text.slice(0, NATIVE_ID_TOKEN_MAX_BYTES);
+    }
+    function nativeSourceAddress(historySessionId, addr) {
+      const session = typeof historySessionId === "string" ? historySessionId.trim() : "";
+      if (!session || !addr || !ADDR_RE.test(addr)) return void 0;
+      return { cls: "n", L: lineageToken(session), addr };
+    }
+    function runtimeSourceAddress(dedupKey) {
+      const key2 = typeof dedupKey === "string" ? dedupKey.trim() : "";
+      if (!key2 || key2.length > LOCAL_KEY_MAX_LENGTH) return void 0;
+      return { cls: "rt", key: key2 };
+    }
+    function acpSourceAddress(localId) {
+      const id22 = typeof localId === "string" ? localId.trim() : "";
+      if (!id22 || id22.length > LOCAL_KEY_MAX_LENGTH) return void 0;
+      return { cls: "acp", id: id22 };
+    }
+    function messageSourceKey(src) {
+      switch (src.cls) {
+        case "n":
+          return `n:${src.L}.${src.addr}`;
+        case "rt":
+          return `rt:${src.key}`;
+        case "acp":
+          return `acp:${src.id}`;
+      }
+    }
+    function naturalMessageId(src) {
+      if (src.cls !== "n") return null;
+      return `n.${src.L}.${src.addr}`;
+    }
+    function readMessageSourceAddress(value) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return void 0;
+      const record22 = value;
+      switch (record22.cls) {
+        case "n": {
+          const L = typeof record22.L === "string" ? record22.L : "";
+          const addr = typeof record22.addr === "string" ? record22.addr : "";
+          if (!LINEAGE_RE.test(L) || !ADDR_RE.test(addr)) return void 0;
+          return { cls: "n", L, addr };
+        }
+        case "rt":
+          return runtimeSourceAddress(record22.key);
+        case "acp":
+          return acpSourceAddress(record22.id);
+        default:
+          return void 0;
+      }
+    }
+    function stripMessageSourceAddresses(messages) {
+      if (!Array.isArray(messages) || !messages.some((m) => m && typeof m === "object" && "_src" in m)) {
+        return messages;
+      }
+      return messages.map((message) => {
+        if (!message || typeof message !== "object" || !("_src" in message)) return message;
+        const { _src, ...rest } = message;
+        void _src;
+        return rest;
+      });
+    }
+    function recordBlockSource(historySessionId, recordIndex, blockIndex) {
+      return nativeSourceAddress(historySessionId, recordBlockAddress(recordIndex, blockIndex));
+    }
+    var import_crypto14;
+    var NATIVE_ID_TOKEN_MAX_BYTES;
+    var SESSION_START_ADDRESS;
+    var ADDR_RE;
+    var LINEAGE_RE;
+    var LOCAL_KEY_MAX_LENGTH;
+    var init_message_source_address = __esm2({
+      "src/chat/message-source-address.ts"() {
+        "use strict";
+        import_crypto14 = require("crypto");
+        NATIVE_ID_TOKEN_MAX_BYTES = 40;
+        SESSION_START_ADDRESS = "s";
+        ADDR_RE = /^[a-z0-9._-]{1,48}$/;
+        LINEAGE_RE = /^[0-9a-f]{8}$/;
+        LOCAL_KEY_MAX_LENGTH = 256;
+      }
+    });
     function getNativeHistoryScriptName(canonicalHistory, key2) {
       const configured = canonicalHistory?.scripts?.[key2];
       if (typeof configured === "string" && configured.trim()) return configured.trim();
@@ -86372,6 +86750,8 @@ ${upstream}`;
             blockIndex: ref.blockIndex
           };
         }
+        const src = readMessageSourceAddress(record22?._src);
+        if (src) base._src = src;
         return sanitizeHistoryMessage(agentType, base);
       }).filter(Boolean);
     }
@@ -86607,6 +86987,7 @@ ${upstream}`;
         "use strict";
         fs17 = __toESM2(require("fs"));
         init_chat_history();
+        init_message_source_address();
       }
     });
     function getHistoryDir() {
@@ -87613,6 +87994,7 @@ ${upstream}`;
           * @message-projection-excludes toolBlockRef: sealed by sourceMtimeMs, so a ref
           * persisted to disk is dead on the next read (expandToolBlock fails closed with
           * `source_changed`). Re-stamped by the native parser on each read instead.
+          * @message-projection-excludes _src: the identity ledger's reader address is re-stamped by the native reader on every read; a persisted copy would pin a stale lineage.
           *
           * The incremental-append lane. Read-back is a passthrough, so a field omitted
           * here is unrecoverable — see the note on the pushed record below.
@@ -92887,7 +93269,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
     }
     function deliverTaskToSession(dispatchThunk, ctx, warmup) {
-      const delivery = { id: `dlv-${(0, import_crypto14.randomUUID)()}` };
+      const delivery = { id: `dlv-${(0, import_crypto15.randomUUID)()}` };
       try {
         recordTaskDispatchedLedger(ctx, delivery.id);
       } catch {
@@ -93639,7 +94021,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         });
       });
     }
-    var import_crypto14;
+    var import_crypto15;
     var warnedInvalidRepoConfigNodes;
     var warnedMissingRouterView;
     var BOOTSTRAP_TERMINAL_STATUSES;
@@ -93652,7 +94034,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
     var init_mesh_queue_assignment = __esm2({
       "src/mesh/mesh-queue-assignment.ts"() {
         "use strict";
-        import_crypto14 = require("crypto");
+        import_crypto15 = require("crypto");
         init_runtime_defaults();
         init_config();
         init_mesh_config();
@@ -98817,6 +99199,8 @@ ${effect.notification.body || ""}`.trim();
           };
         }
       }
+      const src = readMessageSourceAddress(message._src);
+      if (src) normalized._src = src;
       if (Array.isArray(message.toolCalls)) normalized.toolCalls = message.toolCalls;
       if (isPlainObject32(message.meta)) normalized.meta = message.meta;
       if (typeof message.senderName === "string") normalized.senderName = message.senderName;
@@ -98940,6 +99324,7 @@ ${effect.notification.body || ""}`.trim();
       "src/providers/read-chat-contract.ts"() {
         "use strict";
         init_contracts2();
+        init_message_source_address();
         init_transcript_v2();
         VALID_STATUSES = ["idle", "generating", "waiting_approval", "waiting_choice", "finalizing", "error", "panel_hidden", "starting", "streaming", "no_progress", "long_generating"];
         VALID_ROLES = ["user", "assistant", "system", "human"];
@@ -100512,7 +100897,7 @@ ${effect.notification.body || ""}`.trim();
         );
       }
       relPaths.sort();
-      const hash2 = (0, import_crypto15.createHash)("sha256");
+      const hash2 = (0, import_crypto16.createHash)("sha256");
       for (const relPath of relPaths) {
         const absPath = path29.join(rootDir, ...relPath.split("/"));
         const bytes = fs21.readFileSync(absPath);
@@ -100554,14 +100939,14 @@ ${effect.notification.body || ""}`.trim();
     }
     var fs21;
     var path29;
-    var import_crypto15;
+    var import_crypto16;
     var TREE_DIGEST_ALGORITHM;
     var init_tree_digest = __esm2({
       "src/providers/channel/tree-digest.ts"() {
         "use strict";
         fs21 = __toESM2(require("fs"));
         path29 = __toESM2(require("path"));
-        import_crypto15 = require("crypto");
+        import_crypto16 = require("crypto");
         init_contract();
         TREE_DIGEST_ALGORITHM = "adhdev-provider-tree-sha256-v1";
       }
@@ -104687,7 +105072,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         }
         const shape = shapes.pick(rec);
         if (!shape) continue;
-        for (const msg of projectMessages(rec, shape.map, i, lines.length, mtime)) {
+        for (const msg of projectMessages(rec, shape.map, i, lines.length, mtime, providerSessionId || requested || sourcePath)) {
           if (transcriptWorkspace) msg.workspace = transcriptWorkspace;
           messages.push(msg);
         }
@@ -105641,7 +106026,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return cur;
     }
-    function projectMessages(record22, map3, index, total, sourceMtimeMs) {
+    function projectMessages(record22, map3, index, total, sourceMtimeMs, sourceLineage) {
       const roleRaw = jsonPathGet(record22, map3.role);
       const role = normalizeRole(roleRaw);
       let receivedAt = sourceMtimeMs - (total - 1 - index) * 1e3;
@@ -105660,7 +106045,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           blockIndex: -1
         });
         if (recordTool) {
-          out.push({ ...recordTool, receivedAt });
+          out.push(withRecordSource({ ...recordTool, receivedAt }, sourceLineage, index, -1));
           return out;
         }
       }
@@ -105668,7 +106053,14 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const workspace = typeof workspaceRaw === "string" && workspaceRaw.trim() ? workspaceRaw.trim() : void 0;
       const contentRaw = jsonPathGet(record22, map3.content);
       const content = cleanContent(stringifyContent(contentRaw), map3);
-      if (content) out.push(workspace ? { role, content, receivedAt, kind, workspace } : { role, content, receivedAt, kind });
+      if (content) {
+        out.push(withRecordSource(
+          workspace ? { role, content, receivedAt, kind, workspace } : { role, content, receivedAt, kind },
+          sourceLineage,
+          index,
+          -1
+        ));
+      }
       if (map3.tools && Array.isArray(contentRaw)) {
         let nudge = 1;
         for (let blockIndex = 0; blockIndex < contentRaw.length; blockIndex += 1) {
@@ -105678,12 +106070,17 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             blockIndex
           });
           if (tool) {
-            out.push({ ...tool, receivedAt: receivedAt + nudge });
+            out.push(withRecordSource({ ...tool, receivedAt: receivedAt + nudge }, sourceLineage, index, blockIndex));
             nudge += 1;
           }
         }
       }
       return out;
+    }
+    function withRecordSource(message, lineage, recordIndex, blockIndex) {
+      if (!lineage) return message;
+      const src = recordBlockSource(lineage, recordIndex, blockIndex);
+      return src ? { ...message, _src: src } : message;
     }
     function cleanContent(input, map3) {
       let content = input;
@@ -105858,6 +106255,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         init_usage_normalize();
         init_transcript_claim_registry();
         init_native_history_jsonl_cache();
+        init_message_source_address();
         init_native_history_tool_blocks();
         init_native_history_jsonl_cache();
         UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
@@ -106100,7 +106498,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             kind: "session_start",
             agent: "claude-cli",
             historySessionId: sessionId,
-            workspace: detectedWorkspace
+            workspace: detectedWorkspace,
+            _src: nativeSourceAddress(sessionId, SESSION_START_ADDRESS)
           });
         }
         const type2 = String(record22.type || "").trim();
@@ -106130,6 +106529,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             if (part.toolName) msg.toolName = part.toolName;
             if (detectedWorkspace) msg.workspace = detectedWorkspace;
             stampToolBlockRef(msg, part, recordIndex, sourceMtimeMs);
+            msg._src = recordBlockSource(sessionId, recordIndex, part.blockIndex);
             records.push(msg);
           }
         } else if (type2 === "assistant") {
@@ -106147,6 +106547,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             if (part.toolName) msg.toolName = part.toolName;
             if (detectedWorkspace) msg.workspace = detectedWorkspace;
             stampToolBlockRef(msg, part, recordIndex, sourceMtimeMs);
+            msg._src = recordBlockSource(sessionId, recordIndex, part.blockIndex);
             records.push(msg);
           }
         }
@@ -106190,6 +106591,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         init_usage_normalize();
         init_fs_utils();
         init_native_history_tool_blocks();
+        init_message_source_address();
       }
     });
     function resolveNativeCompletionSignalSpec(nativeHistory) {
@@ -106384,7 +106786,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return false;
     }
-    function pushAssistantStandardMessage(records, sessionId, receivedAt, content, workspace) {
+    function pushAssistantStandardMessage(records, sessionId, receivedAt, content, workspace, recordIndex = -1) {
       const text = content.trim();
       if (!text) return;
       if (hasAssistantStandardMessageSinceLastUser(records, text)) return;
@@ -106398,6 +106800,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         historySessionId: sessionId
       };
       if (workspace) msg.workspace = workspace;
+      const src = recordBlockSource(sessionId, recordIndex, -1);
+      if (src) msg._src = src;
       records.push(msg);
     }
     function extractCodexUsage(payload, receivedAt) {
@@ -106489,7 +106893,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
               kind: "session_start",
               agent: "codex-cli",
               historySessionId: sessionId,
-              workspace: detectedWorkspace
+              workspace: detectedWorkspace,
+              _src: nativeSourceAddress(sessionId, SESSION_START_ADDRESS)
             });
           }
           continue;
@@ -106517,7 +106922,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
               sessionId,
               receivedAt,
               flattenCodexContent(payload.last_agent_message),
-              detectedWorkspace
+              detectedWorkspace,
+              recordIndex
             );
           } else if (payloadType === "agent_message" && String(payload.phase ?? "").trim() === "final_answer") {
             pushAssistantStandardMessage(
@@ -106525,7 +106931,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
               sessionId,
               receivedAt,
               flattenCodexContent(payload.message),
-              detectedWorkspace
+              detectedWorkspace,
+              recordIndex
             );
           } else if (payloadType === "token_count") {
             const usageRecord = extractCodexUsage(payload, receivedAt);
@@ -106550,6 +106957,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             historySessionId: sessionId
           };
           if (detectedWorkspace) msg.workspace = detectedWorkspace;
+          msg._src = recordBlockSource(sessionId, recordIndex, -1);
           records.push(msg);
         } else if (payloadType === "function_call" || payloadType === "custom_tool_call") {
           const { content, truncated, toolName } = summarizeToolCall(payload);
@@ -106569,6 +106977,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           if (truncated && sourceMtimeMs > 0) {
             msg.toolBlockRef = { sourceMtimeMs, recordIndex, blockIndex: -1 };
           }
+          msg._src = recordBlockSource(sessionId, recordIndex, -1);
           records.push(msg);
         } else if (payloadType === "function_call_output" || payloadType === "custom_tool_call_output") {
           const { content, truncated } = extractToolOutputContent(payload);
@@ -106587,6 +106996,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           if (truncated && sourceMtimeMs > 0) {
             msg.toolBlockRef = { sourceMtimeMs, recordIndex, blockIndex: -1 };
           }
+          msg._src = recordBlockSource(sessionId, recordIndex, -1);
           records.push(msg);
         }
       }
@@ -106649,6 +107059,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         init_native_turn_signal();
         init_fs_utils();
         init_native_history_tool_blocks();
+        init_message_source_address();
         CODEX_DEFAULT_COMPLETION_SIGNAL = {
           recordType: "task_complete",
           abortRecordType: "turn_aborted",
@@ -107252,6 +107663,8 @@ ${output}` : "";
           msg.toolBlockRef = { sourceMtimeMs: sealMtimeMs, recordIndex, blockIndex };
         }
         if (normalizedWorkspace) msg.workspace = normalizedWorkspace;
+        const src = recordBlockSource(sessionId, recordIndex, blockIndex);
+        if (src) msg._src = src;
         messages.push(msg);
       };
       for (const row of rows) {
@@ -107287,6 +107700,8 @@ ${output}` : "";
             historySessionId: sessionId
           };
           if (normalizedWorkspace) msg.workspace = normalizedWorkspace;
+          const userSrc = recordBlockSource(sessionId, row.idx, -1);
+          if (userSrc) msg._src = userSrc;
           messages.push(msg);
         } else if (row.step_type === AGY_STEP_TYPE_MODEL) {
           const toolCalls = includeTools ? extractModelToolCalls(payload) : [];
@@ -107334,6 +107749,8 @@ ${output}` : "";
             historySessionId: sessionId
           };
           if (normalizedWorkspace) msg.workspace = normalizedWorkspace;
+          const answerSrc = recordBlockSource(sessionId, row.idx, -1);
+          if (answerSrc) msg._src = answerSrc;
           messages.push(msg);
           emitToolCalls();
         } else if (includeTools) {
@@ -107641,6 +108058,7 @@ ${output}` : "";
         init_logger();
         init_fs_utils();
         init_native_history_tool_blocks();
+        init_message_source_address();
         MIN_PRINTABLE_RUN = 8;
         AGY_STEP_TYPE_USER = 14;
         AGY_STEP_TYPE_MODEL = 15;
@@ -107716,6 +108134,10 @@ ${output}` : "";
          ORDER BY timestamp ASC, id ASC`
       ).all(...clusterIds);
       const out = [];
+      const rowSource = (rowId) => {
+        const src = nativeSourceAddress(sessionId, rowIdAddress(rowId, 0));
+        return src ? { _src: src } : {};
+      };
       for (const r of rows) {
         const role = normalizeHermesRole(r.role);
         const receivedAt = Math.floor(Number(r.timestamp) * 1e3);
@@ -107725,6 +108147,7 @@ ${output}` : "";
           if (!projected) continue;
           out.push({
             id: String(r.id),
+            ...rowSource(r.id),
             role: "assistant",
             content: projected.content,
             receivedAt,
@@ -107738,6 +108161,7 @@ ${output}` : "";
           if (!result) continue;
           out.push({
             id: String(r.id),
+            ...rowSource(r.id),
             role: "assistant",
             content: `\u2198 ${result}`,
             receivedAt,
@@ -107747,6 +108171,7 @@ ${output}` : "";
         }
         out.push({
           id: String(r.id),
+          ...rowSource(r.id),
           role,
           content: text,
           receivedAt,
@@ -107934,6 +108359,7 @@ ${output}` : "";
         os19 = __toESM2(require("os"));
         init_load_better_sqlite3();
         init_native_history_tool_blocks();
+        init_message_source_address();
         init_usage_normalize();
         HERMES_STATE_DB = path38.join(os19.homedir(), ".hermes", "state.db");
         HERMES_LEGACY_SESSIONS_DIR = path38.join(os19.homedir(), ".hermes", "sessions");
@@ -108161,6 +108587,13 @@ ${output}` : "";
           historySessionId: sessionId || providerSessionId,
           ...workspace ? { workspace } : {},
           providerUnitKey: `${providerSessionId}:${index}`,
+          // Records are append-only and one record is one bubble (§3.1):
+          // `n.<L>.<recordIndex>.0`. The surviving-message `index` above shifts
+          // when a dropped record type changes, so the record index is used.
+          ...(() => {
+            const src = recordBlockSource(sessionId || providerSessionId, message.recordIndex, -1);
+            return src ? { _src: src } : {};
+          })(),
           // grok records ARE the tool block (no content array to index into), so
           // blockIndex is -1 — the same record-level convention codex uses.
           ...message.kind === "tool" && message.truncated && sourceMtimeMs > 0 ? { toolBlockRef: { sourceMtimeMs, recordIndex: message.recordIndex, blockIndex: -1 } } : {}
@@ -108260,6 +108693,7 @@ ${output}` : "";
         os20 = __toESM2(require("os"));
         init_fs_utils();
         init_native_history_tool_blocks();
+        init_message_source_address();
         USER_QUERY_RE = /<user_query>\s*([\s\S]*?)\s*<\/user_query>/;
       }
     });
@@ -108309,7 +108743,13 @@ ${output}` : "";
         // unrelated property on the reader's internal record never rides this
         // wire by accident.
         ...typeof m.senderName === "string" && m.senderName ? { senderName: m.senderName } : {},
-        ...typeof m.toolName === "string" && m.toolName ? { toolName: m.toolName } : {}
+        ...typeof m.toolName === "string" && m.toolName ? { toolName: m.toolName } : {},
+        // The reader's source address for the message identity ledger. Same
+        // allow-list rule: re-read shape-checked, never spread.
+        ...(() => {
+          const src = readMessageSourceAddress(m._src);
+          return src ? { _src: src } : {};
+        })()
       };
     }
     function createNativeHistoryDispatcher(reader) {
@@ -108710,6 +109150,7 @@ ${output}` : "";
         init_constants2();
         init_antigravity_claim_registry();
         init_fs_utils();
+        init_message_source_address();
         codexRuntimeBindings = /* @__PURE__ */ new Map();
         AGY_SPAWN_CLAIM_GRACE_MS = 2e3;
         RECENT_WINDOW_MS = 5 * 60 * 1e3;
@@ -115726,6 +116167,749 @@ ${marker}`,
         "use strict";
       }
     });
+    function midpoint(a, b) {
+      if (b !== null && a >= b) throw new Error(`fractional-index: ${a} >= ${b}`);
+      if (a.slice(-1) === ZERO2 || b !== null && b.slice(-1) === ZERO2) {
+        throw new Error("fractional-index: trailing zero");
+      }
+      if (b !== null) {
+        let n = 0;
+        while ((a[n] || ZERO2) === b[n]) n += 1;
+        if (n > 0) return b.slice(0, n) + midpoint(a.slice(n), b.slice(n));
+      }
+      const digitA = a ? BASE_62_DIGITS.indexOf(a[0]) : 0;
+      const digitB = b !== null ? BASE_62_DIGITS.indexOf(b[0]) : BASE_62_DIGITS.length;
+      if (digitB - digitA > 1) {
+        return BASE_62_DIGITS[Math.round(0.5 * (digitA + digitB))];
+      }
+      if (b !== null && b.length > 1) return b.slice(0, 1);
+      return BASE_62_DIGITS[digitA] + midpoint(a.slice(1), null);
+    }
+    function integerLength(head) {
+      if (head >= "a" && head <= "z") return head.charCodeAt(0) - "a".charCodeAt(0) + 2;
+      if (head >= "A" && head <= "Z") return "Z".charCodeAt(0) - head.charCodeAt(0) + 2;
+      throw new Error(`fractional-index: invalid order key head ${head}`);
+    }
+    function integerPart(key2) {
+      const length = integerLength(key2[0]);
+      if (length > key2.length) throw new Error(`fractional-index: invalid order key ${key2}`);
+      return key2.slice(0, length);
+    }
+    function isValidOrderKey(key2) {
+      if (typeof key2 !== "string" || key2.length === 0) return false;
+      if (key2 === SMALLEST_INTEGER) return false;
+      for (const ch of key2) if (!BASE_62_DIGITS.includes(ch)) return false;
+      try {
+        const int3 = integerPart(key2);
+        const fraction = key2.slice(int3.length);
+        return !fraction.endsWith(ZERO2);
+      } catch {
+        return false;
+      }
+    }
+    function assertOrderKey(key2) {
+      if (!isValidOrderKey(key2)) throw new Error(`fractional-index: invalid order key ${key2}`);
+    }
+    function incrementInteger(x) {
+      const [head, ...digits] = x.split("");
+      let carry = true;
+      for (let i = digits.length - 1; carry && i >= 0; i -= 1) {
+        const d = BASE_62_DIGITS.indexOf(digits[i]) + 1;
+        if (d === BASE_62_DIGITS.length) {
+          digits[i] = ZERO2;
+        } else {
+          digits[i] = BASE_62_DIGITS[d];
+          carry = false;
+        }
+      }
+      if (carry) {
+        if (head === "Z") return `a${ZERO2}`;
+        if (head === "z") return null;
+        const nextHead = String.fromCharCode(head.charCodeAt(0) + 1);
+        if (nextHead > "a") digits.push(ZERO2);
+        else digits.pop();
+        return nextHead + digits.join("");
+      }
+      return head + digits.join("");
+    }
+    function decrementInteger(x) {
+      const [head, ...digits] = x.split("");
+      let borrow = true;
+      for (let i = digits.length - 1; borrow && i >= 0; i -= 1) {
+        const d = BASE_62_DIGITS.indexOf(digits[i]) - 1;
+        if (d === -1) {
+          digits[i] = BASE_62_DIGITS.slice(-1);
+        } else {
+          digits[i] = BASE_62_DIGITS[d];
+          borrow = false;
+        }
+      }
+      if (borrow) {
+        if (head === "a") return `Z${BASE_62_DIGITS.slice(-1)}`;
+        if (head === "A") return null;
+        const prevHead = String.fromCharCode(head.charCodeAt(0) - 1);
+        if (prevHead < "Z") digits.push(BASE_62_DIGITS.slice(-1));
+        else digits.pop();
+        return prevHead + digits.join("");
+      }
+      return head + digits.join("");
+    }
+    function generateKeyBetween(a, b) {
+      if (a !== null) assertOrderKey(a);
+      if (b !== null) assertOrderKey(b);
+      if (a !== null && b !== null && a >= b) throw new Error(`fractional-index: ${a} >= ${b}`);
+      if (a === null) {
+        if (b === null) return `a${ZERO2}`;
+        const ib2 = integerPart(b);
+        const fb2 = b.slice(ib2.length);
+        if (ib2 === SMALLEST_INTEGER) return ib2 + midpoint("", fb2);
+        if (ib2 < b) return ib2;
+        const decremented = decrementInteger(ib2);
+        if (decremented === null) throw new Error("fractional-index: cannot decrement any more");
+        return decremented;
+      }
+      if (b === null) {
+        const ia2 = integerPart(a);
+        const fa2 = a.slice(ia2.length);
+        const incremented2 = incrementInteger(ia2);
+        return incremented2 === null ? ia2 + midpoint(fa2, null) : incremented2;
+      }
+      const ia = integerPart(a);
+      const fa = a.slice(ia.length);
+      const ib = integerPart(b);
+      const fb = b.slice(ib.length);
+      if (ia === ib) return ia + midpoint(fa, fb);
+      const incremented = incrementInteger(ia);
+      if (incremented === null) throw new Error("fractional-index: cannot increment any more");
+      if (incremented < b) return incremented;
+      return ia + midpoint(fa, null);
+    }
+    function generateNKeysBetween(a, b, n) {
+      if (n <= 0) return [];
+      if (n === 1) return [generateKeyBetween(a, b)];
+      if (b === null) {
+        let current2 = generateKeyBetween(a, b);
+        const result = [current2];
+        for (let i = 0; i < n - 1; i += 1) {
+          current2 = generateKeyBetween(current2, b);
+          result.push(current2);
+        }
+        return result;
+      }
+      if (a === null) {
+        let current2 = generateKeyBetween(a, b);
+        const result = [current2];
+        for (let i = 0; i < n - 1; i += 1) {
+          current2 = generateKeyBetween(a, current2);
+          result.push(current2);
+        }
+        result.reverse();
+        return result;
+      }
+      const mid = Math.floor(n / 2);
+      const center = generateKeyBetween(a, b);
+      return [
+        ...generateNKeysBetween(a, center, mid),
+        center,
+        ...generateNKeysBetween(center, b, n - mid - 1)
+      ];
+    }
+    var BASE_62_DIGITS;
+    var ZERO2;
+    var SMALLEST_INTEGER;
+    var init_fractional_index = __esm2({
+      "src/chat/fractional-index.ts"() {
+        "use strict";
+        BASE_62_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        ZERO2 = BASE_62_DIGITS[0];
+        SMALLEST_INTEGER = `A${ZERO2.repeat(26)}`;
+      }
+    });
+    function newEpochToken() {
+      return (0, import_crypto17.randomBytes)(4).readUInt32BE(0).toString(36).padStart(6, "0").slice(-6);
+    }
+    function contentKey(role, kind, text) {
+      return `${role}\0${kind}\0${text}`;
+    }
+    function sameContent(a, b) {
+      return a.role === b.role && a.kind === b.kind && a.text === b.text;
+    }
+    function isRewriteOf(prev, next) {
+      const a = prev.replace(/\s+/g, "");
+      const b = next.replace(/\s+/g, "");
+      if (a === b) return true;
+      if (!a || !b) return true;
+      if (b.startsWith(a) || a.startsWith(b)) return true;
+      const limit = Math.min(a.length, b.length);
+      let prefix = 0;
+      while (prefix < limit && a.charCodeAt(prefix) === b.charCodeAt(prefix)) prefix += 1;
+      let suffix = 0;
+      while (suffix < limit - prefix && a.charCodeAt(a.length - 1 - suffix) === b.charCodeAt(b.length - 1 - suffix)) suffix += 1;
+      return (prefix + suffix) / Math.max(a.length, b.length) >= SIMILARITY_MIN_OVERLAP;
+    }
+    function longestIncreasingSubsequence(values) {
+      const tails = [];
+      const prev = new Array(values.length).fill(-1);
+      for (let i = 0; i < values.length; i += 1) {
+        let lo = 0;
+        let hi = tails.length;
+        while (lo < hi) {
+          const mid = lo + hi >> 1;
+          if (values[tails[mid]] < values[i]) lo = mid + 1;
+          else hi = mid;
+        }
+        if (lo > 0) prev[i] = tails[lo - 1];
+        tails[lo] = i;
+      }
+      const out = [];
+      let k = tails.length ? tails[tails.length - 1] : -1;
+      while (k >= 0) {
+        out.push(k);
+        k = prev[k];
+      }
+      return out.reverse();
+    }
+    function exactAnchors(old, next) {
+      const anchors = [];
+      let pre = 0;
+      while (pre < old.length && pre < next.length && sameContent(old[pre], next[pre])) {
+        anchors.push([pre, pre]);
+        pre += 1;
+      }
+      let suf = 0;
+      while (suf < old.length - pre && suf < next.length - pre && sameContent(old[old.length - 1 - suf], next[next.length - 1 - suf])) {
+        suf += 1;
+      }
+      const oEnd = old.length - suf;
+      const nEnd = next.length - suf;
+      const oLen = oEnd - pre;
+      const nLen = nEnd - pre;
+      if (oLen > 0 && nLen > 0) {
+        if (oLen * nLen <= LCS_MAX_CELLS) {
+          const width = nLen + 1;
+          const table = new Int32Array((oLen + 1) * width);
+          for (let i2 = oLen - 1; i2 >= 0; i2 -= 1) {
+            for (let j2 = nLen - 1; j2 >= 0; j2 -= 1) {
+              table[i2 * width + j2] = sameContent(old[pre + i2], next[pre + j2]) ? table[(i2 + 1) * width + j2 + 1] + 1 : Math.max(table[(i2 + 1) * width + j2], table[i2 * width + j2 + 1]);
+            }
+          }
+          let i = 0;
+          let j = 0;
+          while (i < oLen && j < nLen) {
+            if (sameContent(old[pre + i], next[pre + j])) {
+              anchors.push([pre + i, pre + j]);
+              i += 1;
+              j += 1;
+            } else if (table[(i + 1) * width + j] >= table[i * width + j + 1]) {
+              i += 1;
+            } else {
+              j += 1;
+            }
+          }
+        } else {
+          const count2 = (items, from, to) => {
+            const map3 = /* @__PURE__ */ new Map();
+            for (let k = from; k < to; k += 1) {
+              const key2 = contentKey(items[k].role, items[k].kind, items[k].text);
+              const hit = map3.get(key2);
+              if (hit) hit.n += 1;
+              else map3.set(key2, { n: 1, at: k });
+            }
+            return map3;
+          };
+          const oldKeys = count2(old, pre, oEnd);
+          const newKeys = count2(next, pre, nEnd);
+          const candidates = [];
+          for (const [key2, o] of oldKeys) {
+            const n = newKeys.get(key2);
+            if (o.n === 1 && n && n.n === 1) candidates.push([o.at, n.at]);
+          }
+          candidates.sort((x, y) => x[1] - y[1]);
+          const order = longestIncreasingSubsequence(candidates.map(([o]) => o.toString(36).padStart(8, "0")));
+          for (const k of order) anchors.push(candidates[k]);
+        }
+      }
+      for (let k = suf; k > 0; k -= 1) anchors.push([old.length - k, next.length - k]);
+      return anchors;
+    }
+    function alignMessageSequences(old, next) {
+      const anchors = exactAnchors(old, next);
+      const pairs2 = [...anchors];
+      const oldUsed = new Uint8Array(old.length);
+      const newUsed = new Uint8Array(next.length);
+      for (const [o, n] of anchors) {
+        oldUsed[o] = 1;
+        newUsed[n] = 1;
+      }
+      const bounds = [[-1, -1], ...anchors, [old.length, next.length]];
+      for (let g3 = 0; g3 + 1 < bounds.length; g3 += 1) {
+        const [oStart, nStart] = bounds[g3];
+        const [oStop, nStop] = bounds[g3 + 1];
+        let cursor = oStart + 1;
+        for (let n = nStart + 1; n < nStop; n += 1) {
+          for (let o = cursor; o < oStop; o += 1) {
+            if (oldUsed[o]) continue;
+            if (old[o].role !== next[n].role || old[o].kind !== next[n].kind) continue;
+            if (!isRewriteOf(old[o].text, next[n].text)) continue;
+            pairs2.push([o, n]);
+            oldUsed[o] = 1;
+            newUsed[n] = 1;
+            cursor = o + 1;
+            break;
+          }
+        }
+      }
+      const leftovers = /* @__PURE__ */ new Map();
+      for (let o = 0; o < old.length; o += 1) {
+        if (oldUsed[o]) continue;
+        const key2 = contentKey(old[o].role, old[o].kind, old[o].text);
+        const queue = leftovers.get(key2);
+        if (queue) queue.push(o);
+        else leftovers.set(key2, [o]);
+      }
+      for (let n = 0; n < next.length; n += 1) {
+        if (newUsed[n]) continue;
+        const queue = leftovers.get(contentKey(next[n].role, next[n].kind, next[n].text));
+        const o = queue?.shift();
+        if (o === void 0) continue;
+        pairs2.push([o, n]);
+        oldUsed[o] = 1;
+        newUsed[n] = 1;
+      }
+      return pairs2;
+    }
+    function getMessageIdentityLedger(sessionKey2) {
+      let ledger = ledgers.get(sessionKey2);
+      if (ledger) {
+        ledgers.delete(sessionKey2);
+      } else {
+        ledger = new MessageIdentityLedger();
+      }
+      ledgers.set(sessionKey2, ledger);
+      while (ledgers.size > LEDGER_REGISTRY_MAX) {
+        const oldest = ledgers.keys().next().value;
+        ledgers.delete(oldest);
+      }
+      return ledger;
+    }
+    var import_crypto17;
+    var TOMBSTONE_POOL_MAX;
+    var LIVE_ENTRIES_MAX;
+    var LCS_MAX_CELLS;
+    var SIMILARITY_MIN_OVERLAP;
+    var MessageIdentityLedger;
+    var LEDGER_REGISTRY_MAX;
+    var ledgers;
+    var init_message_identity_ledger = __esm2({
+      "src/chat/message-identity-ledger.ts"() {
+        "use strict";
+        import_crypto17 = require("crypto");
+        init_fractional_index();
+        init_message_source_address();
+        TOMBSTONE_POOL_MAX = 256;
+        LIVE_ENTRIES_MAX = 1e4;
+        LCS_MAX_CELLS = 25e4;
+        SIMILARITY_MIN_OVERLAP = 0.5;
+        MessageIdentityLedger = class {
+          epochToken;
+          counter = 0;
+          frameNo = 0;
+          entries = /* @__PURE__ */ new Map();
+          pool = /* @__PURE__ */ new Map();
+          bySrc = /* @__PURE__ */ new Map();
+          constructor(options = {}) {
+            this.epochToken = options.epoch || newEpochToken();
+          }
+          get epoch() {
+            return this.epochToken;
+          }
+          get frame() {
+            return this.frameNo;
+          }
+          /** Live entries (including window-retained), ascending `ord`. */
+          snapshot() {
+            return [...this.entries.values()].sort((a, b) => a.ord < b.ord ? -1 : a.ord > b.ord ? 1 : 0).map((e) => ({
+              messageId: e.id,
+              ord: e.ord,
+              rev: e.rev,
+              srcKey: e.srcKey,
+              srcId: e.srcId,
+              retained: e.retained
+            }));
+          }
+          /**
+           * verifiedClear (§3.5): tombstone every live bubble and start a new epoch.
+           * Daemon-issued ids of the old epoch are never reissued.
+           */
+          reset() {
+            const deletes = [...this.entries.keys()];
+            this.entries.clear();
+            this.pool.clear();
+            this.bySrc.clear();
+            this.counter = 0;
+            let next = newEpochToken();
+            while (next === this.epochToken) next = newEpochToken();
+            this.epochToken = next;
+            this.frameNo += 1;
+            return {
+              epoch: this.epochToken,
+              frame: this.frameNo,
+              assignments: [],
+              upserts: [],
+              deletes,
+              aliases: [],
+              retainedCount: 0,
+              reset: true
+            };
+          }
+          observe(inputs, options = {}) {
+            const coverage = options.coverage === "window" ? "window" : "full";
+            this.frameNo += 1;
+            const count2 = inputs.length;
+            const ids = new Array(count2).fill(null);
+            const claimed = /* @__PURE__ */ new Set();
+            const previouslyLive = new Set(this.entries.keys());
+            const created = /* @__PURE__ */ new Set();
+            const revived = /* @__PURE__ */ new Set();
+            const aliases = [];
+            const srcs = new Array(count2).fill(void 0);
+            const srcKeys = new Array(count2).fill(null);
+            {
+              const seen = /* @__PURE__ */ new Set();
+              for (let i = 0; i < count2; i += 1) {
+                const src = inputs[i].src;
+                if (!src) continue;
+                const key2 = messageSourceKey(src);
+                if (seen.has(key2)) continue;
+                seen.add(key2);
+                srcs[i] = src;
+                srcKeys[i] = key2;
+              }
+            }
+            for (let i = 0; i < count2; i += 1) {
+              const key2 = srcKeys[i];
+              if (!key2) continue;
+              const id22 = this.bySrc.get(key2);
+              if (!id22 || claimed.has(id22)) continue;
+              if (this.entries.has(id22)) {
+                ids[i] = id22;
+                claimed.add(id22);
+              } else if (this.pool.has(id22)) {
+                this.revive(id22);
+                revived.add(id22);
+                ids[i] = id22;
+                claimed.add(id22);
+              }
+            }
+            const frameLineages = /* @__PURE__ */ new Set();
+            for (const src of srcs) if (src?.cls === "n") frameLineages.add(src.L);
+            const oldCandidates = [...this.entries.values()].filter((e) => !claimed.has(e.id) && !(e.srcClass === "n" && e.lineage !== null && frameLineages.has(e.lineage))).sort((a, b) => a.ord < b.ord ? -1 : a.ord > b.ord ? 1 : 0);
+            const newPositions = [];
+            for (let i = 0; i < count2; i += 1) if (ids[i] === null) newPositions.push(i);
+            if (oldCandidates.length > 0 && newPositions.length > 0) {
+              const pairs2 = alignMessageSequences(oldCandidates, newPositions.map((i) => inputs[i]));
+              for (const [o, n] of pairs2) {
+                const entry = oldCandidates[o];
+                const i = newPositions[n];
+                ids[i] = entry.id;
+                claimed.add(entry.id);
+                const src = srcs[i];
+                if (src) this.bind(entry, src, srcKeys[i], aliases);
+              }
+            }
+            for (let i = 0; i < count2; i += 1) {
+              if (ids[i] !== null) continue;
+              const input = inputs[i];
+              const src = srcs[i];
+              if (!src) {
+                const revivedId = this.findRevivable(input, claimed);
+                if (revivedId) {
+                  this.revive(revivedId);
+                  revived.add(revivedId);
+                  ids[i] = revivedId;
+                  claimed.add(revivedId);
+                  continue;
+                }
+              }
+              const natural = src ? naturalMessageId(src) : null;
+              let id22;
+              if (natural && !claimed.has(natural) && !this.entries.has(natural)) {
+                this.dropFromPool(natural);
+                id22 = natural;
+              } else {
+                id22 = this.mint(claimed);
+              }
+              const entry = {
+                id: id22,
+                ord: "",
+                rev: 1,
+                role: input.role,
+                kind: input.kind,
+                text: input.text,
+                revisionKey: input.revisionKey,
+                srcClass: null,
+                lineage: null,
+                srcKey: null,
+                srcId: null,
+                boundKeys: /* @__PURE__ */ new Set(),
+                retained: false
+              };
+              this.entries.set(id22, entry);
+              if (src) this.bind(entry, src, srcKeys[i], natural === id22 ? null : aliases);
+              created.add(id22);
+              ids[i] = id22;
+              claimed.add(id22);
+            }
+            let minSurvivingOrd = null;
+            for (const id22 of claimed) {
+              if (!previouslyLive.has(id22)) continue;
+              const ord = this.entries.get(id22).ord;
+              if (minSurvivingOrd === null || ord < minSurvivingOrd) minSurvivingOrd = ord;
+            }
+            const deletes = [];
+            for (const id22 of previouslyLive) {
+              if (claimed.has(id22)) continue;
+              const entry = this.entries.get(id22);
+              if (coverage === "window" && (minSurvivingOrd === null || entry.ord < minSurvivingOrd)) {
+                entry.retained = true;
+                continue;
+              }
+              this.tombstone(entry);
+              deletes.push(id22);
+            }
+            const list = ids;
+            const ordChanged = this.assignOrds(list, previouslyLive, claimed);
+            const upserts = [];
+            const assignments = new Array(count2);
+            for (let i = 0; i < count2; i += 1) {
+              const id22 = list[i];
+              const entry = this.entries.get(id22);
+              const input = inputs[i];
+              if (created.has(id22)) {
+                upserts.push(id22);
+              } else if (revived.has(id22) || entry.revisionKey !== input.revisionKey || ordChanged.has(id22)) {
+                entry.rev += 1;
+                upserts.push(id22);
+              }
+              entry.role = input.role;
+              entry.kind = input.kind;
+              entry.text = input.text;
+              entry.revisionKey = input.revisionKey;
+              entry.retained = false;
+              assignments[i] = { messageId: id22, ord: entry.ord, rev: entry.rev };
+            }
+            deletes.push(...this.enforceLiveCap());
+            let retainedCount = 0;
+            for (const entry of this.entries.values()) if (entry.retained) retainedCount += 1;
+            return {
+              epoch: this.epochToken,
+              frame: this.frameNo,
+              assignments,
+              upserts,
+              deletes,
+              aliases,
+              retainedCount,
+              reset: false
+            };
+          }
+          // ── internals ───────────────────────────────────────────────────────────
+          mint(claimed) {
+            for (; ; ) {
+              this.counter += 1;
+              const id22 = `d.${this.epochToken}.${this.counter}`;
+              if (!claimed.has(id22) && !this.entries.has(id22) && !this.pool.has(id22)) return id22;
+            }
+          }
+          bind(entry, src, key2, aliases) {
+            this.bySrc.set(key2, entry.id);
+            entry.boundKeys.add(key2);
+            entry.srcKey = key2;
+            entry.srcClass = src.cls;
+            entry.lineage = src.cls === "n" ? src.L : null;
+            const natural = naturalMessageId(src);
+            if (natural && natural !== entry.id) {
+              entry.srcId = natural;
+              aliases?.push({ messageId: entry.id, srcId: natural });
+            }
+          }
+          tombstone(entry) {
+            this.entries.delete(entry.id);
+            entry.retained = false;
+            this.pool.delete(entry.id);
+            this.pool.set(entry.id, entry);
+            while (this.pool.size > TOMBSTONE_POOL_MAX) {
+              const oldest = this.pool.keys().next().value;
+              this.dropFromPool(oldest);
+            }
+          }
+          dropFromPool(id22) {
+            const entry = this.pool.get(id22);
+            if (!entry) return;
+            this.pool.delete(id22);
+            for (const key2 of entry.boundKeys) {
+              if (this.bySrc.get(key2) === id22) this.bySrc.delete(key2);
+            }
+          }
+          revive(id22) {
+            const entry = this.pool.get(id22);
+            if (!entry) return;
+            this.pool.delete(id22);
+            this.entries.set(id22, entry);
+          }
+          /** Newest exact tombstone for an unaddressed bubble (e.g. a filter toggled back). */
+          findRevivable(input, claimed) {
+            const pooled = [...this.pool.values()];
+            for (let k = pooled.length - 1; k >= 0; k -= 1) {
+              const entry = pooled[k];
+              if (claimed.has(entry.id)) continue;
+              if (entry.srcClass === "n") continue;
+              if (sameContent(entry, input)) return entry.id;
+            }
+            return null;
+          }
+          /**
+           * Step 3: keep the `ord` of surviving bubbles that are still in ascending
+           * order, give every other listed bubble a key between its neighbours.
+           * Returns the ids whose `ord` changed (moved or revived; new ids are
+           * counted as created, not changed).
+           */
+          assignOrds(list, previouslyLive, claimed) {
+            const changed = /* @__PURE__ */ new Set();
+            const survivorPositions = [];
+            for (let i2 = 0; i2 < list.length; i2 += 1) {
+              if (previouslyLive.has(list[i2]) && this.entries.get(list[i2]).ord) survivorPositions.push(i2);
+            }
+            const keep = new Set(
+              longestIncreasingSubsequence(survivorPositions.map((i2) => this.entries.get(list[i2]).ord)).map((k) => survivorPositions[k])
+            );
+            let maxRetainedOrd = null;
+            for (const entry of this.entries.values()) {
+              if (claimed.has(entry.id)) continue;
+              if (maxRetainedOrd === null || entry.ord > maxRetainedOrd) maxRetainedOrd = entry.ord;
+            }
+            let i = 0;
+            while (i < list.length) {
+              if (keep.has(i)) {
+                i += 1;
+                continue;
+              }
+              let j = i;
+              while (j < list.length && !keep.has(j)) j += 1;
+              let lower = i > 0 ? this.entries.get(list[i - 1]).ord : maxRetainedOrd;
+              const upper = j < list.length ? this.entries.get(list[j]).ord : null;
+              if (lower !== null && upper !== null && lower >= upper) lower = null;
+              const keys = generateNKeysBetween(lower || null, upper, j - i);
+              for (let k = i; k < j; k += 1) {
+                const entry = this.entries.get(list[k]);
+                const nextOrd = keys[k - i];
+                if (entry.ord !== nextOrd) {
+                  if (entry.ord) changed.add(entry.id);
+                  entry.ord = nextOrd;
+                }
+              }
+              i = j;
+            }
+            return changed;
+          }
+          enforceLiveCap() {
+            if (this.entries.size <= LIVE_ENTRIES_MAX) return [];
+            const retained = [...this.entries.values()].filter((e) => e.retained).sort((a, b) => a.ord < b.ord ? -1 : a.ord > b.ord ? 1 : 0);
+            const dropped = [];
+            for (const entry of retained) {
+              if (this.entries.size <= LIVE_ENTRIES_MAX) break;
+              this.tombstone(entry);
+              dropped.push(entry.id);
+            }
+            return dropped;
+          }
+        };
+        LEDGER_REGISTRY_MAX = 128;
+        ledgers = /* @__PURE__ */ new Map();
+      }
+    });
+    function normalizedRole(message) {
+      const role = typeof message.role === "string" ? message.role.trim().toLowerCase() : "";
+      return role === "human" ? "user" : role;
+    }
+    function normalizedKind(message) {
+      return typeof message.kind === "string" && message.kind.trim() ? message.kind.trim() : "standard";
+    }
+    function flattenedText(message) {
+      try {
+        return flattenContent(message.content);
+      } catch {
+        return "";
+      }
+    }
+    function messageIdentityRevisionKey(message, text = flattenedText(message)) {
+      const meta3 = message.meta && typeof message.meta === "object" ? message.meta : void 0;
+      return JSON.stringify([
+        normalizedRole(message),
+        normalizedKind(message),
+        text,
+        message.bubbleState ?? null,
+        message._turnKey ?? null,
+        message.senderName ?? null,
+        message.toolName ?? null,
+        typeof message.receivedAt === "number" ? message.receivedAt : null,
+        typeof message.timestamp === "number" ? message.timestamp : null,
+        meta3?.streaming === true
+      ]);
+    }
+    function toMessageIdentityInput(message) {
+      const text = flattenedText(message);
+      const src = readMessageSourceAddress(message._src);
+      return {
+        role: normalizedRole(message),
+        kind: normalizedKind(message),
+        text,
+        ...src ? { src } : {},
+        revisionKey: messageIdentityRevisionKey(message, text)
+      };
+    }
+    function resolveReadChatIdentityCoverage(payloadCoverage, forced) {
+      if (forced) return forced;
+      if (payloadCoverage === void 0 || payloadCoverage === null || payloadCoverage === "full") return "full";
+      return "window";
+    }
+    function assignReadChatMessageIds(sessionKey2, messages, coverage) {
+      const ledger = getMessageIdentityLedger(sessionKey2);
+      const frame2 = ledger.observe(messages.map(toMessageIdentityInput), { coverage });
+      const ids = /* @__PURE__ */ new Map();
+      for (let i = 0; i < messages.length; i += 1) ids.set(messages[i], frame2.assignments[i].messageId);
+      return { ids, frame: frame2 };
+    }
+    function withMessageIdentity(message, messageId) {
+      const { _src, ...rest } = message;
+      void _src;
+      if (!messageId) return rest;
+      return { ...rest, id: messageId, messageId };
+    }
+    function stampDomScriptMessageSources(parsed, lineageSeed) {
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return parsed;
+      const record22 = parsed;
+      if (!Array.isArray(record22.messages)) return parsed;
+      const seed = [record22.providerSessionId, record22.id, lineageSeed].find((value) => typeof value === "string" && value.trim());
+      if (!seed) return parsed;
+      let stamped = false;
+      const messages = record22.messages.map((message) => {
+        if (!message || typeof message !== "object" || Array.isArray(message)) return message;
+        const nativeId = message.messageId;
+        const src = nativeSourceAddress(seed, keyedNativeAddress(nativeId, 0));
+        if (!src) return message;
+        stamped = true;
+        return { ...message, _src: src };
+      });
+      return stamped ? { ...record22, messages } : parsed;
+    }
+    var init_read_chat_message_identity = __esm2({
+      "src/commands/read-chat-message-identity.ts"() {
+        "use strict";
+        init_contracts2();
+        init_message_identity_ledger();
+        init_message_source_address();
+      }
+    });
     function readLiveCodexWorkspaceNativeHistory(agentStr, args) {
       if (agentStr !== "codex-cli") return null;
       const workspace = typeof args.workspace === "string" ? args.workspace.trim() : "";
@@ -117119,7 +118303,7 @@ ${marker}`,
       }
       return result;
     }
-    function buildReadChatCommandResult(payload, args, h) {
+    function buildReadChatCommandResult(payload, args, h, presentation = {}) {
       let validatedPayload;
       const debugReadChat = payload?.debugReadChat && typeof payload.debugReadChat === "object" ? payload.debugReadChat : void 0;
       const presentationSessionIdHint = typeof args?.targetSessionId === "string" && args.targetSessionId.trim() ? args.targetSessionId.trim() : typeof args?.sessionId === "string" && args.sessionId.trim() ? args.sessionId.trim() : typeof h?.currentSession?.sessionId === "string" ? String(h.currentSession.sessionId) : "";
@@ -117152,6 +118336,18 @@ ${marker}`,
       const includeActivity = args?.includeActivity === true || args?.includeActivity === "true";
       const visibleMessages = includeActivity ? filteredMessages.filter((m) => isUserFacingChatMessage(m) || isActivityChatMessage(m)) : filterUserFacingChatMessages(filteredMessages);
       const observationMessages = filteredMessages.filter((m) => isUserFacingChatMessage(m) || isActivityChatMessage(m) && isWireSafeActivityKind(m.kind));
+      let messageIds = null;
+      try {
+        const identityScope = messages.filter((m) => isUserFacingChatMessage(m) || isActivityChatMessage(m));
+        const ledgerKey = presentationSessionIdHint || `provider:${providerHint || "unknown"}`;
+        messageIds = assignReadChatMessageIds(
+          ledgerKey,
+          identityScope,
+          resolveReadChatIdentityCoverage(validatedPayload.coverage, presentation.identityCoverage)
+        ).ids;
+      } catch {
+        messageIds = null;
+      }
       const sync = buildFullTail(visibleMessages, normalizeReadChatTailLimit(args));
       const hiddenMsgCount = Math.max(0, messages.length - visibleMessages.length);
       const preservedPayloadFields = Object.fromEntries(Object.entries(payload).filter(([key2]) => shouldPreserveReadChatPayloadField(key2)));
@@ -117196,7 +118392,7 @@ ${marker}`,
         success: true,
         ...validatedPayload,
         ...preservedPayloadFields,
-        messages: sync.messages,
+        messages: sync.messages.map((message) => withMessageIdentity(message, messageIds?.get(message))),
         totalMessages: sync.totalMessages,
         // PROJECTION-SELF-REFERENCE (turn-completion deadlock): the provider's OWN
         // status verdict, BEFORE the Stage 6 projection overrides it above.
@@ -117236,6 +118432,7 @@ ${marker}`,
         init_read_chat_message_filters();
         init_transcript_observation_builder();
         init_transcript_publisher();
+        init_read_chat_message_identity();
         WIRE_SAFE_ACTIVITY_KINDS = /* @__PURE__ */ new Set(["tool", "terminal", "thought"]);
       }
     });
@@ -117729,6 +118926,10 @@ ${marker}`,
       }
     }
     async function handleChatHistory(h, args) {
+      const result = await readChatHistoryPage(h, args);
+      return Array.isArray(result?.messages) ? { ...result, messages: stripMessageSourceAddresses(result.messages) } : result;
+    }
+    async function readChatHistoryPage(h, args) {
       const { agentType, offset, limit } = args;
       const historySessionId = getHistorySessionId(h, args);
       const includeActivity = args?.includeActivity === true || args?.includeActivity === "true";
@@ -118368,7 +119569,7 @@ ${marker}`,
               }
             }
             if (parsed && typeof parsed === "object") {
-              const validated = validateReadChatResultPayload(parsed, "extension read_chat");
+              const validated = validateReadChatResultPayload(stampDomScriptMessageSources(parsed, historySessionId || args?.targetSessionId), "extension read_chat");
               _log(`Extension OK: ${validated.messages?.length || 0} msgs`);
               traceProviderEvent(args, "provider", "extension.read_chat.success", {
                 h,
@@ -118387,7 +119588,7 @@ ${marker}`,
                 args?.targetSessionId,
                 historySessionId
               );
-              return buildReadChatCommandResult(validated, args, h);
+              return buildReadChatCommandResult(validated, args, h, { identityCoverage: "window" });
             }
             if (!extensionReadChatError) {
               extensionReadChatError = "extension read_chat returned a non-object payload";
@@ -118425,7 +119626,7 @@ ${marker}`,
                 messages: stream.messages || [],
                 status: stream.status,
                 agentType: stream.agentType
-              }, args, h);
+              }, args, h, { identityCoverage: "window" });
             }
           }
         }
@@ -118450,7 +119651,7 @@ ${marker}`,
               }
             }
             if (parsed && typeof parsed === "object") {
-              const validated = validateReadChatResultPayload(parsed, "webview read_chat");
+              const validated = validateReadChatResultPayload(stampDomScriptMessageSources(parsed, historySessionId || args?.targetSessionId), "webview read_chat");
               _log(`Webview OK: ${validated.messages?.length || 0} msgs`);
               h.historyWriter.appendNewMessages(
                 provider?.type || getCurrentProviderType(h, "unknown_webview"),
@@ -118459,7 +119660,7 @@ ${marker}`,
                 args?.targetSessionId,
                 historySessionId
               );
-              return buildReadChatCommandResult(validated, args, h);
+              return buildReadChatCommandResult(validated, args, h, { identityCoverage: "window" });
             }
             if (!webviewReadChatError) {
               webviewReadChatError = "webview read_chat returned a non-object payload";
@@ -118488,7 +119689,7 @@ ${marker}`,
               }
             }
             if (parsed && typeof parsed === "object") {
-              const validated = validateReadChatResultPayload(parsed, "ide read_chat");
+              const validated = validateReadChatResultPayload(stampDomScriptMessageSources(parsed, historySessionId || args?.targetSessionId), "ide read_chat");
               _log(`OK: ${validated.messages?.length || 0} msgs`);
               traceProviderEvent(args, "provider", "ide.read_chat.success", {
                 h,
@@ -118507,7 +119708,7 @@ ${marker}`,
                 args?.targetSessionId,
                 historySessionId
               );
-              return buildReadChatCommandResult(validated, args, h);
+              return buildReadChatCommandResult(validated, args, h, { identityCoverage: "window" });
             }
             if (!ideReadChatError) {
               ideReadChatError = "ide read_chat returned a non-object payload";
@@ -118547,6 +119748,8 @@ ${marker}`,
         init_read_chat_message_filters();
         init_read_chat_source_decision();
         init_observed_model();
+        init_read_chat_message_identity();
+        init_message_source_address();
         init_chat_commands_read_turn_markers();
         init_read_chat_presentation();
         init_chat_commands_read_session_id();
@@ -124534,7 +125737,7 @@ ${marker}`,
         })),
         on_dependency_failure: parseOnDependencyFailurePolicy3(req.onDependencyFailure)
       };
-      return (0, import_crypto16.createHash)("sha256").update(canonicalJson(normalized)).digest("hex");
+      return (0, import_crypto18.createHash)("sha256").update(canonicalJson(normalized)).digest("hex");
     }
     function commitMeshGraphPlan(req, queueOpts) {
       requireMeshHostQueueOwner(queueOpts);
@@ -124937,12 +126140,12 @@ ${marker}`,
       }
       return [...new Set(out)];
     }
-    var import_crypto16;
+    var import_crypto18;
     var MeshGraphPlanError;
     var init_mesh_graph_plan = __esm2({
       "src/mesh/mesh-graph-plan.ts"() {
         "use strict";
-        import_crypto16 = require("crypto");
+        import_crypto18 = require("crypto");
         init_logger();
         init_mesh_runtime_store();
         init_mesh_graph_input_binding();
@@ -125683,7 +126886,7 @@ ${marker}`,
         } else {
           takeoverFromClaimed = priorState === "claimed";
           generation = gate.leaseGeneration + 1;
-          fencingToken = (0, import_crypto17.randomUUID)();
+          fencingToken = (0, import_crypto19.randomUUID)();
         }
         const deadlineAt = input.extendDeadlineSeconds && input.extendDeadlineSeconds > 0 ? isoAfter(nowMs2, input.extendDeadlineSeconds) : gate.deadlineAt;
         const won = graphStore.patchGate(gate.gateId, {
@@ -126129,7 +127332,7 @@ ${marker}`,
       }
       return result;
     }
-    var import_crypto17;
+    var import_crypto19;
     var MESH_GATE_DEFAULT_LEASE_SECONDS;
     var MESH_GATE_NAMED_OUTCOMES;
     var MESH_GATE_RELEASE_PATCH_KEYS;
@@ -126137,7 +127340,7 @@ ${marker}`,
     var init_mesh_graph_gates = __esm2({
       "src/mesh/mesh-graph-gates.ts"() {
         "use strict";
-        import_crypto17 = require("crypto");
+        import_crypto19 = require("crypto");
         init_mesh_runtime_store();
         init_logger();
         init_mesh_graph_input_binding();
@@ -127142,7 +128345,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         (ctx, args) => run2(ctx, stripRouterInternalArgs(args))
       ]));
     }
-    var import_crypto18;
+    var import_crypto20;
     var indexSlot;
     var turnObserve2;
     var meshRecordHandler;
@@ -127162,7 +128365,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     var init_turn_ledger_ipc = __esm2({
       "src/commands/low-family/turn-ledger-ipc.ts"() {
         "use strict";
-        import_crypto18 = require("crypto");
+        import_crypto20 = require("crypto");
         init_dist();
         init_dist();
         init_router_internal_args();
@@ -127227,7 +128430,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
               return { success: false, error: "turn_cancel: no attempt found for the given attemptId/taskId", code: "ledger_not_owner" };
             }
             const evidence = {
-              eventId: (0, import_crypto18.randomUUID)(),
+              eventId: (0, import_crypto20.randomUUID)(),
               at: Date.now(),
               source: "mcp_probe",
               sessionId: attempt.sessionId,
@@ -127258,7 +128461,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
               return { success: true, ...response2 };
             }
             const evidence = {
-              eventId: (0, import_crypto18.randomUUID)(),
+              eventId: (0, import_crypto20.randomUUID)(),
               at: Date.now(),
               source: "mcp_probe",
               sessionId: attempt.sessionId,
@@ -138445,9 +139648,10 @@ ${buttons.join("\n")}`;
       const normalizedContent = typeof normalizedMessage.content === "string" ? normalizedMessage.content.trim() : flattenContent(normalizedMessage.content).trim();
       if (!normalizedContent && (!Array.isArray(normalizedMessage.content) || normalizedMessage.content.length === 0)) return;
       if (host.runtimeMessages.some((entry) => entry.key === dedupKey)) return;
+      const src = runtimeSourceAddress(dedupKey);
       host.runtimeMessages.push({
         key: dedupKey,
-        message: normalizedMessage
+        message: src ? { ...normalizedMessage, _src: src } : normalizedMessage
       });
       if (normalizedContent) {
         host.historyWriter.appendNewMessages(
@@ -138520,6 +139724,7 @@ ${buttons.join("\n")}`;
         init_cli_provider_input_prompt();
         init_hash();
         init_cli_provider_instance_types();
+        init_message_source_address();
       }
     });
     function toActiveChatMessage(message) {
@@ -141070,6 +142275,7 @@ ${buttons.join("\n")}`;
         init_logger();
         init_provider_event_port();
         init_turn_evidence_port();
+        init_message_source_address();
         AcpProviderInstance = class {
           constructor(provider, workingDir, cliArgs = []) {
             this.cliArgs = cliArgs;
@@ -141108,6 +142314,15 @@ ${buttons.join("\n")}`;
           partialBlocks = [];
           /** Tool calls collected during current turn */
           turnToolCalls = [];
+          /**
+           * Local ids for the message identity ledger's `acp` source class (design
+           * 2026-09-28 §3.4). Every pushed message gets `m<n>`; a turn's streaming
+           * thought/answer partials use `t<turn>.thought` / `t<turn>.answer` and the
+           * finalized messages REUSE those ids, so the ledger keeps one bubble id
+           * from first partial to final. Tool bubbles use the protocol toolCallId.
+           */
+          acpMessageSeq = 0;
+          acpTurnSeq = 0;
           /** Guard: prevent concurrent sendPrompt calls from racing on shared state */
           _sendPromptInFlight = false;
           // Error tracking
@@ -141167,16 +142382,16 @@ ${buttons.join("\n")}`;
             }));
             if (this.currentStatus === "generating") {
               const partialThoughtMessage = this.buildPartialThoughtMessage(Date.now());
-              if (partialThoughtMessage) recentMessages.push(partialThoughtMessage);
+              if (partialThoughtMessage) recentMessages.push(this.withAcpSource(partialThoughtMessage, this.turnSourceId("thought")));
             }
             if (this.currentStatus === "generating" && (this.partialContent || this.partialBlocks.length > 0)) {
               const blocks = this.buildPartialBlocks();
               if (blocks.length > 0) {
-                recentMessages.push(buildAssistantChatMessage({
+                recentMessages.push(this.withAcpSource(buildAssistantChatMessage({
                   content: blocks,
                   timestamp: Date.now(),
                   toolCalls: this.turnToolCalls.length > 0 ? [...this.turnToolCalls] : void 0
-                }));
+                }), this.turnSourceId("answer")));
               }
             }
             return {
@@ -141797,10 +143012,11 @@ ${buttons.join("\n")}`;
               if (b.type === "resource") return { type: "resource", resource: b.resource };
               return { type: "text", text: flattenContent([b]) };
             }) : [{ type: "text", text }];
-            this.messages.push(buildUserChatMessage({
+            this.acpTurnSeq += 1;
+            this.messages.push(this.withAcpSource(buildUserChatMessage({
               content: contentBlocks && contentBlocks.length > 0 ? contentBlocks : text,
               timestamp: Date.now()
-            }));
+            }), this.nextMessageSourceId()));
             this.currentStatus = "generating";
             this.partialContent = "";
             this.partialThoughtContent = "";
@@ -142002,11 +143218,11 @@ ${buttons.join("\n")}`;
                 content = m.content.filter((p) => p.type === "text").map((p) => p.text || "").join("\n");
               }
               if (content.trim()) {
-                this.messages.push(buildChatMessage({
+                this.messages.push(this.withAcpSource(buildChatMessage({
                   role: m.role || "assistant",
                   content: content.trim(),
                   timestamp: Date.now()
-                }));
+                }), this.nextMessageSourceId()));
                 this.partialContent = "";
               }
             }
@@ -142051,6 +143267,19 @@ ${buttons.join("\n")}`;
             }
           }
           // ─── Rich Content Helpers ────────────────────────────
+          nextMessageSourceId() {
+            this.acpMessageSeq += 1;
+            return `m${this.acpMessageSeq}`;
+          }
+          turnSourceId(slot) {
+            return `t${this.acpTurnSeq}.${slot}`;
+          }
+          /** Stamp the identity ledger's `acp` source address (daemon-internal `_src`). */
+          withAcpSource(message, localId) {
+            if (!message) return message;
+            const src = acpSourceAddress(localId);
+            return src ? { ...message, _src: src } : message;
+          }
           /** Build ContentBlock[] from current partial state */
           buildPartialBlocks() {
             const blocks = [];
@@ -142098,39 +143327,40 @@ ${rawInput}` : rawInput;
             return toolCall.title || "";
           }
           buildTurnToolCallMessages(timestamp2 = Date.now()) {
-            return this.turnToolCalls.map((toolCall) => {
-              const content = this.summarizeToolCallBubbleContent(toolCall);
-              if (!content) return null;
-              const isRunning = toolCall.status === "pending" || toolCall.status === "in_progress";
-              const label2 = toolCall.title || void 0;
-              const kind = this.buildToolCallBubbleKind(toolCall);
-              if (kind === "thought") {
-                return buildThoughtChatMessage({
-                  content,
-                  timestamp: timestamp2,
-                  meta: { label: label2 || "Thought", isRunning }
-                });
-              }
-              if (kind === "terminal") {
-                return buildTerminalChatMessage({
-                  content,
-                  timestamp: timestamp2,
-                  meta: { label: label2 || "Ran command", isRunning }
-                });
-              }
-              return buildToolChatMessage({
+            return this.turnToolCalls.map((toolCall, index) => this.withAcpSource(this.buildTurnToolCallMessage(toolCall, timestamp2), this.turnSourceId(`tool.${toolCall.toolCallId || index}`))).filter(Boolean);
+          }
+          buildTurnToolCallMessage(toolCall, timestamp2) {
+            const content = this.summarizeToolCallBubbleContent(toolCall);
+            if (!content) return null;
+            const isRunning = toolCall.status === "pending" || toolCall.status === "in_progress";
+            const label2 = toolCall.title || void 0;
+            const kind = this.buildToolCallBubbleKind(toolCall);
+            if (kind === "thought") {
+              return buildThoughtChatMessage({
                 content,
                 timestamp: timestamp2,
-                meta: { label: label2 || "Tool call", isRunning }
+                meta: { label: label2 || "Thought", isRunning }
               });
-            }).filter(Boolean);
+            }
+            if (kind === "terminal") {
+              return buildTerminalChatMessage({
+                content,
+                timestamp: timestamp2,
+                meta: { label: label2 || "Ran command", isRunning }
+              });
+            }
+            return buildToolChatMessage({
+              content,
+              timestamp: timestamp2,
+              meta: { label: label2 || "Tool call", isRunning }
+            });
           }
           /** Finalize streaming content into an assistant message */
           finalizeAssistantMessage() {
             const timestamp2 = Date.now();
             const thoughtMessage = this.buildPartialThoughtMessage(timestamp2);
             if (thoughtMessage) {
-              this.messages.push(thoughtMessage);
+              this.messages.push(this.withAcpSource(thoughtMessage, this.turnSourceId("thought")));
             }
             const toolCallMessages = this.buildTurnToolCallMessages(timestamp2);
             if (toolCallMessages.length > 0) {
@@ -142144,11 +143374,11 @@ ${rawInput}` : rawInput;
               return b;
             }).filter((b) => b.type !== "text" || b.type === "text" && b.text.trim());
             if (finalBlocks.length > 0) {
-              this.messages.push(buildAssistantChatMessage({
+              this.messages.push(this.withAcpSource(buildAssistantChatMessage({
                 content: finalBlocks.length === 1 && finalBlocks[0].type === "text" ? finalBlocks[0].text : finalBlocks,
                 timestamp: Date.now(),
                 toolCalls: this.turnToolCalls.length > 0 ? [...this.turnToolCalls] : void 0
-              }));
+              }), this.turnSourceId("answer")));
             }
             this.partialContent = "";
             this.partialThoughtContent = "";
@@ -142277,10 +143507,10 @@ ${rawInput}` : rawInput;
           appendSystemMessage(content, timestamp2 = Date.now()) {
             const normalizedContent = String(content || "").trim();
             if (!normalizedContent) return;
-            this.messages.push(buildRuntimeSystemChatMessage({
+            this.messages.push(this.withAcpSource(buildRuntimeSystemChatMessage({
               content: normalizedContent,
               timestamp: timestamp2
-            }));
+            }), this.nextMessageSourceId()));
             if (this.messages.length > 200) {
               this.messages = this.messages.slice(-100);
             }
@@ -156280,7 +157510,7 @@ ${e?.stderr || ""}`;
         role: "member"
       };
     }
-    var import_crypto19;
+    var import_crypto21;
     var fs70;
     var daemonCommandRegistry;
     var DaemonCommandRouter;
@@ -156330,7 +157560,7 @@ ${e?.stderr || ""}`;
         init_mesh_node_state_push_store();
         init_mesh_node_state_lifecycle();
         init_mesh_remote_worktree_membership();
-        import_crypto19 = require("crypto");
+        import_crypto21 = require("crypto");
         init_mesh_node_runtime_io();
         init_git_status();
         init_launch();
@@ -156431,7 +157661,7 @@ ${e?.stderr || ""}`;
            * as `daemonBootId` in this daemon's own runtime summary (a coordinator that
            * sees it change knows this member restarted).
            */
-          meshCoordinatorBootId = (0, import_crypto19.randomUUID)();
+          meshCoordinatorBootId = (0, import_crypto21.randomUUID)();
           meshNodeStatePushRestore = null;
           constructor(deps) {
             this.deps = deps;
@@ -159515,7 +160745,7 @@ ${e?.stderr || ""}`;
       const nowMs2 = ports.nowMs();
       const nowIso = new Date(nowMs2).toISOString();
       const leaseUntil = new Date(nowMs2 + WORKSPACE_SAGA_LEASE_MS).toISOString();
-      const fencingToken = (0, import_crypto20.randomUUID)();
+      const fencingToken = (0, import_crypto22.randomUUID)();
       const claimed = store2.transaction(() => {
         const graphStore = store2.graphStore();
         const intent2 = graphStore.getWorkspaceIntent(graphId, workspaceRef);
@@ -160014,13 +161244,13 @@ ${e?.stderr || ""}`;
         return void 0;
       }
     }
-    var import_crypto20;
+    var import_crypto22;
     var LEASE_OWNER;
     var ACTIVE_SAGA_STATES;
     var init_mesh_graph_workspace_saga = __esm2({
       "src/mesh/mesh-graph-workspace-saga.ts"() {
         "use strict";
-        import_crypto20 = require("crypto");
+        import_crypto22 = require("crypto");
         init_mesh_runtime_store();
         init_mesh_graph_types();
         init_mesh_graph_transition_runner();
@@ -172196,7 +173426,7 @@ data: ${JSON.stringify(msg.data)}
         });
       }
     };
-    var import_crypto21 = require("crypto");
+    var import_crypto23 = require("crypto");
     var import_session_host_core12 = require_dist();
     var BASE_KEY_SEQUENCES = {
       enter: "\r",
@@ -172294,7 +173524,7 @@ data: ${JSON.stringify(msg.data)}
         const sessionId = String(options.sessionId || "").trim();
         if (!sessionId) throw new Error("sessionId is required");
         const mode = options.mode || "read";
-        const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto21.randomUUID)().slice(0, 8)}`;
+        const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto23.randomUUID)().slice(0, 8)}`;
         const client = options.client || new import_session_host_core12.SessionHostClient({ endpoint: options.endpoint });
         await client.connect();
         const attachResponse = await client.request({
@@ -173867,7 +175097,7 @@ data: ${JSON.stringify(msg.data)}
         }
       }
     }
-    var import_crypto22 = require("crypto");
+    var import_crypto24 = require("crypto");
     var import_fs29 = require("fs");
     var import_path29 = require("path");
     init_config();
@@ -173929,7 +175159,7 @@ data: ${JSON.stringify(msg.data)}
       LOG.info("Seqscribe", "local authority secret minted (standalone, no fleet secret configured)");
     }
     function mintLocalAuthoritySecret() {
-      return (0, import_crypto22.randomBytes)(32).toString("hex");
+      return (0, import_crypto24.randomBytes)(32).toString("hex");
     }
     function loadOrCreateLocalAuthoritySecret(env2) {
       const existing = loadStoredLocalAuthoritySecret(env2);
@@ -175040,7 +176270,7 @@ data: ${JSON.stringify(msg.data)}
     }
     init_mesh_publisher();
     init_mesh_record();
-    var import_crypto23 = require("crypto");
+    var import_crypto25 = require("crypto");
     init_dist();
     init_dist();
     init_policy();
@@ -175507,7 +176737,7 @@ data: ${JSON.stringify(msg.data)}
         };
       }
       function notifyMeshEvent(notice) {
-        const eventId = notice.eventId ?? `mesh_event:${(0, import_crypto23.randomUUID)()}`;
+        const eventId = notice.eventId ?? `mesh_event:${(0, import_crypto25.randomUUID)()}`;
         const at = notice.at ?? now();
         const notifyKind = notice.notify ?? "mesh_event";
         const entry = {
@@ -180544,7 +181774,7 @@ ${notice.notice}${supersededHint}`;
         queuedAt: nowMs2
       });
     }
-    var import_crypto24 = require("crypto");
+    var import_crypto26 = require("crypto");
     init_mesh_runtime_store();
     init_deliver();
     init_mesh_task_predicates();
@@ -180634,7 +181864,7 @@ ${notice.notice}${supersededHint}`;
         };
       };
       const stuck = stuckNodes.map(describe32);
-      const fingerprint = (0, import_crypto24.createHash)("sha256").update(JSON.stringify(stuck.map((s2) => [s2.nodeId, s2.state, s2.reasonCode ?? ""]).sort())).digest("hex").slice(0, 16);
+      const fingerprint = (0, import_crypto26.createHash)("sha256").update(JSON.stringify(stuck.map((s2) => [s2.nodeId, s2.state, s2.reasonCode ?? ""]).sort())).digest("hex").slice(0, 16);
       return {
         kind: "graph_stalled",
         meshId,
@@ -180714,7 +181944,7 @@ ${notice.notice}${supersededHint}`;
         if (covered.has(rootId)) continue;
         const waiting = collectWaitingQueueDependents(store2, meshId, rootId);
         if (waiting.length === 0) continue;
-        const fingerprint = (0, import_crypto24.createHash)("sha256").update(JSON.stringify([root.status, ...waiting.map((w) => w.taskId).sort()])).digest("hex").slice(0, 16);
+        const fingerprint = (0, import_crypto26.createHash)("sha256").update(JSON.stringify([root.status, ...waiting.map((w) => w.taskId).sort()])).digest("hex").slice(0, 16);
         out.push({
           kind: "queue_chain_stalled",
           meshId,

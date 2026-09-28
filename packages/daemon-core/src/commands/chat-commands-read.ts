@@ -31,6 +31,8 @@ import {
 } from './read-chat-message-filters.js';
 import { decideCliReadChatSource, supportsCliNativeTranscript } from './read-chat-source-decision.js';
 import { nativeHistoryObservedModel } from '../providers/native-history/observed-model.js';
+import { stampDomScriptMessageSources } from './read-chat-message-identity.js';
+import { stripMessageSourceAddresses } from '../chat/message-source-address.js';
 // (NATIVE-TURN-SIGNAL) turn-terminal marker selection — pure-move extraction
 // (file-size gate); logic unchanged, see the module header.
 import {
@@ -762,6 +764,16 @@ function getCliVisibleTranscriptCount(adapter: any): number {
 }
 
 export async function handleChatHistory(h: CommandHelpers, args: any): Promise<CommandResult> {
+    // chat_history pages native-history rows straight to the caller without
+    // passing the read_chat choke point, so the daemon-internal `_src` reader
+    // stamp is dropped here instead (design 2026-09-28 §3.3).
+    const result = await readChatHistoryPage(h, args);
+    return Array.isArray((result as any)?.messages)
+        ? { ...result, messages: stripMessageSourceAddresses((result as any).messages) }
+        : result;
+}
+
+async function readChatHistoryPage(h: CommandHelpers, args: any): Promise<CommandResult> {
     const { agentType, offset, limit } = args;
     const historySessionId = getHistorySessionId(h, args);
     // Same opt-in contract as read_chat (read-chat-presentation.ts): prose-only
@@ -1800,7 +1812,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     }
                 }
                 if (parsed && typeof parsed === 'object') {
-                    const validated = validateReadChatResultPayload(parsed, 'extension read_chat');
+                    const validated = validateReadChatResultPayload(stampDomScriptMessageSources(parsed, historySessionId || args?.targetSessionId), 'extension read_chat');
                     _log(`Extension OK: ${validated.messages?.length || 0} msgs`);
                     traceProviderEvent(args, 'provider', 'extension.read_chat.success', {
                         h,
@@ -1819,7 +1831,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         args?.targetSessionId,
                         historySessionId,
                     );
-                    return buildReadChatCommandResult(validated as Record<string, any>, args, h);
+                    return buildReadChatCommandResult(validated as Record<string, any>, args, h, { identityCoverage: 'window' });
                 }
                 if (!extensionReadChatError) {
                     extensionReadChatError = 'extension read_chat returned a non-object payload';
@@ -1858,7 +1870,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         messages: stream.messages || [],
                         status: stream.status,
                         agentType: stream.agentType,
-                    }, args, h);
+                    }, args, h, { identityCoverage: 'window' });
                 }
             }
         }
@@ -1889,7 +1901,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     }
                 }
                 if (parsed && typeof parsed === 'object') {
-                    const validated = validateReadChatResultPayload(parsed, 'webview read_chat');
+                    const validated = validateReadChatResultPayload(stampDomScriptMessageSources(parsed, historySessionId || args?.targetSessionId), 'webview read_chat');
                     _log(`Webview OK: ${validated.messages?.length || 0} msgs`);
                     h.historyWriter.appendNewMessages(
                         provider?.type || getCurrentProviderType(h, 'unknown_webview'),
@@ -1898,7 +1910,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         args?.targetSessionId,
                         historySessionId,
                     );
-                    return buildReadChatCommandResult(validated as Record<string, any>, args, h);
+                    return buildReadChatCommandResult(validated as Record<string, any>, args, h, { identityCoverage: 'window' });
                 }
                 if (!webviewReadChatError) {
                     webviewReadChatError = 'webview read_chat returned a non-object payload';
@@ -1929,7 +1941,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     }
                 }
                 if (parsed && typeof parsed === 'object') {
-                    const validated = validateReadChatResultPayload(parsed, 'ide read_chat');
+                    const validated = validateReadChatResultPayload(stampDomScriptMessageSources(parsed, historySessionId || args?.targetSessionId), 'ide read_chat');
                     _log(`OK: ${validated.messages?.length || 0} msgs`);
                     traceProviderEvent(args, 'provider', 'ide.read_chat.success', {
                         h,
@@ -1948,7 +1960,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         args?.targetSessionId,
                         historySessionId,
                     );
-                    return buildReadChatCommandResult(validated as Record<string, any>, args, h);
+                    return buildReadChatCommandResult(validated as Record<string, any>, args, h, { identityCoverage: 'window' });
                 }
                 if (!ideReadChatError) {
                     ideReadChatError = 'ide read_chat returned a non-object payload';

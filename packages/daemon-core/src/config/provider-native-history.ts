@@ -24,6 +24,7 @@ import {
     sanitizeHistoryMessage,
     sortSavedHistorySessionSummaries,
 } from './chat-history.js';
+import { readMessageSourceAddress } from '../chat/message-source-address.js';
 
 export type ProviderNativeHistoryScripts = Record<string, ((input: any) => any) | undefined>;
 
@@ -137,6 +138,13 @@ function normalizeProviderNativeHistoryRecords(agentType: string, historySession
                     blockIndex: ref.blockIndex,
                 };
             }
+            // The reader's source address for the message identity ledger
+            // (design 2026-09-28 §3.3). Same first-hop rule as the ref above: a
+            // `_src` dropped here is unrecoverable, so it is carried by NAME and
+            // re-read shape-checked. Daemon-internal — stripped at the read_chat
+            // choke point and never persisted.
+            const src = readMessageSourceAddress(record?._src);
+            if (src) (base as any)._src = src;
             return sanitizeHistoryMessage(agentType, base);
         })
         .filter(Boolean) as HistoryMessage[];
