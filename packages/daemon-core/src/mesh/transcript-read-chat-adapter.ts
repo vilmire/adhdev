@@ -2,8 +2,8 @@
  * `mesh_read_chat_display` roster adapter — design §4 (roster id 3), §8 unit 6
  * ("mesh_read_chat remote display cutover").
  *
- * Maps a verified-complete `ReplicatedTranscriptSnapshotV1` (§8 unit 1's closed
- * wire allow-list) into the exact payload shape the daemon's `read_chat`
+ * Maps a verified `ReplicatedTranscriptViewV2` (the keyed chat topic folded
+ * by `KeyedTranscriptFolder`, design 2026-09-28 §5.3) into the exact payload shape the daemon's `read_chat`
  * command result already has — the object `meshReadChat`
  * (`oss/packages/mcp-server/src/tools/mesh-tools-session.ts`) hands to
  * `compactChatPayload`/`annotateRapidReadChatAdvisory` and, for `compact=false`,
@@ -22,7 +22,7 @@
  * the destination.
  *
  * ── Status is NOT recomputed here (design §5.2) ────────────────────────────
- * ★ `snapshot.status` was already produced by `read-chat-presentation.ts`'s
+ * ★ `view.status` was already produced by `read-chat-presentation.ts`'s
  * `effectiveStatus` (`:202-215`) — i.e. AFTER the Stage 6 turn-authority
  * decision (`resolveSessionTurnPresentation` → `turn_reducer` override →
  * `normalizeReadChatCommandStatus` → the waiting_approval/modal contract
@@ -47,7 +47,7 @@
  * diagnostic sub-fields. `transcriptProvenance` gets the same treatment.
  *
  * `activeInteractivePrompt` carries `{message, options}` — the allow-listed
- * `ReplicatedTranscriptPromptV1`. It cannot reconstruct the full
+ * `ChatPromptV2`. It cannot reconstruct the full
  * `InteractivePrompt` needed to ANSWER a prompt, but answering is a live
  * daemon RPC on a different verb regardless of transcript source, and
  * `mesh_read_chat` is a DISPLAY surface (roster note: "Remote transcript
@@ -55,29 +55,29 @@
  */
 
 import type {
-    ReplicatedTranscriptMessageV1,
-    ReplicatedTranscriptSnapshotV1,
-} from '../seqscribe/transcript-projection.js';
+    ReplicatedTranscriptMessageV2,
+    ReplicatedTranscriptViewV2,
+} from '../seqscribe/transcript-keyed-codec.js';
 
 /**
  * One roster-mapped message, in the `ChatMessage`-ish shape the mcp-server
  * compactor reads (`isCoordinatorVisibleMessage`/`messageContent`, chat-
  * compact.ts).
  *
- * @message-projection l2-decode
+ * @message-projection l2k-decode
+ * @message-projection-excludes srcId: handoff provenance (§3.4) the read_chat payload has no slot for; `messageId` already carries the identity.
  *
- * The far side of the replica wire. `check:message-projection-parity` enforces
- * that every field the encoder puts on the wire is still read back out here:
- * dropping one at this hop loses it exactly as completely as never encoding it,
- * and just as silently.
+ * The far side of the keyed replica wire. `check:message-projection-parity`
+ * enforces that every field the encoder puts on the wire is still read back
+ * out here: dropping one at this hop loses it exactly as completely as never
+ * encoding it, and just as silently.
  *
- * ★ `turnKey` is carried onto `_turnKey` ONLY — it must NOT stand in for
- * `bubbleId`. `turnKey` is TURN-grained (one value per user message, shared by
- * every bubble of that turn), while `bubbleId` is per-BUBBLE. Conflating them
- * made all N bubbles of a turn share one identity. The wire also carries
- * `sequence` (a monotonic per-session integer), which IS per-message and is
- * mapped through as-is; `providerUnitKey` deliberately stays off the wire
- * because it embeds a content hash (server content boundary).
+ * ★ Per-bubble identity is `messageId` (mapped onto both `messageId` and `id`,
+ * matching what the live read_chat choke point emits). `turnKey` is carried
+ * onto `_turnKey` ONLY — it is TURN-grained and must never stand in for a
+ * bubble id. `ord`/`rev` travel so a consumer can order and change-detect
+ * without re-deriving anything. `providerUnitKey` stays off the wire (content
+ * hash, server content boundary).
  *
  * ★ `meta.streaming` is reconstructed from the allow-listed `streaming` scalar
  * ONLY when it is non-null. Never synthesize a `meta` object otherwise:
@@ -85,8 +85,12 @@ import type {
  * `meta.userVisible`, and an always-present `meta` would be a new (empty)
  * object on every message where the live path had none.
  */
-function mapTranscriptMessage(message: ReplicatedTranscriptMessageV1): Record<string, unknown> {
+function mapTranscriptMessage(message: ReplicatedTranscriptMessageV2): Record<string, unknown> {
     const mapped: Record<string, unknown> = {
+        id: message.messageId,
+        messageId: message.messageId,
+        ord: message.ord,
+        rev: message.rev,
         role: message.role,
         kind: message.kind,
         content: message.content,
@@ -96,14 +100,14 @@ function mapTranscriptMessage(message: ReplicatedTranscriptMessageV1): Record<st
     if (message.bubbleState !== null) mapped.bubbleState = message.bubbleState;
     if (message.senderName !== null) mapped.senderName = message.senderName;
     if (message.toolName !== null) mapped.toolName = message.toolName;
-    if (message.toolBlockRef !== null) mapped.toolBlockRef = message.toolBlockRef;
+    // Expand is addressed by `messageId` (design §5.9); only the affordance travels.
+    if (message.expandable) mapped.expandable = message.expandable;
     if (message.turnKey !== null) {
         // `_turnKey` ONLY — never `bubbleId`. See this file's header: `turnKey`
         // is turn-grained, so using it as per-bubble identity makes every bubble
         // of one turn indistinguishable.
         mapped._turnKey = message.turnKey;
     }
-    if (typeof message.sequence === 'number') mapped.sequence = message.sequence;
     if (message.streaming !== null) mapped.meta = { streaming: message.streaming };
     return mapped;
 }
@@ -128,7 +132,7 @@ function mapProvenanceScalar(value: string | null): Record<string, unknown> | un
  */
 const ACTIVITY_MESSAGE_KINDS = new Set(['tool', 'terminal', 'thought']);
 
-function isActivityWireMessage(message: ReplicatedTranscriptMessageV1): boolean {
+function isActivityWireMessage(message: ReplicatedTranscriptMessageV2): boolean {
     return typeof message.kind === 'string' && ACTIVITY_MESSAGE_KINDS.has(message.kind.trim().toLowerCase());
 }
 
@@ -160,13 +164,14 @@ export interface TranscriptReadChatPayload {
     /** Design §5.5's "stale idle UI" — a replica read whose freshness gate did not hold. */
     stale: boolean;
     transcriptReadSource: 'replica';
-    /** Revision identity, for operator diagnostics (§8 unit 10). Non-content scalars. */
-    replicaRevision: number;
+    /** Commit identity (producer epoch + frame), for operator diagnostics. Non-content scalars. */
+    replicaEpoch: string;
+    replicaFrame: number;
     replicaObservedAt: string;
 }
 
 /**
- * Map one verified-complete replica snapshot into the `read_chat` payload
+ * Map one verified replica view into the `read_chat` payload
  * shape. Pure: no I/O, no clock, no status derivation (see header).
  *
  * `totalMessages` comes from `coverage.totalMessageCount` — the FULL observed
@@ -176,8 +181,8 @@ export interface TranscriptReadChatPayload {
  * to the `compact=false` branch, which is exactly where the untailed count is
  * the honest answer.
  */
-export function mapTranscriptSnapshotToReadChatPayload(
-    snapshot: ReplicatedTranscriptSnapshotV1,
+export function mapTranscriptViewToReadChatPayload(
+    snapshot: ReplicatedTranscriptViewV2,
     options: { omittedBefore: boolean; stale: boolean },
 ): TranscriptReadChatPayload {
     const messageSource = mapProvenanceScalar(snapshot.provenance.messageSource);
@@ -209,7 +214,8 @@ export function mapTranscriptSnapshotToReadChatPayload(
         omittedBefore: options.omittedBefore,
         stale: options.stale,
         transcriptReadSource: 'replica',
-        replicaRevision: snapshot.revision,
+        replicaEpoch: snapshot.epoch,
+        replicaFrame: snapshot.frame,
         replicaObservedAt: snapshot.observedAt,
     };
 }

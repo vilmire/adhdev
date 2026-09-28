@@ -6,7 +6,20 @@ import type { GitCompactSummary, MessageInputSupport, RecentSessionBucket, Sessi
 import type { ChatMessage } from '../../types';
 
 export type CliConversationViewMode = 'terminal' | 'chat';
-export type DashboardMessage = ChatMessage & { _localId?: string; _turnKey?: string };
+export type DashboardMessage = ChatMessage & {
+    _localId?: string;
+    _turnKey?: string;
+    /**
+     * Keyed replica lane only (`transcript-chat-pane-adapter.ts`): the bubble's
+     * fractional-index order key and per-bubble revision from the keyed chat
+     * wire (design 2026-09-28 §4.2-§4.4). Diagnostics and change detection;
+     * rendering order is the array order the view already has.
+     */
+    _ord?: string;
+    _rev?: number;
+    /** Keyed replica lane only: a truncated tool bubble the daemon can expand by `messageId` (§5.9). */
+    _expandable?: boolean;
+};
 
 export interface ActiveConversation {
     routeId: string;

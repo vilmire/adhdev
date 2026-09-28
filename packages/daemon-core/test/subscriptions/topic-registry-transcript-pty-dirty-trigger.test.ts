@@ -67,7 +67,7 @@ function configureRecordingProjection(): { pulled: string[] } {
     configureTranscriptProjection({
         daemonId: () => 'daemon-1',
         writerId: () => 'writer-1',
-        publishRevision: async () => {},
+        appendChatFrame: async () => {},
         resolveSourcePath: () => null,
         collectObservation: async (sessionId: string) => {
             pulled.push(sessionId);

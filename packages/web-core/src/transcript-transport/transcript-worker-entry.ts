@@ -75,8 +75,8 @@ let activeNode: TranscriptWorkerNode | null = null;
 
 scope.onmessage = (ev) => {
     const port = ev.ports?.[0];
-    const snapshotPort = ev.ports?.[1];
-    if (!port || !snapshotPort) return;
+    const viewPort = ev.ports?.[1];
+    if (!port || !viewPort) return;
     const init = ev.data as { sessionKey?: unknown; writerId?: unknown } | null;
     const sessionKey = typeof init?.sessionKey === 'string' ? init.sessionKey : null;
     const writerId = typeof init?.writerId === 'string' ? init.writerId : null;
@@ -109,7 +109,7 @@ scope.onmessage = (ev) => {
 
         const session = runTranscriptWorkerSession({
             node,
-            port: snapshotPort as unknown as TranscriptWorkerSessionPort,
+            port: viewPort as unknown as TranscriptWorkerSessionPort,
             currentPeer: () => peer,
         });
 

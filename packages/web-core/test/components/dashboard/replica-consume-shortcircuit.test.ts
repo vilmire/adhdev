@@ -1,15 +1,14 @@
 /**
  * ★ Consume-path short-circuits: performance only, behaviour identical.
  *
- * Three optimizations landed on the browser consume path, each of which
- * REPLACES WORK WHOSE OUTCOME IS ALREADY DETERMINED and must therefore be
- * indistinguishable from the unoptimized path in every observable respect:
+ * Two optimizations on the browser consume path each REPLACE WORK WHOSE
+ * OUTCOME IS ALREADY DETERMINED and must therefore be indistinguishable from
+ * the unoptimized path in every observable respect (the v1 codec re-decode
+ * short-circuit that used to be ① went away with the v1 wire — the keyed
+ * folder never re-decodes a whole transcript):
  *
- *   ① codec re-decode short-circuit — a commit whose `snapshotSha256` equals
- *      the hash of the complete revision already held skips
- *      concat → UTF-8 → SHA-256 → JSON.parse and returns the held snapshot.
- *   ② controller map-skip — a re-delivered identical snapshot skips the O(N)
- *      `mapTranscriptSnapshotToChatTailUpdate` allocation.
+ *   ② controller map-skip — a re-delivered identical view skips the
+ *      `mapTranscriptViewToChatTailUpdate` pass.
  *   ③ fan-out sharing — the pane controller and the warm inbox controller
  *      receive ONE mapping instead of computing it twice.
  *
@@ -27,16 +26,10 @@
  * short-circuit must break only a performance claim, never a correctness one.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core'
-import {
-  TranscriptRevisionAssembler,
-  encodeTranscriptRevision,
-  type TranscriptRevisionIdentity,
-  type TranscriptRevisionRow,
-} from '@adhdev/daemon-core/seqscribe/transcript-revision-codec'
+import type { ReplicatedTranscriptViewV2 } from '@adhdev/daemon-core'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
-  applyTranscriptReplicaSnapshotToControllers,
+  applyTranscriptReplicaViewToControllers,
   getOrCreateSessionChatTailController,
   resetSessionChatTailControllersForTest,
 } from '../../../src/components/dashboard/session-chat-tail-controller'
@@ -45,25 +38,17 @@ const DAEMON = 'daemon-1'
 const SESSION = 'session-1'
 const SUBSCRIPTION_KEY = `daemon:${DAEMON}:session:${SESSION}`
 
-const IDENTITY: TranscriptRevisionIdentity = {
-  sessionId: SESSION,
-  producerDaemonId: DAEMON,
-  producerWriterId: 'writer-1',
-  producerEpoch: 'epoch-1',
-  revision: 7,
-}
-
-function snapshot(overrides: Partial<ReplicatedTranscriptSnapshotV1> = {}): ReplicatedTranscriptSnapshotV1 {
+function snapshot(overrides: Partial<ReplicatedTranscriptViewV2> = {}): ReplicatedTranscriptViewV2 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId: SESSION,
     historySessionId: null,
     providerType: 'claude-cli',
     providerSessionId: null,
     producerDaemonId: DAEMON,
     producerWriterId: 'writer-1',
-    producerEpoch: 'epoch-1',
-    revision: 7,
+    epoch: 'epoch-1',
+    frame: 7,
     observedAt: '2026-09-06T00:00:00.000Z',
     status: 'idle',
     providerObservedStatus: null,
@@ -76,7 +61,7 @@ function snapshot(overrides: Partial<ReplicatedTranscriptSnapshotV1> = {}): Repl
     terminalMarkers: [],
     coverage: { mode: 'tail', totalMessageCount: 0, returnedMessageCount: 0, omittedBefore: false },
     ...overrides,
-  } as ReplicatedTranscriptSnapshotV1
+  } as ReplicatedTranscriptViewV2
 }
 
 function message(role: 'user' | 'assistant', content: string, receivedAt: number) {
@@ -87,46 +72,24 @@ function message(role: 'user' | 'assistant', content: string, receivedAt: number
     receivedAt,
     timestamp: receivedAt,
     turnKey: `${role}-${receivedAt}`,
-    sequence: receivedAt,
+    messageId: `m-${role}-${receivedAt}`,
+    ord: String(receivedAt).padStart(8, '0'),
+    rev: 1,
+    expandable: false,
+    srcId: null,
     bubbleState: 'final',
     senderName: null,
     toolName: null,
     streaming: null,
-  } as ReplicatedTranscriptSnapshotV1['messages'][number]
+  } as ReplicatedTranscriptViewV2['messages'][number]
 }
 
 function withMessages(revision: number, status: string, ...contents: string[]) {
   return snapshot({
-    revision,
-    status: status as ReplicatedTranscriptSnapshotV1['status'],
+    frame: revision,
+    status: status as ReplicatedTranscriptViewV2['status'],
     messages: contents.map((c, i) => message(i % 2 === 0 ? 'user' : 'assistant', c, 10 + i)),
   })
-}
-
-/** Encode a snapshot and hand every row to `assembler`, returning the results. */
-function ingestRevision(
-  assembler: TranscriptRevisionAssembler,
-  body: ReplicatedTranscriptSnapshotV1,
-  identity: TranscriptRevisionIdentity = IDENTITY,
-) {
-  const encoded = encodeTranscriptRevision(body, identity, () => '2026-09-06T00:00:00.000Z')
-  if (!encoded.ok) throw new Error('fixture snapshot is oversize')
-  const rows: TranscriptRevisionRow[] = [
-    { writer: identity.producerWriterId, seq: 1, kind: 'transcript.revision.begin.v1', payload: encoded.begin },
-    ...encoded.chunks.map((chunk, i) => ({
-      writer: identity.producerWriterId,
-      seq: 2 + i,
-      kind: 'transcript.revision.chunk.v1',
-      payload: chunk,
-    })),
-    {
-      writer: identity.producerWriterId,
-      seq: 2 + encoded.chunks.length,
-      kind: 'transcript.revision.commit.v1',
-      payload: encoded.commit,
-    },
-  ]
-  return rows.map((row) => assembler.ingestRow(row))
 }
 
 function setup(sessionSuffix = '') {
@@ -151,60 +114,6 @@ beforeEach(() => {
 })
 
 // ───────────────────────────────────────────────────────────────────────────
-// ① ★ The codec short-circuit returns a snapshot EQUAL to the full decode.
-// ───────────────────────────────────────────────────────────────────────────
-describe('★ ①: codec re-decode short-circuit is result-identical', () => {
-  it('★ returns the same snapshot content on a repeat commit as on the first', () => {
-    const body = withMessages(7, 'idle', 'question', 'answer', 'more')
-    const assembler = new TranscriptRevisionAssembler(IDENTITY.producerWriterId)
-
-    const first = ingestRevision(assembler, body).at(-1)
-    const second = ingestRevision(assembler, body).at(-1)
-
-    expect(first?.status).toBe('complete')
-    expect(second?.status).toBe('complete')
-    // The whole point: the second delivery skipped the decode, and still
-    // produced content indistinguishable from the first.
-    expect(second && 'snapshot' in second ? second.snapshot : null)
-      .toEqual(first && 'snapshot' in first ? first.snapshot : undefined)
-    // A control assembler that never saw the first delivery (so its
-    // short-circuit cannot arm) must agree with both.
-    const cold = new TranscriptRevisionAssembler(IDENTITY.producerWriterId)
-    const coldResult = ingestRevision(cold, body).at(-1)
-    expect(coldResult && 'snapshot' in coldResult ? coldResult.snapshot : null)
-      .toEqual(second && 'snapshot' in second ? second.snapshot : undefined)
-  })
-
-  it('★ never skips a revision whose CONTENT actually changed', () => {
-    const assembler = new TranscriptRevisionAssembler(IDENTITY.producerWriterId)
-    ingestRevision(assembler, withMessages(7, 'idle', 'q'))
-
-    // Same identity shape, different body — different hash, so the gate (which
-    // keys on the hash, never on `revision`) must miss and decode in full.
-    const changed = withMessages(7, 'idle', 'q', 'a')
-    const result = ingestRevision(assembler, changed).at(-1)
-    expect(result?.status).toBe('complete')
-    expect(result && 'snapshot' in result ? result.snapshot.messages : []).toHaveLength(2)
-  })
-
-  it('★ still rejects identical BYTES committed under a different identity', () => {
-    // The short-circuit skips the DECODE, never the body-vs-envelope check.
-    // Identical content under a bumped epoch must fail exactly as it would on
-    // the full path — this is the check that would silently vanish if the
-    // optimization returned the cached snapshot unvalidated.
-    const body = withMessages(7, 'idle', 'q', 'a')
-    const assembler = new TranscriptRevisionAssembler(IDENTITY.producerWriterId)
-    ingestRevision(assembler, body)
-
-    const foreign = { ...IDENTITY, producerEpoch: 'epoch-2' }
-    const results = ingestRevision(assembler, body, foreign)
-    const commit = results.at(-1)
-    expect(commit?.status).toBe('rejected')
-    expect(commit && 'reason' in commit ? commit.reason : '').toBe('wrong_owner')
-  })
-})
-
-// ───────────────────────────────────────────────────────────────────────────
 // ② ★ Controller map-skip does not change what lands on screen.
 // ───────────────────────────────────────────────────────────────────────────
 describe('★ ②: controller map-skip is screen-identical', () => {
@@ -213,10 +122,10 @@ describe('★ ②: controller map-skip is screen-identical', () => {
     controller.retain()
     const body = withMessages(7, 'idle', 'q', 'a')
 
-    controller.applyTranscriptReplicaSnapshot(body, { omittedBefore: false })
+    controller.applyTranscriptReplicaView(body)
     const afterFirst = controller.getSnapshot()
 
-    controller.applyTranscriptReplicaSnapshot(body, { omittedBefore: false })
+    controller.applyTranscriptReplicaView(body)
     const afterRepeat = controller.getSnapshot()
 
     expect(afterRepeat.liveMessages.map((m) => m.content)).toEqual(['q', 'a'])
@@ -228,22 +137,22 @@ describe('★ ②: controller map-skip is screen-identical', () => {
   it('★ a genuinely NEW revision is never skipped', () => {
     const { controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(withMessages(7, 'idle', 'q', 'a'), { omittedBefore: false })
-    controller.applyTranscriptReplicaSnapshot(withMessages(8, 'idle', 'q', 'a', 'next'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(withMessages(7, 'idle', 'q', 'a'))
+    controller.applyTranscriptReplicaView(withMessages(8, 'idle', 'q', 'a', 'next'))
     expect(controller.getSnapshot().liveMessages.map((m) => m.content)).toEqual(['q', 'a', 'next'])
   })
 
-  it('★ a repeat snapshot with a FLIPPED omittedBefore behaves as the unoptimized path did', () => {
-    // `omittedBefore`/`stale` are the caller's per-delivery decision, not a
-    // property of the snapshot, so they are part of the skip key — the skip
-    // does NOT fire here and the update is mapped and re-evaluated in full.
+  it('★ a repeat view with a FLIPPED stale flag behaves as the unoptimized path did', () => {
+    // `stale` is the caller's per-delivery decision, not a property of the
+    // view, so it is part of the skip key — the skip does NOT fire here and the
+    // update is mapped and re-evaluated in full.
     //
     // ★ It nonetheless does not land, and that is CORRECT rather than a
-    // regression: `handleUpdate` short-circuits on an unchanged message
-    // signature ('noop') before it writes any of the snapshot's label fields,
-    // so a flag-only change has never been able to move the rendered snapshot.
-    // Pinned as a DIFFERENTIAL against a controller that cannot take the skip
-    // at all (distinct objects each time), so this asserts equivalence with the
+    // regression: `handleUpdate` short-circuits on unchanged bubbles ('noop')
+    // before it writes any of the snapshot's label fields, so a flag-only
+    // change has never been able to move the rendered snapshot. Pinned as a
+    // DIFFERENTIAL against a controller that cannot take the skip at all
+    // (distinct objects each time), so this asserts equivalence with the
     // pre-optimization path rather than blessing the flag behaviour itself.
     const skipping = setup('history-flag-skip')
     const mapping = setup('history-flag-map')
@@ -251,14 +160,14 @@ describe('★ ②: controller map-skip is screen-identical', () => {
     mapping.controller.retain()
 
     const shared = withMessages(7, 'idle', 'q', 'a')
-    skipping.controller.applyTranscriptReplicaSnapshot(shared, { omittedBefore: false })
-    skipping.controller.applyTranscriptReplicaSnapshot(shared, { omittedBefore: true })
+    skipping.controller.applyTranscriptReplicaView(shared)
+    skipping.controller.applyTranscriptReplicaView(shared, { stale: true })
 
-    mapping.controller.applyTranscriptReplicaSnapshot(withMessages(7, 'idle', 'q', 'a'), { omittedBefore: false })
-    mapping.controller.applyTranscriptReplicaSnapshot(withMessages(7, 'idle', 'q', 'a'), { omittedBefore: true })
+    mapping.controller.applyTranscriptReplicaView(withMessages(7, 'idle', 'q', 'a'))
+    mapping.controller.applyTranscriptReplicaView(withMessages(7, 'idle', 'q', 'a'), { stale: true })
 
-    expect(skipping.controller.getSnapshot().omittedBefore)
-      .toBe(mapping.controller.getSnapshot().omittedBefore)
+    expect(skipping.controller.getSnapshot().stale)
+      .toBe(mapping.controller.getSnapshot().stale)
     expect(skipping.controller.getSnapshot().liveMessages.map((m) => m.content))
       .toEqual(mapping.controller.getSnapshot().liveMessages.map((m) => m.content))
   })
@@ -270,11 +179,11 @@ describe('★ ②: controller map-skip is screen-identical', () => {
     const { controller } = setup()
     controller.retain()
     const body = withMessages(7, 'idle', 'q', 'a')
-    controller.applyTranscriptReplicaSnapshot(body, { omittedBefore: false })
+    controller.applyTranscriptReplicaView(body)
     controller.clearLiveSnapshot()
     expect(controller.getSnapshot().liveMessages).toHaveLength(0)
 
-    controller.applyTranscriptReplicaSnapshot(body, { omittedBefore: false })
+    controller.applyTranscriptReplicaView(body)
     expect(controller.getSnapshot().liveMessages.map((m) => m.content)).toEqual(['q', 'a'])
   })
 })
@@ -289,11 +198,10 @@ describe('★ ③: shared fan-out mapping reaches every warm controller', () => 
     pane.controller.retain()
     inbox.controller.retain()
 
-    const applied = applyTranscriptReplicaSnapshotToControllers(
+    const applied = applyTranscriptReplicaViewToControllers(
       DAEMON,
       SESSION,
-      withMessages(7, 'idle', 'q', 'a'),
-      { omittedBefore: false },
+      withMessages(7, 'idle', 'q', 'a')
     )
 
     expect(applied).toBe(2)
@@ -314,11 +222,10 @@ describe('★ ③: shared fan-out mapping reaches every warm controller', () => 
     const broken = withMessages(7, 'idle', 'q') as unknown as Record<string, unknown>
     delete broken.activeModal
 
-    applyTranscriptReplicaSnapshotToControllers(
+    applyTranscriptReplicaViewToControllers(
       DAEMON,
       SESSION,
-      broken as unknown as ReplicatedTranscriptSnapshotV1,
-      { omittedBefore: false },
+      broken as unknown as ReplicatedTranscriptViewV2
     )
     expect(controller.getSnapshot().transcriptFallbackReason).toBe('revision_invalid')
   })
@@ -333,13 +240,13 @@ describe('★★ ④: the map-skip preserves every side effect the noop path had
     controller.retain()
     const body = withMessages(7, 'generating', 'q', 'a')
 
-    controller.applyTranscriptReplicaSnapshot(body, { omittedBefore: false })
+    controller.applyTranscriptReplicaView(body)
     const afterFirst = controller.getLivenessStateForTest()
 
     advance(5_000)
     // This delivery takes the SKIP path. If it failed to stamp, the lane would
     // look silent to the watchdog and trigger a spurious re-pull.
-    controller.applyTranscriptReplicaSnapshot(body, { omittedBefore: false })
+    controller.applyTranscriptReplicaView(body)
     const afterSkip = controller.getLivenessStateForTest()
 
     expect(afterSkip.lastInboundAt).toBe(afterFirst.lastInboundAt + 5_000)
@@ -360,13 +267,13 @@ describe('★★ ④: the map-skip preserves every side effect the noop path had
     mapping.controller.retain()
 
     const shared = withMessages(7, 'generating', 'q', 'a')
-    skipping.controller.applyTranscriptReplicaSnapshot(shared, { omittedBefore: false })
-    mapping.controller.applyTranscriptReplicaSnapshot(withMessages(7, 'generating', 'q', 'a'), { omittedBefore: false })
+    skipping.controller.applyTranscriptReplicaView(shared)
+    mapping.controller.applyTranscriptReplicaView(withMessages(7, 'generating', 'q', 'a'))
 
     skipping.advance(3_000)
     mapping.advance(3_000)
-    skipping.controller.applyTranscriptReplicaSnapshot(shared, { omittedBefore: false })
-    mapping.controller.applyTranscriptReplicaSnapshot(withMessages(7, 'generating', 'q', 'a'), { omittedBefore: false })
+    skipping.controller.applyTranscriptReplicaView(shared)
+    mapping.controller.applyTranscriptReplicaView(withMessages(7, 'generating', 'q', 'a'))
 
     const a = skipping.controller.getLivenessStateForTest()
     const b = mapping.controller.getLivenessStateForTest()
@@ -393,11 +300,11 @@ describe('★★ ④: the map-skip preserves every side effect the noop path had
     const long = () => withMessages(7, 'generating', 'a', 'b', 'c', 'd')
     const short = withMessages(8, 'generating', 'a')
 
-    skipping.controller.applyTranscriptReplicaSnapshot(long(), { omittedBefore: false })
-    mapping.controller.applyTranscriptReplicaSnapshot(long(), { omittedBefore: false })
+    skipping.controller.applyTranscriptReplicaView(long())
+    mapping.controller.applyTranscriptReplicaView(long())
 
-    skipping.controller.applyTranscriptReplicaSnapshot(short, { omittedBefore: false })
-    mapping.controller.applyTranscriptReplicaSnapshot(withMessages(8, 'generating', 'a'), { omittedBefore: false })
+    skipping.controller.applyTranscriptReplicaView(short)
+    mapping.controller.applyTranscriptReplicaView(withMessages(8, 'generating', 'a'))
     expect(skipping.controller.getSnapshot().liveMessages.map((m) => m.content))
       .toEqual(mapping.controller.getSnapshot().liveMessages.map((m) => m.content))
 
@@ -405,8 +312,8 @@ describe('★★ ④: the map-skip preserves every side effect the noop path had
     // must RE-EVALUATE rather than replay a remembered decision.
     skipping.advance(600_000)
     mapping.advance(600_000)
-    skipping.controller.applyTranscriptReplicaSnapshot(short, { omittedBefore: false })
-    mapping.controller.applyTranscriptReplicaSnapshot(withMessages(8, 'generating', 'a'), { omittedBefore: false })
+    skipping.controller.applyTranscriptReplicaView(short)
+    mapping.controller.applyTranscriptReplicaView(withMessages(8, 'generating', 'a'))
 
     expect(skipping.controller.getSnapshot().liveMessages.map((m) => m.content))
       .toEqual(mapping.controller.getSnapshot().liveMessages.map((m) => m.content))
@@ -419,36 +326,6 @@ describe('★★ ④: the map-skip preserves every side effect the noop path had
 // ⑤ ★ Injection: disabling a short-circuit must break PERFORMANCE only.
 // ───────────────────────────────────────────────────────────────────────────
 describe('★ ⑤: the short-circuits are provably work-skipping, not result-changing', () => {
-  it('★ the codec skips the decode on a repeat, and is result-identical either way', () => {
-    const body = withMessages(7, 'idle', 'q', 'a', 'and more content to decode')
-
-    // Instrumented: count how often the expensive JSON.parse actually runs.
-    const parse = JSON.parse
-    let parses = 0
-    const spy = vi.spyOn(JSON, 'parse').mockImplementation(((text: string, reviver?: never) => {
-      // Only snapshot-sized payloads count; the per-row envelope parses in the
-      // subscription layer are not what this measures.
-      if (text.includes('"schemaVersion"')) parses += 1
-      return parse(text, reviver)
-    }) as typeof JSON.parse)
-
-    try {
-      const assembler = new TranscriptRevisionAssembler(IDENTITY.producerWriterId)
-      const first = ingestRevision(assembler, body).at(-1)
-      const parsesAfterFirst = parses
-      expect(parsesAfterFirst).toBe(1)
-
-      const second = ingestRevision(assembler, body).at(-1)
-      // ★ The performance claim: the repeat did NO snapshot parse at all.
-      expect(parses).toBe(parsesAfterFirst)
-      // ★ The correctness claim, which holds regardless: same result.
-      expect(second && 'snapshot' in second ? second.snapshot : null)
-        .toEqual(first && 'snapshot' in first ? first.snapshot : undefined)
-    } finally {
-      spy.mockRestore()
-    }
-  })
-
   it('★ the fan-out maps once for two controllers, not twice', () => {
     const pane = setup('history-1')
     const inbox = setup()
@@ -456,7 +333,7 @@ describe('★ ⑤: the short-circuits are provably work-skipping, not result-cha
     inbox.controller.retain()
 
     const body = withMessages(7, 'idle', 'q', 'a')
-    applyTranscriptReplicaSnapshotToControllers(DAEMON, SESSION, body, { omittedBefore: false })
+    applyTranscriptReplicaViewToControllers(DAEMON, SESSION, body)
 
     // Both controllers rendered from ONE mapping, so their message arrays are
     // the very same object — the observable signature of the shared map.

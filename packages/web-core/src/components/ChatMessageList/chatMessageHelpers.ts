@@ -151,11 +151,41 @@ function hashContent(input: string): string {
  * stable-key behaviour.
  */
 export function getToolExpandStateKey(message: ChatMessage): string | null {
+    // The keyed replica lane expands by `messageId` (design 2026-09-28 §5.9) —
+    // an identity that already survives streaming rewrites, so it is the key.
+    const address = getToolExpandAddress(message);
+    if (address && 'messageId' in address) return `toolmsg:${address.messageId}`;
     const ref = message.toolBlockRef;
     if (!ref || typeof ref !== 'object') return null;
     const { recordIndex, blockIndex } = ref as { recordIndex?: unknown; blockIndex?: unknown };
     if (!Number.isInteger(recordIndex) || !Number.isInteger(blockIndex)) return null;
     return `toolblock:${recordIndex}:${blockIndex}`;
+}
+
+/**
+ * (TOOL-EXPAND) How to ask the daemon for this tool bubble's untruncated body
+ * (`expand_tool_block`), or null when it has nothing more to fetch.
+ *
+ *   - `{ toolBlockRef }` — the read_chat lane: the native-history parser
+ *     stamped a content-free block address on a bubble it truncated.
+ *   - `{ messageId }` — the keyed replica lane (design 2026-09-28 §5.9): the
+ *     wire carries only `expandable`, because an mtime-sealed ref would change
+ *     on every append and force every past tool bubble to be rewritten. The
+ *     daemon resolves the block from its message identity ledger and still
+ *     fails closed (`source_changed`) if the source moved.
+ */
+export type ToolExpandAddress =
+    | { readonly toolBlockRef: NonNullable<ChatMessage['toolBlockRef']> }
+    | { readonly messageId: string };
+
+export function getToolExpandAddress(message: ChatMessage): ToolExpandAddress | null {
+    const ref = message.toolBlockRef;
+    if (ref && typeof ref === 'object') return { toolBlockRef: ref };
+    const keyed = message as ChatMessage & { _expandable?: boolean };
+    if (keyed._expandable === true && typeof keyed.messageId === 'string' && keyed.messageId) {
+        return { messageId: keyed.messageId };
+    }
+    return null;
 }
 
 /**
@@ -183,12 +213,11 @@ export function getToolExpandStateKey(message: ChatMessage): string | null {
  * it. It only yields a per-BUBBLE key when a per-message field (`bubbleId`,
  * `providerUnitKey`, `index`, `sequence`) joins it in the composite.
  *
- * On the replica path that is NOT guaranteed. `ReplicatedTranscriptMessageV1.
- * sequence` is `number | null` BY DESIGN ("null means UNKNOWN, never 0"), and
- * `transcript-chat-pane-adapter.ts` deliberately maps `turnKey` → `_turnKey`
- * while leaving `bubbleId`/`providerUnitKey` unset (the former would collapse
- * the turn, the latter embeds a content hash the wire allow-list excludes). So
- * a producer that emits `turnKey` without a numeric `sequence` — the identity
+ * That is NOT guaranteed on every lane: a `sequence` may be absent ("null
+ * means UNKNOWN, never 0"), and `bubbleId`/`providerUnitKey` are deliberately
+ * kept off the replica wire (the former is daemon-internal, the latter embeds a
+ * content hash). The keyed replica lane is covered by `messageId` below, but a
+ * legacy producer that emits `turnKey` without a numeric `sequence` — the identity
  * stamping in `chat-commands-read.ts` / `parse-session.ts` is per-path, not a
  * property of `ChatMessage` itself — reduces the whole composite to
  * `turn:<turnKey>` and EVERY bubble of that turn collides on one React key.

@@ -1,9 +1,10 @@
 import type { SessionChatTailUpdate, SubscribeRequest } from '@adhdev/daemon-core'
-import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core/seqscribe/transcript-projection'
+import type { ReplicatedTranscriptViewV2 } from '@adhdev/daemon-core/seqscribe/transcript-keyed-codec'
 import type { ActiveConversation, DashboardMessage } from './types'
 import {
-  isMappableTranscriptSnapshot,
-  mapTranscriptSnapshotToChatTailUpdate,
+  TranscriptBubbleCache,
+  isMappableTranscriptView,
+  mapTranscriptViewToChatTailUpdate,
   type TranscriptChatTailUpdate,
 } from './transcript-chat-pane-adapter'
 import { subscriptionManager, type SubscriptionHandle, type SubscriptionManager } from '../../managers/SubscriptionManager'
@@ -426,18 +427,23 @@ export class SessionChatTailController {
    */
   private lastKnownStatus: unknown = undefined
   /**
-   * (PERF) The last replica snapshot whose mapping this controller already ran
+   * (PERF) The last replica view whose mapping this controller already ran
    * AND which resolved to `noop` — the key for the map-skip in
-   * `applyTranscriptReplicaSnapshot`. Held by REFERENCE, never deep-compared:
-   * the assembler reuses one frozen object across repeat deliveries of a
-   * revision, so `===` is a sound "provably unchanged" test and a new revision
-   * is always a new object. Cleared on any non-`noop` outcome so a deferral or
-   * an apply can never be replayed as a skip.
+   * `applyTranscriptReplicaView`. Held by REFERENCE, never deep-compared: the
+   * host's mirror builds a new view object per applied frame, so `===` is a
+   * sound "provably unchanged" test (a re-delivery of the same view). Cleared
+   * on any non-`noop` outcome so a deferral or an apply can never be replayed
+   * as a skip.
    */
-  private lastMappedRevisionSnapshot: ReplicatedTranscriptSnapshotV1 | null = null
-  /** (PERF) Caller-decided delivery flags the map-skip key above is scoped to. */
-  private lastMappedOmittedBefore = false
+  private lastMappedView: ReplicatedTranscriptViewV2 | null = null
+  /** (PERF) Caller-decided delivery flag the map-skip key above is scoped to. */
   private lastMappedStale = false
+  /**
+   * Mapped bubbles for direct `applyTranscriptReplicaView` callers (the
+   * fan-out passes its own shared mapping) — keeps unchanged bubbles'
+   * `DashboardMessage` objects stable across frames.
+   */
+  private readonly bubbleCache = new TranscriptBubbleCache()
   /**
    * (D1) A terminal/settled status event arrived and the authoritative tail has
    * not been re-pulled since. One-shot: consumed by the next
@@ -445,7 +451,7 @@ export class SessionChatTailController {
    *
    * ── Why the status lane is the rescue signal ──────────────────────────────
    * The replica lane and the status lane are SIBLING handlers on the same P2P
-   * DataChannel (`p2p-manager.ts` `onSnapshot` / `onStatusEvent`). When the
+   * DataChannel (`p2p-manager.ts` `onView` / `onStatusEvent`). When the
    * replica lane wedges, the status lane keeps delivering — observed live: the
    * completion toast fires while the transcript stays frozen. So the surviving
    * lane can vouch for the dead one.
@@ -453,7 +459,7 @@ export class SessionChatTailController {
    * That matters because the controller cannot otherwise tell a wedged replica
    * from a healthy one: `expireStaleReplicaLease` only arms on
    * `lastReplicaBusyAt`, which is stamped ONLY from an inbound replica snapshot
-   * (see `applyTranscriptReplicaSnapshot`). A lane that dies takes the evidence
+   * (see `applyTranscriptReplicaView`). A lane that dies takes the evidence
    * of its own death with it — the lease never arms, and the `replicaHealthy`
    * refusal is never released. This latch is the out-of-band evidence.
    */
@@ -517,22 +523,23 @@ export class SessionChatTailController {
   private everHadHealthyReplica = false
   /**
    * (LEASE) Wall-clock of the last moment the replica lane demonstrably MOVED
-   * for this session — a snapshot whose revision was higher than the previous
-   * one. This is the lease clock, and it is deliberately stamped on
+   * for this session — a view whose commit (epoch, frame) advanced past the
+   * previous one. This is the lease clock, and it is deliberately stamped on
    * ADVANCEMENT rather than on arrival: a lane re-delivering the same revision
    * forever is precisely the stall this exists to detect, so counting those
    * deliveries as health would renew the lease off the very symptom.
    */
   private lastReplicaAdvanceAt = 0
   /**
-   * (LEASE) Highest replica revision seen for this session, the comparison
-   * basis for "did it advance". Replica revisions are monotonic within one
-   * producer epoch (transcript-chat-pane-adapter.ts maps `snapshot.revision`),
-   * which is the only ordering property this needs — it never orders replica
-   * against legacy, and must not be confused with the seq-ordering that
-   * `applyTranscriptReplicaSnapshot` documents as deliberately absent.
+   * (LEASE) The newest replica commit seen for this session, the comparison
+   * basis for "did it advance". Keyed frames are monotonic within one producer
+   * epoch, and a new epoch (producer restart) is itself an advance — which is
+   * the only ordering property this needs. It never orders replica against
+   * legacy, and must not be confused with the seq-ordering that
+   * `applyTranscriptReplicaView` documents as deliberately absent.
    */
-  private lastReplicaRevision = 0
+  private lastReplicaEpoch: string | null = null
+  private lastReplicaFrame = -1
   /**
    * (LEASE) Wall-clock of the last replica snapshot that reported a BUSY status,
    * which is the activity signal that arms lease expiry at all.
@@ -644,11 +651,11 @@ export class SessionChatTailController {
       ...buildEmptySnapshot(this.snapshot.cursor.tailLimit),
       hasLiveSnapshot: true,
     }
-    // (PERF) ★ The map-skip key asserts "re-delivering this snapshot would
-    // change nothing on screen". Blanking the screen invalidates exactly that,
-    // so the next delivery of the SAME revision must map and re-apply rather
-    // than be skipped into a permanently empty pane.
-    this.lastMappedRevisionSnapshot = null
+    // (PERF) ★ The map-skip key asserts "re-delivering this view would change
+    // nothing on screen". Blanking the screen invalidates exactly that, so the
+    // next delivery of the SAME view must map and re-apply rather than be
+    // skipped into a permanently empty pane.
+    this.lastMappedView = null
     this.emit()
   }
 
@@ -698,7 +705,8 @@ export class SessionChatTailController {
   }
 
   /**
-   * (§8 unit 4b) Apply a verified transcript replica snapshot.
+   * (§8 unit 4b) Apply a verified keyed transcript view (design 2026-09-28
+   * message-keyed storage §5.4).
    *
    * Routes through the SAME `handleUpdate` every legacy `session.chat_tail`
    * update takes, deliberately: the shrink-defense, dedup, force-apply and
@@ -706,94 +714,65 @@ export class SessionChatTailController {
    * bypassed just because this update came from the replica. The only thing
    * that differs is the labelling the adapter puts on the update
    * (`transcriptReadSource: 'replica'`, plus `omittedBefore`/`stale`), which
-   * `handleUpdate` already reads.
+   * `handleUpdate` already reads — and that unchanged bubbles arrive as the
+   * SAME objects (`TranscriptBubbleCache`), which `handleUpdate` uses as its
+   * rev-based change test.
    *
    * The two sources are never merged into one live window: whichever update
    * arrives last wins, exactly as two legacy updates would.
    *
    * ── Why last-writer-wins, and NOT `seq` ordering ───────────────────────────
-   * `handleUpdate` deliberately does not read `update.seq`. It is not an
-   * oversight to fix by adding a comparison: the three sources that reach this
-   * method carry `seq` values from three INCOMPARABLE domains, and each has a
-   * defect that makes it unusable as an ordering key.
+   * `handleUpdate` deliberately does not read `update.seq`. The three sources
+   * that reach this method carry `seq` values from three INCOMPARABLE domains:
    *
    *   1. `read_chat` re-pull (`refreshAuthoritativeTail`) hardcodes `seq: 0`.
    *      That path exists precisely to OVERRIDE a stale live window (D8
    *      self-heal); ordering it by seq would make the self-heal always lose.
-   *   2. Legacy `session.chat_tail` seq is a PER-SUBSCRIPTION counter — the
-   *      daemon seeds `seq: 0` per subscription entry (topic-registry.ts) and
-   *      increments per delivery (subscription-updates.ts). It resets on every
-   *      resubscribe, so after a WS reconnect every fresh update would sit
-   *      below the pre-reconnect high-water mark and be rejected forever.
-   *   3. Replica seq is `snapshot.revision` (transcript-chat-pane-adapter.ts),
-   *      a transcript revision from an unrelated numbering space.
+   *   2. Legacy `session.chat_tail` seq is a PER-SUBSCRIPTION counter that
+   *      resets on every resubscribe.
+   *   3. Replica seq is the keyed commit's `frame` within its producer epoch,
+   *      an unrelated numbering space.
    *
-   * Per-SOURCE monotonicity (rejecting only replica-vs-replica regressions) is
-   * the one variant that is not immediately self-defeating, but it does not
-   * address the risk either: the flap this would be meant to prevent is
-   * CROSS-source interleaving, which per-source ordering cannot order by
-   * construction. Ordering these sources needs a shared monotonic clock the
-   * wire does not currently carry — introducing one is a protocol change, not a
-   * local fix here. Until then last-writer-wins is the deliberate contract, and
-   * the shrink-defense / force-apply / dedup rules above are what actually
-   * protect the window from a bad update.
+   * Ordering these sources needs a shared monotonic clock the wire does not
+   * carry. Until then last-writer-wins is the deliberate contract, and the
+   * shrink-defense / force-apply / dedup rules are what actually protect the
+   * window from a bad update.
    *
    * ── (§8 unit 9-pre-c) Structural refusal ───────────────────────────────
-   * ★ A snapshot missing a required field is REFUSED here and reported as a
-   * `revision_invalid` fallback, rather than being mapped on a best-effort
-   * basis. The motivating case is `activeModal`: the mapper's
-   * `snapshot.activeModal ? ... : null` cannot tell "no modal" from "the
-   * projection stopped sending the field", so a regression rendered an
-   * approval-waiting session with no approval UI and reported nothing.
-   *
-   * Refusing keeps the pane on whatever legacy already put there and makes the
-   * fault observable — the same decline-and-fall-back contract roster ids 3-8
-   * already have (`isUsableSnapshot` in mcp-server / unit 7's daemon router).
+   * ★ A view missing a required field is REFUSED here and reported as a
+   * `revision_invalid` fallback rather than mapped best-effort (the
+   * `activeModal` case: "no modal" vs "the projection stopped sending it").
    * It does not throw: this runs inside a MessagePort `onmessage` handler with
    * no catch above it, where a throw would drop the delivery silently.
    */
-  applyTranscriptReplicaSnapshot(
-    snapshot: ReplicatedTranscriptSnapshotV1,
+  applyTranscriptReplicaView(
+    view: ReplicatedTranscriptViewV2,
     options: {
-      omittedBefore: boolean
       stale?: boolean
       /**
-       * (PERF) A mapping of THIS snapshot+options that the caller already
-       * computed, to be reused instead of recomputed. Optional and purely an
-       * optimization: omitting it produces an identical result. Only
-       * `applyTranscriptReplicaSnapshotToControllers` passes it, and only
-       * because every controller it fans out to derives the same
-       * `subscriptionKey` from the same `(daemonId, sessionId)`.
+       * (PERF) A mapping of THIS view+options that the caller already
+       * computed, to be reused instead of recomputed. Only
+       * `applyTranscriptReplicaViewToControllers` passes it, because every
+       * controller it fans out to derives the same `subscriptionKey` from the
+       * same `(daemonId, sessionId)`.
        */
       mapped?: TranscriptChatTailUpdate
-    },
+    } = {},
   ): void {
-    if (!isMappableTranscriptSnapshot(snapshot)) {
+    if (!isMappableTranscriptView(view)) {
       this.reportTranscriptReplicaFallback('revision_invalid')
       return
     }
 
-    // ── (PERF) Skip the O(N) mapping for a re-delivered identical revision ────
-    // `mapTranscriptSnapshotToChatTailUpdate` allocates a new object per message
-    // (`snapshot.messages.map`), and it ran BEFORE `handleUpdate` could discover
-    // the update changes nothing. A frozen lane re-sends the same revision on
-    // every heartbeat and a SNAP replays the ring, so this was the dominant
-    // per-message cost on screens that were not changing at all.
+    // ── (PERF) Skip the mapping for a re-delivered identical view ────────────
+    // Identity (`===`) on the view, not a deep compare: the host's mirror
+    // builds a new view object per applied frame, so reference equality is
+    // exactly the "nothing could have changed" proof.
     //
-    // The gate is deliberately NARROW — the same `(revision, snapshot object)`
-    // pair this controller already mapped and resolved to `noop`. Identity
-    // (`===`) on the snapshot, not a deep compare: the assembler hands the SAME
-    // frozen object to every controller for a repeat revision (see the codec's
-    // re-decode short-circuit), so reference equality is exactly the "nothing
-    // could have changed" proof, and a genuinely new revision is a new object
-    // that never matches.
-    //
-    // ★ `omittedBefore`/`stale` are part of the key. They are the CALLER's
-    // per-delivery decision, not a property of the snapshot, and they land in
-    // the applied snapshot — so a delivery that flips either must NOT be
-    // short-circuited even though the revision repeats.
-    const mapSkippable = this.lastMappedRevisionSnapshot === snapshot
-      && this.lastMappedOmittedBefore === options.omittedBefore
+    // ★ `stale` is part of the key: it is the CALLER's per-delivery decision
+    // and lands in the applied snapshot, so a delivery that flips it must NOT
+    // be short-circuited even though the view repeats.
+    const mapSkippable = this.lastMappedView === view
       && this.lastMappedStale === (options.stale === true)
 
     let outcome: ChatTailUpdateOutcome
@@ -801,52 +780,45 @@ export class SessionChatTailController {
       // ★ Reproduce the `noop` path's side effects EXACTLY. `handleUpdate`
       // stamps these before any apply/discard decision, deliberately: a stream
       // of correctly-discarded no-op updates still counts as lane liveness and
-      // must not trip the watchdog. Dropping them here would turn a healthy
-      // frozen-but-alive lane into a watchdog re-pull storm — which is why this
-      // is a duplicated stamp rather than an early `return`.
+      // must not trip the watchdog.
       const updateTime = this.now()
       this.lastInboundAt = updateTime
-      this.lastKnownStatus = snapshot.status
-      if (shouldGuardTailShrinkForStatus(snapshot.status) || isBusyChatTailStatus(snapshot.status)) {
+      this.lastKnownStatus = view.status
+      if (shouldGuardTailShrinkForStatus(view.status) || isBusyChatTailStatus(view.status)) {
         this.lastActiveStatusAt = updateTime
       }
       outcome = 'noop'
     } else {
-      // (PERF) `options.mapped` is the fan-out's shared mapping — see
-      // `applyTranscriptReplicaSnapshotToControllers`. Absent (direct callers,
-      // tests) this maps as before; the two are the same value by construction,
-      // since every controller in one fan-out shares a `subscriptionKey`.
       outcome = this.handleUpdate(
         options.mapped
-          ?? mapTranscriptSnapshotToChatTailUpdate(snapshot, {
+          ?? mapTranscriptViewToChatTailUpdate(view, {
             subscriptionKey: this.subscriptionKey,
-            omittedBefore: options.omittedBefore,
             stale: options.stale === true,
+            cache: this.bubbleCache,
           }),
       )
       // Arm the skip only for an outcome that provably left the screen alone.
       // `applied` changed the snapshot, and `deferred`/`rejected` mean the next
-      // delivery of these same bytes may legitimately decide differently (the
-      // busy window lapses, a force-apply becomes eligible) — so neither may be
-      // short-circuited into a silent `noop`.
+      // delivery of this same view may legitimately decide differently (the
+      // busy window lapses, a force-apply becomes eligible).
       if (outcome === 'noop') {
-        this.lastMappedRevisionSnapshot = snapshot
-        this.lastMappedOmittedBefore = options.omittedBefore
+        this.lastMappedView = view
         this.lastMappedStale = options.stale === true
       } else {
-        this.lastMappedRevisionSnapshot = null
+        this.lastMappedView = null
       }
     }
 
-    // (LEASE) Renew on ADVANCEMENT, before the health gate below. A revision
-    // that moved forward is the lane demonstrating it is still producing, which
-    // is the one fact the lease measures. Revisions that repeat or regress
-    // deliberately do NOT renew: re-delivery of a frozen revision is the stall
-    // itself, and letting it renew would make the lease unexpirable.
-    const revision = typeof snapshot.revision === 'number' ? snapshot.revision : 0
-    const advanced = revision > this.lastReplicaRevision
+    // (LEASE) Renew on ADVANCEMENT, before the health gate below. A commit
+    // that moved forward (a later frame, or a new producer epoch) is the lane
+    // demonstrating it is still producing, which is the one fact the lease
+    // measures. A repeated commit deliberately does NOT renew: re-delivery of
+    // a frozen view is the stall itself.
+    const frame = typeof view.frame === 'number' ? view.frame : 0
+    const advanced = view.epoch !== this.lastReplicaEpoch || frame > this.lastReplicaFrame
     if (advanced) {
-      this.lastReplicaRevision = revision
+      this.lastReplicaEpoch = view.epoch
+      this.lastReplicaFrame = frame
       this.lastReplicaAdvanceAt = this.now()
       // (VISIBILITY) The lane just proved itself alive, so any hidden-time
       // credit banked before this point describes a stall window that is now
@@ -857,7 +829,7 @@ export class SessionChatTailController {
     // (LEASE) Arm expiry only while the replica itself says work is in progress.
     // See `lastReplicaBusyAt` — an idle session's silence is correct, and
     // expiring on it would revive legacy across every settled session.
-    if (isBusyChatTailStatus(snapshot.status)) this.lastReplicaBusyAt = this.now()
+    if (isBusyChatTailStatus(view.status)) this.lastReplicaBusyAt = this.now()
 
     // (§8 unit 9) ★ Suppress legacy only AFTER a verified snapshot has actually
     // been applied — never on arrival, and never before the structural refusal
@@ -1396,6 +1368,27 @@ export class SessionChatTailController {
    * silently dropped, same as every other best-effort report in this file —
    * a session with no live connection has nothing to report anyway.
    */
+  /**
+   * Ask the owning daemon for one keyed base frame (`request_transcript_base`,
+   * design 2026-09-28 §5.2) after the worker's folder kept rejecting this
+   * session's commits. Rides the same `sendData` command lane as
+   * `report_transcript_transport` (P2P on cloud, the local `/ws` on
+   * standalone) — never the server — and carries only the raw session id.
+   * Best-effort: false when there is no lane to send it on.
+   */
+  requestTranscriptBase(): boolean {
+    if (!this.sendData || !this.daemonId || !this.sessionId) return false
+    try {
+      return this.sendData(this.daemonId, {
+        type: 'command',
+        commandType: 'request_transcript_base',
+        data: { rawSessionId: this.sessionId },
+      }) === true
+    } catch {
+      return false
+    }
+  }
+
   private reportTransportSelection(): void {
     if (!this.sendData || !this.daemonId) return
     const selection: 'replica' | 'legacy' = this.replicaHealthy ? 'replica' : 'legacy'
@@ -1464,7 +1457,8 @@ export class SessionChatTailController {
     // revision would make the next lane's first snapshots read as "not
     // advancing" and expire a perfectly healthy lease.
     this.lastReplicaAdvanceAt = 0
-    this.lastReplicaRevision = 0
+    this.lastReplicaEpoch = null
+    this.lastReplicaFrame = -1
     this.lastReplicaBusyAt = 0
     // (VISIBILITY) Same reasoning — hidden-time credit describes a stall
     // window on the lane this controller no longer has.
@@ -1472,7 +1466,7 @@ export class SessionChatTailController {
     this.hiddenElapsedMs = 0
     // (PERF) A recycled controller renders from a blank snapshot, so no prior
     // mapping describes its screen — see `clearLiveSnapshot` for the same rule.
-    this.lastMappedRevisionSnapshot = null
+    this.lastMappedView = null
   }
 
   private emit(): void {
@@ -1533,11 +1527,21 @@ export class SessionChatTailController {
     // Fold the last-substantive-assistant identity into the no-op check so a
     // user-only → [user, assistant] transition always registers as a change even
     // when the coarse last-message/length signature happens to match (D6 cause (a)).
+    //
+    // A keyed replica update is compared by bubble IDENTITY instead: its mapper
+    // (`TranscriptBubbleCache`) hands back the same object for every bubble
+    // whose `(messageId, rev)` did not move, so "every row is the same object
+    // in the same order" is exactly "no bubble's rev changed". The coarse
+    // last-message signature would miss a change to an EARLIER bubble (a tool
+    // result landing while a later bubble streams), which the keyed wire now
+    // delivers on its own frame.
     const unchanged = !forceApplyNativeAssistant
-      && buildChatSnapshotSignature(this.snapshot.liveMessages)
-        === buildChatSnapshotSignature(nextMessages)
-      && lastSubstantiveAssistantIdentity(this.snapshot.liveMessages)
-        === lastSubstantiveAssistantIdentity(nextMessages)
+      && (readUpdateTranscriptReadSource(update) === 'replica'
+        ? sameMessageObjects(this.snapshot.liveMessages, nextMessages)
+        : buildChatSnapshotSignature(this.snapshot.liveMessages)
+            === buildChatSnapshotSignature(nextMessages)
+          && lastSubstantiveAssistantIdentity(this.snapshot.liveMessages)
+            === lastSubstantiveAssistantIdentity(nextMessages))
       && this.snapshot.cursor.tailLimit === nextCursor.tailLimit
     if (unchanged) return 'noop'
     this.lastAppliedAt = updateTime
@@ -1569,6 +1573,15 @@ export class SessionChatTailController {
     this.emit()
     return 'applied'
   }
+}
+
+/** Same rows, same order, reference-equal — the keyed lane's rev-based change test. */
+function sameMessageObjects(current: readonly DashboardMessage[], next: readonly DashboardMessage[]): boolean {
+  if (current.length !== next.length) return false
+  for (let i = 0; i < current.length; i += 1) {
+    if (current[i] !== next[i]) return false
+  }
+  return true
 }
 
 export function getOrCreateSessionChatTailController(options: SessionChatTailControllerOptions): SessionChatTailController {
@@ -1627,7 +1640,15 @@ export function getSessionChatTailSnapshotForConversation(
 }
 
 /**
- * (§8 unit 4b) Deliver a verified replica snapshot to every warm controller for
+ * Mapped-bubble caches for the fan-out, one per `(daemonId, sessionId)` — the
+ * mapping is shared by every controller of that pair (see below), so its
+ * identity-preserving bubble cache is too. Dropped when a view reaches no warm
+ * controller, so a session nobody is reading does not pin its bubbles here.
+ */
+const fanOutBubbleCaches = new Map<string, TranscriptBubbleCache>()
+
+/**
+ * (§8 unit 4b) Deliver a verified keyed view to every warm controller for
  * `(daemonId, sessionId)`.
  *
  * Prefix-matched rather than exact-keyed because one session can have several
@@ -1641,53 +1662,75 @@ export function getSessionChatTailSnapshotForConversation(
  * session, which is normal (the replica arrived for a session the user is not
  * looking at) and NOT a fallback condition.
  */
-export function applyTranscriptReplicaSnapshotToControllers(
+export function applyTranscriptReplicaViewToControllers(
   daemonId: string,
   sessionId: string,
-  snapshot: ReplicatedTranscriptSnapshotV1,
-  options: { omittedBefore: boolean; stale?: boolean },
+  view: ReplicatedTranscriptViewV2,
+  options: { stale?: boolean } = {},
 ): number {
   if (!daemonId || !sessionId) return 0
   const prefix = `${daemonId}::${sessionId}::`
   // (PERF) Map ONCE for the whole fan-out. A session routinely has two warm
   // controllers alive (the pane's, keyed by historySessionId, and the mobile
-  // inbox's, keyed by sessionId) and each was running the same O(messages)
-  // mapping over the same snapshot.
+  // inbox's, keyed by sessionId).
   //
   // ★ Sharing is sound because the mapped update depends only on
-  // `(snapshot, subscriptionKey, omittedBefore, stale)`, and every controller
-  // here derives `subscriptionKey` as `daemon:${daemonId}:session:${sessionId}`
-  // from the SAME pair this function was called with — the registry key differs
-  // between them only in `historySessionId`, which the mapping does not read.
+  // `(view, subscriptionKey, stale)`, and every controller here derives
+  // `subscriptionKey` as `daemon:${daemonId}:session:${sessionId}` from the
+  // SAME pair this function was called with — the registry key differs between
+  // them only in `historySessionId`, which the mapping does not read.
   //
   // Built lazily so a fan-out that matches no warm controller (the common case:
-  // a snapshot for a session nobody is looking at) does no mapping work at all.
+  // a view for a session nobody is looking at) does no mapping work at all.
   let mapped: TranscriptChatTailUpdate | undefined
   let applied = 0
   for (const [key, controller] of controllerRegistry.entries()) {
     if (!key.startsWith(prefix)) continue
-    if (!mapped && isMappableTranscriptSnapshot(snapshot)) {
-      mapped = mapTranscriptSnapshotToChatTailUpdate(snapshot, {
+    if (!mapped && isMappableTranscriptView(view)) {
+      let cache = fanOutBubbleCaches.get(prefix)
+      if (!cache) {
+        cache = new TranscriptBubbleCache()
+        fanOutBubbleCaches.set(prefix, cache)
+      }
+      mapped = mapTranscriptViewToChatTailUpdate(view, {
         subscriptionKey: `daemon:${daemonId}:session:${sessionId}`,
-        omittedBefore: options.omittedBefore,
         stale: options.stale === true,
+        cache,
       })
     }
-    controller.applyTranscriptReplicaSnapshot(snapshot, { ...options, mapped })
+    controller.applyTranscriptReplicaView(view, { ...options, mapped })
     applied += 1
   }
+  if (applied === 0) fanOutBubbleCaches.delete(prefix)
   return applied
+}
+
+/**
+ * Send one `request_transcript_base` for `(daemonId, sessionId)` through the
+ * first warm controller that has a command lane (see
+ * `SessionChatTailController.requestTranscriptBase`). The request is
+ * per-session, not per-controller, so one send is enough. Returns whether it
+ * was sent; false is normal when nothing is warm for the session.
+ */
+export function requestTranscriptBaseForSession(daemonId: string, sessionId: string): boolean {
+  if (!daemonId || !sessionId) return false
+  const prefix = `${daemonId}::${sessionId}::`
+  for (const [key, controller] of controllerRegistry.entries()) {
+    if (!key.startsWith(prefix)) continue
+    if (controller.requestTranscriptBase()) return true
+  }
+  return false
 }
 
 /**
  * (D1) Route a daemon status event to every warm controller for this session.
  *
- * Prefix-matched for the same reason `applyTranscriptReplicaSnapshotToControllers`
+ * Prefix-matched for the same reason `applyTranscriptReplicaViewToControllers`
  * is: one session can have a pane controller and a warm inbox controller alive
  * at once, and a frozen transcript is equally wrong in both.
  *
  * ── Why the status lane is wired to the transcript watchdog at all ─────────
- * `onStatusEvent` and `onSnapshot` are sibling handlers on the SAME P2P
+ * `onStatusEvent` and `onView` are sibling handlers on the SAME P2P
  * DataChannel (`p2p-manager.ts`). Observed live: the completion toast fires off
  * the first while the transcript rendered by the second stays frozen. That makes
  * the status lane the only in-band signal that survives a wedged replica — and
@@ -1746,7 +1789,7 @@ export function reportTranscriptReplicaFallbackForSession(
  * entries of the controller registry. Those are exactly roster ids 1-2
  * (`web_chat_pane` / `web_warm_mobile_preview`, design §4) — the two consumers
  * a replica snapshot is delivered to by
- * `applyTranscriptReplicaSnapshotToControllers`. Deriving from the same
+ * `applyTranscriptReplicaViewToControllers`. Deriving from the same
  * registry keeps "what we asked the daemon to replicate" and "what we can
  * actually deliver to" from drifting apart; threading the selection through
  * React separately would let one change without the other, which is the
@@ -1795,6 +1838,7 @@ export function subscribeTranscriptSessionInterest(listener: () => void): () => 
 }
 
 export function resetSessionChatTailControllersForTest(): void {
+  fanOutBubbleCaches.clear()
   for (const controller of controllerRegistry.values()) {
     controller.dispose()
   }

@@ -4,7 +4,7 @@
  * daemon shutdown.
  *
  * ── Why this exists ─────────────────────────────────────────────────────────
- * `writer-gc.ts` prunes `session.*.transcript` rows with the vendor's
+ * `writer-gc.ts` prunes `session.*.chat` (and the removed `.transcript`) rows with the vendor's
  * `Node.pruneTopic`, which DELETEs `sq_log` rows. A DELETE frees pages inside
  * the file but never shrinks it, and seqscribe.db was created with
  * `auto_vacuum = NONE`, so without this module the freed space stays on disk

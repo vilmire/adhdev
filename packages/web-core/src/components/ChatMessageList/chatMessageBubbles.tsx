@@ -29,6 +29,8 @@ import {
     type ActionLog,
     type MessageMeta,
     type StructuredMessagePart,
+    getToolExpandAddress,
+    type ToolExpandAddress,
 } from './chatMessageHelpers';
 
 // System bubbles (git errors, status lines, long file paths) truncate at this
@@ -324,7 +326,7 @@ export interface ChatMessageRowProps {
      * a pane with no daemon transport (static share views) simply renders the
      * summary with no expand affordance.
      */
-    onExpandToolBlock?: (ref: NonNullable<ChatMessage['toolBlockRef']>) => void;
+    onExpandToolBlock?: (address: ToolExpandAddress) => void;
     /** Collapse back to the summary. */
     onCollapseToolBlock?: () => void;
     /** This row's expansion state, owned by the pane that does the fetching. */
@@ -517,6 +519,8 @@ function computeChatMessageRowSignature(message: ChatMessage): string {
         // (the same text queued twice). Without the id in the signature their
         // rows hash identically and the memo would render one for both.
         meta ? String(meta.pendingId ?? '') : '',
+        // Keyed replica lane: the expand affordance (design 2026-09-28 §5.9).
+        (message as ChatMessage & { _expandable?: boolean })._expandable === true ? 'expandable' : '',
     ].join('');
 }
 
@@ -585,7 +589,9 @@ export const ChatMessageRow = memo(function ChatMessageRow({
         // ref only on bubbles it actually truncated, so the affordance appears
         // exactly where there is more text to fetch — and never on a bubble
         // whose expanded form would be identical.
-        const expandableRef = message.toolBlockRef;
+        // The keyed replica lane marks such a bubble `expandable` and it is
+        // expanded by `messageId` instead (`getToolExpandAddress`).
+        const expandableRef = getToolExpandAddress(message);
         // Header label: the daemon derives meta.label from the reader's
         // toolName (e.g. 'read_file') when it resolved one, falling back to the
         // generic senderName:'Tool' marker otherwise — see

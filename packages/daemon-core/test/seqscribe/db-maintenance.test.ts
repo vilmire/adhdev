@@ -11,7 +11,21 @@ import {
     seqscribeFreelistOverThreshold,
 } from '../../src/seqscribe/db-maintenance.js';
 import { openSeqscribeNode, type SeqscribeNodeHandle } from '../../src/seqscribe/node.js';
-import { meshEventsTopic, sessionTranscriptPolicy, sessionTranscriptTopic } from '../../src/seqscribe/topics.js';
+import type { TopicPolicy } from 'seqscribe';
+import { ADHDEV_AUTHORITY_ID } from '../../src/seqscribe/authority-id.js';
+import { meshEventsTopic } from '../../src/seqscribe/topics.js';
+
+/**
+ * A prunable filler topic: `full` retention + subscribe-only, not keyed (the
+ * shape the retired v1 transcript topic had). These tests only need rows they
+ * can bulk-append and prune; which ADHDev topic produced them is irrelevant.
+ */
+function fillerTopic(name: string): string {
+    return `test.filler.${name.toLowerCase().replace(/[^a-z0-9_-]+/g, '_')}`;
+}
+function fillerPolicy(): TopicPolicy {
+    return { kind: 'append', retention: { mode: 'full' }, replication: 'subscribe-only', access: 'content', finalityAuthority: ADHDEV_AUTHORITY_ID };
+}
 import {
     __resetTranscriptWriterGcForTests,
     runTranscriptWriterGcSweep,
@@ -91,10 +105,10 @@ function logRows(dbPath: string, topic: string): number {
 async function legacyDbWithFreelist(name: string): Promise<{ dbPath: string; transcript: string; mesh: string }> {
     const dbPath = freshDbPath(name);
     precreateLegacyDb(dbPath);
-    const transcript = sessionTranscriptTopic(`${name}-session`);
+    const transcript = fillerTopic(`${name}-session`);
     const mesh = meshEventsTopic(MESH_ID);
     const handle = openSeqscribeNode({ dbPath, env: ENV, storedFleetSecret: null, meshIds: [MESH_ID] });
-    handle.node.defineTopic(transcript, sessionTranscriptPolicy());
+    handle.node.defineTopic(transcript, fillerPolicy());
     await appendBig(handle, transcript, 200);
     await appendBig(handle, mesh, 20);
     await handle.node.pruneTopic(transcript, { keepNewest: 10 });
@@ -111,8 +125,8 @@ describe('incremental vacuum on the live connection', () => {
     it('★ a step frees at most maxPages, and the post-sweep reclaim is bounded by steps × pages', async () => {
         const dbPath = freshDbPath('incr');
         const handle = open(dbPath);
-        const topic = sessionTranscriptTopic('incr-session');
-        handle.node.defineTopic(topic, sessionTranscriptPolicy());
+        const topic = fillerTopic('incr-session');
+        handle.node.defineTopic(topic, fillerPolicy());
         await appendBig(handle, topic, 120);
         await handle.node.pruneTopic(topic, { keepNewest: 5 });
         const free0 = handle.maintenance!.freelistStats()!.freelistCount;
@@ -182,8 +196,8 @@ describe('compactSeqscribeDbAtShutdown', () => {
     it('already INCREMENTAL: runs a plain incremental vacuum instead of VACUUM', async () => {
         const dbPath = freshDbPath('already');
         const handle = openSeqscribeNode({ dbPath, env: ENV, storedFleetSecret: null, meshIds: [] });
-        const topic = sessionTranscriptTopic('already-session');
-        handle.node.defineTopic(topic, sessionTranscriptPolicy());
+        const topic = fillerTopic('already-session');
+        handle.node.defineTopic(topic, fillerPolicy());
         await appendBig(handle, topic, 100);
         await handle.node.pruneTopic(topic, { keepNewest: 5 });
         await handle.close();

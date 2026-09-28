@@ -62,8 +62,8 @@ function setup(readChatMessages: () => Array<Record<string, unknown>>) {
             );
             return null;
         },
-        publishRevision: async (sessionId, encoded) => {
-            published.push({ sessionId, revision: encoded.begin.revision });
+        appendChatFrame: async (sessionId, encoded) => {
+            published.push({ sessionId, revision: encoded.frame });
         },
     } as any);
     return { service: service!, published };
@@ -162,8 +162,8 @@ function setupThrowing(fail: () => boolean) {
             );
             return null;
         },
-        publishRevision: async (sessionId, encoded) => {
-            published.push({ sessionId, revision: encoded.begin.revision });
+        appendChatFrame: async (sessionId, encoded) => {
+            published.push({ sessionId, revision: encoded.frame });
         },
     } as any);
     return { service: service!, published };

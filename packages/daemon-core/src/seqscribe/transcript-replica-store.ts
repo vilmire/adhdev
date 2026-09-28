@@ -1,73 +1,51 @@
 /**
- * `TranscriptReplicaStore` — the subscriber half of §8 unit 3 ("dynamic
- * transcript activation + daemon replica store"), design §3.7.
+ * `TranscriptReplicaStore` — the daemon-side subscriber of remote sessions'
+ * keyed chat topics (design 2026-09-28 message-keyed storage §5.2; lifecycle
+ * from the 2026-08-29 transcript design §3.7).
  *
- * One instance per daemon process (constructed once at boot alongside the
- * seqscribe node, like `createFleetStatusPeerViewConsumer`). Keyed by
- * `(ownerDaemonId, rawSessionId)` — design §3.7: "current complete snapshot +
- * revision identity/hash · one in-flight revision buffer, byte/row/time caps
- * · SUB cursor/epoch, last SNAP reset reason, last commit time · readiness/
- * fallback reason과 parity state". The in-flight buffer and byte/row caps are
- * already `TranscriptRevisionAssembler`'s job (transcript-revision-codec.ts,
- * §8 unit 1) — this class owns the SUB lifecycle and the per-key assembler
- * instance, not a second copy of that bookkeeping.
+ * One instance per daemon process, keyed by `(ownerDaemonId, rawSessionId)`.
+ * Each key holds a `tail` SUB on `session.<id>.chat` and a
+ * `KeyedTranscriptFolder` fed by it; `getReplica` serves the folder's last
+ * VERIFIED commit (`lastGood` semantics — a frame that fails the commit
+ * digest never becomes visible, the previous one keeps serving).
  *
  * ── SUB is the only legal live read here ────────────────────────────────────
- * `session.*.transcript` is `retention: {mode:'full'}`, `replication:
- * 'subscribe-only'` (G2b, landed 2026-09-24 — see `topics.ts
- * #sessionTranscriptPolicy` for the full account). `ensureSubscription`
- * below uses `handle.node.subscribe(peer, {view:'tail', params:{topic}})`
- * exclusively — never `onEntry`, never `scanEntries` (that is
- * transcript-parity-actual.ts's job, and ONLY for parity/audit — design §3.3:
- * "live consumer는 built-in tail SUB/SNAP/DELTA를 사용하고 scanEntries로
- * polling하지 않는다"). The vendor's `tail` view serves `full`+
- * `subscribe-only` topics with the identical SNAP/DELTA/Row wire shape it
- * always used for `ring` topics (`FULL_TAIL_DEFAULT = 500` in `subs.ts`
- * mirrors the old ring size), so the code below needed no change for the
- * retention switch — only this comment did. One behavioral note: because a
- * `full`-retention topic keeps every row (bounded only by `writer-gc.ts`'s
- * periodic prune, not by structural eviction), a SNAP `reset:true` can now
- * arrive here either from a genuinely fresh subscription/reconnect (as
- * before) OR after a prune has moved the tail window's floor — this class
- * does not need to distinguish the two: either way the correct reaction is
- * "resync from the SNAP", which is what it already does.
+ * `subscribe(peer, {view:'tail', params:{topic}})` exclusively — never
+ * `onEntry`, never `scanEntries` (parity's job). The owner installs a SNAP
+ * selector (transcript-tail-snapshot.ts) so every SNAP is the committed
+ * newest-per-key state plus the frame in flight; a SNAP always resets.
  *
- * ── Row payload is a JSON STRING here, unlike scanEntries' LogEntry ────────
- * SUB rows are seqscribe's flat `Row` shape (`Record<string, string | number |
- * null>`) — `payload` arrives JSON-encoded, exactly as
- * `fleet-status-peer-view.ts#parseTailRow` documents. `transcript-parity-
- * actual.ts` reads `LogEntry.payload` instead, which the library hands back
- * ALREADY PARSED — the two paths are not interchangeable and this file must
- * not reuse the other's row adapter.
+ * ── Resync ─────────────────────────────────────────────────────────────────
+ * When the folder flags a resync (digest mismatch, torn SNAP, owner/session
+ * mismatch on a commit) the SUB is closed and reopened, which yields a fresh
+ * `reset:true` SNAP. The same reason three times in a row asks the owner for
+ * one base frame (`request_transcript_base`) through the injected
+ * `requestBase` hook — there is no server path for it.
  *
- * ── Defense in depth beyond the codec's own checks ─────────────────────────
- * `TranscriptRevisionAssembler` (constructed here WITHOUT an
- * `expectedOwnerWriterId` — this unit does not yet have a prior, trusted
- * writerId for a session it is subscribing to for the first time; see the
- * header note below) already rejects a spliced begin/commit pair and a
- * snapshot whose body `sessionId` disagrees with the envelope identity. What
- * it does NOT know is what THIS CALLER expected to be subscribing to before
- * the first byte arrived. So after every `status:'complete'` this store
- * additionally checks the assembled identity against the caller-supplied
- * `(ownerDaemonId, rawSessionId)` key — design §3.5's "entry의 raw sessionId와
- * owner/writer도 다시 검사" applied at the STORE layer, independent of the
- * codec-internal self-consistency checks.
+ * ── Defense in depth ───────────────────────────────────────────────────────
+ * The folder is constructed with the CALLER's expected session id and owner
+ * daemon id, so a commit or meta describing anything else is rejected before
+ * it can become visible — design §3.5's "entry의 raw sessionId와 owner/writer도
+ * 다시 검사" applied at the store layer.
  */
 
-import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import type { PeerHandle, Row, Subscription } from 'seqscribe';
 import { LOG } from '../logging/logger.js';
 import type { SeqscribeNodeHandle } from './node.js';
-import { ensureSessionTranscriptTopic } from './transcript-activation.js';
-import type { ReplicatedTranscriptSnapshotV1 } from './transcript-projection.js';
+import { ensureSessionChatTopic } from './transcript-activation.js';
+import type { ChatCommitV2, ReplicatedTranscriptViewV2 } from './transcript-keyed-codec.js';
 import {
-    TranscriptRevisionAssembler,
-    type TranscriptRevisionIdentity,
-    type TranscriptRevisionRejectReason,
-} from './transcript-revision-codec.js';
+    KeyedTranscriptFolder,
+    parseChatSubRow,
+    type KeyedChatRow,
+    type KeyedFoldRejectReason,
+} from './transcript-keyed-folder.js';
 import type { TranscriptTopicClaimRegistry } from './transcript-topic-claim.js';
 
 export const TRANSCRIPT_REPLICA_SUB_VIEW = 'tail';
+
+/** Consecutive resyncs for the same reason before asking the owner for a base frame. */
+export const TRANSCRIPT_REPLICA_BASE_REQUEST_AFTER = 3;
 
 export interface TranscriptReplicaKey {
     readonly ownerDaemonId: string;
@@ -88,184 +66,229 @@ export type TranscriptSubscribeResult =
     | { readonly ok: true; readonly alreadySubscribed: boolean }
     | { readonly ok: false; readonly reason: TranscriptSubscribeRejectReason };
 
+/** Identity of the commit a replica view reflects — non-content scalars. */
+export interface TranscriptReplicaCommitIdentity {
+    readonly sessionId: string;
+    readonly producerDaemonId: string;
+    readonly producerWriterId: string;
+    readonly epoch: string;
+    readonly frame: number;
+    readonly observedAt: string;
+}
+
 export type TranscriptReplicaReadResult =
     | { readonly available: false; readonly reason: 'no_subscription' | 'no_complete_revision' }
     | {
           readonly available: true;
-          readonly snapshot: ReplicatedTranscriptSnapshotV1;
-          readonly identity: TranscriptRevisionIdentity;
+          readonly view: ReplicatedTranscriptViewV2;
+          readonly identity: TranscriptReplicaCommitIdentity;
       };
+
+export interface TranscriptReplicaStoreHooks {
+    /** Ask the owner for one base frame (`request_transcript_base`, §5.2). */
+    requestBase?(key: TranscriptReplicaKey): void;
+}
+
+export interface TranscriptReplicaStoreCounters {
+    /** Subscriptions restarted after a folder resync. */
+    resubscribes: number;
+    /** Base-frame requests sent to owners. */
+    baseRequests: number;
+    /** Commits rejected by digest/count verification (`chatDigestMismatch`). */
+    digestMismatches: number;
+}
 
 interface ActiveEntry {
     generation: number;
-    assembler: TranscriptRevisionAssembler;
-    subscription: Subscription;
-    unsubscribeSnapshot: () => void;
-    unsubscribeDelta: () => void;
-    /**
-     * The store's OWN last-verified-good complete revision — deliberately NOT
-     * the same slot as `assembler.getLatestComplete()`. The assembler
-     * overwrites its internal `complete` unconditionally the moment a
-     * begin/chunk/commit set round-trips (it has no notion of "the caller's
-     * expected owner"); this store-level slot is only ever updated AFTER the
-     * additional owner/session re-check below passes, so a spliced-but-self-
-     * consistent revision claiming the wrong producer never becomes visible
-     * through `getReplica` — the prior good complete (if any) keeps serving,
-     * matching design §3.4's "commit 전까지는 직전 complete snapshot을 계속
-     * 제공한다" extended to a revision that fails THIS store's cross-check.
-     */
-    lastGood: { snapshot: ReplicatedTranscriptSnapshotV1; identity: TranscriptRevisionIdentity } | null;
+    peer: PeerHandle;
+    topic: string;
+    folder: KeyedTranscriptFolder;
+    subscription: Subscription | null;
+    unsubscribeSnapshot: (() => void) | null;
+    unsubscribeDelta: (() => void) | null;
     /** Bumped on every rejected row — diagnostics only, never gates a read. */
     rejectedRows: number;
-    lastRejectReason: TranscriptRevisionRejectReason | 'owner_mismatch' | 'session_mismatch' | null;
+    lastRejectReason: KeyedFoldRejectReason | 'malformed_row' | null;
+    resyncStreak: { reason: KeyedFoldRejectReason; count: number } | null;
+    resyncScheduled: boolean;
 }
 
-function isFiniteNonNegativeInt(value: unknown): value is number {
-    return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
-}
-
-/** Parse one SUB tail row into the assembler's row shape, or null if malformed. */
-function parseReplicaRow(row: Row): { writer: string; seq: number; kind: string; payload: unknown } | null {
-    if (typeof row.writer !== 'string' || !isFiniteNonNegativeInt(row.seq) || typeof row.kind !== 'string') {
-        return null;
-    }
-    if (typeof row.payload !== 'string') return null;
-    try {
-        return { writer: row.writer, seq: row.seq, kind: row.kind, payload: JSON.parse(row.payload) };
-    } catch {
-        return null;
-    }
+function identityOf(commit: ChatCommitV2, view: ReplicatedTranscriptViewV2): TranscriptReplicaCommitIdentity {
+    return {
+        sessionId: view.sessionId,
+        producerDaemonId: commit.producerDaemonId,
+        producerWriterId: commit.writer,
+        epoch: commit.epoch,
+        frame: commit.frame,
+        observedAt: commit.observedAt,
+    };
 }
 
 export class TranscriptReplicaStore {
     private readonly active = new Map<string, ActiveEntry>();
     private nextGeneration = 1;
     private stopped = false;
+    private readonly counters: TranscriptReplicaStoreCounters = { resubscribes: 0, baseRequests: 0, digestMismatches: 0 };
 
     constructor(
         private readonly node: SeqscribeNodeHandle,
         private readonly claims: TranscriptTopicClaimRegistry,
+        private hooks: TranscriptReplicaStoreHooks = {},
     ) {}
 
     /**
-     * Define the topic locally (both ends must independently define — design
-     * §3.1) and attach a `tail` SUB to `peer` for `key`. Idempotent per key:
-     * a second call with the SAME key re-derives readiness without tearing
-     * down a healthy subscription; a call with a DIFFERENT peer object for an
-     * ALREADY-subscribed key first closes the stale subscription (peer
-     * reconnect case).
+     * Late-bind the base-frame requester: the store is built with the node,
+     * before the host's mesh dispatch exists (boot S7 binds it).
+     */
+    setBaseRequester(requestBase: ((key: TranscriptReplicaKey) => void) | null): void {
+        this.hooks = { ...this.hooks, requestBase: requestBase ?? undefined };
+    }
+
+    /**
+     * Define the topic locally (both ends must independently define) and attach
+     * a `tail` SUB to `peer` for `key`. Idempotent per key.
      */
     ensureSubscription(key: TranscriptReplicaKey, peer: PeerHandle): TranscriptSubscribeResult {
         if (this.stopped) return { ok: false, reason: 'subscribe_failed' };
 
-        const activation = ensureSessionTranscriptTopic(this.node, this.claims, key.rawSessionId, key.ownerDaemonId);
-        if (!activation.ok) {
-            return { ok: false, reason: activation.reason };
-        }
+        const activation = ensureSessionChatTopic(this.node, this.claims, key.rawSessionId, key.ownerDaemonId);
+        if (!activation.ok) return { ok: false, reason: activation.reason };
 
         const keyStr = replicaKeyString(key);
-        const existing = this.active.get(keyStr);
-        if (existing) return { ok: true, alreadySubscribed: true };
+        if (this.active.has(keyStr)) return { ok: true, alreadySubscribed: true };
 
-        const generation = this.nextGeneration++;
-        const assembler = new TranscriptRevisionAssembler();
-        let subscription: Subscription | null = null;
-        let unsubscribeSnapshot: (() => void) | null = null;
-        let unsubscribeDelta: (() => void) | null = null;
-
-        const ingest = (rows: readonly Row[]): void => {
-            const current = this.active.get(keyStr);
-            if (!current || current.generation !== generation) return;
-            for (const row of rows) {
-                const parsed = parseReplicaRow(row);
-                if (!parsed) {
-                    current.rejectedRows++;
-                    continue;
-                }
-                const result = current.assembler.ingestRow(parsed);
-                if (result.status === 'rejected') {
-                    current.rejectedRows++;
-                    current.lastRejectReason = result.reason;
-                    continue;
-                }
-                if (result.status !== 'complete') continue;
-
-                // Store-level re-check (see header): the assembler already
-                // verified begin/commit/snapshot self-consistency; this
-                // additionally verifies the result matches what THIS CALLER
-                // asked to subscribe to.
-                if (result.identity.sessionId !== key.rawSessionId) {
-                    current.rejectedRows++;
-                    current.lastRejectReason = 'session_mismatch';
-                    LOG.warn(
-                        'Seqscribe',
-                        `transcript replica session mismatch expected=${key.rawSessionId.length <= 8 ? key.rawSessionId : `${key.rawSessionId.slice(0, 8)}…`} — discarding revision`,
-                    );
-                    continue;
-                }
-                if (!daemonIdsEquivalent(result.identity.producerDaemonId, key.ownerDaemonId)) {
-                    current.rejectedRows++;
-                    current.lastRejectReason = 'owner_mismatch';
-                    LOG.warn('Seqscribe', 'transcript replica owner mismatch — discarding revision');
-                    continue;
-                }
-                // Accepted: promote to the store's OWN last-good slot (see
-                // ActiveEntry#lastGood's doc comment for why `getReplica` reads
-                // this, not `assembler.getLatestComplete()` directly).
-                current.lastGood = { snapshot: result.snapshot, identity: result.identity };
-            }
-        };
-
-        try {
-            subscription = this.node.node.subscribe(peer, {
-                view: TRANSCRIPT_REPLICA_SUB_VIEW,
-                params: { topic: activation.topic },
-            });
-            unsubscribeSnapshot = subscription.onSnapshot((rows) => ingest(rows));
-            unsubscribeDelta = subscription.onDelta((changes) => ingest(changes.upserts));
-        } catch (error) {
-            try { unsubscribeSnapshot?.(); } catch { /* noop */ }
-            try { unsubscribeDelta?.(); } catch { /* noop */ }
-            try { subscription?.close(); } catch { /* noop */ }
-            LOG.warn(
-                'Seqscribe',
-                `transcript replica subscribe failed topic=${activation.topic}: ${
-                    error instanceof Error ? error.message : String(error)
-                }`,
-            );
-            return { ok: false, reason: 'subscribe_failed' };
-        }
-
-        this.active.set(keyStr, {
-            generation,
-            assembler,
-            subscription,
-            unsubscribeSnapshot,
-            unsubscribeDelta,
-            lastGood: null,
+        const entry: ActiveEntry = {
+            generation: this.nextGeneration++,
+            peer,
+            topic: activation.topic,
+            folder: new KeyedTranscriptFolder({ expectedSessionId: key.rawSessionId, expectedOwnerDaemonId: key.ownerDaemonId }),
+            subscription: null,
+            unsubscribeSnapshot: null,
+            unsubscribeDelta: null,
             rejectedRows: 0,
             lastRejectReason: null,
-        });
+            resyncStreak: null,
+            resyncScheduled: false,
+        };
+        if (!this.attach(key, entry)) return { ok: false, reason: 'subscribe_failed' };
+        this.active.set(keyStr, entry);
         return { ok: true, alreadySubscribed: false };
     }
 
-    /** Close one key's SUB and drop its assembler state. */
+    private attach(key: TranscriptReplicaKey, entry: ActiveEntry): boolean {
+        const keyStr = replicaKeyString(key);
+        const generation = entry.generation;
+        const parse = (rows: readonly Row[]): KeyedChatRow[] => {
+            const out: KeyedChatRow[] = [];
+            for (const row of rows) {
+                const parsed = parseChatSubRow(row);
+                if (parsed) out.push(parsed);
+                else {
+                    entry.rejectedRows++;
+                    entry.lastRejectReason = 'malformed_row';
+                }
+            }
+            return out;
+        };
+        const after = (rejectedBefore: number): void => {
+            const current = this.active.get(keyStr);
+            if (current !== entry || entry.generation !== generation) return;
+            const stats = entry.folder.stats();
+            entry.rejectedRows += stats.rejectedRows - rejectedBefore;
+            entry.lastRejectReason = stats.lastRejectReason ?? entry.lastRejectReason;
+            const reason = entry.folder.needsResync;
+            if (!reason) {
+                entry.resyncStreak = null;
+                return;
+            }
+            // Only a rejection that happened in THIS batch counts toward the
+            // streak — later rows arriving before the resubscribe must not.
+            if (stats.rejectedRows > rejectedBefore) this.scheduleResync(key, entry, reason);
+        };
+        try {
+            const subscription = this.node.node.subscribe(entry.peer, {
+                view: TRANSCRIPT_REPLICA_SUB_VIEW,
+                params: { topic: entry.topic },
+            });
+            entry.subscription = subscription;
+            entry.unsubscribeSnapshot = subscription.onSnapshot((rows) => {
+                if (entry.generation !== generation) return;
+                const before = entry.folder.stats().rejectedRows;
+                entry.folder.ingestSnapshot(parse(rows));
+                after(before);
+            });
+            entry.unsubscribeDelta = subscription.onDelta((changes) => {
+                if (entry.generation !== generation) return;
+                const before = entry.folder.stats().rejectedRows;
+                entry.folder.ingestRows(parse(changes.upserts));
+                after(before);
+            });
+            return true;
+        } catch (error) {
+            this.detachSub(entry);
+            LOG.warn(
+                'Seqscribe',
+                `transcript replica subscribe failed topic=${entry.topic}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+            return false;
+        }
+    }
+
+    private detachSub(entry: ActiveEntry): void {
+        try { entry.unsubscribeSnapshot?.(); } catch { /* noop */ }
+        try { entry.unsubscribeDelta?.(); } catch { /* noop */ }
+        try { entry.subscription?.close(); } catch { /* peer may already be closed */ }
+        entry.unsubscribeSnapshot = null;
+        entry.unsubscribeDelta = null;
+        entry.subscription = null;
+    }
+
+    /** Restart the SUB (→ fresh reset SNAP); escalate a repeating reason to a base request. */
+    private scheduleResync(key: TranscriptReplicaKey, entry: ActiveEntry, reason: KeyedFoldRejectReason): void {
+        if (reason === 'digest_mismatch') this.counters.digestMismatches++;
+        entry.resyncStreak =
+            entry.resyncStreak?.reason === reason
+                ? { reason, count: entry.resyncStreak.count + 1 }
+                : { reason, count: 1 };
+        if (entry.resyncStreak.count >= TRANSCRIPT_REPLICA_BASE_REQUEST_AFTER) {
+            entry.resyncStreak = null;
+            this.counters.baseRequests++;
+            LOG.warn('Seqscribe', `transcript replica requesting a base frame topic=${entry.topic} reason=${reason}`);
+            try { this.hooks.requestBase?.(key); } catch { /* best-effort */ }
+        }
+        if (entry.resyncScheduled) return;
+        entry.resyncScheduled = true;
+        const keyStr = replicaKeyString(key);
+        const timer = setTimeout(() => {
+            entry.resyncScheduled = false;
+            if (this.stopped || this.active.get(keyStr) !== entry) return;
+            this.detachSub(entry);
+            entry.generation = this.nextGeneration++;
+            // Keep the folder: its last verified view keeps serving until the
+            // new SNAP verifies (the folder swaps only on a verified commit).
+            this.counters.resubscribes++;
+            if (!this.attach(key, entry)) this.active.delete(keyStr);
+        }, 0);
+        timer.unref?.();
+    }
+
+    /** Close one key's SUB and drop its folder. */
     detachSubscription(key: TranscriptReplicaKey): void {
         const keyStr = replicaKeyString(key);
         const entry = this.active.get(keyStr);
         if (!entry) return;
         this.active.delete(keyStr);
-        try { entry.unsubscribeSnapshot(); } catch { /* noop */ }
-        try { entry.unsubscribeDelta(); } catch { /* noop */ }
-        try { entry.subscription.close(); } catch { /* peer may already be closed */ }
+        this.detachSub(entry);
     }
 
     /** Pure in-memory read — the `read_transcript_replica` IPC's data source. */
     getReplica(key: TranscriptReplicaKey): TranscriptReplicaReadResult {
         const entry = this.active.get(replicaKeyString(key));
         if (!entry) return { available: false, reason: 'no_subscription' };
-        if (!entry.lastGood) return { available: false, reason: 'no_complete_revision' };
-        return { available: true, snapshot: entry.lastGood.snapshot, identity: entry.lastGood.identity };
+        const view = entry.folder.view();
+        const commit = entry.folder.lastCommit();
+        if (!view || !commit) return { available: false, reason: 'no_complete_revision' };
+        return { available: true, view, identity: identityOf(commit, view) };
     }
 
     /** Diagnostics only — never gates a read. */
@@ -275,16 +298,18 @@ export class TranscriptReplicaStore {
         return { subscribed: true, rejectedRows: entry.rejectedRows, lastRejectReason: entry.lastRejectReason };
     }
 
+    /** Local-only counters (`chatDigestMismatch` among them). */
+    getCounters(): TranscriptReplicaStoreCounters {
+        return { ...this.counters };
+    }
+
     /** Close every SUB — daemon shutdown, before `node.close()`. */
     stop(): void {
         if (this.stopped) return;
         this.stopped = true;
-        for (const keyStr of Array.from(this.active.keys())) {
-            const entry = this.active.get(keyStr)!;
+        for (const [keyStr, entry] of Array.from(this.active)) {
             this.active.delete(keyStr);
-            try { entry.unsubscribeSnapshot(); } catch { /* noop */ }
-            try { entry.unsubscribeDelta(); } catch { /* noop */ }
-            try { entry.subscription.close(); } catch { /* noop */ }
+            this.detachSub(entry);
         }
     }
 }

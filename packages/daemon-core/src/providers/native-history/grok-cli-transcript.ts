@@ -36,7 +36,11 @@
  * no per-message `ts`. Ordering is file order (which is chronological), and
  * receivedAt is synthesized by interpolating between the session's created_at
  * (summary.json) and the file mtime so messages keep a stable, monotonic order
- * without inventing precise wall-clock times.
+ * without inventing precise wall-clock times. Once synthesized, a record's
+ * time is FROZEN for the process (`frozenReceivedAt`): re-interpolating on
+ * every read moved every earlier record's time whenever one record was
+ * appended, which the keyed transcript lane reads as a change to every bubble
+ * (design 2026-09-28 §3.1).
  *
  * OSS code (AGPL-3.0). Must not import from packages/ (proprietary).
  */
@@ -354,6 +358,43 @@ function readSessionCreatedAtMs(sessionDir: string): number {
   return 0;
 }
 
+/** Files whose synthesized times are kept (LRU); an evicted file re-interpolates once. */
+const FROZEN_TIMES_MAX_FILES = 64;
+const frozenTimes = new Map<string, { startMs: number; byRecord: Map<number, number> }>();
+
+/**
+ * Per-record `receivedAt`, frozen at first synthesis for this process. Records
+ * already seen keep their time; newly appended ones get `endMs` (the file was
+ * just written), clamped to stay after the previous record. A changed session
+ * start (a different file at the same path) resets the file's entry.
+ */
+function frozenReceivedAt(
+  sourcePath: string,
+  startMs: number,
+  recordIndexes: readonly number[],
+  interpolate: (index: number) => number,
+  endMs: number,
+): number[] {
+  let entry = frozenTimes.get(sourcePath);
+  if (entry) frozenTimes.delete(sourcePath);
+  if (!entry || entry.startMs !== startMs) entry = { startMs, byRecord: new Map() };
+  frozenTimes.set(sourcePath, entry);
+  while (frozenTimes.size > FROZEN_TIMES_MAX_FILES) frozenTimes.delete(frozenTimes.keys().next().value as string);
+  const firstSynthesis = entry.byRecord.size === 0;
+  const out: number[] = [];
+  let previous = -Infinity;
+  recordIndexes.forEach((recordIndex, index) => {
+    let at = entry!.byRecord.get(recordIndex);
+    if (at === undefined) {
+      at = Math.max(firstSynthesis ? interpolate(index) : endMs, previous + 1);
+      entry!.byRecord.set(recordIndex, at);
+    }
+    previous = at;
+    out.push(at);
+  });
+  return out;
+}
+
 /**
  * Read one grok session transcript.
  *
@@ -396,9 +437,16 @@ export function readSession(
   const endMs = Math.max(sourceMtimeMs, startMs);
   const span = endMs - startMs;
   const step = parsed.length > 1 ? Math.floor(span / (parsed.length - 1)) : 0;
+  const times = frozenReceivedAt(
+    sourcePath,
+    startMs,
+    parsed.map((message) => message.recordIndex),
+    (index) => (parsed.length > 1 ? startMs + step * index : endMs),
+    endMs,
+  );
 
   const messages: GrokNativeHistoryMessage[] = parsed.map((message, index) => {
-    const receivedAt = parsed.length > 1 ? startMs + step * index : endMs;
+    const receivedAt = times[index];
     return {
       ts: new Date(receivedAt).toISOString(),
       receivedAt,

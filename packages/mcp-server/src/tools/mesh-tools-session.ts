@@ -1635,7 +1635,7 @@ function attachPendingCoordinatorEvents(rendered: string, events: any[]): string
  * precisely because the design's acceptance item is "compact/full parity":
  * with one renderer, a replica-sourced payload cannot drift from a live one in
  * how it is compacted, advisory-annotated or serialized — only in the payload
- * FIELDS, which `mapTranscriptSnapshotToReadChatPayload`'s allow-list governs
+ * FIELDS, which `mapTranscriptViewToReadChatPayload`'s allow-list governs
  * and the adapter tests pin.
  */
 function renderMeshReadChatPayload(

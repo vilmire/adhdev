@@ -15,6 +15,7 @@ import type { SeqscribeRuntime } from './runtime.js';
 import { summarizeSeqscribeStats } from './stats.js';
 import { transcriptParityCounters } from './transcript-parity.js';
 import { transcriptTransportSelectionCounters } from './transcript-transport-selection.js';
+import { transcriptChatRuntimeCounters } from './transcript-keyed-publish-runtime.js';
 
 export interface LocalSeqscribeStatsInputs {
     /**
@@ -73,6 +74,31 @@ export function buildLocalSeqscribeStats(
             // distributions would defeat the status-frame dedup. The cloud
             // status-report supplier deliberately does NOT pass this.
             transcriptLatency: transcriptService?.getLatencyDetail() ?? null,
+            // Keyed chat write/compaction/read health (design 2026-09-28 §8.3).
+            // Local-only like the latency block above.
+            transcriptChat: (() => {
+                const chatRuntime = transcriptChatRuntimeCounters();
+                const replica = rt.transcriptReplica?.getCounters?.() ?? { digestMismatches: 0, resubscribes: 0, baseRequests: 0 };
+                return {
+                    chatFramesPublished: transcriptCounters?.published ?? 0,
+                    chatRowsWritten: transcriptCounters?.chatRowsWritten ?? 0,
+                    chatBytesWritten: transcriptCounters?.chatBytesWritten ?? 0,
+                    chatBaseFrames: transcriptCounters?.chatBaseFrames ?? {
+                        epoch_start: 0, writer_change: 0, lineage_switch: 0, resync_request: 0, unexpected: 0,
+                    },
+                    chatBaseRateExceeded: transcriptCounters?.chatBaseRateExceeded ?? 0,
+                    chatTripwireRefused: transcriptCounters?.chatTripwireRefused ?? 0,
+                    chatUnidentified: transcriptCounters?.unidentified ?? 0,
+                    chatPrunedRows: chatRuntime.prunedRows,
+                    chatPrunePasses: chatRuntime.prunePasses,
+                    chatPruneErrors: chatRuntime.pruneErrors,
+                    chatParityReadBacks: chatRuntime.parityReadBacks,
+                    chatLedgerSeeds: chatRuntime.ledgerSeeds,
+                    chatDigestMismatch: replica.digestMismatches,
+                    chatReplicaResubscribes: replica.resubscribes,
+                    chatBaseRequests: replica.baseRequests,
+                };
+            })(),
             // `active` follows the SERVICE, not the mode: mode `shadow` still
             // publishes, so keying off the mode would read `false` on a daemon
             // that is actively appending.

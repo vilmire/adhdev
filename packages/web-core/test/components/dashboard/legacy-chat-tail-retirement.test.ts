@@ -29,7 +29,7 @@
  * about bookkeeping.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core'
+import type { ReplicatedTranscriptViewV2 } from '@adhdev/daemon-core'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
   getOrCreateSessionChatTailController,
@@ -49,17 +49,17 @@ const DAEMON = 'daemon-1'
 const SESSION = 'session-1'
 const SUBSCRIPTION_KEY = `daemon:${DAEMON}:session:${SESSION}`
 
-function snapshot(overrides: Partial<ReplicatedTranscriptSnapshotV1> = {}): ReplicatedTranscriptSnapshotV1 {
+function snapshot(overrides: Partial<ReplicatedTranscriptViewV2> = {}): ReplicatedTranscriptViewV2 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId: SESSION,
     historySessionId: null,
     providerType: 'claude-cli',
     providerSessionId: null,
     producerDaemonId: DAEMON,
     producerWriterId: 'writer-1',
-    producerEpoch: 'epoch-1',
-    revision: 1,
+    epoch: 'epoch-1',
+    frame: 1,
     observedAt: '2026-09-05T00:00:00.000Z',
     status: 'idle',
     providerObservedStatus: null,
@@ -79,7 +79,7 @@ function message(
   role: 'user' | 'assistant',
   content: string,
   receivedAt: number,
-): ReplicatedTranscriptSnapshotV1['messages'][number] {
+): ReplicatedTranscriptViewV2['messages'][number] {
   return {
     role,
     kind: 'standard',
@@ -87,17 +87,22 @@ function message(
     receivedAt,
     timestamp: receivedAt,
     turnKey: `${role}-${receivedAt}`,
+    messageId: `m-${role}-${receivedAt}`,
+    ord: String(receivedAt).padStart(8, '0'),
+    rev: 1,
+    expandable: false,
+    srcId: null,
     bubbleState: 'final',
     senderName: null,
     toolName: null,
     streaming: null,
-  } as ReplicatedTranscriptSnapshotV1['messages'][number]
+  } as ReplicatedTranscriptViewV2['messages'][number]
 }
 
 /** A replica snapshot that carries real content — enough to mark the lane healthy. */
 function healthySnapshot(revision: number, ...contents: string[]) {
   return snapshot({
-    revision,
+    frame: revision,
     messages: contents.map((c, i) => message(i % 2 === 0 ? 'user' : 'assistant', c, 10 + i)),
   })
 }
@@ -203,11 +208,9 @@ describe('★ unit 9 ①: a session that never sees a replica keeps legacy fully
 
     // The 9-pre-c refusal path: a snapshot missing `activeModal` is refused and
     // reported as a fallback. It must not count as replica health.
-    const broken = { ...snapshot({ status: 'waiting_approval', revision: 2 }) } as Record<string, unknown>
+    const broken = { ...snapshot({ status: 'waiting_approval', frame: 2 }) } as Record<string, unknown>
     delete broken.activeModal
-    controller.applyTranscriptReplicaSnapshot(broken as unknown as ReplicatedTranscriptSnapshotV1, {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(broken as unknown as ReplicatedTranscriptViewV2)
 
     // Legacy never unsubscribed, and still delivers.
     expect(unsubscribeFrames(sendData)).toHaveLength(0)
@@ -219,7 +222,7 @@ describe('★ unit 9 ①: a session that never sees a replica keeps legacy fully
   it('★ a disposed-then-retained controller re-arms legacy (health is not carried across dispose)', () => {
     const { sendData, controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'replica answer'))
     expect(unsubscribeFrames(sendData)).toHaveLength(1)
 
     // The registry recycles controllers by key, and the replica worker host does
@@ -252,7 +255,7 @@ describe('★ unit 9 ②: any replica fallback re-arms the legacy transport', ()
       controller.retain()
 
       // Healthy replica → legacy stands down.
-      controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+      controller.applyTranscriptReplicaView(healthySnapshot(2, 'replica answer'))
       expect(unsubscribeFrames(sendData)).toHaveLength(1)
       expect(controller.getSnapshot().transcriptReadSource).toBe('replica')
 
@@ -359,9 +362,9 @@ describe('★ unit 9 ②: any replica fallback re-arms the legacy transport', ()
     const { sendData, manager, controller } = setup()
     controller.retain()
 
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica one'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'replica one'))
     controller.reportTranscriptReplicaFallback('no_node')
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(3, 'r1', 'replica two'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(3, 'r1', 'replica two'))
     expect(controller.getSnapshot().transcriptReadSource).toBe('replica')
 
     sendData.mockClear()
@@ -384,7 +387,7 @@ describe('★ unit 9 ③: a healthy replica session stops running legacy', () =>
     controller.retain()
     expect(subscribeFrames(sendData)).toHaveLength(1)
 
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'replica answer'))
 
     expect(unsubscribeFrames(sendData)).toHaveLength(1)
     expect(controller.getSnapshot().transcriptReadSource).toBe('replica')
@@ -394,7 +397,7 @@ describe('★ unit 9 ③: a healthy replica session stops running legacy', () =>
   it('★ retaining again does NOT resubscribe legacy while the replica is healthy', () => {
     const { sendData, controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'replica answer'))
 
     sendData.mockClear()
     controller.retain()
@@ -406,11 +409,11 @@ describe('★ unit 9 ③: a healthy replica session stops running legacy', () =>
   it('further replica snapshots do not churn the subscription', () => {
     const { sendData, controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'a'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'a'))
     sendData.mockClear()
 
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(3, 'a', 'b'), { omittedBefore: false })
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(4, 'a', 'b', 'c'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(3, 'a', 'b'))
+    controller.applyTranscriptReplicaView(healthySnapshot(4, 'a', 'b', 'c'))
 
     expect(frames(sendData)).toHaveLength(0)
   })
@@ -424,7 +427,7 @@ describe('★ unit 9 ④: read_chat and chat_history survive on a retired sessio
   it('the one-shot read_chat self-heal still applies while the replica is healthy', async () => {
     const { controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'replica answer'))
 
     // §5.6: "제거 후에도 seqscribe unavailable/oversize 시 one-shot/on-demand
     // legacy `read_chat` fallback은 남긴다." It does not travel over the
@@ -448,7 +451,7 @@ describe('★ unit 9 ④: read_chat and chat_history survive on a retired sessio
   it('`Load older` (chat_history) is unaffected on a retired session', async () => {
     const { controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'live one', 'live two'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'live one', 'live two'))
 
     const loader = vi.fn().mockResolvedValue({
       messages: [
@@ -520,7 +523,7 @@ describe('★ unit 9 ⑤⑥⑦: a replica regression is visible, and nothing els
   it('⑤ ★ a healthy replica session shows no warning', () => {
     const { controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'replica answer'))
 
     expect(controller.getSnapshot().transcriptReadSource).toBe('replica')
     expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(false)
@@ -532,9 +535,9 @@ describe('★ unit 9 ⑤⑥⑦: a replica regression is visible, and nothing els
   it('⑤ ★ repeated healthy replica updates never raise the warning', () => {
     const { controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'a'), { omittedBefore: false })
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(3, 'a', 'b'), { omittedBefore: false })
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(4, 'a', 'b', 'c'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'a'))
+    controller.applyTranscriptReplicaView(healthySnapshot(3, 'a', 'b'))
+    controller.applyTranscriptReplicaView(healthySnapshot(4, 'a', 'b', 'c'))
 
     expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(false)
     expect(transcriptFallbackDiagnostics().regressions).toBe(0)
@@ -544,7 +547,7 @@ describe('★ unit 9 ⑤⑥⑦: a replica regression is visible, and nothing els
   it('⑥ ★ a replica → legacy regression IS marked, surfaced and counted', () => {
     const { controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'replica answer'))
     expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(false)
 
     controller.reportTranscriptReplicaFallback('no_node')
@@ -566,7 +569,7 @@ describe('★ unit 9 ⑤⑥⑦: a replica regression is visible, and nothing els
       __resetTranscriptFallbackDiagnosticsForTests()
       const { controller } = setup()
       controller.retain()
-      controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+      controller.applyTranscriptReplicaView(healthySnapshot(2, 'replica answer'))
       controller.reportTranscriptReplicaFallback(reason)
 
       expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(true)
@@ -577,13 +580,11 @@ describe('★ unit 9 ⑤⑥⑦: a replica regression is visible, and nothing els
   it('★ the warning RETRACTS when the replica recovers — it describes current health, not history', () => {
     const { controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'replica answer'))
     controller.reportTranscriptReplicaFallback('no_node')
     expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(true)
 
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(5, 'replica answer', 'replica is back'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(5, 'replica answer', 'replica is back'))
 
     expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(false)
     expect(buildTranscriptReadSourceAttributes(controller.getSnapshot()))
@@ -596,7 +597,7 @@ describe('★ unit 9 ⑤⑥⑦: a replica regression is visible, and nothing els
   it('★ a disposed controller does not inherit a regression claim', () => {
     const { controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'replica answer'))
     controller.dispose()
 
     controller.retain()
@@ -609,7 +610,7 @@ describe('★ unit 9 ⑤⑥⑦: a replica regression is visible, and nothing els
   it('★ the diagnostics counter is content-free — integers and closed-union reasons only', () => {
     const { controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'a secret user message'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'a secret user message'))
     controller.reportTranscriptReplicaFallback('no_node')
 
     // ★ Server content boundary (CLAUDE.md): these counters are browser-local

@@ -1,6 +1,6 @@
 /**
  * The standalone replica lane wired to the REAL web-core chat-tail controller
- * registry (not fakes): a verified snapshot arriving on the lane must flip the
+ * registry (not fakes): a verified keyed view arriving on the lane must flip the
  * controller to `replica`, and the resulting `report_transcript_transport`
  * frame must pass standalone's `/ws` data filter — that frame is what the
  * daemon's `transcriptTransportSelection.replicaSelected` counts, i.e. the
@@ -13,10 +13,11 @@
 import { afterEach, describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
 import {
-    applyTranscriptReplicaSnapshotToControllers,
+    applyTranscriptReplicaViewToControllers,
     collectRetainedTranscriptSessionInterest,
     getOrCreateSessionChatTailController,
     reportTranscriptReplicaFallbackForSession,
+    requestTranscriptBaseForSession,
     resetSessionChatTailControllersForTest,
     subscribeTranscriptSessionInterest,
 } from '../../web-core/src/components/dashboard/session-chat-tail-controller.ts'
@@ -32,17 +33,17 @@ const SESSION = 'sess-1'
 
 afterEach(() => resetSessionChatTailControllersForTest())
 
-function healthySnapshot(revision: number) {
+function healthyView(frame: number) {
     return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         sessionId: SESSION,
         historySessionId: null,
         providerType: 'claude-cli',
         providerSessionId: null,
         producerDaemonId: DAEMON,
         producerWriterId: 'writer-1',
-        producerEpoch: 'epoch-1',
-        revision,
+        epoch: 'epoch-1',
+        frame,
         observedAt: '2026-09-24T00:00:00.000Z',
         status: 'idle',
         providerObservedStatus: null,
@@ -52,8 +53,8 @@ function healthySnapshot(revision: number) {
         turn: null,
         provenance: { messageSource: null, transcriptProvenance: null },
         messages: [
-            { role: 'user', kind: 'standard', content: 'hi', receivedAt: 10, timestamp: 10, turnKey: 'u-10', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
-            { role: 'assistant', kind: 'standard', content: 'replica answer', receivedAt: 11, timestamp: 11, turnKey: 'a-11', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+            { messageId: 'n.0000beef.1.0', ord: 'a1', rev: 1, role: 'user', kind: 'standard', content: 'hi', receivedAt: 10, timestamp: 10, turnKey: 'u-10', bubbleState: 'final', senderName: null, toolName: null, streaming: null, expandable: false, srcId: null },
+            { messageId: 'n.0000beef.2.0', ord: 'a2', rev: 1, role: 'assistant', kind: 'standard', content: 'replica answer', receivedAt: 11, timestamp: 11, turnKey: 'a-11', bubbleState: 'final', senderName: null, toolName: null, streaming: null, expandable: false, srcId: null },
         ],
         terminalMarkers: [],
         coverage: { mode: 'tail', totalMessageCount: 2, returnedMessageCount: 2, omittedBefore: false },
@@ -91,23 +92,30 @@ function setup() {
     controller.retain()
 
     const sockets: FakeSocket[] = []
-    let onSnapshot: ((m: any) => void) | null = null
+    let onView: ((m: any) => void) | null = null
+    let onBaseRequest: ((sessionId: string) => void) | null = null
     const activations: string[][] = []
     const client = new StandaloneTranscriptLaneClient({
         createSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
-        startHost: (_t, cb) => {
-            onSnapshot = cb
-            return { pendingCount: () => 0, running: () => true, activateSessions: (ids) => { activations.push([...ids]) }, stop: () => {} }
+        startHost: (_t, viewCb, baseCb) => {
+            onView = viewCb
+            onBaseRequest = baseCb
+            return { pendingCount: () => 0, running: () => true, activateSessions: (ids) => { activations.push([...ids]) }, view: () => null, stop: () => {} }
         },
         collectInterest: collectRetainedTranscriptSessionInterest,
         subscribeInterest: subscribeTranscriptSessionInterest,
-        applySnapshot: applyTranscriptReplicaSnapshotToControllers as any,
+        applyView: (daemonId, sessionId, view) => applyTranscriptReplicaViewToControllers(daemonId, sessionId, view),
+        requestBase: requestTranscriptBaseForSession,
         reportFallback: reportTranscriptReplicaFallbackForSession,
         setTimer: () => null,
         clearTimer: () => {},
         now: () => 0,
     })
-    return { wire, controller, client, sockets, activations, deliver: (m: any) => onSnapshot!(m) }
+    return {
+        wire, controller, client, sockets, activations,
+        deliver: (m: any) => onView!(m),
+        requestBase: (sessionId: string) => onBaseRequest!(sessionId),
+    }
 }
 
 const reports = (wire: any[]) =>
@@ -122,13 +130,13 @@ describe('standalone replica lane → real chat-tail controller → /ws report',
         h.client.stop()
     })
 
-    it('a verified snapshot on the lane flips the controller to replica and the report reaches /ws', () => {
+    it('a verified view on the lane flips the controller to replica and the report reaches /ws', () => {
         const h = setup()
         h.client.start()
         h.sockets[0]!.fire('open')
         assert.deepEqual(reports(h.wire), ['legacy'])
 
-        h.deliver({ kind: 'transcript-bridge-snapshot', sessionId: SESSION, snapshot: healthySnapshot(2), omittedBefore: false })
+        h.deliver({ sessionId: SESSION, view: healthyView(2), reset: true })
 
         assert.deepEqual(reports(h.wire), ['legacy', 'replica'])
         const messages = h.controller.getSnapshot().liveMessages as Array<{ content?: unknown }>
@@ -140,9 +148,19 @@ describe('standalone replica lane → real chat-tail controller → /ws report',
         const h = setup()
         h.client.start()
         h.sockets[0]!.fire('open')
-        h.deliver({ kind: 'transcript-bridge-snapshot', sessionId: SESSION, snapshot: healthySnapshot(2), omittedBefore: false })
+        h.deliver({ sessionId: SESSION, view: healthyView(2), reset: true })
         h.sockets[0]!.fire('close')
         assert.deepEqual(reports(h.wire), ['legacy', 'replica', 'legacy'])
+        h.client.stop()
+    })
+
+    it('a worker base-frame request reaches /ws as request_transcript_base (session id only)', () => {
+        const h = setup()
+        h.client.start()
+        h.sockets[0]!.fire('open')
+        h.requestBase(SESSION)
+        const requests = h.wire.filter((f) => f.type === 'command' && f.commandType === 'request_transcript_base')
+        assert.deepEqual(requests, [{ type: 'command', commandType: 'request_transcript_base', data: { rawSessionId: SESSION } }])
         h.client.stop()
     })
 })

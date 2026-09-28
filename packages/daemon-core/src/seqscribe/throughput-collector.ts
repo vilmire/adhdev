@@ -31,7 +31,7 @@
  *
  * ── Content boundary ───────────────────────────────────────────────────────
  * `syncHotspots` pairs a TOPIC NAME with a PEER ID, and ADHDev topic names
- * embed session and mesh identifiers (`session.<id>.transcript`,
+ * embed session and mesh identifiers (`session.<id>.chat`,
  * `mesh.<meshId>.events`). It is therefore a LOCAL-ONLY diagnostic: it may
  * reach the daemon log and `get_status_metadata`, and it must never reach the
  * server. The cloud projection (`buildCloudSeqscribeSummary` in

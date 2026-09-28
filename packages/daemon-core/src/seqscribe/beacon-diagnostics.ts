@@ -229,7 +229,7 @@ export interface BeaconBoardSnapshot {
  * i.e. a `full-sync` topic, where lagging behind is a real, closable gap.
  *
  * On a `subscribe-only` topic it is meaningless, and confidently wrong:
- * `fleet.status` and `session.*.transcript` are ring topics whose peer entries
+ * `fleet.status` and `session.*.chat` are subscribe-only topics whose peer entries
  * arrive over a connection-scoped SUB and live in an in-memory slot map
  * (see `fleet-status-peer-view.ts` — "ring payloads are in-memory and
  * subscribe-only by contract"). They are NEVER written into our vectors. So

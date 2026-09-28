@@ -27,7 +27,15 @@ function run(body: (h: DaemonCommandHandler, args: any) => CommandRouterResult |
 const handlerCommands: Record<string, HandlerRun> = {
     // ─── Chat commands (chat-commands.ts) ───────────────
     read_chat: run((h, a) => Chat.handleReadChat(h, a)),
-    expand_tool_block: run((h, a) => Chat.handleExpandToolBlock(h, a)),
+    expand_tool_block: run(async (h, a) => {
+        // Addressed by `messageId` (keyed storage §5.9): the ledger holds the
+        // ref its latest read observed. After a restart no read may have run
+        // yet for this session — refresh once so the id resolves.
+        if (!a?.toolBlockRef && typeof a?.messageId === 'string' && !Chat.resolveToolBlockRefByMessageId(h, a)) {
+            try { await Chat.handleReadChat(h, { targetSessionId: a?.targetSessionId ?? a?.sessionId }); } catch { /* the expand below reports the miss */ }
+        }
+        return Chat.handleExpandToolBlock(h, a);
+    }),
     get_chat_debug_bundle: run((h, a) => Chat.handleGetChatDebugBundle(h, a)),
     chat_history: run((h, a) => Chat.handleChatHistory(h, a)),
     send_chat: run((h, a) => Chat.handleSendChat(h, a)),

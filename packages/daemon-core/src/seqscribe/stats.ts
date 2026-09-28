@@ -9,7 +9,7 @@
  * for seqscribe. Every field below is a counter, a boolean, or a bucketed
  * integer. Deliberately absent:
  *
- *   - topic NAMES — `session.<id>.transcript` and `mesh.<meshId>.events` embed
+ *   - topic NAMES — `session.<id>.chat` and `mesh.<meshId>.events` embed
  *     session and mesh identifiers, so a per-topic map would leak the fleet's
  *     shape to the server. Only aggregates cross.
  *   - peer ids and writer ids — peer identity is not routing metadata here.
@@ -65,6 +65,26 @@ function bucket(value: number, thresholds: readonly number[]): number {
  * Fleet-wide seqscribe health. Counters and buckets only — see the content
  * boundary note above.
  */
+/** Keyed chat counters surfaced locally (`transcriptChatDetail`). Integers only. */
+export interface TranscriptChatDetail {
+    chatFramesPublished: number;
+    chatRowsWritten: number;
+    chatBytesWritten: number;
+    chatBaseFrames: Record<'epoch_start' | 'writer_change' | 'lineage_switch' | 'resync_request' | 'unexpected', number>;
+    chatBaseRateExceeded: number;
+    chatTripwireRefused: number;
+    chatUnidentified: number;
+    chatPrunedRows: number;
+    chatPrunePasses: number;
+    chatPruneErrors: number;
+    chatParityReadBacks: number;
+    chatLedgerSeeds: number;
+    /** Replica-side commits rejected by the digest/count check. */
+    chatDigestMismatch: number;
+    chatReplicaResubscribes: number;
+    chatBaseRequests: number;
+}
+
 export interface SeqscribeStatusSummary {
     /** Topics defined on this node. */
     topics: number;
@@ -246,7 +266,9 @@ export interface SeqscribeStatusSummary {
         persistentMismatches: number;
         missingCompleteRevision: number;
         fieldMismatch: number;
+        missingMessage: number;
         extraMessage: number;
+        revRegression: number;
         wrongSession: number;
         wrongOwner: number;
         digestMismatch: number;
@@ -352,6 +374,16 @@ export interface SeqscribeStatusSummary {
         missingBubbleIdentity: number;
         droppedToolBlockRef: number;
     };
+    /**
+     * Keyed chat transcript write/compaction/read health (design 2026-09-28
+     * §5.8, §8.3): frames, rows and bytes written, base frames by reason,
+     * compaction, parity read-backs and the replica store's digest mismatches.
+     *
+     * ★ LOCAL-ONLY (`adhdev status` diagnostics): raw monotonic counters would
+     * defeat the deduped status-frame hash, and none of it has a server use.
+     * No topic names or ids — `buildCloudSeqscribeSummary` does not name it.
+     */
+    transcriptChatDetail?: TranscriptChatDetail;
     transcriptCounterDetail?: {
         /** PTY dirty triggers collapsed behind the per-session throttle window. */
         ptyDirtyCoalesced: number;
@@ -463,6 +495,8 @@ export interface SummarizeOptions {
         extraInShadow?: number;
         fieldMismatch?: number;
     };
+    /** Keyed chat write/compaction/read counters — local-only, see `transcriptChatDetail`. */
+    transcriptChat?: TranscriptChatDetail;
     /**
      * §8 unit 2 transcript publisher counters. Omitted → reported as inactive/zero.
      *
@@ -500,7 +534,9 @@ export interface SummarizeOptions {
         compared?: number;
         missingCompleteRevision?: number;
         fieldMismatch?: number;
+        missingMessage?: number;
         extraMessage?: number;
+        revRegression?: number;
         wrongSession?: number;
         wrongOwner?: number;
         digestMismatch?: number;
@@ -642,7 +678,9 @@ export function summarizeSeqscribeStats(
                           persistentMismatches: tp.persistentMismatches ?? 0,
                           missingCompleteRevision: tp.missingCompleteRevision ?? 0,
                           fieldMismatch: tp.fieldMismatch ?? 0,
+                          missingMessage: tp.missingMessage ?? 0,
                           extraMessage: tp.extraMessage ?? 0,
+                          revRegression: tp.revRegression ?? 0,
                           wrongSession: tp.wrongSession ?? 0,
                           wrongOwner: tp.wrongOwner ?? 0,
                           digestMismatch: tp.digestMismatch ?? 0,
@@ -658,6 +696,9 @@ export function summarizeSeqscribeStats(
             // Deep-copied by the recorder's own `detail()`, so a caller holding
             // this cannot see it mutate on the next trigger.
             ...(opts.transcriptLatency ? { transcriptLatencyDetail: opts.transcriptLatency } : {}),
+            ...(opts.transcriptChat
+                ? { transcriptChatDetail: { ...opts.transcriptChat, chatBaseFrames: { ...opts.transcriptChat.chatBaseFrames } } }
+                : {}),
             // Emitted only when the caller passed the full counter object. A
             // status-reporter caller supplying just the five bucket fields
             // leaves these undefined, and the key is then omitted entirely

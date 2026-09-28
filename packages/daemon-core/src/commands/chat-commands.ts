@@ -13,7 +13,7 @@ export { READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS, buildSendInputSignature } from './c
 export { evaluateReadChatNodeWorkspaceScope } from './chat-commands-scope.js';
 export { sanitizeDebugBundleValue, handleGetChatDebugBundle } from './chat-commands-debug-bundle.js';
 export { handleChatHistory, handleReadChat, __resetProviderSessionPinsForTest, __getProviderSessionPinForTest } from './chat-commands-read.js';
-export { handleExpandToolBlock } from './chat-commands-expand-tool.js';
+export { handleExpandToolBlock, resolveToolBlockRefByMessageId } from './chat-commands-expand-tool.js';
 export {
     handleSendChat,
     handleCancelQueuedChat,

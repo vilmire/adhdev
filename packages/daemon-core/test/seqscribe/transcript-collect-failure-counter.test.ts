@@ -40,7 +40,7 @@ function makeService(collect: TranscriptProjectionDeps['collectObservation']): T
         writerId: () => 'writer-a',
         epoch: 'epoch-fixed',
         now: () => '2026-08-29T00:00:00.000Z',
-        publishRevision: async () => {},
+        appendChatFrame: async () => {},
         collectObservation: collect,
     };
     const service = new TranscriptProjectionService(deps);

@@ -8,7 +8,7 @@
  * LOAD. That turned "read the topic policy table" into a side effect: any
  * consumer that only wanted the policy shape — notably web-core's parity test,
  * which compares the browser policy against this table's real
- * `sessionTranscriptPolicy` — had to have a live/pinned ADHDEV_CONFIG_DIR or it
+ * `sessionChatPolicy` — had to have a live/pinned ADHDEV_CONFIG_DIR or it
  * died during import.
  *
  * So this module has, and must keep, ZERO imports. topics.ts reads the id from

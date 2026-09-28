@@ -15,8 +15,8 @@
  *   2. starts ONE worker host per open lane and tells it which sessions to
  *      subscribe (the retained controller registry — same derivation as
  *      web-cloud's `bindTranscriptSessionInterest`);
- *   3. feeds each verified snapshot to the controllers
- *      (`applyTranscriptReplicaSnapshotToControllers`), which is what flips
+ *   3. feeds each verified keyed view to the controllers
+ *      (`applyTranscriptReplicaViewToControllers`), which is what flips
  *      `replicaHealthy` and makes the controller report `replica` via
  *      `report_transcript_transport`;
  *   4. on lane close: stops the host (the worker never resumes across a gap),
@@ -28,9 +28,9 @@
  * assembly is `standalone-transcript-lane-wiring.ts`.
  *
  * Legacy `session.chat_tail` is NOT touched here — the controller keeps it
- * running until a verified replica snapshot lands (G6 proper deletes it later).
+ * running until a verified replica view lands (G6 proper deletes it later).
  */
-import type { TranscriptBridgeSnapshotMessage, TranscriptWorkerHostHandle } from '@adhdev/web-core/transcript-transport'
+import type { TranscriptSessionView, TranscriptWorkerHostHandle } from '@adhdev/web-core/transcript-transport'
 
 /** Must equal daemon-core `STANDALONE_SEQSCRIBE_WS_PATH` (pinned by tests on both sides). */
 export const STANDALONE_SEQSCRIBE_WS_PATH = '/ws/seqscribe'
@@ -77,18 +77,30 @@ export function buildStandaloneSeqscribeWsUrl(
 }
 
 /**
- * What `sendDataViaWs` may put on the `/ws` JSON lane. Legacy topic
- * subscribe/unsubscribe, plus exactly ONE command: the controller's
- * fire-and-forget `report_transcript_transport` (closed two-value enum, see
- * `SessionChatTailController.reportTransportSelection`). Before this, the
- * report was silently dropped by a subscribe-only filter, which is half of why
- * standalone read `transcriptTransportSelection = {0,0}`.
+ * Commands the chat-tail controller sends on the `/ws` JSON lane (`sendData`).
+ * Both are fire-and-forget and content-free:
+ *   - `report_transcript_transport` — closed two-value enum, see
+ *     `SessionChatTailController.reportTransportSelection`. Before it was
+ *     allowed, the report was silently dropped by a subscribe-only filter,
+ *     which is half of why standalone read `transcriptTransportSelection = {0,0}`.
+ *   - `request_transcript_base` — the worker's folder kept rejecting a
+ *     session's keyed commits, so ask the daemon for one base frame (design
+ *     2026-09-28 §5.2, `SessionChatTailController.requestTranscriptBase`).
+ *     Carries only the raw session id.
+ */
+export const STANDALONE_WS_DATA_COMMANDS: readonly string[] = ['report_transcript_transport', 'request_transcript_base']
+
+/**
+ * What `sendDataViaWs` may put on the `/ws` JSON lane: legacy topic
+ * subscribe/unsubscribe, plus exactly the `STANDALONE_WS_DATA_COMMANDS`.
  */
 export function isStandaloneWsDataFrame(data: unknown): boolean {
     if (!data || typeof data !== 'object') return false
     const frame = data as { type?: unknown; commandType?: unknown }
     if (frame.type === 'subscribe' || frame.type === 'unsubscribe') return true
-    return frame.type === 'command' && frame.commandType === 'report_transcript_transport'
+    return frame.type === 'command'
+        && typeof frame.commandType === 'string'
+        && STANDALONE_WS_DATA_COMMANDS.includes(frame.commandType)
 }
 
 /** The `WebSocket` surface this lane uses (a real DOM `WebSocket` satisfies it). */
@@ -106,19 +118,17 @@ export interface StandaloneTranscriptLaneDeps {
     /** Start the shared worker host on an OPEN lane; null = worker unavailable (lane stays off). */
     startHost(
         transport: LaneSocket,
-        onSnapshot: (message: TranscriptBridgeSnapshotMessage) => void,
+        onView: (update: TranscriptSessionView) => void,
+        onBaseRequest: (sessionId: string) => void,
     ): TranscriptWorkerHostHandle | null
     /** web-core `collectRetainedTranscriptSessionInterest`. */
     collectInterest(): Map<string, string[]>
     /** web-core `subscribeTranscriptSessionInterest`. */
     subscribeInterest(listener: () => void): () => void
-    /** web-core `applyTranscriptReplicaSnapshotToControllers`. */
-    applySnapshot(
-        daemonId: string,
-        sessionId: string,
-        snapshot: TranscriptBridgeSnapshotMessage['snapshot'],
-        options: { omittedBefore: boolean },
-    ): number
+    /** web-core `applyTranscriptReplicaViewToControllers`. */
+    applyView(daemonId: string, sessionId: string, view: TranscriptSessionView['view']): number
+    /** web-core `requestTranscriptBaseForSession`. */
+    requestBase(daemonId: string, sessionId: string): boolean
     /** web-core `reportTranscriptReplicaFallbackForSession`. */
     reportFallback(daemonId: string, sessionId: string, reason: string): void
     /** `purpose` is diagnostic only (tests tell the two timers apart by it). */
@@ -138,7 +148,7 @@ export class StandaloneTranscriptLaneClient {
     /** sessionId → daemonIds that are reading it (retained controllers). */
     private sessionDaemons = new Map<string, string[]>()
     private activeSessions: string[] = []
-    /** Sessions that delivered at least one verified snapshot on the CURRENT host. */
+    /** Sessions that delivered at least one verified view on the CURRENT host. */
     private delivered = new Set<string>()
     private subRetryTimer: unknown = null
     private subRetryDelay = SUB_RETRY_INITIAL_MS
@@ -197,7 +207,11 @@ export class StandaloneTranscriptLaneClient {
         if (this.stopped || socket !== this.socket) return
         this.openedAt = this.deps.now()
         this.stopHost(false)
-        const host = this.deps.startHost(socket, (message) => this.deliver(message))
+        const host = this.deps.startHost(
+            socket,
+            (update) => this.deliver(update),
+            (sessionId) => this.requestBase(sessionId),
+        )
         if (!host) {
             // No Worker / OPFS in this browser: the lane can never carry a
             // replica here. Stop trying rather than reconnect-loop.
@@ -279,7 +293,7 @@ export class StandaloneTranscriptLaneClient {
     /**
      * ★ Why re-SUB at all: a seqscribe SUB for a topic the daemon has not
      * DEFINED yet is refused (`ERR_ACL_DENIED` — nothing to grant) and the
-     * library does not retry it. The daemon defines `session.<id>.transcript`
+     * library does not retry it. The daemon defines `session.<id>.chat`
      * lazily, on that session's first publish after (re)start, so a pane opened
      * on a brand-new session — or on any idle session right after a daemon
      * restart — would otherwise sit on legacy until the lane happened to
@@ -291,7 +305,7 @@ export class StandaloneTranscriptLaneClient {
      * "activate without the undelivered sessions, then with them" — which
      * closes and reopens exactly those subscriptions. Delivered sessions are
      * never touched. Doubling cadence capped at `SUB_RETRY_MAX_MS` keeps a
-     * session whose topic has rows but no verifiable revision from costing
+     * session whose topic has rows but no verifiable commit from costing
      * more than one SNAP a minute.
      */
     private armSubRetry(reset: boolean): void {
@@ -316,14 +330,19 @@ export class StandaloneTranscriptLaneClient {
         this.armSubRetry(false)
     }
 
-    private deliver(message: TranscriptBridgeSnapshotMessage): void {
-        const daemonIds = this.sessionDaemons.get(message.sessionId)
+    private deliver(update: TranscriptSessionView): void {
+        const daemonIds = this.sessionDaemons.get(update.sessionId)
         if (!daemonIds) return
-        this.delivered.add(message.sessionId)
+        this.delivered.add(update.sessionId)
         for (const daemonId of daemonIds) {
-            this.deps.applySnapshot(daemonId, message.sessionId, message.snapshot, {
-                omittedBefore: message.omittedBefore,
-            })
+            this.deps.applyView(daemonId, update.sessionId, update.view)
+        }
+    }
+
+    /** One base-frame request per session — the request is per session, not per reader. */
+    private requestBase(sessionId: string): void {
+        for (const daemonId of this.sessionDaemons.get(sessionId) ?? []) {
+            if (this.deps.requestBase(daemonId, sessionId)) return
         }
     }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ADHDEV_AUTHORITY_ID } from '../../src/seqscribe/authority.js';
-import { safeSessionId, sessionTranscriptPolicy, sessionTranscriptTopic } from '../../src/seqscribe/topics.js';
+import { safeSessionId, sessionChatPolicy, sessionChatTopic } from '../../src/seqscribe/topics.js';
 import {
     TranscriptTopicClaimRegistry,
     type TranscriptTopicClaim,
@@ -9,7 +9,7 @@ import {
 /**
  * §8 unit 1 — "transcript topic identity + projection contract".
  *
- * `safeSessionId` (topics.ts) and `sessionTranscriptTopic`/`sessionTranscriptPolicy`
+ * `safeSessionId` (topics.ts) and `sessionChatTopic`/`sessionChatPolicy`
  * already existed before this unit (Phase 0 topic table). What this unit adds
  * is the fail-closed collision defense design §3.5 requires around them: a
  * known-answer/collision fixture proving the sanitizer really does collapse
@@ -36,15 +36,16 @@ describe('safeSessionId — known answer + collision (design §3.5)', () => {
         expect(segments[0]).toBe('a_b');
     });
 
-    it('sessionTranscriptTopic interpolates the sanitized segment', () => {
-        expect(sessionTranscriptTopic('A:B')).toBe('session.a_b.transcript');
-        expect(sessionTranscriptTopic('a.b')).toBe('session.a_b.transcript');
+    it('sessionChatTopic interpolates the sanitized segment', () => {
+        expect(sessionChatTopic('A:B')).toBe('session.a_b.chat');
+        expect(sessionChatTopic('a.b')).toBe('session.a_b.chat');
     });
 
-    it('sessionTranscriptPolicy is full/subscribe-only/content/adhdev-coordinator (G2b)', () => {
-        const policy = sessionTranscriptPolicy();
+    it('sessionChatPolicy is keyed append, full/subscribe-only/content/adhdev-coordinator (design 2026-09-28 §4.1)', () => {
+        const policy = sessionChatPolicy();
         expect(policy).toEqual({
             kind: 'append',
+            keyed: { tombstoneKind: 'chat.del.v2' },
             retention: { mode: 'full' },
             replication: 'subscribe-only',
             access: 'content',
@@ -55,15 +56,15 @@ describe('safeSessionId — known answer + collision (design §3.5)', () => {
 
 describe('TranscriptTopicClaimRegistry — fail-closed on raw id collision (design §3.5)', () => {
     function claimOf(rawSessionId: string, ownerDaemonId = 'daemon-a'): TranscriptTopicClaim {
-        return { topic: sessionTranscriptTopic(rawSessionId), rawSessionId, ownerDaemonId };
+        return { topic: sessionChatTopic(rawSessionId), rawSessionId, ownerDaemonId };
     }
 
     it('claims a fresh topic', () => {
         const registry = new TranscriptTopicClaimRegistry();
         const result = registry.claim(claimOf('A:B'));
         expect(result).toEqual({ ok: true });
-        expect(registry.get('session.a_b.transcript')).toEqual({
-            topic: 'session.a_b.transcript',
+        expect(registry.get('session.a_b.chat')).toEqual({
+            topic: 'session.a_b.chat',
             rawSessionId: 'A:B',
             ownerDaemonId: 'daemon-a',
         });
@@ -74,12 +75,12 @@ describe('TranscriptTopicClaimRegistry — fail-closed on raw id collision (desi
         expect(registry.claim(claimOf('A:B', 'daemon-a'))).toEqual({ ok: true });
         // Same raw id, new owner — the normal owner-move path (design §3.4).
         expect(registry.claim(claimOf('A:B', 'daemon-c'))).toEqual({ ok: true });
-        expect(registry.get('session.a_b.transcript')?.ownerDaemonId).toBe('daemon-c');
+        expect(registry.get('session.a_b.chat')?.ownerDaemonId).toBe('daemon-c');
     });
 
     it('fail-closed: a colliding DIFFERENT raw session id is rejected, not silently swapped', () => {
         const registry = new TranscriptTopicClaimRegistry();
-        const first = claimOf('A:B'); // sanitizes to session.a_b.transcript
+        const first = claimOf('A:B'); // sanitizes to session.a_b.chat
         const second = claimOf('a.b'); // same topic, different raw id — the collision
 
         expect(registry.claim(first)).toEqual({ ok: true });
@@ -93,12 +94,12 @@ describe('TranscriptTopicClaimRegistry — fail-closed on raw id collision (desi
 
         // The original claim must be untouched — the second (rejected) caller's
         // identity must never overwrite it.
-        expect(registry.get('session.a_b.transcript')).toEqual(first);
+        expect(registry.get('session.a_b.chat')).toEqual(first);
     });
 
     it('release() frees a topic so a later distinct raw id may claim it', () => {
         const registry = new TranscriptTopicClaimRegistry();
-        const topic = sessionTranscriptTopic('A:B');
+        const topic = sessionChatTopic('A:B');
         registry.claim(claimOf('A:B'));
         registry.release(topic);
         expect(registry.get(topic)).toBeUndefined();

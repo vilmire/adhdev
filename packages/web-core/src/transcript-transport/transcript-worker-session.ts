@@ -1,6 +1,7 @@
 /**
  * The worker's session-activation loop: owns which sessions are subscribed and
- * pushes verified snapshots back to the main thread.
+ * pushes each verified keyed frame (only the bubbles it changed) back to the
+ * main thread.
  *
  * Extracted from `transcript-worker-entry.ts` deliberately. That file is the
  * real dedicated-worker global-scope script and is NOT unit-testable (it needs
@@ -22,16 +23,17 @@
 import type { PeerHandle } from 'seqscribe';
 import {
     isTranscriptSessionActivation,
-    transcriptBridgeSnapshotMessage,
+    transcriptBridgeBaseRequestMessage,
+    transcriptBridgeFrameMessage,
     type TranscriptSessionActivation,
 } from './bridge-protocol.js';
 import {
-    subscribeSessionTranscript,
+    subscribeSessionChat,
     type TranscriptSessionSubscriptionHandle,
 } from './transcript-session-subscription.js';
 import type { TranscriptWorkerNode } from './transcript-worker-node.js';
 
-/** The worker half of the snapshot port. */
+/** The worker half of the view port. */
 export interface TranscriptWorkerSessionPort {
     postMessage(data: unknown): void;
     onmessage: ((ev: { data: unknown }) => void) | null;
@@ -48,6 +50,8 @@ export interface TranscriptWorkerSessionOptions {
     currentPeer(): PeerHandle | null;
     /** Surfaces a rejected row's reason for fallback telemetry. */
     onRejected?(sessionId: string, reason: string): void;
+    /** Defers a resync's resubscribe (tests). Defaults to `setTimeout(cb, 0)`. */
+    schedule?(cb: () => void): void;
 }
 
 export interface TranscriptWorkerSessionHandle {
@@ -62,8 +66,8 @@ export interface TranscriptWorkerSessionHandle {
 }
 
 /**
- * Wire a snapshot port to a node: apply activations, subscribe, and forward
- * each verified revision.
+ * Wire a view port to a node: apply activations, subscribe, and forward each
+ * verified keyed frame.
  */
 export function runTranscriptWorkerSession(
     options: TranscriptWorkerSessionOptions,
@@ -85,15 +89,20 @@ export function runTranscriptWorkerSession(
 
     const openSubscription = (sessionId: string, peer: PeerHandle): void => {
         if (subscriptions.has(sessionId)) return;
-        const handle = subscribeSessionTranscript(options.node, {
+        const handle = subscribeSessionChat(options.node, {
             sessionId,
             peer,
-            ...(activation?.ownerWriterId ? { ownerWriterId: activation.ownerWriterId } : {}),
-            onSnapshot: ({ snapshot, omittedBefore }) => {
+            ...(activation?.ownerDaemonId ? { ownerDaemonId: activation.ownerDaemonId } : {}),
+            onFrame: (delta) => {
                 if (closed) return;
-                options.port.postMessage(transcriptBridgeSnapshotMessage(sessionId, snapshot, omittedBefore));
+                options.port.postMessage(transcriptBridgeFrameMessage(sessionId, delta));
             },
             onRejected: (reason) => options.onRejected?.(sessionId, reason),
+            onBaseRequest: () => {
+                if (closed) return;
+                options.port.postMessage(transcriptBridgeBaseRequestMessage(sessionId));
+            },
+            ...(options.schedule ? { schedule: options.schedule } : {}),
         });
         subscriptions.set(sessionId, handle);
     };

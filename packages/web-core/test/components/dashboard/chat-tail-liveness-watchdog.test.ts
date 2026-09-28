@@ -18,7 +18,7 @@
  * regress into either (a) no recovery, or (b) a fixed-interval RPC poll.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ReplicatedTranscriptSnapshotV1, SessionChatTailUpdate } from '@adhdev/daemon-core'
+import type { ReplicatedTranscriptViewV2, SessionChatTailUpdate } from '@adhdev/daemon-core'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
   buildChatTailLivenessWatchdogPlan,
@@ -50,18 +50,18 @@ function createUpdate(overrides: Partial<SessionChatTailUpdate> = {}): SessionCh
 }
 
 function replicaSnapshot(
-  overrides: Partial<ReplicatedTranscriptSnapshotV1> = {},
-): ReplicatedTranscriptSnapshotV1 {
+  overrides: Partial<ReplicatedTranscriptViewV2> = {},
+): ReplicatedTranscriptViewV2 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId: 'session-1',
     historySessionId: null,
     providerType: 'claude-cli',
     providerSessionId: null,
     producerDaemonId: 'daemon-1',
     producerWriterId: 'writer-1',
-    producerEpoch: 'epoch-1',
-    revision: 1,
+    epoch: 'epoch-1',
+    frame: 1,
     observedAt: '2026-09-06T00:00:00.000Z',
     status: 'idle',
     providerObservedStatus: null,
@@ -81,7 +81,7 @@ function replicaMessage(
   role: 'user' | 'assistant',
   content: string,
   receivedAt: number,
-): ReplicatedTranscriptSnapshotV1['messages'][number] {
+): ReplicatedTranscriptViewV2['messages'][number] {
   return {
     role,
     kind: 'standard',
@@ -89,11 +89,16 @@ function replicaMessage(
     receivedAt,
     timestamp: receivedAt,
     turnKey: `${role}-${receivedAt}`,
+    messageId: `m-${role}-${receivedAt}`,
+    ord: String(receivedAt).padStart(8, '0'),
+    rev: 1,
+    expandable: false,
+    srcId: null,
     bubbleState: 'final',
     senderName: null,
     toolName: null,
     streaming: null,
-  } as ReplicatedTranscriptSnapshotV1['messages'][number]
+  } as ReplicatedTranscriptViewV2['messages'][number]
 }
 
 /**
@@ -279,9 +284,8 @@ describe('chat tail liveness watchdog', () => {
     advance(BUSY_QUIET_MS * 10)
     expect(controller.shouldRefreshForLiveness()).toBe(true)
 
-    controller.applyTranscriptReplicaSnapshot(
-      replicaSnapshot({ revision: 5, messages: [replicaMessage('assistant', 'from replica', 10)] }),
-      { omittedBefore: false },
+    controller.applyTranscriptReplicaView(
+      replicaSnapshot({ frame: 5, messages: [replicaMessage('assistant', 'from replica', 10)] })
     )
     // Sanity: the replica really did take over the pane (otherwise the refusal
     // below would pass vacuously).

@@ -331,7 +331,7 @@ export function buildTopicPolicyMap(
 /**
  * Default GET scope: metadata-class topics only (§7.1.2 / §7.1.4).
  *
- * Mirrors the server's `isMetadataClassTopic`. `session.*.transcript` is a
+ * Mirrors the server's `isMetadataClassTopic`. `session.*.chat` is a
  * content-class topic; its NAME is still only a name, but the approved exception
  * makes carrying it a case-by-case call, so a caller has to ask explicitly.
  *

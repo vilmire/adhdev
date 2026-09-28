@@ -14,7 +14,7 @@
  * that file already proves retire/re-arm legacy correctly.
  */
 import { describe, expect, it, vi } from 'vitest'
-import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core'
+import type { ReplicatedTranscriptViewV2 } from '@adhdev/daemon-core'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
   getOrCreateSessionChatTailController,
@@ -25,17 +25,17 @@ const DAEMON = 'daemon-1'
 const SESSION = 'session-1'
 const SUBSCRIPTION_KEY = `daemon:${DAEMON}:session:${SESSION}`
 
-function snapshot(overrides: Partial<ReplicatedTranscriptSnapshotV1> = {}): ReplicatedTranscriptSnapshotV1 {
+function snapshot(overrides: Partial<ReplicatedTranscriptViewV2> = {}): ReplicatedTranscriptViewV2 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId: SESSION,
     historySessionId: null,
     providerType: 'claude-cli',
     providerSessionId: null,
     producerDaemonId: DAEMON,
     producerWriterId: 'writer-1',
-    producerEpoch: 'epoch-1',
-    revision: 1,
+    epoch: 'epoch-1',
+    frame: 1,
     observedAt: '2026-09-05T00:00:00.000Z',
     status: 'idle',
     providerObservedStatus: null,
@@ -55,7 +55,7 @@ function message(
   role: 'user' | 'assistant',
   content: string,
   receivedAt: number,
-): ReplicatedTranscriptSnapshotV1['messages'][number] {
+): ReplicatedTranscriptViewV2['messages'][number] {
   return {
     role,
     kind: 'standard',
@@ -63,16 +63,21 @@ function message(
     receivedAt,
     timestamp: receivedAt,
     turnKey: `${role}-${receivedAt}`,
+    messageId: `m-${role}-${receivedAt}`,
+    ord: String(receivedAt).padStart(8, '0'),
+    rev: 1,
+    expandable: false,
+    srcId: null,
     bubbleState: 'final',
     senderName: null,
     toolName: null,
     streaming: null,
-  } as ReplicatedTranscriptSnapshotV1['messages'][number]
+  } as ReplicatedTranscriptViewV2['messages'][number]
 }
 
 function healthySnapshot(revision: number, ...contents: string[]) {
   return snapshot({
-    revision,
+    frame: revision,
     messages: contents.map((c, i) => message(i % 2 === 0 ? 'user' : 'assistant', c, 10 + i)),
   })
 }
@@ -112,13 +117,9 @@ describe('transcript transport selection reporting', () => {
   it('reports "replica" once a verified snapshot lands, without re-reporting on every subsequent snapshot', () => {
     const { sendData, controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(3, 'replica answer', 'two'), {
-      omittedBefore: false,
-    })
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(4, 'replica answer', 'two', 'three'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'replica answer'))
+    controller.applyTranscriptReplicaView(healthySnapshot(3, 'replica answer', 'two'))
+    controller.applyTranscriptReplicaView(healthySnapshot(4, 'replica answer', 'two', 'three'))
 
     // legacy (retain) -> replica (first healthy snapshot); the two further
     // snapshots do not churn the subscription (legacy-chat-tail-retirement's
@@ -130,7 +131,7 @@ describe('transcript transport selection reporting', () => {
   it('reports "legacy" again after a fallback re-arms it', () => {
     const { sendData, controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'replica answer'))
     controller.reportTranscriptReplicaFallback('no_node')
 
     expect(transportReportFrames(sendData)).toEqual([
@@ -143,9 +144,9 @@ describe('transcript transport selection reporting', () => {
   it('recovery is not one-way: replica -> legacy -> replica reports each transition once', () => {
     const { sendData, controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica one'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'replica one'))
     controller.reportTranscriptReplicaFallback('no_node')
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(3, 'r1', 'replica two'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(3, 'r1', 'replica two'))
 
     expect(transportReportFrames(sendData)).toEqual([
       { selection: 'legacy' },
@@ -158,7 +159,7 @@ describe('transcript transport selection reporting', () => {
   it('★ a repeated fallback with the SAME reason does not re-report legacy twice (dedup)', () => {
     const { sendData, controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'replica answer'))
     controller.reportTranscriptReplicaFallback('no_node')
     // `reportTranscriptReplicaFallback`'s own dedup guard still re-syncs the
     // legacy subscription state on a repeat identical fallback (its header:
@@ -173,7 +174,7 @@ describe('transcript transport selection reporting', () => {
   it('reports fresh (legacy) after dispose + re-retain, matching health being re-earned', () => {
     const { sendData, controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'replica answer'))
     controller.release()
     controller.dispose()
 
@@ -200,9 +201,7 @@ describe('transcript transport selection reporting', () => {
   it('★ content boundary: the reported value is always the closed enum, never richer session data', () => {
     const { sendData, controller } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'super secret prompt content'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'super secret prompt content'))
 
     const reports = transportReportFrames(sendData)
     for (const report of reports) {

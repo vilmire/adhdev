@@ -1,5 +1,6 @@
 /**
- * RF-ROUTER LOW family — `ensure_transcript_subscription` / `read_transcript_replica`.
+ * RF-ROUTER LOW family — `ensure_transcript_subscription` / `read_transcript_replica`
+ * / `request_transcript_base`.
  *
  * Design §4 ("별도 프로세스 경계"): mcp-server must not open `seqscribe.db`
  * itself (single-process ownership, node.ts's header) — it reads a remote
@@ -23,10 +24,17 @@
  * roster consumer existed, so the vocabulary would not fork later. §8 unit 5
  * adds the first two roster consumers (`web_chat_pane`,
  * `web_warm_mobile_preview`) against that same type.
+ *
+ * `request_transcript_base` is the OWNER side of the keyed chat resync path
+ * (design 2026-09-28 §5.2): a reader whose folder keeps failing a commit
+ * digest asks the producing daemon for one `resync_request` base frame. It
+ * travels the same peer command path as the other two (never the server) and
+ * carries only a session id.
  */
 
 import type { TranscriptConsumerFallbackReason } from '../../mesh/transcript-read-model-consumers.js';
 import type { LowFamilyHandler } from './types.js';
+import { requestTranscriptBaseFrame } from '../../seqscribe/transcript-publisher.js';
 import { defineCommandSpecs } from '../command-registry.js';
 
 function readKeyArgs(args: any): { ownerDaemonId: string; rawSessionId: string } | null {
@@ -76,7 +84,14 @@ export const transcriptReplicaHandlers: Record<string, LowFamilyHandler> = {
 
         const read = store.getReplica(key);
         if (!read.available) return { success: true, available: false, reason: read.reason };
-        return { success: true, available: true, snapshot: read.snapshot, identity: read.identity };
+        return { success: true, available: true, view: read.view, identity: read.identity };
+    },
+
+    request_transcript_base: async (_ctx, args) => {
+        const rawSessionId = typeof args?.rawSessionId === 'string' ? args.rawSessionId.trim()
+            : typeof args?.sessionId === 'string' ? args.sessionId.trim() : '';
+        if (!rawSessionId) return { success: false, error: 'rawSessionId required' };
+        return { success: true, accepted: requestTranscriptBaseFrame(rawSessionId) };
     },
 };
 

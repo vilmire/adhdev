@@ -1,4 +1,4 @@
-// Phase 3 unit ①: the browser can DEFINE `session.<id>.transcript` — a
+// Phase 3 unit ①: the browser can DEFINE `session.<id>.chat` — a
 // content-class, finalityAuthority-naming topic — without holding the fleet
 // secret, by supplying non-signing `AuthorityHooks`.
 //
@@ -8,7 +8,7 @@
 //   ③ the browser-safe-finality interlock accepts ring AND full+subscribe-only,
 //      but throws on full-sync (safety)
 //   ④ the browser policy's topicSchemaHash equals the DAEMON's, computed from
-//      daemon-core's own `sessionTranscriptPolicy` — if this diverges every
+//      daemon-core's own `sessionChatPolicy` — if this diverges every
 //      daemon peer answers ERR_SCHEMA_MISMATCH and the whole unit is moot.
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm'
 // ★ Deliberate deep RELATIVE import of daemon-core SOURCE, test-only. The
@@ -19,7 +19,7 @@ import sqlite3InitModule from '@sqlite.org/sqlite-wasm'
 // web-core's runtime path, which the web bundle must never carry.
 import {
     configSettingsPolicy as daemonConfigSettingsPolicy,
-    sessionTranscriptPolicy as daemonSessionTranscriptPolicy,
+    sessionChatPolicy as daemonSessionChatPolicy,
 } from '../../../daemon-core/src/seqscribe/topics.js'
 import type { SqliteWasmDbLike, TopicPolicy } from 'seqscribe'
 import { createSeqscribe, sqliteWasmHandle, topicSchemaHashOf } from 'seqscribe'
@@ -31,8 +31,8 @@ import {
     isBrowserSafeFinalityPolicy,
 } from '../../src/transcript-transport/browser-reject-authority.js'
 import {
-    sessionTranscriptPolicy,
-    sessionTranscriptTopic,
+    sessionChatPolicy,
+    sessionChatTopic,
 } from '../../src/transcript-transport/topic-addressing.js'
 import { TranscriptWorkerNode, type TranscriptWorkerStorage } from '../../src/transcript-transport/transcript-worker-node.js'
 
@@ -47,14 +47,14 @@ async function memoryStorage(): Promise<TranscriptWorkerStorage> {
     }
 }
 
-const TOPIC = sessionTranscriptTopic('daemon_abc123')
+const TOPIC = sessionChatTopic('daemon_abc123')
 
 describe('browserRejectAuthority — defineTopic gate', () => {
     it('① WITHOUT authority hooks, defining the transcript policy throws', async () => {
         const node = new TranscriptWorkerNode({ writerId: 'browser_test_no_auth', openStorage: memoryStorage })
         await node.open()
         try {
-            expect(() => node.node.defineTopic(TOPIC, sessionTranscriptPolicy())).toThrow(
+            expect(() => node.node.defineTopic(TOPIC, sessionChatPolicy())).toThrow(
                 /finalityAuthority/i,
             )
         } finally {
@@ -70,7 +70,7 @@ describe('browserRejectAuthority — defineTopic gate', () => {
         })
         await node.open()
         try {
-            expect(() => node.node.defineTopic(TOPIC, sessionTranscriptPolicy())).not.toThrow()
+            expect(() => node.node.defineTopic(TOPIC, sessionChatPolicy())).not.toThrow()
         } finally {
             await node.close()
         }
@@ -106,9 +106,9 @@ describe('browser-safe-finality interlock', () => {
 
     it('classifies ring, full+subscribe-only, and full-sync', () => {
         // The real session transcript policy is now full+subscribe-only (G2b).
-        expect(sessionTranscriptPolicy().retention.mode).toBe('full')
-        expect(sessionTranscriptPolicy().replication).toBe('subscribe-only')
-        expect(isBrowserSafeFinalityPolicy(sessionTranscriptPolicy())).toBe(true)
+        expect(sessionChatPolicy().retention.mode).toBe('full')
+        expect(sessionChatPolicy().replication).toBe('subscribe-only')
+        expect(isBrowserSafeFinalityPolicy(sessionChatPolicy())).toBe(true)
         // A ring topic (any size) is safe regardless of replication.
         expect(isBrowserSafeFinalityPolicy(ringPolicy)).toBe(true)
         // full-sync is never safe, ring or not.
@@ -117,7 +117,7 @@ describe('browser-safe-finality interlock', () => {
     })
 
     it('assertBrowserSafeFinalityPolicy passes ring and full+subscribe-only, throws on full-sync', () => {
-        expect(() => assertBrowserSafeFinalityPolicy(TOPIC, sessionTranscriptPolicy())).not.toThrow()
+        expect(() => assertBrowserSafeFinalityPolicy(TOPIC, sessionChatPolicy())).not.toThrow()
         expect(() => assertBrowserSafeFinalityPolicy('some.ring.topic', ringPolicy)).not.toThrow()
         expect(() => assertBrowserSafeFinalityPolicy('assistant.journal', fullSyncContentPolicy)).toThrow(
             /refuses to define "assistant\.journal"/s,
@@ -133,7 +133,7 @@ describe('browser-safe-finality interlock', () => {
         await node.open()
         try {
             // The full+subscribe-only transcript topic it exists to serve (G2b): fine.
-            expect(() => node.node.defineTopic(TOPIC, sessionTranscriptPolicy())).not.toThrow()
+            expect(() => node.node.defineTopic(TOPIC, sessionChatPolicy())).not.toThrow()
             // A full-sync content topic: refused BEFORE seqscribe sees it,
             // because reject-all would silently kill its finality.
             expect(() => node.node.defineTopic('assistant.journal', fullSyncContentPolicy)).toThrow(
@@ -156,10 +156,11 @@ describe('browser-safe-finality interlock', () => {
         })
         const guarded = guardBrowserSafeDefineTopic(raw)
         try {
-            guarded.defineTopic(TOPIC, sessionTranscriptPolicy())
+            guarded.defineTopic(TOPIC, sessionChatPolicy())
             // Non-defineTopic members must still bind to the real node.
             expect(() => guarded.vectors()).not.toThrow()
-            await guarded.log(TOPIC).append('msg', { text: 'hello' })
+            // A keyed topic: every append names its key (design 2026-09-28 §4.2).
+            await guarded.log(TOPIC).append('chat.meta.v2', { text: 'hello' }, { key: 'meta' })
             expect(guarded.finality(TOPIC)).toBeNull()
         } finally {
             await guarded.close()
@@ -169,18 +170,21 @@ describe('browser-safe-finality interlock', () => {
 })
 
 describe('④ topicSchemaHash parity with daemon-core', () => {
-    it('browser and daemon sessionTranscriptPolicy hash identically', () => {
-        const browserHash = topicSchemaHashOf(sessionTranscriptPolicy())
-        const daemonHash = topicSchemaHashOf(daemonSessionTranscriptPolicy() as TopicPolicy)
+    it('browser and daemon sessionChatPolicy hash identically', () => {
+        const browserHash = topicSchemaHashOf(sessionChatPolicy())
+        const daemonHash = topicSchemaHashOf(daemonSessionChatPolicy() as TopicPolicy)
         expect(browserHash).toBe(daemonHash)
     })
 
-    it('the policies are structurally identical, not merely hash-equal', () => {
-        expect(sessionTranscriptPolicy()).toEqual(daemonSessionTranscriptPolicy())
+    it('the policies are structurally identical, not merely hash-equal — key order included', () => {
+        expect(sessionChatPolicy()).toEqual(daemonSessionChatPolicy())
+        // `keyed` is outside topicSchemaHash, so the hash test above cannot see
+        // it; the byte-identity below does (same keys, same order, same values).
+        expect(JSON.stringify(sessionChatPolicy())).toBe(JSON.stringify(daemonSessionChatPolicy()))
     })
 
     it('dropping finalityAuthority WOULD fork the hash — the reason it stays', () => {
-        const withAuthority = sessionTranscriptPolicy()
+        const withAuthority = sessionChatPolicy()
         const { finalityAuthority: _dropped, ...withoutAuthority } = withAuthority
         expect(topicSchemaHashOf(withoutAuthority as TopicPolicy)).not.toBe(
             topicSchemaHashOf(withAuthority),

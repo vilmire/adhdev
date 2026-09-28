@@ -32,7 +32,7 @@
  *
  * ── Why the four reasons, and why they are not interchangeable ──────────────
  * They are the four ways the replica can fail to answer, each at a different
- * layer, and each with a different real origin exercised here:
+ * layer, and each with a different real origin:
  *
  *   `authority_unavailable`  no fleet secret → the topic cannot even be defined.
  *                            Origin: `ensureSessionTranscriptTopic` with
@@ -47,9 +47,13 @@
  *                            ring reset). Origin: the REAL
  *                            `readTranscriptForDaemonConsumer` over a store
  *                            whose entry has no `lastGood`.
- *   `projection_oversize`    the snapshot cannot be encoded at all. Origin: the
- *                            REAL `encodeTranscriptRevision`, given a snapshot
- *                            that genuinely exceeds the chunk budget.
+ *   `projection_oversize`    the transcript could not be projected at all. ★ The
+ *                            keyed chat wire (design 2026-09-28) has no
+ *                            whole-snapshot encoder to overflow — an oversize
+ *                            live set is capped with `coverage.omittedBefore`
+ *                            instead — so like `topic_not_granted` this is an
+ *                            ACCEPTED-BUT-UNPRODUCED union member on the web
+ *                            path; the pane behaviour is still drilled.
  *
  * The first two are pre-subscription faults, the third is post-subscription, the
  * fourth is producer-side. Collapsing any of them into "it declined" would lose
@@ -57,8 +61,8 @@
  *
  * ★ Coverage honesty: this half drills the PANE for all four reasons (the pane
  * must survive any of them, however the reason arose). Real-origin production is
- * proven for three; the fourth is recorded as an unproduced-but-accepted union
- * member in the daemon-core half rather than being faked.
+ * the daemon-core half's job; `topic_not_granted` and `projection_oversize` are
+ * recorded as unproduced-but-accepted union members rather than being faked.
  *
  * ── Relationship to the live standalone check ──────────────────────────────
  * 9-pre-c was proposed as a manual standalone exercise. That is kept as the
@@ -68,14 +72,12 @@
  * the executable half; the runbook is the live-environment half.
  */
 import { describe, expect, it, vi } from 'vitest'
-import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core'
-import { encodeTranscriptRevision } from '@adhdev/daemon-core/seqscribe/transcript-revision-codec'
+import type { ReplicatedTranscriptViewV2 } from '@adhdev/daemon-core'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
   getOrCreateSessionChatTailController,
   resetSessionChatTailControllersForTest,
 } from '../../../src/components/dashboard/session-chat-tail-controller'
-import { mapTranscriptSnapshotToChatTailUpdate } from '../../../src/components/dashboard/transcript-chat-pane-adapter'
 
 const DAEMON = 'daemon-1'
 const SESSION = 'session-1'
@@ -107,17 +109,17 @@ const FIRE_DRILL_REASONS = [
   { reason: 'no_node', layer: 'transport: the replication lane itself is gone' },
 ] as const
 
-function snapshot(overrides: Partial<ReplicatedTranscriptSnapshotV1> = {}): ReplicatedTranscriptSnapshotV1 {
+function snapshot(overrides: Partial<ReplicatedTranscriptViewV2> = {}): ReplicatedTranscriptViewV2 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId: SESSION,
     historySessionId: null,
     providerType: 'claude-cli',
     providerSessionId: null,
     producerDaemonId: DAEMON,
     producerWriterId: 'writer-1',
-    producerEpoch: 'epoch-1',
-    revision: 1,
+    epoch: 'epoch-1',
+    frame: 1,
     observedAt: '2026-09-04T00:00:00.000Z',
     status: 'idle',
     providerObservedStatus: null,
@@ -137,7 +139,7 @@ function message(
   role: 'user' | 'assistant',
   content: string,
   receivedAt: number,
-): ReplicatedTranscriptSnapshotV1['messages'][number] {
+): ReplicatedTranscriptViewV2['messages'][number] {
   return {
     role,
     kind: 'standard',
@@ -145,11 +147,16 @@ function message(
     receivedAt,
     timestamp: receivedAt,
     turnKey: `${role}-${receivedAt}`,
+    messageId: `m-${role}-${receivedAt}`,
+    ord: String(receivedAt).padStart(8, '0'),
+    rev: 1,
+    expandable: false,
+    srcId: null,
     bubbleState: 'final',
     senderName: null,
     toolName: null,
     streaming: null,
-  } as ReplicatedTranscriptSnapshotV1['messages'][number]
+  } as ReplicatedTranscriptViewV2['messages'][number]
 }
 
 /**
@@ -260,9 +267,8 @@ describe('★ §5.6 fallback fire drill — the pane survives every replica decl
     const controller = paneWithLegacyContent()
     expect(controller.getSnapshot().transcriptReadSource).toBe('legacy')
 
-    controller.applyTranscriptReplicaSnapshot(
-      snapshot({ revision: 2, messages: [message('assistant', 'replica answer', 10)] }),
-      { omittedBefore: false },
+    controller.applyTranscriptReplicaView(
+      snapshot({ frame: 2, messages: [message('assistant', 'replica answer', 10)] })
     )
 
     const after = controller.getSnapshot()
@@ -350,16 +356,15 @@ describe('★ §5.6 fallback fire drill — the pane survives every replica decl
 
     // The daemon re-admitted this browser and redialed the lane; the worker
     // verified a fresh snapshot and it reaches the pane.
-    controller.applyTranscriptReplicaSnapshot(
+    controller.applyTranscriptReplicaView(
       snapshot({
-        revision: 5,
+        frame: 5,
         messages: [
           message('user', 'legacy question', 1),
           message('assistant', 'legacy answer', 2),
           message('assistant', 'replica is back', 12),
         ],
-      }),
-      { omittedBefore: false },
+      })
     )
 
     const after = controller.getSnapshot()
@@ -376,9 +381,8 @@ describe('★ §5.6 fallback fire drill — the pane survives every replica decl
    */
   it('a fallback after a replica read relabels without merging the two sources', () => {
     const controller = paneWithLegacyContent()
-    controller.applyTranscriptReplicaSnapshot(
-      snapshot({ revision: 2, messages: [message('assistant', 'replica answer', 10)] }),
-      { omittedBefore: false },
+    controller.applyTranscriptReplicaView(
+      snapshot({ frame: 2, messages: [message('assistant', 'replica answer', 10)] })
     )
     const beforeFallback = controller.getSnapshot().liveMessages.map((m) => m.content)
 
@@ -411,12 +415,11 @@ describe('★ 9-pre-c: a structurally-invalid replica snapshot is refused, not h
 
     // The projection regression: `activeModal` stops arriving on a session that
     // is WAITING FOR APPROVAL — the case where losing the modal is worst.
-    const broken = { ...snapshot({ status: 'waiting_approval', revision: 2 }) } as Record<string, unknown>
+    const broken = { ...snapshot({ status: 'waiting_approval', frame: 2 }) } as Record<string, unknown>
     delete broken.activeModal
 
-    controller.applyTranscriptReplicaSnapshot(
-      broken as unknown as ReplicatedTranscriptSnapshotV1,
-      { omittedBefore: false },
+    controller.applyTranscriptReplicaView(
+      broken as unknown as ReplicatedTranscriptViewV2
     )
 
     const after = controller.getSnapshot()
@@ -434,18 +437,17 @@ describe('★ 9-pre-c: a structurally-invalid replica snapshot is refused, not h
     // shrink-defense would defer a 1-message tail — the update would be dropped
     // for a reason that has nothing to do with `activeModal`, making this
     // control vacuous. Found by running it, not by reading.
-    controller.applyTranscriptReplicaSnapshot(
+    controller.applyTranscriptReplicaView(
       snapshot({
         status: 'waiting_approval',
-        revision: 2,
+        frame: 2,
         activeModal: { message: 'Run `rm -rf build/`?', buttons: ['Yes', 'No'] },
         messages: [
           message('user', 'legacy question', 1),
           message('assistant', 'legacy answer', 2),
           message('assistant', 'need approval', 5),
         ],
-      }),
-      { omittedBefore: false },
+      })
     )
 
     const after = controller.getSnapshot()
@@ -456,9 +458,9 @@ describe('★ 9-pre-c: a structurally-invalid replica snapshot is refused, not h
   it('a present-but-null activeModal is NORMAL and still applies — the fix must not reject ordinary sessions', () => {
     const controller = paneWithLegacyContent()
 
-    controller.applyTranscriptReplicaSnapshot(
+    controller.applyTranscriptReplicaView(
       snapshot({
-        revision: 2,
+        frame: 2,
         activeModal: null,
         // Non-shrinking, for the same reason as the control above.
         messages: [
@@ -466,70 +468,10 @@ describe('★ 9-pre-c: a structurally-invalid replica snapshot is refused, not h
           message('assistant', 'legacy answer', 2),
           message('assistant', 'ordinary answer', 9),
         ],
-      }),
-      { omittedBefore: false },
+      })
     )
 
     expect(controller.getSnapshot().transcriptReadSource).toBe('replica')
     expect(controller.getSnapshot().liveMessages.some((m) => m.content === 'ordinary answer')).toBe(true)
-  })
-})
-
-// ───────────────────────────────────────────────────────────────────────────
-// Real-origin production of the reasons.
-//
-// The cases above prove the PANE behaviour given a reason. These prove the
-// reasons are the ones production actually emits — without this half, the drill
-// would be asserting against strings a test author chose.
-// ───────────────────────────────────────────────────────────────────────────
-describe('★ fire drill: each reason is produced by its real origin, not hand-written', () => {
-  /**
-   * `projection_oversize` from the REAL encoder.
-   *
-   * The budget is `MAX_TRANSCRIPT_REVISION_CHUNKS` chunks (~8.3 MiB of JCS
-   * bytes), so this builds a snapshot that genuinely exceeds it rather than
-   * stubbing the return. Owner policy (§7.2 item 3) is explicit that oversize is
-   * NEVER truncated — it must fail the whole call to legacy.
-   */
-  it('projection_oversize: the real encoder refuses an oversize snapshot instead of truncating it', () => {
-    const huge = snapshot({
-      messages: Array.from({ length: 400 }, (_, i) => message('assistant', 'x'.repeat(24_000), i)),
-    })
-
-    const encoded = encodeTranscriptRevision(huge, {
-      sessionId: SESSION,
-      producerDaemonId: DAEMON,
-      producerWriterId: 'writer-1',
-      producerEpoch: 'epoch-1',
-      revision: 1,
-    })
-
-    expect(encoded.ok).toBe(false)
-    if (encoded.ok) throw new Error('unreachable — asserted false above')
-    expect(encoded.reason).toBe('projection_oversize')
-
-    // ★ No truncation: the encoder reports the FULL size it refused. A "helpful"
-    // future edit that trimmed messages to fit would show a smaller number here
-    // and would be silently dropping the user's conversation.
-    expect(encoded.snapshotBytes).toBeGreaterThan(8_000_000)
-  })
-
-  /**
-   * The control for the case above: the same encoder, a normal-sized snapshot,
-   * succeeds. Without this, `expect(ok).toBe(false)` would also pass against an
-   * encoder that refused everything.
-   */
-  it('control: the same encoder accepts a normal snapshot, so oversize is a real threshold', () => {
-    const ordinary = snapshot({ messages: [message('assistant', 'short answer', 1)] })
-
-    const encoded = encodeTranscriptRevision(ordinary, {
-      sessionId: SESSION,
-      producerDaemonId: DAEMON,
-      producerWriterId: 'writer-1',
-      producerEpoch: 'epoch-1',
-      revision: 1,
-    })
-
-    expect(encoded.ok).toBe(true)
   })
 })

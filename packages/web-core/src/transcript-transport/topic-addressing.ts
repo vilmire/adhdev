@@ -1,8 +1,8 @@
 /**
- * `session.<safeSessionId>.transcript` topic addressing — browser-worker
- * mirror of `oss/packages/daemon-core/src/seqscribe/topics.ts`'s
- * `safeSessionId`/`sessionTranscriptTopic`/`sessionTranscriptPolicy` (design
- * §3.1, §3.5).
+ * `session.<safeSessionId>.chat` topic addressing — browser-worker mirror of
+ * `oss/packages/daemon-core/src/seqscribe/topics.ts`'s
+ * `safeSessionId`/`sessionChatTopic`/`sessionChatPolicy` (design 2026-09-28
+ * message-keyed storage §4.1, §5.4).
  *
  * ── Why this is a DUPLICATE, not an import ──────────────────────────────────
  * `topics.ts` is not portable: it imports `authority.ts`, which imports
@@ -35,49 +35,46 @@ export function safeSessionId(sessionId: string): string {
     return sanitizeSegment(sessionId, 'unknown_session');
 }
 
-/** Mirrors `topics.ts#sessionTranscriptTopic`. */
-export function sessionTranscriptTopic(sessionId: string): string {
-    return `session.${safeSessionId(sessionId)}.transcript`;
+/**
+ * Mirrors `topics.ts#sessionChatTopic` — the keyed per-session chat topic
+ * (design 2026-09-28 message-keyed storage §4.1). The whole-snapshot topic
+ * it replaced was removed in the same change (§6).
+ */
+export function sessionChatTopic(sessionId: string): string {
+    return `session.${safeSessionId(sessionId)}.chat`;
 }
 
 /** Mirrors `topics.ts#ADHDEV_AUTHORITY_ID` (`authority.ts`). */
 export const ADHDEV_AUTHORITY_ID = 'adhdev-coordinator';
 
-/** Mirrors `topics.ts#SESSION_TRANSCRIPT_RING`. */
-export const SESSION_TRANSCRIPT_RING = 500;
+/** Mirrors `topics.ts#CHAT_TOMBSTONE_KIND` (the policy's `keyed.tombstoneKind`). */
+export const CHAT_TOMBSTONE_KIND = 'chat.del.v2';
 
 /**
- * Mirrors `topics.ts#sessionTranscriptPolicy`.
+ * Mirrors `topics.ts#sessionChatPolicy` — byte-identical, same key order
+ * (`check:topic-sanitizer-parity` diffs the two bodies).
  *
  * ★ `finalityAuthority` MUST STAY — do not delete it "because the browser
  * cannot sign". It is not a capability claim; it is an input to
  * `topicSchemaHash` (seqscribe SPEC §14 / host-guide §6). Dropping it here
  * while the daemon keeps it forks the hash, and every daemon peer then rejects
- * this topic with `ERR_SCHEMA_MISMATCH`. Removing it fleet-wide is separately
- * forbidden by the Phase 3 design doc.
+ * this topic with `ERR_SCHEMA_MISMATCH`.
  *
  * What the browser lacks is the SIGNING key, not the field. seqscribe's gate
- * (`vendor/seqscribe/src/topics.ts:53-54`) only requires that an
- * `AuthorityHooks.verifyFinality` *exists* — so the browser supplies the
- * non-signing `browserRejectAuthority` and this policy stays byte-identical to
- * the daemon's.
+ * only requires that an `AuthorityHooks.verifyFinality` *exists* — so the
+ * browser supplies the non-signing `browserRejectAuthority` and this policy
+ * stays byte-identical to the daemon's.
  *
- * ★ G2b (landed 2026-09-24): retention is now `{mode:'full'}`, matching
- * daemon-core exactly. The earlier revert's blocker (`subs.ts`'s
- * `view:'tail'` throwing `ERR_UNKNOWN_VIEW` for any non-ring topic) is
- * resolved upstream — `tail` now also serves `full` + `subscribe-only`
- * topics, which is what both this file's own live delivery path
- * (`transcript-session-subscription.ts`) and the daemon's use. This file's
- * whole enforcement mechanism is "stay byte-identical to the daemon's
- * policy, checked by a structural-equality test" (`browser-reject-
- * authority.test.ts`) — see `topics.ts#sessionTranscriptPolicy` for the full
- * account, including why a browser-side hard cap is not needed (only the
- * daemon-side `writer-gc.ts` prunes; the browser never accumulates durable
- * rows of its own).
+ * `keyed`, like `retention` and `replication`, is a LOCAL storage policy and
+ * is not part of `topicSchemaHash`; it is still mirrored exactly so both ends
+ * describe the topic the same way (`topics.ts#sessionChatPolicy`). The browser
+ * never appends to this topic and never accumulates durable rows of its own —
+ * it only folds the `tail` SUB it receives (`transcript-session-subscription.ts`).
  */
-export function sessionTranscriptPolicy(): TopicPolicy {
+export function sessionChatPolicy(): TopicPolicy {
     return {
         kind: 'append',
+        keyed: { tombstoneKind: CHAT_TOMBSTONE_KIND },
         retention: { mode: 'full' },
         replication: 'subscribe-only',
         access: 'content',

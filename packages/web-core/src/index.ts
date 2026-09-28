@@ -118,7 +118,9 @@ export { default as ToastContainer } from './components/dashboard/ToastContainer
 export { buildConversations } from './components/dashboard/buildConversations'
 // (§8 unit 4b) Transcript replica delivery into the chat pane. Exported so the
 // cloud assembly — which owns the P2P/worker transport — can route a verified
-// snapshot to whichever controllers are warm, without reaching into the module.
+// view to whichever controllers are warm, without reaching into the module,
+// and ask the owner for a keyed base frame when the worker's folder keeps
+// rejecting a session's commits.
 // (§8 unit 4c) …and the reverse direction: the cloud assembly reads which
 // sessions are actually being displayed, so it can declare exactly those as
 // transcript interest. Derived from the same registry the delivery above
@@ -128,11 +130,12 @@ export { buildConversations } from './components/dashboard/buildConversations'
 // DataChannel is the only thing still reporting, so it is what tells the frozen
 // pane to re-pull.
 export {
-    applyTranscriptReplicaSnapshotToControllers,
+    applyTranscriptReplicaViewToControllers,
     collectRetainedTranscriptSessionInterest,
     isTerminalChatTailStatusEvent,
     noteTerminalStatusEventForControllers,
     reportTranscriptReplicaFallbackForSession,
+    requestTranscriptBaseForSession,
     subscribeTranscriptSessionInterest,
 } from './components/dashboard/session-chat-tail-controller'
 export type { ActiveConversation } from './components/dashboard/types'

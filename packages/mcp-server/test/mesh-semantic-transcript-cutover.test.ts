@@ -34,15 +34,15 @@ const NOW = Date.parse('2026-09-02T00:00:00.000Z');
 
 function snapshot(overrides: Record<string, any> = {}): any {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId: 'sess-remote',
     historySessionId: null,
     providerType: 'claude-cli',
     providerSessionId: 'psid-1',
     producerDaemonId: 'daemon-remote',
     producerWriterId: 'writer-1',
-    producerEpoch: 'epoch-1',
-    revision: 12,
+    epoch: 'epoch-1',
+    frame: 12,
     observedAt: new Date(NOW - 1_000).toISOString(),
     status: 'idle',
     providerObservedStatus: 'idle',
@@ -52,8 +52,8 @@ function snapshot(overrides: Record<string, any> = {}): any {
     turn: null,
     provenance: { messageSource: 'native_history', transcriptProvenance: null },
     messages: [
-      { role: 'user', kind: 'standard', content: 'do it', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
-      { role: 'assistant', kind: 'standard', content: 'REPLICA_ANSWER', receivedAt: 2, timestamp: 2, turnKey: 't2', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+      { messageId: 'd.t.1', ord: 'a1', rev: 1, expandable: false, srcId: null, role: 'user', kind: 'standard', content: 'do it', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+      { messageId: 'd.t.2', ord: 'a2', rev: 1, expandable: false, srcId: null, role: 'assistant', kind: 'standard', content: 'REPLICA_ANSWER', receivedAt: 2, timestamp: 2, turnKey: 't2', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
     ],
     terminalMarkers: [],
     coverage: { mode: 'current-turn', totalMessageCount: 2, returnedMessageCount: 2, omittedBefore: false },
@@ -76,7 +76,7 @@ function transportFor(opts: { snap?: any; available?: boolean; ready?: boolean; 
       if (type === 'read_transcript_replica') {
         return opts.available === false
           ? { success: true, available: false, reason: opts.reason ?? 'no_complete_revision' }
-          : { success: true, available: true, snapshot: opts.snap ?? snapshot(), identity: { revision: 12 } };
+          : { success: true, available: true, view: opts.snap ?? snapshot(), identity: { frame: 12 } };
       }
       throw new Error(`unexpected command ${type}`);
     },

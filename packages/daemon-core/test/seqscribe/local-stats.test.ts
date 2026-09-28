@@ -24,6 +24,9 @@ import type { SeqscribeRuntime } from '../../src/seqscribe/runtime.js'
 const transcriptCounters = {
   published: 7, publishFailed: 1, deduped: 2, oversized: 0, dropped: 0,
   ptyDirtyCoalesced: 5, emptyGuarded: 0, collectorUnavailable: 0, sourcePending: 3, collectFailed: 0,
+  unidentified: 0, chatRowsWritten: 21, chatBytesWritten: 4096,
+  chatBaseFrames: { epoch_start: 1, writer_change: 0, lineage_switch: 0, resync_request: 0, unexpected: 0 },
+  chatBaseRateExceeded: 0, chatTripwireRefused: 0,
 }
 
 function runtime(withTranscript: boolean): SeqscribeRuntime {
@@ -31,6 +34,7 @@ function runtime(withTranscript: boolean): SeqscribeRuntime {
   return {
     node: { authorityEnabled: true },
     collector: { snapshot: () => snapshot },
+    transcriptReplica: { getCounters: () => ({ digestMismatches: 2, resubscribes: 3, baseRequests: 1 }) },
     projections: () => ({
       transcript: withTranscript
         ? { getCounters: () => transcriptCounters, getLatencyDetail: () => ({ lat: 1 }) }
@@ -61,6 +65,12 @@ describe('buildLocalSeqscribeStats — transcript counter wiring (§8 unit 2)', 
     expect(opts.terminalRedrive).toBeUndefined()
     expect(opts.readRouting).toBeUndefined()
     expect(opts.authorityEnabled).toBe(true)
+    // Keyed chat write/read health (design 2026-09-28 §8.3) — local-only detail.
+    expect(opts.transcriptChat).toMatchObject({
+      chatFramesPublished: 7, chatRowsWritten: 21, chatBytesWritten: 4096,
+      chatDigestMismatch: 2, chatReplicaResubscribes: 3, chatBaseRequests: 1,
+    })
+    expect(opts.transcriptChat.chatBaseFrames.epoch_start).toBe(1)
   })
 
   it('★passes the WHOLE parity counter object, never a narrowed subset, with local diagnostics on', () => {

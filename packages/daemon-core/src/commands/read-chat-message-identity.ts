@@ -17,6 +17,7 @@ import type { ChatMessage } from '../types.js';
 import { flattenContent } from '../providers/contracts.js';
 import {
     getMessageIdentityLedger,
+    type MessageIdentityAssignment,
     type MessageIdentityCoverage,
     type MessageIdentityFrame,
     type MessageIdentityInput,
@@ -69,6 +70,9 @@ export function toMessageIdentityInput(message: ChatMessage): MessageIdentityInp
         text,
         ...(src ? { src } : {}),
         revisionKey: messageIdentityRevisionKey(message, text),
+        // The tool-block ref an expand request resolves by `messageId` (design
+        // §5.9). Kept on the ledger entry, refreshed every read, never emitted.
+        ...(message.toolBlockRef ? { locator: message.toolBlockRef } : {}),
     };
 }
 
@@ -96,12 +100,22 @@ export function assignReadChatMessageIds(
     sessionKey: string,
     messages: readonly ChatMessage[],
     coverage: MessageIdentityCoverage,
-): { ids: Map<ChatMessage, string>; frame: MessageIdentityFrame } {
+): {
+    ids: Map<ChatMessage, string>;
+    assignments: Map<ChatMessage, MessageIdentityAssignment>;
+    frame: MessageIdentityFrame;
+    /** Ids kept live only because they scrolled out of a window source (§3.5). */
+    retainedIds: string[];
+} {
     const ledger = getMessageIdentityLedger(sessionKey);
     const frame = ledger.observe(messages.map(toMessageIdentityInput), { coverage });
     const ids = new Map<ChatMessage, string>();
-    for (let i = 0; i < messages.length; i += 1) ids.set(messages[i], frame.assignments[i].messageId);
-    return { ids, frame };
+    const assignments = new Map<ChatMessage, MessageIdentityAssignment>();
+    for (let i = 0; i < messages.length; i += 1) {
+        ids.set(messages[i], frame.assignments[i].messageId);
+        assignments.set(messages[i], frame.assignments[i]);
+    }
+    return { ids, assignments, frame, retainedIds: frame.retainedCount > 0 ? ledger.retainedIds() : [] };
 }
 
 /**

@@ -65,7 +65,7 @@ describe('Transcript stat polling instead of PTY', () => {
         const service = configureTranscriptProjection({
             daemonId: () => 'daemon-1',
             writerId: () => 'writer-1',
-            publishRevision: async () => {},
+            appendChatFrame: async () => {},
             resolveSourcePath: (s) => s === sessionId ? transcriptPath : null,
             collectObservation: async () => {
                 collectorCalls += 1;

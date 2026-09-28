@@ -28,6 +28,7 @@ import { describe, expect, it } from 'vitest'
 import {
     buildChatMessageStableKeys,
     getChatMessageStableKey,
+    getToolExpandAddress,
     getToolExpandStateKey,
 } from '../../src/components/ChatMessageList/chatMessageHelpers'
 import type { ChatMessage } from '../../src/types'
@@ -161,5 +162,30 @@ describe('(A#4) the React key is untouched by the expansion key', () => {
         const b = replicaToolBubble('same')
         const keys = buildChatMessageStableKeys([a, b])
         expect(new Set(keys).size).toBe(2)
+    })
+})
+
+describe('keyed replica lane: expand by messageId (design 2026-09-28 §5.9)', () => {
+    const keyed = (extra: Record<string, unknown> = {}) =>
+        ({ role: 'assistant', kind: 'tool', content: 'Read(x)…', messageId: 'n.0000beef.4.1', ...extra }) as unknown as ChatMessage
+
+    it('addresses an expandable keyed bubble by messageId, and keys its state by it', () => {
+        const message = keyed({ _expandable: true })
+        expect(getToolExpandAddress(message)).toEqual({ messageId: 'n.0000beef.4.1' })
+        expect(getToolExpandStateKey(message)).toBe('toolmsg:n.0000beef.4.1')
+        // Content growth does not move the key.
+        expect(getToolExpandStateKey(keyed({ _expandable: true, content: 'Read(x)… more' })))
+            .toBe(getToolExpandStateKey(message))
+    })
+
+    it('a keyed bubble that is not expandable has nothing to fetch', () => {
+        expect(getToolExpandAddress(keyed())).toBeNull()
+        expect(getToolExpandStateKey(keyed())).toBeNull()
+    })
+
+    it('a read_chat bubble with a toolBlockRef keeps the ref address and its block key', () => {
+        const message = keyed({ toolBlockRef: REF, _expandable: true })
+        expect(getToolExpandAddress(message)).toEqual({ toolBlockRef: REF })
+        expect(getToolExpandStateKey(message)).toBe('toolblock:4:1')
     })
 })

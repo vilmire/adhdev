@@ -1,44 +1,57 @@
 /**
  * `web_chat_pane` / `web_warm_mobile_preview` roster adapter — design §4, §8
- * unit 5 ("web chat pane consumer cutover").
+ * unit 5 ("web chat pane consumer cutover"), keyed since design 2026-09-28
+ * message-keyed storage §5.4.
  *
- * Maps a verified-complete `ReplicatedTranscriptSnapshotV1` (§8 unit 1's
- * closed wire allow-list) into the exact `SessionChatTailUpdate` shape
- * `SessionChatTailController.handleUpdate` already consumes (design:
- * "기존 controller snapshot API 유지"), so every existing shrink-defense /
- * dedup / force-apply rule in that controller composes unchanged regardless
- * of which source (replica or legacy `session.chat_tail`) produced the
- * update. `web_warm_mobile_preview` needs no separate adapter — per §4 it
- * reads the SAME warm controller snapshot this feeds, via
+ * Maps a verified committed `ReplicatedTranscriptViewV2` (the worker's
+ * `KeyedTranscriptFolder` output, mirrored on the main thread by
+ * `transcript-view-mirror.ts`) into the exact `SessionChatTailUpdate` shape
+ * `SessionChatTailController.handleUpdate` already consumes, so every existing
+ * shrink-defense / dedup / force-apply rule in that controller composes
+ * unchanged regardless of which source (replica or legacy
+ * `session.chat_tail` / `read_chat`) produced the update.
+ * `web_warm_mobile_preview` needs no separate adapter — per §4 it reads the
+ * SAME warm controller snapshot this feeds, via
  * `getSessionChatTailSnapshotForConversation`.
  *
+ * ── Bubble identity is the producer's `messageId` ───────────────────────────
+ * Every bubble on the keyed wire carries the daemon ledger's opaque
+ * `messageId` (unique per bubble within the session, stable across re-reads,
+ * streaming growth and source handoffs). It becomes `ChatMessage.id` AND
+ * `messageId`, so `getChatMessageStableKey` keys the row `mid:<messageId>` —
+ * the same key the legacy read_chat lane produces for the same bubble, so a
+ * lane switch does not remount. Order is the view's `ord` order.
+ *
+ * ── Change detection is by `rev`, and unchanged bubbles keep their object ───
+ * `mapTranscriptViewToChatTailUpdate` reuses the previously mapped
+ * `DashboardMessage` for every bubble whose `(messageId, rev)` did not move
+ * (`TranscriptBubbleCache`). The controller then sees reference-equal rows for
+ * untouched bubbles, React's memoized rows skip them, and only the bubbles a
+ * frame actually changed re-render — no remount, no whole-list churn.
+ *
  * ── What does NOT round-trip, and why that is safe ──────────────────────────
- * `ReplicatedTranscriptSnapshotV1.provenance.messageSource` is a single
- * allow-listed SCALAR (§2.4: "provenance: messageSource/transcriptProvenance
- * 의 명시적 scalar/enum allow-list"), not the rich `{selected, fallbackReason,
- * nativeSource}` object `read_chat`'s live `messageSource` carries. This
- * adapter reconstructs only `{selected: <that scalar>}`. The controller's A3
- * shrink-defense (`isNativeHistorySource`, `shouldForceApplyNativeAssistantTail`)
- * only ever reads `.selected` — so the important fast path (force-apply a
- * native-history tail that finally adds the assistant answer) still fires.
- * The `fallbackReason`-keyed LENIENCY branch inside `shouldDeferBusyTailUpdate`
- * simply never engages for a replica-sourced update (no `fallbackReason`
- * field to read), which falls through to the stricter count-heuristic — a
- * safe direction to fail in (more conservative shrink-defense, never less).
+ * `provenance.messageSource` is a single allow-listed SCALAR, not the rich
+ * `{selected, fallbackReason, nativeSource}` object `read_chat`'s live
+ * `messageSource` carries. This adapter reconstructs only `{selected: <that
+ * scalar>}`. The controller's A3 shrink-defense (`isNativeHistorySource`,
+ * `shouldForceApplyNativeAssistantTail`) only ever reads `.selected` — so the
+ * important fast path (force-apply a native-history tail that finally adds the
+ * assistant answer) still fires. The `fallbackReason`-keyed LENIENCY branch
+ * inside `shouldDeferBusyTailUpdate` simply never engages for a
+ * replica-sourced update, which falls through to the stricter count-heuristic
+ * — a safe direction to fail in.
  *
  * `activeInteractivePrompt` is intentionally left `null`: the allow-listed
- * `ReplicatedTranscriptPromptV1` (`{message, options}`) cannot reconstruct a
- * full `InteractivePrompt` (`promptId/origin/providerType/createdAt/
- * questions[]`, `providers/types/interactive-prompt.ts`) needed to ANSWER a
+ * `{message, options}` cannot reconstruct a full `InteractivePrompt`
+ * (`promptId/origin/providerType/createdAt/questions[]`) needed to ANSWER a
  * prompt — and answering always requires a live daemon RPC regardless of
  * transcript source, so this is not a functional regression.
  */
+import type { ChatMessage, SessionChatTailUpdate } from '@adhdev/daemon-core'
 import type {
-    ChatMessage,
-    ReplicatedTranscriptMessageV1,
-    ReplicatedTranscriptSnapshotV1,
-    SessionChatTailUpdate,
-} from '@adhdev/daemon-core'
+    ReplicatedTranscriptMessageV2,
+    ReplicatedTranscriptViewV2,
+} from '@adhdev/daemon-core/seqscribe/transcript-keyed-codec'
 import type { DashboardMessage } from './types'
 
 /**
@@ -103,35 +116,37 @@ export function buildTranscriptReadSourceAttributes(state: {
     }
 }
 
-/** One roster-mapped message.
+/** One roster-mapped bubble.
  *
- * @message-projection l2-decode
+ * @message-projection l2k-decode
  *
- * The far side of the replica wire. `check:message-projection-parity` enforces
- * that every field the encoder puts on the wire is still read back out here —
- * dropping one at this hop loses it exactly as completely as never encoding it.
+ * The far side of the keyed chat wire. `check:message-projection-parity`
+ * enforces that every field the keyed encoder writes and the pane needs is
+ * still read back out here — dropping one at this hop loses it exactly as
+ * completely as never encoding it.
  *
- * ★ Identity mapping is deliberately NARROW. `turnKey` goes to `_turnKey` only —
- * it is TURN-grained (one value per user message, shared by every bubble of the
- * turn) and must never be assigned to the per-BUBBLE `bubbleId`, or all bubbles
- * of a turn collapse onto one React key. `sequence` (allow-listed, a monotonic
- * per-session integer) IS per-message and carries through. `providerUnitKey`
- * stays off the wire on purpose: it embeds a content hash.
+ * ★ `messageId` is the bubble's identity: it becomes `id` (and `messageId`),
+ * which `getChatMessageStableKey` ranks first. `turnKey` goes to `_turnKey`
+ * only — it is TURN-grained (shared by every bubble of a turn) and must never
+ * become a per-bubble key.
  *
- * ★ `toolName` (TOOL-LABEL, 2026-09-25): mapped since daemon-core's `ChatMessage`
- * gained the field and the producer (`commands/transcript-observation-builder.ts`)
- * forwards the reader's tool name instead of hardcoding `undefined`. It is the
- * ONLY way the tool card label reaches this lane: `meta.label` (what the REST
- * read_chat path derives) never travels — the wire carries `meta.streaming`
- * alone — so this adapter re-derives `meta.label` from `toolName` exactly as
- * `chat-commands-read-native-normalize.ts` does for the REST path. Without it
- * every card on the live dashboard read the literal 'Tool' (standalone matrix
- * run: kimi Write/Bash, hermes write_file all rendered as TOOL). */
-function mapTranscriptMessage(message: ReplicatedTranscriptMessageV1): DashboardMessage {
-    const mapped: ChatMessage = {
+ * ★ `toolName` is the ONLY way the tool card label reaches this lane:
+ * `meta.label` (what the REST read_chat path derives) never travels, so this
+ * adapter re-derives `meta.label` from `toolName` exactly as
+ * `chat-commands-read-native-normalize.ts` does for the REST path.
+ *
+ * ★ `expandable` replaces the v1 wire's mtime-sealed `toolBlockRef` (design
+ * §5.9): a truncated tool bubble is expanded by `messageId`, and the daemon
+ * resolves the block from its identity ledger. */
+function mapTranscriptMessage(message: ReplicatedTranscriptMessageV2): DashboardMessage {
+    const mapped: DashboardMessage = {
         role: message.role,
         kind: message.kind as ChatMessage['kind'],
         content: message.content,
+        id: message.messageId,
+        messageId: message.messageId,
+        _ord: message.ord,
+        _rev: message.rev,
     }
     if (message.receivedAt !== null) mapped.receivedAt = message.receivedAt
     if (message.timestamp !== null) mapped.timestamp = message.timestamp
@@ -143,19 +158,47 @@ function mapTranscriptMessage(message: ReplicatedTranscriptMessageV1): Dashboard
         // senderName:'Tool' marker) so both lanes label the card identically.
         mapped.meta = { ...(mapped.meta ?? {}), label: message.toolName }
     }
-    if (message.toolBlockRef !== null) mapped.toolBlockRef = message.toolBlockRef
-    if (message.turnKey !== null) {
-        // `_turnKey` ONLY. `turnKey` is TURN-grained — the producer increments it
-        // once per user message, so every bubble of a multi-bubble turn (prompt →
-        // tool → output → answer) shares one value. Assigning it to `bubbleId`
-        // (a per-BUBBLE field) made all N bubbles collide on a single React key,
-        // because `getChatMessageStableKey` ranks `_turnKey`/`bubbleId` above the
-        // content-hash fallback. Leaving `bubbleId` unset lets that fallback
-        // distinguish bubbles by their own content, which is correct-by-default.
-        mapped._turnKey = message.turnKey
+    if (message.expandable) mapped._expandable = true
+    if (message.turnKey !== null) mapped._turnKey = message.turnKey
+    return mapped
+}
+
+/**
+ * Per-subscription cache of mapped bubbles, keyed by `messageId`.
+ *
+ * A hit is reused — the SAME `DashboardMessage` object — when the incoming
+ * bubble is the same object the mirror already held (the bubble was not in
+ * this frame), or, after a reset frame re-sent every bubble as a fresh clone,
+ * when its `rev` and `ord` did not move. `rev` is the producer's per-bubble
+ * revision (any change to the bubble bumps it), so that is the change test;
+ * `content` is compared too on that reset-only path, as a guard against a
+ * producer whose revision counter restarted.
+ */
+export class TranscriptBubbleCache {
+    private entries = new Map<string, { source: ReplicatedTranscriptMessageV2; mapped: DashboardMessage }>()
+
+    map(messages: readonly ReplicatedTranscriptMessageV2[]): DashboardMessage[] {
+        const next = new Map<string, { source: ReplicatedTranscriptMessageV2; mapped: DashboardMessage }>()
+        const out = messages.map((message) => {
+            const hit = this.entries.get(message.messageId)
+            let entry = hit
+            if (
+                !hit
+                || (hit.source !== message
+                    && (hit.source.rev !== message.rev
+                        || hit.source.ord !== message.ord
+                        || hit.source.content !== message.content))
+            ) {
+                entry = { source: message, mapped: mapTranscriptMessage(message) }
+            } else if (hit.source !== message) {
+                entry = { source: message, mapped: hit.mapped }
+            }
+            next.set(message.messageId, entry!)
+            return entry!.mapped
+        })
+        this.entries = next
+        return out
     }
-    if (typeof message.sequence === 'number') mapped.sequence = message.sequence
-    return mapped as DashboardMessage
 }
 
 /**
@@ -163,60 +206,44 @@ function mapTranscriptMessage(message: ReplicatedTranscriptMessageV1): Dashboard
  * header for what it can and cannot carry.
  */
 function mapMessageSource(
-    provenance: ReplicatedTranscriptSnapshotV1['provenance'],
+    provenance: ReplicatedTranscriptViewV2['provenance'],
 ): Record<string, unknown> | undefined {
     if (!provenance.messageSource) return undefined
     return { selected: provenance.messageSource }
 }
 
 /**
- * (§8 unit 9-pre-c) Is this snapshot structurally complete enough to map?
+ * (§8 unit 9-pre-c) Is this view structurally complete enough to map?
  *
  * ── The defect this closes ─────────────────────────────────────────────────
- * `mapTranscriptSnapshotToChatTailUpdate` reads `activeModal` as
- * `snapshot.activeModal ? {...} : null`, which treats a MISSING field and an
- * absent modal identically. `activeModal` is a REQUIRED, non-optional field on
- * `ReplicatedTranscriptSnapshotV1` (`ReplicatedTranscriptModalV1 | null`) and
- * `encodeTranscriptSnapshot` always emits it — so its absence is a projection
- * regression, never a legitimate shape.
- *
- * Conflating the two degrades SILENTLY in the worst possible direction: a
- * session sitting on `waiting_approval` renders with NO approval UI. The user
- * cannot act, the agent stays blocked, and nothing reports an error. That is
- * the same empty-success class the §5.6 fire drill exists to catch, on the
- * highest-traffic consumer (roster ids 1-2).
+ * The mapper reads `activeModal` as `view.activeModal ? {...} : null`, which
+ * treats a MISSING field and an absent modal identically. `activeModal` is a
+ * REQUIRED field on `ReplicatedTranscriptViewV2` (`ChatModalV2 | null`) and
+ * the folder always materializes it — so its absence is a projection
+ * regression, never a legitimate shape. Conflating the two degrades SILENTLY
+ * in the worst direction: a session sitting on `waiting_approval` renders with
+ * NO approval UI.
  *
  * ── Why a validator here rather than a throw inside the mapper ─────────────
  * ★ The production call chain has NO try/catch:
- *   `p2p-manager.ts` `onSnapshot` → `applyTranscriptReplicaSnapshotToControllers`
- *   → `applyTranscriptReplicaSnapshot` → this mapper,
- * and `onSnapshot` is invoked directly inside `transcript-worker-host.ts`'s
- * `snapshotChannel.port1.onmessage`. A raw throw would escape into a
- * MessagePort event handler — killing that delivery AND skipping the
- * downstream `transcriptSnapshotHandlers`, i.e. trading a silent wrong answer
- * for a silent dropped one. Neither is a fallback.
+ *   host `onView` (`transcript-worker-host.ts`'s view-port `onmessage`)
+ *   → `applyTranscriptReplicaViewToControllers`
+ *   → `applyTranscriptReplicaView` → this mapper.
+ * A raw throw would escape into a MessagePort event handler — killing that
+ * delivery AND skipping the caller's downstream handlers, i.e. trading a
+ * silent wrong answer for a silent dropped one. So the contract is a DECLINE,
+ * matching every other roster consumer (`isUsableSnapshot` in mcp-server and
+ * `transcript-daemon-consumer-read.ts`).
  *
- * So the contract is a DECLINE, matching what every other roster consumer
- * already does: unit 6's `isUsableSnapshot` (mcp-server) and unit 7's
- * (`transcript-daemon-consumer-read.ts`) both refuse structurally-invalid
- * snapshots and let the caller run legacy. This is the same discipline for
- * ids 1-2, which were the only consumers lacking it.
- *
- * ★ An ALLOW-LIST of required shape, never a deny-list sanitizer — the
- * repo-wide rule for every boundary of this kind (CLAUDE.md server content
- * boundary). It asserts what must be present rather than stripping what must
- * not be, so a field added upstream cannot slip through unvalidated.
- *
- * Deliberately NOT validated: `title` and `turnKey`, which the injection suite
- * documents as structural-but-not-behaviour-gating, and `historySessionId` /
- * `providerObservedStatus`, which are legitimately nullable and read
- * defensively. Validating them would reject snapshots the pane can render
- * perfectly well — a fallback is not free, it costs the replica lane.
+ * ★ An ALLOW-LIST of required shape, never a deny-list sanitizer — it asserts
+ * what must be present rather than stripping what must not be, so a field
+ * added upstream cannot slip through unvalidated.
  */
-export function isMappableTranscriptSnapshot(snapshot: ReplicatedTranscriptSnapshotV1): boolean {
-    if (!snapshot || typeof snapshot !== 'object') return false
-    const value = snapshot as unknown as Record<string, unknown>
+export function isMappableTranscriptView(view: ReplicatedTranscriptViewV2): boolean {
+    if (!view || typeof view !== 'object') return false
+    const value = view as unknown as Record<string, unknown>
 
+    if (value.schemaVersion !== 2) return false
     if (typeof value.sessionId !== 'string' || !value.sessionId) return false
     if (typeof value.status !== 'string' || !value.status) return false
     if (!Array.isArray(value.messages)) return false
@@ -238,7 +265,7 @@ export function isMappableTranscriptSnapshot(snapshot: ReplicatedTranscriptSnaps
 }
 
 export interface TranscriptChatTailUpdate extends SessionChatTailUpdate {
-    /** Ring/SNAP-reset discontinuity — design §3.7's "이전 내용 생략" signal. */
+    /** Bubbles before the live set were omitted — the producer's `coverage.omittedBefore`. */
     omittedBefore: boolean
     /** Design §5.5's "stale idle UI" — a replica tail whose freshness gate did not hold. */
     stale: boolean
@@ -247,37 +274,38 @@ export interface TranscriptChatTailUpdate extends SessionChatTailUpdate {
 }
 
 /**
- * Map one verified-complete replica snapshot into the controller's update
- * shape. `subscriptionKey`/`seq`/`timestamp` are wire bookkeeping the
- * controller's `handleUpdate` does not read (see its `readChatTailUpdateMessages`/
- * `readUpdateStringField` helpers) — filled with harmless placeholders so the
- * object satisfies `SessionChatTailUpdate` structurally.
+ * Map one verified committed view into the controller's update shape.
+ * `subscriptionKey`/`seq`/`timestamp` are wire bookkeeping the controller's
+ * `handleUpdate` does not read — `seq` carries the commit's frame number for
+ * diagnostics only.
  *
- * `omittedBefore`/`stale` are the CALLER's readiness/SNAP-reset decision
- * (design §3.7, §5.5) — this function only carries them onto the wire shape,
- * it does not compute them from the snapshot itself.
+ * `omittedBefore` is the producer's statement (`coverage.omittedBefore`);
+ * `stale` is the CALLER's freshness decision (design §5.5).
+ *
+ * `cache` preserves bubble object identity across frames (see
+ * `TranscriptBubbleCache`); without one every bubble is mapped afresh.
  */
-export function mapTranscriptSnapshotToChatTailUpdate(
-    snapshot: ReplicatedTranscriptSnapshotV1,
-    options: { subscriptionKey: string; omittedBefore: boolean; stale: boolean },
+export function mapTranscriptViewToChatTailUpdate(
+    view: ReplicatedTranscriptViewV2,
+    options: { subscriptionKey: string; stale: boolean; cache?: TranscriptBubbleCache },
 ): TranscriptChatTailUpdate {
-    const messageSource = mapMessageSource(snapshot.provenance)
+    const messageSource = mapMessageSource(view.provenance)
     return {
         topic: 'session.chat_tail',
         key: options.subscriptionKey,
-        sessionId: snapshot.sessionId,
-        ...(snapshot.historySessionId ? { historySessionId: snapshot.historySessionId } : {}),
-        seq: snapshot.revision,
+        sessionId: view.sessionId,
+        ...(view.historySessionId ? { historySessionId: view.historySessionId } : {}),
+        seq: view.frame,
         timestamp: 0,
-        messages: snapshot.messages.map(mapTranscriptMessage),
-        status: snapshot.status,
-        ...(snapshot.title ? { title: snapshot.title } : {}),
-        activeModal: snapshot.activeModal
-            ? { message: snapshot.activeModal.message, buttons: [...snapshot.activeModal.buttons] }
+        messages: options.cache ? options.cache.map(view.messages) : view.messages.map(mapTranscriptMessage),
+        status: view.status,
+        ...(view.title ? { title: view.title } : {}),
+        activeModal: view.activeModal
+            ? { message: view.activeModal.message, buttons: [...view.activeModal.buttons] }
             : null,
         activeInteractivePrompt: null,
         ...(messageSource ? { messageSource } : {}),
-        omittedBefore: options.omittedBefore,
+        omittedBefore: view.coverage?.omittedBefore === true,
         stale: options.stale,
         transcriptReadSource: 'replica',
     }

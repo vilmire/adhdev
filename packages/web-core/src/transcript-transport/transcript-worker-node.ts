@@ -34,7 +34,7 @@ export interface TranscriptWorkerNodeEnv {
     readonly rng?: () => number;
     /**
      * seqscribe authority hooks. Required to define any topic whose policy
-     * names a `finalityAuthority` — which `sessionTranscriptPolicy()` does,
+     * names a `finalityAuthority` — which `sessionChatPolicy()` does,
      * because that id is part of `topicSchemaHash` and must match the daemon's
      * byte-for-byte (see `topic-addressing.ts` / `browser-reject-authority.ts`).
      *

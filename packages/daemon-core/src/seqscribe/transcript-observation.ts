@@ -1,58 +1,62 @@
 /**
  * `TranscriptObservation` — the single-collection choke point (design §5.2,
- * §8 unit 2: "single observation publisher").
+ * §8 unit 2: "single observation publisher"; keyed storage 2026-09-28 §3.3).
  *
- * `TranscriptObservation` is `TranscriptSnapshotCandidate` (transcript-
- * projection.ts, §8 unit 1) MINUS the fields the PUBLISHER stamps at publish
- * time rather than the fields read_chat's last mile observes:
+ * One read_chat observation of a session, as the keyed chat publisher
+ * (transcript-publisher.ts) receives it: presentation scalars plus the FULL,
+ * caller-independent bubble list, each bubble already carrying the stable
+ * `messageId` and fractional `ord` the message identity ledger assigned at the
+ * choke point. Producer identity, frame numbers and `rev`s are NOT here — the
+ * publisher stamps those when it turns an observation into a frame.
  *
- *   - `producerDaemonId` / `producerWriterId` / `producerEpoch` / `revision` —
- *     producer/session identity and the monotonic counter, owned by
- *     `TranscriptProjectionService` (transcript-publisher.ts), never by the
- *     read_chat call that happened to trigger a publish.
- *   - `observedAt` — stamped alongside identity, for the same reason: two
- *     `read_chat` calls one millisecond apart with byte-identical content
- *     must NOT mint two revisions (design §3.4's stable-hash-skips-append
- *     rule), so `observedAt` cannot be part of what the dedup hash compares.
- *
- * This is the ONE object both the legacy `SessionChatTailUpdate` selector and
- * the seqscribe encoder are meant to derive from (design §1.3, §5.2) — no
- * second `read_chat` call, no second normalization pass. Building one FROM the
- * real `ChatMessage[]`/`SessionTurnPresentation` shapes (which requires
- * `providers/contracts.ts#flattenContent` and `mesh/mesh-turn-presentation.ts`)
- * is `commands/transcript-observation-builder.ts` — NOT this file, because
+ * Built from the real `ChatMessage[]`/`SessionTurnPresentation` shapes by
+ * `commands/transcript-observation-builder.ts` — not in this file, because
  * `check:boundaries` forbids `seqscribe/** -> providers/**|mesh/**` value
- * imports and this module stays producer-neutral like the rest of `seqscribe/`
- * (see transcript-projection.ts's header for the same rule applied to
- * `TranscriptSnapshotCandidate`).
+ * imports and this module stays producer-neutral like the rest of `seqscribe/`.
+ * The types below are therefore STRUCTURAL and loosely typed (`unknown`), and
+ * the keyed encoder (transcript-keyed-codec.ts) re-coerces every field by name.
+ *
+ * The v1 whole-snapshot dedup hash that lived here is gone with the v1 lane
+ * (§6.1): "unchanged" is now decided per bubble by the publisher, so an
+ * unchanged source writes zero rows without hashing the whole transcript.
  */
 
-import { jcs, sha256HexUtf8, type JsonValue } from 'seqscribe';
-import { encodeTranscriptSnapshot } from './transcript-projection.js';
-import type {
-    TranscriptSnapshotCandidate,
-    TranscriptSnapshotCandidateCoverage,
-    TranscriptSnapshotCandidateMessage,
-    TranscriptSnapshotCandidateModal,
-    TranscriptSnapshotCandidatePrompt,
-    TranscriptSnapshotCandidateProvenance,
-    TranscriptSnapshotCandidateTerminalMarker,
-    TranscriptSnapshotCandidateTurn,
-} from './transcript-projection.js';
-import type { TranscriptRevisionIdentity } from './transcript-revision-codec.js';
+/** One observed bubble — flattened content plus the choke point's identity. */
+export interface TranscriptObservationMessage {
+    /** Stable, opaque id from the message identity ledger (§3.2). */
+    readonly messageId?: string;
+    /** Fractional-index order key from the ledger (§4.4). */
+    readonly ord?: string;
+    readonly role?: unknown;
+    readonly kind?: unknown;
+    readonly content: string;
+    readonly receivedAt?: unknown;
+    readonly timestamp?: unknown;
+    readonly turnKey?: unknown;
+    readonly bubbleState?: unknown;
+    readonly senderName?: unknown;
+    readonly toolName?: unknown;
+    /** A truncated tool bubble the daemon can expand by `messageId` (§5.9). */
+    readonly expandable?: boolean;
+    /** Natural id adopted by source handoff (§3.4), when the ledger recorded one. */
+    readonly srcId?: string | null;
+    readonly meta?: unknown;
+    readonly [extra: string]: unknown;
+}
 
-/**
- * Explicitly listed rather than `Omit<TranscriptSnapshotCandidate, ...>` on
- * purpose: `TranscriptSnapshotCandidate` carries a `[extra: string]: unknown`
- * index signature (deliberately, per its own header — candidates are loosely
- * typed upstream shapes), and `keyof` a type with an index signature collapses
- * to `string`. `Omit`/`Pick` over that would silently widen every named field
- * here to `unknown` instead of erroring — TS caught this immediately as
- * "missing properties" when the mapped-type version was tried, which is the
- * good outcome; a `Record<string, unknown>` shape would have compiled and
- * hidden it. See `check:type-scale`-adjacent precedent: explicit interfaces
- * over derived types whenever an index signature is in the source.
- */
+export interface TranscriptObservationCoverage {
+    /** `'window'` when the source shows only part of the transcript (§3.5). */
+    readonly mode: unknown;
+    readonly omittedBefore?: unknown;
+    /**
+     * Ids the ledger keeps live although this observation did not list them
+     * (they scrolled out of a window source's view). The publisher keeps them
+     * instead of tombstoning them.
+     */
+    readonly retainedMessageIds?: readonly string[];
+    readonly [extra: string]: unknown;
+}
+
 export interface TranscriptObservation {
     readonly sessionId: string;
     readonly historySessionId?: unknown;
@@ -62,77 +66,24 @@ export interface TranscriptObservation {
     readonly status: string;
     readonly providerObservedStatus?: unknown;
     readonly title?: unknown;
-    readonly activeModal?: TranscriptSnapshotCandidateModal | null;
-    readonly activeInteractivePrompt?: TranscriptSnapshotCandidatePrompt | null;
-    readonly turn?: TranscriptSnapshotCandidateTurn | null;
+    readonly activeModal?: unknown;
+    readonly activeInteractivePrompt?: unknown;
+    readonly turn?: unknown;
 
-    readonly provenance?: TranscriptSnapshotCandidateProvenance;
-    readonly messages: readonly TranscriptSnapshotCandidateMessage[];
-    readonly terminalMarkers?: readonly TranscriptSnapshotCandidateTerminalMarker[];
-    readonly coverage: TranscriptSnapshotCandidateCoverage;
+    readonly provenance?: unknown;
+    readonly messages: readonly TranscriptObservationMessage[];
+    readonly terminalMarkers?: readonly unknown[];
+    readonly coverage: TranscriptObservationCoverage;
+    /** The session's message identity ledger epoch `E` (persisted on meta, §4.10). */
+    readonly ledgerEpoch?: string;
 
     readonly [extra: string]: unknown;
 }
 
-/** Merge a collected observation with publish-time identity into a full candidate. */
-export function stampTranscriptObservation(
-    observation: TranscriptObservation,
-    identity: TranscriptRevisionIdentity,
-    observedAt: string,
-): TranscriptSnapshotCandidate {
-    return {
-        ...observation,
-        producerDaemonId: identity.producerDaemonId,
-        producerWriterId: identity.producerWriterId,
-        producerEpoch: identity.producerEpoch,
-        revision: identity.revision,
-        observedAt,
-    };
-}
-
 /**
- * Fixed identity/timestamp the dedup hash stamps onto every observation, so
- * the only thing that can move the hash is CONTENT.
- */
-const DEDUP_HASH_IDENTITY: TranscriptRevisionIdentity = {
-    sessionId: '',
-    producerDaemonId: '',
-    producerWriterId: '',
-    producerEpoch: '',
-    revision: 0,
-};
-const DEDUP_HASH_OBSERVED_AT = '';
-
-/**
- * Canonical content hash for design §3.4's rule — "snapshot hash가 직전
- * complete hash와 같으면 append하지 않는다" ("if the snapshot hash matches the
- * previous complete hash, do not append"). That rule is about the CONTENT a
- * subscriber would receive being unchanged, not about the revision counter or
- * observedAt timestamp — those always differ across two calls by construction,
- * so they are stamped with fixed values here.
- *
- * ★ Hashed over the WIRE projection (`encodeTranscriptSnapshot`), never over
- * the raw observation. The observation carries producer-side fields the
- * allow-list encoder drops — `provenance.messageSource` is a whole object
- * whose `staleness.sourceMtimeAgeMs` is `Date.now() - mtime` and so changes
- * on EVERY read, plus per-message `meta` of which only `streaming` travels.
- * Hashing the raw observation made every PTY-throttled read (350 ms) look
- * "new": measured 2026-09-28 on a preview daemon, ~95% of one session's
- * revisions differed from their predecessor only in `revision`/`observedAt`
- * — 41,928 revisions in 27.7 h, ~55 KB each, 2.3 GB of sq_log. Hashing the
- * projection dedups exactly the revisions no reader could tell apart.
- */
-export function hashTranscriptObservation(observation: TranscriptObservation): string {
-    const projected = encodeTranscriptSnapshot(
-        stampTranscriptObservation(observation, DEDUP_HASH_IDENTITY, DEDUP_HASH_OBSERVED_AT),
-    );
-    return sha256HexUtf8(jcs(projected as unknown as JsonValue));
-}
-
-/**
- * An observation with no messages and no title/modal/prompt/turn is the
- * "transient empty read" shape design §3.4 says must not silently replace a
- * previously-published non-empty revision — see the `verifiedClear` guard in
+ * An observation with no messages and no title/modal/prompt is the "transient
+ * empty read" shape that must not silently replace previously published
+ * content — see the `verifiedClear` guard in
  * `TranscriptProjectionService.publishObservation`.
  */
 export function isEmptyTranscriptObservation(observation: TranscriptObservation): boolean {

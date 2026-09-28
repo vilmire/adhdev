@@ -29,17 +29,17 @@
       "require": "./dist/config/config-dir.js",
       "default": "./dist/config/config-dir.js"
     },
-    "./seqscribe/transcript-revision-codec": {
-      "types": "./dist/seqscribe/transcript-revision-codec.d.ts",
-      "import": "./dist/seqscribe/transcript-revision-codec.mjs",
-      "require": "./dist/seqscribe/transcript-revision-codec.js",
-      "default": "./dist/seqscribe/transcript-revision-codec.js"
+    "./seqscribe/transcript-keyed-codec": {
+      "types": "./dist/seqscribe/transcript-keyed-codec.d.ts",
+      "import": "./dist/seqscribe/transcript-keyed-codec.mjs",
+      "require": "./dist/seqscribe/transcript-keyed-codec.js",
+      "default": "./dist/seqscribe/transcript-keyed-codec.js"
     },
-    "./seqscribe/transcript-projection": {
-      "types": "./dist/seqscribe/transcript-projection.d.ts",
-      "import": "./dist/seqscribe/transcript-projection.mjs",
-      "require": "./dist/seqscribe/transcript-projection.js",
-      "default": "./dist/seqscribe/transcript-projection.js"
+    "./seqscribe/transcript-keyed-folder": {
+      "types": "./dist/seqscribe/transcript-keyed-folder.d.ts",
+      "import": "./dist/seqscribe/transcript-keyed-folder.mjs",
+      "require": "./dist/seqscribe/transcript-keyed-folder.js",
+      "default": "./dist/seqscribe/transcript-keyed-folder.js"
     },
     "./mesh/transcript-read-model-consumers": {
       "types": "./dist/mesh/transcript-read-model-consumers.d.ts",

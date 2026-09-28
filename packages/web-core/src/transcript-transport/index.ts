@@ -16,23 +16,32 @@ export {
     type BrowserSafeDefineTopicTarget,
 } from './browser-reject-authority.js';
 export {
+    isTranscriptBridgeBaseRequestMessage,
     isTranscriptBridgeControlEvent,
-    isTranscriptBridgeSnapshotMessage,
+    isTranscriptBridgeFrameMessage,
     isTranscriptSessionActivation,
+    transcriptBridgeBaseRequestMessage,
     transcriptBridgeControlEvent,
-    transcriptBridgeSnapshotMessage,
+    transcriptBridgeFrameMessage,
     transcriptSessionActivation,
+    type TranscriptBridgeBaseRequestMessage,
     type TranscriptBridgeControlEvent,
     type TranscriptBridgeControlEventName,
-    type TranscriptBridgeSnapshotMessage,
+    type TranscriptBridgeFrameMessage,
     type TranscriptSessionActivation,
+    type TranscriptViewMeta,
 } from './bridge-protocol.js';
 export {
-    subscribeSessionTranscript,
+    BASE_REQUEST_AFTER,
+    subscribeSessionChat,
     type TranscriptSessionSubscriptionHandle,
     type TranscriptSessionSubscriptionOptions,
-    type TranscriptSessionUpdate,
 } from './transcript-session-subscription.js';
+export {
+    TranscriptViewMirror,
+    compareTranscriptOrd,
+    type TranscriptSessionView,
+} from './transcript-view-mirror.js';
 export {
     runTranscriptWorkerSession,
     type TranscriptWorkerSessionHandle,
@@ -69,10 +78,10 @@ export {
 } from './transcript-worker-host.js';
 export {
     ADHDEV_AUTHORITY_ID,
-    SESSION_TRANSCRIPT_RING,
+    CHAT_TOMBSTONE_KIND,
     safeSessionId,
-    sessionTranscriptPolicy,
-    sessionTranscriptTopic,
+    sessionChatPolicy,
+    sessionChatTopic,
 } from './topic-addressing.js';
 export { isTranscriptWorkerEnabled, type TranscriptFlagEnv } from './web-transcript-flag.js';
 export {

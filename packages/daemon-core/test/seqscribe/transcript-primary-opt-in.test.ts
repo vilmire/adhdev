@@ -65,7 +65,7 @@ describe('ADHDEV_SEQSCRIBE_TRANSCRIPT opt-in seam (design §8 unit 9)', () => {
 
         // Gate is open: the refusal is now about the missing store, NOT the mode.
         const outcome = readWith(env);
-        expect(outcome.snapshot).toBeNull();
+        expect(outcome.view).toBeNull();
         expect(outcome.fallbackReason).toBe('no_node');
         expect(outcome.fallbackReason).not.toBe('mode_not_primary');
     });

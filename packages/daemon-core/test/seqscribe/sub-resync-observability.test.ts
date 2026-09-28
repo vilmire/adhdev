@@ -37,14 +37,14 @@ describe('sub_resync WARN rate limit', () => {
         let now = 0;
         const lines: string[] = [];
         const warn = createSubResyncWarner((m) => lines.push(m), () => now, 60_000);
-        const e = { topic: 'session.s1.transcript', peerId: 'dash-1', view: 'tail', reason: 'backpressure' };
+        const e = { topic: 'session.s1.chat', peerId: 'dash-1', view: 'tail', reason: 'backpressure' };
         warn(e, 'w1');
         now = 1_000;
         warn(e, 'w1');
         warn(e, 'w1');
         warn({ ...e, peerId: 'dash-2' }, 'w1'); // a different subscriber is its own key
         expect(lines).toHaveLength(2);
-        expect(lines[0]).toContain('topic=session.s1.transcript peer=dash-1 view=tail reason=backpressure');
+        expect(lines[0]).toContain('topic=session.s1.chat peer=dash-1 view=tail reason=backpressure');
         expect(lines[0]).not.toContain('more in the last');
         now = 61_000;
         warn(e, 'w1');

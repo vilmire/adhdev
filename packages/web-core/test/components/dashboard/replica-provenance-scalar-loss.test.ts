@@ -21,10 +21,10 @@
  * and the controller must apply a shrinking replica snapshot during generation.
  */
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { ReplicatedTranscriptSnapshotV1, SessionChatTailUpdate } from '@adhdev/daemon-core'
+import type { ReplicatedTranscriptViewV2, SessionChatTailUpdate } from '@adhdev/daemon-core'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
-  applyTranscriptReplicaSnapshotToControllers,
+  applyTranscriptReplicaViewToControllers,
   getOrCreateSessionChatTailController,
   resetSessionChatTailControllersForTest,
 } from '../../../src/components/dashboard/session-chat-tail-controller'
@@ -50,7 +50,7 @@ function replicaMessage(
   role: 'user' | 'assistant',
   content: string,
   receivedAt: number,
-): ReplicatedTranscriptSnapshotV1['messages'][number] {
+): ReplicatedTranscriptViewV2['messages'][number] {
   return {
     role,
     kind: 'standard',
@@ -58,26 +58,31 @@ function replicaMessage(
     receivedAt,
     timestamp: receivedAt,
     turnKey: `${role}-${receivedAt}`,
+    messageId: `m-${role}-${receivedAt}`,
+    ord: String(receivedAt).padStart(8, '0'),
+    rev: 1,
+    expandable: false,
+    srcId: null,
     bubbleState: 'final',
     senderName: null,
     toolName: null,
     streaming: null,
-  } as ReplicatedTranscriptSnapshotV1['messages'][number]
+  } as ReplicatedTranscriptViewV2['messages'][number]
 }
 
 function replicaSnapshot(
-  overrides: Partial<ReplicatedTranscriptSnapshotV1> = {},
-): ReplicatedTranscriptSnapshotV1 {
+  overrides: Partial<ReplicatedTranscriptViewV2> = {},
+): ReplicatedTranscriptViewV2 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId: 'session-1',
     historySessionId: null,
     providerType: 'claude-cli',
     providerSessionId: null,
     producerDaemonId: 'daemon-1',
     producerWriterId: 'writer-1',
-    producerEpoch: 'epoch-1',
-    revision: 1,
+    epoch: 'epoch-1',
+    frame: 1,
     observedAt: '2026-09-06T00:00:00.000Z',
     status: 'generating',
     providerObservedStatus: null,
@@ -110,10 +115,8 @@ function createHarness() {
     deliver: (update: Partial<SessionChatTailUpdate> = {}) => {
       manager.publish(createUpdate(update) as never)
     },
-    applyReplica: (snapshot: ReplicatedTranscriptSnapshotV1) => {
-      applyTranscriptReplicaSnapshotToControllers('daemon-1', 'session-1', snapshot, {
-        omittedBefore: false,
-      })
+    applyReplica: (snapshot: ReplicatedTranscriptViewV2) => {
+      applyTranscriptReplicaViewToControllers('daemon-1', 'session-1', snapshot)
     },
     advance: (ms: number) => { clock += ms },
     now: () => clock,
@@ -147,7 +150,7 @@ describe('(STEP 0) oscillation-vs-wedge reproduction matrix', () => {
 
     h.advance(1_000)
     h.applyReplica(replicaSnapshot({
-      revision: 2,
+      frame: 2,
       messages: [1, 2, 3, 4].map((n) => replicaMessage(n % 2 ? 'user' : 'assistant', `r${n}`, n)),
       coverage: { mode: 'tail', totalMessageCount: 4, returnedMessageCount: 4, omittedBefore: false },
     }))
@@ -166,7 +169,7 @@ describe('(STEP 0) oscillation-vs-wedge reproduction matrix', () => {
 
     h.advance(1_000)
     h.applyReplica(replicaSnapshot({
-      revision: 2,
+      frame: 2,
       messages: [1, 2, 3].map((n) => replicaMessage(n % 2 ? 'user' : 'assistant', `r${n}`, n)),
       coverage: { mode: 'tail', totalMessageCount: 3, returnedMessageCount: 3, omittedBefore: false },
     }))
@@ -186,7 +189,7 @@ describe('(STEP 0) oscillation-vs-wedge reproduction matrix', () => {
 
     h.advance(1_000)
     h.applyReplica(replicaSnapshot({
-      revision: 2,
+      frame: 2,
       provenance: { messageSource: 'native-history', transcriptProvenance: 'provider-native' },
       messages: [1, 2, 3].map((n) => replicaMessage(n % 2 ? 'user' : 'assistant', `r${n}`, n)),
       coverage: { mode: 'tail', totalMessageCount: 3, returnedMessageCount: 3, omittedBefore: false },
@@ -228,7 +231,7 @@ describe('(STEP 0) oscillation-vs-wedge reproduction matrix', () => {
     // regardless of cause.
     const h = createHarness()
     h.applyReplica(replicaSnapshot({
-      revision: 2,
+      frame: 2,
       messages: [replicaMessage('user', 'q', 1)],
       coverage: { mode: 'tail', totalMessageCount: 1, returnedMessageCount: 1, omittedBefore: false },
     }))
@@ -239,7 +242,7 @@ describe('(STEP 0) oscillation-vs-wedge reproduction matrix', () => {
     for (let i = 0; i < 8; i += 1) {
       h.advance(5_000)
       h.applyReplica(replicaSnapshot({
-        revision: 2 + i + 1,
+        frame: 2 + i + 1,
         messages: [replicaMessage('user', 'q', 1)],
         coverage: { mode: 'tail', totalMessageCount: 1, returnedMessageCount: 1, omittedBefore: false },
       }))

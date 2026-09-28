@@ -9,20 +9,21 @@
  * it goes through the `ensure_transcript_subscription`/`read_transcript_replica`
  * IPC pair. These two consumers run INSIDE the daemon that owns the store, so
  * they call `TranscriptReplicaStore` directly — the IPC hop would be the same
- * process talking to itself. The shared parts are the SOURCE type
- * (`ReplicatedTranscriptSnapshotV1`), the roster, the closed fallback union and
- * the payload adapter — all reused verbatim, not re-implemented.
+ * process talking to itself. The shared parts are the SOURCE type (the keyed
+ * chat topic's folded `ReplicatedTranscriptViewV2`, design 2026-09-28 §5.3),
+ * the roster, the closed fallback union and the payload adapter — all reused
+ * verbatim, not re-implemented.
  *
  * ── The readiness gate applied here (design §5.5) ──────────────────────────
  * Common conditions 1, 2, 5 and 7 of §5.5 are enforced in this module or
  * upstream of it:
  *   1. mode `primary` + roster `enabled`      → `mode_not_primary` / `consumer_not_enabled`
  *   2. node/store present, key resolvable     → `no_node`
- *   5. a complete, structurally usable revision → `no_complete_revision` / `revision_invalid`
+ *   5. a verified commit, structurally usable → `no_complete_revision` / `revision_invalid`
  *   7. owner/session identity match           → enforced INSIDE the store on
- *      every accepted revision (`transcript-replica-store.ts`, the
- *      `identity.sessionId` / `producerDaemonId` checks), so a snapshot that
- *      reaches us is already owner-and-session-verified.
+ *      every commit (the folder is built with the caller's expected session
+ *      and owner, `transcript-replica-store.ts`), so a view that reaches us
+ *      is already owner-and-session-verified.
  * The SEMANTIC extra condition — "active/generating session은 commit age가
  * configured freshness budget 이내" — is `maxAgeMs`, supplied by each consumer
  * because the two have genuinely different budgets (see the constants below).
@@ -46,9 +47,7 @@
 
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { resolveTranscriptMode } from '../seqscribe/transcript-mode.js';
-import type {
-    ReplicatedTranscriptSnapshotV1,
-} from '../seqscribe/transcript-projection.js';
+import type { ReplicatedTranscriptViewV2 } from '../seqscribe/transcript-keyed-codec.js';
 import type { TranscriptReplicaStore } from '../seqscribe/transcript-replica-store.js';
 import {
     TRANSCRIPT_CONSUMER_ROSTER,
@@ -80,36 +79,36 @@ export const TRANSCRIPT_STATUS_PROBE_MAX_AGE_MS = 10_000;
  */
 export const TRANSCRIPT_TERMINAL_EVIDENCE_MAX_AGE_MS = 8_000;
 
-/** What a roster consumer gets back. `snapshot === null` ⇒ run the legacy read. */
+/** What a roster consumer gets back. `view === null` ⇒ run the legacy read. */
 export interface TranscriptConsumerReadOutcome {
-    readonly snapshot: ReplicatedTranscriptSnapshotV1 | null;
-    /** Null exactly when `snapshot` is non-null. */
+    readonly view: ReplicatedTranscriptViewV2 | null;
+    /** Null exactly when `view` is non-null. */
     readonly fallbackReason: TranscriptConsumerFallbackReason | null;
 }
 
 function decline(reason: TranscriptConsumerFallbackReason): TranscriptConsumerReadOutcome {
-    return { snapshot: null, fallbackReason: reason };
+    return { view: null, fallbackReason: reason };
 }
 
 /**
  * Structural verification of the fields these two consumers actually read.
  *
  * ★ An allow-list assertion of the REQUIRED shape, never a deny-list
- * sanitizer — same discipline as §8 unit 6's `isUsableSnapshot`. Duplicated
+ * sanitizer — same discipline as §8 unit 6's `isUsableView`. Duplicated
  * rather than shared because the two live in different packages (mcp-server
  * cannot import daemon-core internals beyond the public barrel) and, more
  * importantly, because the field sets differ: this one additionally requires
  * `messages` entries to be objects, since the terminal-evidence consumer walks
  * them with `countTrailingToolActivityAfterFinalAssistant`.
  */
-function isUsableSnapshot(value: unknown): value is ReplicatedTranscriptSnapshotV1 {
+function isUsableView(value: unknown): value is ReplicatedTranscriptViewV2 {
     if (!value || typeof value !== 'object') return false;
     const snapshot = value as Record<string, unknown>;
-    if (snapshot.schemaVersion !== 1) return false;
+    if (snapshot.schemaVersion !== 2) return false;
     if (typeof snapshot.sessionId !== 'string' || !snapshot.sessionId) return false;
     if (typeof snapshot.status !== 'string' || !snapshot.status) return false;
     if (typeof snapshot.observedAt !== 'string' || !snapshot.observedAt) return false;
-    if (typeof snapshot.revision !== 'number') return false;
+    if (typeof snapshot.frame !== 'number') return false;
     if (!Array.isArray(snapshot.messages)) return false;
     if (snapshot.messages.some(message => !message || typeof message !== 'object')) return false;
     const coverage = snapshot.coverage as Record<string, unknown> | undefined;
@@ -140,8 +139,8 @@ export interface TranscriptConsumerReadRequest {
  * The single routing point for roster ids 4-5. Pure apart from the store read
  * and the clock; never throws.
  *
- * ★ Status is NOT derived here, only carried. `snapshot.status` and
- * `snapshot.providerObservedStatus` were produced by `read-chat-presentation`'s
+ * ★ Status is NOT derived here, only carried. `view.status` and
+ * `view.providerObservedStatus` were produced by `read-chat-presentation`'s
  * `effectiveStatus` on the producer side — the same single authority §8 unit
  * 6's adapter header documents. A second normalization on the consumer side
  * would be a second authority for the same surface.
@@ -180,7 +179,7 @@ export function readTranscriptForDaemonConsumer(
         // member that exists rather than widening it.
         return decline('no_complete_revision');
     }
-    if (!isUsableSnapshot(read.snapshot)) return decline('revision_invalid');
+    if (!isUsableView(read.view)) return decline('revision_invalid');
 
     // §5.5 condition 7 is enforced inside the store, but re-assert the owner
     // half here: the store compares the ASSEMBLED identity, and this is the
@@ -190,15 +189,15 @@ export function readTranscriptForDaemonConsumer(
     if (!daemonIdsEquivalent(read.identity.producerDaemonId, ownerDaemonId)) {
         return decline('owner_mismatch');
     }
-    if (read.snapshot.sessionId !== rawSessionId) return decline('owner_mismatch');
+    if (read.view.sessionId !== rawSessionId) return decline('owner_mismatch');
 
     // §5.5 semantic condition — commit age within the consumer's budget. An
     // unparseable `observedAt` is refused rather than treated as fresh: this
     // path may not invent freshness it cannot prove.
-    const observedAtMs = Date.parse(read.snapshot.observedAt);
+    const observedAtMs = Date.parse(read.view.observedAt);
     if (!Number.isFinite(observedAtMs)) return decline('revision_invalid');
     const nowMs = request.nowMs ?? Date.now();
     if (nowMs - observedAtMs > request.maxAgeMs) return decline('stale_active_session');
 
-    return { snapshot: read.snapshot, fallbackReason: null };
+    return { view: read.view, fallbackReason: null };
 }

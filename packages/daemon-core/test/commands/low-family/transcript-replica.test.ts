@@ -103,15 +103,15 @@ describe('read_transcript_replica', () => {
         expect(result).toEqual({ success: true, available: false, reason: 'no_complete_revision' });
     });
 
-    it('returns the snapshot+identity when the store has a complete revision', async () => {
-        const snapshot = { schemaVersion: 1, sessionId: 'sess-1' };
+    it('returns the view+identity when the store has a verified commit', async () => {
+        const view = { schemaVersion: 2, sessionId: 'sess-1' };
         const identity = { sessionId: 'sess-1', producerDaemonId: 'daemon-owner', producerWriterId: 'w', producerEpoch: 'e', revision: 1 };
-        const store = { getReplica: vi.fn().mockReturnValue({ available: true, snapshot, identity }) };
+        const store = { getReplica: vi.fn().mockReturnValue({ available: true, view, identity }) };
         const result = await transcriptReplicaHandlers.read_transcript_replica!(
             ctx({ getTranscriptReplicaStore: () => store as any }),
             { ownerDaemonId: 'daemon-owner', rawSessionId: 'sess-1' },
         );
-        expect(result).toEqual({ success: true, available: true, snapshot, identity });
+        expect(result).toEqual({ success: true, available: true, view, identity });
     });
 
     it('accepts sessionId as an alias for rawSessionId', async () => {
@@ -121,5 +121,17 @@ describe('read_transcript_replica', () => {
             { ownerDaemonId: 'daemon-owner', sessionId: 'sess-1' },
         );
         expect(store.getReplica).toHaveBeenCalledWith({ ownerDaemonId: 'daemon-owner', rawSessionId: 'sess-1' });
+    });
+});
+
+describe('request_transcript_base (keyed chat resync, design 2026-09-28 §5.2)', () => {
+    it('requires a session id and reports whether a publisher accepted it', async () => {
+        const { __resetTranscriptProjectionForTests, configureTranscriptProjection } = await import('../../../src/seqscribe/transcript-publisher.js');
+        __resetTranscriptProjectionForTests();
+        expect(await transcriptReplicaHandlers.request_transcript_base(ctx(), {})).toMatchObject({ success: false });
+        expect(await transcriptReplicaHandlers.request_transcript_base(ctx(), { rawSessionId: 's1' })).toEqual({ success: true, accepted: false });
+        configureTranscriptProjection({ daemonId: () => 'd', writerId: () => 'w', appendChatFrame: async () => {} });
+        expect(await transcriptReplicaHandlers.request_transcript_base(ctx(), { rawSessionId: 's1' })).toEqual({ success: true, accepted: true });
+        __resetTranscriptProjectionForTests();
     });
 });

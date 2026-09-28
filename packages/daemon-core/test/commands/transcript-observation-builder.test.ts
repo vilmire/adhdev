@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { buildTranscriptObservationFromReadChat } from '../../src/commands/transcript-observation-builder.js';
-import { encodeTranscriptMessage } from '../../src/seqscribe/transcript-projection.js';
+import { encodeChatMessageHead } from '../../src/seqscribe/transcript-keyed-codec.js';
 import type { ChatMessage } from '../../src/types.js';
 
-const BASE_COVERAGE = { mode: 'full' as const, totalMessageCount: 1, returnedMessageCount: 1, omittedBefore: false };
+const BASE_COVERAGE = { mode: 'full' as const, omittedBefore: false };
+
+/** The keyed wire head a builder output message becomes (the downstream allow-list hop). */
+function wireHead(message: Parameters<typeof encodeChatMessageHead>[0]) {
+    return encodeChatMessageHead(message, { id: 'd.x.1', ord: 'a0', rev: 1, epoch: 'e', frame: 1, srcId: null, body: { text: message.content } });
+}
 
 describe('buildTranscriptObservationFromReadChat (design §5.2 choke point)', () => {
     it('returns null without a sessionId or providerType — never publishes an unaddressable observation', () => {
@@ -83,27 +88,19 @@ describe('buildTranscriptObservationFromReadChat (design §5.2 choke point)', ()
             providerObservedStatus: 'idle',
             turn: null,
             messages,
-            coverage: { mode: 'full', totalMessageCount: 20, returnedMessageCount: 20, omittedBefore: false },
+            coverage: { mode: 'full', omittedBefore: false },
         });
         expect(result?.messages).toHaveLength(20);
         expect(result?.coverage.mode).toBe('full');
     });
 
     /**
-     * (TOOL-EXPAND) Regression: the expand ref must survive BOTH narrowings.
-     *
-     * `flattenMessage` here and `encodeTranscriptMessage` downstream are two
-     * independent field-by-field allow-lists, and a field has to be named in
-     * each one. When the ref was added, only the encoder and the web adapter
-     * were widened — this builder kept dropping it, so every truncated tool
-     * bubble reached the dashboard with `toolBlockRef: null` and no way to
-     * fetch the rest. The parser-level tests stayed green throughout, because
-     * the ref was minted correctly and only died in transit.
-     *
-     * Asserting across the pair is therefore the point: either hop alone can be
-     * green while the chain is broken.
+     * (TOOL-EXPAND, keyed lane) The mtime-sealed ref itself no longer travels
+     * (design 2026-09-28 §5.9) — only the affordance does, and it has to
+     * survive BOTH narrowings: this builder and the keyed wire encoder. Either
+     * hop alone can be green while the chain is broken, so assert across the pair.
      */
-    it('carries toolBlockRef through the builder AND the wire encoder', () => {
+    it('turns a truncated tool bubble into `expandable` through the builder AND the keyed wire encoder, and drops the ref', () => {
         const ref = { sourceMtimeMs: 1_700_000_000_123, recordIndex: 13, blockIndex: 0 };
         const messages: ChatMessage[] = [
             { role: 'assistant', kind: 'tool', content: 'a long tool result…', toolBlockRef: ref },
@@ -117,11 +114,40 @@ describe('buildTranscriptObservationFromReadChat (design §5.2 choke point)', ()
             messages,
             coverage: BASE_COVERAGE,
         });
-        // Hop 1 — the narrowing this file owns.
-        expect(result?.messages[0]?.toolBlockRef).toEqual(ref);
-        // Hop 2 — the wire allow-list the dashboard actually receives. `null`
-        // here is the live symptom, so assert the resolved object, not truthiness.
-        expect(encodeTranscriptMessage(result!.messages[0]!).toolBlockRef).toEqual(ref);
+        expect(result?.messages[0]?.expandable).toBe(true);
+        expect(result?.messages[0]?.toolBlockRef).toBeUndefined();
+        const head = wireHead(result!.messages[0]!);
+        expect(head.expandable).toBe(true);
+        expect(JSON.stringify(head)).not.toContain('recordIndex');
+    });
+
+    it('stamps the identity ledger assignment (messageId, ord, srcId) and the retained window ids', () => {
+        const messages: ChatMessage[] = [
+            { role: 'user', kind: 'standard', content: 'q' },
+            { role: 'assistant', kind: 'standard', content: 'a' },
+        ];
+        const assignments = new Map([
+            [messages[0]!, { messageId: 'n.aaaaaaaa.1.0', ord: 'a1', rev: 1, srcId: null }],
+            [messages[1]!, { messageId: 'd.e.3', ord: 'a2', rev: 2, srcId: 'n.bbbbbbbb.4.0' }],
+        ]);
+        const result = buildTranscriptObservationFromReadChat({
+            sessionId: 'sess-1',
+            providerType: 'claude-code',
+            status: 'idle',
+            providerObservedStatus: 'idle',
+            turn: null,
+            messages,
+            identity: { assignments, retainedIds: ['d.e.1'], ledgerEpoch: 'e' },
+            coverage: { mode: 'window', omittedBefore: true },
+        });
+        expect(result?.messages.map((m) => [m.messageId, m.ord, m.srcId])).toEqual([
+            ['n.aaaaaaaa.1.0', 'a1', null],
+            ['d.e.3', 'a2', 'n.bbbbbbbb.4.0'],
+        ]);
+        expect(result?.coverage).toMatchObject({ mode: 'window', omittedBefore: true, retainedMessageIds: ['d.e.1'] });
+        expect(result?.ledgerEpoch).toBe('e');
+        // No sequence / toolBlockRef / _src on the observation (keyed wire excludes them).
+        expect(Object.keys(result!.messages[0]!)).not.toEqual(expect.arrayContaining(['sequence', '_src', 'toolBlockRef']));
     });
 
     it('carries toolName through the builder AND the wire encoder (TOOL-LABEL: the live lane label)', () => {
@@ -142,12 +168,12 @@ describe('buildTranscriptObservationFromReadChat (design §5.2 choke point)', ()
         // dashboard's live lane labelled every tool card 'Tool'.
         expect(result?.messages[0]?.toolName).toBe('Write');
         expect(result?.messages[1]?.toolName).toBeUndefined();
-        // Hop 2 — survives the wire allow-list as a typed string / null.
-        expect(encodeTranscriptMessage(result!.messages[0]!).toolName).toBe('Write');
-        expect(encodeTranscriptMessage(result!.messages[1]!).toolName).toBeNull();
+        // Hop 2 — survives the keyed wire allow-list as a typed string / null.
+        expect(wireHead(result!.messages[0]!).toolName).toBe('Write');
+        expect(wireHead(result!.messages[1]!).toolName).toBeNull();
     });
 
-    it('leaves toolBlockRef null for a bubble that was never truncated', () => {
+    it('leaves expandable false for a bubble that was never truncated', () => {
         const messages: ChatMessage[] = [{ role: 'assistant', kind: 'tool', content: 'short' }];
         const result = buildTranscriptObservationFromReadChat({
             sessionId: 'sess-1',
@@ -159,7 +185,7 @@ describe('buildTranscriptObservationFromReadChat (design §5.2 choke point)', ()
             coverage: BASE_COVERAGE,
         });
         // An expand affordance on a complete bubble returns the same text back.
-        expect(encodeTranscriptMessage(result!.messages[0]!).toolBlockRef).toBeNull();
+        expect(wireHead(result!.messages[0]!).expandable).toBe(false);
     });
 
     it('never throws on malformed message content', () => {

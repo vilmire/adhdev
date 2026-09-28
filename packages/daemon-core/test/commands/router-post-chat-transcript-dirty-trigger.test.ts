@@ -24,7 +24,7 @@ function arm(collectObservation: any) {
     const service = configureTranscriptProjection({
         daemonId: () => 'daemon-1',
         writerId: () => 'writer-1',
-        publishRevision: async () => {},
+        appendChatFrame: async () => {},
         collectObservation,
     });
     if (service) subscribeTranscriptProjection(bus, service);
