@@ -33,8 +33,8 @@ import {
     TRANSCRIPT_STATUS_PROBE_MAX_AGE_MS,
     TRANSCRIPT_TERMINAL_EVIDENCE_MAX_AGE_MS,
 } from '../transcript-daemon-consumer-read.js';
-import { mapTranscriptSnapshotToReadChatPayload } from '../transcript-read-chat-adapter.js';
-import type { ReplicatedTranscriptSnapshotV1 } from '../../seqscribe/transcript-projection.js';
+import { mapTranscriptViewToReadChatPayload } from '../transcript-read-chat-adapter.js';
+import type { ReplicatedTranscriptViewV2 } from '../../seqscribe/transcript-keyed-codec.js';
 import type { TurnPolicy } from './policy.js';
 import type { HoldReason, TurnAttempt } from './types.js';
 
@@ -189,7 +189,7 @@ export async function reprobeWorkerStatus(
             maxAgeMs: TRANSCRIPT_STATUS_PROBE_MAX_AGE_MS,
             store: components.transcriptReplicaStore,
         });
-        if (replica.snapshot) return replica.snapshot.status.toLowerCase();
+        if (replica.view) return replica.view.status.toLowerCase();
     }
     try {
         if (args.isLocalNode) {
@@ -438,10 +438,10 @@ function readArgsFor(attempt: TurnAttempt, workspace?: string): Record<string, u
     };
 }
 
-function replicaPayload(snapshot: ReplicatedTranscriptSnapshotV1): Record<string, unknown> {
+function replicaPayload(snapshot: ReplicatedTranscriptViewV2): Record<string, unknown> {
     // `turnTerminalMarkers` stays ABSENT (the wire carries none): a replica read
     // takes the message-shape admission rules — weaker, never a fabricated veto.
-    return mapTranscriptSnapshotToReadChatPayload(snapshot, {
+    return mapTranscriptViewToReadChatPayload(snapshot, {
         omittedBefore: snapshot.coverage.omittedBefore,
         stale: false,
     }) as unknown as Record<string, unknown>;
@@ -514,8 +514,8 @@ export function createComponentsProbeReader(components: ProbeComponents, options
             maxAgeMs: TRANSCRIPT_TERMINAL_EVIDENCE_MAX_AGE_MS,
             store: components.transcriptReplicaStore,
         });
-        if (replica.snapshot) {
-            return { presence: 'present', ...(status ? { status } : {}), transcript: analyze(replicaPayload(replica.snapshot), attempt) };
+        if (replica.view) {
+            return { presence: 'present', ...(status ? { status } : {}), transcript: analyze(replicaPayload(replica.view), attempt) };
         }
         try {
             const result = await dispatch(daemonId, 'read_chat', readArgsFor(attempt, workspace));

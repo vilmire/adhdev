@@ -79,12 +79,21 @@ export interface MessageIdentityInput {
      * keyed publisher (design step 3) passes its wire-entry hash here.
      */
     readonly revisionKey: string;
+    /**
+     * Opaque, daemon-local locator kept with the entry and handed back by
+     * {@link MessageIdentityLedger.locatorOf} — today the tool-block ref an
+     * expand request resolves through the ledger (design §5.9). Refreshed on
+     * every observation; never compared, never emitted.
+     */
+    readonly locator?: unknown;
 }
 
 export interface MessageIdentityAssignment {
     readonly messageId: string;
     readonly ord: string;
     readonly rev: number;
+    /** Natural id of the adopted source when this id was inherited (§3.4), else null. */
+    readonly srcId: string | null;
 }
 
 export interface MessageIdentityAlias {
@@ -132,6 +141,28 @@ export interface MessageIdentityEntrySnapshot {
     readonly retained: boolean;
 }
 
+/**
+ * One persisted bubble a ledger can be rebuilt from after a restart (§4.10):
+ * the keyed chat topic's newest-per-key heads, read back by the publisher.
+ */
+export interface MessageIdentitySeedEntry {
+    readonly messageId: string;
+    readonly ord: string;
+    readonly rev: number;
+    readonly role: string;
+    readonly kind: string;
+    /** The stored body — re-derives the aligner's local fingerprint (§4.10). */
+    readonly text: string;
+    /** Natural id this entry adopted by handoff (§3.4 `srcId`), if any. */
+    readonly srcId?: string | null;
+}
+
+export interface MessageIdentitySeed {
+    /** The persisted ledger epoch `E` (`meta.ledgerEpoch`). */
+    readonly epoch: string;
+    readonly entries: readonly MessageIdentitySeedEntry[];
+}
+
 interface LedgerEntry {
     readonly id: string;
     ord: string;
@@ -148,6 +179,7 @@ interface LedgerEntry {
     /** Every `bySrc` key that points here — cleared when the entry is finally evicted. */
     readonly boundKeys: Set<string>;
     retained: boolean;
+    locator: unknown;
 }
 
 /** Recently tombstoned entries kept for revival (caller-dependent filters, toggles). */
@@ -158,6 +190,16 @@ const LIVE_ENTRIES_MAX = 10_000;
 const LCS_MAX_CELLS = 250_000;
 /** §3.3 2b: minimum prefix+suffix overlap for "the same bubble, rewritten". */
 const SIMILARITY_MIN_OVERLAP = 0.5;
+
+const NATIVE_ID_RE = /^n\.([0-9a-f]{8})\.([a-z0-9._-]{1,48})$/;
+const DAEMON_ID_RE = /^d\.([a-z0-9]{1,16})\.(\d{1,15})$/;
+const EPOCH_TOKEN_RE = /^[a-z0-9]{1,16}$/;
+
+/** The native address a `n.<L>.<addr>` id was derived from, or undefined. */
+function nativeAddressOfId(id: string | null | undefined): MessageSourceAddress | undefined {
+    const m = typeof id === 'string' ? NATIVE_ID_RE.exec(id) : null;
+    return m ? { cls: 'n', L: m[1], addr: m[2] } : undefined;
+}
 
 function newEpochToken(): string {
     // 6 base36 chars (§3.2 `E`), drawn from 32 random bits.
@@ -353,7 +395,63 @@ export class MessageIdentityLedger {
     private readonly bySrc = new Map<string, string>();
 
     constructor(options: { epoch?: string } = {}) {
-        this.epochToken = options.epoch || newEpochToken();
+        this.epochToken = options.epoch && EPOCH_TOKEN_RE.test(options.epoch) ? options.epoch : newEpochToken();
+    }
+
+    /**
+     * Rebuild from persisted bubbles (§4.10) — only on a ledger that has not
+     * observed anything yet. Native ids re-bind their own address (and an
+     * adopted `srcId`'s), `d.*` ids keep their ord/rev and are re-found by the
+     * aligner from the stored text, and the `d.<E>.<n>` counter resumes after
+     * the largest persisted `n` of this epoch so no id is ever reissued.
+     * Returns false (and changes nothing) when the ledger is already in use.
+     */
+    restore(seed: MessageIdentitySeed): boolean {
+        if (this.frameNo !== 0 || this.entries.size > 0) return false;
+        if (seed.epoch && EPOCH_TOKEN_RE.test(seed.epoch)) this.epochToken = seed.epoch;
+        for (const item of seed.entries) {
+            if (!item || typeof item.messageId !== 'string' || !item.messageId || this.entries.has(item.messageId)) continue;
+            if (typeof item.ord !== 'string' || !item.ord) continue;
+            const role = String(item.role ?? '').trim().toLowerCase();
+            const entry: LedgerEntry = {
+                id: item.messageId,
+                ord: item.ord,
+                rev: Number.isSafeInteger(item.rev) && item.rev > 0 ? item.rev : 1,
+                role: role === 'human' ? 'user' : role,
+                kind: String(item.kind ?? '').trim() || 'standard',
+                text: typeof item.text === 'string' ? item.text : '',
+                // Unknown until the next observation, which re-keys it; the
+                // ledger's own rev may move once, the persisted rev does not.
+                revisionKey: '',
+                srcClass: null,
+                lineage: null,
+                srcKey: null,
+                srcId: null,
+                boundKeys: new Set(),
+                retained: false,
+                locator: undefined,
+            };
+            this.entries.set(entry.id, entry);
+            const own = nativeAddressOfId(entry.id);
+            if (own) this.bind(entry, own, messageSourceKey(own), null);
+            const adopted = nativeAddressOfId(item.srcId);
+            if (adopted) this.bind(entry, adopted, messageSourceKey(adopted), null);
+            const daemon = DAEMON_ID_RE.exec(entry.id);
+            if (daemon && daemon[1] === this.epochToken) this.counter = Math.max(this.counter, Number(daemon[2]));
+        }
+        return true;
+    }
+
+    /** Ids kept only because they scrolled out of a window source's view (§3.5). */
+    retainedIds(): string[] {
+        const out: string[] = [];
+        for (const entry of this.entries.values()) if (entry.retained) out.push(entry.id);
+        return out;
+    }
+
+    /** The locator the latest observation attached to `messageId` (§5.9), if live. */
+    locatorOf(messageId: string): unknown {
+        return this.entries.get(messageId)?.locator;
     }
 
     get epoch(): string {
@@ -507,6 +605,7 @@ export class MessageIdentityLedger {
                 srcId: null,
                 boundKeys: new Set(),
                 retained: false,
+                locator: undefined,
             };
             this.entries.set(id, entry);
             if (src) this.bind(entry, src, srcKeys[i]!, natural === id ? null : aliases);
@@ -556,7 +655,8 @@ export class MessageIdentityLedger {
             entry.text = input.text;
             entry.revisionKey = input.revisionKey;
             entry.retained = false;
-            assignments[i] = { messageId: id, ord: entry.ord, rev: entry.rev };
+            entry.locator = input.locator;
+            assignments[i] = { messageId: id, ord: entry.ord, rev: entry.rev, srcId: entry.srcId };
         }
 
         deletes.push(...this.enforceLiveCap());
@@ -711,13 +811,33 @@ export class MessageIdentityLedger {
 const LEDGER_REGISTRY_MAX = 128;
 const ledgers = new Map<string, MessageIdentityLedger>();
 
+/**
+ * Supplies the persisted state a NEW ledger is rebuilt from (§4.10) — the
+ * keyed chat publisher registers one that reads its own topic's newest-per-key
+ * heads. Synchronous by contract (the choke point is synchronous); returning
+ * null or throwing just means "start fresh".
+ */
+export type MessageIdentitySeedProvider = (sessionKey: string) => MessageIdentitySeed | null;
+let seedProvider: MessageIdentitySeedProvider | null = null;
+
+export function setMessageIdentitySeedProvider(provider: MessageIdentitySeedProvider | null): void {
+    seedProvider = provider;
+}
+
 /** The session's ledger, created on first use (LRU-bounded). */
 export function getMessageIdentityLedger(sessionKey: string): MessageIdentityLedger {
     let ledger = ledgers.get(sessionKey);
     if (ledger) {
         ledgers.delete(sessionKey);
     } else {
-        ledger = new MessageIdentityLedger();
+        let seed: MessageIdentitySeed | null = null;
+        try {
+            seed = seedProvider?.(sessionKey) ?? null;
+        } catch {
+            seed = null;
+        }
+        ledger = new MessageIdentityLedger(seed ? { epoch: seed.epoch } : {});
+        if (seed) ledger.restore(seed);
     }
     ledgers.set(sessionKey, ledger);
     while (ledgers.size > LEDGER_REGISTRY_MAX) {

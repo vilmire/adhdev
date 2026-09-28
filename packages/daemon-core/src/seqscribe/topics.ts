@@ -105,9 +105,29 @@ export function meshIdFromEventsTopic(topic: string): string | null {
 /** Cross-daemon assistant journal — the Phase 1 greenfield consumer. */
 export const ASSISTANT_JOURNAL_TOPIC = 'assistant.journal';
 
-/** Per-session chat transcript tail (Phase 4). */
-export function sessionTranscriptTopic(sessionId: string): string {
-    return `session.${safeSessionId(sessionId)}.transcript`;
+/**
+ * Per-session keyed chat transcript (design 2026-09-28 message-keyed storage
+ * §4.1). One row per changed bubble/part plus a small `meta` and a per-frame
+ * `commit`, newest-per-key compacted — see `sessionChatPolicy`.
+ *
+ * The earlier `session.<id>.transcript` whole-snapshot revision topic was
+ * removed in the same change (§6); its leftover rows are deleted by
+ * `writer-gc.ts`'s boot sweep, which recognizes that name on its own.
+ */
+export function sessionChatTopic(sessionId: string): string {
+    return `session.${safeSessionId(sessionId)}.chat`;
+}
+
+/**
+ * Recover the sanitized session segment from `session.<seg>.chat`, or null if
+ * `topic` is not a session chat topic. Returns the SANITIZED segment (see the
+ * caveat on `meshIdFromEventsTopic`) — compare topic names, never raw ids.
+ */
+export function sessionSegmentFromChatTopic(topic: string): string | null {
+    if (!topic.startsWith('session.') || !topic.endsWith('.chat')) return null;
+    const segment = topic.slice('session.'.length, -'.chat'.length);
+    if (segment.length === 0 || segment.includes('.')) return null;
+    return segment;
 }
 
 /**
@@ -131,13 +151,6 @@ export const FLEET_STATUS_TOPIC = 'fleet.status';
 export const CONFIG_SETTINGS_TOPIC = 'config.settings';
 
 // ─── Policies ───────────────────────────────────────────────────────────────
-
-/**
- * Ring size for a session transcript. Sized so a tail reload shows a useful
- * scrollback while keeping the per-session cost bounded — the ring is not the
- * transcript's system of record, it is the live tail.
- */
-export const SESSION_TRANSCRIPT_RING = 500;
 
 /** Ring size for the fleet status tail (design §1). */
 export const FLEET_STATUS_RING = 50;
@@ -200,46 +213,38 @@ export function meshHandoffPolicy(): TopicPolicy {
     };
 }
 
+/** Tombstone kind of the keyed chat topic (a deleted bubble, part or key). */
+export const CHAT_TOMBSTONE_KIND = 'chat.del.v2';
+
 /**
- * `session.<id>.transcript` — chat content, `full` retention (durable across
- * a daemon restart — the G2b goal, design §7e), `subscribe-only`: peers
- * stream the tail instead of negotiating mutual full-sync. NOTE a `full`
- * grant on a subscribe-only topic is a host error the library rejects
- * (seqscribe proposals-v3.5 P1) — grant `serve`.
+ * `session.<id>.chat` — chat content, keyed append (design 2026-09-28 §4.1).
  *
- * ── `full`, not `ring` (G2b, landed 2026-09-24) ─────────────────────────────
- * An earlier attempt at this switch reverted the same day: the vendor's
- * built-in `view: 'tail'` SUB view — used for live delivery by both the
- * daemon (`transcript-replica-store.ts`) and the browser
- * (`transcript-session-subscription.ts`) — only served `ring` topics and
- * threw `ERR_UNKNOWN_VIEW` for anything else. That blocker is now resolved
- * upstream: `tail` also serves `retention:{mode:'full'}` +
- * `replication:'subscribe-only'` topics with identical SNAP/DELTA/Row wire
- * shapes (`oss/vendor/seqscribe/src/subs.ts`, `FULL_TAIL_DEFAULT`), and a
- * cursor-beyond-journal resume gets a SNAP `reset:true` the same way a ring
- * epoch bump does — so the existing `TranscriptRevisionAssembler`/parity
- * code needs no redesign.
+ * `kind:'append'` + `keyed`: every entry carries a key (`m:<messageId>`,
+ * `p:<messageId>:<k>`, `meta`, `commit`), the newest row per key is that key's
+ * value, and a `chat.del.v2` row deletes it. Only CHANGED bubbles are written
+ * per observation, so a streaming tick costs one bubble (or one 24 KiB part)
+ * plus a commit, independent of the transcript's size.
  *
- * A `full`-retention topic accumulates durable `sq_log` rows forever unless
- * something bounds it, since finality certification for per-session topics
- * is not wired (they are defined on demand, after boot — see
- * `transcript-activation.ts` — so they are never in the coordinator's static
- * certify list). The bound is `writer-gc.ts`'s periodic sweep, which calls
- * the vendor's `Node.pruneTopic(topic, {olderThanMs, keepNewest})` — a
- * local-only, queue-safe prune that never deletes below any registered
- * `onEntry` consumer cursor and refuses outright while a `tail` SUB
- * subscriber is attached (see that module for how the sweep handles the
- * refusal).
- *
- * The `ringSize` parameter was removed with the ring era — every caller now
- * calls this with no arguments. `SESSION_TRANSCRIPT_RING` is kept only for
- * `FLEET_STATUS_RING`-style callers that still want a ring elsewhere (none
- * today) and as a documented historical default should ring ever return for
- * a different topic.
+ * - `retention:'full'` + `subscribe-only`: durable across a restart; peers
+ *   stream the `tail` SUB, whose SNAP for a keyed topic is newest-per-key
+ *   (the host selector in `transcript-tail-snapshot.ts` pins it to the last
+ *   commit). A `full` grant on a subscribe-only topic is a host error the
+ *   library rejects — grant `serve`.
+ * - Bounded by the producer's own `pruneSuperseded` after each commit and by
+ *   `writer-gc.ts`'s safety-net sweep, not by `pruneTopic` (which would drop
+ *   live keys).
+ * - `keyed` is a LOCAL storage policy: like retention and replication it is
+ *   not part of `topicSchemaHash`, and `kind`/`finalityAuthority` match the
+ *   removed `.transcript` topic, so no coordinated fleet upgrade is needed
+ *   (host-guide §6). Both ends — daemon and the web worker's
+ *   `topic-addressing.ts` — must still define it identically.
+ * - `access:'content'`: never granted to a metadata-class peer, and outside
+ *   Beacon's default metadata scope. No `hintKeys` — the keys are message ids.
  */
-export function sessionTranscriptPolicy(): TopicPolicy {
+export function sessionChatPolicy(): TopicPolicy {
     return {
         kind: 'append',
+        keyed: { tombstoneKind: CHAT_TOMBSTONE_KIND },
         retention: { mode: 'full' },
         replication: 'subscribe-only',
         access: 'content',
@@ -308,8 +313,8 @@ export interface TopicDefinition {
 /**
  * The topics every daemon defines at boot.
  *
- * Per-session transcript topics are deliberately absent: they are defined
- * on demand as sessions appear (Phase 4), since policies are immutable per
+ * Per-session chat topics are deliberately absent: they are defined on
+ * demand as sessions appear (Phase 4), since policies are immutable per
  * process and a session set is not known at boot.
  */
 export function baseTopicDefinitions(meshIds: readonly string[]): TopicDefinition[] {
@@ -328,7 +333,7 @@ export function baseTopicDefinitions(meshIds: readonly string[]): TopicDefinitio
         defs.push({ topic, policy: meshEventsPolicy() });
         // Worker handoff notes for the same mesh. Registered at boot alongside
         // the events topic because the mesh set IS known at boot — unlike the
-        // per-session transcript topics above, which are not.
+        // per-session chat topics above, which are not.
         defs.push({ topic: meshHandoffTopic(meshId), policy: meshHandoffPolicy() });
     }
     return defs;

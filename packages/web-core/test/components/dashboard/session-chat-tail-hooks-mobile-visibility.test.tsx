@@ -105,17 +105,17 @@ describe('★ useSessionChatTailController mobile pagehide/pageshow visibility g
     })
 
     act(() => {
-      controller.applyTranscriptReplicaSnapshot(
+      controller.applyTranscriptReplicaView(
         {
-          schemaVersion: 1,
+          schemaVersion: 2,
           sessionId: SESSION,
           historySessionId: null,
           providerType: 'claude-cli',
           providerSessionId: null,
           producerDaemonId: DAEMON,
           producerWriterId: 'writer-1',
-          producerEpoch: 'epoch-1',
-          revision: 2,
+          epoch: 'epoch-1',
+          frame: 2,
           observedAt: new Date(clock).toISOString(),
           status: 'generating',
           providerObservedStatus: null,
@@ -125,13 +125,12 @@ describe('★ useSessionChatTailController mobile pagehide/pageshow visibility g
           turn: null,
           provenance: { messageSource: null, transcriptProvenance: null },
           messages: [
-            { role: 'user', kind: 'standard', content: 'q', receivedAt: 10, timestamp: 10, turnKey: 'user-10', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
-            { role: 'assistant', kind: 'standard', content: 'a', receivedAt: 11, timestamp: 11, turnKey: 'assistant-11', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+            { role: 'user', kind: 'standard', content: 'q', receivedAt: 10, timestamp: 10, turnKey: 'user-10', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'mid-user-10-10', ord: '00000010', rev: 1, expandable: false, srcId: null },
+            { role: 'assistant', kind: 'standard', content: 'a', receivedAt: 11, timestamp: 11, turnKey: 'assistant-11', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'mid-assistant-11-11', ord: '00000011', rev: 1, expandable: false, srcId: null },
           ],
           terminalMarkers: [],
           coverage: { mode: 'tail', totalMessageCount: 2, returnedMessageCount: 2, omittedBefore: false },
-        } as never,
-        { omittedBefore: false },
+        } as never
       )
     })
 

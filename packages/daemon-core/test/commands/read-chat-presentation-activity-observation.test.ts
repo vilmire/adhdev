@@ -52,8 +52,10 @@ describe('buildReadChatCommandResult — caller-independent activity observation
         // Observation: prose + activity, in order.
         const [, observation] = notifyTranscriptObservation.mock.calls[0]!;
         expect(observation.messages.map((m: any) => m.kind)).toEqual(['standard', 'tool', 'thought', 'terminal', 'standard']);
-        expect(observation.coverage.returnedMessageCount).toBe(5);
-        expect(observation.coverage.totalMessageCount).toBe(5);
+        // Every observed bubble carries the ledger's identity (keyed lane, design 2026-09-28 §3.3).
+        expect(observation.messages.every((m: any) => typeof m.messageId === 'string' && typeof m.ord === 'string')).toBe(true);
+        expect(new Set(observation.messages.map((m: any) => m.messageId)).size).toBe(5);
+        expect(observation.coverage.mode).toBe('full');
     });
 
     it('produces the SAME observation content whether or not the caller passed includeActivity (revision consistency)', async () => {

@@ -43,20 +43,17 @@ export default defineConfig({
     'src/status/normalize.ts',
     'src/chat/chat-signatures.ts',
     'src/config/config-dir.ts',
-    // Portable (no Node builtins) leaves §8 unit 5 exposes so
-    // `oss/packages/web-core`'s browser-worker transcript adapter can import
-    // them without dragging the rest of daemon-core (logger/fs) into a
-    // browser bundle — see each file's own header for the portability note.
-    'src/seqscribe/transcript-revision-codec.ts',
+    // Portable (no Node builtins) leaves exposed as subpath exports so
+    // `oss/packages/web-core`'s browser code can import them without dragging
+    // the rest of daemon-core (logger/fs) into a browser bundle — see each
+    // file's own header for the portability note.
     'src/mesh/transcript-read-model-consumers.ts',
-    // The projection allow-list (design §2.4). Same portability property as the
-    // codec beside it — its only import is `seqscribe`, no Node builtins — and
-    // it is the producer step that runs BEFORE the codec
-    // (`transcript-publisher.ts:376-377`). Exposed as a leaf because
-    // `test:seqscribe-asymmetric` must drive the real encoder across a process
-    // boundary: a gate that asserts the content boundary while re-implementing
-    // the projection would assert only against its own copy.
-    'src/seqscribe/transcript-projection.ts',
+    // The keyed chat wire (design 2026-09-28 §5.1): codec + reader folder,
+    // portable for the same reason (only `seqscribe` and the dependency-free
+    // `@adhdev/mesh-shared` are imported). web-core's transcript worker folds
+    // `session.<id>.chat` rows with exactly this code.
+    'src/seqscribe/transcript-keyed-codec.ts',
+    'src/seqscribe/transcript-keyed-folder.ts',
   ],
   format: ['cjs', 'esm'],
   dts: false,

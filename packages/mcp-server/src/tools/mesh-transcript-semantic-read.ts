@@ -24,7 +24,7 @@
  * The IPC pair (`ensure_transcript_subscription` / `read_transcript_replica`),
  * the process-boundary rule (§4 "별도 프로세스 경계": mcp-server never opens
  * `seqscribe.db`; the coordinator daemon owns it), and the payload shape
- * (`mapTranscriptSnapshotToReadChatPayload`). Producing the SAME `read_chat`-
+ * (`mapTranscriptViewToReadChatPayload`). Producing the SAME `read_chat`-
  * shaped payload is what lets all three call sites keep their existing parsers
  * — `readFinalAssistantTranscriptEvidence`, `hasTrailingToolActivityAfter
  * FinalAssistant`, `magiReadIndicatesApprovalWedge`,
@@ -55,8 +55,8 @@
  */
 
 import {
-    mapTranscriptSnapshotToReadChatPayload,
-    type ReplicatedTranscriptSnapshotV1,
+    mapTranscriptViewToReadChatPayload,
+    type ReplicatedTranscriptViewV2,
     type TranscriptReadChatPayload,
 } from '@adhdev/daemon-core';
 import {
@@ -88,7 +88,7 @@ export interface SemanticTranscriptReadOutcome {
  * decided. This is an ADMISSION gate — it does not change any field of the
  * snapshot, it only decides whether this consumer is allowed to act on it. The
  * store has no staleness signal of its own to defer to (`getReplica` returns
- * `{snapshot, identity}` only), and §5.5 places the freshness requirement on
+ * `{view, identity}` only), and §5.5 places the freshness requirement on
  * the consumer for exactly this reason: the budget that is safe for an approval
  * click is not the budget that is safe for a chat pane.
  *
@@ -109,7 +109,7 @@ export interface SemanticTranscriptReadRequest {
      * "coverage가 tail뿐이면 legacy"). A snapshot outside the set declines with
      * `coverage_insufficient`.
      */
-    readonly acceptCoverage: readonly ('full' | 'tail' | 'current-turn')[];
+    readonly acceptCoverage: readonly ('full' | 'tail' | 'window' | 'current-turn')[];
     /**
      * Require `observedAt` inside the freshness budget. True for every
      * irreversible decision (§5.5). When false the snapshot's age is not
@@ -167,9 +167,9 @@ function narrowReason(value: any, fallback: TranscriptConsumerFallbackReason): T
  * shape and refuses otherwise, so a projection regression falls back to legacy
  * instead of feeding a half-empty transcript into a completion synthesis.
  */
-function isUsableSnapshot(value: any): value is ReplicatedTranscriptSnapshotV1 {
+function isUsableSnapshot(value: any): value is ReplicatedTranscriptViewV2 {
     if (!value || typeof value !== 'object') return false;
-    if (value.schemaVersion !== 1) return false;
+    if (value.schemaVersion !== 2) return false;
     if (typeof value.sessionId !== 'string' || !value.sessionId) return false;
     if (typeof value.status !== 'string' || !value.status) return false;
     if (!Array.isArray(value.messages)) return false;
@@ -178,7 +178,7 @@ function isUsableSnapshot(value: any): value is ReplicatedTranscriptSnapshotV1 {
     if (typeof value.coverage.totalMessageCount !== 'number') return false;
     if (typeof value.coverage.omittedBefore !== 'boolean') return false;
     if (!value.provenance || typeof value.provenance !== 'object') return false;
-    if (typeof value.revision !== 'number') return false;
+    if (typeof value.frame !== 'number') return false;
     if (typeof value.observedAt !== 'string' || !value.observedAt) return false;
     // `activeModal` is optional but, when present, must be the allow-listed
     // shape — `magi_approval_probe` decides an approve click from it.
@@ -233,11 +233,11 @@ export async function readTranscriptReplicaForSemanticConsumer(
     if (read?.available !== true) {
         return { payload: null, fallbackReason: ensureReason ?? narrowReason(read, 'no_complete_revision') };
     }
-    if (!isUsableSnapshot(read.snapshot)) {
+    if (!isUsableSnapshot(read.view)) {
         return { payload: null, fallbackReason: 'revision_invalid' };
     }
 
-    const snapshot = read.snapshot;
+    const snapshot = read.view;
 
     // ── Coverage admission (§4 roster rows 6/8) ─────────────────────────────
     // `magi_result_collect` must read the CURRENT turn: the whole FIX#1
@@ -260,7 +260,7 @@ export async function readTranscriptReplicaForSemanticConsumer(
     }
 
     return {
-        payload: mapTranscriptSnapshotToReadChatPayload(snapshot, {
+        payload: mapTranscriptViewToReadChatPayload(snapshot, {
             omittedBefore: snapshot.coverage.omittedBefore,
             stale: read.stale === true,
         }),

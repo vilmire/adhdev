@@ -92,7 +92,7 @@ const WORKER_PEER_CONTEXT_CMDS = ['worker_peer_context_pull']
 // Phase 3 §8 unit 3: daemon-local transcript replica IPC (design §4,
 // "별도 프로세스 경계") — mcp-server reaches the seqscribe-node-owning
 // daemon through these two commands instead of opening seqscribe.db itself.
-const TRANSCRIPT_REPLICA_CMDS = ['ensure_transcript_subscription', 'read_transcript_replica']
+const TRANSCRIPT_REPLICA_CMDS = ['ensure_transcript_subscription', 'read_transcript_replica', 'request_transcript_base']
 // wiring-unification G2b (2026-09-24): the dashboard reports which transport
 // (replica vs legacy) it actually used, once per subscription health
 // transition, over P2P — see transcript-transport-report.ts's header.
@@ -114,7 +114,7 @@ const TURN_LEDGER_IPC_CMDS = [
 ]
 
 describe('low-family registry', () => {
-  it('registers all 92 LOW family commands once, no overlap', () => {
+  it('registers all 93 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
@@ -125,8 +125,9 @@ describe('low-family registry', () => {
     // 69 − import_mesh_ledger_slice (C-W9a) + 13 store IPC commands + 1
     // report_transcript_transport (G2b, 2026-09-24) + 8 C-W9c graph/stats/prune/
     // orphaned-pin commands + 1 worker_report_forwarded (F7, 2026-09-25) + 1
-    // worker_progress_forwarded (F7 progress axis) = 92.
-    expect(all).toHaveLength(92)
+    // worker_progress_forwarded (F7 progress axis) + 1 request_transcript_base
+    // (keyed chat resync, 2026-09-28) = 93.
+    expect(all).toHaveLength(93)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)

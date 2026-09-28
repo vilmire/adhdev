@@ -27,7 +27,7 @@ describe('subscribeTranscriptProjection', () => {
     const bus = createSessionLifecycleBus()
     const collectObservation = vi.fn().mockResolvedValue(null)
     const service = new TranscriptProjectionService({
-      daemonId: () => 'daemon-1', writerId: () => 'writer-1', publishRevision: async () => {}, collectObservation,
+      daemonId: () => 'daemon-1', writerId: () => 'writer-1', appendChatFrame: async () => {}, collectObservation,
     })
     subscribeTranscriptProjection(bus, service)
     bus.emit(providerEvent('agent:generating_completed'))
@@ -71,7 +71,7 @@ describe('subscribeTranscriptProjection', () => {
 
   it('forgetSession drops the per-session revision state so the maps cannot grow forever', async () => {
     const service = new TranscriptProjectionService({
-      daemonId: () => 'daemon-1', writerId: () => 'writer-1', epoch: 'e', now: () => '2026-09-23T00:00:00.000Z', publishRevision: async () => {},
+      daemonId: () => 'daemon-1', writerId: () => 'writer-1', epoch: 'e', now: () => '2026-09-23T00:00:00.000Z', appendChatFrame: async () => {},
     })
     service.observe('sess-4', {
       sessionId: 'sess-4', providerType: 'claude-code', status: 'idle',

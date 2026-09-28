@@ -43,13 +43,15 @@ class FakeSocket implements LaneSocket {
 interface FakeHost {
     activations: string[][]
     stopped: boolean
-    onSnapshot: (message: any) => void
+    onView: (update: any) => void
+    onBaseRequest: (sessionId: string) => void
 }
 
 function harness(initialInterest: Map<string, string[]> = new Map([['standalone_mach_1', ['s1']]])) {
     const sockets: FakeSocket[] = []
     const hosts: FakeHost[] = []
-    const applied: Array<{ daemonId: string; sessionId: string; snapshot: unknown; omittedBefore: boolean }> = []
+    const applied: Array<{ daemonId: string; sessionId: string; view: unknown }> = []
+    const baseRequests: Array<{ daemonId: string; sessionId: string }> = []
     const fallbacks: Array<{ daemonId: string; sessionId: string; reason: string }> = []
     const allTimers: Array<{ cb: () => void; ms: number; cleared: boolean; fired: boolean; purpose: string }> = []
     let interest = initialInterest
@@ -62,14 +64,15 @@ function harness(initialInterest: Map<string, string[]> = new Map([['standalone_
             sockets.push(s)
             return s
         },
-        startHost: (_transport, onSnapshot) => {
+        startHost: (_transport, onView, onBaseRequest) => {
             if (!hostAvailable) return null
-            const host: FakeHost = { activations: [], stopped: false, onSnapshot }
+            const host: FakeHost = { activations: [], stopped: false, onView, onBaseRequest }
             hosts.push(host)
             return {
                 pendingCount: () => 0,
                 running: () => !host.stopped,
                 activateSessions: (ids: readonly string[]) => { host.activations.push([...ids]) },
+                view: () => null,
                 stop: () => { host.stopped = true },
             }
         },
@@ -78,9 +81,13 @@ function harness(initialInterest: Map<string, string[]> = new Map([['standalone_
             interestListener = listener
             return () => { interestListener = null }
         },
-        applySnapshot: (daemonId, sessionId, snapshot, options) => {
-            applied.push({ daemonId, sessionId, snapshot, omittedBefore: options.omittedBefore })
+        applyView: (daemonId, sessionId, view) => {
+            applied.push({ daemonId, sessionId, view })
             return 1
+        },
+        requestBase: (daemonId, sessionId) => {
+            baseRequests.push({ daemonId, sessionId })
+            return true
         },
         reportFallback: (daemonId, sessionId, reason) => { fallbacks.push({ daemonId, sessionId, reason }) },
         setTimer: (cb, ms, purpose) => {
@@ -93,7 +100,7 @@ function harness(initialInterest: Map<string, string[]> = new Map([['standalone_
     }
     return {
         client: new StandaloneTranscriptLaneClient(deps),
-        sockets, hosts, applied, fallbacks,
+        sockets, hosts, applied, fallbacks, baseRequests,
         /** Reconnect timers ever scheduled, in order. */
         get timers() { return allTimers.filter((t) => t.purpose === 'reconnect') },
         /** Sub-retry timers that are still pending. */
@@ -118,8 +125,8 @@ function harness(initialInterest: Map<string, string[]> = new Map([['standalone_
     }
 }
 
-function snapshotMessage(sessionId: string, omittedBefore = false) {
-    return { kind: 'transcript-bridge-snapshot', sessionId, snapshot: { revision: 7, sessionId }, omittedBefore }
+function viewUpdate(sessionId: string) {
+    return { sessionId, view: { frame: 7, sessionId }, reset: true }
 }
 
 describe('standalone transcript lane — wire constants', () => {
@@ -140,11 +147,13 @@ describe('standalone transcript lane — wire constants', () => {
         assert.equal(isStandaloneTranscriptLaneEnabled({ VITE_ADHDEV_TRANSCRIPT_WORKER: 'on' }), true)
     })
 
-    it('lets the controller report frame onto /ws, and nothing else beyond subscribe/unsubscribe', () => {
+    it('lets the controller report / base-request frames onto /ws, and nothing else beyond subscribe/unsubscribe', () => {
         assert.equal(isStandaloneWsDataFrame({ type: 'subscribe', topic: 'session.chat_tail' }), true)
         assert.equal(isStandaloneWsDataFrame({ type: 'unsubscribe', topic: 'x', key: 'k' }), true)
         // The exact frame SessionChatTailController.reportTransportSelection sends.
         assert.equal(isStandaloneWsDataFrame({ type: 'command', commandType: 'report_transcript_transport', data: { selection: 'replica' } }), true)
+        // The exact frame SessionChatTailController.requestTranscriptBase sends (design 2026-09-28 §5.2).
+        assert.equal(isStandaloneWsDataFrame({ type: 'command', commandType: 'request_transcript_base', data: { rawSessionId: 's1' } }), true)
         assert.equal(isStandaloneWsDataFrame({ type: 'command', commandType: 'send_chat', data: {} }), false)
         assert.equal(isStandaloneWsDataFrame({ type: 'status' }), false)
         assert.equal(isStandaloneWsDataFrame(null), false)
@@ -162,20 +171,31 @@ describe('StandaloneTranscriptLaneClient', () => {
         assert.deepEqual(h.hosts[0]!.activations, [['s1']])
     })
 
-    it('feeds every verified snapshot to the controllers of each daemon reading that session', () => {
+    it('feeds every verified view to the controllers of each daemon reading that session', () => {
         const h = harness(new Map([['standalone_mach_1', ['s1', 's2']]]))
         h.client.start()
         h.sockets[0]!.fire('open')
-        h.hosts[0]!.onSnapshot(snapshotMessage('s1', true))
+        h.hosts[0]!.onView(viewUpdate('s1'))
         assert.deepEqual(h.applied, [{
             daemonId: 'standalone_mach_1',
             sessionId: 's1',
-            snapshot: { revision: 7, sessionId: 's1' },
-            omittedBefore: true,
+            view: { frame: 7, sessionId: 's1' },
         }])
-        // A snapshot for a session nobody retains is not delivered anywhere.
-        h.hosts[0]!.onSnapshot(snapshotMessage('s-unknown'))
+        // A view for a session nobody retains is not delivered anywhere.
+        h.hosts[0]!.onView(viewUpdate('s-unknown'))
         assert.equal(h.applied.length, 1)
+    })
+
+    it('routes a worker base-frame request to ONE daemon reading that session', () => {
+        const h = harness(new Map([['standalone_mach_1', ['s1']], ['standalone', ['s1']]]))
+        h.client.start()
+        h.sockets[0]!.fire('open')
+        h.hosts[0]!.onBaseRequest('s1')
+        assert.equal(h.baseRequests.length, 1)
+        assert.equal(h.baseRequests[0]!.sessionId, 's1')
+        // Nobody reads this one: nothing to send it through.
+        h.hosts[0]!.onBaseRequest('s-unknown')
+        assert.equal(h.baseRequests.length, 1)
     })
 
     it('re-activates the host when the retained session set changes (absolute set, deduped)', () => {
@@ -187,9 +207,9 @@ describe('StandaloneTranscriptLaneClient', () => {
         // Unchanged set → no redundant activation.
         h.setInterest(new Map([['standalone_mach_1', ['s1', 's2']]]))
         assert.equal(h.hosts[0]!.activations.length, 2)
-        // s1 now maps to both daemon ids → both controller sets get the snapshot.
+        // s1 now maps to both daemon ids → both controller sets get the view.
         h.setInterest(new Map([['standalone_mach_1', ['s1', 's2']], ['standalone', ['s1']]]))
-        h.hosts[0]!.onSnapshot(snapshotMessage('s1'))
+        h.hosts[0]!.onView(viewUpdate('s1'))
         assert.deepEqual(h.applied.map((a) => a.daemonId).sort(), ['standalone', 'standalone_mach_1'])
     })
 
@@ -250,18 +270,18 @@ describe('StandaloneTranscriptLaneClient', () => {
 })
 
 describe('re-SUB of sessions whose topic the daemon had not defined yet', () => {
-    it('re-arms only undelivered sessions, with doubling cadence, until a snapshot arrives', () => {
+    it('re-arms only undelivered sessions, with doubling cadence, until a view arrives', () => {
         const h = harness(new Map([['standalone_mach_1', ['s1', 's2']]]))
         h.client.start()
         h.sockets[0]!.fire('open')
-        h.hosts[0]!.onSnapshot(snapshotMessage('s1'))
+        h.hosts[0]!.onView(viewUpdate('s1'))
         assert.equal(h.pendingSubRetries().length, 1)
         const first = h.runSubRetry()
         assert.equal(first, SUB_RETRY_INITIAL_MS)
         // close+reopen exactly s2's subscription; the delivered s1 stays subscribed throughout.
         assert.deepEqual(h.hosts[0]!.activations, [['s1', 's2'], ['s1'], ['s1', 's2']])
         assert.equal(h.pendingSubRetries()[0]!.ms, SUB_RETRY_INITIAL_MS * 2)
-        h.hosts[0]!.onSnapshot(snapshotMessage('s2'))
+        h.hosts[0]!.onView(viewUpdate('s2'))
         h.runSubRetry()
         // everything delivered → no further re-SUB and no further timer
         assert.equal(h.hosts[0]!.activations.length, 3)

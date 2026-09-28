@@ -2,7 +2,7 @@
  * Browser-side seqscribe authority hooks — a NON-SIGNING, reject-all verifier.
  *
  * ── The problem this solves ────────────────────────────────────────────────
- * `session.<id>.transcript` is a content-class policy that names
+ * `session.<id>.chat` is a content-class policy that names
  * `finalityAuthority: ADHDEV_AUTHORITY_ID` (topic-addressing.ts, mirroring
  * daemon-core `seqscribe/topics.ts`). seqscribe refuses to DEFINE such a topic
  * unless an `AuthorityHooks.verifyFinality` is present:
@@ -32,7 +32,7 @@
  *      exempts ring retention from finality/archive/snapshot entirely. There
  *      is nothing for this hook to reject in the first place.
  *   2. FULL retention + `subscribe-only` replication (G2b, landed
- *      2026-09-24 — `session.<id>.transcript`): certs DO arrive here, but a
+ *      2026-09-24, kept by the keyed `session.<id>.chat`): certs DO arrive here, but a
  *      rejected cert takes a DEFINED branch, not an invented state —
  *      vendor/seqscribe/src/finality.ts:115-119 routes a failed verify to
  *      `emitAnomaly({ kind: 'bad_cert' })`, no throw, no wedge — and that
@@ -58,7 +58,7 @@
  * this module has actually reasoned about being safe.
  *
  * ── G2b (landed 2026-09-24): the vendor `tail`-view blocker is resolved ────
- * `session.<id>.transcript` switching to `full` retention was blocked once
+ * The per-session transcript topic switching to `full` retention was blocked once
  * before by `oss/vendor/seqscribe/src/subs.ts`'s `view:'tail'` throwing
  * `ERR_UNKNOWN_VIEW` for any non-ring topic — unrelated to this file's own
  * guard, which was already sound for the `subscribe-only` case even then.

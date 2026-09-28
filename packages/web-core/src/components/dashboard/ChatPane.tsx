@@ -5,7 +5,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
-import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
+import ChatMessageList, { getChatMessageStableKey, type ToolExpandAddress } from '../ChatMessageList';
 import ChatControlsSection, { readSessionLaunchSurface } from './ChatControlsSection';
 import ChatInputBar, { type ImageAttachment } from './ChatInputBar';
 import PendingQueueStrip from './PendingQueueStrip';
@@ -20,7 +20,7 @@ import { eventManager } from '../../managers/EventManager';
 import { getConversationViewStates } from './DashboardMobileChatShared';
 import type { ToolExpandFailureReason, ToolExpandState } from '../ChatMessageList/chatMessageBubbles';
 import type { ActiveConversation, DashboardMessage } from './types';
-import type { ChatMessage, DaemonData } from '../../types';
+import type { DaemonData } from '../../types';
 import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader';
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace';
 import { IconChat, IconEye, IconFolder, IconPlug, IconSpinner } from '../Icons';
@@ -524,15 +524,18 @@ export default function ChatPane({
 
     const handleExpandToolBlock = useCallback(async (
         messageKey: string,
-        ref: NonNullable<ChatMessage['toolBlockRef']>,
+        address: ToolExpandAddress,
     ) => {
         if (!daemonId) return;
         setToolExpansions(prev => ({ ...prev, [messageKey]: { status: 'loading' } }));
         try {
+            // `{ toolBlockRef }` (read_chat lane) or `{ messageId }` (keyed
+            // replica lane, design 2026-09-28 §5.9) — the daemon accepts either
+            // and resolves a messageId through its identity ledger.
             const raw = await sendCommand(daemonId, 'expand_tool_block', {
                 targetSessionId: activeConv.sessionId,
                 agentType: controlsContext.providerType || activeConv.agentType,
-                toolBlockRef: ref,
+                ...('messageId' in address ? { messageId: address.messageId } : { toolBlockRef: address.toolBlockRef }),
             });
             const body = unwrapCommandResult(raw) as {
                 success?: boolean;

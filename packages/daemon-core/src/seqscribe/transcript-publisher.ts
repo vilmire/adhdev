@@ -1,27 +1,24 @@
 /**
  * `TranscriptProjectionService` — the single-observation coalescing publisher
- * (design §5.2, §8 unit 2: "single observation publisher + parity/readiness").
+ * of the keyed chat transcript (design 2026-09-28 message-keyed storage; the
+ * coalescing rules are unchanged from the 2026-08-29 transcript design §5.2).
  *
- * ── What this unit owns, and what it does NOT ──────────────────────────────
- * This service turns a `TranscriptObservation` into a begin/chunk/commit
- * envelope set (via unit 1's `encodeTranscriptRevision`) and hands the result
- * to an INJECTED `publishRevision` sink. It never touches a live seqscribe
- * node, never defines a topic, and never runs the two-sided define/serve
- * grant/updateGrants activation handshake — wiring an encoder call to a live
- * `node.log(topic).append` is `§8 unit 3` ("dynamic transcript activation +
- * daemon replica store"), exactly as transcript-revision-codec.ts's header
- * says for the assembler half. `configureTranscriptProjection` is therefore
- * NOT called from `boot/daemon-lifecycle.ts` in this unit: there is nothing
- * true to wire it to yet. (That is no longer the state of the tree — a later
- * unit did wire it; `configureTranscriptProjection` is now called from
- * `boot/daemon-lifecycle.ts`. The call sites below are live, not inert.)
- * The call sites this unit DOES add (the choke point in
- * `commands/read-chat-presentation.ts`, the dirty trigger in
- * `subscriptions/topic-registry.ts#markChatOutputActivity`) are safe no-ops
- * while unconfigured — the same incremental pattern unit 1 used for
- * `TranscriptTopicClaimRegistry`.
+ * ── What this service owns ─────────────────────────────────────────────────
+ * It turns each `TranscriptObservation` into at most one FRAME of
+ * `session.<id>.chat` rows (transcript-keyed-frame.ts: changed bubbles only,
+ * meta when it changed, then a commit) and hands the frame to an INJECTED
+ * `appendChatFrame` sink. The live append, compaction and parity read-back
+ * are `transcript-keyed-publish-runtime.ts`'s — the only module that appends
+ * to a `.chat` topic (`check:transcript-write-shape`).
  *
- * ── Coalescing (design §5.2) ────────────────────────────────────────────────
+ * Per session it keeps a `KeyedChatSessionState`: what is already durable, so
+ * an observation that changed nothing writes nothing, and a streaming tick
+ * writes one bubble (or one 24 KiB part) plus a commit regardless of how long
+ * the transcript is. The state is rebuilt from the topic on first use after a
+ * restart (`readPersistedChat`) and dropped whenever an append fails, so the
+ * next frame re-diffs against what actually landed.
+ *
+ * ── Coalescing ─────────────────────────────────────────────────────────────
  * "publisher는 read hot path를 block하지 않는 bounded per-session queue를 쓰되,
  * enqueue 실패를 숨기지 않는다. 같은 session의 중간 observation은 coalesce하고
  * 최신 complete 상태를 발행한다." Two entry points exist:
@@ -32,54 +29,37 @@
  *   - `markDirty(sessionId)` — PULL trigger. Called from output-activity/
  *     status-change hooks that know a session changed but do not have a fresh
  *     observation. Requires `deps.collectObservation` to do anything; a
- *     service configured without it treats `markDirty` as a no-op (useful for
- *     unit tests that only exercise `observe`, and for exercising the choke
- *     point in isolation before a collector exists).
+ *     service configured without it treats `markDirty` as a no-op.
  *
  * Both are serialized PER SESSION through the same `inFlight`/`pendingLatest`
- * bookkeeping so the monotonic revision counter never races, and a second
- * call arriving while one is in flight replaces (never queues) the pending
- * work — "매 commit 전체 교체다. delta merge가 아니다" (§3.4) applies just as
- * much to what the publisher itself coalesces as to what a subscriber does.
- * That `inFlight` coalescing merges CONCURRENT work only. It does nothing for
- * a serial stream: a chunk arriving after the previous pull has settled starts
- * a full new pull, and each pull re-encodes the WHOLE snapshot (§3.4 — "매
- * commit 전체 교체다"), not a delta. Measured, 20 serial PTY callbacks produce
- * 20 full reparses. Do not treat `inFlight` as a burst guard; it is not one.
+ * bookkeeping so frames never race, and a second call arriving while one is in
+ * flight replaces (never queues) the pending work. That coalescing merges
+ * CONCURRENT work only; a serial stream of PTY callbacks is collapsed by the
+ * separate leading+trailing throttle (`markPtyOutputActivity`): the first byte
+ * pulls immediately, the rest of a paint burst is collapsed into at most one
+ * pull per `TRANSCRIPT_PTY_DIRTY_THROTTLE_MS`. The trailing pull is not
+ * optional — a provider may append its JSONL record just after the terminal
+ * write. The window is FIXED: a frame's cost no longer grows with the
+ * transcript, so the v1 size-adaptive window (up to 3 s for large sessions)
+ * is gone (§7.1). Status/finalization/post-chat callers use the immediate
+ * `markDirty` path.
  *
- * PTY output therefore uses a separate leading+trailing throttle
- * (`markPtyOutputActivity`): the first byte pulls immediately, while the rest
- * of a paint burst is collapsed into at most one pull per
- * `TRANSCRIPT_PTY_DIRTY_THROTTLE_MS` window. The trailing pull is not optional
- * — a provider may append its JSONL record just after the terminal write, so
- * dropping it loses the tail of every burst. Status/finalization/post-chat
- * callers continue to use the immediate `markDirty` path, so completion and
- * approval transitions are not delayed by the throughput guard.
- *
- * ── Dedup / empty-guard / oversize (design §3.4, §7.2 item 3) ──────────────
- * See `transcript-observation.ts#hashTranscriptObservation` for why the dedup
- * hash excludes producer identity/revision/observedAt. The empty-guard and
- * oversize-fallback rules are implemented in `publishObservation` below with
- * inline comments at each branch.
+ * ── Empty-guard ────────────────────────────────────────────────────────────
+ * An empty observation never clears published bubbles unless the collector
+ * positively confirmed a clear (`verifiedClear`) — see `publishObservation`.
  */
 
 import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { LOG } from '../logging/logger.js';
+import { dropMessageIdentityLedger, peekMessageIdentityLedger } from '../chat/message-identity-ledger.js';
+import type { ChatBaseReason } from './transcript-keyed-codec.js';
 import {
-    encodeTranscriptRevision,
-    type TranscriptRevisionBeginV1,
-    type TranscriptRevisionChunkV1,
-    type TranscriptRevisionCommitV1,
-    type TranscriptRevisionIdentity,
-} from './transcript-revision-codec.js';
-import { encodeTranscriptSnapshot } from './transcript-projection.js';
-import {
-    hashTranscriptObservation,
-    isEmptyTranscriptObservation,
-    stampTranscriptObservation,
-    type TranscriptObservation,
-} from './transcript-observation.js';
+    KeyedChatSessionState,
+    type KeyedChatFrame,
+    type PersistedChatState,
+} from './transcript-keyed-frame.js';
+import { isEmptyTranscriptObservation, type TranscriptObservation } from './transcript-observation.js';
 import { resolveTranscriptMode, type TranscriptMode } from './transcript-mode.js';
 import {
     TranscriptLatencyRecorder,
@@ -101,42 +81,6 @@ export const MAX_TRACKED_SESSIONS = 512;
  */
 export const TRANSCRIPT_PTY_DIRTY_THROTTLE_MS = 350;
 
-/** Snapshots at or below this size keep exactly the base 350 ms window. */
-export const TRANSCRIPT_PTY_DIRTY_SIZE_FREE_BYTES = 64 * 1024;
-
-/** Upper bound on the size-adaptive trailing window. */
-export const TRANSCRIPT_PTY_DIRTY_MAX_WINDOW_MS = 3000;
-
-/**
- * Size-adaptive PTY-dirty trailing window.
- *
- * Every pull re-encodes the WHOLE snapshot (§3.4) and the live publisher then
- * appends ~one 36 KiB chunk row per 36 KiB of it, so the per-pull cost grows
- * linearly with snapshot size while the 350 ms ceiling stays fixed. Measured
- * (preview rc.47): one session held 2.5 pulls/s (the 350 ms ceiling) for a
- * full minute, each pull ~80 KB. The
- * window therefore grows by 1 ms per KiB above
- * `TRANSCRIPT_PTY_DIRTY_SIZE_FREE_BYTES`:
- *
- *   window = clamp(350 + max(0, bytes - 64 KiB) / 1024, 350, 3000) ms
- *
- *   ≤ 64 KiB → 350 ms (unchanged) · 500 KiB → ~786 ms · 1 MiB → ~1.31 s ·
- *   ≥ ~2.65 MiB (2714 KiB) → 3000 ms cap
- *
- * `lastSnapshotBytes` is the size of the session's most recently ENCODED
- * snapshot (0 before the first). Only the trailing window stretches: the
- * leading edge still pulls immediately, the trailing pull is still mandatory,
- * and the 3 s stat poll is unchanged.
- */
-export function ptyDirtyWindowMs(lastSnapshotBytes: number): number {
-    const bytes = Number.isFinite(lastSnapshotBytes) ? lastSnapshotBytes : 0;
-    const extraMs = Math.max(0, bytes - TRANSCRIPT_PTY_DIRTY_SIZE_FREE_BYTES) / 1024;
-    return Math.min(
-        TRANSCRIPT_PTY_DIRTY_MAX_WINDOW_MS,
-        Math.max(TRANSCRIPT_PTY_DIRTY_THROTTLE_MS, TRANSCRIPT_PTY_DIRTY_THROTTLE_MS + extraMs),
-    );
-}
-
 /**
  * Safety net only, NOT the latency path. Picks up transcript writes that
  * produced no PTY callback (external edits, a provider that flushes its JSONL
@@ -145,12 +89,6 @@ export function ptyDirtyWindowMs(lastSnapshotBytes: number): number {
  * which is exactly why the PTY trigger above must stay wired.
  */
 export const TRANSCRIPT_STAT_POLL_INTERVAL_MS = 3000;
-
-export interface TranscriptRevisionEnvelope {
-    readonly begin: TranscriptRevisionBeginV1;
-    readonly chunks: readonly TranscriptRevisionChunkV1[];
-    readonly commit: TranscriptRevisionCommitV1;
-}
 
 export interface TranscriptObservationCollectResult {
     readonly observation: TranscriptObservation;
@@ -170,40 +108,44 @@ export interface TranscriptProjectionDeps {
     /** Injected for tests; defaults to `new Date().toISOString()`. */
     now?(): string;
     /**
-     * The producer epoch — random per service-instantiation (design §3.4:
-     * "publisher service boot마다 random UUID"). Injectable for tests that need
-     * a fixed value; defaults to `randomUUID()`.
+     * The producer epoch — random per service instantiation (§4.10: "프로세스
+     * (퍼블리셔 인스턴스)마다 새로 발급"). Injectable for tests.
      */
     epoch?: string;
     /**
-     * Hand a complete begin/chunk/commit envelope set to whatever actually owns
-     * the live seqscribe append (§8 unit 3). Rejecting/throwing is caught and
-     * counted (`publishFailed`) — this must never propagate into the read_chat
-     * hot path that triggered it.
+     * Read back what the topic already holds for a session, to rebuild its
+     * published state after a restart (§4.10). Synchronous (seqscribe's scans
+     * are). Omit or return null for "nothing persisted" (tests, no node).
      */
-    publishRevision(sessionId: string, envelope: TranscriptRevisionEnvelope): Promise<void>;
+    readPersistedChat?(sessionId: string): PersistedChatState | null;
+    /**
+     * Durably append one frame's rows (the live `.chat` append — §8 unit 3).
+     * Rejecting/throwing is caught and counted (`publishFailed`) and drops the
+     * session's state so the next frame re-diffs against the topic. Must never
+     * propagate into the read_chat hot path that triggered it.
+     */
+    appendChatFrame(sessionId: string, frame: KeyedChatFrame, observation: TranscriptObservation): Promise<void>;
     resolveSourcePath?: (sessionId: string) => string | null;
     /**
      * Pull a fresh observation for `markDirty`-triggered publishes. Omit to
-     * make `markDirty` an inert no-op (e.g. in tests that only exercise
-     * `observe`, or before a later unit wires a real collector).
+     * make `markDirty` an inert no-op.
      */
     collectObservation?(sessionId: string): Promise<TranscriptObservationCollectResult | null>;
-    /** Called once per oversize rejection — the caller's cue to fall back the
-     * whole read to legacy `read_chat`/`chat_history` (design §3.3, §7.2 item 3). */
-    onOversize?(sessionId: string, chunkCount: number, snapshotBytes: number): void;
 }
 
+/** Base frames by reason (§4.10), plus `unexpected` for tripwire frames (§8.2c). */
+export type TranscriptChatBaseCounts = Record<ChatBaseReason | 'unexpected', number>;
+
 export interface TranscriptProjectionCounters {
-    /** Complete revisions successfully handed to `publishRevision`. */
+    /** Frames successfully appended (`chatFramesPublished`). */
     published: number;
-    /** `publishRevision` threw/rejected. */
+    /** `appendChatFrame` threw/rejected. */
     publishFailed: number;
-    /** Stable-hash observations that produced no new revision (design §3.4). */
+    /** Observations that changed nothing and wrote zero rows. */
     deduped: number;
-    /** Transient-empty observations that did NOT clobber a prior non-empty revision. */
+    /** Transient-empty observations that did NOT clobber published bubbles. */
     emptyGuarded: number;
-    /** Rejected by `encodeTranscriptRevision` as `projection_oversize`. */
+    /** Frames in which the 16 MiB live cap tombstoned the oldest bubbles (§11 Q1). */
     oversized: number;
     /** Sessions dropped because `MAX_TRACKED_SESSIONS` was reached. */
     dropped: number;
@@ -212,17 +154,24 @@ export interface TranscriptProjectionCounters {
     /** `collectObservation` returned `null` (source not ready — safety-net poll found nothing new). */
     sourcePending: number;
     /**
-     * `collectObservation` threw. Split out of `sourcePending` deliberately:
-     * that counter conflates "collector ran fine and had nothing new" with the
-     * healthy nested-push path (the internal collector returns null even on
-     * success), so a collector failing on EVERY tick was indistinguishable from
-     * a normal idle daemon. Only this counter rising means the collect leg is
-     * actually broken. Mirrors how `publishFailed` is kept separate from
-     * `published`.
+     * `collectObservation` threw. Split out of `sourcePending` deliberately: only
+     * this counter rising means the collect leg is actually broken.
      */
     collectFailed: number;
     /** PTY dirty triggers collapsed behind the per-session throttle window. */
     ptyDirtyCoalesced: number;
+    /** Observations whose bubbles carried no `messageId`/`ord` (identity ledger failed) — not published. */
+    unidentified: number;
+    /** Rows appended across all frames (`chatRowsWritten`). */
+    chatRowsWritten: number;
+    /** JCS payload bytes appended across all frames (`chatBytesWritten`). */
+    chatBytesWritten: number;
+    /** Base frames by reason (`chatBaseFrames`). */
+    chatBaseFrames: TranscriptChatBaseCounts;
+    /** Base frames that came within 10 minutes of the previous one for their session. */
+    chatBaseRateExceeded: number;
+    /** Tripwire frames that were refused because the tripwire is armed to throw. */
+    chatTripwireRefused: number;
 }
 
 function freshCounters(): TranscriptProjectionCounters {
@@ -237,26 +186,35 @@ function freshCounters(): TranscriptProjectionCounters {
         sourcePending: 0,
         collectFailed: 0,
         ptyDirtyCoalesced: 0,
+        unidentified: 0,
+        chatRowsWritten: 0,
+        chatBytesWritten: 0,
+        chatBaseFrames: { epoch_start: 0, writer_change: 0, lineage_switch: 0, resync_request: 0, unexpected: 0 },
+        chatBaseRateExceeded: 0,
+        chatTripwireRefused: 0,
     };
 }
 
-interface SessionState {
-    revision: number;
-    /** Content hash of the last successfully published complete revision. */
-    hash: string;
+/**
+ * Whether a tripwire frame (§8.2c — a delta frame rewriting more than half of
+ * the live bubbles) is REFUSED instead of published. Armed in development
+ * builds and by `ADHDEV_TRANSCRIPT_TRIPWIRE=throw` (the gate tests); in
+ * production the frame is published and counted as `chatBaseFrames.unexpected`.
+ */
+export function transcriptTripwireArmed(env: NodeJS.ProcessEnv = process.env): boolean {
+    return env.ADHDEV_TRANSCRIPT_TRIPWIRE === 'throw' || env.NODE_ENV === 'development';
+}
+
+function newProducerEpoch(): string {
+    return randomUUID().replace(/-/g, '').slice(0, 12);
 }
 
 export class TranscriptProjectionService {
     private readonly deps: TranscriptProjectionDeps;
     private readonly epoch: string;
     private readonly counters: TranscriptProjectionCounters = freshCounters();
-    private readonly sessionState = new Map<string, SessionState>();
-    /**
-     * Size of each session's most recently encoded snapshot — including an
-     * oversized one, which is exactly the case that most needs a longer PTY
-     * window. Feeds `ptyDirtyWindowMs`; cleared by `forgetSession`.
-     */
-    private readonly lastSnapshotBytes = new Map<string, number>();
+    /** Per-session published state (LRU order: most recently published last). */
+    private readonly sessionState = new Map<string, KeyedChatSessionState>();
 
     // Per-session coalescing bookkeeping. `inFlight` gates concurrent work for
     // a session; `pendingObservation`/`pendingPull` hold "arrived while busy,
@@ -288,7 +246,7 @@ export class TranscriptProjectionService {
 
     constructor(deps: TranscriptProjectionDeps) {
         this.deps = deps;
-        this.epoch = deps.epoch ?? randomUUID();
+        this.epoch = deps.epoch ?? newProducerEpoch();
     }
 
     mode(env?: NodeJS.ProcessEnv): TranscriptMode {
@@ -313,7 +271,7 @@ export class TranscriptProjectionService {
         }
         if (!this.admitSession(sessionId)) return;
         this.beginTrigger(sessionId, 'unspecified');
-        const sourcePath = (observation.provenance?.transcriptProvenance as any)?.sourcePath;
+        const sourcePath = ((observation.provenance as any)?.transcriptProvenance as any)?.sourcePath;
         if (typeof sourcePath === 'string' && sourcePath) {
             this.knownPaths.set(sessionId, sourcePath);
         }
@@ -403,7 +361,7 @@ export class TranscriptProjectionService {
             this.ptyDirtyTimers.delete(sessionId);
             this.armPtyDirtyTimer(sessionId);
             this.markDirty(sessionId, 'pty_output');
-        }, ptyDirtyWindowMs(this.lastSnapshotBytes.get(sessionId) ?? 0));
+        }, TRANSCRIPT_PTY_DIRTY_THROTTLE_MS);
         timer.unref?.();
         this.ptyDirtyTimers.set(sessionId, timer);
     }
@@ -439,7 +397,6 @@ export class TranscriptProjectionService {
         if (!sessionId) return;
         this.stopPolling(sessionId);
         this.sessionState.delete(sessionId);
-        this.lastSnapshotBytes.delete(sessionId);
         this.pendingObservation.delete(sessionId);
         this.pendingPull.delete(sessionId);
         this.pendingContext.delete(sessionId);
@@ -447,6 +404,10 @@ export class TranscriptProjectionService {
         if (timer) clearTimeout(timer);
         this.ptyDirtyTimers.delete(sessionId);
         this.ptyDirtyTrailing.delete(sessionId);
+        // The session's identity ledger holds its bubble texts for alignment;
+        // a terminated session no longer needs them (a later read re-seeds
+        // from the topic).
+        dropMessageIdentityLedger(sessionId.trim());
     }
 
     private runStatPoll(): void {
@@ -487,6 +448,47 @@ export class TranscriptProjectionService {
      */
     seedSession(sessionId: string): void {
         this.markDirty(sessionId, 'seed');
+    }
+
+    /**
+     * A reader reported repeated digest mismatches (`request_transcript_base`,
+     * §5.2): make the session's next frame a full `resync_request` base frame,
+     * and pull one now.
+     */
+    requestBase(sessionId: string): void {
+        if (!sessionId) return;
+        if (this.mode() === 'off') return;
+        this.stateFor(sessionId).requestBase('resync_request');
+        this.markDirty(sessionId, 'unspecified');
+    }
+
+    /** The session's published state, restored from the topic on first use. */
+    private stateFor(sessionId: string): KeyedChatSessionState {
+        let state = this.sessionState.get(sessionId);
+        if (state) {
+            this.sessionState.delete(sessionId);
+            this.sessionState.set(sessionId, state);
+            return state;
+        }
+        state = new KeyedChatSessionState(sessionId, this.epoch);
+        try {
+            const persisted = this.deps.readPersistedChat?.(sessionId) ?? null;
+            if (persisted) state.restore(persisted, this.deps.writerId());
+        } catch (error) {
+            LOG.warn(
+                'Seqscribe',
+                `transcript chat restore failed session=${redactSessionId(sessionId)}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+        }
+        this.sessionState.set(sessionId, state);
+        // Bounded like every per-session map here; an evicted state is simply
+        // restored from the topic again on its next frame.
+        while (this.sessionState.size > MAX_TRACKED_SESSIONS) {
+            const oldest = this.sessionState.keys().next().value as string;
+            if (oldest === sessionId) break;
+            this.sessionState.delete(oldest);
+        }
+        return state;
     }
 
     private admitSession(sessionId: string): boolean {
@@ -530,7 +532,7 @@ export class TranscriptProjectionService {
             }
             // Stamped whether or not the collector produced anything: the
             // collect leg is the file read + normalization, and its cost is the
-            // same work regardless of whether it found a new revision. Recording
+            // same work regardless of whether it found a new frame. Recording
             // only the productive pulls would bias the distribution toward the
             // cheap cases.
             const ctx = this.triggerContext.get(sessionId);
@@ -589,82 +591,97 @@ export class TranscriptProjectionService {
         const mode = this.mode();
         if (mode === 'off') return;
 
-        const last = this.sessionState.get(sessionId);
+        const state = this.stateFor(sessionId);
 
-        // Design §3.4: "pending:true, unsafe mapping, transient empty read는
-        // 이미 non-empty complete snapshot을 빈 값으로 덮지 않는다." A prior
-        // complete revision exists (`last`), the new observation is empty, and
-        // the caller has NOT positively confirmed a clear — hold, do not publish.
-        if (last && isEmptyTranscriptObservation(observation) && !verifiedClear) {
+        // "pending:true, unsafe mapping, transient empty read는 이미 non-empty
+        // complete snapshot을 빈 값으로 덮지 않는다." Published bubbles exist, the
+        // new observation is empty, and the caller has NOT positively confirmed
+        // a clear — hold, do not tombstone everything.
+        if (state.liveCount > 0 && isEmptyTranscriptObservation(observation) && !verifiedClear) {
             this.counters.emptyGuarded++;
             return;
         }
+        if (verifiedClear) {
+            // §3.5: a verified clear starts a new identity epoch, so daemon-issued
+            // ids of the cleared conversation are never reissued.
+            try { peekMessageIdentityLedger(sessionId.trim())?.reset(); } catch { /* identity is best-effort */ }
+        }
 
-        const contentHash = hashTranscriptObservation(observation);
-        if (last && last.hash === contentHash) {
+        const nowIso = (this.deps.now ?? (() => new Date().toISOString()))();
+        const nowMs = Date.now();
+        const built = state.build(observation, {
+            writerId: this.deps.writerId(),
+            producerDaemonId: this.deps.daemonId(),
+            observedAt: nowIso,
+            nowMs,
+            verifiedClear,
+        });
+        if (built.status === 'unchanged') {
             this.counters.deduped++;
             return;
         }
-
-        const revision = (last?.revision ?? 0) + 1;
-        const identity: TranscriptRevisionIdentity = {
-            sessionId: observation.sessionId,
-            producerDaemonId: this.deps.daemonId(),
-            producerWriterId: this.deps.writerId(),
-            producerEpoch: this.epoch,
-            revision,
-        };
-        const now = this.deps.now ?? (() => new Date().toISOString());
-        const candidate = stampTranscriptObservation(observation, identity, now());
-        const snapshot = encodeTranscriptSnapshot(candidate);
-        const encoded = encodeTranscriptRevision(snapshot, identity, now);
-        this.lastSnapshotBytes.set(sessionId, encoded.ok ? encoded.begin.snapshotBytes : encoded.snapshotBytes);
-
-        if (!encoded.ok) {
-            // Design §3.3/§7.2 item 3: no silent truncation. Count it and let the
-            // caller (§8 unit 3+) fall the whole read back to legacy — this
-            // service does not itself know how to fall back a read.
-            this.counters.oversized++;
-            LOG.warn(
-                'Seqscribe',
-                `transcript projection_oversize session=${redactSessionId(sessionId)} chunks=${encoded.chunkCount} bytes=${encoded.snapshotBytes}`,
-            );
-            this.deps.onOversize?.(sessionId, encoded.chunkCount, encoded.snapshotBytes);
+        if (built.status === 'unidentified') {
+            this.counters.unidentified++;
             return;
         }
+        const frame = built.frame;
 
-        // Commit the new state BEFORE the async publish call so a concurrent
-        // `observe`/`markDirty` arriving mid-publish dedupes/coalesces against
-        // this revision rather than racing to mint a duplicate one.
-        this.sessionState.set(sessionId, { revision, hash: contentHash });
+        if (frame.tripwire) {
+            // §8.2c — a delta frame rewrote most of the live transcript: exactly
+            // the whole-transcript-per-change shape this storage exists to end.
+            LOG.warn(
+                'Seqscribe',
+                `transcript chat tripwire session=${redactSessionId(sessionId)} rewritten=${frame.rewrittenBubbles}/${frame.priorLive} frame=${frame.frame}`,
+            );
+            if (transcriptTripwireArmed()) {
+                this.counters.chatTripwireRefused++;
+                this.sessionState.delete(sessionId);
+                return;
+            }
+            this.counters.chatBaseFrames.unexpected++;
+        }
 
         if (mode === 'shadow' || mode === 'primary') {
             const encodedAt = this.latency.now();
             try {
-                await this.deps.publishRevision(sessionId, { begin: encoded.begin, chunks: encoded.chunks, commit: encoded.commit });
-                this.counters.published++;
-                // Only a SUCCESSFUL publish is sampled. A failed sink returns
-                // fast and would drag the distribution down while representing
-                // nothing a user ever saw rendered — `publishFailed` is the
-                // counter for that case.
-                const ctx = this.triggerContext.get(sessionId);
-                this.latency.recordStage('collect_to_publish', this.latency.now() - encodedAt);
-                if (ctx) {
-                    this.latency.recordPublished(ctx.source);
-                    this.latency.recordTriggerToPublish(ctx.source, this.latency.now() - ctx.startedAt);
-                }
+                await this.deps.appendChatFrame(sessionId, frame, observation);
             } catch (error) {
                 this.counters.publishFailed++;
+                // What landed is unknown (a group commit rolls back whole, but
+                // an earlier frame may have been torn): re-diff against the
+                // topic on the next frame instead of trusting this state.
+                this.sessionState.delete(sessionId);
                 LOG.warn(
                     'Seqscribe',
                     `transcript publish failed session=${redactSessionId(sessionId)}: ${error instanceof Error ? error.message : String(error)}`,
                 );
+                return;
+            }
+            state.commit(frame, nowMs);
+            this.counters.published++;
+            this.counters.chatRowsWritten += frame.rows.length;
+            this.counters.chatBytesWritten += frame.bytes;
+            if (frame.capped) this.counters.oversized++;
+            if (frame.commit.baseReason) this.counters.chatBaseFrames[frame.commit.baseReason]++;
+            if (frame.baseRateExceeded) {
+                this.counters.chatBaseRateExceeded++;
+                LOG.warn(
+                    'Seqscribe',
+                    `transcript chat base frames too frequent session=${redactSessionId(sessionId)} reason=${frame.commit.baseReason}`,
+                );
+            }
+            // Only a SUCCESSFUL publish is sampled — `publishFailed` counts the rest.
+            const ctx = this.triggerContext.get(sessionId);
+            this.latency.recordStage('collect_to_publish', this.latency.now() - encodedAt);
+            if (ctx) {
+                this.latency.recordPublished(ctx.source);
+                this.latency.recordTriggerToPublish(ctx.source, this.latency.now() - ctx.startedAt);
             }
         }
     }
 
     getCounters(): TranscriptProjectionCounters {
-        return { ...this.counters };
+        return { ...this.counters, chatBaseFrames: { ...this.counters.chatBaseFrames } };
     }
 
     /**
@@ -719,6 +736,16 @@ export function configureTranscriptProjection(deps: TranscriptProjectionDeps | n
 
 export function activeTranscriptProjectionService(): TranscriptProjectionService | null {
     return activeService;
+}
+
+/**
+ * `request_transcript_base` (§5.2) — a reader's repeated digest mismatches ask
+ * for one base frame. Safe no-op when unconfigured.
+ */
+export function requestTranscriptBaseFrame(sessionId: string): boolean {
+    if (!activeService) return false;
+    activeService.requestBase(sessionId);
+    return true;
 }
 
 /** Safe no-op when unconfigured — see the choke-point wiring note in read-chat-presentation.ts. */

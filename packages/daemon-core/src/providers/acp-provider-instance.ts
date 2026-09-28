@@ -305,6 +305,13 @@ export class AcpProviderInstance implements ProviderInstance {
      */
     private acpMessageSeq = 0;
     private acpTurnSeq = 0;
+    /**
+     * When the current turn started. The streaming thought/answer partials are
+     * stamped with it rather than `Date.now()`, so re-reading an unchanged
+     * partial yields an identical bubble — the keyed transcript lane writes
+     * only bubbles whose fields changed (design 2026-09-28 §3.1, §8.1-2).
+     */
+    private acpTurnStartedAt = 0;
  /** Guard: prevent concurrent sendPrompt calls from racing on shared state */
     private _sendPromptInFlight = false;
 
@@ -389,7 +396,7 @@ export class AcpProviderInstance implements ProviderInstance {
         })) as ChatMessage[];
 
         if (this.currentStatus === 'generating') {
-            const partialThoughtMessage = this.buildPartialThoughtMessage(Date.now());
+            const partialThoughtMessage = this.buildPartialThoughtMessage(this.acpTurnStartedAt || Date.now());
             if (partialThoughtMessage) recentMessages.push(this.withAcpSource(partialThoughtMessage, this.turnSourceId('thought')) as ChatMessage);
         }
 
@@ -399,7 +406,7 @@ export class AcpProviderInstance implements ProviderInstance {
             if (blocks.length > 0) {
                 recentMessages.push(this.withAcpSource(buildAssistantChatMessage({
                     content: blocks,
-                    timestamp: Date.now(),
+                    timestamp: this.acpTurnStartedAt || Date.now(),
                     toolCalls: this.turnToolCalls.length > 0 ? [...this.turnToolCalls] : undefined,
                 }), this.turnSourceId('answer')));
             }
@@ -1167,6 +1174,7 @@ export class AcpProviderInstance implements ProviderInstance {
 
  // Add user message locally (store as ContentBlock[])
         this.acpTurnSeq += 1;
+        this.acpTurnStartedAt = Date.now();
         this.messages.push(this.withAcpSource(buildUserChatMessage({
             content: contentBlocks && contentBlocks.length > 0 ? contentBlocks : text,
             timestamp: Date.now(),

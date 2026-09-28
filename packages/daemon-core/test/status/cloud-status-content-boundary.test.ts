@@ -317,7 +317,7 @@ describe('buildCloudStatusReportPayload — p2p transport telemetry', () => {
  * sits behind the same allow-list.
  *
  * The specific leak this guards: seqscribe's own `stats()` is keyed BY TOPIC,
- * and ADHDev topic names embed identifiers — `session.<sessionId>.transcript`,
+ * and ADHDev topic names embed identifiers — `session.<sessionId>.chat`,
  * `mesh.<meshId>.events`. Forwarding that map would publish the fleet's session
  * and mesh inventory to the server on every heartbeat. Only aggregates cross.
  */
@@ -367,8 +367,8 @@ describe('cloud status seqscribe boundary', () => {
         const payload = buildCloudStatusReportPayload([], undefined, 1, {
             ...healthy,
             // The shapes a careless widening would forward:
-            topicNames: ['session.sess-1.transcript', 'mesh.mesh_abc.events'],
-            perTopic: { 'session.sess-1.transcript': { pending: 3 } },
+            topicNames: ['session.sess-1.chat', 'mesh.mesh_abc.events'],
+            perTopic: { 'session.sess-1.chat': { pending: 3 } },
             peerIds: ['peer-a', 'peer-b'],
             writerId: 'adhdev-0123456789abcdef',
             lastEntryPayload: { text: 'secret prompt text' },
@@ -489,7 +489,7 @@ describe('cloud status seqscribe boundary', () => {
                 wantRoundsServed: 12,
             },
             syncHotspots: [
-                { topic: 'session.sess-1.transcript', peerId: 'peer-a', bytes: 1_048_576 },
+                { topic: 'session.sess-1.chat', peerId: 'peer-a', bytes: 1_048_576 },
                 { topic: 'mesh.mesh_abc.events', peerId: 'peer-b', bytes: 524_288 },
             ],
             // Stage 4A read-path routing. Local-only for the dedup reason
@@ -661,7 +661,7 @@ describe('★beacon diagnostics never reach the server status frame', () => {
                 behind: 42,
                 topics: [
                     { node: 'adhdev-fedcba9876543210', topic: 'mesh.mesh_abc.events', behind: 42 },
-                    { node: 'adhdev-fedcba9876543210', topic: 'session.sess-1.transcript', behind: 7 },
+                    { node: 'adhdev-fedcba9876543210', topic: 'session.sess-1.chat', behind: 7 },
                 ],
                 lastSeen: '2026-08-28T00:00:00.000Z',
             },
@@ -669,7 +669,7 @@ describe('★beacon diagnostics never reach the server status frame', () => {
         maxBehind: 42,
         soleCopy: [
             {
-                topic: 'session.sess-1.transcript',
+                topic: 'session.sess-1.chat',
                 writer: 'adhdev-0123456789abcdef',
                 localSeq: 20, bestPeerSeq: 12, unreplicated: 8, verdict: 'sole-copy',
             },
@@ -698,14 +698,14 @@ describe('★beacon diagnostics never reach the server status frame', () => {
             beacon,
             // The flatter shapes a careless widening might take instead.
             beaconMaxBehind: 42,
-            beaconTopics: ['mesh.mesh_abc.events', 'session.sess-1.transcript'],
+            beaconTopics: ['mesh.mesh_abc.events', 'session.sess-1.chat'],
             beaconSoleCopy: beacon.soleCopy,
         } as any);
         const wire = JSON.stringify(payload);
 
         for (const leaked of [
             'mesh.mesh_abc.events',      // mesh id in a topic name
-            'session.sess-1.transcript', // ★ a CONTENT-class topic's name
+            'session.sess-1.chat', // ★ a CONTENT-class topic's name
             'mesh_abc',
             'sess-1',
             'adhdev-fedcba9876543210',   // peer writer id

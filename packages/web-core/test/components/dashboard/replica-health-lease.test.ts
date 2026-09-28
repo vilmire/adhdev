@@ -20,7 +20,7 @@
  * landing after a newer replica revision is the last-writer-wins hazard. The
  * latch itself had to become a lease.
  *
- * Separately, `applyTranscriptReplicaSnapshot` flipped the flag on a `void`
+ * Separately, `applyTranscriptReplicaView` flipped the flag on a `void`
  * contract — it could not observe whether `handleUpdate` had actually applied
  * the snapshot. A snapshot that arrived but was DEFERRED (busy/shrink defense)
  * therefore retired legacy without ever rendering replica content.
@@ -37,7 +37,7 @@
  * internal flag, so "legacy came back" is a claim about the transport.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core'
+import type { ReplicatedTranscriptViewV2 } from '@adhdev/daemon-core'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
   getOrCreateSessionChatTailController,
@@ -55,17 +55,17 @@ const SUBSCRIPTION_KEY = `daemon:${DAEMON}:session:${SESSION}`
  */
 const LEASE_MS = 20_000
 
-function snapshot(overrides: Partial<ReplicatedTranscriptSnapshotV1> = {}): ReplicatedTranscriptSnapshotV1 {
+function snapshot(overrides: Partial<ReplicatedTranscriptViewV2> = {}): ReplicatedTranscriptViewV2 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId: SESSION,
     historySessionId: null,
     providerType: 'claude-cli',
     providerSessionId: null,
     producerDaemonId: DAEMON,
     producerWriterId: 'writer-1',
-    producerEpoch: 'epoch-1',
-    revision: 1,
+    epoch: 'epoch-1',
+    frame: 1,
     observedAt: '2026-09-06T00:00:00.000Z',
     status: 'idle',
     providerObservedStatus: null,
@@ -85,7 +85,7 @@ function message(
   role: 'user' | 'assistant',
   content: string,
   receivedAt: number,
-): ReplicatedTranscriptSnapshotV1['messages'][number] {
+): ReplicatedTranscriptViewV2['messages'][number] {
   return {
     role,
     kind: 'standard',
@@ -93,18 +93,23 @@ function message(
     receivedAt,
     timestamp: receivedAt,
     turnKey: `${role}-${receivedAt}`,
+    messageId: `m-${role}-${receivedAt}`,
+    ord: String(receivedAt).padStart(8, '0'),
+    rev: 1,
+    expandable: false,
+    srcId: null,
     bubbleState: 'final',
     senderName: null,
     toolName: null,
     streaming: null,
-  } as ReplicatedTranscriptSnapshotV1['messages'][number]
+  } as ReplicatedTranscriptViewV2['messages'][number]
 }
 
 /** A replica snapshot carrying real content — enough to mark the lane healthy. */
 function healthySnapshot(revision: number, status: string, ...contents: string[]) {
   return snapshot({
-    revision,
-    status: status as ReplicatedTranscriptSnapshotV1['status'],
+    frame: revision,
+    status: status as ReplicatedTranscriptViewV2['status'],
     messages: contents.map((c, i) => message(i % 2 === 0 ? 'user' : 'assistant', c, 10 + i)),
   })
 }
@@ -176,9 +181,7 @@ describe('★ A①: a stalled replica lane loses health and legacy comes back', 
     expect(subscribeFrames(sendData)).toHaveLength(1)
 
     // The replica takes over on a session that is actively generating.
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'q', 'a'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'generating', 'q', 'a'))
     // Legacy has stood down — this is the state the old latch made permanent.
     expect(unsubscribeFrames(sendData)).toHaveLength(1)
     expect(subscribeFrames(sendData)).toHaveLength(1)
@@ -204,9 +207,7 @@ describe('★ A①: a stalled replica lane loses health and legacy comes back', 
     // above. Only rendering new content proves the recovery is real.
     const { sendData, manager, controller, advance } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'q', 'a'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'generating', 'q', 'a'))
 
     advance(LEASE_MS)
     controller.shouldRefreshForLiveness()
@@ -222,16 +223,13 @@ describe('★ A①: a stalled replica lane loses health and legacy comes back', 
     // legacy under a healthy replica and reintroduce cross-source interleaving.
     const { sendData, controller, advance } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'q', 'a'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'generating', 'q', 'a'))
 
     for (let i = 0; i < 5; i += 1) {
       advance(LEASE_MS - 1)
       controller.shouldRefreshForLiveness()
-      controller.applyTranscriptReplicaSnapshot(
-        healthySnapshot(3 + i, 'generating', 'q', 'a', `chunk-${i}`),
-        { omittedBefore: false },
+      controller.applyTranscriptReplicaView(
+        healthySnapshot(3 + i, 'generating', 'q', 'a', `chunk-${i}`)
       )
     }
     advance(LEASE_MS - 1)
@@ -247,15 +245,11 @@ describe('★ A①: a stalled replica lane loses health and legacy comes back', 
     // lease could never expire — the latch bug with extra steps.
     const { sendData, controller, advance } = setup()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'q', 'a'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'generating', 'q', 'a'))
 
     advance(LEASE_MS - 1)
     // Same revision 2, re-delivered.
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'q', 'a'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'generating', 'q', 'a'))
     advance(1)
     controller.shouldRefreshForLiveness()
 
@@ -276,9 +270,7 @@ describe('★ A②: a genuinely idle session never revives legacy', () => {
     controller.retain()
 
     // Replica takes over on a settled, idle session.
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'idle', 'q', 'a'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'idle', 'q', 'a'))
     expect(unsubscribeFrames(sendData)).toHaveLength(1)
 
     // Long silence — the correct and expected state for an idle session.
@@ -300,14 +292,10 @@ describe('★ A②: a genuinely idle session never revives legacy', () => {
     const { sendData, controller, advance } = setup()
     controller.retain()
 
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'q', 'a'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'generating', 'q', 'a'))
     // The turn finishes: the replica reports idle and then legitimately rests.
     advance(1_000)
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(3, 'idle', 'q', 'a', 'done'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(3, 'idle', 'q', 'a', 'done'))
 
     for (let i = 0; i < 20; i += 1) {
       advance(LEASE_MS)
@@ -338,9 +326,7 @@ describe('★ A③: hidden document time does not count toward the lease window'
     controller.retain()
 
     // The replica takes over on a session that is actively generating.
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'q', 'a'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'generating', 'q', 'a'))
     expect(unsubscribeFrames(sendData)).toHaveLength(1)
 
     // App minimized. Wall clock keeps moving well past the lease window while
@@ -370,9 +356,7 @@ describe('★ A③: hidden document time does not count toward the lease window'
     const { sendData, controller, advance } = setup()
     controller.retain()
 
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'q', 'a'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'generating', 'q', 'a'))
 
     // Minimize: visibilitychange AND pagehide both fire `hidden = true`.
     controller.noteVisibilityChange(true)
@@ -389,9 +373,7 @@ describe('★ A③: hidden document time does not count toward the lease window'
 
     // And a genuine stall afterward, fully visible, must still be caught —
     // proving the duplicate edges did not leak extra banked credit forward.
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(3, 'generating', 'q', 'a', 'more'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(3, 'generating', 'q', 'a', 'more'))
     advance(LEASE_MS)
     controller.shouldRefreshForLiveness()
     expect(controller.getSnapshot().transcriptFallbackReason).toBe('replica_lease_expired')
@@ -402,9 +384,7 @@ describe('★ A③: hidden document time does not count toward the lease window'
     const { sendData, controller, advance } = setup()
     controller.retain()
 
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'q', 'a'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'generating', 'q', 'a'))
 
     // No visibility edge at all — the pane stayed visible throughout and the
     // lane genuinely stopped advancing.
@@ -419,9 +399,7 @@ describe('★ A③: hidden document time does not count toward the lease window'
     const { sendData, controller, advance } = setup()
     controller.retain()
 
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'q', 'a'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'generating', 'q', 'a'))
 
     // Brief minimize — well under the lease window — then resume, and the lane
     // STILL never advances for a full lease window of genuinely visible time.
@@ -438,18 +416,14 @@ describe('★ A③: hidden document time does not count toward the lease window'
     const { controller, advance } = setup()
     controller.retain()
 
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'q', 'a'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'generating', 'q', 'a'))
 
     // First minimize/restore — banks hidden credit, then the lane proves
     // itself alive by advancing (which must clear that credit).
     controller.noteVisibilityChange(true)
     advance(LEASE_MS * 3)
     controller.noteVisibilityChange(false)
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(3, 'generating', 'q', 'a', 'more'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(3, 'generating', 'q', 'a', 'more'))
     expect(controller.getSnapshot().transcriptFallbackReason).not.toBe('replica_lease_expired')
 
     // A SECOND, unrelated stall while fully visible must not be discounted by
@@ -483,9 +457,7 @@ describe('★ B: a snapshot that never reached the screen cannot retire legacy',
     // The INVARIANT under test is unchanged: only an APPLIED snapshot retires legacy.
     const broken = { ...healthySnapshot(2, 'generating', 'only one') }
     delete (broken as Record<string, unknown>).activeModal
-    controller.applyTranscriptReplicaSnapshot(broken as ReplicatedTranscriptSnapshotV1, {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(broken as ReplicatedTranscriptViewV2)
 
     // ★ Nothing replica-authored is on screen...
     expect(controller.getSnapshot().liveMessages).toHaveLength(6)
@@ -503,9 +475,7 @@ describe('★ B: a snapshot that never reached the screen cannot retire legacy',
     controller.retain()
     publishLegacy(manager, 1, 'generating', ['q1', 'a1', 'q2', 'a2', 'q3', 'a3'])
 
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'only one'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'generating', 'only one'))
 
     expect(controller.getSnapshot().liveMessages.map((m) => m.content)).toEqual(['only one'])
   })
@@ -520,15 +490,12 @@ describe('★ B: a snapshot that never reached the screen cannot retire legacy',
     // so it cannot retire legacy.
     const broken = { ...healthySnapshot(2, 'generating', 'only one') }
     delete (broken as Record<string, unknown>).activeModal
-    controller.applyTranscriptReplicaSnapshot(broken as ReplicatedTranscriptSnapshotV1, {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(broken as ReplicatedTranscriptViewV2)
     expect(unsubscribeFrames(sendData)).toHaveLength(0)
 
     // A full, non-shrinking replica window lands for real.
-    controller.applyTranscriptReplicaSnapshot(
-      healthySnapshot(3, 'generating', 'q1', 'a1', 'q2', 'a2', 'q3', 'replica answer'),
-      { omittedBefore: false },
+    controller.applyTranscriptReplicaView(
+      healthySnapshot(3, 'generating', 'q1', 'a1', 'q2', 'a2', 'q3', 'replica answer')
     )
 
     expect(controller.getSnapshot().liveMessages.map((m) => m.content)).toContain('replica answer')
@@ -544,9 +511,7 @@ describe('★ B: a snapshot that never reached the screen cannot retire legacy',
     const broken = { ...healthySnapshot(2, 'generating', 'q', 'a') }
     delete (broken as Record<string, unknown>).activeModal
 
-    controller.applyTranscriptReplicaSnapshot(broken as ReplicatedTranscriptSnapshotV1, {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(broken as ReplicatedTranscriptViewV2)
 
     expect(unsubscribeFrames(sendData)).toHaveLength(0)
     expect(controller.getSnapshot().transcriptFallbackReason).toBe('revision_invalid')

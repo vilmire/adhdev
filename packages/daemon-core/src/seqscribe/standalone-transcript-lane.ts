@@ -4,7 +4,7 @@
  * G6 prerequisite, design `docs/design/2026-09-23-wiring-unification.md` §7e).
  *
  * The standalone daemon already runs the same seqscribe node, defines the same
- * `session.<safeSessionId>.transcript` topics (`transcript-activation.ts`) and
+ * `session.<safeSessionId>.chat` topics (`transcript-activation.ts`) and
  * holds a machine-local finality authority (`local-authority.ts`). What it
  * lacked was a transport that serves those topics to its own dashboard, so the
  * shared chat-tail controller never received a replica snapshot and stayed on
@@ -45,12 +45,13 @@ import { webSocketChannel, type PeerHandleExt, type WebSocketLike } from 'seqscr
 import { LOG } from '../logging/logger.js';
 import { onTopicActivated } from './mesh-publisher.js';
 import type { SeqscribeNodeHandle } from './node.js';
+import { sessionSegmentFromChatTopic } from './topics.js';
 
 /** Upgrade path of the replica lane on the standalone HTTP server (next to `/ws`). */
 export const STANDALONE_SEQSCRIBE_WS_PATH = '/ws/seqscribe';
 
 /**
- * The only admissible peer class: `session.<id>.transcript` is
+ * The only admissible peer class: `session.<id>.chat` is
  * `access: 'content'`, and seqscribe throws when a `metadata` peer is granted
  * a content topic (SPEC §14 attach) — same constraint as the cloud router's
  * `SEQSCRIBE_PEER_CLASS`.
@@ -65,19 +66,17 @@ export const STANDALONE_SEQSCRIBE_PEER_CLASS = 'content' as const;
 export const MAX_STANDALONE_SEQSCRIBE_LANES = 8;
 
 /**
- * `session.<segment>.transcript` → segment, else null. The segment is what
- * `safeSessionId` produced, so it never contains a dot.
+ * `session.<segment>.chat` → segment, else null (the keyed chat topic, design
+ * 2026-09-28 §5.8). The segment is what `safeSessionId` produced, so it never
+ * contains a dot.
  */
 export function transcriptTopicSessionSegment(topic: string): string | null {
-    if (!topic.startsWith('session.') || !topic.endsWith('.transcript')) return null;
-    const segment = topic.slice('session.'.length, -'.transcript'.length);
-    if (segment.length === 0 || segment.includes('.')) return null;
-    return segment;
+    return sessionSegmentFromChatTopic(topic);
 }
 
 /**
  * The grant map one standalone dashboard lane is advertised: `serve` on every
- * DEFINED `subscribe-only` session transcript topic, nothing else.
+ * DEFINED `subscribe-only` session chat topic, nothing else.
  *
  * Re-derived from `node.topics` every time (never mutated in place): seqscribe
  * P15 grants are a FULL replacement, and an incrementally assembled map is the

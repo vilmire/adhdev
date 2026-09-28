@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core'
+import type { ReplicatedTranscriptViewV2 } from '@adhdev/daemon-core'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
   getOrCreateSessionChatTailController,
@@ -7,20 +7,20 @@ import {
 } from '../../../src/components/dashboard/session-chat-tail-controller'
 import {
   buildTranscriptReadSourceAttributes,
-  mapTranscriptSnapshotToChatTailUpdate,
+  mapTranscriptViewToChatTailUpdate,
 } from '../../../src/components/dashboard/transcript-chat-pane-adapter'
 
-function buildSnapshot(overrides: Partial<ReplicatedTranscriptSnapshotV1> = {}): ReplicatedTranscriptSnapshotV1 {
+function buildSnapshot(overrides: Partial<ReplicatedTranscriptViewV2> = {}): ReplicatedTranscriptViewV2 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId: 'session-1',
     historySessionId: null,
     providerType: 'claude-cli',
     providerSessionId: null,
     producerDaemonId: 'daemon-1',
     producerWriterId: 'writer-1',
-    producerEpoch: 'epoch-1',
-    revision: 1,
+    epoch: 'epoch-1',
+    frame: 1,
     observedAt: '2026-08-30T00:00:00.000Z',
     status: 'idle',
     providerObservedStatus: null,
@@ -36,19 +36,19 @@ function buildSnapshot(overrides: Partial<ReplicatedTranscriptSnapshotV1> = {}):
   }
 }
 
-describe('mapTranscriptSnapshotToChatTailUpdate', () => {
+describe('mapTranscriptViewToChatTailUpdate', () => {
   it('maps identity/messages/status into the SessionChatTailUpdate shape', () => {
     const snapshot = buildSnapshot({
       sessionId: 'session-9',
       historySessionId: 'history-9',
       status: 'generating',
       messages: [
-        { role: 'user', kind: 'standard', content: 'hi', receivedAt: 10, timestamp: 10, turnKey: 'turn-1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
-        { role: 'assistant', kind: 'standard', content: 'hello', receivedAt: 20, timestamp: 20, turnKey: 'turn-2', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+        { role: 'user', kind: 'standard', content: 'hi', receivedAt: 10, timestamp: 10, turnKey: 'turn-1', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'mid-turn-1-10', ord: '00000010', rev: 1, expandable: false, srcId: null },
+        { role: 'assistant', kind: 'standard', content: 'hello', receivedAt: 20, timestamp: 20, turnKey: 'turn-2', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'mid-turn-2-20', ord: '00000020', rev: 1, expandable: false, srcId: null },
       ],
     })
 
-    const update = mapTranscriptSnapshotToChatTailUpdate(snapshot, { subscriptionKey: 'key-1', omittedBefore: false, stale: false })
+    const update = mapTranscriptViewToChatTailUpdate(snapshot, { subscriptionKey: 'key-1', stale: false })
 
     expect(update.topic).toBe('session.chat_tail')
     expect(update.sessionId).toBe('session-9')
@@ -69,24 +69,24 @@ describe('mapTranscriptSnapshotToChatTailUpdate', () => {
 
   it('reconstructs a narrow {selected} messageSource from the allow-listed scalar', () => {
     const snapshot = buildSnapshot({ provenance: { messageSource: 'native-history', transcriptProvenance: null } })
-    const update = mapTranscriptSnapshotToChatTailUpdate(snapshot, { subscriptionKey: 'key-1', omittedBefore: false, stale: false })
+    const update = mapTranscriptViewToChatTailUpdate(snapshot, { subscriptionKey: 'key-1', stale: false })
     expect(update.messageSource).toEqual({ selected: 'native-history' })
   })
 
   it('omits messageSource entirely when the snapshot carries none', () => {
     const snapshot = buildSnapshot()
-    const update = mapTranscriptSnapshotToChatTailUpdate(snapshot, { subscriptionKey: 'key-1', omittedBefore: false, stale: false })
+    const update = mapTranscriptViewToChatTailUpdate(snapshot, { subscriptionKey: 'key-1', stale: false })
     expect(update.messageSource).toBeUndefined()
   })
 
   it('maps toolName onto the bubble AND derives meta.label from it — the live lane has no meta.label (TOOL-LABEL)', () => {
     const snapshot = buildSnapshot({
       messages: [
-        { role: 'assistant', kind: 'tool', content: '↗ Write: {"path":"x"}', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: 'Tool', toolName: 'Write', streaming: null },
-        { role: 'assistant', kind: 'tool', content: '↘ ok', receivedAt: 2, timestamp: 2, turnKey: 't1', bubbleState: 'final', senderName: 'Tool', toolName: null, streaming: null },
+        { role: 'assistant', kind: 'tool', content: '↗ Write: {"path":"x"}', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: 'Tool', toolName: 'Write', streaming: null, messageId: 'mid-t1-1', ord: '00000001', rev: 1, expandable: false, srcId: null },
+        { role: 'assistant', kind: 'tool', content: '↘ ok', receivedAt: 2, timestamp: 2, turnKey: 't1', bubbleState: 'final', senderName: 'Tool', toolName: null, streaming: null, messageId: 'mid-t1-2', ord: '00000002', rev: 1, expandable: false, srcId: null },
       ],
     })
-    const update = mapTranscriptSnapshotToChatTailUpdate(snapshot, { subscriptionKey: 'key-1', omittedBefore: false, stale: false })
+    const update = mapTranscriptViewToChatTailUpdate(snapshot, { subscriptionKey: 'key-1', stale: false })
     expect(update.messages[0].toolName).toBe('Write')
     expect(update.messages[0].meta?.label).toBe('Write')
     // A result bubble has no tool name of its own: nothing is invented for it.
@@ -94,23 +94,18 @@ describe('mapTranscriptSnapshotToChatTailUpdate', () => {
     expect(update.messages[1].meta?.label).toBeUndefined()
   })
 
-  it('carries toolBlockRef through so a truncated tool bubble stays expandable, and omits it when null', () => {
-    const ref = { sourceMtimeMs: 123456, recordIndex: 4, blockIndex: 1 }
+  it('maps messageId onto id/messageId, keeps ord/rev, and marks an expandable bubble for expand-by-messageId', () => {
     const snapshot = buildSnapshot({
       messages: [
-        { role: 'assistant', kind: 'tool', content: 'Read(x)…', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null, toolBlockRef: ref },
+        { role: 'assistant', kind: 'tool', content: 'Read(x)…', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'n.aa.1.0', ord: 'a0', rev: 3, expandable: true, srcId: null },
+        { role: 'assistant', kind: 'tool', content: 'Read(y)', receivedAt: 2, timestamp: 2, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'n.aa.2.0', ord: 'a1', rev: 1, expandable: false, srcId: null },
       ],
     })
-    const update = mapTranscriptSnapshotToChatTailUpdate(snapshot, { subscriptionKey: 'key-1', omittedBefore: false, stale: false })
-    expect(update.messages[0].toolBlockRef).toEqual(ref)
-
-    const plainSnapshot = buildSnapshot({
-      messages: [
-        { role: 'assistant', kind: 'tool', content: 'Read(x)', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null, toolBlockRef: null },
-      ],
-    })
-    const plainUpdate = mapTranscriptSnapshotToChatTailUpdate(plainSnapshot, { subscriptionKey: 'key-1', omittedBefore: false, stale: false })
-    expect('toolBlockRef' in plainUpdate.messages[0]).toBe(false)
+    const update = mapTranscriptViewToChatTailUpdate(snapshot, { subscriptionKey: 'key-1', stale: false })
+    expect(update.messages[0]).toMatchObject({ id: 'n.aa.1.0', messageId: 'n.aa.1.0', _ord: 'a0', _rev: 3, _expandable: true })
+    // The keyed wire never carries the mtime-sealed ref (design 2026-09-28 §5.9).
+    expect('toolBlockRef' in update.messages[0]).toBe(false)
+    expect('_expandable' in update.messages[1]).toBe(false)
   })
 
   it('maps activeModal 1:1 and leaves activeInteractivePrompt null (cannot round-trip from the allow-list)', () => {
@@ -118,14 +113,14 @@ describe('mapTranscriptSnapshotToChatTailUpdate', () => {
       activeModal: { message: 'Run this command?', buttons: ['Approve', 'Deny'] },
       activeInteractivePrompt: { message: 'Pick one', options: ['a', 'b'] },
     })
-    const update = mapTranscriptSnapshotToChatTailUpdate(snapshot, { subscriptionKey: 'key-1', omittedBefore: false, stale: false })
+    const update = mapTranscriptViewToChatTailUpdate(snapshot, { subscriptionKey: 'key-1', stale: false })
     expect(update.activeModal).toEqual({ message: 'Run this command?', buttons: ['Approve', 'Deny'] })
     expect(update.activeInteractivePrompt).toBeNull()
   })
 
-  it('carries omittedBefore/stale straight through from the caller', () => {
-    const snapshot = buildSnapshot()
-    const update = mapTranscriptSnapshotToChatTailUpdate(snapshot, { subscriptionKey: 'key-1', omittedBefore: true, stale: true })
+  it('reads omittedBefore from the producer coverage and carries stale from the caller', () => {
+    const snapshot = buildSnapshot({ coverage: { mode: 'window', totalMessageCount: 0, returnedMessageCount: 0, omittedBefore: true } })
+    const update = mapTranscriptViewToChatTailUpdate(snapshot, { subscriptionKey: 'key-1', stale: true })
     expect(update.omittedBefore).toBe(true)
     expect(update.stale).toBe(true)
   })
@@ -147,14 +142,14 @@ describe('SessionChatTailController transcript replica integration', () => {
 
     const snapshot = buildSnapshot({
       status: 'idle',
+      coverage: { mode: 'window', totalMessageCount: 2, returnedMessageCount: 2, omittedBefore: true },
       messages: [
-        { role: 'user', kind: 'standard', content: 'hi', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
-        { role: 'assistant', kind: 'standard', content: 'hello there', receivedAt: 2, timestamp: 2, turnKey: 't2', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+        { role: 'user', kind: 'standard', content: 'hi', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'mid-t1-1', ord: '00000001', rev: 1, expandable: false, srcId: null },
+        { role: 'assistant', kind: 'standard', content: 'hello there', receivedAt: 2, timestamp: 2, turnKey: 't2', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'mid-t2-2', ord: '00000002', rev: 1, expandable: false, srcId: null },
       ],
     })
-    const update = mapTranscriptSnapshotToChatTailUpdate(snapshot, {
+    const update = mapTranscriptViewToChatTailUpdate(snapshot, {
       subscriptionKey: 'daemon:daemon-1:session:session-1',
-      omittedBefore: true,
       stale: false,
     })
 
@@ -182,13 +177,13 @@ describe('SessionChatTailController transcript replica integration', () => {
     controller.retain()
 
     const snapshot = buildSnapshot({
+      coverage: { mode: 'window', totalMessageCount: 1, returnedMessageCount: 1, omittedBefore: true },
       messages: [
-        { role: 'assistant', kind: 'standard', content: 'from replica', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+        { role: 'assistant', kind: 'standard', content: 'from replica', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'mid-t1-1', ord: '00000001', rev: 1, expandable: false, srcId: null },
       ],
     })
-    manager.publish(mapTranscriptSnapshotToChatTailUpdate(snapshot, {
+    manager.publish(mapTranscriptViewToChatTailUpdate(snapshot, {
       subscriptionKey: 'daemon:daemon-1:session:session-1',
-      omittedBefore: true,
       stale: false,
     }))
     expect(controller.getSnapshot().transcriptReadSource).toBe('replica')
@@ -228,12 +223,11 @@ describe('SessionChatTailController transcript replica integration', () => {
 
     const snapshot = buildSnapshot({
       messages: [
-        { role: 'assistant', kind: 'standard', content: 'routed', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+        { role: 'assistant', kind: 'standard', content: 'routed', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'mid-t1-1', ord: '00000001', rev: 1, expandable: false, srcId: null },
       ],
     })
-    const update = mapTranscriptSnapshotToChatTailUpdate(snapshot, {
+    const update = mapTranscriptViewToChatTailUpdate(snapshot, {
       subscriptionKey: 'daemon:daemon-1:session:session-1',
-      omittedBefore: false,
       stale: false,
     })
     expect(update.key).toBe('daemon:daemon-1:session:session-1')
@@ -277,12 +271,11 @@ describe('SessionChatTailController transcript replica integration', () => {
     const snapshot = buildSnapshot({
       sessionId: 'session-1',
       messages: [
-        { role: 'assistant', kind: 'standard', content: 'mine', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+        { role: 'assistant', kind: 'standard', content: 'mine', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'mid-t1-1', ord: '00000001', rev: 1, expandable: false, srcId: null },
       ],
     })
-    const update = mapTranscriptSnapshotToChatTailUpdate(snapshot, {
+    const update = mapTranscriptViewToChatTailUpdate(snapshot, {
       subscriptionKey: 'daemon:daemon-1:session:session-1',
-      omittedBefore: false,
       stale: false,
     })
     expect(update.sessionId).toBe('session-1')
@@ -291,14 +284,14 @@ describe('SessionChatTailController transcript replica integration', () => {
 
     // A foreign-session snapshot mapped onto the same subscription key must be
     // rejected by the identity gate rather than overwriting this pane.
-    const foreign = mapTranscriptSnapshotToChatTailUpdate(
+    const foreign = mapTranscriptViewToChatTailUpdate(
       buildSnapshot({
         sessionId: 'session-OTHER',
         messages: [
-          { role: 'assistant', kind: 'standard', content: 'not mine', receivedAt: 9, timestamp: 9, turnKey: 'tX', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+          { role: 'assistant', kind: 'standard', content: 'not mine', receivedAt: 9, timestamp: 9, turnKey: 'tX', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'mid-tX-9', ord: '00000009', rev: 1, expandable: false, srcId: null },
         ],
       }),
-      { subscriptionKey: 'daemon:daemon-1:session:session-1', omittedBefore: false, stale: false },
+      { subscriptionKey: 'daemon:daemon-1:session:session-1', stale: false },
     )
     manager.publish(foreign)
     expect(controller.getSnapshot().liveMessages).toHaveLength(1)
@@ -334,30 +327,30 @@ describe('SessionChatTailController transcript replica integration', () => {
     controller.retain()
 
     // Busy phase: a long PTY-ish tail ending on the USER prompt (no assistant yet).
-    manager.publish(mapTranscriptSnapshotToChatTailUpdate(
+    manager.publish(mapTranscriptViewToChatTailUpdate(
       buildSnapshot({
         status: 'generating',
         messages: [
-          { role: 'user', kind: 'standard', content: 'q1', receivedAt: 1, timestamp: 1, turnKey: 'u1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
-          { role: 'assistant', kind: 'thought', content: 'thinking', receivedAt: 2, timestamp: 2, turnKey: 'x1', bubbleState: 'partial', senderName: null, toolName: null, streaming: null },
-          { role: 'user', kind: 'standard', content: 'q2', receivedAt: 3, timestamp: 3, turnKey: 'u2', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+          { role: 'user', kind: 'standard', content: 'q1', receivedAt: 1, timestamp: 1, turnKey: 'u1', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'mid-u1-1', ord: '00000001', rev: 1, expandable: false, srcId: null },
+          { role: 'assistant', kind: 'thought', content: 'thinking', receivedAt: 2, timestamp: 2, turnKey: 'x1', bubbleState: 'partial', senderName: null, toolName: null, streaming: null, messageId: 'mid-x1-2', ord: '00000002', rev: 1, expandable: false, srcId: null },
+          { role: 'user', kind: 'standard', content: 'q2', receivedAt: 3, timestamp: 3, turnKey: 'u2', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'mid-u2-3', ord: '00000003', rev: 1, expandable: false, srcId: null },
         ],
       }),
-      { subscriptionKey: 'daemon:daemon-1:session:session-1', omittedBefore: false, stale: false },
+      { subscriptionKey: 'daemon:daemon-1:session:session-1', stale: false },
     ))
     expect(controller.getSnapshot().liveMessages).toHaveLength(3)
 
     // Corrective native-history tail: SHORTER, but finally carries the answer.
-    const corrective = mapTranscriptSnapshotToChatTailUpdate(
+    const corrective = mapTranscriptViewToChatTailUpdate(
       buildSnapshot({
         status: 'generating',
         provenance: { messageSource: 'native-history', transcriptProvenance: null },
         messages: [
-          { role: 'user', kind: 'standard', content: 'q2', receivedAt: 3, timestamp: 3, turnKey: 'u2', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
-          { role: 'assistant', kind: 'standard', content: 'the answer', receivedAt: 4, timestamp: 4, turnKey: 'a1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+          { role: 'user', kind: 'standard', content: 'q2', receivedAt: 3, timestamp: 3, turnKey: 'u2', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'mid-u2-3', ord: '00000003', rev: 1, expandable: false, srcId: null },
+          { role: 'assistant', kind: 'standard', content: 'the answer', receivedAt: 4, timestamp: 4, turnKey: 'a1', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'mid-a1-4', ord: '00000004', rev: 1, expandable: false, srcId: null },
         ],
       }),
-      { subscriptionKey: 'daemon:daemon-1:session:session-1', omittedBefore: false, stale: false },
+      { subscriptionKey: 'daemon:daemon-1:session:session-1', stale: false },
     )
     // Both projections must be present for the gate to be reachable at all.
     expect(corrective.messageSource).toEqual({ selected: 'native-history' })
@@ -394,13 +387,13 @@ describe('SessionChatTailController transcript replica integration', () => {
 
     // Identical bubble identity ('a1') and identical content — arrival time is
     // the ONLY difference between the two tails.
-    const tailAt = (receivedAt: number) => mapTranscriptSnapshotToChatTailUpdate(
+    const tailAt = (receivedAt: number) => mapTranscriptViewToChatTailUpdate(
       buildSnapshot({
         messages: [
-          { role: 'assistant', kind: 'standard', content: 'same text', receivedAt, timestamp: receivedAt, turnKey: 'a1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+          { role: 'assistant', kind: 'standard', content: 'same text', receivedAt, timestamp: receivedAt, turnKey: 'a1', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'mid-a1-0', ord: '00000000', rev: 1, expandable: false, srcId: null },
         ],
       }),
-      { subscriptionKey: 'daemon:daemon-1:session:session-1', omittedBefore: false, stale: false },
+      { subscriptionKey: 'daemon:daemon-1:session:session-1', stale: false },
     )
 
     manager.publish(tailAt(100))
@@ -415,13 +408,13 @@ describe('SessionChatTailController transcript replica integration', () => {
     expect(result.liveMessages[0]).toMatchObject({ receivedAt: 200, timestamp: 200 })
   })
 
-  it('carries snapshot.revision as seq — the wire ordering field must not silently become undefined', () => {
-    // Guards `seq: snapshot.revision`. Every consumer of a chat_tail envelope
-    // treats `seq` as the monotonic revision; if the adapter dropped it the
-    // field would read `undefined` rather than fail loudly.
-    const update = mapTranscriptSnapshotToChatTailUpdate(
-      buildSnapshot({ revision: 42 }),
-      { subscriptionKey: 'key-1', omittedBefore: false, stale: false },
+  it('carries the commit frame as seq — the wire ordering field must not silently become undefined', () => {
+    // Guards `seq: view.frame`. Every consumer of a chat_tail envelope treats
+    // `seq` as a number; if the adapter dropped it the field would read
+    // `undefined` rather than fail loudly.
+    const update = mapTranscriptViewToChatTailUpdate(
+      buildSnapshot({ frame: 42 }),
+      { subscriptionKey: 'key-1', stale: false },
     )
     expect(update.seq).toBe(42)
     expect(update.seq).not.toBeUndefined()
@@ -442,12 +435,11 @@ describe('SessionChatTailController transcript replica integration', () => {
 
     const snapshot = buildSnapshot({
       messages: [
-        { role: 'assistant', kind: 'standard', content: 'hi', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+        { role: 'assistant', kind: 'standard', content: 'hi', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null, messageId: 'mid-t1-1', ord: '00000001', rev: 1, expandable: false, srcId: null },
       ],
     })
-    manager.publish(mapTranscriptSnapshotToChatTailUpdate(snapshot, {
+    manager.publish(mapTranscriptViewToChatTailUpdate(snapshot, {
       subscriptionKey: 'daemon:daemon-1:session:session-1',
-      omittedBefore: false,
       stale: false,
     }))
 

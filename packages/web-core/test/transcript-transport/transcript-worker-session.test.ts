@@ -1,69 +1,30 @@
 // The worker's activation loop (unit 4b): which sessions are subscribed, what
-// survives a transport reset, and what reaches the snapshot port.
+// survives a transport reset, and what reaches the view port (keyed frames,
+// design 2026-09-28 message-keyed storage §5.4).
 //
 // Uses the REAL seqscribe stack (same rig as the subscription suite) so
 // "resubscribe after reset" is proven against actual peer/subscription
 // lifecycle rather than a mock that cannot fail the way the real one does.
-import { encodeTranscriptRevision } from '@adhdev/daemon-core/seqscribe/transcript-revision-codec'
-import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core/seqscribe/transcript-projection'
-import sqlite3InitModule from '@sqlite.org/sqlite-wasm'
-import type { Channel, PeerHandle, SqliteWasmDbLike } from 'seqscribe'
-import { sqliteWasmHandle } from 'seqscribe'
+import type { PeerHandle } from 'seqscribe'
 import { describe, expect, it } from 'vitest'
 import { browserRejectAuthority } from '../../src/transcript-transport/browser-reject-authority.js'
 import {
-    isTranscriptBridgeSnapshotMessage,
+    isTranscriptBridgeBaseRequestMessage,
+    isTranscriptBridgeFrameMessage,
     transcriptSessionActivation,
 } from '../../src/transcript-transport/bridge-protocol.js'
-import { sessionTranscriptPolicy, sessionTranscriptTopic } from '../../src/transcript-transport/topic-addressing.js'
+import { sessionChatPolicy, sessionChatTopic } from '../../src/transcript-transport/topic-addressing.js'
 import {
     runTranscriptWorkerSession,
     type TranscriptWorkerSessionPort,
 } from '../../src/transcript-transport/transcript-worker-session.js'
-import {
-    TranscriptWorkerNode,
-    type TranscriptWorkerStorage,
-} from '../../src/transcript-transport/transcript-worker-node.js'
+import { TranscriptWorkerNode } from '../../src/transcript-transport/transcript-worker-node.js'
+import { KeyedChatProducer, PRODUCER_DAEMON, PRODUCER_WRITER, channelPair, memoryStorage, waitFor } from './keyed-chat-rig.js'
 
 const SESSION_A = 'sess-A'
 const SESSION_B = 'sess-B'
-const PRODUCER_WRITER = 'adhdev_daemon_writer'
 
-async function memoryStorage(): Promise<TranscriptWorkerStorage> {
-    const sqlite3 = await sqlite3InitModule()
-    const db = new sqlite3.oo1.DB(':memory:')
-    return { handle: sqliteWasmHandle(db as unknown as SqliteWasmDbLike), dispose: () => db.close() }
-}
-
-function channelPair(): [Channel, Channel] {
-    let aMsg: ((m: string) => void) | null = null
-    let bMsg: ((m: string) => void) | null = null
-    let aClose: (() => void) | null = null
-    let bClose: (() => void) | null = null
-    const a: Channel = {
-        send: (m) => queueMicrotask(() => bMsg?.(m)),
-        onMessage: (cb) => void (aMsg = cb),
-        onClose: (cb) => void (aClose = cb),
-        close: () => queueMicrotask(() => bClose?.()),
-    }
-    const b: Channel = {
-        send: (m) => queueMicrotask(() => aMsg?.(m)),
-        onMessage: (cb) => void (bMsg = cb),
-        onClose: (cb) => void (bClose = cb),
-        close: () => queueMicrotask(() => aClose?.()),
-    }
-    return [a, b]
-}
-
-async function waitFor(cond: () => boolean, timeoutMs = 4000): Promise<void> {
-    const start = Date.now()
-    while (!cond()) {
-        if (Date.now() - start > timeoutMs) throw new Error('timed out waiting for condition')
-        await new Promise((r) => setTimeout(r, 5))
-    }
-}
-
-/** A test double for the worker half of the snapshot MessagePort. */
+/** A test double for the worker half of the view MessagePort. */
 function fakePort(): TranscriptWorkerSessionPort & { readonly posted: unknown[] } {
     const posted: unknown[] = []
     return {
@@ -75,68 +36,13 @@ function fakePort(): TranscriptWorkerSessionPort & { readonly posted: unknown[] 
     }
 }
 
-function snapshotFixture(sessionId: string, revision: number, content: string): ReplicatedTranscriptSnapshotV1 {
-    return {
-        schemaVersion: 1,
-        sessionId,
-        historySessionId: null,
-        providerType: 'claude',
-        providerSessionId: null,
-        producerDaemonId: 'daemon_owner',
-        producerWriterId: PRODUCER_WRITER,
-        producerEpoch: 'epoch-1',
-        revision,
-        observedAt: '2026-09-04T00:00:00.000Z',
-        status: 'idle',
-        providerObservedStatus: null,
-        title: null,
-        activeModal: null,
-        activeInteractivePrompt: null,
-        turn: null,
-        provenance: { messageSource: 'native', transcriptProvenance: null },
-        messages: [
-            {
-                role: 'assistant',
-                kind: 'text',
-                content,
-                receivedAt: 1_700_000_000_000,
-                timestamp: null,
-                turnKey: `turn-${revision}`,
-                bubbleState: null,
-                senderName: null,
-                toolName: null,
-                streaming: null,
-            },
-        ],
-        terminalMarkers: [],
-        coverage: { mode: 'tail', totalMessageCount: 1, returnedMessageCount: 1, omittedBefore: false },
-    } as unknown as ReplicatedTranscriptSnapshotV1
-}
-
-async function publish(
-    producer: TranscriptWorkerNode,
-    snapshot: ReplicatedTranscriptSnapshotV1,
-): Promise<void> {
-    const encoded = encodeTranscriptRevision(snapshot, {
-        sessionId: snapshot.sessionId,
-        producerDaemonId: snapshot.producerDaemonId,
-        producerWriterId: snapshot.producerWriterId,
-        producerEpoch: snapshot.producerEpoch,
-        revision: snapshot.revision,
-    })
-    if (!encoded.ok) throw new Error('fixture oversize')
-    const log = producer.node.log(sessionTranscriptTopic(snapshot.sessionId))
-    await log.append('transcript.revision.begin.v1', encoded.begin as never)
-    for (const c of encoded.chunks) await log.append('transcript.revision.chunk.v1', c as never)
-    await log.append('transcript.revision.commit.v1', encoded.commit as never)
-}
-
 interface Rig {
     producer: TranscriptWorkerNode
     consumer: TranscriptWorkerNode
     /** Re-dials a fresh channel pair, as a transport reconnect would. */
     reattach(): PeerHandle
     peer: PeerHandle
+    chat(sessionId: string): KeyedChatProducer
     close(): Promise<void>
 }
 
@@ -155,9 +61,11 @@ async function rig(sessionIds: readonly string[]): Promise<Rig> {
     await consumer.open()
 
     const grants: Record<string, 'serve'> = {}
+    const producers = new Map<string, KeyedChatProducer>()
     for (const id of sessionIds) {
-        producer.node.defineTopic(sessionTranscriptTopic(id), sessionTranscriptPolicy())
-        grants[sessionTranscriptTopic(id)] = 'serve'
+        producer.node.defineTopic(sessionChatTopic(id), sessionChatPolicy())
+        grants[sessionChatTopic(id)] = 'serve'
+        producers.set(id, new KeyedChatProducer(producer, id))
     }
 
     let producerPeer: PeerHandle | null = null
@@ -188,6 +96,7 @@ async function rig(sessionIds: readonly string[]): Promise<Rig> {
             peer = dial()
             return peer
         },
+        chat: (sessionId) => producers.get(sessionId)!,
         async close() {
             await producer.close()
             await consumer.close()
@@ -196,7 +105,7 @@ async function rig(sessionIds: readonly string[]): Promise<Rig> {
 }
 
 describe('runTranscriptWorkerSession', () => {
-    it('subscribes only to activated sessions and posts their snapshots', async () => {
+    it('subscribes only to activated sessions and posts their frames', async () => {
         const r = await rig([SESSION_A, SESSION_B])
         const port = fakePort()
         try {
@@ -207,20 +116,22 @@ describe('runTranscriptWorkerSession', () => {
             })
 
             // Activate A only — B is granted and defined, but not wanted.
-            port.onmessage?.({ data: transcriptSessionActivation([SESSION_A], PRODUCER_WRITER) })
+            port.onmessage?.({ data: transcriptSessionActivation([SESSION_A], PRODUCER_DAEMON) })
             expect(session.activeSessionIds()).toEqual([SESSION_A])
 
-            await publish(r.producer, snapshotFixture(SESSION_A, 1, 'for A'))
+            await r.chat(SESSION_A).publish({ upserts: [{ id: 'a1', ord: 'a1', text: 'for A' }] })
             await waitFor(() => port.posted.length > 0)
 
             const message = port.posted[0]
-            expect(isTranscriptBridgeSnapshotMessage(message)).toBe(true)
-            if (!isTranscriptBridgeSnapshotMessage(message)) throw new Error('unreachable')
+            expect(isTranscriptBridgeFrameMessage(message)).toBe(true)
+            if (!isTranscriptBridgeFrameMessage(message)) throw new Error('unreachable')
             expect(message.sessionId).toBe(SESSION_A)
-            expect(message.snapshot.messages[0].content).toBe('for A')
+            expect(message.reset).toBe(true)
+            expect(message.upserts[0].content).toBe('for A')
+            expect(message.meta?.status).toBe('idle')
 
-            // A revision on the NON-activated session must not be delivered.
-            await publish(r.producer, snapshotFixture(SESSION_B, 1, 'for B'))
+            // A frame on the NON-activated session must not be delivered.
+            await r.chat(SESSION_B).publish({ upserts: [{ id: 'b1', ord: 'a1', text: 'for B' }] })
             await new Promise((res) => setTimeout(res, 150))
             expect(port.posted).toHaveLength(1)
 
@@ -240,11 +151,11 @@ describe('runTranscriptWorkerSession', () => {
                 currentPeer: () => r.peer,
             })
 
-            port.onmessage?.({ data: transcriptSessionActivation([SESSION_A, SESSION_B], PRODUCER_WRITER) })
+            port.onmessage?.({ data: transcriptSessionActivation([SESSION_A, SESSION_B], PRODUCER_DAEMON) })
             expect(session.activeSessionIds().sort()).toEqual([SESSION_A, SESSION_B])
             expect(r.consumer.stats().activeSubscriptions).toBe(2)
 
-            port.onmessage?.({ data: transcriptSessionActivation([SESSION_B], PRODUCER_WRITER) })
+            port.onmessage?.({ data: transcriptSessionActivation([SESSION_B], PRODUCER_DAEMON) })
             expect(session.activeSessionIds()).toEqual([SESSION_B])
             expect(r.consumer.stats().activeSubscriptions).toBe(1)
 
@@ -264,9 +175,9 @@ describe('runTranscriptWorkerSession', () => {
                 port,
                 currentPeer: () => r.peer,
             })
-            port.onmessage?.({ data: transcriptSessionActivation([SESSION_A], PRODUCER_WRITER) })
+            port.onmessage?.({ data: transcriptSessionActivation([SESSION_A], PRODUCER_DAEMON) })
 
-            await publish(r.producer, snapshotFixture(SESSION_A, 1, 'before reset'))
+            await r.chat(SESSION_A).publish({ upserts: [{ id: 'a1', ord: 'a1', text: 'before reset' }] })
             await waitFor(() => port.posted.length === 1)
 
             // Transport died: the peer and every subscription on it are dead.
@@ -280,25 +191,18 @@ describe('runTranscriptWorkerSession', () => {
             session.resubscribe()
             expect(session.activeSessionIds()).toEqual([SESSION_A])
 
-            await publish(r.producer, snapshotFixture(SESSION_A, 2, 'after reset'))
+            await r.chat(SESSION_A).publish({ upserts: [{ id: 'a1', ord: 'a1', text: 'after reset' }] })
 
-            const revisions = (): number[] =>
-                port.posted
-                    .filter(isTranscriptBridgeSnapshotMessage)
-                    .map((m) => m.snapshot.revision)
-            await waitFor(() => revisions().includes(2))
+            const frames = () => port.posted.filter(isTranscriptBridgeFrameMessage)
+            await waitFor(() => frames().some((m) => m.frame === 2))
 
-            // The fresh subscription SNAPs the whole ring first, so revision 1
-            // is legitimately re-delivered before 2 — the ring is the replica's
-            // source, not a delta feed, and re-emitting a revision the pane has
-            // already applied is idempotent (`handleUpdate` dedups by signature).
-            // What matters is that the post-reset revision arrives at all, and
-            // that it is the newest one.
-            expect(revisions()).toContain(2)
-            expect(revisions().at(-1)).toBe(2)
-
-            const latest = port.posted.filter(isTranscriptBridgeSnapshotMessage).at(-1)
-            expect(latest?.snapshot.messages[0].content).toBe('after reset')
+            // The fresh subscription SNAPs the committed live set first (a reset
+            // frame), then the new commit arrives — possibly folded into that
+            // same reset when the SNAP was served after it. Either way the last
+            // frame carries the post-reset content.
+            const latest = frames().at(-1)
+            expect(latest?.frame).toBe(2)
+            expect(latest?.upserts.at(-1)?.content).toBe('after reset')
 
             session.close()
         } finally {
@@ -319,15 +223,47 @@ describe('runTranscriptWorkerSession', () => {
 
             // Activation arrives BEFORE any peer exists (the realistic ordering:
             // the user picks a session while the channel is still dialing).
-            port.onmessage?.({ data: transcriptSessionActivation([SESSION_A], PRODUCER_WRITER) })
+            port.onmessage?.({ data: transcriptSessionActivation([SESSION_A], PRODUCER_DAEMON) })
             expect(session.activeSessionIds()).toEqual([])
 
             peer = r.peer
             session.resubscribe()
             expect(session.activeSessionIds()).toEqual([SESSION_A])
 
-            await publish(r.producer, snapshotFixture(SESSION_A, 1, 'late attach'))
+            await r.chat(SESSION_A).publish({ upserts: [{ id: 'a1', ord: 'a1', text: 'late attach' }] })
             await waitFor(() => port.posted.length === 1)
+
+            session.close()
+        } finally {
+            await r.close()
+        }
+    })
+
+    it('forwards the folder\'s base-frame request to the main thread as a bridge message', async () => {
+        const r = await rig([SESSION_A])
+        const port = fakePort()
+        const pending: (() => void)[] = []
+        try {
+            const session = runTranscriptWorkerSession({
+                node: r.consumer,
+                port,
+                currentPeer: () => r.peer,
+                schedule: (cb) => pending.push(cb),
+            })
+            port.onmessage?.({ data: transcriptSessionActivation([SESSION_A]) })
+
+            // A producer whose every commit lies about its digest: each resync's
+            // SNAP fails again, until the streak asks for a base frame.
+            await r.chat(SESSION_A).publish({ upserts: [{ id: 'a1', ord: 'a1', text: 'x' }], corruptDigest: true })
+            for (let i = 0; i < 3; i += 1) {
+                await waitFor(() => pending.length > 0)
+                pending.shift()!()
+            }
+            await waitFor(() => port.posted.some(isTranscriptBridgeBaseRequestMessage))
+            const request = port.posted.find(isTranscriptBridgeBaseRequestMessage)
+            expect(request).toEqual({ kind: 'transcript-bridge-base-request', sessionId: SESSION_A })
+            // Content-free: the request names the session and nothing else.
+            expect(port.posted.filter(isTranscriptBridgeFrameMessage)).toEqual([])
 
             session.close()
         } finally {
@@ -344,7 +280,7 @@ describe('runTranscriptWorkerSession', () => {
                 port,
                 currentPeer: () => r.peer,
             })
-            port.onmessage?.({ data: transcriptSessionActivation([SESSION_A], PRODUCER_WRITER) })
+            port.onmessage?.({ data: transcriptSessionActivation([SESSION_A], PRODUCER_DAEMON) })
             expect(r.consumer.stats().activeSubscriptions).toBe(1)
 
             session.close()

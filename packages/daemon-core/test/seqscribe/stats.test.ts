@@ -112,7 +112,7 @@ describe('summarizeSeqscribeStats', () => {
         const summary = summarizeSeqscribeStats(
             {
                 topics: {
-                    'session.sess-abc123.transcript': topic({ pending: 2 }),
+                    'session.sess-abc123.chat': topic({ pending: 2 }),
                     'mesh.mesh_deadbeef.events': topic({ logRows: 900 }),
                 },
                 peers: [
@@ -129,7 +129,7 @@ describe('summarizeSeqscribeStats', () => {
         // substring check on the word itself would flag its own field names as
         // a false-positive leak. What must never appear is the session/mesh id
         // EMBEDDED IN a topic name.
-        for (const identifier of ['sess-abc123', 'mesh_deadbeef', 'peer-secret-1', 'session.sess-abc123.transcript', 'mesh.mesh_deadbeef.events']) {
+        for (const identifier of ['sess-abc123', 'mesh_deadbeef', 'peer-secret-1', 'session.sess-abc123.chat', 'mesh.mesh_deadbeef.events']) {
             expect(serialized).not.toContain(identifier);
         }
         for (const value of Object.values(summary)) {

@@ -1,214 +1,93 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
     __resetTranscriptParityForTests,
-    compareTranscriptRevision,
+    compareTranscriptChat,
     redactSessionId,
     transcriptParityCounters,
+    type TranscriptChatParityExpected,
+    type TranscriptParityActual,
 } from '../../src/seqscribe/transcript-parity.js';
-import { encodeTranscriptSnapshot, type TranscriptSnapshotCandidate } from '../../src/seqscribe/transcript-projection.js';
+import { KeyedTranscriptFolder } from '../../src/seqscribe/transcript-keyed-folder.js';
+import { FrameDriver, SESSION, observation, ordOf } from './keyed-chat-fixtures.js';
 
-function candidate(overrides: Partial<TranscriptSnapshotCandidate> = {}): TranscriptSnapshotCandidate {
+/**
+ * Keyed chat parity (design 2026-09-28 §5.5): the frame a publisher built from
+ * the legacy read_chat observation vs the same commit folded back from the
+ * topic. Built from REAL frames and a REAL folder, so the comparison covers
+ * the encode → append-shape → fold round trip, not two hand-made objects.
+ */
+
+function roundTrip(texts: string[]): { expected: TranscriptChatParityExpected; actual: TranscriptParityActual } {
+    const driver = new FrameDriver();
+    const folder = new KeyedTranscriptFolder({ expectedSessionId: SESSION });
+    const frame = driver.step(observation(texts.map((text, i) => ({ id: `d.p.${i + 1}`, ord: ordOf(i), text }))))!;
+    folder.ingestRows(driver.rowsOf(frame));
     return {
-        sessionId: 'sess-1',
-        providerType: 'claude-code',
-        producerDaemonId: 'daemon-a',
-        producerWriterId: 'writer-a',
-        producerEpoch: 'epoch-1',
-        revision: 1,
-        observedAt: '2026-08-29T00:00:00.000Z',
-        status: 'idle',
-        messages: [{ role: 'assistant', kind: 'standard', content: 'hello' }],
-        coverage: { mode: 'full', totalMessageCount: 1, returnedMessageCount: 1, omittedBefore: false },
-        ...overrides,
+        expected: {
+            sessionId: SESSION,
+            producerDaemonId: frame.commit.producerDaemonId,
+            live: frame.live,
+            digest: frame.commit.digest,
+            messages: frame.expectedMessages(),
+        },
+        actual: { status: 'found', view: folder.view()!, commit: folder.lastCommit()! },
     };
 }
 
-describe('compareTranscriptRevision (design §5.3/§5.4)', () => {
-    beforeEach(() => {
-        __resetTranscriptParityForTests();
+describe('compareTranscriptChat', () => {
+    beforeEach(() => __resetTranscriptParityForTests());
+
+    it('a frame and its fold-back compare clean', () => {
+        const { expected, actual } = roundTrip(['a', 'b', 'c']);
+        expect(compareTranscriptChat('d:s', expected, actual)).toEqual([]);
+        expect(transcriptParityCounters()).toMatchObject({ compared: 1, mismatches: 0, persistentMismatches: 0 });
     });
 
-    it('identical expected/actual compares clean', () => {
-        const snap = encodeTranscriptSnapshot(candidate());
-        const mismatches = compareTranscriptRevision('daemon-a:sess-1', snap, { status: 'found', snapshot: snap });
-        expect(mismatches).toEqual([]);
-        expect(transcriptParityCounters().mismatches).toBe(0);
-        expect(transcriptParityCounters().compared).toBe(1);
-    });
-
-    it('missing_complete_revision gets a one-sweep grace, then persists on recurrence (§5.4)', () => {
-        const expected = encodeTranscriptSnapshot(candidate());
-        const key = 'daemon-a:sess-1';
-
-        const first = compareTranscriptRevision(key, expected, { status: 'missing' });
-        expect(first).toEqual([{ kind: 'missing_complete_revision', session: redactSessionId(key) }]);
-        expect(transcriptParityCounters().persistentMismatches).toBe(0); // grace: not yet persistent
-
-        const second = compareTranscriptRevision(key, expected, { status: 'missing' });
-        expect(second[0]?.kind).toBe('missing_complete_revision');
-        expect(transcriptParityCounters().persistentMismatches).toBe(1); // recurrence -> real failure
-    });
-
-    it('missing followed by a complete revision clears the pending grace (no false persistence)', () => {
-        const expected = encodeTranscriptSnapshot(candidate());
-        const key = 'daemon-a:sess-1';
-
-        compareTranscriptRevision(key, expected, { status: 'missing' });
-        compareTranscriptRevision(key, expected, { status: 'found', snapshot: expected });
+    it('missing commit gets a one-sweep grace, then persists on recurrence', () => {
+        const { expected } = roundTrip(['a']);
+        expect(compareTranscriptChat('d:s', expected, { status: 'missing' })[0]!.kind).toBe('missing_complete_revision');
         expect(transcriptParityCounters().persistentMismatches).toBe(0);
-
-        // A LATER miss is a fresh occurrence, not a recurrence of the repaired one.
-        compareTranscriptRevision(key, expected, { status: 'missing' });
-        expect(transcriptParityCounters().persistentMismatches).toBe(0);
+        compareTranscriptChat('d:s', expected, { status: 'missing' });
+        expect(transcriptParityCounters()).toMatchObject({ persistentMismatches: 1, sessionsRepeated: 1, pendingMissingRevisits: 1 });
     });
 
-    it('wrong_session counts as persistent immediately, on first observation', () => {
-        const expected = encodeTranscriptSnapshot(candidate({ sessionId: 'sess-1' }));
-        const actual = encodeTranscriptSnapshot(candidate({ sessionId: 'sess-OTHER' }));
-        const mismatches = compareTranscriptRevision('daemon-a:sess-1', expected, { status: 'found', snapshot: actual });
-        expect(mismatches[0]?.kind).toBe('wrong_session');
-        expect(transcriptParityCounters().persistentMismatches).toBe(1);
+    it('a bubble missing from the read-back is missing_message; an unexpected one is extra_message', () => {
+        const { expected, actual } = roundTrip(['a', 'b']);
+        const live = new Map(expected.live);
+        live.set('d.p.99', 1);
+        expect(compareTranscriptChat('d:s', { ...expected, live }, actual).map((m) => m.kind)).toEqual(['missing_message']);
+        live.delete('d.p.99');
+        live.delete('d.p.2');
+        expect(compareTranscriptChat('d:s', { ...expected, live }, actual).map((m) => m.kind)).toEqual(['extra_message']);
     });
 
-    it('wrong_owner tolerates daemonIdsEquivalent variance but rejects a real mismatch', () => {
-        const expected = encodeTranscriptSnapshot(candidate({ producerDaemonId: 'mach_abc' }));
-        // Same underlying machine under a different-but-equivalent form must NOT
-        // be flagged — that is exactly what daemonIdsEquivalent is for.
-        const equivalentActual = encodeTranscriptSnapshot(candidate({ producerDaemonId: 'daemon_mach_abc' }));
-        expect(compareTranscriptRevision('k1', expected, { status: 'found', snapshot: equivalentActual })).toEqual([]);
-
-        const wrongActual = encodeTranscriptSnapshot(candidate({ producerDaemonId: 'mach_zzz' }));
-        const mismatches = compareTranscriptRevision('k2', expected, { status: 'found', snapshot: wrongActual });
-        expect(mismatches[0]?.kind).toBe('wrong_owner');
+    it('an older rev in storage than the frame committed is rev_regression', () => {
+        const { expected, actual } = roundTrip(['a']);
+        const live = new Map([['d.p.1', 5]]);
+        expect(compareTranscriptChat('d:s', { ...expected, live }, actual).map((m) => m.kind)).toEqual(['rev_regression']);
     });
 
-    it('field_mismatch reports the differing field names, never values (§6.1)', () => {
-        const expected = encodeTranscriptSnapshot(candidate({ status: 'idle' }));
-        const actual = encodeTranscriptSnapshot(candidate({ status: 'generating' }));
-        const mismatches = compareTranscriptRevision('k', expected, { status: 'found', snapshot: actual });
-        expect(mismatches[0]?.kind).toBe('field_mismatch');
-        expect(mismatches[0]?.fields).toContain('status');
-        // Never a value — the mismatch record has no field carrying 'idle'/'generating'.
-        expect(JSON.stringify(mismatches[0])).not.toContain('generating');
+    it('field differences report field NAMES only, never values', () => {
+        const { expected, actual } = roundTrip(['secret body']);
+        const messages = expected.messages.map((m) => ({ ...m, content: 'other body', bubbleState: 'streaming' as const }));
+        const [mismatch] = compareTranscriptChat('d:s', { ...expected, messages }, actual);
+        expect(mismatch).toMatchObject({ kind: 'field_mismatch', fields: ['bubbleState', 'content'] });
+        expect(JSON.stringify(mismatch)).not.toContain('secret');
     });
 
-    it('extra_message counts as persistent immediately on message-count divergence', () => {
-        const expected = encodeTranscriptSnapshot(candidate());
-        const actual = encodeTranscriptSnapshot(
-            candidate({
-                messages: [
-                    { role: 'assistant', kind: 'standard', content: 'hello' },
-                    { role: 'assistant', kind: 'standard', content: 'extra' },
-                ],
-            }),
-        );
-        const mismatches = compareTranscriptRevision('k', expected, { status: 'found', snapshot: actual });
-        expect(mismatches[0]?.kind).toBe('extra_message');
-        expect(transcriptParityCounters().persistentMismatches).toBe(1);
+    it('a digest the commit does not carry is digest_mismatch', () => {
+        const { expected, actual } = roundTrip(['a']);
+        expect(compareTranscriptChat('d:s', { ...expected, digest: '0'.repeat(64) }, actual).map((m) => m.kind)).toEqual(['digest_mismatch']);
     });
 
-    it('digest_mismatch catches a divergence outside the explicitly-diffed fields', () => {
-        const expected = encodeTranscriptSnapshot(candidate({ historySessionId: 'hist-a' }));
-        const actual = encodeTranscriptSnapshot(candidate({ historySessionId: 'hist-b' }));
-        const mismatches = compareTranscriptRevision('k', expected, { status: 'found', snapshot: actual });
-        expect(mismatches[0]?.kind).toBe('digest_mismatch');
-        expect(transcriptParityCounters().persistentMismatches).toBe(1);
+    it('wrong session / wrong owner', () => {
+        const { expected, actual } = roundTrip(['a']);
+        expect(compareTranscriptChat('d:s', { ...expected, sessionId: 'other' }, actual)[0]!.kind).toBe('wrong_session');
+        expect(compareTranscriptChat('d:s', { ...expected, producerDaemonId: 'daemon_mach_elsewhere' }, actual)[0]!.kind).toBe('wrong_owner');
     });
 
-    it('never throws on malformed input', () => {
-        const expected = encodeTranscriptSnapshot(candidate());
-        expect(() => compareTranscriptRevision('', expected, { status: 'missing' })).not.toThrow();
-    });
-});
-
-/**
- * ★ §5.6 gate condition 4 (`persistent mismatch 0`) is only DECIDABLE if the
- * recurrence rule was actually reachable.
- *
- * `runs` cannot say. `missing_complete_revision` is promoted to persistent only
- * on a session key's SECOND comparison, and the sole non-test caller
- * (`transcript-publish-runtime.ts`) compares once per append — so two appends on
- * two different sessions give `runs: 2, persistentMismatches: 0` while the
- * promotion path never ran once. These counters separate that "undecided" zero
- * from a genuinely clean one.
- */
-describe('★transcript parity recurrence observability (§5.6 decidability)', () => {
-    beforeEach(() => {
-        __resetTranscriptParityForTests();
-    });
-
-    it('runs=2 over two DISTINCT sessions leaves the recurrence rule unexercised', () => {
-        const snap = encodeTranscriptSnapshot(candidate());
-        compareTranscriptRevision('daemon-a:sess-1', snap, { status: 'missing' });
-        compareTranscriptRevision('daemon-a:sess-2', snap, { status: 'missing' });
-
-        const c = transcriptParityCounters();
-        expect(c.runs).toBe(2);
-        expect(c.persistentMismatches).toBe(0);
-        // ...and THIS is what says the zero above proves nothing.
-        expect(c.sessionsObserved).toBe(2);
-        expect(c.sessionsRepeated).toBe(0);
-        expect(c.pendingMissingRevisits).toBe(0);
-        expect(c.pendingMissingOpen).toBe(2);
-    });
-
-    it('runs=2 over the SAME session does exercise it, and says so', () => {
-        const snap = encodeTranscriptSnapshot(candidate());
-        compareTranscriptRevision('daemon-a:sess-1', snap, { status: 'missing' });
-        compareTranscriptRevision('daemon-a:sess-1', snap, { status: 'missing' });
-
-        const c = transcriptParityCounters();
-        expect(c.runs).toBe(2);
-        expect(c.sessionsObserved).toBe(1);
-        expect(c.sessionsRepeated).toBe(1);
-        expect(c.pendingMissingRevisits).toBe(1);
-        expect(c.persistentMismatches).toBe(1);
-    });
-
-    it('counts a revisit that REPAIRS as an evaluation too, and closes the grace slot', () => {
-        const snap = encodeTranscriptSnapshot(candidate());
-        compareTranscriptRevision('daemon-a:sess-1', snap, { status: 'missing' });
-        compareTranscriptRevision('daemon-a:sess-1', snap, { status: 'found', snapshot: snap });
-
-        const c = transcriptParityCounters();
-        // The rule fired and answered "repaired" — a clean 0 that is DECIDED,
-        // which is exactly the state the distinct-sessions case above lacks.
-        expect(c.pendingMissingRevisits).toBe(1);
-        expect(c.sessionsRepeated).toBe(1);
-        expect(c.persistentMismatches).toBe(0);
-        expect(c.pendingMissingOpen).toBe(0);
-    });
-
-    it('exposes the full six-class split and the compared total', () => {
-        compareTranscriptRevision(
-            'k',
-            encodeTranscriptSnapshot(candidate({ sessionId: 'sess-1' })),
-            { status: 'found', snapshot: encodeTranscriptSnapshot(candidate({ sessionId: 'sess-OTHER' })) },
-        );
-        const c = transcriptParityCounters();
-        expect(c.compared).toBe(1);
-        expect(c.wrongSession).toBe(1);
-        expect(c.missingCompleteRevision).toBe(0);
-        expect(c.fieldMismatch).toBe(0);
-        expect(c.extraMessage).toBe(0);
-        expect(c.wrongOwner).toBe(0);
-        expect(c.digestMismatch).toBe(0);
-    });
-
-    it('★dates the zero — `since` is a real process stamp, so a restart is not read as parity', () => {
-        // Without this an observer cannot tell "counted for an hour, nothing
-        // wrong" from "restarted a second ago, counted nothing". Reading a
-        // freshly-reset 0 as clean is the exact mistake this gate already made.
-        const c = transcriptParityCounters();
-        expect(c.since).toBeGreaterThan(1_600_000_000_000);
-        expect(c.since).toBeLessThanOrEqual(Date.now());
-        expect(c.runs).toBe(0);
-    });
-});
-
-describe('redactSessionId', () => {
-    it('truncates long ids and passes short ones through', () => {
-        expect(redactSessionId('abc')).toBe('abc');
-        expect(redactSessionId('daemon-a:sess-12345678')).toBe('daemon-a…(22)');
+    it('redactSessionId truncates long ids', () => {
+        expect(redactSessionId('short')).toBe('short');
+        expect(redactSessionId('0123456789abcdef')).toBe('01234567…(16)');
     });
 });

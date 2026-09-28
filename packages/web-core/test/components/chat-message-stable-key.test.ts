@@ -94,11 +94,11 @@ describe('getChatMessageStableKey', () => {
 /**
  * ★ Turn-grained-only identity must not collapse a turn's bubbles.
  *
- * `ReplicatedTranscriptMessageV1.sequence` is `number | null` BY DESIGN ("null
- * means UNKNOWN, never 0"), and `transcript-chat-pane-adapter.ts` maps only
- * `turnKey` → `_turnKey`, deliberately leaving `bubbleId` (would itself collapse
- * the turn) and `providerUnitKey` (content hash, off the wire allow-list) unset.
- * So when a producer emits `turnKey` without a numeric `sequence`, the identity
+ * A legacy producer's `sequence` may be absent ("null means UNKNOWN, never
+ * 0"), and `bubbleId` (would itself collapse the turn) and `providerUnitKey`
+ * (content hash, off the wire allow-list) are left unset on replica-derived
+ * bubbles. (The keyed replica lane is keyed by `messageId` instead.) So when a
+ * producer emits `turnKey` without a numeric `sequence`, the identity
  * composite reduces to `turn:<turnKey>` — shared by every bubble of the turn.
  *
  * Measured before the fix: 4 bubbles → 1 distinct key. React reconciles

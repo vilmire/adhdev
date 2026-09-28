@@ -1,69 +1,64 @@
 /**
- * Worker-side live transcript feed for ONE session — the piece unit 4's
- * foundation deliberately left open ("topic activation / re-attach on reset is
- * consumer-cutover territory", `transcript-worker-entry.ts`) and that unit 5's
- * landed `transcript-chat-pane-adapter.ts` has been waiting on with zero
- * production callers.
+ * Worker-side live chat feed for ONE session — design 2026-09-28
+ * message-keyed storage §5.4.
  *
  * This joins three already-built halves:
  *
- *   topic-addressing.ts        → WHICH topic (byte-identical to the daemon's)
- *   TranscriptWorkerNode       → attach/subscribe mechanics
- *   TranscriptRevisionAssembler → begin/chunk/commit → verified snapshot
+ *   topic-addressing.ts     → WHICH topic (`session.<id>.chat`, byte-identical
+ *                             to the daemon's)
+ *   TranscriptWorkerNode    → attach/subscribe mechanics
+ *   KeyedTranscriptFolder   → keyed rows → verified committed view + per-commit
+ *                             changes (`onFrame`)
  *
- * ── Why the assembler is imported from daemon-core rather than copied ───────
- * `transcript-revision-codec.ts` was made Node-`Buffer`-free specifically so
- * this module could reuse it in a browser Worker (see that file's "Portable on
- * purpose" header). Reusing it is what makes the browser's verification —
- * chunk indexing, byte counts, SHA-256, owner/writer gating — the SAME code the
- * daemon and mcp-server run, rather than a second implementation that could
- * drift into accepting a revision the daemon would reject. It is reached
- * through daemon-core's `./seqscribe/transcript-revision-codec` SUBPATH export,
- * never the root barrel: a barrel value-import would drag the logger's fs/path
- * into the browser bundle and kill it.
+ * ── Why the folder is imported from daemon-core rather than copied ──────────
+ * `transcript-keyed-folder.ts` and its codec are portable on purpose (no
+ * `Buffer`, no Node builtins — see the codec's header), so the browser folds
+ * and verifies with the SAME code the daemon's replica store runs: the commit
+ * digest over `(id, rev)`, the live count, the session/owner identity gates.
+ * A second implementation could drift into accepting a frame the daemon would
+ * reject. It is reached through daemon-core's
+ * `./seqscribe/transcript-keyed-folder` SUBPATH export, never the root barrel:
+ * a barrel value-import would drag the logger's fs/path into the browser
+ * bundle and kill it.
  *
- * ── SNAP reset is a display signal, not a data loss ─────────────────────────
- * seqscribe's built-in ring `tail` view re-SNAPs whenever a DELTA outruns the
- * frame budget or the send queue drops (`vendor/seqscribe/src/subs.ts`). Design
- * §3.7 requires that a reset NOT blank the pane: the last verified complete
- * revision keeps displaying until a new one verifies, and the discontinuity
- * surfaces as `omittedBefore` — ChatPane's "이전 내용 생략" banner. So a reset
- * here only sets a flag; it never clears `latest`.
+ * ── A SNAP reset is a display signal, not a data loss ───────────────────────
+ * A keyed `tail` SNAP is `latestPerKey(W) ∪ rowsAfter(W)` (the daemon's tail
+ * selector, W = the newest commit's rowid): the WHOLE committed live set, not
+ * a ring window. The folder verifies it against that commit and swaps
+ * atomically; until it verifies, the previous committed view keeps serving —
+ * so a reset never blanks the pane and never replays history through it.
+ * Whether earlier bubbles were omitted is the producer's own statement
+ * (`meta.coverage.omittedBefore`: a window source or the live-size cap), not
+ * something a reader has to infer from ring positions.
  *
- * That flag is NOT the raw `reset` bit, though: seqscribe SNAP-resets a fresh
- * subscription too, so the banner has to be qualified by whether the ring tail
- * still contains the owning writer's seq 1 — see `ringCoversWriterStart`.
- *
- * A SNAP also carries the whole ring tail oldest-first, so it must resolve to a
- * SINGLE atomic swap to the newest verifiable revision — see the long note in
- * `ingest` below for why replaying each one is a user-visible regression.
+ * ── Resync ──────────────────────────────────────────────────────────────────
+ * A frame that fails verification (digest mismatch, a torn SNAP, a foreign
+ * owner) leaves the folder flagged `needsResync`. The subscription is then
+ * restarted — a fresh SUB answers with a reset SNAP — while the SAME folder is
+ * kept, so its last verified view keeps serving. When the same reason repeats
+ * `BASE_REQUEST_AFTER` times in a row, the owner is asked for one base frame
+ * (`onBaseRequest` → `request_transcript_base` on the main thread's command
+ * path), mirroring the daemon replica store
+ * (`seqscribe/transcript-replica-store.ts`).
  */
 import {
-    TRANSCRIPT_REVISION_BEGIN_KIND,
-    TRANSCRIPT_REVISION_CHUNK_KIND,
-    TRANSCRIPT_REVISION_COMMIT_KIND,
-    TranscriptRevisionAssembler,
-    type TranscriptRevisionRow,
-} from '@adhdev/daemon-core/seqscribe/transcript-revision-codec';
-import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core/seqscribe/transcript-projection';
-import type { PeerHandle, Row, Subscription } from 'seqscribe';
-import { sessionTranscriptPolicy, sessionTranscriptTopic } from './topic-addressing.js';
+    KeyedTranscriptFolder,
+    parseChatSubRow,
+    type KeyedChatRow,
+    type KeyedFoldRejectReason,
+    type KeyedTranscriptFrameDelta,
+} from '@adhdev/daemon-core/seqscribe/transcript-keyed-folder';
+import type { ReplicatedTranscriptViewV2 } from '@adhdev/daemon-core/seqscribe/transcript-keyed-codec';
+import type { PeerHandle, Row, Subscription, Unsub } from 'seqscribe';
+import { sessionChatPolicy, sessionChatTopic } from './topic-addressing.js';
 import type { TranscriptWorkerNode } from './transcript-worker-node.js';
 
-/** What the consumer needs alongside the snapshot to render it correctly. */
-export interface TranscriptSessionUpdate {
-    readonly snapshot: ReplicatedTranscriptSnapshotV1;
-    /**
-     * Rows before this one may never have been seen — design §3.7's
-     * "이전 내용 생략". Raised when a SNAP reset arrives whose ring tail no
-     * longer holds the owning writer's first row (evicted history, or a
-     * producer restart that dropped the in-memory ring); a reset on a ring
-     * that still reaches seq 1 is just this subscription starting, and does
-     * NOT raise it. Sticky until the next clean revision, because the gap does
-     * not heal just because a later revision arrives without a reset flag.
-     */
-    readonly omittedBefore: boolean;
-}
+/**
+ * Consecutive resyncs for the same reason before asking the owner for a base
+ * frame. Mirrors `TRANSCRIPT_REPLICA_BASE_REQUEST_AFTER` in the daemon's
+ * replica store.
+ */
+export const BASE_REQUEST_AFTER = 3;
 
 export interface TranscriptSessionSubscriptionOptions {
     /** Raw session id. Sanitized into the topic name here — callers pass raw. */
@@ -71,338 +66,176 @@ export interface TranscriptSessionSubscriptionOptions {
     /** The attached daemon peer this session's transcript is served by. */
     readonly peer: PeerHandle;
     /**
-     * The daemon's seqscribe writer id. Gates EVERY row (design §3.3) so a
-     * second writer on the topic cannot land a revision. Optional only because
-     * the browser may not know it before the first `begin` — when omitted the
-     * codec's own identity checks still apply.
+     * The producing daemon's id. When present the folder refuses a commit any
+     * other daemon produced (`daemonIdsEquivalent`), on top of the topic name
+     * and the commit's own session id.
      */
-    readonly ownerWriterId?: string;
+    readonly ownerDaemonId?: string;
     /**
-     * Fires for each verified-complete revision, in arrival order — with one
-     * deliberate collapse: a SNAP reset delivers the whole ring tail at once,
-     * and fires ONCE with the newest verifiable revision in it (design §3.7's
-     * atomic swap), not once per historical revision the ring still holds.
+     * Fires once per applied commit with exactly what changed — `reset:true`
+     * carries the whole live set (SNAP, first commit, writer change).
      */
-    onSnapshot(update: TranscriptSessionUpdate): void;
-    /**
-     * A row was rejected. Reason is the codec's closed union — surfaced so the
-     * consumer can fall back with a real reason instead of silently showing a
-     * stale pane.
-     */
-    onRejected?(reason: string): void;
+    onFrame(delta: KeyedTranscriptFrameDelta): void;
+    /** A row or frame was rejected. The reason is the folder's closed union. */
+    onRejected?(reason: KeyedFoldRejectReason): void;
+    /** The same rejection repeated `BASE_REQUEST_AFTER` resyncs in a row. */
+    onBaseRequest?(): void;
+    /** Defers the resubscribe off the ingest call stack. Defaults to `setTimeout(cb, 0)`. */
+    schedule?(cb: () => void): void;
 }
 
 export interface TranscriptSessionSubscriptionHandle {
     /** The topic this subscription is bound to — for diagnostics/tests. */
     readonly topic: string;
-    /** Last verified complete revision, or null before the first one lands. */
-    latest(): TranscriptSessionUpdate | null;
+    /** The last verified committed view, or null before the first one. */
+    view(): ReplicatedTranscriptViewV2 | null;
+    /** Subscriptions restarted after a folder resync — diagnostics/tests. */
+    resubscribes(): number;
     /** Idempotent. */
     close(): void;
 }
 
 /**
- * `Row.payload` arrives as a JSON STRING (`subs.ts#ringRow` stringifies
- * `LogEntry.payload`), so it must be parsed before the assembler — which types
- * `payload` as the decoded object — ever sees it.
- *
- * A row whose payload is not parseable JSON is dropped rather than handed on:
- * the assembler's rejection vocabulary describes malformed TRANSCRIPT
- * envelopes, and a non-JSON ring row is a transport-level corruption that
- * predates that vocabulary.
- */
-function toRevisionRow(row: Row): TranscriptRevisionRow | null {
-    const { writer, seq, kind, payload } = row;
-    if (typeof writer !== 'string' || typeof seq !== 'number' || typeof kind !== 'string') return null;
-    if (typeof payload !== 'string') return null;
-    try {
-        return { writer, seq, kind, payload: JSON.parse(payload) as unknown };
-    } catch {
-        return null;
-    }
-}
-
-/**
- * Does this SNAP's ring tail still hold the owning writer's FIRST row?
- *
- * Writer seq is per-(topic, writer) and starts at 1 (`vendor/seqscribe/src/
- * log.ts:706,723`), and a session's transcript is a topic of its own, so
- * "the owner's lowest seq here is 1" means the ring never evicted anything
- * this writer wrote — there is no earlier content the viewer is missing.
- *
- * Scoped to `ownerWriterId` because the ring is topic-wide: a foreign writer's
- * rows are rejected downstream by the codec's owner gate anyway, and letting
- * one of them supply seq 1 would fake coverage the owner does not have. When
- * the owner id is unknown (it is optional — the browser may not know it before
- * the first `begin`), coverage cannot be established, so this returns false and
- * the caller keeps the banner: unknown resolves toward warning, not silence.
- */
-/**
- * (PERF) The highest `revision` any COMMIT row in this SNAP tail claims, or null
- * when the tail holds no parseable commit.
- *
- * ── Why a pre-scan ──────────────────────────────────────────────────────────
- * A SNAP carries the whole ring tail, which holds well over a hundred PAST
- * revisions. The emission rule below already discards all but the newest — but
- * it discovered which was newest only AFTER fully decoding each one
- * (base64 → concat → UTF-8 → SHA-256 → JSON.parse over the entire snapshot).
- * Every revision but one was decoded purely to be thrown away.
- *
- * A commit envelope states its own `revision` in cleartext, so the winner can
- * be identified from metadata alone, and only that revision's rows need the
- * expensive path. This reads the SAME field the assembler reads and changes no
- * wire format.
- *
- * ★ Advisory ONLY — it selects which rows to decode, it never decides validity.
- * A commit naming a high revision it cannot back up (missing chunks, bad hash,
- * foreign writer) is still rejected by the assembler exactly as before; the
- * fallback below then replays the tail in full rather than trusting this hint.
- */
-function maxCommittedRevision(rows: readonly Row[]): number | null {
-    let max: number | null = null;
-    for (const row of rows) {
-        if (row.kind !== TRANSCRIPT_REVISION_COMMIT_KIND) continue;
-        const parsed = toRevisionRow(row);
-        if (!parsed) continue;
-        const revision = (parsed.payload as { revision?: unknown } | null)?.revision;
-        if (typeof revision !== 'number') continue;
-        if (max === null || revision >= max) max = revision;
-    }
-    return max;
-}
-
-/**
- * (PERF) Does this row belong to `revision`, or is it a non-revision row that
- * must still be offered to the assembler?
- *
- * begin/chunk/commit all carry `revision` on their payload, so a row of a
- * different revision can be skipped without decoding its snapshot. Anything
- * whose revision cannot be read is NOT skipped — unknown resolves toward doing
- * the work, so the assembler keeps seeing every row it would have seen.
- */
-function rowIsForRevision(row: Row, revision: number): boolean {
-    const kind = row.kind;
-    if (
-        kind !== TRANSCRIPT_REVISION_BEGIN_KIND &&
-        kind !== TRANSCRIPT_REVISION_CHUNK_KIND &&
-        kind !== TRANSCRIPT_REVISION_COMMIT_KIND
-    ) {
-        return true;
-    }
-    const parsed = toRevisionRow(row);
-    if (!parsed) return true;
-    const rowRevision = (parsed.payload as { revision?: unknown } | null)?.revision;
-    if (typeof rowRevision !== 'number') return true;
-    return rowRevision === revision;
-}
-
-/**
- * Index of the last COMMIT row for `revision` in `rows`, or -1. Everything
- * after it is the in-flight tail (see `inFlightFrom` in `ingest`).
- */
-function lastCommitIndex(rows: readonly Row[], revision: number): number {
-    for (let i = rows.length - 1; i >= 0; i--) {
-        const row = rows[i]!;
-        if (row.kind === TRANSCRIPT_REVISION_COMMIT_KIND && rowIsForRevision(row, revision)) return i;
-    }
-    return -1;
-}
-
-function ringCoversWriterStart(rows: readonly Row[], ownerWriterId: string | undefined): boolean {
-    if (ownerWriterId === undefined) return false;
-    for (const row of rows) {
-        if (row.writer === ownerWriterId && row.seq === 1) return true;
-    }
-    return false;
-}
-
-/**
- * Define the session's transcript topic, subscribe to its ring tail through the
- * already-attached daemon peer, and reassemble verified snapshots.
+ * Define the session's chat topic, subscribe to its `tail` through the
+ * already-attached daemon peer, and fold the rows into verified frames.
  *
  * The topic is defined on THIS node with the same policy the daemon uses
- * (`sessionTranscriptPolicy`) because `topicSchemaHash` covers the policy —
- * a divergent one is rejected peer-side as `ERR_SCHEMA_MISMATCH`, not silently
- * tolerated. `TranscriptWorkerNode`'s browser-safe-finality interlock
- * (`browser-reject-authority.ts`) independently refuses any policy it has not
- * reasoned about being safe here — `sessionTranscriptPolicy()`'s current
- * shape (`full` retention, `subscribe-only` replication, G2b) is one of the
- * two shapes it accepts.
+ * (`sessionChatPolicy`) — `topicSchemaHash` covers the policy's kind and
+ * finality authority, and a divergent one is rejected peer-side as
+ * `ERR_SCHEMA_MISMATCH`. `TranscriptWorkerNode`'s browser-safe-finality
+ * interlock (`browser-reject-authority.ts`) independently refuses any policy it
+ * has not reasoned about being safe here — `full` retention + `subscribe-only`
+ * is one of the two shapes it accepts.
  */
-export function subscribeSessionTranscript(
+export function subscribeSessionChat(
     node: TranscriptWorkerNode,
     options: TranscriptSessionSubscriptionOptions,
 ): TranscriptSessionSubscriptionHandle {
-    const topic = sessionTranscriptTopic(options.sessionId);
+    const topic = sessionChatTopic(options.sessionId);
     // Idempotent by design: re-defining an identical topic/policy is a no-op in
     // seqscribe, so a second session activation for the same topic is safe.
-    node.node.defineTopic(topic, sessionTranscriptPolicy());
+    node.node.defineTopic(topic, sessionChatPolicy());
 
-    const assembler = new TranscriptRevisionAssembler(options.ownerWriterId);
-    let latest: TranscriptSessionUpdate | null = null;
-    let pendingOmittedBefore = false;
+    const folder = new KeyedTranscriptFolder({
+        expectedSessionId: options.sessionId,
+        ...(options.ownerDaemonId ? { expectedOwnerDaemonId: options.ownerDaemonId } : {}),
+        onFrame: (delta) => {
+            if (closed) return;
+            // An applied commit ends any resync streak.
+            streak = null;
+            options.onFrame(delta);
+        },
+    });
+    const schedule = options.schedule ?? ((cb: () => void): void => void setTimeout(cb, 0));
+
+    let subscription: Subscription | null = null;
+    let unsubs: Unsub[] = [];
+    let generation = 0;
+    let streak: { reason: KeyedFoldRejectReason; count: number } | null = null;
+    let resyncScheduled = false;
+    let resubscribes = 0;
     let closed = false;
 
-    const ingest = (rows: readonly Row[], reset: boolean): void => {
-        if (closed) return;
-        // Sticky: a reset marks the NEXT delivered revision as discontinuous.
-        // Cleared only when that revision is actually delivered below, so a
-        // reset followed by rows that never complete keeps the flag armed.
-        //
-        // ── But a reset alone does NOT mean rows were lost ─────────────────
-        // seqscribe SNAP-resets a FRESH subscription too: `handleSub` falls
-        // through to `sendSnap(..., true)` for "fresh or beyond retention or
-        // epoch mismatch" alike (`vendor/seqscribe/src/subs.ts:178-180`), so
-        // `reset === true` conflates "you missed rows" with "you just got
-        // here". Treating the flag as authoritative therefore raised the
-        // "이전 내용 생략" banner on EVERY first subscription, including
-        // sessions whose entire history was sitting in the ring.
-        //
-        // The ring itself distinguishes the two. Writer seq is per-(topic,
-        // writer) and starts at 1 (`log.ts:706,723` — `head.contigSeq + 1`
-        // over a stream keyed by topic+writer), and one session's transcript
-        // is one topic. So the owner's LOWEST seq in the tail being 1 proves
-        // the ring still holds that writer's very first row, i.e. nothing
-        // ahead of the delivered revision was evicted.
-        //
-        // Only the positive direction is sound. seq > 1 is NOT proof of
-        // eviction: `rings` is in-memory only (`log.ts:131`, populated solely
-        // by `persist()` at :889 with no disk restore) while `contigSeq`
-        // persists in `sq_writers`, so a producer restart yields an empty
-        // ring whose next rows start well above 1. That is still a real
-        // discontinuity for the viewer, so banner-on-uncertainty remains the
-        // safe default — do not invert this into "seq > 1 ⇒ evicted".
-        //
-        // `||=`, never `=`: an armed flag must survive a later reset that
-        // happens to arrive with a complete ring, because the gap the earlier
-        // reset opened does not heal.
-        //
-        // ★ G2b note: `session.*.transcript` is now `full` retention
-        // (`topic-addressing.ts#sessionTranscriptPolicy`), bounded by the
-        // daemon's `writer-gc.ts` prune sweep rather than ring eviction. A
-        // `reset:true` SNAP can therefore also arrive after a prune moved the
-        // tail window's floor forward — `ringCoversWriterStart` below still
-        // answers the right question either way ("does this window reach the
-        // writer's seq 1"), so no logic change was needed, only this note.
-        if (reset && !ringCoversWriterStart(rows, options.ownerWriterId)) pendingOmittedBefore = true;
-
-        // ── Why a reset collapses to ONE emission ──────────────────────────
-        // A SNAP hands over the WHOLE ring tail, oldest-first. Since one
-        // transcript revision is only `begin + N chunks + commit` rows, a
-        // 500-slot ring holds well over a hundred PAST revisions. Emitting
-        // each one as it reassembles replays the session's history forward
-        // through the pane — the user watches a correct view snap back to an
-        // old message. Nothing downstream catches it: the assembler's
-        // `complete` is overwritten unconditionally, `handleUpdate` never
-        // reads `seq`, and the pane's shrink guard only fires when the new
-        // message list is SHORTER — oldest-first replay grows monotonically,
-        // so it is structurally blind to this direction.
-        //
-        // Design §3.7 already specifies the correct behaviour: "SNAP은 tail
-        // rows 전체에서 가장 새로운 검증 가능한 complete revision을 찾는다"
-        // and swaps ONCE, atomically. So on a reset we reassemble every row
-        // but publish only the highest-revision complete snapshot.
-        //
-        // DELTA (`reset === false`) is untouched: those rows are sequential
-        // steady-state upserts and each one is a genuine new revision.
-        let best: ReplicatedTranscriptSnapshotV1 | null = null;
-
-        // ── (PERF) SNAP two-pass: decide the winner from metadata, decode once ──
-        // Pass 1 reads the commit envelopes' cleartext `revision` to find which
-        // revision this tail would have ended up publishing anyway; pass 2 (the
-        // loop below) then hands the assembler only that revision's rows, so the
-        // ~100+ superseded revisions in the ring are never base64-decoded,
-        // hashed or JSON-parsed. On a DELTA nothing is filtered — those rows are
-        // sequential steady-state upserts, each a genuine new revision.
-        //
-        // `targetRevision === null` (no parseable commit in the tail) leaves the
-        // filter off entirely, which is the pre-existing full replay.
-        const targetRevision = reset ? maxCommittedRevision(rows) : null;
-        // Rows already offered to the assembler, so the fallback replay does not
-        // report the SAME row's rejection twice. Rows the filter skipped were
-        // never offered, so their rejections are reported for the first time on
-        // the replay — the net set of reported reasons therefore matches the
-        // unfiltered behaviour, just possibly in a different order.
-        const offered = new Set<Row>();
-        // ── The in-flight tail rides along unfiltered ──────────────────────
-        // Rows AFTER the target revision's commit are the producer's next,
-        // still-uncommitted revision (the daemon's transcript tail selector
-        // ships exactly "newest complete revision + in-flight rows"). They
-        // must reach the assembler: the rest of that revision (its commit,
-        // maybe more chunks) arrives by DELTA, and an assembler that never saw
-        // its begin rejects the commit (`commit_without_begin`) and drops a
-        // revision the SNAP had already delivered half of. Offering them
-        // AFTER the target completes only arms the assembler's in-flight
-        // buffer — they cannot displace `best`, which is settled by then.
-        const inFlightFrom = targetRevision !== null ? lastCommitIndex(rows, targetRevision) + 1 : rows.length;
-        const scan = (candidateRows: readonly Row[], filterToRevision: number | null): void => {
-            for (const [index, row] of candidateRows.entries()) {
-                if (filterToRevision !== null && index < inFlightFrom && !rowIsForRevision(row, filterToRevision)) {
-                    continue;
-                }
-                const revisionRow = toRevisionRow(row);
-                if (!revisionRow) continue;
-                const alreadyOffered = offered.has(row);
-                offered.add(row);
-                const result = assembler.ingestRow(revisionRow);
-                if (result.status === 'rejected') {
-                    if (!alreadyOffered) options.onRejected?.(result.reason);
-                    continue;
-                }
-                if (result.status !== 'complete') continue;
-                if (reset) {
-                    // Keep the newest. `>=` (not `>`) so that when a publisher
-                    // restart legitimately resets the counter, the later-arriving
-                    // rows — which are the newer ones in ring order — still win.
-                    if (!best || result.snapshot.revision >= best.revision) best = result.snapshot;
-                    continue;
-                }
-                const update: TranscriptSessionUpdate = {
-                    snapshot: result.snapshot,
-                    omittedBefore: pendingOmittedBefore,
-                };
-                pendingOmittedBefore = false;
-                latest = update;
-                options.onSnapshot(update);
-            }
-        };
-
-        scan(rows, targetRevision);
-
-        // ★ Fail-open, never fail-quiet. The pre-scan is a HINT: the highest
-        // committed revision can fail verification (missing chunks after ring
-        // eviction, a foreign writer, a corrupt envelope), in which case the
-        // pane must still get the newest revision that DOES verify — exactly
-        // what the unfiltered replay produced before. Falling back costs the
-        // full old cost only in the rare case that used to be the every-time
-        // cost.
-        if (reset && !best && targetRevision !== null) scan(rows, null);
-
-        if (!best) return;
-        // `omittedBefore` rides on THIS emission — the one the consumer
-        // actually renders. Attaching it to the first replayed revision (as
-        // the per-row path did) meant the "이전 내용 생략" banner was consumed
-        // by a revision that a later one immediately replaced, so the gap the
-        // user needed to see disappeared before they could see it.
-        const update: TranscriptSessionUpdate = { snapshot: best, omittedBefore: pendingOmittedBefore };
-        pendingOmittedBefore = false;
-        latest = update;
-        options.onSnapshot(update);
+    const parse = (rows: readonly Row[]): KeyedChatRow[] => {
+        const out: KeyedChatRow[] = [];
+        for (const row of rows) {
+            const parsed = parseChatSubRow(row);
+            if (parsed) out.push(parsed);
+            else options.onRejected?.('malformed_row');
+        }
+        return out;
     };
 
-    const subscription: Subscription = node.subscribe(options.peer, { view: 'tail', params: { topic } });
-    subscription.onSnapshot((rows, reset) => ingest(rows, reset));
-    // DELTA upserts are the steady-state path once a SNAP has landed; without
-    // this the pane would only ever update on a reset.
-    subscription.onDelta(({ upserts }) => ingest(upserts, false));
+    const detach = (): void => {
+        for (const unsub of unsubs) {
+            try {
+                unsub();
+            } catch {
+                // listener already gone with its subscription
+            }
+        }
+        unsubs = [];
+        if (subscription) {
+            try {
+                node.unsubscribe(subscription);
+            } catch {
+                // subscription already torn down with its peer
+            }
+        }
+        subscription = null;
+    };
+
+    /** Restart the SUB (→ fresh reset SNAP), keeping the folder's verified view. */
+    const scheduleResync = (reason: KeyedFoldRejectReason): void => {
+        streak = streak?.reason === reason ? { reason, count: streak.count + 1 } : { reason, count: 1 };
+        if (streak.count >= BASE_REQUEST_AFTER) {
+            streak = null;
+            try {
+                options.onBaseRequest?.();
+            } catch {
+                // best-effort — the resubscribe below still runs
+            }
+        }
+        if (resyncScheduled) return;
+        resyncScheduled = true;
+        schedule(() => {
+            resyncScheduled = false;
+            if (closed) return;
+            detach();
+            resubscribes += 1;
+            attach();
+        });
+    };
+
+    /** Surface this batch's rejections and resync when the folder asks for it. */
+    const after = (rejectedBefore: number, gen: number): void => {
+        if (closed || gen !== generation) return;
+        const stats = folder.stats();
+        if (stats.rejectedRows > rejectedBefore && stats.lastRejectReason) {
+            options.onRejected?.(stats.lastRejectReason);
+        }
+        const reason = folder.needsResync;
+        if (!reason) return;
+        // Only a rejection that happened in THIS batch counts toward the streak
+        // — rows arriving before the resubscribe lands must not re-trigger it.
+        if (stats.rejectedRows > rejectedBefore) scheduleResync(reason);
+    };
+
+    const attach = (): void => {
+        generation += 1;
+        const gen = generation;
+        const sub = node.subscribe(options.peer, { view: 'tail', params: { topic } });
+        subscription = sub;
+        unsubs = [
+            sub.onSnapshot((rows) => {
+                if (closed || gen !== generation) return;
+                const before = folder.stats().rejectedRows;
+                folder.ingestSnapshot(parse(rows));
+                after(before, gen);
+            }),
+            // DELTA upserts are the steady-state path once a SNAP has landed.
+            // A keyed tail DELTA carries appended rows only; a deleted bubble
+            // arrives as a `chat.del.v2` tombstone ROW, so `deletes` (seqscribe
+            // row keys) carries nothing the folder needs.
+            sub.onDelta(({ upserts }) => {
+                if (closed || gen !== generation) return;
+                const before = folder.stats().rejectedRows;
+                folder.ingestRows(parse(upserts));
+                after(before, gen);
+            }),
+        ];
+    };
+
+    attach();
 
     return {
         topic,
-        latest: () => latest,
+        view: () => folder.view(),
+        resubscribes: () => resubscribes,
         close(): void {
             if (closed) return;
             closed = true;
-            node.unsubscribe(subscription);
+            detach();
         },
     };
 }

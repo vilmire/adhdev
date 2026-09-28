@@ -12,12 +12,13 @@
  *      before any mesh ledger append / meshRecord (S7+).
  *   2. fleet.status shadow, then 3. fleet.status parity (only arms over an
  *      active shadow).
- *   4. transcript projection + its bus subscriber (+ the registry's claim release).
- *   5. transcript writer-gc (G2b, `writer-gc.ts`) — after the projection so
- *      the sweep only ever prunes topics the projection has already had a
- *      chance to define; arming order between this and mesh topic activation
- *      below doesn't matter (disjoint topic namespaces), so it goes right
- *      after its natural predecessor, the transcript projection.
+ *   4. keyed chat transcript projection + its bus subscriber (+ the registry's
+ *      claim release, + the message identity ledger's restart seed).
+ *   5. transcript writer-gc (`writer-gc.ts`: the v1 `.transcript` row sweep and
+ *      the `.chat` compaction safety net) — after the projection so the sweep
+ *      only ever compacts topics the projection has already had a chance to
+ *      define; arming order between this and mesh topic activation below
+ *      doesn't matter (disjoint topic namespaces).
  *   6. activate known mesh topics — needs the armed publisher node. NOT a
  *      tryStep: a known mesh whose events topic cannot be defined is a mesh
  *      boot failure (C7-1), so the error propagates out of the stage.
@@ -39,8 +40,8 @@ import { activateMeshTopicsAtBoot, configureMeshPublisher } from '../../seqscrib
 import { configureFleetStatusShadow } from '../../seqscribe/fleet-status-shadow.js';
 import { configureFleetStatusParity } from '../../seqscribe/fleet-status-parity.js';
 import { configureTranscriptProjection } from '../../seqscribe/transcript-publisher.js';
-import { createLiveTranscriptPublisher } from '../../seqscribe/transcript-publish-runtime.js';
-import { releaseSessionTranscriptTopic } from '../../seqscribe/transcript-activation.js';
+import { createLiveChatPublisher } from '../../seqscribe/transcript-keyed-publish-runtime.js';
+import { releaseSessionChatTopic } from '../../seqscribe/transcript-activation.js';
 import { subscribeTranscriptProjection } from '../../seqscribe/transcript-bus-subscriber.js';
 import { configureTranscriptWriterGc } from '../../seqscribe/writer-gc.js';
 import { pruneRetiredMeshConsumers } from '../../seqscribe/mesh-turn-consumer.js';
@@ -92,16 +93,21 @@ function armProjections(rt: SeqscribeRuntime, s5: CommandPlaneStage, hooks: ArmS
     step('fleet-parity');
     undo.push(['fleet-parity', () => { configureFleetStatusParity(null); }]);
 
-    // 4. Transcript projection (§8 unit 3). Releasing the in-memory claim on
-    // session removal lets a later session reuse a colliding sanitized segment.
-    s5.sessionRegistry.setTranscriptTopicRelease((rawSessionId) => releaseSessionTranscriptTopic(rt.transcriptClaims, rawSessionId));
+    // 4. Keyed chat transcript projection (design 2026-09-28). Releasing the
+    // in-memory claim on session removal lets a later session reuse a colliding
+    // sanitized segment. The ledger seed lets message ids survive a restart.
+    s5.sessionRegistry.setTranscriptTopicRelease((rawSessionId) => releaseSessionChatTopic(rt.transcriptClaims, rawSessionId));
     const transcriptOwnerDaemonId = node.daemonId ?? node.writerId;
     let transcript: ReturnType<typeof configureTranscriptProjection> = null;
+    let removeLedgerSeed: () => void = () => {};
     tryStep('Seqscribe', 'transcript projection', () => {
+        const chat = createLiveChatPublisher(node, rt.transcriptClaims, transcriptOwnerDaemonId);
+        removeLedgerSeed = chat.installLedgerSeed();
         transcript = configureTranscriptProjection({
             daemonId: () => transcriptOwnerDaemonId,
             writerId: () => node.writerId,
-            publishRevision: createLiveTranscriptPublisher(node, rt.transcriptClaims, transcriptOwnerDaemonId),
+            appendChatFrame: (sessionId, frame, observation) => chat.appendChatFrame(sessionId, frame, observation),
+            readPersistedChat: (sessionId) => chat.readPersistedChat(sessionId),
             resolveSourcePath: (sessionId: string) => {
                 const session = s5.sessionRegistry.get(sessionId);
                 if (!session) return null;
@@ -128,9 +134,6 @@ function armProjections(rt: SeqscribeRuntime, s5: CommandPlaneStage, hooks: ArmS
                 }
                 return null;
             },
-            onOversize: (sessionId) => {
-                LOG.warn('Seqscribe', `transcript projection oversize session=${shortId(sessionId)} — caller must fall back to legacy read_chat/chat_history`);
-            },
         });
     });
     const offTranscript = transcript ? subscribeTranscriptProjection(s5.bus, transcript) : () => {};
@@ -138,11 +141,12 @@ function armProjections(rt: SeqscribeRuntime, s5: CommandPlaneStage, hooks: ArmS
     undo.push(['transcript', () => {
         offTranscript();
         configureTranscriptProjection(null);
+        removeLedgerSeed();
         s5.sessionRegistry.setTranscriptTopicRelease(null);
     }]);
 
-    // 5. Transcript writer-gc (G2b) — bounds `full`-retention session
-    // transcript topics locally (writer-gc.ts's header has the full account).
+    // 5. Transcript writer-gc — removes the v1 `.transcript` rows and compacts
+    // `.chat` topics whose producer is gone (writer-gc.ts's header).
     tryStep('Seqscribe', 'transcript writer-gc', () => { configureTranscriptWriterGc(node); });
     step('transcript-writer-gc');
     undo.push(['transcript-writer-gc', () => { configureTranscriptWriterGc(null); }]);

@@ -114,8 +114,8 @@ function observation(overrides: Partial<TranscriptObservation> = {}): Transcript
         sessionId: 'sess-1',
         providerType: 'claude',
         status: 'idle',
-        messages: [{ role: 'assistant', text: 'hello' }],
-        coverage: { complete: true },
+        messages: [{ messageId: 'd.lat.1', ord: 'a0', role: 'assistant', content: 'hello' }],
+        coverage: { mode: 'full' },
         ...overrides,
     } as TranscriptObservation;
 }
@@ -128,7 +128,7 @@ function makeService(
         daemonId: () => 'daemon-1',
         writerId: () => 'writer-1',
         epoch: 'epoch-1',
-        publishRevision: async (sessionId) => {
+        appendChatFrame: async (sessionId) => {
             published.push(sessionId);
         },
         ...overrides,
@@ -232,7 +232,7 @@ describe('TranscriptProjectionService — trigger attribution', () => {
             daemonId: () => 'daemon-1',
             writerId: () => 'writer-1',
             epoch: 'epoch-1',
-            publishRevision: async (sessionId) => {
+            appendChatFrame: async (sessionId) => {
                 published.push(sessionId);
             },
             collectObservation: async (sessionId) => {
@@ -255,7 +255,7 @@ describe('TranscriptProjectionService — trigger attribution', () => {
         // representing nothing a user ever saw rendered.
         const { service } = makeService({
             collectObservation: async () => ({ observation: observation() }),
-            publishRevision: async () => {
+            appendChatFrame: async () => {
                 throw new Error('sink down');
             },
         });

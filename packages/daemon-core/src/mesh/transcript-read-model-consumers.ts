@@ -2,7 +2,7 @@
  * transcript replica consumer roster — design §4 ("소비자 컷오버 로스터").
  *
  * The complete, enumerated set of read sites allowed to answer from the
- * `session.<safeSessionId>.transcript` replica instead of the daemon's
+ * `session.<safeSessionId>.chat` replica instead of the daemon's
  * normalized `read_chat` path, in the design's consumer integration order.
  * Nothing outside this roster cuts over — mirrors the pattern
  * `mesh-read-model-consumers.ts` established for the (unrelated) mesh-ledger

@@ -125,10 +125,10 @@ describe('standalone transcript lane over a real ws socket', () => {
   it('authenticated dashboard SUBs view:tail and receives SNAP then DELTA rows', async () => {
     const daemon = openNode('daemon');
     const browser = openNode('browser');
-    const topic = topics.sessionTranscriptTopic(SESSION_ID);
+    const topic = topics.sessionChatTopic(SESSION_ID);
     const claims = new claimsMod.TranscriptTopicClaimRegistry();
-    expect(activation.ensureSessionTranscriptTopic(daemon, claims, SESSION_ID, 'standalone_mach_e2e').ok).toBe(true);
-    await daemon.node.log(topic).append('transcript.revision.begin', { n: 1 });
+    expect(activation.ensureSessionChatTopic(daemon, claims, SESSION_ID, 'standalone_mach_e2e').ok).toBe(true);
+    await daemon.node.log(topic).append('chat.meta.v2', { n: 1 }, { key: 'meta' });
 
     const url = await startDaemon(daemon);
     const ws = new WebSocket(`${url}?token=${TOKEN}`);
@@ -140,7 +140,7 @@ describe('standalone transcript lane over a real ws socket', () => {
     });
     await waitFor(() => peer.state() === 'ready', 'peer ready');
 
-    browser.node.defineTopic(topic, topics.sessionTranscriptPolicy());
+    browser.node.defineTopic(topic, topics.sessionChatPolicy());
     const snaps: Row[][] = [];
     const deltas: Row[][] = [];
     const sub = browser.node.subscribe(peer, { view: 'tail', params: { topic } });
@@ -148,10 +148,10 @@ describe('standalone transcript lane over a real ws socket', () => {
     sub.onDelta(({ upserts }) => deltas.push(upserts));
 
     await waitFor(() => snaps.length > 0, 'SNAP');
-    expect(snaps[0]!.map((r) => r.kind)).toEqual(['transcript.revision.begin']);
-    await daemon.node.log(topic).append('transcript.revision.commit', { n: 2 });
+    expect(snaps[0]!.map((r) => r.kind)).toEqual(['chat.meta.v2']);
+    await daemon.node.log(topic).append('chat.commit.v2', { n: 2 }, { key: 'commit' });
     await waitFor(() => deltas.length > 0, 'DELTA');
-    expect(deltas.flat().map((r) => r.kind)).toContain('transcript.revision.commit');
+    expect(deltas.flat().map((r) => r.kind)).toContain('chat.commit.v2');
   });
 
   it('unauthenticated upgrade is refused before any seqscribe frame flows', async () => {

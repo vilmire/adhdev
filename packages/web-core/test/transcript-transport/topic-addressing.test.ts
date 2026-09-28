@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
     ADHDEV_AUTHORITY_ID,
+    CHAT_TOMBSTONE_KIND,
     safeSessionId,
-    sessionTranscriptPolicy,
-    sessionTranscriptTopic,
-    SESSION_TRANSCRIPT_RING,
+    sessionChatPolicy,
+    sessionChatTopic,
 } from '../../src/transcript-transport/topic-addressing.js';
 
 // Known-answer vectors mirrored from `oss/packages/daemon-core/src/seqscribe/
@@ -51,28 +51,26 @@ describe('topic-addressing (browser mirror of daemon-core topics.ts)', () => {
         expect(safeSessionId('A:B')).toBe(safeSessionId('a.b'));
     });
 
-    it('builds the exact session.<safeSessionId>.transcript topic name', () => {
-        expect(sessionTranscriptTopic('daemon_abc123')).toBe('session.daemon_abc123.transcript');
-        expect(sessionTranscriptTopic('A:B')).toBe('session.a_b.transcript');
+    it('builds the exact session.<safeSessionId>.chat topic name', () => {
+        expect(sessionChatTopic('daemon_abc123')).toBe('session.daemon_abc123.chat');
+        expect(sessionChatTopic('A:B')).toBe('session.a_b.chat');
     });
 
-    it('builds a policy matching topics.ts#sessionTranscriptPolicy exactly (G2b: full retention)', () => {
-        expect(sessionTranscriptPolicy()).toEqual({
+    it('builds a policy matching topics.ts#sessionChatPolicy exactly, key order included', () => {
+        const policy = sessionChatPolicy();
+        expect(policy).toEqual({
             kind: 'append',
+            keyed: { tombstoneKind: 'chat.del.v2' },
             retention: { mode: 'full' },
             replication: 'subscribe-only',
             access: 'content',
             finalityAuthority: ADHDEV_AUTHORITY_ID,
         });
+        expect(Object.keys(policy)).toEqual(['kind', 'keyed', 'retention', 'replication', 'access', 'finalityAuthority']);
+        expect(CHAT_TOMBSTONE_KIND).toBe('chat.del.v2');
     });
 
     it('pins the fleet-wide authority id constant', () => {
         expect(ADHDEV_AUTHORITY_ID).toBe('adhdev-coordinator');
-    });
-
-    it('SESSION_TRANSCRIPT_RING is a kept historical constant, no longer used by sessionTranscriptPolicy', () => {
-        // Not referenced by the policy since G2b switched to full retention —
-        // kept only for documentary parity with daemon-core's own constant.
-        expect(SESSION_TRANSCRIPT_RING).toBe(500);
     });
 });

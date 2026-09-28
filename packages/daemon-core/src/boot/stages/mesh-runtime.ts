@@ -76,6 +76,16 @@ import type { MeshRuntimeStage, ProjectionsStage } from './types.js';
 /** Build the components object hosts and mesh modules consume. */
 export function assembleDaemonComponents(s6: ProjectionsStage): DaemonComponents {
     const { cfg, seqscribe } = s6;
+    // Keyed chat resync (design 2026-09-28 §5.2): a replica whose commits keep
+    // failing their digest asks the OWNER for one base frame over the same
+    // peer command path every other mesh command uses (never the server).
+    // Absent on standalone, which has no daemon-to-daemon dispatch.
+    const dispatch = cfg.mesh?.dispatchMeshCommand;
+    if (seqscribe && dispatch) {
+        seqscribe.transcriptReplica.setBaseRequester((key) => {
+            void dispatch(key.ownerDaemonId, 'request_transcript_base', { rawSessionId: key.rawSessionId }).catch(() => {});
+        });
+    }
     const components: DaemonComponents = {
         providerLoader: s6.providerLoader,
         instanceManager: s6.instanceManager,

@@ -51,6 +51,14 @@ describe('TOOL-EXPAND bubble affordance', () => {
         expect(html).toContain('Show full output')
     })
 
+    it('★ offers expansion on a keyed-replica bubble marked expandable, and asks by messageId', () => {
+        // The keyed wire carries `expandable` instead of the mtime-sealed ref
+        // (design 2026-09-28 §5.9); the adapter maps it to `_expandable`.
+        const onExpand = vi.fn()
+        const html = render(toolBubble({ messageId: 'n.0000beef.4.1', _expandable: true }), { onExpandToolBlock: onExpand })
+        expect(html).toContain('Show full output')
+    })
+
     it('offers NOTHING on a bubble with no ref — it is already complete', () => {
         // The parser attaches a ref only when the cap actually bit, so "no ref"
         // means expanding would return the same string.

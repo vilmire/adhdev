@@ -304,7 +304,7 @@ describe('summarizeSeqscribeStats — local diagnostics are opt-in', () => {
     node.accrue({
         servedEntries: 1,
         servedBytes: 100,
-        hotspot: { topic: 'session.sess-1.transcript', peerId: 'peer-a', bytes: 100 },
+        hotspot: { topic: 'session.sess-1.chat', peerId: 'peer-a', bytes: 100 },
     });
     const collector = startSeqscribeThroughputCollector({
         readStats: () => node.stats(),
@@ -334,7 +334,7 @@ describe('summarizeSeqscribeStats — local diagnostics are opt-in', () => {
         expect(summary.stalledStreams).toBe(2);
         expect(summary.throughput?.servedEntries).toBe(1);
         expect(summary.syncHotspots).toEqual([
-            { topic: 'session.sess-1.transcript', peerId: 'peer-a', bytes: 100 },
+            { topic: 'session.sess-1.chat', peerId: 'peer-a', bytes: 100 },
         ]);
     });
 

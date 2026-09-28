@@ -71,7 +71,7 @@ export interface DaemonBootConfig {
          * G3 (`CommandRouterDeps.resolveTranscriptPeer`, `commands/router.ts`) —
          * cloud-only resolver for a remote daemon's live seqscribe `PeerHandle`,
          * so `TranscriptReplicaStore.ensureSubscription` can attach a `tail` SUB
-         * to `session.<id>.transcript` for a session owned by that daemon.
+         * to `session.<id>.chat` for a session owned by that daemon.
          * Backed by `CloudSeqscribeWiring.resolveTranscriptPeer`
          * (`packages/daemon-cloud/src/cloud-seqscribe-wiring.ts`), which reads
          * the SAME mesh peer map `wireMeshTransport` populates — no new peer

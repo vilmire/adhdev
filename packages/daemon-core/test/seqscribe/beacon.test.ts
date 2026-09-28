@@ -63,7 +63,7 @@ import {
     CONFIG_SETTINGS_TOPIC,
     FLEET_STATUS_TOPIC,
     meshEventsTopic,
-    sessionTranscriptTopic,
+    sessionChatTopic,
 } from '../../src/seqscribe/topics.js';
 
 /** A valid 64-hex chain hash, the only shape the projection accepts. */
@@ -282,14 +282,15 @@ describe('defaultBeaconTopicScope — metadata class only (§7.1.2)', () => {
             [FLEET_STATUS_TOPIC]: {},
             [meshEventsTopic('mesh_abc123')]: {},
             [ASSISTANT_JOURNAL_TOPIC]: {},
-            [sessionTranscriptTopic('sess-1')]: {},
+            [sessionChatTopic('sess-1')]: {},
             'config.settings': {},
         });
 
         expect(scope.sort()).toEqual([FLEET_STATUS_TOPIC, meshEventsTopic('mesh_abc123')].sort());
-        // The content-class transcript topic name is the one §7.1.4 calls a
-        // case-by-case decision — it must not ride the DEFAULT scope.
-        expect(scope).not.toContain(sessionTranscriptTopic('sess-1'));
+        // The content-class chat transcript topic name is the one §7.1.4 calls
+        // a case-by-case decision — it must not ride the DEFAULT scope
+        // (design 2026-09-28 I1: `.chat` is structurally excluded).
+        expect(scope).not.toContain(sessionChatTopic('sess-1'));
     });
 });
 

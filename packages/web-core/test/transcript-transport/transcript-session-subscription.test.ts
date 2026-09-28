@@ -1,508 +1,227 @@
-// The live worker feed (unit 4b): a real seqscribe producer appends real
-// begin/chunk/commit rows for `session.<safeSessionId>.transcript`, and the
-// browser-side subscription reassembles them into a verified snapshot.
+// The live worker feed (design 2026-09-28 message-keyed storage §5.4): a real
+// seqscribe producer appends real keyed `session.<safeSessionId>.chat` frames,
+// and the browser-side subscription folds them with daemon-core's own
+// `KeyedTranscriptFolder` into verified per-commit changes.
 //
 // Deliberately end-to-end over the REAL stack — real sqlite-wasm storage, real
-// seqscribe SUB, the real daemon-core encoder, the real assembler. A fake that
-// handed pre-built snapshots to the adapter would prove nothing about the part
-// that was actually missing: whether a browser node can define the same topic
-// the daemon defined, subscribe through a peer, and pass the codec's
-// hash/chunk/owner verification against bytes a real producer emitted.
-import { encodeTranscriptRevision } from '@adhdev/daemon-core/seqscribe/transcript-revision-codec'
-import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core/seqscribe/transcript-projection'
-import sqlite3InitModule from '@sqlite.org/sqlite-wasm'
-import type { Channel, LogEntry, SqliteWasmDbLike } from 'seqscribe'
-import { sqliteWasmHandle } from 'seqscribe'
+// seqscribe SUB, the real daemon-core codec and folder. A fake that handed
+// pre-built views to the adapter would prove nothing about the part that
+// matters: whether a browser node can define the same topic the daemon
+// defined, subscribe through a peer, and pass the folder's digest/owner
+// verification against rows a real producer emitted.
+import type { KeyedTranscriptFrameDelta } from '@adhdev/daemon-core/seqscribe/transcript-keyed-folder'
 import { describe, expect, it } from 'vitest'
-import { sessionTranscriptPolicy, sessionTranscriptTopic } from '../../src/transcript-transport/topic-addressing.js'
-import { subscribeSessionTranscript } from '../../src/transcript-transport/transcript-session-subscription.js'
+import { sessionChatTopic } from '../../src/transcript-transport/topic-addressing.js'
 import {
-    TranscriptWorkerNode,
-    type TranscriptWorkerStorage,
-} from '../../src/transcript-transport/transcript-worker-node.js'
-import { browserRejectAuthority } from '../../src/transcript-transport/browser-reject-authority.js'
+    BASE_REQUEST_AFTER,
+    subscribeSessionChat,
+} from '../../src/transcript-transport/transcript-session-subscription.js'
+import { PRODUCER_DAEMON, rig, waitFor } from './keyed-chat-rig.js'
 
 const SESSION_ID = 'sess-Live-Feed-01'
-const TOPIC = sessionTranscriptTopic(SESSION_ID)
-const PRODUCER_WRITER = 'adhdev_daemon_writer'
 
-async function memoryStorage(): Promise<TranscriptWorkerStorage> {
-    const sqlite3 = await sqlite3InitModule()
-    const db = new sqlite3.oo1.DB(':memory:')
-    return {
-        handle: sqliteWasmHandle(db as unknown as SqliteWasmDbLike),
-        dispose: () => db.close(),
-    }
-}
-
-function channelPair(): [Channel, Channel] {
-    let aMsg: ((m: string) => void) | null = null
-    let bMsg: ((m: string) => void) | null = null
-    let aClose: (() => void) | null = null
-    let bClose: (() => void) | null = null
-    const a: Channel = {
-        send: (m) => queueMicrotask(() => bMsg?.(m)),
-        onMessage: (cb) => void (aMsg = cb),
-        onClose: (cb) => void (aClose = cb),
-        close: () => queueMicrotask(() => bClose?.()),
-    }
-    const b: Channel = {
-        send: (m) => queueMicrotask(() => aMsg?.(m)),
-        onMessage: (cb) => void (bMsg = cb),
-        onClose: (cb) => void (bClose = cb),
-        close: () => queueMicrotask(() => aClose?.()),
-    }
-    return [a, b]
-}
-
-async function waitFor(cond: () => boolean, timeoutMs = 4000): Promise<void> {
-    const start = Date.now()
-    while (!cond()) {
-        if (Date.now() - start > timeoutMs) throw new Error('timed out waiting for condition')
-        await new Promise((r) => setTimeout(r, 5))
-    }
-}
-
-function snapshotFixture(revision: number, content: string): ReplicatedTranscriptSnapshotV1 {
-    return {
-        schemaVersion: 1,
-        sessionId: SESSION_ID,
-        historySessionId: null,
-        providerType: 'claude',
-        providerSessionId: null,
-        producerDaemonId: 'daemon_owner',
-        producerWriterId: PRODUCER_WRITER,
-        producerEpoch: 'epoch-1',
-        revision,
-        observedAt: '2026-09-04T00:00:00.000Z',
-        status: 'idle',
-        providerObservedStatus: null,
-        title: null,
-        activeModal: null,
-        activeInteractivePrompt: null,
-        turn: null,
-        provenance: { messageSource: 'native', transcriptProvenance: null },
-        messages: [
-            {
-                role: 'assistant',
-                kind: 'text',
-                content,
-                receivedAt: 1_700_000_000_000,
-                timestamp: null,
-                turnKey: `turn-${revision}`,
-                bubbleState: null,
-                senderName: null,
-                toolName: null,
-                streaming: null,
-            },
-        ],
-        terminalMarkers: [],
-        coverage: { mode: 'tail', totalMessageCount: 1, returnedMessageCount: 1, omittedBefore: false },
-    } as unknown as ReplicatedTranscriptSnapshotV1
-}
-
-/** Append one full begin/chunk/commit envelope, as the daemon's publisher does. */
-async function publishRevision(
-    producer: TranscriptWorkerNode,
-    snapshot: ReplicatedTranscriptSnapshotV1,
-): Promise<void> {
-    const encoded = encodeTranscriptRevision(snapshot, {
-        sessionId: snapshot.sessionId,
-        producerDaemonId: snapshot.producerDaemonId,
-        producerWriterId: snapshot.producerWriterId,
-        producerEpoch: snapshot.producerEpoch,
-        revision: snapshot.revision,
-    })
-    if (!encoded.ok) throw new Error(`fixture should not be oversize: ${encoded.reason}`)
-    const log = producer.node.log(TOPIC)
-    await log.append('transcript.revision.begin.v1', encoded.begin as never)
-    for (const chunk of encoded.chunks) await log.append('transcript.revision.chunk.v1', chunk as never)
-    await log.append('transcript.revision.commit.v1', encoded.commit as never)
-}
-
-interface Rig {
-    producer: TranscriptWorkerNode
-    consumer: TranscriptWorkerNode
-    consumerPeer: ReturnType<TranscriptWorkerNode['attach']>
-    close(): Promise<void>
-}
-
-async function rig(): Promise<Rig> {
-    const producer = new TranscriptWorkerNode({
-        writerId: PRODUCER_WRITER,
-        openStorage: memoryStorage,
-        authority: browserRejectAuthority,
-    })
-    // The browser consumer: no fleet secret, only the non-signing hooks.
-    const consumer = new TranscriptWorkerNode({
-        writerId: 'dashboard_writer',
-        openStorage: memoryStorage,
-        authority: browserRejectAuthority,
-    })
-    await producer.open()
-    await consumer.open()
-    producer.node.defineTopic(TOPIC, sessionTranscriptPolicy())
-
-    const [pChan, cChan] = channelPair()
-    producer.attach(pChan, { peerId: 'dashboard', peerClass: 'content', grants: { [TOPIC]: 'serve' } })
-    const consumerPeer = consumer.attach(cChan, { peerId: 'daemon', peerClass: 'content', grants: {} })
-
-    return {
-        producer,
-        consumer,
-        consumerPeer,
-        async close() {
-            await producer.close()
-            await consumer.close()
-        },
-    }
-}
-
-describe('subscribeSessionTranscript (live worker feed)', () => {
-    it('reassembles a real published revision into a verified snapshot', async () => {
-        const r = await rig()
+describe('subscribeSessionChat (live worker feed)', () => {
+    it('folds a published frame into a verified reset frame and a committed view', async () => {
+        const r = await rig(SESSION_ID)
         try {
-            const seen: { content: string; omittedBefore: boolean }[] = []
-            const sub = subscribeSessionTranscript(r.consumer, {
+            const frames: KeyedTranscriptFrameDelta[] = []
+            const sub = subscribeSessionChat(r.consumer, {
                 sessionId: SESSION_ID,
                 peer: r.consumerPeer,
-                ownerWriterId: PRODUCER_WRITER,
-                onSnapshot: ({ snapshot, omittedBefore }) =>
-                    seen.push({ content: snapshot.messages[0].content, omittedBefore }),
+                ownerDaemonId: PRODUCER_DAEMON,
+                onFrame: (delta) => frames.push(delta),
             })
 
             // The browser derives the SAME topic name the daemon defined.
-            expect(sub.topic).toBe(TOPIC)
+            expect(sub.topic).toBe(sessionChatTopic(SESSION_ID))
 
-            await publishRevision(r.producer, snapshotFixture(1, 'hello from the daemon'))
-            await waitFor(() => seen.length > 0)
+            await r.chat.publish({ upserts: [{ id: 'n.a.1.0', ord: 'a1', text: 'hello from the daemon' }] })
+            await waitFor(() => frames.length > 0)
 
-            expect(seen[0].content).toBe('hello from the daemon')
-            expect(sub.latest()?.snapshot.revision).toBe(1)
+            expect(frames[0].reset).toBe(true)
+            expect(frames[0].upserts.map((m) => m.content)).toEqual(['hello from the daemon'])
+            expect(sub.view()?.messages.map((m) => m.messageId)).toEqual(['n.a.1.0'])
+            expect(sub.view()?.frame).toBe(1)
             sub.close()
         } finally {
             await r.close()
         }
     })
 
-    it('delivers successive revisions in order', async () => {
-        const r = await rig()
+    it('a DELTA frame carries ONLY the bubbles it changed, and tombstones as deletes', async () => {
+        const r = await rig(SESSION_ID)
         try {
-            const revisions: number[] = []
-            const sub = subscribeSessionTranscript(r.consumer, {
+            const frames: KeyedTranscriptFrameDelta[] = []
+            const sub = subscribeSessionChat(r.consumer, {
                 sessionId: SESSION_ID,
                 peer: r.consumerPeer,
-                ownerWriterId: PRODUCER_WRITER,
-                onSnapshot: ({ snapshot }) => revisions.push(snapshot.revision),
+                onFrame: (delta) => frames.push(delta),
             })
 
-            await publishRevision(r.producer, snapshotFixture(1, 'first'))
-            await waitFor(() => revisions.length >= 1)
-            await publishRevision(r.producer, snapshotFixture(2, 'second'))
-            await waitFor(() => revisions.length >= 2)
+            await r.chat.publish({
+                upserts: [
+                    { id: 'm1', ord: 'a1', text: 'one' },
+                    { id: 'm2', ord: 'a2', text: 'two' },
+                    { id: 'm3', ord: 'a3', text: 'three' },
+                ],
+            })
+            await waitFor(() => frames.length >= 1)
 
-            expect(revisions).toEqual([1, 2])
-            expect(sub.latest()?.snapshot.messages[0].content).toBe('second')
+            // Streaming growth of ONE bubble: one upsert, nothing else.
+            await r.chat.publish({ upserts: [{ id: 'm2', ord: 'a2', text: 'two, grown' }] })
+            await waitFor(() => frames.length >= 2)
+            expect(frames[1].reset).toBe(false)
+            expect(frames[1].upserts.map((m) => [m.messageId, m.rev, m.content])).toEqual([['m2', 2, 'two, grown']])
+            expect(frames[1].deletes).toEqual([])
+            expect(frames[1].meta).toBeNull()
+
+            await r.chat.publish({ deletes: ['m1'] })
+            await waitFor(() => frames.length >= 3)
+            expect(frames[2].upserts).toEqual([])
+            expect(frames[2].deletes).toEqual(['m1'])
+            expect(sub.view()?.messages.map((m) => m.messageId)).toEqual(['m2', 'm3'])
             sub.close()
         } finally {
             await r.close()
         }
     })
 
-    // The owner-visible defect: "화면이 갑자기 이전 메세지로 툭하고 전부 변경된다".
-    // A SNAP reset hands over the WHOLE ring tail oldest-first, and the ring
-    // holds ~160 past revisions (3 rows each in a 500-slot ring). Emitting one
-    // snapshot per reassembled revision replays the session's history through
-    // the pane. Design §3.7 requires the opposite: find the newest verifiable
-    // complete revision in the tail and swap ONCE.
-    it('a reset SNAP carrying several past revisions emits once, with the newest', async () => {
-        const r = await rig()
+    it('a late subscriber gets the committed live set in ONE reset frame (tombstones folded away)', async () => {
+        const r = await rig(SESSION_ID)
         try {
-            // Fill the ring BEFORE anyone subscribes, so the subscription's
-            // first SNAP replays all three at once — the real reset shape.
-            await publishRevision(r.producer, snapshotFixture(1, 'oldest'))
-            await publishRevision(r.producer, snapshotFixture(2, 'middle'))
-            await publishRevision(r.producer, snapshotFixture(3, 'newest'))
+            await r.chat.publish({ upserts: [{ id: 'm1', ord: 'a1', text: 'one' }, { id: 'm2', ord: 'a2', text: 'two' }] })
+            await r.chat.publish({ upserts: [{ id: 'm2', ord: 'a2', text: 'two v2' }] })
+            await r.chat.publish({ deletes: ['m1'], status: 'generating' })
 
-            const seen: { revision: number; content: string; omittedBefore: boolean }[] = []
-            const sub = subscribeSessionTranscript(r.consumer, {
+            const frames: KeyedTranscriptFrameDelta[] = []
+            const sub = subscribeSessionChat(r.consumer, {
                 sessionId: SESSION_ID,
                 peer: r.consumerPeer,
-                ownerWriterId: PRODUCER_WRITER,
-                onSnapshot: ({ snapshot, omittedBefore }) =>
-                    seen.push({ revision: snapshot.revision, content: snapshot.messages[0].content, omittedBefore }),
+                onFrame: (delta) => frames.push(delta),
             })
+            await waitFor(() => frames.length >= 1)
 
-            await waitFor(() => seen.length > 0)
-            // Give any extra (incorrect) replay emissions time to land before
-            // asserting the count, so this fails on N-emissions rather than
-            // racing past them.
-            await new Promise((res) => setTimeout(res, 150))
-
-            expect(seen).toHaveLength(1)
-            expect(seen[0].revision).toBe(3)
-            expect(seen[0].content).toBe('newest')
-            // The ring here holds all 9 rows (3 revisions x begin/chunk/commit)
-            // starting at the writer's seq 1, so nothing was actually omitted —
-            // this reset is only "the subscription just started". The banner
-            // belongs to the eviction case below, not to this one.
-            expect(seen[0].omittedBefore).toBe(false)
-            expect(sub.latest()?.snapshot.revision).toBe(3)
+            expect(frames).toHaveLength(1)
+            expect(frames[0].reset).toBe(true)
+            expect(frames[0].upserts.map((m) => [m.messageId, m.content])).toEqual([['m2', 'two v2']])
+            expect(frames[0].meta?.status).toBe('generating')
+            expect(frames[0].frame).toBe(3)
             sub.close()
         } finally {
             await r.close()
         }
     })
 
-    // ── The "이전 내용 생략" banner must mean something ──────────────────────
-    // seqscribe SNAP-resets a FRESH subscription exactly as it does one that
-    // fell out of retention (`vendor/seqscribe/src/subs.ts:178-180`), so the
-    // raw `reset` bit raised the banner on every first subscription. These two
-    // cases are a matched pair and must be read together: the first pins that
-    // a complete ring shows NO banner, the second that an evicted one still
-    // DOES. Without the second, "the banner was deleted" would pass just as
-    // happily as "the banner was fixed".
-    it('does not claim omitted content when the ring still holds the session start', async () => {
-        const r = await rig()
+    it('refuses a commit produced by a daemon that is not the declared owner', async () => {
+        const r = await rig(SESSION_ID)
         try {
-            const seen: boolean[] = []
-            await publishRevision(r.producer, snapshotFixture(1, 'first'))
-            await publishRevision(r.producer, snapshotFixture(2, 'second'))
-
-            const sub = subscribeSessionTranscript(r.consumer, {
-                sessionId: SESSION_ID,
-                peer: r.consumerPeer,
-                ownerWriterId: PRODUCER_WRITER,
-                onSnapshot: ({ omittedBefore }) => seen.push(omittedBefore),
-            })
-
-            await waitFor(() => seen.length > 0)
-            // The ring's first row IS the writer's seq 1, so the whole session
-            // is on screen and a banner would be a lie.
-            expect(seen[0]).toBe(false)
-
-            // A steady-state DELTA after the clean SNAP stays clean too.
-            await publishRevision(r.producer, snapshotFixture(3, 'third'))
-            await waitFor(() => seen.length > 1)
-            expect(seen[1]).toBe(false)
-            sub.close()
-        } finally {
-            await r.close()
-        }
-    })
-
-    it('does claim omitted content when the ring evicted the session start', async () => {
-        const r = await rig()
-        try {
-            // Overflow the 500-slot ring before subscribing: 180 revisions x 3
-            // rows = 540 rows, so the oldest 40 are evicted and the tail now
-            // starts at seq 41 — the writer's seq 1 is gone for good.
-            for (let i = 1; i <= 180; i++) await publishRevision(r.producer, snapshotFixture(i, `m${i}`))
-
-            const seen: { revision: number; omittedBefore: boolean }[] = []
-            const sub = subscribeSessionTranscript(r.consumer, {
-                sessionId: SESSION_ID,
-                peer: r.consumerPeer,
-                ownerWriterId: PRODUCER_WRITER,
-                onSnapshot: ({ snapshot, omittedBefore }) =>
-                    seen.push({ revision: snapshot.revision, omittedBefore }),
-            })
-
-            await waitFor(() => seen.length > 0)
-            // Real loss: earlier revisions existed and are no longer reachable.
-            expect(seen[0].omittedBefore).toBe(true)
-            // Still the A안 contract — one emission, carrying the newest.
-            expect(seen[0].revision).toBe(180)
-            sub.close()
-        } finally {
-            await r.close()
-        }
-    }, 120_000)
-
-    it('keeps the banner armed when the owner writer id is unknown', async () => {
-        const r = await rig()
-        try {
-            const seen: boolean[] = []
-            await publishRevision(r.producer, snapshotFixture(1, 'only'))
-
-            // No `ownerWriterId`: coverage cannot be established, so the
-            // subscription must not silently claim the session is complete.
-            const sub = subscribeSessionTranscript(r.consumer, {
-                sessionId: SESSION_ID,
-                peer: r.consumerPeer,
-                onSnapshot: ({ omittedBefore }) => seen.push(omittedBefore),
-            })
-
-            await waitFor(() => seen.length > 0)
-            expect(seen[0]).toBe(true)
-            sub.close()
-        } finally {
-            await r.close()
-        }
-    })
-
-    it('rejects a revision written by a writer that is not the declared owner', async () => {
-        const r = await rig()
-        try {
-            const seen: unknown[] = []
+            const frames: KeyedTranscriptFrameDelta[] = []
             const rejected: string[] = []
-            subscribeSessionTranscript(r.consumer, {
+            const sub = subscribeSessionChat(r.consumer, {
                 sessionId: SESSION_ID,
                 peer: r.consumerPeer,
-                // Gate on a DIFFERENT writer than the one that will publish.
-                ownerWriterId: 'some_other_writer',
-                onSnapshot: (u) => seen.push(u),
+                ownerDaemonId: 'daemon_someone_else',
+                onFrame: (delta) => frames.push(delta),
                 onRejected: (reason) => rejected.push(reason),
+                schedule: () => undefined,
             })
 
-            await publishRevision(r.producer, snapshotFixture(1, 'should not be displayed'))
+            await r.chat.publish({ upserts: [{ id: 'm1', ord: 'a1', text: 'not yours' }] })
             await waitFor(() => rejected.length > 0)
 
-            expect(rejected).toContain('wrong_writer')
-            expect(seen).toEqual([])
-        } finally {
-            await r.close()
-        }
-    })
-
-    it('an incomplete revision (commit never arrives) produces no snapshot', async () => {
-        const r = await rig()
-        try {
-            const seen: unknown[] = []
-            const sub = subscribeSessionTranscript(r.consumer, {
-                sessionId: SESSION_ID,
-                peer: r.consumerPeer,
-                ownerWriterId: PRODUCER_WRITER,
-                onSnapshot: (u) => seen.push(u),
-            })
-
-            const snapshot = snapshotFixture(1, 'half-written')
-            const encoded = encodeTranscriptRevision(snapshot, {
-                sessionId: snapshot.sessionId,
-                producerDaemonId: snapshot.producerDaemonId,
-                producerWriterId: snapshot.producerWriterId,
-                producerEpoch: snapshot.producerEpoch,
-                revision: snapshot.revision,
-            })
-            if (!encoded.ok) throw new Error('fixture oversize')
-            const log = r.producer.node.log(TOPIC)
-            // begin + chunks, but deliberately NO commit — a producer crash
-            // mid-revision must never surface as a displayable snapshot.
-            await log.append('transcript.revision.begin.v1', encoded.begin as never)
-            for (const chunk of encoded.chunks) await log.append('transcript.revision.chunk.v1', chunk as never)
-
-            // Publish a complete SECOND revision so we can wait on a real
-            // signal rather than an arbitrary sleep: if the partial one were
-            // going to land, it would land before this.
-            await publishRevision(r.producer, snapshotFixture(2, 'complete'))
-            await waitFor(() => seen.length > 0)
-
-            expect(seen).toHaveLength(1)
-            expect(sub.latest()?.snapshot.revision).toBe(2)
-        } finally {
-            await r.close()
-        }
-    })
-
-    // The daemon installs a tail-SNAP selector for transcript topics
-    // (daemon-core seqscribe/transcript-tail-snapshot.ts): a reset SNAP carries
-    // only the newest complete revision plus the in-flight one — a SUFFIX of
-    // the old 500-row window. This pins that the browser consumer accepts that
-    // shape: one emission with the newest revision, and an in-flight revision
-    // whose begin/chunks rode the SNAP completes when its commit arrives as a
-    // DELTA.
-    it('accepts a suffix-trimmed reset SNAP (daemon tail selector shape) and completes the in-flight revision by DELTA', async () => {
-        const r = await rig()
-        try {
-            // Same selection the daemon makes: from the newest commit's begin on.
-            r.producer.node.setTailSnapshotSelector((src) => {
-                const picked: LogEntry[] = []
-                let before: number | null = null
-                let target: number | null = null
-                for (;;) {
-                    const page = src.page(before, 16)
-                    if (page.length === 0) return null
-                    for (const { entry, rowid } of page) {
-                        before = rowid
-                        picked.push(entry)
-                        const rev = (entry.payload as { revision?: number }).revision
-                        if (target === null && entry.kind === 'transcript.revision.commit.v1') target = rev ?? null
-                        else if (target !== null && entry.kind === 'transcript.revision.begin.v1' && rev === target)
-                            return picked.reverse()
-                    }
-                }
-            })
-            for (let i = 1; i <= 5; i++) await publishRevision(r.producer, snapshotFixture(i, `m${i}`))
-            const next = snapshotFixture(6, 'in flight')
-            const encoded = encodeTranscriptRevision(next, {
-                sessionId: next.sessionId,
-                producerDaemonId: next.producerDaemonId,
-                producerWriterId: next.producerWriterId,
-                producerEpoch: next.producerEpoch,
-                revision: next.revision,
-            })
-            if (!encoded.ok) throw new Error('fixture oversize')
-            const log = r.producer.node.log(TOPIC)
-            await log.append('transcript.revision.begin.v1', encoded.begin as never)
-            for (const chunk of encoded.chunks) await log.append('transcript.revision.chunk.v1', chunk as never)
-
-            const snapRows: number[] = []
-            const probe = r.consumer.subscribe(r.consumerPeer, { view: 'tail', params: { topic: TOPIC } })
-            probe.onSnapshot((rows) => snapRows.push(rows.length))
-            const seen: { revision: number; omittedBefore: boolean }[] = []
-            const rejected: string[] = []
-            const sub = subscribeSessionTranscript(r.consumer, {
-                sessionId: SESSION_ID,
-                peer: r.consumerPeer,
-                ownerWriterId: PRODUCER_WRITER,
-                onSnapshot: ({ snapshot, omittedBefore }) => seen.push({ revision: snapshot.revision, omittedBefore }),
-                onRejected: (reason) => rejected.push(reason),
-            })
-            await waitFor(() => seen.length > 0 && snapRows.length > 0)
-            await new Promise((res) => setTimeout(res, 100))
-
-            // revision 5 (begin + chunk + commit) + revision 6's begin + chunk
-            expect(snapRows[0]).toBe(3 + 1 + encoded.chunks.length)
-            expect(seen).toHaveLength(1)
-            expect(seen[0].revision).toBe(5)
-            // Accepted consequence (documented in the daemon selector): the
-            // trimmed SNAP no longer reaches the writer's seq 1, so the
-            // diagnostic-only `omittedBefore` flag reads true.
-            expect(seen[0].omittedBefore).toBe(true)
-
-            await log.append('transcript.revision.commit.v1', encoded.commit as never)
-            await waitFor(() => seen.length > 1)
-            expect(seen[1].revision).toBe(6)
-            expect(sub.latest()?.snapshot.messages[0].content).toBe('in flight')
-            expect(rejected).toEqual([])
+            expect(rejected).toContain('owner_mismatch')
+            expect(frames).toEqual([])
+            expect(sub.view()).toBeNull()
             sub.close()
-            r.consumer.unsubscribe(probe)
+        } finally {
+            await r.close()
+        }
+    })
+
+    it('a frame whose digest does not verify is rolled back, resubscribes, and keeps the last verified view', async () => {
+        const r = await rig(SESSION_ID)
+        try {
+            const frames: KeyedTranscriptFrameDelta[] = []
+            const rejected: string[] = []
+            const pending: (() => void)[] = []
+            const sub = subscribeSessionChat(r.consumer, {
+                sessionId: SESSION_ID,
+                peer: r.consumerPeer,
+                onFrame: (delta) => frames.push(delta),
+                onRejected: (reason) => rejected.push(reason),
+                schedule: (cb) => pending.push(cb),
+            })
+
+            await r.chat.publish({ upserts: [{ id: 'm1', ord: 'a1', text: 'good' }] })
+            await waitFor(() => frames.length >= 1)
+
+            await r.chat.publish({ upserts: [{ id: 'm1', ord: 'a1', text: 'lying commit' }], corruptDigest: true })
+            await waitFor(() => rejected.includes('digest_mismatch'))
+
+            // Rolled back: the verified view is untouched, no frame was emitted.
+            expect(frames).toHaveLength(1)
+            expect(sub.view()?.messages[0].content).toBe('good')
+
+            // The resync restarts the SUB — a fresh reset SNAP.
+            expect(pending).toHaveLength(1)
+            pending.shift()!()
+            expect(sub.resubscribes()).toBe(1)
+            sub.close()
+        } finally {
+            await r.close()
+        }
+    })
+
+    it(`asks the owner for a base frame after ${BASE_REQUEST_AFTER} consecutive resyncs for the same reason`, async () => {
+        const r = await rig(SESSION_ID)
+        try {
+            const pending: (() => void)[] = []
+            let baseRequests = 0
+            let rejectedCount = 0
+            const sub = subscribeSessionChat(r.consumer, {
+                sessionId: SESSION_ID,
+                peer: r.consumerPeer,
+                onFrame: () => undefined,
+                onRejected: () => { rejectedCount += 1 },
+                onBaseRequest: () => { baseRequests += 1 },
+                schedule: (cb) => pending.push(cb),
+            })
+
+            // Every SNAP the lying producer serves fails its digest, so each
+            // resubscribe fails again — the streak the base request exists for.
+            await r.chat.publish({ upserts: [{ id: 'm1', ord: 'a1', text: 'x' }], corruptDigest: true })
+            for (let i = 1; i <= BASE_REQUEST_AFTER; i += 1) {
+                await waitFor(() => pending.length > 0)
+                if (i < BASE_REQUEST_AFTER) expect(baseRequests).toBe(0)
+                const before = rejectedCount
+                pending.shift()!()
+                if (i < BASE_REQUEST_AFTER) await waitFor(() => rejectedCount > before)
+            }
+            expect(baseRequests).toBe(1)
+            sub.close()
         } finally {
             await r.close()
         }
     })
 
     it('close() unsubscribes and stops delivering', async () => {
-        const r = await rig()
+        const r = await rig(SESSION_ID)
         try {
-            const seen: number[] = []
-            const sub = subscribeSessionTranscript(r.consumer, {
+            const frames: KeyedTranscriptFrameDelta[] = []
+            const sub = subscribeSessionChat(r.consumer, {
                 sessionId: SESSION_ID,
                 peer: r.consumerPeer,
-                ownerWriterId: PRODUCER_WRITER,
-                onSnapshot: ({ snapshot }) => seen.push(snapshot.revision),
+                onFrame: (delta) => frames.push(delta),
             })
-            await publishRevision(r.producer, snapshotFixture(1, 'before close'))
-            await waitFor(() => seen.length === 1)
+            await r.chat.publish({ upserts: [{ id: 'm1', ord: 'a1', text: 'first' }] })
+            await waitFor(() => frames.length >= 1)
 
             sub.close()
-            expect(r.consumer.stats().activeSubscriptions).toBe(0)
-
-            await publishRevision(r.producer, snapshotFixture(2, 'after close'))
-            await new Promise((res) => setTimeout(res, 120))
-            expect(seen).toEqual([1])
-
             sub.close() // idempotent
+            await r.chat.publish({ upserts: [{ id: 'm1', ord: 'a1', text: 'after close' }] })
+            await new Promise((resolve) => setTimeout(resolve, 50))
+            expect(frames).toHaveLength(1)
+            expect(r.consumer.stats().activeSubscriptions).toBe(0)
         } finally {
             await r.close()
         }

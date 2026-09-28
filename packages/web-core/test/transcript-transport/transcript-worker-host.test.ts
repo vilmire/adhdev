@@ -9,6 +9,9 @@ import {
     type TranscriptWorkerLike,
 } from '../../src/transcript-transport/transcript-worker-host.js'
 import type { WebSocketLike } from 'seqscribe'
+import type { ReplicatedTranscriptMessageV2 } from '@adhdev/daemon-core/seqscribe/transcript-keyed-codec'
+import type { TranscriptSessionView } from '../../src/transcript-transport/transcript-view-mirror.js'
+import { transcriptBridgeBaseRequestMessage } from '../../src/transcript-transport/bridge-protocol.js'
 
 class FakeTransport implements WebSocketLike {
     readyState: number | string = 0
@@ -77,7 +80,7 @@ function attachWorkerSide(port: MessagePort): { received: string[]; send(msg: st
 const OPTS = { writerId: 'writer_abc', sessionKey: 'sess_1' }
 
 describe('startTranscriptWorkerHost', () => {
-    it('hands the worker its init payload and transfers exactly two ports (wire + snapshot)', () => {
+    it('hands the worker its init payload and transfers exactly two ports (wire + view)', () => {
         const worker = fakeWorker()
         const host = startTranscriptWorkerHost(new FakeTransport(), {
             ...OPTS,
@@ -85,7 +88,7 @@ describe('startTranscriptWorkerHost', () => {
         })
 
         expect(worker.messages).toEqual([{ sessionKey: 'sess_1', writerId: 'writer_abc' }])
-        // Two ports, in a fixed order: [wire, snapshot]. The worker entry reads
+        // Two ports, in a fixed order: [wire, view]. The worker entry reads
         // them positionally (`ev.ports[0]`/`[1]`), so the count AND the order
         // are part of the contract — see the two-ports note in the host header.
         expect(worker.transfers[0]).toHaveLength(2)
@@ -229,5 +232,54 @@ describe('startTranscriptWorkerHost', () => {
         livePort.postMessage.mockClear()
         transport.emit('message', { data: 'INBOUND_AFTER_STOP' })
         expect(livePort.postMessage).not.toHaveBeenCalled()
+    })
+
+    it('mirrors keyed frames from the view port into views that keep untouched bubbles by identity', async () => {
+        const worker = fakeWorker()
+        const views: TranscriptSessionView[] = []
+        const baseRequests: string[] = []
+        const host = startTranscriptWorkerHost(new FakeTransport(), {
+            ...OPTS,
+            createWorker: () => worker,
+            onView: (update) => views.push(update),
+            onBaseRequest: (sessionId) => baseRequests.push(sessionId),
+        })
+        const viewPort = worker.transfers[0][1] as MessagePort
+        viewPort.start()
+
+        const bubble = (id: string, ord: string, rev: number, content: string): ReplicatedTranscriptMessageV2 => ({
+            messageId: id, ord, rev, role: 'assistant', kind: 'standard', content, receivedAt: null, timestamp: null,
+            turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null, expandable: false, srcId: null,
+        })
+        const meta = {
+            schemaVersion: 2, sessionId: 's1', historySessionId: null, providerType: 'claude-cli', providerSessionId: null,
+            producerDaemonId: 'd1', producerWriterId: 'w1', epoch: 'e1', frame: 1, observedAt: 'now', status: 'idle',
+            providerObservedStatus: null, title: null, activeModal: null, activeInteractivePrompt: null, turn: null,
+            provenance: { messageSource: null, transcriptProvenance: null }, terminalMarkers: [],
+            coverage: { mode: 'full', omittedBefore: false, totalMessageCount: 2, returnedMessageCount: 2 },
+        }
+        viewPort.postMessage({
+            kind: 'transcript-bridge-frame', sessionId: 's1', epoch: 'e1', frame: 1, reset: true,
+            upserts: [bubble('m1', 'a1', 1, 'one'), bubble('m2', 'a2', 1, 'two')], deletes: [], meta,
+        })
+        viewPort.postMessage({
+            kind: 'transcript-bridge-frame', sessionId: 's1', epoch: 'e1', frame: 2, reset: false,
+            upserts: [bubble('m2', 'a2', 2, 'two, grown')], deletes: [], meta: null,
+        })
+        viewPort.postMessage(transcriptBridgeBaseRequestMessage('s1'))
+        await new Promise((r) => setTimeout(r, 20))
+
+        expect(views).toHaveLength(2)
+        expect(views[1].view.frame).toBe(2)
+        expect(views[1].view.messages.map((m) => m.content)).toEqual(['one', 'two, grown'])
+        // ★ The bubble the second frame did not touch is the SAME object.
+        expect(views[1].view.messages[0]).toBe(views[0].view.messages[0])
+        expect(views[1].view.messages[1]).not.toBe(views[0].view.messages[1])
+        expect(baseRequests).toEqual(['s1'])
+
+        // Deactivating the session drops its mirror.
+        host.activateSessions([])
+        expect(host.view('s1')).toBeNull()
+        host.stop()
     })
 })

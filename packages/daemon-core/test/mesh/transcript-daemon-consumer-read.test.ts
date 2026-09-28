@@ -25,9 +25,9 @@ import {
     TRANSCRIPT_TERMINAL_EVIDENCE_MAX_AGE_MS,
 } from '../../src/mesh/transcript-daemon-consumer-read.js';
 import { rosterIdsForUnit, TRANSCRIPT_CONSUMER_ROSTER } from '../../src/mesh/transcript-read-model-consumers.js';
-import { mapTranscriptSnapshotToReadChatPayload } from '../../src/mesh/transcript-read-chat-adapter.js';
+import { mapTranscriptViewToReadChatPayload } from '../../src/mesh/transcript-read-chat-adapter.js';
 import type { TranscriptReplicaStore } from '../../src/seqscribe/transcript-replica-store.js';
-import type { ReplicatedTranscriptSnapshotV1 } from '../../src/seqscribe/transcript-projection.js';
+import type { ReplicatedTranscriptViewV2 } from '../../src/seqscribe/transcript-keyed-codec.js';
 
 /** This suite's §8 unit — the roster ids it owns, and the only ones it asserts. */
 const UNIT = 7;
@@ -40,17 +40,17 @@ const OBSERVED_AT_MS = Date.parse(OBSERVED_AT);
 /** `primary` is the only mode any roster consumer reads under (§5.1). */
 const PRIMARY = { ADHDEV_SEQSCRIBE_TRANSCRIPT: 'primary' } as unknown as NodeJS.ProcessEnv;
 
-function snapshot(overrides: Partial<ReplicatedTranscriptSnapshotV1> = {}): ReplicatedTranscriptSnapshotV1 {
+function snapshot(overrides: Partial<ReplicatedTranscriptViewV2> = {}): ReplicatedTranscriptViewV2 {
     return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         sessionId: SESSION,
         historySessionId: null,
         providerType: 'claude-cli',
         providerSessionId: null,
         producerDaemonId: OWNER,
         producerWriterId: 'writer-1',
-        producerEpoch: 'epoch-1',
-        revision: 7,
+        epoch: 'epoch-1',
+        frame: 7,
         observedAt: OBSERVED_AT,
         status: 'idle',
         providerObservedStatus: 'idle',
@@ -77,13 +77,13 @@ function availableStore(
 ): TranscriptReplicaStore {
     return storeReturning({
         available: true,
-        snapshot: snap,
+        view: snap,
         identity: {
             sessionId: SESSION,
             producerDaemonId: OWNER,
             producerWriterId: 'writer-1',
-            producerEpoch: 'epoch-1',
-            revision: 7,
+            epoch: 'epoch-1',
+            frame: 7,
             ...identityOverrides,
         },
     });
@@ -108,7 +108,7 @@ describe('§8 unit 7 — daemon consumer readiness gate (design §5.5)', () => {
     it('serves the replica when every condition holds', () => {
         const outcome = read();
         expect(outcome.fallbackReason).toBeNull();
-        expect(outcome.snapshot?.status).toBe('idle');
+        expect(outcome.view?.status).toBe('idle');
     });
 
     // ── §5.5 condition 1 — mode + roster enablement ────────────────────────
@@ -121,7 +121,7 @@ describe('§8 unit 7 — daemon consumer readiness gate (design §5.5)', () => {
     ])('declines mode=%s with %s', (mode, reason) => {
         const env = (mode === undefined ? {} : { ADHDEV_SEQSCRIBE_TRANSCRIPT: mode }) as NodeJS.ProcessEnv;
         const outcome = read({ env });
-        expect(outcome.snapshot).toBeNull();
+        expect(outcome.view).toBeNull();
         expect(outcome.fallbackReason).toBe(reason);
     });
 
@@ -149,7 +149,7 @@ describe('§8 unit 7 — daemon consumer readiness gate (design §5.5)', () => {
         ['no store (the production state today — resolveTranscriptPeer unset)', { store: null }],
     ])('declines %s with no_node', (_label, overrides) => {
         const outcome = read(overrides as never);
-        expect(outcome.snapshot).toBeNull();
+        expect(outcome.view).toBeNull();
         expect(outcome.fallbackReason).toBe('no_node');
     });
 
@@ -158,7 +158,7 @@ describe('§8 unit 7 — daemon consumer readiness gate (design §5.5)', () => {
         // `no_subscription` is not in the design's closed union.
         for (const reason of ['no_subscription', 'no_complete_revision']) {
             const outcome = read({ store: storeReturning({ available: false, reason }) });
-            expect(outcome.snapshot).toBeNull();
+            expect(outcome.view).toBeNull();
             expect(outcome.fallbackReason).toBe('no_complete_revision');
         }
     });
@@ -167,7 +167,7 @@ describe('§8 unit 7 — daemon consumer readiness gate (design §5.5)', () => {
         const outcome = read({
             store: { getReplica: () => { throw new Error('boom'); } } as unknown as TranscriptReplicaStore,
         });
-        expect(outcome.snapshot).toBeNull();
+        expect(outcome.view).toBeNull();
         expect(outcome.fallbackReason).toBe('stats_error');
     });
 
@@ -176,7 +176,7 @@ describe('§8 unit 7 — daemon consumer readiness gate (design §5.5)', () => {
         const outcome = read({
             store: availableStore(snapshot(), { producerDaemonId: 'daemon_mach_someone_else' }),
         });
-        expect(outcome.snapshot).toBeNull();
+        expect(outcome.view).toBeNull();
         expect(outcome.fallbackReason).toBe('owner_mismatch');
     });
 
@@ -188,12 +188,12 @@ describe('§8 unit 7 — daemon consumer readiness gate (design §5.5)', () => {
             store: availableStore(snapshot({ producerDaemonId: 'daemon_mach_owner' })),
         });
         expect(outcome.fallbackReason).toBeNull();
-        expect(outcome.snapshot).not.toBeNull();
+        expect(outcome.view).not.toBeNull();
     });
 
     it('declines owner_mismatch when the snapshot body names another session', () => {
         const outcome = read({ store: availableStore(snapshot({ sessionId: 'other-session' })) });
-        expect(outcome.snapshot).toBeNull();
+        expect(outcome.view).toBeNull();
         expect(outcome.fallbackReason).toBe('owner_mismatch');
     });
 
@@ -203,7 +203,7 @@ describe('§8 unit 7 — daemon consumer readiness gate (design §5.5)', () => {
         expect(atBudget.fallbackReason).toBeNull();
 
         const pastBudget = read({ nowMs: OBSERVED_AT_MS + TRANSCRIPT_STATUS_PROBE_MAX_AGE_MS + 1 });
-        expect(pastBudget.snapshot).toBeNull();
+        expect(pastBudget.view).toBeNull();
         expect(pastBudget.fallbackReason).toBe('stale_active_session');
     });
 
@@ -222,13 +222,13 @@ describe('§8 unit 7 — daemon consumer readiness gate (design §5.5)', () => {
             nowMs: OBSERVED_AT_MS + TRANSCRIPT_TERMINAL_EVIDENCE_MAX_AGE_MS + 1,
             env: PRIMARY,
         });
-        expect(outcome.snapshot).toBeNull();
+        expect(outcome.view).toBeNull();
         expect(outcome.fallbackReason).toBe('stale_active_session');
     });
 
     it('refuses an unparseable observedAt rather than treating it as fresh', () => {
         const outcome = read({ store: availableStore(snapshot({ observedAt: 'not-a-date' })) });
-        expect(outcome.snapshot).toBeNull();
+        expect(outcome.view).toBeNull();
         expect(outcome.fallbackReason).toBe('revision_invalid');
     });
 
@@ -236,11 +236,11 @@ describe('§8 unit 7 — daemon consumer readiness gate (design §5.5)', () => {
     // Each case removes ONE field the consumers read and asserts the decline;
     // the positive case above is the green half of the same pair.
     it.each([
-        ['schemaVersion', { schemaVersion: 2 }],
+        ['schemaVersion', { schemaVersion: 1 }],
         ['sessionId', { sessionId: '' }],
         ['status', { status: '' }],
         ['observedAt', { observedAt: '' }],
-        ['revision', { revision: 'seven' }],
+        ['frame', { frame: 'seven' }],
         ['messages', { messages: undefined }],
         ['coverage', { coverage: undefined }],
         ['coverage.totalMessageCount', { coverage: { mode: 'full', returnedMessageCount: 0, omittedBefore: false } }],
@@ -253,7 +253,7 @@ describe('§8 unit 7 — daemon consumer readiness gate (design §5.5)', () => {
         const outcome = read({
             store: availableStore({ ...snapshot(), ...overrides }),
         });
-        expect(outcome.snapshot).toBeNull();
+        expect(outcome.view).toBeNull();
         expect(outcome.fallbackReason).toBe('revision_invalid');
     });
 });
@@ -271,7 +271,7 @@ describe('§8 unit 7 — roster id 5 turnTerminalMarkers absence invariant', () 
      * veto from silence.
      */
     it('never puts turnTerminalMarkers on a replica-sourced payload', () => {
-        const payload = mapTranscriptSnapshotToReadChatPayload(
+        const payload = mapTranscriptViewToReadChatPayload(
             snapshot({
                 terminalMarkers: [
                     { receivedAt: 1, outcome: 'completed', turnId: 't1', summary: 'done' },
@@ -285,13 +285,18 @@ describe('§8 unit 7 — roster id 5 turnTerminalMarkers absence invariant', () 
     });
 
     it('carries the fields the terminal-evidence extractors actually read', () => {
-        const payload = mapTranscriptSnapshotToReadChatPayload(
+        const payload = mapTranscriptViewToReadChatPayload(
             snapshot({
                 status: 'idle',
                 providerObservedStatus: 'idle',
                 providerSessionId: 'psid-9',
                 activeModal: { message: 'Approve?', buttons: ['Yes', 'No'] },
                 messages: [{
+                    messageId: 'n.aaaaaaaa.1.0',
+                    ord: 'a0',
+                    rev: 1,
+                    expandable: false,
+                    srcId: null,
                     role: 'assistant',
                     kind: 'standard',
                     content: 'all done',
@@ -324,9 +329,10 @@ describe('§8 unit 7 — roster id 5 turnTerminalMarkers absence invariant', () 
         // `isCoordinatorVisibleMessage` inspects meta.internal/debug/userVisible;
         // an always-present empty `meta` would be a new object the live path
         // never had.
-        const payload = mapTranscriptSnapshotToReadChatPayload(
+        const payload = mapTranscriptViewToReadChatPayload(
             snapshot({
                 messages: [{
+                    messageId: 'd.e.1', ord: 'a0', rev: 1, expandable: false, srcId: null,
                     role: 'assistant', kind: 'standard', content: 'x',
                     receivedAt: 1, timestamp: 1, turnKey: null, bubbleState: null,
                     senderName: null, toolName: null, streaming: null,

@@ -110,7 +110,7 @@ describe('TranscriptWorkerNode lifecycle', () => {
     })
 
     it('attach + subscribe delivers a real revision row, and close() detaches/unsubscribes cleanly', async () => {
-        const TOPIC = 'session.worker-foundation-test.transcript'
+        const TOPIC = 'session.worker-foundation-test.chat_ring'
         const policy: TopicPolicy = {
             kind: 'append',
             retention: { mode: 'ring', size: 8 },

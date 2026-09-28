@@ -35,7 +35,7 @@ function shouldPreserveReadChatPayloadField(key: string): boolean {
 
 /**
  * Activity kinds that survive the replica wire allow-list
- * (`encodeTranscriptMessage` carries `kind` verbatim; meta/source/visibility
+ * (`encodeChatMessageHead` carries `kind` verbatim; meta/source/visibility
  * markers do NOT round-trip). Only these may ride the caller-independent
  * observation — see the observation block in `buildReadChatCommandResult`.
  * Mirrors ACTIVITY kind classification in chat-message-normalization.ts and
@@ -325,9 +325,9 @@ export function buildReadChatCommandResult(
     //      different args (the internal collector passes none;
     //      mesh-completion-synthesis passes includeActivity:true). If the
     //      observation mirrored the caller's filter, the SAME transcript would
-    //      alternate between two contents on `session.<id>.transcript`,
-    //      minting a fresh revision (and chain-hash churn) on every
-    //      caller change with zero real transcript movement.
+    //      alternate between two contents on `session.<id>.chat`,
+    //      writing rows (and tombstones) on every caller change with zero
+    //      real transcript movement.
     //   2. Terminal evidence — the 2026-08 false-completion incident
     //      (mesh-terminal-admission.ts header) was a completion read WITHOUT
     //      the trailing tool call. The replica-served `daemon_terminal_evidence`
@@ -339,7 +339,7 @@ export function buildReadChatCommandResult(
     //
     // ★ Restricted to activity rows whose `kind` survives the wire allow-list
     // (`tool`/`terminal`/`thought`): rows classified activity only via
-    // meta/source markers lose those markers in `encodeTranscriptMessage`
+    // meta/source markers lose those markers in `encodeChatMessageHead`
     // (kind stays 'standard') and would render as ordinary prose on every
     // consumer — the exact noise 1b8f6d03 removed. Those rows stay excluded.
     const observationMessages = filteredMessages.filter((m) => isUserFacingChatMessage(m)
@@ -355,16 +355,17 @@ export function buildReadChatCommandResult(
     // Runs synchronously and must never break the read — on any failure the
     // messages go out without ids, exactly as before this existed.
     let messageIds: Map<ChatMessage, string> | null = null;
+    let identity: ReturnType<typeof assignReadChatMessageIds> | null = null;
+    let identityCoverage: 'full' | 'window' = 'full';
     try {
         const identityScope = messages.filter((m) => isUserFacingChatMessage(m) || isActivityChatMessage(m));
         const ledgerKey = presentationSessionIdHint || `provider:${providerHint || 'unknown'}`;
-        messageIds = assignReadChatMessageIds(
-            ledgerKey,
-            identityScope,
-            resolveReadChatIdentityCoverage(validatedPayload.coverage, presentation.identityCoverage),
-        ).ids;
+        identityCoverage = resolveReadChatIdentityCoverage(validatedPayload.coverage, presentation.identityCoverage);
+        identity = assignReadChatMessageIds(ledgerKey, identityScope, identityCoverage);
+        messageIds = identity.ids;
     } catch {
         messageIds = null;
+        identity = null;
     }
 
     const sync = buildFullTail(visibleMessages, normalizeReadChatTailLimit(args));
@@ -404,11 +405,15 @@ export function buildReadChatCommandResult(
             turn: turnPresentation.authority === 'turn_reducer' ? turnPresentation : null,
             provenance: preservedPayloadFields,
             messages: observationMessages,
+            // The keyed chat lane stores bubbles by these ids (design 2026-09-28
+            // §4.2); without them the publisher refuses the observation rather
+            // than inventing identity.
+            identity: identity
+                ? { assignments: identity.assignments, retainedIds: identity.retainedIds, ledgerEpoch: identity.frame.epoch }
+                : null,
             coverage: {
-                mode: 'full',
-                totalMessageCount: messages.length,
-                returnedMessageCount: observationMessages.length,
-                omittedBefore: false,
+                mode: identityCoverage,
+                omittedBefore: identityCoverage === 'window' && (identity?.retainedIds.length ?? 0) > 0,
             },
         });
         if (observation) notifyTranscriptObservation(observation.sessionId, observation);

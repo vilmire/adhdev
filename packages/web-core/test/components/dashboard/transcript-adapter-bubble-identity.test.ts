@@ -15,17 +15,22 @@
  * into each other, so a turn renders fewer rows than it has, and the surviving
  * row can show another bubble's content after a re-render.
  *
- * The test asserts the SET property (all keys distinct within a turn), not a
- * specific key format — an adapter free to change how it derives identity, but
- * never free to make two distinct bubbles indistinguishable.
+ * On the keyed chat wire (design 2026-09-28 message-keyed storage) every
+ * bubble carries the daemon ledger's opaque `messageId`, which the adapter
+ * maps onto `id`/`messageId` — so the key is `mid:<messageId>`: per bubble,
+ * and stable while the bubble's content grows (no content-hash fallback).
+ *
+ * The first test asserts the SET property (all keys distinct within a turn),
+ * not a specific key format — an adapter is free to change how it derives
+ * identity, but never free to make two distinct bubbles indistinguishable.
  */
 import { describe, expect, it } from 'vitest'
-import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core/seqscribe/transcript-projection'
-import { mapTranscriptSnapshotToChatTailUpdate } from '../../../src/components/dashboard/transcript-chat-pane-adapter'
+import type { ReplicatedTranscriptViewV2 } from '@adhdev/daemon-core/seqscribe/transcript-keyed-codec'
+import { mapTranscriptViewToChatTailUpdate } from '../../../src/components/dashboard/transcript-chat-pane-adapter'
 import { getChatMessageStableKey } from '../../../src/components/ChatMessageList/chatMessageHelpers'
 import type { ChatMessage } from '../../../src/types'
 
-const MAP_OPTIONS = { subscriptionKey: 'sub-1', omittedBefore: false, stale: false }
+const MAP_OPTIONS = { subscriptionKey: 'sub-1', stale: false }
 
 const SHARED_TURN_KEY = 'claude-code:native-turn:sess-1:7'
 
@@ -35,34 +40,41 @@ const SHARED_TURN_KEY = 'claude-code:native-turn:sess-1:7'
  * content-hash fallback in `getChatMessageStableKey` could distinguish them if
  * (and only if) the adapter stops forcing a turn-grained identity field.
  */
-function snapshotWithMultiBubbleTurn(): ReplicatedTranscriptSnapshotV1 {
+function snapshotWithMultiBubbleTurn(): ReplicatedTranscriptViewV2 {
     const message = (
         role: string,
         kind: string,
         content: string,
         receivedAt: number,
-        sequence: number,
+        n: number,
     ) => ({
+        messageId: `n.0000beef.${n}.0`,
+        ord: `a${n}`,
+        rev: 1,
         role,
         kind,
         content,
         receivedAt,
         timestamp: null,
         turnKey: SHARED_TURN_KEY,
-        sequence,
         bubbleState: 'final' as const,
         senderName: null,
         toolName: null,
         streaming: null,
+        expandable: false,
+        srcId: null,
     })
 
     return {
+        schemaVersion: 2,
+        historySessionId: null,
+        providerSessionId: null,
         sessionId: 'sess-1',
         providerType: 'claude-code',
         producerDaemonId: 'daemon-a',
         producerWriterId: 'adhdev-writer-1',
-        producerEpoch: 'epoch-1',
-        revision: 1,
+        epoch: 'epoch-1',
+        frame: 1,
         observedAt: '2026-09-05T00:00:00.000Z',
         status: 'idle',
         providerObservedStatus: null,
@@ -77,19 +89,19 @@ function snapshotWithMultiBubbleTurn(): ReplicatedTranscriptSnapshotV1 {
             message('assistant', 'terminal', 'build output line', 1002, 3),
             message('assistant', 'standard', 'The build passed.', 1003, 4),
         ],
-        terminalMarker: null,
+        terminalMarkers: [],
         coverage: {
             mode: 'full',
             totalMessageCount: 4,
             returnedMessageCount: 4,
             omittedBefore: false,
         },
-    } as unknown as ReplicatedTranscriptSnapshotV1
+    } as unknown as ReplicatedTranscriptViewV2
 }
 
 describe('replica adapter — per-bubble React key identity', () => {
     it('gives every bubble of one multi-bubble turn a DISTINCT stable key', () => {
-        const update = mapTranscriptSnapshotToChatTailUpdate(snapshotWithMultiBubbleTurn(), MAP_OPTIONS)
+        const update = mapTranscriptViewToChatTailUpdate(snapshotWithMultiBubbleTurn(), MAP_OPTIONS)
         expect(update).not.toBeNull()
 
         const messages = (update?.messages ?? []) as unknown as ChatMessage[]
@@ -107,36 +119,28 @@ describe('replica adapter — per-bubble React key identity', () => {
     })
 
     /**
-     * ★ The nullable-`sequence` door into the same collapse.
-     *
-     * `ReplicatedTranscriptMessageV1.sequence` is `number | null` BY DESIGN, and
-     * the adapter maps neither `bubbleId` nor `providerUnitKey`. So a snapshot
-     * whose producer did not stamp `sequence` leaves `_turnKey` as the ONLY
-     * identity — and the four bubbles above only stayed distinct because their
-     * `sequence` happened to be present. Measured before the fix: 1 distinct key.
+     * ★ The key is the bubble's `messageId`, so it does NOT move while the
+     * bubble's content streams. A content-derived fallback would re-key (and
+     * remount) a growing bubble on every frame.
      */
-    it('keeps bubbles distinct even when the wire carries sequence: null', () => {
+    it('keys each bubble by its messageId, stable across content growth', () => {
         const snapshot = snapshotWithMultiBubbleTurn()
-        const withoutSequence = {
+        const grown = {
             ...snapshot,
-            messages: snapshot.messages.map(message => ({ ...message, sequence: null })),
-        } as unknown as ReplicatedTranscriptSnapshotV1
+            messages: snapshot.messages.map(message => ({ ...message, content: `${message.content} …more`, rev: 2 })),
+        } as unknown as ReplicatedTranscriptViewV2
 
-        const update = mapTranscriptSnapshotToChatTailUpdate(withoutSequence, MAP_OPTIONS)
-        const messages = (update?.messages ?? []) as unknown as ChatMessage[]
-        expect(messages).toHaveLength(4)
-        // The adapter must not invent a sequence — null stays unmapped.
-        expect(messages.every(message => message.sequence === undefined)).toBe(true)
+        const before = (mapTranscriptViewToChatTailUpdate(snapshot, MAP_OPTIONS).messages as unknown as ChatMessage[])
+            .map((message, index) => getChatMessageStableKey(message, index))
+        const after = (mapTranscriptViewToChatTailUpdate(grown, MAP_OPTIONS).messages as unknown as ChatMessage[])
+            .map((message, index) => getChatMessageStableKey(message, index))
 
-        const keys = messages.map((message, index) => getChatMessageStableKey(message, index))
-        expect(
-            new Set(keys).size,
-            `null sequence collapsed a turn onto one React key: ${JSON.stringify(keys)}`,
-        ).toBe(keys.length)
+        expect(before).toEqual(snapshot.messages.map(message => `mid:${message.messageId}`))
+        expect(after).toEqual(before)
     })
 
     it('does not let a turn-grained value masquerade as per-bubble identity', () => {
-        const update = mapTranscriptSnapshotToChatTailUpdate(snapshotWithMultiBubbleTurn(), MAP_OPTIONS)
+        const update = mapTranscriptViewToChatTailUpdate(snapshotWithMultiBubbleTurn(), MAP_OPTIONS)
         const messages = (update?.messages ?? []) as unknown as (ChatMessage & {
             _turnKey?: string
         })[]

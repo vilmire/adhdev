@@ -1190,8 +1190,10 @@ export {
   safeSessionId,
   meshEventsTopic,
   meshEventsPolicy,
-  sessionTranscriptTopic,
-  sessionTranscriptPolicy,
+  sessionChatTopic,
+  sessionChatPolicy,
+  sessionSegmentFromChatTopic,
+  CHAT_TOMBSTONE_KIND,
   assistantJournalPolicy,
   fleetStatusPolicy,
   configSettingsPolicy,
@@ -1200,7 +1202,6 @@ export {
   ASSISTANT_JOURNAL_TOPIC,
   FLEET_STATUS_TOPIC,
   CONFIG_SETTINGS_TOPIC,
-  SESSION_TRANSCRIPT_RING,
   FLEET_STATUS_RING,
   type TopicDefinition,
 } from './seqscribe/topics.js';
@@ -1365,6 +1366,10 @@ export {
   activeTranscriptProjectionService,
   type TranscriptProjectionCounters,
 } from './seqscribe/transcript-publisher.js';
+export {
+  transcriptChatRuntimeCounters,
+  type TranscriptChatRuntimeCounters,
+} from './seqscribe/transcript-keyed-publish-runtime.js';
 // Phase 4 Stage 3: fleet.status parity evidence + future-consumer readiness.
 export {
   configureFleetStatusParity,
@@ -1393,34 +1398,35 @@ export {
   FLEET_STATUS_SUB_VIEW,
   type FleetStatusPeerViewConsumer,
 } from './seqscribe/fleet-status-peer-view.js';
-// §8 unit 5 ("web chat pane consumer cutover"): type-only, zero-runtime-cost
-// re-export of the `session.<safeSessionId>.transcript` wire contract (§8
-// unit 1) so web-core's roster adapter can type-import
-// `ReplicatedTranscriptSnapshotV1` from the root barrel WITHOUT a value
-// import — the root-barrel-value-import ban (see meshSurfaceHelpers.ts's own
-// note) only forbids pulling runtime code (logger/fs) into a browser bundle;
-// an `export type` is erased at compile time and carries none of that.
 // §8 unit 6 ("mesh_read_chat remote display cutover"): the `mesh_read_chat_
 // display` roster adapter. A VALUE export (unlike the type-only block below) —
 // mcp-server is a node process, not a browser bundle, so the root-barrel
 // value-import ban does not apply to it.
 export {
-  mapTranscriptSnapshotToReadChatPayload,
+  mapTranscriptViewToReadChatPayload,
   type TranscriptReadChatPayload,
 } from './mesh/transcript-read-chat-adapter.js';
+// The keyed chat wire (design 2026-09-28): type-only, zero-runtime-cost
+// re-export so web-core can type-import the view from the root barrel WITHOUT a
+// value import — the root-barrel-value-import ban (see meshSurfaceHelpers.ts's
+// own note) only forbids pulling runtime code (logger/fs) into a browser
+// bundle; an `export type` is erased at compile time. Value code (the folder, the codec) is
+// reached through the portable subpath exports
+// `@adhdev/daemon-core/seqscribe/transcript-keyed-codec` and
+// `@adhdev/daemon-core/seqscribe/transcript-keyed-folder` — never this barrel.
 export type {
-  ReplicatedTranscriptSnapshotV1,
-  ReplicatedTranscriptMessageV1,
-  ReplicatedTranscriptTerminalMarkerV1,
-  ReplicatedTranscriptCoverageV1,
-  ReplicatedTranscriptProvenanceV1,
-  ReplicatedTranscriptModalV1,
-  ReplicatedTranscriptPromptV1,
-  ReplicatedTranscriptTurnV1,
-  TranscriptMessageBubbleState,
-  TranscriptTerminalOutcome,
-  TranscriptCoverageMode,
-} from './seqscribe/transcript-projection.js';
+  ReplicatedTranscriptViewV2,
+  ReplicatedTranscriptMessageV2,
+  ReplicatedTranscriptViewCoverageV2,
+  ChatCoverageMode,
+  ChatBubbleState as ChatWireBubbleState,
+  ChatModalV2,
+  ChatPromptV2,
+  ChatTurnV2,
+  ChatProvenanceV2,
+  ChatTerminalMarkerV2,
+} from './seqscribe/transcript-keyed-codec.js';
+export type { KeyedTranscriptFrameDelta } from './seqscribe/transcript-keyed-folder.js';
 
 // Child-process wrappers that default to a hidden win32 console window.
 // Exported from the package entry so `packages/daemon-cloud` — which is the

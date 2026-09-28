@@ -115,7 +115,7 @@ export function carryBubbleIdentity(message: BubbleIdentityFields): BubbleIdenti
  *
  * Identifiers, ordinals and three integers — never content. This is L3 only:
  * `providerUnitKey` embeds a content hash and must not reach the replica wire
- * (see `seqscribe/transcript-projection.ts`).
+ * (see `seqscribe/transcript-keyed-codec.ts`).
  */
 export function carryMessageRefs(message: BubbleIdentityFields & {
     toolBlockRef?: { sourceMtimeMs: number; recordIndex: number; blockIndex: number };
@@ -182,7 +182,7 @@ export function carryMessageRefs(message: BubbleIdentityFields & {
  *     deliberately open) and its job is to reject malformed input, not to
  *     narrow a known shape.
  *
- *   seqscribe/transcript-projection.ts `encodeTranscriptMessage` — the L2
+ *   seqscribe/transcript-keyed-codec.ts `encodeChatMessageHead` — the L2K
  *     replica wire. A CONTENT BOUNDARY, not a convenience remap: it must
  *     exclude `providerUnitKey` (a content hash) and carries a different,
  *     narrower field set. Merging it here would put a boundary decision behind

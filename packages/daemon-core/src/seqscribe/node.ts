@@ -254,10 +254,10 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
         throw err;
     }
 
-    // Transcript tail SNAPs carry only the newest complete revision (+ the
-    // in-flight one) instead of the last 500 rows — see
+    // Chat tail SNAPs carry the committed newest-per-key state plus the frame
+    // in flight (latestPerKey(W) ∪ rowsAfter(W)) — see
     // transcript-tail-snapshot.ts. Best-effort: an older vendor build without
-    // the hook keeps the default window.
+    // the hook serves its keyed default (newest-per-key).
     try {
         installTranscriptTailSnapshotSelector(node);
     } catch (err) {

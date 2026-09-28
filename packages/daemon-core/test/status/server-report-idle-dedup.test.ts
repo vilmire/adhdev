@@ -63,7 +63,7 @@ function makeReporter(sessionStatus: { value: string }, getSeqscribeStats?: () =
 
 describe('idle status_report dedup', () => {
     it('includes the supplied seqscribe aggregate and strips non numeric/enum content', async () => {
-        const canary = 'session.secret-session.transcript';
+        const canary = 'session.secret-session.chat';
         const { reporter, statusReports } = makeReporter(
             { value: 'idle' },
             () => ({

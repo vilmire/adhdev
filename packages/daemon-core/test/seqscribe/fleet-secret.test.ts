@@ -15,7 +15,7 @@ import {
     configSettingsPolicy,
     fleetStatusPolicy,
     meshEventsPolicy,
-    sessionTranscriptPolicy,
+    sessionChatPolicy,
     ASSISTANT_JOURNAL_TOPIC,
     CONFIG_SETTINGS_TOPIC,
     meshEventsTopic,
@@ -135,7 +135,7 @@ describe('fleet secret store', () => {
 
 describe('topic policies and finalityAuthority', () => {
     it('stamps the fleet authority on every content policy', () => {
-        for (const policy of [assistantJournalPolicy(), sessionTranscriptPolicy(), configSettingsPolicy()]) {
+        for (const policy of [assistantJournalPolicy(), sessionChatPolicy(), configSettingsPolicy()]) {
             expect(policy.finalityAuthority).toBe(ADHDEV_AUTHORITY_ID);
             expect(policy.access).toBe('content');
         }

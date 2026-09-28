@@ -14,12 +14,22 @@
  * travels the localhost HTTP/WS surface. The expanded body therefore never
  * reaches the Worker — consistent with the P2P-first rule that the server WS /
  * status path carries signalling and metadata, not chat content.
+ *
+ * ── Addressing by `messageId` (keyed storage, design 2026-09-28 §5.9) ──────
+ * The keyed replica wire carries only `expandable: boolean` — a ref sealed by
+ * the file mtime would change on every append and force every past tool
+ * bubble to be rewritten. A replica reader therefore asks with
+ * `{ messageId }`, and the ref is resolved HERE from the session's message
+ * identity ledger, which keeps the ref the latest read observed for that id.
+ * The mtime seal still applies to that ref, so a moved transcript still fails
+ * closed (`source_changed`) instead of naming another block.
  */
 
 import type { CommandResult, CommandHelpers } from './handler.js';
 import { getTargetedCliAdapter } from './chat-commands-shared.js';
 import type { ToolBlockExpandResult } from '../providers/spec/tool-block-expand.js';
 import { LOG } from '../logging/logger.js';
+import { peekMessageIdentityLedger } from '../chat/message-identity-ledger.js';
 
 /**
  * (G11) Describe the ref in a refusal log line.
@@ -45,15 +55,36 @@ function canExpand(adapter: unknown): adapter is ToolBlockExpandCapableAdapter {
     return !!adapter && typeof (adapter as ToolBlockExpandCapableAdapter).expandToolBlock === 'function';
 }
 
+/** The session key the read_chat choke point files this session's ledger under. */
+function ledgerKeyOf(h: CommandHelpers, args: any): string {
+    const raw = typeof args?.targetSessionId === 'string' && args.targetSessionId.trim() ? args.targetSessionId
+        : typeof args?.sessionId === 'string' && args.sessionId.trim() ? args.sessionId
+        : h.currentSession?.sessionId;
+    return typeof raw === 'string' ? raw.trim() : '';
+}
+
+/**
+ * The tool-block ref the session's identity ledger holds for `args.messageId`
+ * (§5.9), or undefined when the id is unknown or not a truncated tool bubble.
+ */
+export function resolveToolBlockRefByMessageId(h: CommandHelpers, args: any): unknown {
+    const messageId = typeof args?.messageId === 'string' ? args.messageId.trim() : '';
+    if (!messageId) return undefined;
+    const key = ledgerKeyOf(h, args);
+    if (!key) return undefined;
+    const locator = peekMessageIdentityLedger(key)?.locatorOf(messageId);
+    return locator && typeof locator === 'object' ? locator : undefined;
+}
+
 export function handleExpandToolBlock(h: CommandHelpers, args: any): CommandResult {
-    const ref = args?.toolBlockRef;
+    const ref = args?.toolBlockRef ?? resolveToolBlockRefByMessageId(h, args);
     // (G11) Which session asked. Falls back rather than bailing: a refusal with
     // an unknown session is still worth logging, and an empty string here would
     // read as a bug in the log rather than as a missing target.
     const sessionId = String(args?.targetSessionId || h.currentSession?.sessionId || 'unknown-session');
     if (!ref || typeof ref !== 'object') {
         LOG.warn('Command', `[expand_tool_block] refused session=${sessionId} reason=missing_ref`);
-        return { success: false, error: 'toolBlockRef is required' };
+        return { success: false, error: 'toolBlockRef or a known messageId is required' };
     }
 
     const adapter = getTargetedCliAdapter(h, args);

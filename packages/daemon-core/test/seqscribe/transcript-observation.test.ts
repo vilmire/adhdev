@@ -1,58 +1,37 @@
 import { describe, expect, it } from 'vitest';
-import {
-    hashTranscriptObservation,
-    isEmptyTranscriptObservation,
-    stampTranscriptObservation,
-    type TranscriptObservation,
-} from '../../src/seqscribe/transcript-observation.js';
-import { encodeTranscriptSnapshot } from '../../src/seqscribe/transcript-projection.js';
+import { isEmptyTranscriptObservation, type TranscriptObservation } from '../../src/seqscribe/transcript-observation.js';
+import { KeyedChatSessionState } from '../../src/seqscribe/transcript-keyed-frame.js';
 
 function observation(overrides: Partial<TranscriptObservation> = {}): TranscriptObservation {
     return {
         sessionId: 'sess-1',
         providerType: 'claude-code',
         status: 'idle',
-        messages: [{ role: 'assistant', kind: 'standard', content: 'hello' }],
-        coverage: { mode: 'full', totalMessageCount: 1, returnedMessageCount: 1, omittedBefore: false },
+        messages: [{ messageId: 'n.00000000.1.0', ord: 'a0', role: 'assistant', kind: 'standard', content: 'hello' }],
+        coverage: { mode: 'full', omittedBefore: false },
         ...overrides,
     };
 }
 
-describe('hashTranscriptObservation — dedup hash excludes identity/revision/observedAt (design §3.4)', () => {
-    it('is stable across different producer identity/revision/observedAt for identical content', () => {
-        const obs = observation();
-        const identityA = { sessionId: 'sess-1', producerDaemonId: 'daemon-a', producerWriterId: 'writer-a', producerEpoch: 'epoch-1', revision: 1 };
-        const identityB = { sessionId: 'sess-1', producerDaemonId: 'daemon-b', producerWriterId: 'writer-b', producerEpoch: 'epoch-2', revision: 42 };
+/** Rows a second observation writes after the first one landed. */
+function rowsAfter(first: TranscriptObservation, second: TranscriptObservation): number {
+    const state = new KeyedChatSessionState('sess-1', 'e');
+    const ctx = { writerId: 'w', producerDaemonId: 'd', observedAt: 't', nowMs: 0 };
+    const built = state.build(first, ctx);
+    if (built.status !== 'frame') throw new Error('first observation must publish');
+    state.commit(built.frame, 0);
+    const next = state.build(second, ctx);
+    return next.status === 'frame' ? next.frame.rows.length : 0;
+}
 
-        const candidateA = stampTranscriptObservation(obs, identityA, '2026-08-29T00:00:00.000Z');
-        const candidateB = stampTranscriptObservation(obs, identityB, '2026-08-29T01:00:00.000Z');
-
-        // The two STAMPED candidates legitimately differ (different revision
-        // numbers, different observedAt) — that is expected and is what
-        // encodeTranscriptSnapshot below will encode. What must NOT differ is
-        // the dedup hash computed over the observation alone.
-        expect(encodeTranscriptSnapshot(candidateA).revision).not.toBe(encodeTranscriptSnapshot(candidateB).revision);
-        expect(hashTranscriptObservation(obs)).toBe(hashTranscriptObservation(obs));
-    });
-
-    it('changes when message content changes', () => {
-        const a = observation();
-        const b = observation({ messages: [{ role: 'assistant', kind: 'standard', content: 'goodbye' }] });
-        expect(hashTranscriptObservation(a)).not.toBe(hashTranscriptObservation(b));
-    });
-
-    it('changes when status changes', () => {
-        const a = observation({ status: 'idle' });
-        const b = observation({ status: 'generating' });
-        expect(hashTranscriptObservation(a)).not.toBe(hashTranscriptObservation(b));
-    });
-});
-
-describe('hashTranscriptObservation — hashes the wire projection, not producer-only fields (incident 2026-09-28)', () => {
-    // read_chat's provenance object carries `staleness.sourceMtimeAgeMs`
-    // (Date.now() - mtime), which changes on every read but is dropped by the
-    // allow-list wire encoder. Hashing the raw observation minted a new,
-    // wire-identical revision on every 350 ms PTY-throttled read.
+/**
+ * The incident-2026-09-28 property, restated for the keyed lane: fields the
+ * wire allow-list drops must never make an observation look changed. v1 hashed
+ * the raw observation and minted a wire-identical revision on every 350 ms
+ * read (41,928 of them for one session); the keyed publisher compares the
+ * ENCODED bubble and meta, so only wire-visible change writes a row.
+ */
+describe('producer-only fields never write a row', () => {
     function withProvenance(ageMs: number, label: string, selected = 'native-history'): TranscriptObservation {
         return observation({
             provenance: {
@@ -63,53 +42,22 @@ describe('hashTranscriptObservation — hashes the wire projection, not producer
                     coverage: { nativeMessageCount: 1, ptyMessageCount: 0 },
                 },
             },
-            messages: [{ role: 'assistant', kind: 'standard', content: 'hello', meta: { label, streaming: false } }],
+            messages: [{ messageId: 'n.00000000.1.0', ord: 'a0', role: 'assistant', kind: 'standard', content: 'hello', meta: { label, streaming: false } }],
         });
     }
 
-    it('is stable when only fields the wire encoder drops change', () => {
-        const a = withProvenance(120, 'Read');
-        const b = withProvenance(470, 'Write');
-        expect(hashTranscriptObservation(a)).toBe(hashTranscriptObservation(b));
+    it('staleness ages and non-streaming meta changes write nothing', () => {
+        expect(rowsAfter(withProvenance(120, 'Read'), withProvenance(470, 'Write'))).toBe(0);
     });
 
-    it('still changes when a projected provenance scalar changes', () => {
-        const a = withProvenance(120, 'Read', 'native-history');
-        const b = withProvenance(120, 'Read', 'pty-parser');
-        expect(hashTranscriptObservation(a)).not.toBe(hashTranscriptObservation(b));
+    it('a projected provenance scalar change writes meta + commit only', () => {
+        expect(rowsAfter(withProvenance(120, 'Read', 'native-history'), withProvenance(120, 'Read', 'pty-parser'))).toBe(2);
     });
 
-    it('still changes when the projected meta.streaming flag changes', () => {
-        const a = observation({ messages: [{ role: 'assistant', kind: 'standard', content: 'hi', meta: { streaming: true } }] });
-        const b = observation({ messages: [{ role: 'assistant', kind: 'standard', content: 'hi', meta: { streaming: false } }] });
-        expect(hashTranscriptObservation(a)).not.toBe(hashTranscriptObservation(b));
-    });
-});
-
-describe('stampTranscriptObservation', () => {
-    it('merges observation + identity + observedAt into an encodable candidate', () => {
-        const identity = { sessionId: 'sess-1', producerDaemonId: 'daemon-a', producerWriterId: 'writer-a', producerEpoch: 'epoch-1', revision: 3 };
-        const candidate = stampTranscriptObservation(observation(), identity, '2026-08-29T00:00:00.000Z');
-        const snapshot = encodeTranscriptSnapshot(candidate);
-        expect(snapshot.sessionId).toBe('sess-1');
-        expect(snapshot.producerDaemonId).toBe('daemon-a');
-        expect(snapshot.revision).toBe(3);
-        expect(snapshot.observedAt).toBe('2026-08-29T00:00:00.000Z');
-        expect(snapshot.messages).toEqual([{
-            role: 'assistant',
-            kind: 'standard',
-            content: 'hello',
-            receivedAt: null,
-            timestamp: null,
-            turnKey: null,
-            // Per-message ordinal; null = UNKNOWN (this fixture supplies none).
-            sequence: null,
-            bubbleState: null,
-            senderName: null,
-            toolName: null,
-            streaming: null,
-            toolBlockRef: null,
-        }]);
+    it('a meta.streaming flip rewrites that one bubble', () => {
+        const a = observation({ messages: [{ messageId: 'd.x.1', ord: 'a0', role: 'assistant', kind: 'standard', content: 'hi', meta: { streaming: true } }] });
+        const b = observation({ messages: [{ messageId: 'd.x.1', ord: 'a0', role: 'assistant', kind: 'standard', content: 'hi', meta: { streaming: false } }] });
+        expect(rowsAfter(a, b)).toBe(2);
     });
 });
 

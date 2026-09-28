@@ -1,45 +1,42 @@
 /**
- * Transcript parity comparator — design §5.3/§5.4, §8 unit 2.
+ * Keyed chat transcript parity — design 2026-09-28 (message-keyed storage) §5.5.
  *
- * Same recurrence discipline `mesh-parity.ts` established for Phase 2's
- * `mesh.<id>.events` shadow, applied to the transcript producer/replica pair:
+ * Compares, per `(session, epoch, frame)`, the COMMITTED state two independent
+ * paths produced:
  *
- *   missing_complete_revision — first observation goes to a pending set (a
- *                                repair opportunity); reported AGAIN on a later
- *                                sweep is a real failure and counts as
- *                                persistent immediately (design §5.4).
- *   field_mismatch / extra_message / wrong_session / wrong_owner /
- *   digest_mismatch — count as persistent on FIRST observation. None of these
- *                                are repairable the way a late mirror repairs
- *                                a missing shadow record — a divergent replica
- *                                is evidence of a real encode/identity bug, not
- *                                a timing gap.
+ *   expected — the frame the publisher just built from the legacy read_chat
+ *              observation (live `(id, rev)` set, digest, and the observed
+ *              bubbles as a reader should materialize them);
+ *   actual   — the producer's own topic read back at that commit's watermark
+ *              and folded by `KeyedTranscriptFolder`
+ *              (transcript-parity-actual.ts).
  *
- * ★ Comparison unit (design §5.3): "비교 단위는 (rawSessionId, producerEpoch,
- * normalizedSnapshotSha256)의 latest committed revision이다" — the CALLER picks
- * one `expected` (from the just-collected `TranscriptObservation`, stamped and
- * encoded) and one `actual` (the subscriber assembler's latest verified
- * complete snapshot) per comparison; this module never fetches either side
- * itself. Wiring `actual` to a LIVE subscriber replica is `§8 unit 3` (`the
- * daemon replica store does not exist yet in this unit — see
- * transcript-publisher.ts's header for the same boundary applied to
- * publishing).
+ * A difference is a real encode/storage/fold defect, not a timing gap: both
+ * sides describe the same commit.
  *
- * ★ §6.1 content boundary: mismatch log lines and the `TranscriptParityMismatch`
- * record carry identifiers, mismatch class, and field NAMES only — never a
- * message/title/modal value. `redactSessionId` truncates the session id the
- * same way `mesh-parity.ts#shortId` truncates ledger entry ids.
+ *   missing_complete_revision — no verifiable commit could be read back. The
+ *                                one repairable class: first sighting goes to a
+ *                                grace set, a second one for the same session
+ *                                counts as persistent.
+ *   wrong_session / wrong_owner / digest_mismatch / missing_message /
+ *   extra_message / rev_regression / field_mismatch — persistent on FIRST
+ *                                observation.
+ *
+ * ★ §6.1 content boundary: log lines and mismatch records carry identifiers,
+ * mismatch class and field NAMES only — never a message/title/modal value.
+ * `messageId`s are not content, but are truncated like session ids anyway.
  */
 
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
-import type { ReplicatedTranscriptSnapshotV1 } from './transcript-projection.js';
-import { hashTranscriptSnapshot } from './transcript-projection.js';
+import type { ChatCommitV2, ReplicatedTranscriptMessageV2, ReplicatedTranscriptViewV2 } from './transcript-keyed-codec.js';
 
 export type TranscriptParityMismatchKind =
     | 'missing_complete_revision'
     | 'field_mismatch'
+    | 'missing_message'
     | 'extra_message'
+    | 'rev_regression'
     | 'wrong_session'
     | 'wrong_owner'
     | 'digest_mismatch';
@@ -57,164 +54,97 @@ export interface TranscriptParityCounters {
     compared: number;
     missingCompleteRevision: number;
     fieldMismatch: number;
+    missingMessage: number;
     extraMessage: number;
+    revRegression: number;
     wrongSession: number;
     wrongOwner: number;
     digestMismatch: number;
-    /** Sum of the six mismatch classes. */
+    /** Sum of every mismatch class. */
     mismatches: number;
-    /** Mismatches that SURVIVED a repair attempt — see the header's recurrence rule. */
+    /** Mismatches counted persistent — see the header's recurrence rule. */
     persistentMismatches: number;
     /** Comparisons run since process start. */
     runs: number;
-
-    // ── Recurrence observability (§5.6 gate condition 4) ────────────────────
-    // ★ `runs` alone cannot answer whether the gate's remaining condition —
-    // `persistent mismatch 0` — is even DECIDABLE. `missing_complete_revision`
-    // is promoted to persistent only when the SAME session key is compared a
-    // second time (see the header's recurrence rule), and the only non-test
-    // caller of `compareTranscriptRevision` is `transcript-publish-runtime.ts`'s
-    // per-append self-check. So `runs = 2` across two DIFFERENT sessions means
-    // the promotion path was never exercised at all, and a persistent count of 0
-    // proves nothing. The two counters below make that distinction visible.
     /** Distinct session keys compared at least once since process start. */
     sessionsObserved: number;
     /**
-     * Distinct session keys compared at least TWICE since process start — i.e.
-     * the ones for which the recurrence rule could actually fire. If this is 0,
+     * Distinct session keys compared at least TWICE — the ones for which the
+     * missing-commit recurrence rule could fire. If this is 0,
      * `persistentMismatches === 0` is UNDECIDED, not clean.
      */
     sessionsRepeated: number;
-    /**
-     * Times a session already sitting in the pending-missing grace set was
-     * compared again — the direct count of recurrence-rule evaluations for the
-     * repairable class. Counts BOTH outcomes: a revisit that found the revision
-     * (repair confirmed) and one that missed again (persistent promotion).
-     */
+    /** Revisits of a session already in the missing-commit grace set. */
     pendingMissingRevisits: number;
-    /** Session keys currently in the pending-missing grace set. */
+    /** Session keys currently in the missing-commit grace set. */
     pendingMissingOpen: number;
     /**
-     * `Date.now()` at module load — effectively daemon process start.
-     *
-     * ★ Every counter above is PROCESS-LOCAL and resets to 0 on daemon restart.
-     * Without this stamp an observer cannot tell "no mismatches ever" from
-     * "restarted a minute ago", and reading a freshly-reset 0 as evidence of
-     * parity is exactly the mistake this gate already made once. Exposed
-     * alongside the counters so the zero is always dated.
+     * `Date.now()` at module load — effectively process start. Every counter is
+     * PROCESS-LOCAL; this dates the zero.
      */
     since: number;
 }
 
-const counters: TranscriptParityCounters = {
-    compared: 0,
-    missingCompleteRevision: 0,
-    fieldMismatch: 0,
-    extraMessage: 0,
-    wrongSession: 0,
-    wrongOwner: 0,
-    digestMismatch: 0,
-    mismatches: 0,
-    persistentMismatches: 0,
-    runs: 0,
-    sessionsObserved: 0,
-    sessionsRepeated: 0,
-    pendingMissingRevisits: 0,
-    pendingMissingOpen: 0,
-    since: Date.now(),
-};
+function freshCounters(): TranscriptParityCounters {
+    return {
+        compared: 0,
+        missingCompleteRevision: 0,
+        fieldMismatch: 0,
+        missingMessage: 0,
+        extraMessage: 0,
+        revRegression: 0,
+        wrongSession: 0,
+        wrongOwner: 0,
+        digestMismatch: 0,
+        mismatches: 0,
+        persistentMismatches: 0,
+        runs: 0,
+        sessionsObserved: 0,
+        sessionsRepeated: 0,
+        pendingMissingRevisits: 0,
+        pendingMissingOpen: 0,
+        since: Date.now(),
+    };
+}
 
-/**
- * How many times each session key has been compared this process. Bounded the
- * only way this map can be: by the number of live sessions the publisher
- * appends for — the same population `pendingMissing` below already tracks
- * unbounded, so this adds no new growth class. Keys only, never values.
- */
+let counters: TranscriptParityCounters = freshCounters();
+/** Comparisons per session key (keys only). Bounded by the sessions published. */
 const observedSessions = new Map<string, number>();
-
-/**
- * Session keys reported `missing_complete_revision` by a PREVIOUS sweep and
- * not yet seen repaired. Same one-sweep-grace mechanism as
- * `mesh-parity.ts#pendingMissing`, keyed by the redacted-safe raw session key
- * the caller passes (a stable per-session string, e.g.
- * `${ownerDaemonId}:${rawSessionId}` — this module never parses it).
- */
+/** Session keys whose last comparison found no verifiable commit. */
 const pendingMissing = new Set<string>();
 
 export function redactSessionId(id: string): string {
     return id.length <= 8 ? id : `${id.slice(0, 8)}…(${id.length})`;
 }
 
-/**
- * Compare the ordered, closed-allow-list message fields a divergence in
- * content/identity would actually change. Returns field NAMES only.
- */
-function diffMessages(expected: ReplicatedTranscriptSnapshotV1, actual: ReplicatedTranscriptSnapshotV1): string[] {
-    const fields: string[] = [];
-    const len = Math.min(expected.messages.length, actual.messages.length);
-    for (let i = 0; i < len; i++) {
-        const e = expected.messages[i]!;
-        const a = actual.messages[i]!;
-        if (e.role !== a.role) fields.push(`messages[${i}].role`);
-        if (e.kind !== a.kind) fields.push(`messages[${i}].kind`);
-        if (e.content !== a.content) fields.push(`messages[${i}].content`);
-        if (e.bubbleState !== a.bubbleState) fields.push(`messages[${i}].bubbleState`);
-        if (e.turnKey !== a.turnKey) fields.push(`messages[${i}].turnKey`);
-    }
-    return fields;
-}
-
-/**
- * Content digest with producer identity/revision/observedAt zeroed out —
- * the same exclusion `transcript-observation.ts#hashTranscriptObservation`
- * applies, for the same reason: `wrong_owner` above already tolerates
- * `daemonIdsEquivalent` variance (e.g. `mach_x` vs `daemon_mach_x` for the
- * SAME machine), so hashing the raw `producerDaemonId` string in here would
- * report a false `digest_mismatch` on every legitimately-equivalent pair that
- * survived the wrong_owner check, and revision/observedAt differ across two
- * independently-collected sides BY CONSTRUCTION.
- */
-function contentDigest(snapshot: ReplicatedTranscriptSnapshotV1): string {
-    return hashTranscriptSnapshot({
-        ...snapshot,
-        producerDaemonId: '',
-        producerWriterId: '',
-        producerEpoch: '',
-        revision: 0,
-        observedAt: '',
-    });
-}
-
-function diffScalars(expected: ReplicatedTranscriptSnapshotV1, actual: ReplicatedTranscriptSnapshotV1): string[] {
-    const fields: string[] = [];
-    if (expected.status !== actual.status) fields.push('status');
-    if (expected.providerObservedStatus !== actual.providerObservedStatus) fields.push('providerObservedStatus');
-    if (expected.title !== actual.title) fields.push('title');
-    if (expected.providerType !== actual.providerType) fields.push('providerType');
-    if (expected.coverage.mode !== actual.coverage.mode) fields.push('coverage.mode');
-    if (expected.coverage.totalMessageCount !== actual.coverage.totalMessageCount) fields.push('coverage.totalMessageCount');
-    if (expected.coverage.returnedMessageCount !== actual.coverage.returnedMessageCount) fields.push('coverage.returnedMessageCount');
-    return fields;
+/** The expected side: what the publisher committed, and the bubbles it observed. */
+export interface TranscriptChatParityExpected {
+    readonly sessionId: string;
+    readonly producerDaemonId: string;
+    /** Live `(messageId, rev)` after the frame. */
+    readonly live: ReadonlyMap<string, number>;
+    readonly digest: string;
+    /** The observed bubbles (a subset of `live` when a window source retained some). */
+    readonly messages: readonly ReplicatedTranscriptMessageV2[];
 }
 
 export type TranscriptParityActual =
     | { readonly status: 'missing' }
-    | { readonly status: 'found'; readonly snapshot: ReplicatedTranscriptSnapshotV1 };
+    | { readonly status: 'found'; readonly view: ReplicatedTranscriptViewV2; readonly commit: ChatCommitV2 };
+
+const COMPARED_FIELDS = ['ord', 'role', 'kind', 'content', 'bubbleState', 'turnKey', 'toolName', 'expandable'] as const;
 
 /**
- * Compare ONE (sessionKey, expected) pair against the caller-supplied actual
- * side. Never throws — parity is diagnostics, matching `runMeshParityCheck`.
+ * Compare ONE commit's expected state against its read-back. Never throws —
+ * parity is diagnostics.
  */
-export function compareTranscriptRevision(
+export function compareTranscriptChat(
     sessionKey: string,
-    expected: ReplicatedTranscriptSnapshotV1,
+    expected: TranscriptChatParityExpected,
     actual: TranscriptParityActual,
 ): TranscriptParityMismatch[] {
     counters.runs++;
     counters.compared++;
-    // Recurrence bookkeeping BEFORE the comparison — a session's second visit is
-    // what makes the missing_complete_revision promotion reachable at all, and
-    // the observer needs that fact whichever branch below runs.
     const seen = (observedSessions.get(sessionKey) ?? 0) + 1;
     observedSessions.set(sessionKey, seen);
     if (seen === 1) counters.sessionsObserved++;
@@ -223,6 +153,10 @@ export function compareTranscriptRevision(
 
     const redacted = redactSessionId(sessionKey);
     const mismatches: TranscriptParityMismatch[] = [];
+    const persistent = (kind: TranscriptParityMismatchKind, fields?: string[]) => {
+        mismatches.push({ kind, session: redacted, ...(fields ? { fields } : {}) });
+        counters.persistentMismatches++;
+    };
 
     if (actual.status === 'missing') {
         mismatches.push({ kind: 'missing_complete_revision', session: redacted });
@@ -233,51 +167,63 @@ export function compareTranscriptRevision(
         }
         pendingMissing.add(sessionKey);
     } else {
-        // A later sweep that finds a complete revision is positive evidence the
-        // earlier miss was repaired — same replace-not-merge rule as
-        // mesh-parity.ts.
         pendingMissing.delete(sessionKey);
-
-        if (expected.sessionId !== actual.snapshot.sessionId) {
-            mismatches.push({ kind: 'wrong_session', session: redacted });
+        const view = actual.view;
+        if (expected.sessionId !== view.sessionId) {
             counters.wrongSession++;
-            counters.persistentMismatches++;
-        } else if (!daemonIdsEquivalent(expected.producerDaemonId, actual.snapshot.producerDaemonId)) {
-            mismatches.push({ kind: 'wrong_owner', session: redacted });
+            persistent('wrong_session');
+        } else if (!daemonIdsEquivalent(expected.producerDaemonId, actual.commit.producerDaemonId)) {
             counters.wrongOwner++;
-            counters.persistentMismatches++;
-        } else if (expected.messages.length !== actual.snapshot.messages.length) {
-            mismatches.push({ kind: 'extra_message', session: redacted });
-            counters.extraMessage++;
-            counters.persistentMismatches++;
+            persistent('wrong_owner');
         } else {
-            const fields = [...diffScalars(expected, actual.snapshot), ...diffMessages(expected, actual.snapshot)];
-            if (fields.length > 0) {
-                mismatches.push({ kind: 'field_mismatch', session: redacted, fields });
+            const actualById = new Map(view.messages.map((m) => [m.messageId, m] as const));
+            let missing = 0;
+            let regressed = 0;
+            for (const [id, rev] of expected.live) {
+                const found = actualById.get(id);
+                if (!found) missing++;
+                else if (found.rev < rev) regressed++;
+            }
+            let extra = 0;
+            for (const id of actualById.keys()) if (!expected.live.has(id)) extra++;
+            if (missing > 0) {
+                counters.missingMessage++;
+                persistent('missing_message');
+            }
+            if (extra > 0) {
+                counters.extraMessage++;
+                persistent('extra_message');
+            }
+            if (regressed > 0) {
+                counters.revRegression++;
+                persistent('rev_regression');
+            }
+            const fields = new Set<string>();
+            for (const message of expected.messages) {
+                const found = actualById.get(message.messageId);
+                if (!found) continue;
+                for (const field of COMPARED_FIELDS) {
+                    if (message[field] !== found[field]) fields.add(field);
+                }
+                if (found.rev !== message.rev && !(found.rev < message.rev)) fields.add('rev');
+            }
+            if (fields.size > 0) {
                 counters.fieldMismatch++;
-                counters.persistentMismatches++;
-            } else if (contentDigest(expected) !== contentDigest(actual.snapshot)) {
-                // Every field this module knows to compare matched, yet the
-                // canonical hash still differs — a field the allow-list carries
-                // but this comparator does not yet diff explicitly. Never
-                // silently treat that as parity; report it so the gap gets a
-                // named field once someone chases it down.
-                mismatches.push({ kind: 'digest_mismatch', session: redacted });
+                persistent('field_mismatch', [...fields].sort());
+            }
+            if (actual.commit.digest !== expected.digest && mismatches.length === 0) {
                 counters.digestMismatch++;
-                counters.persistentMismatches++;
+                persistent('digest_mismatch');
             }
         }
     }
 
     counters.mismatches += mismatches.length;
-    if (mismatches.length > 0) {
-        for (const m of mismatches) {
-            LOG.info(
-                'Seqscribe',
-                `transcript parity mismatch kind=${m.kind} session=${m.session}` +
-                    (m.fields?.length ? ` fields=${m.fields.join(',')}` : ''),
-            );
-        }
+    for (const m of mismatches) {
+        LOG.info(
+            'Seqscribe',
+            `transcript parity mismatch kind=${m.kind} session=${m.session}` + (m.fields?.length ? ` fields=${m.fields.join(',')}` : ''),
+        );
     }
     return mismatches;
 }
@@ -289,21 +235,7 @@ export function transcriptParityCounters(): TranscriptParityCounters {
 
 /** Reset counters. TESTS ONLY. */
 export function __resetTranscriptParityForTests(): void {
-    counters.compared = 0;
-    counters.missingCompleteRevision = 0;
-    counters.fieldMismatch = 0;
-    counters.extraMessage = 0;
-    counters.wrongSession = 0;
-    counters.wrongOwner = 0;
-    counters.digestMismatch = 0;
-    counters.mismatches = 0;
-    counters.persistentMismatches = 0;
-    counters.runs = 0;
-    counters.sessionsObserved = 0;
-    counters.sessionsRepeated = 0;
-    counters.pendingMissingRevisits = 0;
-    counters.pendingMissingOpen = 0;
-    counters.since = Date.now();
+    counters = freshCounters();
     pendingMissing.clear();
     observedSessions.clear();
 }

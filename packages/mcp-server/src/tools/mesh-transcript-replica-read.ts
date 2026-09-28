@@ -63,8 +63,8 @@
  */
 
 import {
-    mapTranscriptSnapshotToReadChatPayload,
-    type ReplicatedTranscriptSnapshotV1,
+    mapTranscriptViewToReadChatPayload,
+    type ReplicatedTranscriptViewV2,
     type TranscriptReadChatPayload,
 } from '@adhdev/daemon-core';
 import { unwrapOneLevel } from './mesh-session-helpers.js';
@@ -115,9 +115,9 @@ function readReason(value: any, fallback: string): string {
  * REQUIRED shape and refuses otherwise. It must never be rewritten as
  * "delete the bad keys and continue".
  */
-function isUsableSnapshot(value: any): value is ReplicatedTranscriptSnapshotV1 {
+function isUsableSnapshot(value: any): value is ReplicatedTranscriptViewV2 {
     if (!value || typeof value !== 'object') return false;
-    if (value.schemaVersion !== 1) return false;
+    if (value.schemaVersion !== 2) return false;
     if (typeof value.sessionId !== 'string' || !value.sessionId) return false;
     if (typeof value.status !== 'string' || !value.status) return false;
     if (!Array.isArray(value.messages)) return false;
@@ -125,7 +125,7 @@ function isUsableSnapshot(value: any): value is ReplicatedTranscriptSnapshotV1 {
     if (typeof value.coverage.totalMessageCount !== 'number') return false;
     if (typeof value.coverage.omittedBefore !== 'boolean') return false;
     if (!value.provenance || typeof value.provenance !== 'object') return false;
-    if (typeof value.revision !== 'number') return false;
+    if (typeof value.frame !== 'number') return false;
     if (typeof value.observedAt !== 'string' || !value.observedAt) return false;
     return true;
 }
@@ -170,13 +170,13 @@ export async function readTranscriptReplicaForDisplay(
     if (read?.available !== true) {
         return { payload: null, fallbackReason: ensureReason ?? readReason(read, 'no_complete_revision') };
     }
-    if (!isUsableSnapshot(read.snapshot)) {
+    if (!isUsableSnapshot(read.view)) {
         return { payload: null, fallbackReason: 'revision_invalid' };
     }
 
-    const snapshot = read.snapshot;
+    const snapshot = read.view;
     return {
-        payload: mapTranscriptSnapshotToReadChatPayload(snapshot, {
+        payload: mapTranscriptViewToReadChatPayload(snapshot, {
             omittedBefore: snapshot.coverage.omittedBefore,
             stale: read.stale === true,
         }),

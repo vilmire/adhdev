@@ -4,7 +4,7 @@
  * ── What it is ─────────────────────────────────────────────────────────────
  * A dashboard peer tells the daemon WHICH SESSIONS it wants replicated over
  * seqscribe. The daemon narrows that peer's grant map to exactly those
- * `session.<id>.transcript` topics (least privilege, design §9 item 4) and —
+ * `session.<id>.chat` topics (least privilege, design §9 item 4) and —
  * because sending this frame proves the sender speaks the protocol — admits it
  * for a seqscribe channel at all.
  *
@@ -13,7 +13,7 @@
  * server WS would open a NEW identifier path outside the two approved
  * content-boundary exceptions (approval-modal text for push actionability;
  * Beacon's topic-name keys for staleness UX) — and Beacon's default scope is
- * metadata-class topics, which `session.*.transcript` explicitly is not. The
+ * metadata-class topics, which `session.*.chat` explicitly is not. The
  * existing P2P `data` channel already carries far richer per-session data
  * peer-to-peer, so the declaration adds no exposure there and needs no new
  * server endpoint.

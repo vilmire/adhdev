@@ -16,13 +16,13 @@ import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 
 function msg(i: number) {
-  return { role: i % 2 ? 'assistant' : 'user', kind: 'standard', content: `M${i}`, receivedAt: i, timestamp: i, turnKey: `t${i}`, bubbleState: 'final', senderName: null, toolName: null, streaming: null };
+  return { messageId: `d.t.${i}`, ord: `a${i}`, rev: 1, expandable: false, srcId: null, role: i % 2 ? 'assistant' : 'user', kind: 'standard', content: `M${i}`, receivedAt: i, timestamp: i, turnKey: `t${i}`, bubbleState: 'final', senderName: null, toolName: null, streaming: null };
 }
 
 const SNAPSHOT = {
-  schemaVersion: 1, sessionId: 'sess-remote', historySessionId: null, providerType: 'claude-cli',
-  providerSessionId: 'psid-current', producerDaemonId: 'daemon-remote', producerWriterId: 'w', producerEpoch: 'e',
-  revision: 3, observedAt: '2026-09-02T00:00:00.000Z', status: 'idle', providerObservedStatus: 'idle', title: null,
+  schemaVersion: 2, sessionId: 'sess-remote', historySessionId: null, providerType: 'claude-cli',
+  providerSessionId: 'psid-current', producerDaemonId: 'daemon-remote', producerWriterId: 'w', epoch: 'e',
+  frame: 3, observedAt: '2026-09-02T00:00:00.000Z', status: 'idle', providerObservedStatus: 'idle', title: null,
   activeModal: null, activeInteractivePrompt: null, turn: null,
   provenance: { messageSource: 'native_history', transcriptProvenance: null },
   messages: [0, 1, 2, 3, 4, 5].map(msg),
@@ -48,7 +48,7 @@ function createRemoteCtx(meshId: string) {
     if (command === 'get_pending_mesh_events') return { events: [] };
     if (command === 'mesh_forward_event') return { success: true, forwarded: 0 };
     if (command === 'ensure_transcript_subscription') return { success: true, ready: true };
-    if (command === 'read_transcript_replica') return { success: true, available: true, snapshot: SNAPSHOT, identity: { revision: 3 } };
+    if (command === 'read_transcript_replica') return { success: true, available: true, view: SNAPSHOT, identity: { frame: 3 } };
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (_d: string, command: string, args: Record<string, unknown> = {}) => {

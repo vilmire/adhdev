@@ -1,11 +1,12 @@
 /**
- * `session.<safeSessionId>.transcript` dynamic activation — §8 unit 3
+ * `session.<safeSessionId>.chat` dynamic activation — §8 unit 3
  * ("dynamic transcript activation + daemon replica store").
  *
  * This is the piece transcript-topic-claim.ts's header and transcript-
  * publisher.ts's header both name as deferred: wiring the LOCAL, in-memory
  * claim primitive (transcript-topic-claim.ts) and the topic table
- * (topics.ts#sessionTranscriptTopic/sessionTranscriptPolicy, from §8 unit 1)
+ * (topics.ts#sessionChatTopic/sessionChatPolicy — the keyed chat topic that
+ * replaced the v1 `.transcript` revision topic, design 2026-09-28 §4.1)
  * into an actual `node.node.defineTopic` call, on BOTH the publisher and the
  * subscriber side of a session — design §3.1: "런타임 session discovery 때 양
  * 끝이 같은 policy로 define한 뒤, handle의 topics에 push한 뒤 topic activation
@@ -18,7 +19,7 @@
  * on the NODE HANDLE, not on any mesh-specific state — the P14/P15 grant
  * re-derivation they drive already runs for ANY topic in `node.topics`
  * regardless of which module defined it. So a transcript topic activated
- * through `ensureSessionTranscriptTopic` below reaches the exact same
+ * through `ensureSessionChatTopic` below reaches the exact same
  * transport listener (today: `SeqscribeDataChannelRouter.deriveGrants`) that
  * mesh events/handoff topics do, with no new plumbing on that side.
  *
@@ -36,8 +37,8 @@
  * unit does instead, as a partial, real mitigation: a transcript topic is
  * only ever DEFINED (and therefore only ever eligible for ANY grant) once a
  * producer has something to publish or a consumer has actually asked to
- * subscribe (`ensureSessionTranscriptTopic` is called on demand, per session —
- * see transcript-publish-runtime.ts and transcript-replica-store.ts — never
+ * subscribe (`ensureSessionChatTopic` is called on demand, per session —
+ * see transcript-keyed-publish-runtime.ts and transcript-replica-store.ts — never
  * at boot for every known session). That bounds exposure to "sessions someone
  * cares about" rather than "every session that ever existed", but it is not
  * the per-peer narrowing the owner decision asks for. Follow-up: a
@@ -48,7 +49,7 @@
 import { LOG } from '../logging/logger.js';
 import { announceTopicActivated } from './mesh-publisher.js';
 import type { SeqscribeNodeHandle } from './node.js';
-import { sessionTranscriptPolicy, sessionTranscriptTopic } from './topics.js';
+import { sessionChatPolicy, sessionChatTopic } from './topics.js';
 import type { TranscriptTopicClaim, TranscriptTopicClaimRegistry } from './transcript-topic-claim.js';
 
 export type TranscriptActivationRejectReason =
@@ -92,9 +93,9 @@ function definedTopicsFor(node: SeqscribeNodeHandle): Map<string, boolean> {
 }
 
 /**
- * Claim + define + announce `session.<safeSessionId>.transcript` for
+ * Claim + define + announce `session.<safeSessionId>.chat` for
  * `rawSessionId` on `node`, if not already done. Both the publisher
- * (transcript-publish-runtime.ts) and the subscriber
+ * (transcript-keyed-publish-runtime.ts) and the subscriber
  * (transcript-replica-store.ts) call this on their OWN node before they
  * append/subscribe — each end needs the schema locally, and each end needs
  * the fail-closed claim (design §3.5): "이미 다른 raw ID가 claim한 topic이면
@@ -105,13 +106,13 @@ function definedTopicsFor(node: SeqscribeNodeHandle): Map<string, boolean> {
  * lifetime, and the caller is expected to simply retry on its next
  * publish/subscribe attempt rather than latch a stale negative.
  */
-export function ensureSessionTranscriptTopic(
+export function ensureSessionChatTopic(
     node: SeqscribeNodeHandle,
     claims: TranscriptTopicClaimRegistry,
     rawSessionId: string,
     ownerDaemonId: string,
 ): TranscriptActivationResult {
-    const topic = sessionTranscriptTopic(rawSessionId);
+    const topic = sessionChatTopic(rawSessionId);
 
     const claimResult = claims.claim({ topic, rawSessionId, ownerDaemonId });
     if (!claimResult.ok) {
@@ -137,12 +138,12 @@ export function ensureSessionTranscriptTopic(
     }
 
     // The topic may already be defined on the library node WITHOUT being in
-    // `node.topics`: writer-gc.ts's sweep bare-defines on-disk-only transcript
-    // topics to prune them (no claim, no push, no announce). `defineTopic`
+    // `node.topics`: writer-gc.ts's sweep bare-defines on-disk-only chat
+    // topics to compact them (no claim, no push, no announce). `defineTopic`
     // with the identical policy is idempotent in the library, so this path
     // still pushes and announces exactly once.
     try {
-        const policy = sessionTranscriptPolicy();
+        const policy = sessionChatPolicy();
         node.node.defineTopic(topic, policy);
         node.topics.push({ topic, policy });
         cache.set(topic, true);
@@ -165,14 +166,14 @@ export function ensureSessionTranscriptTopic(
 }
 
 /**
- * Release the claim for a session's transcript topic — daemon-side session
+ * Release the claim for a session's chat topic — daemon-side session
  * teardown (transcript-topic-claim.ts#release doc). Does NOT undefine the
  * topic on the node (seqscribe has no `undefineTopic`); it only lifts the
  * fail-closed guard so a genuinely new session that collides on the sanitized
  * segment (design §3.5) can claim the name again.
  */
-export function releaseSessionTranscriptTopic(claims: TranscriptTopicClaimRegistry, rawSessionId: string): void {
-    claims.release(sessionTranscriptTopic(rawSessionId));
+export function releaseSessionChatTopic(claims: TranscriptTopicClaimRegistry, rawSessionId: string): void {
+    claims.release(sessionChatTopic(rawSessionId));
 }
 
 /** TESTS ONLY — clears the per-node definition cache. */

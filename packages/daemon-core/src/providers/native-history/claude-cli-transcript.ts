@@ -103,6 +103,18 @@ function extractTimestampValue(value: unknown): number {
   return 0;
 }
 
+/** The first extractable `timestamp` in the file, or 0. Stops at the first hit. */
+function firstRecordTimestamp(lines: readonly string[]): number {
+  for (const line of lines) {
+    let parsed: unknown = null;
+    try { parsed = JSON.parse(line); } catch { continue; }
+    if (!parsed || typeof parsed !== 'object') continue;
+    const ts = extractTimestampValue((parsed as Record<string, unknown>).timestamp);
+    if (ts) return ts;
+  }
+  return 0;
+}
+
 function isSafeSessionId(sessionId: string): boolean {
   return /^[A-Za-z0-9._:-]+$/.test(sessionId) && !sessionId.includes('..');
 }
@@ -449,7 +461,13 @@ function parseTranscriptFile(
   // message. Keying on the id keeps exactly one observation per message so a
   // long streamed reply is not counted many times over.
   const seenUsageMessageIds = new Set<string>();
-  let fallbackTs = Date.now();
+  // Records without a timestamp take the previous record's time + 1. The seed
+  // for LEADING untimestamped records must be a property of the file, not the
+  // clock: `Date.now()` here made every re-read of an unchanged file produce
+  // different `receivedAt`s, which the keyed transcript lane reads as a change
+  // to every such bubble (design 2026-09-28 §3.1). The file's first timestamp
+  // never changes under append, so it is used; failing that, 0.
+  let fallbackTs = firstRecordTimestamp(lines);
   let detectedWorkspace = typeof workspaceFallback === 'string' ? workspaceFallback.trim() : '';
 
   // recordIndex counts SURVIVING records — every line this loop successfully

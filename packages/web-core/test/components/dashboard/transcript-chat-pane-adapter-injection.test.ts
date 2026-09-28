@@ -45,28 +45,28 @@
  * than not asserting one.
  */
 import { describe, expect, it, vi } from 'vitest'
-import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core'
+import type { ReplicatedTranscriptViewV2 } from '@adhdev/daemon-core'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
   getOrCreateSessionChatTailController,
   resetSessionChatTailControllersForTest,
 } from '../../../src/components/dashboard/session-chat-tail-controller'
 import {
-  isMappableTranscriptSnapshot,
-  mapTranscriptSnapshotToChatTailUpdate,
+  isMappableTranscriptView,
+  mapTranscriptViewToChatTailUpdate,
 } from '../../../src/components/dashboard/transcript-chat-pane-adapter'
 
-function buildSnapshot(overrides: Partial<ReplicatedTranscriptSnapshotV1> = {}): ReplicatedTranscriptSnapshotV1 {
+function buildSnapshot(overrides: Partial<ReplicatedTranscriptViewV2> = {}): ReplicatedTranscriptViewV2 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId: 'session-1',
     historySessionId: null,
     providerType: 'claude-cli',
     providerSessionId: null,
     producerDaemonId: 'daemon-1',
     producerWriterId: 'writer-1',
-    producerEpoch: 'epoch-1',
-    revision: 1,
+    epoch: 'epoch-1',
+    frame: 1,
     observedAt: '2026-08-30T00:00:00.000Z',
     status: 'idle',
     providerObservedStatus: null,
@@ -87,7 +87,7 @@ function message(
   content: string,
   receivedAt: number,
   turnKey: string,
-): ReplicatedTranscriptSnapshotV1['messages'][number] {
+): ReplicatedTranscriptViewV2['messages'][number] {
   return {
     role,
     kind: 'standard',
@@ -99,45 +99,45 @@ function message(
     senderName: null,
     toolName: null,
     streaming: null,
-  } as ReplicatedTranscriptSnapshotV1['messages'][number]
+  } as ReplicatedTranscriptViewV2['messages'][number]
 }
 
 /** Delete ONE field from the wire snapshot — what a projection regression looks like. */
-function inject(field: string, base: ReplicatedTranscriptSnapshotV1): ReplicatedTranscriptSnapshotV1 {
+function inject(field: string, base: ReplicatedTranscriptViewV2): ReplicatedTranscriptViewV2 {
   const mutated = { ...base } as Record<string, unknown>
   delete mutated[field]
-  return mutated as ReplicatedTranscriptSnapshotV1
+  return mutated as ReplicatedTranscriptViewV2
 }
 
-const OPTS = { subscriptionKey: 'daemon:daemon-1:session:session-1', omittedBefore: false, stale: false }
+const OPTS = { subscriptionKey: 'daemon:daemon-1:session:session-1', stale: false }
 
 // ───────────────────────────────────────────────────────────────────────────
 // Pure-mapper injection: the fields the controller reads by name.
 // ───────────────────────────────────────────────────────────────────────────
-describe('mapTranscriptSnapshotToChatTailUpdate — required-field injection (roster id 1)', () => {
+describe('mapTranscriptViewToChatTailUpdate — required-field injection (roster id 1)', () => {
   it('messages: present → mapped tail; removed → the mapper throws instead of silently emitting an empty transcript', () => {
     const base = buildSnapshot({ messages: [message('assistant', 'answer', 10, 't1')] })
 
-    expect(mapTranscriptSnapshotToChatTailUpdate(base, OPTS).messages).toHaveLength(1)
+    expect(mapTranscriptViewToChatTailUpdate(base, OPTS).messages).toHaveLength(1)
 
     // ★ Throwing is the CORRECT failure here. A mapper that emitted `[]` would
     // hand the controller a well-formed "this session has no messages" update,
     // which the pane renders as an empty transcript — a silent wrong answer.
-    expect(() => mapTranscriptSnapshotToChatTailUpdate(inject('messages', base), OPTS)).toThrow()
+    expect(() => mapTranscriptViewToChatTailUpdate(inject('messages', base), OPTS)).toThrow()
   })
 
   it('status: present → mapped; removed → status is undefined, so the busy/shrink gates lose their input', () => {
     const base = buildSnapshot({ status: 'generating', messages: [message('user', 'q', 1, 'u1')] })
 
-    expect(mapTranscriptSnapshotToChatTailUpdate(base, OPTS).status).toBe('generating')
-    expect(mapTranscriptSnapshotToChatTailUpdate(inject('status', base), OPTS).status).toBeUndefined()
+    expect(mapTranscriptViewToChatTailUpdate(base, OPTS).status).toBe('generating')
+    expect(mapTranscriptViewToChatTailUpdate(inject('status', base), OPTS).status).toBeUndefined()
   })
 
   it('sessionId: present → mapped; removed → undefined, which the controller cross-session guard cannot match', () => {
     const base = buildSnapshot({ sessionId: 'session-1', messages: [message('user', 'q', 1, 'u1')] })
 
-    expect(mapTranscriptSnapshotToChatTailUpdate(base, OPTS).sessionId).toBe('session-1')
-    expect(mapTranscriptSnapshotToChatTailUpdate(inject('sessionId', base), OPTS).sessionId).toBeUndefined()
+    expect(mapTranscriptViewToChatTailUpdate(base, OPTS).sessionId).toBe('session-1')
+    expect(mapTranscriptViewToChatTailUpdate(inject('sessionId', base), OPTS).sessionId).toBeUndefined()
   })
 
   /**
@@ -151,7 +151,7 @@ describe('mapTranscriptSnapshotToChatTailUpdate — required-field injection (ro
    * adapter later learned to fail closed. 9-pre-c is that change.
    *
    * The contract is now a DECLINE, not a throw — see
-   * `isMappableTranscriptSnapshot`'s header for why a throw is wrong on this
+   * `isMappableTranscriptView`'s header for why a throw is wrong on this
    * path (it runs inside a MessagePort `onmessage` with no catch above it).
    * The mapper itself is unchanged and still maps best-effort; the REFUSAL
    * lives at the controller boundary, which is what the behavioural case in
@@ -164,23 +164,23 @@ describe('mapTranscriptSnapshotToChatTailUpdate — required-field injection (ro
       messages: [message('assistant', 'need approval', 5, 'a1')],
     })
 
-    const mapped = mapTranscriptSnapshotToChatTailUpdate(base, OPTS)
+    const mapped = mapTranscriptViewToChatTailUpdate(base, OPTS)
     expect(mapped.activeModal).toEqual({ message: 'Run `rm -rf build/`?', buttons: ['Yes', 'No'] })
 
     // ★ A present-but-null modal is a NORMAL, renderable state and must stay
     // mappable — otherwise every ordinary session would fall back.
-    expect(isMappableTranscriptSnapshot(base)).toBe(true)
-    expect(isMappableTranscriptSnapshot(buildSnapshot({ activeModal: null }))).toBe(true)
+    expect(isMappableTranscriptView(base)).toBe(true)
+    expect(isMappableTranscriptView(buildSnapshot({ activeModal: null }))).toBe(true)
 
     // ★ A MISSING field is a projection regression and is now refused, so the
     // controller falls back to legacy instead of silently dropping the
     // approval UI.
-    expect(isMappableTranscriptSnapshot(inject('activeModal', base))).toBe(false)
+    expect(isMappableTranscriptView(inject('activeModal', base))).toBe(false)
 
     // A structurally malformed modal is refused too — `magi_approval_probe`
     // and the pane both read `.message`/`.buttons` by name.
     expect(
-      isMappableTranscriptSnapshot(
+      isMappableTranscriptView(
         buildSnapshot({ activeModal: { message: 'x' } as never }),
       ),
     ).toBe(false)
@@ -192,8 +192,8 @@ describe('mapTranscriptSnapshotToChatTailUpdate — required-field injection (ro
       messages: [message('assistant', 'answer', 10, 'a1')],
     })
 
-    expect(mapTranscriptSnapshotToChatTailUpdate(base, OPTS).messageSource).toEqual({ selected: 'native-history' })
-    expect(() => mapTranscriptSnapshotToChatTailUpdate(inject('provenance', base), OPTS)).toThrow()
+    expect(mapTranscriptViewToChatTailUpdate(base, OPTS).messageSource).toEqual({ selected: 'native-history' })
+    expect(() => mapTranscriptViewToChatTailUpdate(inject('provenance', base), OPTS)).toThrow()
   })
 })
 
@@ -226,7 +226,7 @@ describe('messageSource projection — behavioural injection through the control
    * @param provenance the snapshot provenance for the corrective tail
    * @returns the rendered live messages after the corrective tail is published
    */
-  function renderCorrectiveTail(provenance: ReplicatedTranscriptSnapshotV1['provenance']) {
+  function renderCorrectiveTail(provenance: ReplicatedTranscriptViewV2['provenance']) {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
     const controller = getOrCreateSessionChatTailController({
@@ -239,7 +239,7 @@ describe('messageSource projection — behavioural injection through the control
     })
     controller.retain()
 
-    manager.publish(mapTranscriptSnapshotToChatTailUpdate(
+    manager.publish(mapTranscriptViewToChatTailUpdate(
       buildSnapshot({
         status: 'generating',
         messages: [
@@ -254,10 +254,10 @@ describe('messageSource projection — behavioural injection through the control
 
     // ★ Still `generating` — see note (1) above. This is what keeps the
     // shrink-defense engaged so the provenance actually decides the outcome.
-    manager.publish(mapTranscriptSnapshotToChatTailUpdate(
+    manager.publish(mapTranscriptViewToChatTailUpdate(
       buildSnapshot({
         status: 'generating',
-        revision: 2,
+        frame: 2,
         provenance,
         messages: [message('user', 'q2', 3, 'u2'), message('assistant', 'the real answer', 4, 'a2')],
       }),
@@ -302,7 +302,7 @@ describe('messageSource projection — behavioural injection through the control
 // injection surface is the selector's substantive-message identity.
 // ───────────────────────────────────────────────────────────────────────────
 describe('warm preview projection — injection (roster id 2)', () => {
-  function warmSnapshotAfter(snapshot: ReplicatedTranscriptSnapshotV1) {
+  function warmSnapshotAfter(snapshot: ReplicatedTranscriptViewV2) {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
     const controller = getOrCreateSessionChatTailController({
@@ -314,7 +314,7 @@ describe('warm preview projection — injection (roster id 2)', () => {
       tailLimit: 60,
     })
     controller.retain()
-    manager.publish(mapTranscriptSnapshotToChatTailUpdate(snapshot, OPTS))
+    manager.publish(mapTranscriptViewToChatTailUpdate(snapshot, OPTS))
     return controller.getSnapshot()
   }
 
@@ -325,16 +325,16 @@ describe('warm preview projection — injection (roster id 2)', () => {
     expect(withContent.hasLiveSnapshot).toBe(true)
     expect(withContent.liveMessages[withContent.liveMessages.length - 1]).toMatchObject({ content: 'preview me' })
 
-    // ★ The injection: the projection carries the revision but no messages.
+    // ★ The injection: the projection carries the commit but no messages.
     // The preview must NOT invent a substantive message from an empty tail.
-    const withoutContent = warmSnapshotAfter(buildSnapshot({ revision: 2, messages: [] }))
+    const withoutContent = warmSnapshotAfter(buildSnapshot({ frame: 2, messages: [] }))
     expect(withoutContent.liveMessages).toHaveLength(0)
   })
 
   it('status: present → carried to the preview; removed → undefined, so the preview badge loses its input', () => {
     const base = buildSnapshot({ status: 'waiting_approval', messages: [message('assistant', 'x', 1, 'a1')] })
 
-    expect(mapTranscriptSnapshotToChatTailUpdate(base, OPTS).status).toBe('waiting_approval')
-    expect(mapTranscriptSnapshotToChatTailUpdate(inject('status', base), OPTS).status).toBeUndefined()
+    expect(mapTranscriptViewToChatTailUpdate(base, OPTS).status).toBe('waiting_approval')
+    expect(mapTranscriptViewToChatTailUpdate(inject('status', base), OPTS).status).toBeUndefined()
   })
 })

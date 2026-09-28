@@ -22,15 +22,15 @@ import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 const SNAPSHOT = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   sessionId: 'sess-remote',
   historySessionId: null,
   providerType: 'claude-cli',
   providerSessionId: 'psid-1',
   producerDaemonId: 'daemon-remote',
   producerWriterId: 'writer-1',
-  producerEpoch: 'epoch-1',
-  revision: 12,
+  epoch: 'epoch-1',
+  frame: 12,
   observedAt: '2026-09-02T00:00:00.000Z',
   status: 'idle',
   providerObservedStatus: 'idle',
@@ -40,8 +40,8 @@ const SNAPSHOT = {
   turn: null,
   provenance: { messageSource: 'native_history', transcriptProvenance: null },
   messages: [
-    { role: 'user', kind: 'standard', content: 'run the tests', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
-    { role: 'assistant', kind: 'standard', content: 'REPLICA_ANSWER', receivedAt: 2, timestamp: 2, turnKey: 't2', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+    { messageId: 'd.t.1', ord: 'a1', rev: 1, expandable: false, srcId: null, role: 'user', kind: 'standard', content: 'run the tests', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+    { messageId: 'd.t.2', ord: 'a2', rev: 1, expandable: false, srcId: null, role: 'assistant', kind: 'standard', content: 'REPLICA_ANSWER', receivedAt: 2, timestamp: 2, turnKey: 't2', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
   ],
   terminalMarkers: [],
   coverage: { mode: 'full', totalMessageCount: 2, returnedMessageCount: 2, omittedBefore: false },
@@ -109,7 +109,7 @@ function createRemoteCtx(
     if (command === 'read_transcript_replica') {
       if (opts.readReplicaThrows) throw new Error('ipc down');
       return opts.replicaAnswers
-        ? { success: true, available: true, snapshot: SNAPSHOT, identity: { revision: 12 } }
+        ? { success: true, available: true, view: SNAPSHOT, identity: { frame: 12 } }
         : { success: true, available: false, reason: 'no_subscription' };
     }
     throw new Error(`unexpected direct command: ${command}`);
@@ -167,7 +167,7 @@ test('compact/full parity: both branches render the SAME replica payload', async
     // and the replica revision, compact keeps the lifted summary.
     assert.equal(compact.status, full.status);
     assert.equal(full.totalMessages, 2);
-    assert.equal(full.replicaRevision, 12);
+    assert.equal(full.replicaFrame, 12);
     assert.equal(compact.summary, 'REPLICA_ANSWER');
     // The full branch keeps every message; compact lifts the final assistant
     // bubble into `summary` and blanks its duplicate body (existing contract).
@@ -284,9 +284,9 @@ test('readTranscriptReplicaForDisplay refuses a structurally invalid snapshot ra
     async command(type: string, __ipcArgs?: Record<string, unknown>) {
     if (isTurnIpcCommand(type)) return answerTurnIpc(type, __ipcArgs ?? {});
       if (type === 'ensure_transcript_subscription') return { success: true, ready: true };
-      // schemaVersion 1 but `messages` missing — a projection regression.
+      // schemaVersion 2 but `messages` missing — a projection regression.
       const { messages, ...broken } = SNAPSHOT as any;
-      return { success: true, available: true, snapshot: broken };
+      return { success: true, available: true, view: broken };
     },
   };
   const outcome = await readTranscriptReplicaForDisplay(transport, { ownerDaemonId: 'd', rawSessionId: 's' });

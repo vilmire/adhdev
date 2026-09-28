@@ -81,7 +81,13 @@ function estimateBytes(value: unknown): number {
 
 function trimMessageForStatus(message: unknown, stringLimit: number): unknown {
     if (!message || typeof message !== 'object') return message;
-    return trimStructuredStrings(message, stringLimit);
+    // `_src` is the daemon-internal reader address the message identity ledger
+    // keys on (chat/message-source-address.ts). ACP/CLI `activeChat` rows carry
+    // it into this P2P status projection; it is process-local and never meant
+    // for any consumer, so it stops here (design 2026-09-28 §3.3).
+    const { _src, ...rest } = message as Record<string, unknown>;
+    void _src;
+    return trimStructuredStrings(rest, stringLimit);
 }
 
 /**

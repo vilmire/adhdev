@@ -37,7 +37,7 @@
  * it, "the fix" would be indistinguishable from deleting the race protection.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ReplicatedTranscriptSnapshotV1, SessionChatTailUpdate } from '@adhdev/daemon-core'
+import type { ReplicatedTranscriptViewV2, SessionChatTailUpdate } from '@adhdev/daemon-core'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
   getOrCreateSessionChatTailController,
@@ -74,7 +74,7 @@ function replicaMessage(
   role: 'user' | 'assistant',
   content: string,
   receivedAt: number,
-): ReplicatedTranscriptSnapshotV1['messages'][number] {
+): ReplicatedTranscriptViewV2['messages'][number] {
   return {
     role,
     kind: 'standard',
@@ -82,26 +82,31 @@ function replicaMessage(
     receivedAt,
     timestamp: receivedAt,
     turnKey: `${role}-${receivedAt}`,
+    messageId: `m-${role}-${receivedAt}`,
+    ord: String(receivedAt).padStart(8, '0'),
+    rev: 1,
+    expandable: false,
+    srcId: null,
     bubbleState: 'final',
     senderName: null,
     toolName: null,
     streaming: null,
-  } as ReplicatedTranscriptSnapshotV1['messages'][number]
+  } as ReplicatedTranscriptViewV2['messages'][number]
 }
 
 function replicaSnapshot(
-  overrides: Partial<ReplicatedTranscriptSnapshotV1> = {},
-): ReplicatedTranscriptSnapshotV1 {
+  overrides: Partial<ReplicatedTranscriptViewV2> = {},
+): ReplicatedTranscriptViewV2 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId: SESSION,
     historySessionId: null,
     providerType: 'claude-cli',
     providerSessionId: null,
     producerDaemonId: DAEMON,
     producerWriterId: 'writer-1',
-    producerEpoch: 'epoch-1',
-    revision: 1,
+    epoch: 'epoch-1',
+    frame: 1,
     observedAt: '2026-09-06T00:00:00.000Z',
     status: 'idle',
     providerObservedStatus: null,
@@ -120,8 +125,8 @@ function replicaSnapshot(
 /** A replica snapshot carrying real content — enough to mark the lane healthy. */
 function healthySnapshot(revision: number, status: string, ...contents: string[]) {
   return replicaSnapshot({
-    revision,
-    status: status as ReplicatedTranscriptSnapshotV1['status'],
+    frame: revision,
+    status: status as ReplicatedTranscriptViewV2['status'],
     messages: contents.map((c, i) => replicaMessage(i % 2 === 0 ? 'user' : 'assistant', c, 10 + i)),
   })
 }
@@ -158,9 +163,7 @@ function wedgeReplicaLane(h: ReturnType<typeof createHarness>) {
   // Idle status, so `lastReplicaBusyAt` is never stamped. This is not a contrived
   // corner: a session whose snapshots arrive between turns, or whose busy
   // snapshot was itself the one that got lost, lands here.
-  h.controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'idle', 'q', 'a'), {
-    omittedBefore: false,
-  })
+  h.controller.applyTranscriptReplicaView(healthySnapshot(2, 'idle', 'q', 'a'))
   expect(h.controller.getSnapshot().transcriptReadSource).toBe('replica')
 }
 

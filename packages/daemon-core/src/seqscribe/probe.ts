@@ -21,7 +21,7 @@
  *
  *   - `full-sync` + `append`, so entries converge on mutual attach with no
  *     served view or subscription machinery (the ring topics `fleet.status`
- *     and `session.*.transcript` are `subscribe-only`, which needs both).
+ *     and `session.*.chat` are `subscribe-only`, which needs both).
  *   - it is the Phase 1 GREENFIELD topic with an official producer/consumer
  *     pair (journal.ts) — exactly the calls a real consumer will make.
  *   - it has no legacy consumer to disturb: the assistant feature is unbuilt,

@@ -2,8 +2,9 @@
  * Browser shim for the bare `crypto` specifier (copy of the web-cloud shim; web-standalone is OSS and cannot import it).
  *
  * ── Why this exists ────────────────────────────────────────────────────────
- * `@adhdev/daemon-core/seqscribe/transcript-revision-codec` is consumed by
- * web-core's transcript transport (`transcript-session-subscription.ts`), but
+ * `@adhdev/daemon-core/seqscribe/transcript-keyed-folder` (and the keyed codec
+ * it imports) is consumed by web-core's transcript transport
+ * (`transcript-session-subscription.ts`), but
  * daemon-core is built by tsup with `platform: node` / `target: node18` and
  * `noExternal: ['seqscribe']`. Inlining seqscribe drags in its `@noble/hashes`
  * dependency, and under the Node condition that resolves to
@@ -16,7 +17,7 @@
  *   `Failed to resolve module specifier "crypto"`.
  *
  * ── Why a shim rather than dropping the external ──────────────────────────
- * The codec only ever calls `sha256` / `bytesToHex`, which are pure JS. The
+ * The codec only ever hashes (SHA-256 over JCS), which is pure JS. The
  * `crypto` module is referenced solely for `randomBytes`, on a code path this
  * bundle never executes. So the import needs to *resolve*, not to work — but
  * we still map it onto Web Crypto rather than a throwing stub, so that any

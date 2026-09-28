@@ -263,7 +263,7 @@ describe('fleet.status entry rejects unlisted fields', () => {
                 parityMissingInShadowBucket: 0,
                 parityExtraInShadowBucket: 0,
                 parityFieldMismatchBucket: 0,
-                topicNames: ['session.sess-1.transcript'],
+                topicNames: ['session.sess-1.chat'],
                 lastEntryPayload: { text: 'secret prompt text' },
             } as any,
         });

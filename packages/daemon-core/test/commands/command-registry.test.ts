@@ -200,6 +200,9 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     'deposit_worker_mailbox',
     'worker_drain_mailbox', 'worker_peer_context_pull', 'ensure_transcript_subscription',
     'read_transcript_replica',
+    // NOT a legacy-table migration: the keyed chat transcript's resync path
+    // (design 2026-09-28 §5.2) — a reader asks the owner for one base frame.
+    'request_transcript_base',
     // NOT a legacy-table migration: G2 transcript-transport selection
     // reporting (wiring-unification G2b, 2026-09-24,
     // commands/low-family/transcript-transport-report.ts). The dashboard

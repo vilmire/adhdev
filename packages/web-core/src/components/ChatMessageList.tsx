@@ -25,6 +25,7 @@ import {
     getToolExpandStateKey,
     buildChatMessageStableKeys,
     type ActionLog,
+    type ToolExpandAddress,
 } from './ChatMessageList/chatMessageHelpers';
 import {
     CHAT_SCROLL_NEAR_BOTTOM_PX,
@@ -57,7 +58,7 @@ import type { ChatMessage } from '../types';
 // Re-export the pure helpers so existing import paths (tests, ChatPane) keep
 // resolving from this module after the C9 3/3 decomposition.
 export type { ActionLog } from './ChatMessageList/chatMessageHelpers';
-export { getChatMessageStableKey, getToolExpandStateKey, buildChatMessageStableKeys } from './ChatMessageList/chatMessageHelpers';
+export { getChatMessageStableKey, getToolExpandStateKey, getToolExpandAddress, buildChatMessageStableKeys, type ToolExpandAddress } from './ChatMessageList/chatMessageHelpers';
 export {
     buildChatScrollFingerprint,
     getChatScrollJumpButtonState,
@@ -126,7 +127,7 @@ export interface ChatMessageListProps {
      * Rendered only on bubbles the parser actually truncated, so a host that
      * omits it (read-only share views) loses no affordance that would work.
      */
-    onExpandToolBlock?: (messageKey: string, ref: NonNullable<ChatMessage['toolBlockRef']>) => void;
+    onExpandToolBlock?: (messageKey: string, address: ToolExpandAddress) => void;
     /** Collapse an expanded tool bubble back to its summary. */
     onCollapseToolBlock?: (messageKey: string) => void;
     /** Expansion state per message key, owned by the host that fetches. */
@@ -652,7 +653,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                         isSendingNow={isSendingNow}
                         onCancelQueued={onCancelQueued}
                         toolExpand={toolExpansions?.[toolExpandKey]}
-                        onExpandToolBlock={onExpandToolBlock ? (ref) => onExpandToolBlock(toolExpandKey, ref) : undefined}
+                        onExpandToolBlock={onExpandToolBlock ? (address) => onExpandToolBlock(toolExpandKey, address) : undefined}
                         onCollapseToolBlock={onCollapseToolBlock ? () => onCollapseToolBlock(toolExpandKey) : undefined}
                         onToggleTextExpanded={() => setExpandedTexts(prev => {
                             const next = new Set(prev);

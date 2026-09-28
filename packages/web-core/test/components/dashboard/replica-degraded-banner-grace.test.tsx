@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core'
+import type { ReplicatedTranscriptViewV2 } from '@adhdev/daemon-core'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
   getOrCreateSessionChatTailController,
@@ -33,17 +33,17 @@ const DAEMON = 'daemon-1'
 const SESSION = 'session-1'
 const SUBSCRIPTION_KEY = `daemon:${DAEMON}:session:${SESSION}`
 
-function snapshot(overrides: Partial<ReplicatedTranscriptSnapshotV1> = {}): ReplicatedTranscriptSnapshotV1 {
+function snapshot(overrides: Partial<ReplicatedTranscriptViewV2> = {}): ReplicatedTranscriptViewV2 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId: SESSION,
     historySessionId: null,
     providerType: 'claude-cli',
     providerSessionId: null,
     producerDaemonId: DAEMON,
     producerWriterId: 'writer-1',
-    producerEpoch: 'epoch-1',
-    revision: 1,
+    epoch: 'epoch-1',
+    frame: 1,
     observedAt: '2026-09-05T00:00:00.000Z',
     status: 'idle',
     providerObservedStatus: null,
@@ -63,7 +63,7 @@ function message(
   role: 'user' | 'assistant',
   content: string,
   receivedAt: number,
-): ReplicatedTranscriptSnapshotV1['messages'][number] {
+): ReplicatedTranscriptViewV2['messages'][number] {
   return {
     role,
     kind: 'standard',
@@ -71,16 +71,21 @@ function message(
     receivedAt,
     timestamp: receivedAt,
     turnKey: `${role}-${receivedAt}`,
+    messageId: `m-${role}-${receivedAt}`,
+    ord: String(receivedAt).padStart(8, '0'),
+    rev: 1,
+    expandable: false,
+    srcId: null,
     bubbleState: 'final',
     senderName: null,
     toolName: null,
     streaming: null,
-  } as ReplicatedTranscriptSnapshotV1['messages'][number]
+  } as ReplicatedTranscriptViewV2['messages'][number]
 }
 
 function healthySnapshot(revision: number, ...contents: string[]) {
   return snapshot({
-    revision,
+    frame: revision,
     messages: contents.map((c, i) => message(i % 2 === 0 ? 'user' : 'assistant', c, 10 + i)),
   })
 }
@@ -231,7 +236,7 @@ describe('★ controller state is independent of banner grace', () => {
   it('sets and clears transcriptReplicaDegraded immediately while the banner waits', () => {
     const { controller } = setupController()
     controller.retain()
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+    controller.applyTranscriptReplicaView(healthySnapshot(2, 'replica answer'))
     expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(false)
 
     controller.reportTranscriptReplicaFallback('no_node')
@@ -248,9 +253,7 @@ describe('★ controller state is independent of banner grace', () => {
     expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(true)
     expect(bannerShown()).toBe(false)
 
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(5, 'replica answer', 'replica is back'), {
-      omittedBefore: false,
-    })
+    controller.applyTranscriptReplicaView(healthySnapshot(5, 'replica answer', 'replica is back'))
     expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(false)
     expect(buildTranscriptReadSourceAttributes(controller.getSnapshot()))
       .not.toHaveProperty('data-transcript-replica-degraded')

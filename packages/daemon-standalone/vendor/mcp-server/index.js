@@ -41489,7 +41489,7 @@ var require_dist3 = __commonJS({
       if (value.length <= max) return value;
       return `${value.slice(0, max - 1).trimEnd()}\u2026`;
     }
-    function normalizeStringList(value, field3, truncated) {
+    function normalizeStringList(value, field2, truncated) {
       if (value === void 0 || value === null) return void 0;
       if (!Array.isArray(value)) return void 0;
       const items = [];
@@ -41501,9 +41501,9 @@ var require_dist3 = __commonJS({
         if (trimmed2.length > LIST_ITEM_MAX) itemTruncated = true;
         items.push(truncateString2(trimmed2, LIST_ITEM_MAX));
       }
-      if (itemTruncated) truncated.push({ field: field3, reason: "item_too_long" });
+      if (itemTruncated) truncated.push({ field: field2, reason: "item_too_long" });
       if (items.length > LIST_MAX_ITEMS) {
-        truncated.push({ field: field3, reason: "list_too_long" });
+        truncated.push({ field: field2, reason: "list_too_long" });
         return items.slice(0, LIST_MAX_ITEMS);
       }
       return items.length > 0 ? items : void 0;
@@ -69561,8 +69561,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (segment.length === 0 || segment.includes(".")) return null;
       return segment;
     }
-    function sessionTranscriptTopic(sessionId) {
-      return `session.${safeSessionId(sessionId)}.transcript`;
+    function sessionChatTopic(sessionId) {
+      return `session.${safeSessionId(sessionId)}.chat`;
+    }
+    function sessionSegmentFromChatTopic(topic) {
+      if (!topic.startsWith("session.") || !topic.endsWith(".chat")) return null;
+      const segment = topic.slice("session.".length, -".chat".length);
+      if (segment.length === 0 || segment.includes(".")) return null;
+      return segment;
     }
     function meshHandoffTopic(meshId) {
       return `mesh.${safeMeshId(meshId)}.handoff`;
@@ -69596,9 +69602,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         finalityAuthority: ADHDEV_AUTHORITY_ID
       };
     }
-    function sessionTranscriptPolicy() {
+    function sessionChatPolicy() {
       return {
         kind: "append",
+        keyed: { tombstoneKind: CHAT_TOMBSTONE_KIND },
         retention: { mode: "full" },
         replication: "subscribe-only",
         access: "content",
@@ -69655,8 +69662,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var ASSISTANT_JOURNAL_TOPIC;
     var FLEET_STATUS_TOPIC;
     var CONFIG_SETTINGS_TOPIC;
-    var SESSION_TRANSCRIPT_RING;
     var FLEET_STATUS_RING;
+    var CHAT_TOMBSTONE_KIND;
     var init_topics2 = __esm2({
       "src/seqscribe/topics.ts"() {
         "use strict";
@@ -69665,8 +69672,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         ASSISTANT_JOURNAL_TOPIC = "assistant.journal";
         FLEET_STATUS_TOPIC = "fleet.status";
         CONFIG_SETTINGS_TOPIC = "config.settings";
-        SESSION_TRANSCRIPT_RING = 500;
         FLEET_STATUS_RING = 50;
+        CHAT_TOMBSTONE_KIND = "chat.del.v2";
       }
     });
     function warnOnce(message) {
@@ -74622,7 +74629,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function trimMessageForStatus(message, stringLimit) {
       if (!message || typeof message !== "object") return message;
-      return trimStructuredStrings(message, stringLimit);
+      const { _src, ...rest } = message;
+      void _src;
+      return trimStructuredStrings(rest, stringLimit);
     }
     function normalizeMessageTime(message) {
       if (!message || typeof message !== "object") return message;
@@ -83574,26 +83583,26 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         errors: []
       };
     }
-    function validateStringList(value, field3, max, errors) {
+    function validateStringList(value, field2, max, errors) {
       if (value === void 0) return void 0;
       if (!Array.isArray(value)) {
-        errors.push({ field: field3, message: `${field3} must be an array of strings` });
+        errors.push({ field: field2, message: `${field2} must be an array of strings` });
         return void 0;
       }
       if (value.length > max) {
-        errors.push({ field: field3, message: `${field3} has ${value.length} entries, over the ${max} limit` });
+        errors.push({ field: field2, message: `${field2} has ${value.length} entries, over the ${max} limit` });
         return void 0;
       }
       const out = [];
       for (const item of value) {
         if (typeof item !== "string") {
-          errors.push({ field: field3, message: `${field3} must contain only strings` });
+          errors.push({ field: field2, message: `${field2} must contain only strings` });
           return void 0;
         }
         const trimmed2 = item.trim();
         if (!trimmed2) continue;
         if (trimmed2.length > WORKER_LIST_ITEM_MAX_CHARS) {
-          errors.push({ field: field3, message: `${field3} contains an entry over the ${WORKER_LIST_ITEM_MAX_CHARS} char limit` });
+          errors.push({ field: field2, message: `${field2} contains an entry over the ${WORKER_LIST_ITEM_MAX_CHARS} char limit` });
           return void 0;
         }
         out.push(trimmed2);
@@ -102155,10 +102164,10 @@ ${effect.notification.body || ""}`.trim();
         if (!["safe", "caution", "dangerous"].includes(String(risk))) {
           errors.push(`${prefix}.risk must be one of: safe, caution, dangerous`);
         }
-        for (const field3 of ["launchArgs", "removeArgs"]) {
-          const value = mode[field3];
+        for (const field2 of ["launchArgs", "removeArgs"]) {
+          const value = mode[field2];
           if (value !== void 0 && (!Array.isArray(value) || value.some((arg) => typeof arg !== "string" || !arg.trim()))) {
-            errors.push(`${prefix}.${field3} must be an array of non-empty strings when provided`);
+            errors.push(`${prefix}.${field2} must be an array of non-empty strings when provided`);
           }
         }
         if (strategy === "launch-args" && (!Array.isArray(mode.launchArgs) || mode.launchArgs.length === 0)) {
@@ -102216,11 +102225,11 @@ ${effect.notification.body || ""}`.trim();
               if (typeof entry.mediaType !== "string" || !VALID_CAPABILITY_MEDIA_TYPES.has(entry.mediaType)) {
                 errors.push(`capabilities.input.strategies.mediaType must only include: ${Array.from(VALID_CAPABILITY_MEDIA_TYPES).join(", ")}`);
               }
-              for (const field3 of ["strategies", "degradation"]) {
-                const values = entry[field3];
+              for (const field2 of ["strategies", "degradation"]) {
+                const values = entry[field2];
                 if (values === void 0) continue;
                 if (!Array.isArray(values) || values.some((value) => typeof value !== "string" || !VALID_INPUT_STRATEGIES2.has(value))) {
-                  errors.push(`capabilities.input.strategies.${field3} must only include: ${Array.from(VALID_INPUT_STRATEGIES2).join(", ")}`);
+                  errors.push(`capabilities.input.strategies.${field2} must only include: ${Array.from(VALID_INPUT_STRATEGIES2).join(", ")}`);
                 }
               }
               if (entry.native !== void 0 && typeof entry.native !== "boolean") {
@@ -106294,6 +106303,20 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return 0;
     }
+    function firstRecordTimestamp(lines) {
+      for (const line of lines) {
+        let parsed = null;
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (!parsed || typeof parsed !== "object") continue;
+        const ts2 = extractTimestampValue(parsed.timestamp);
+        if (ts2) return ts2;
+      }
+      return 0;
+    }
     function isSafeSessionId(sessionId) {
       return /^[A-Za-z0-9._:-]+$/.test(sessionId) && !sessionId.includes("..");
     }
@@ -106470,7 +106493,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const records = [];
       const usageRecords = [];
       const seenUsageMessageIds = /* @__PURE__ */ new Set();
-      let fallbackTs = Date.now();
+      let fallbackTs = firstRecordTimestamp(lines);
       let detectedWorkspace = typeof workspaceFallback === "string" ? workspaceFallback.trim() : "";
       let recordIndex = -1;
       for (const line of lines) {
@@ -107284,19 +107307,19 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const [key2, afterKey] = readVarint(buf, i);
         if (afterKey === i) break;
         i = afterKey;
-        const field3 = Math.floor(key2 / 8);
+        const field2 = Math.floor(key2 / 8);
         const wireType = key2 & 7;
-        if (field3 <= 0) break;
+        if (field2 <= 0) break;
         if (wireType === 0) {
           const [value, next] = readVarint(buf, i);
           if (next === i) break;
           i = next;
-          fields.push({ field: field3, wireType, varint: value });
+          fields.push({ field: field2, wireType, varint: value });
         } else if (wireType === 2) {
           const [len, afterLen] = readVarint(buf, i);
           i = afterLen;
           if (len < 0 || i + len > buf.length) break;
-          fields.push({ field: field3, wireType, bytes: buf.subarray(i, i + len) });
+          fields.push({ field: field2, wireType, bytes: buf.subarray(i, i + len) });
           i += len;
         } else if (wireType === 5) {
           i += 4;
@@ -107308,9 +107331,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return fields;
     }
-    function firstLenField(buf, field3) {
+    function firstLenField(buf, field2) {
       for (const f of decodeProtoFields(buf)) {
-        if (f.field === field3 && f.wireType === 2 && f.bytes) return f.bytes;
+        if (f.field === field2 && f.wireType === 2 && f.bytes) return f.bytes;
       }
       return null;
     }
@@ -107386,16 +107409,16 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return best;
     }
-    function allLenFields(buf, field3) {
+    function allLenFields(buf, field2) {
       const out = [];
       for (const f of decodeProtoFields(buf)) {
-        if (f.field === field3 && f.wireType === 2 && f.bytes) out.push(f.bytes);
+        if (f.field === field2 && f.wireType === 2 && f.bytes) out.push(f.bytes);
       }
       return out;
     }
-    function textField(buf, field3) {
+    function textField(buf, field2) {
       if (!buf) return null;
-      const bytes = firstLenField(buf, field3);
+      const bytes = firstLenField(buf, field2);
       if (!bytes || bytes.length === 0 || !looksLikeText(bytes)) return null;
       return bytes.toString("utf-8");
     }
@@ -107421,18 +107444,18 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const [key2, afterKey] = readVarint(buf, i);
         if (afterKey === i || afterKey > buf.length) return null;
         i = afterKey;
-        const field3 = Math.floor(key2 / 8);
+        const field2 = Math.floor(key2 / 8);
         const wireType = key2 & 7;
-        if (field3 <= 0 || field3 > 1e3) return null;
+        if (field2 <= 0 || field2 > 1e3) return null;
         if (wireType === 0) {
           const [value, next] = readVarint(buf, i);
           if (next === i || next > buf.length || (buf[next - 1] & 128) !== 0) return null;
           i = next;
-          fields.push({ field: field3, wireType, varint: value });
+          fields.push({ field: field2, wireType, varint: value });
         } else if (wireType === 2) {
           const [len, afterLen] = readVarint(buf, i);
           if (afterLen === i || afterLen + len > buf.length) return null;
-          fields.push({ field: field3, wireType, bytes: buf.subarray(afterLen, afterLen + len) });
+          fields.push({ field: field2, wireType, bytes: buf.subarray(afterLen, afterLen + len) });
           i = afterLen + len;
         } else if (wireType === 5 && i + 4 <= buf.length) {
           i += 4;
@@ -108544,6 +108567,26 @@ ${output}` : "";
       }
       return 0;
     }
+    function frozenReceivedAt(sourcePath, startMs, recordIndexes, interpolate, endMs) {
+      let entry = frozenTimes.get(sourcePath);
+      if (entry) frozenTimes.delete(sourcePath);
+      if (!entry || entry.startMs !== startMs) entry = { startMs, byRecord: /* @__PURE__ */ new Map() };
+      frozenTimes.set(sourcePath, entry);
+      while (frozenTimes.size > FROZEN_TIMES_MAX_FILES) frozenTimes.delete(frozenTimes.keys().next().value);
+      const firstSynthesis = entry.byRecord.size === 0;
+      const out = [];
+      let previous = -Infinity;
+      recordIndexes.forEach((recordIndex, index) => {
+        let at = entry.byRecord.get(recordIndex);
+        if (at === void 0) {
+          at = Math.max(firstSynthesis ? interpolate(index) : endMs, previous + 1);
+          entry.byRecord.set(recordIndex, at);
+        }
+        previous = at;
+        out.push(at);
+      });
+      return out;
+    }
     function readSession5(sourcePath, sessionId, workspace) {
       let text;
       try {
@@ -108574,8 +108617,15 @@ ${output}` : "";
       const endMs = Math.max(sourceMtimeMs, startMs);
       const span = endMs - startMs;
       const step = parsed.length > 1 ? Math.floor(span / (parsed.length - 1)) : 0;
+      const times = frozenReceivedAt(
+        sourcePath,
+        startMs,
+        parsed.map((message) => message.recordIndex),
+        (index) => parsed.length > 1 ? startMs + step * index : endMs,
+        endMs
+      );
       const messages = parsed.map((message, index) => {
-        const receivedAt = parsed.length > 1 ? startMs + step * index : endMs;
+        const receivedAt = times[index];
         return {
           ts: new Date(receivedAt).toISOString(),
           receivedAt,
@@ -108685,6 +108735,8 @@ ${output}` : "";
     var path39;
     var os20;
     var USER_QUERY_RE;
+    var FROZEN_TIMES_MAX_FILES;
+    var frozenTimes;
     var init_grok_cli_transcript = __esm2({
       "src/providers/native-history/grok-cli-transcript.ts"() {
         "use strict";
@@ -108695,6 +108747,8 @@ ${output}` : "";
         init_native_history_tool_blocks();
         init_message_source_address();
         USER_QUERY_RE = /<user_query>\s*([\s\S]*?)\s*<\/user_query>/;
+        FROZEN_TIMES_MAX_FILES = 64;
+        frozenTimes = /* @__PURE__ */ new Map();
       }
     });
     function normalizeUuid(uuid3) {
@@ -109329,8 +109383,8 @@ ${output}` : "";
     }
     function passesFilter(record22, filter) {
       if (!filter) return true;
-      for (const [field3, expected] of Object.entries(filter)) {
-        if (record22[field3] !== expected) return false;
+      for (const [field2, expected] of Object.entries(filter)) {
+        if (record22[field2] !== expected) return false;
       }
       return true;
     }
@@ -116325,6 +116379,10 @@ ${marker}`,
         SMALLEST_INTEGER = `A${ZERO2.repeat(26)}`;
       }
     });
+    function nativeAddressOfId(id22) {
+      const m = typeof id22 === "string" ? NATIVE_ID_RE.exec(id22) : null;
+      return m ? { cls: "n", L: m[1], addr: m[2] } : void 0;
+    }
     function newEpochToken() {
       return (0, import_crypto17.randomBytes)(4).readUInt32BE(0).toString(36).padStart(6, "0").slice(-6);
     }
@@ -116478,12 +116536,22 @@ ${marker}`,
       }
       return pairs2;
     }
+    function setMessageIdentitySeedProvider(provider) {
+      seedProvider = provider;
+    }
     function getMessageIdentityLedger(sessionKey2) {
       let ledger = ledgers.get(sessionKey2);
       if (ledger) {
         ledgers.delete(sessionKey2);
       } else {
-        ledger = new MessageIdentityLedger();
+        let seed = null;
+        try {
+          seed = seedProvider?.(sessionKey2) ?? null;
+        } catch {
+          seed = null;
+        }
+        ledger = new MessageIdentityLedger(seed ? { epoch: seed.epoch } : {});
+        if (seed) ledger.restore(seed);
       }
       ledgers.set(sessionKey2, ledger);
       while (ledgers.size > LEDGER_REGISTRY_MAX) {
@@ -116492,14 +116560,24 @@ ${marker}`,
       }
       return ledger;
     }
+    function peekMessageIdentityLedger(sessionKey2) {
+      return ledgers.get(sessionKey2);
+    }
+    function dropMessageIdentityLedger(sessionKey2) {
+      ledgers.delete(sessionKey2);
+    }
     var import_crypto17;
     var TOMBSTONE_POOL_MAX;
     var LIVE_ENTRIES_MAX;
     var LCS_MAX_CELLS;
     var SIMILARITY_MIN_OVERLAP;
+    var NATIVE_ID_RE;
+    var DAEMON_ID_RE;
+    var EPOCH_TOKEN_RE;
     var MessageIdentityLedger;
     var LEDGER_REGISTRY_MAX;
     var ledgers;
+    var seedProvider;
     var init_message_identity_ledger = __esm2({
       "src/chat/message-identity-ledger.ts"() {
         "use strict";
@@ -116510,6 +116588,9 @@ ${marker}`,
         LIVE_ENTRIES_MAX = 1e4;
         LCS_MAX_CELLS = 25e4;
         SIMILARITY_MIN_OVERLAP = 0.5;
+        NATIVE_ID_RE = /^n\.([0-9a-f]{8})\.([a-z0-9._-]{1,48})$/;
+        DAEMON_ID_RE = /^d\.([a-z0-9]{1,16})\.(\d{1,15})$/;
+        EPOCH_TOKEN_RE = /^[a-z0-9]{1,16}$/;
         MessageIdentityLedger = class {
           epochToken;
           counter = 0;
@@ -116518,7 +116599,60 @@ ${marker}`,
           pool = /* @__PURE__ */ new Map();
           bySrc = /* @__PURE__ */ new Map();
           constructor(options = {}) {
-            this.epochToken = options.epoch || newEpochToken();
+            this.epochToken = options.epoch && EPOCH_TOKEN_RE.test(options.epoch) ? options.epoch : newEpochToken();
+          }
+          /**
+           * Rebuild from persisted bubbles (§4.10) — only on a ledger that has not
+           * observed anything yet. Native ids re-bind their own address (and an
+           * adopted `srcId`'s), `d.*` ids keep their ord/rev and are re-found by the
+           * aligner from the stored text, and the `d.<E>.<n>` counter resumes after
+           * the largest persisted `n` of this epoch so no id is ever reissued.
+           * Returns false (and changes nothing) when the ledger is already in use.
+           */
+          restore(seed) {
+            if (this.frameNo !== 0 || this.entries.size > 0) return false;
+            if (seed.epoch && EPOCH_TOKEN_RE.test(seed.epoch)) this.epochToken = seed.epoch;
+            for (const item of seed.entries) {
+              if (!item || typeof item.messageId !== "string" || !item.messageId || this.entries.has(item.messageId)) continue;
+              if (typeof item.ord !== "string" || !item.ord) continue;
+              const role = String(item.role ?? "").trim().toLowerCase();
+              const entry = {
+                id: item.messageId,
+                ord: item.ord,
+                rev: Number.isSafeInteger(item.rev) && item.rev > 0 ? item.rev : 1,
+                role: role === "human" ? "user" : role,
+                kind: String(item.kind ?? "").trim() || "standard",
+                text: typeof item.text === "string" ? item.text : "",
+                // Unknown until the next observation, which re-keys it; the
+                // ledger's own rev may move once, the persisted rev does not.
+                revisionKey: "",
+                srcClass: null,
+                lineage: null,
+                srcKey: null,
+                srcId: null,
+                boundKeys: /* @__PURE__ */ new Set(),
+                retained: false,
+                locator: void 0
+              };
+              this.entries.set(entry.id, entry);
+              const own = nativeAddressOfId(entry.id);
+              if (own) this.bind(entry, own, messageSourceKey(own), null);
+              const adopted = nativeAddressOfId(item.srcId);
+              if (adopted) this.bind(entry, adopted, messageSourceKey(adopted), null);
+              const daemon = DAEMON_ID_RE.exec(entry.id);
+              if (daemon && daemon[1] === this.epochToken) this.counter = Math.max(this.counter, Number(daemon[2]));
+            }
+            return true;
+          }
+          /** Ids kept only because they scrolled out of a window source's view (§3.5). */
+          retainedIds() {
+            const out = [];
+            for (const entry of this.entries.values()) if (entry.retained) out.push(entry.id);
+            return out;
+          }
+          /** The locator the latest observation attached to `messageId` (§5.9), if live. */
+          locatorOf(messageId) {
+            return this.entries.get(messageId)?.locator;
           }
           get epoch() {
             return this.epochToken;
@@ -116652,7 +116786,8 @@ ${marker}`,
                 srcKey: null,
                 srcId: null,
                 boundKeys: /* @__PURE__ */ new Set(),
-                retained: false
+                retained: false,
+                locator: void 0
               };
               this.entries.set(id22, entry);
               if (src) this.bind(entry, src, srcKeys[i], natural === id22 ? null : aliases);
@@ -116696,7 +116831,8 @@ ${marker}`,
               entry.text = input.text;
               entry.revisionKey = input.revisionKey;
               entry.retained = false;
-              assignments[i] = { messageId: id22, ord: entry.ord, rev: entry.rev };
+              entry.locator = input.locator;
+              assignments[i] = { messageId: id22, ord: entry.ord, rev: entry.rev, srcId: entry.srcId };
             }
             deletes.push(...this.enforceLiveCap());
             let retainedCount = 0;
@@ -116825,6 +116961,7 @@ ${marker}`,
         };
         LEDGER_REGISTRY_MAX = 128;
         ledgers = /* @__PURE__ */ new Map();
+        seedProvider = null;
       }
     });
     function normalizedRole(message) {
@@ -116864,7 +117001,10 @@ ${marker}`,
         kind: normalizedKind(message),
         text,
         ...src ? { src } : {},
-        revisionKey: messageIdentityRevisionKey(message, text)
+        revisionKey: messageIdentityRevisionKey(message, text),
+        // The tool-block ref an expand request resolves by `messageId` (design
+        // §5.9). Kept on the ledger entry, refreshed every read, never emitted.
+        ...message.toolBlockRef ? { locator: message.toolBlockRef } : {}
       };
     }
     function resolveReadChatIdentityCoverage(payloadCoverage, forced) {
@@ -116876,8 +117016,12 @@ ${marker}`,
       const ledger = getMessageIdentityLedger(sessionKey2);
       const frame2 = ledger.observe(messages.map(toMessageIdentityInput), { coverage });
       const ids = /* @__PURE__ */ new Map();
-      for (let i = 0; i < messages.length; i += 1) ids.set(messages[i], frame2.assignments[i].messageId);
-      return { ids, frame: frame2 };
+      const assignments = /* @__PURE__ */ new Map();
+      for (let i = 0; i < messages.length; i += 1) {
+        ids.set(messages[i], frame2.assignments[i].messageId);
+        assignments.set(messages[i], frame2.assignments[i]);
+      }
+      return { ids, assignments, frame: frame2, retainedIds: frame2.retainedCount > 0 ? ledger.retainedIds() : [] };
     }
     function withMessageIdentity(message, messageId) {
       const { _src, ...rest } = message;
@@ -116941,20 +117085,18 @@ ${marker}`,
         init_chat_history();
       }
     });
-    function flattenMessage(message) {
+    function flattenMessage(message, identity) {
       const meta3 = message.meta && typeof message.meta === "object" ? message.meta : void 0;
       return {
+        messageId: identity?.messageId,
+        ord: identity?.ord,
+        srcId: identity?.srcId ?? null,
         role: message.role,
         kind: message.kind,
         content: flattenContent(message.content),
         receivedAt: message.receivedAt,
         timestamp: message.timestamp,
         turnKey: message._turnKey,
-        // Per-MESSAGE ordinal. This map is an explicit field-by-field narrowing,
-        // so widening the downstream encoder's allow-list alone is NOT enough —
-        // the field has to survive here first or the encoder only ever sees
-        // undefined.
-        sequence: message.sequence,
         bubbleState: message.bubbleState,
         senderName: message.senderName,
         // TOOL-LABEL (2026-09-25): the invoked tool's name rides the wire so the
@@ -116962,14 +117104,10 @@ ${marker}`,
         // `meta.label` never travels (only `meta.streaming` does), so this typed
         // field is the only way the label reaches the durable transcript lane.
         toolName: typeof message.toolName === "string" && message.toolName ? message.toolName : void 0,
-        // (TOOL-EXPAND) The expand ref must survive THIS hop too. It is three
-        // integers addressing a block in the provider's own transcript file —
-        // content-free, so it is safe on the P2P transcript wire — and without
-        // it a truncated tool bubble reaches the dashboard with no way to fetch
-        // the rest, which is exactly the defect the caps would otherwise create.
-        // The downstream encoder re-validates it field by field; this map only
-        // has to stop dropping it (see the `sequence` note above).
-        toolBlockRef: message.toolBlockRef,
+        // (TOOL-EXPAND) Only the affordance travels: a truncated tool bubble the
+        // daemon can expand. The address itself stays on the ledger entry
+        // (design §5.9) — see the `toolBlockRef` exclusion above.
+        expandable: message.kind === "tool" && !!message.toolBlockRef,
         meta: meta3
       };
     }
@@ -116987,9 +117125,14 @@ ${marker}`,
         activeInteractivePrompt: input.activeInteractivePrompt ?? null,
         turn: input.turn,
         provenance: input.provenance,
-        messages: input.messages.map(flattenMessage),
+        messages: input.messages.map((message) => flattenMessage(message, input.identity?.assignments.get(message))),
         terminalMarkers: [],
-        coverage: input.coverage
+        coverage: {
+          mode: input.coverage.mode,
+          omittedBefore: input.coverage.omittedBefore,
+          ...input.identity && input.identity.retainedIds.length > 0 ? { retainedMessageIds: input.identity.retainedIds } : {}
+        },
+        ...input.identity ? { ledgerEpoch: input.identity.ledgerEpoch } : {}
       };
     }
     var init_transcript_observation_builder = __esm2({
@@ -116998,244 +117141,29 @@ ${marker}`,
         init_contracts2();
       }
     });
-    function bytesToBase64(bytes) {
-      let binary2 = "";
-      for (let i = 0; i < bytes.length; i++) binary2 += String.fromCharCode(bytes[i]);
-      return btoa(binary2);
+    function chatMessageKey(messageId) {
+      return `m:${messageId}`;
     }
-    function base64ToBytes(base643) {
-      const binary2 = atob(base643);
-      const bytes = new Uint8Array(binary2.length);
-      for (let i = 0; i < binary2.length; i++) bytes[i] = binary2.charCodeAt(i);
-      return bytes;
+    function chatPartKey(messageId, k) {
+      return `p:${messageId}:${k}`;
     }
-    function concatBytes(chunks) {
-      const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-      const out = new Uint8Array(total);
-      let offset = 0;
-      for (const chunk of chunks) {
-        out.set(chunk, offset);
-        offset += chunk.length;
-      }
-      return out;
-    }
-    function encodeTranscriptRevision(snapshot, identity, now = () => (/* @__PURE__ */ new Date()).toISOString()) {
-      const json3 = jcs(snapshot);
-      const bytes = new TextEncoder().encode(json3);
-      const snapshotSha256 = sha256HexUtf8(json3);
-      const chunkCount = Math.max(1, Math.ceil(bytes.length / TRANSCRIPT_REVISION_CHUNK_BYTES));
-      if (chunkCount > MAX_TRANSCRIPT_REVISION_CHUNKS) {
-        return { ok: false, reason: "projection_oversize", chunkCount, snapshotBytes: bytes.length };
-      }
-      const begin = {
-        v: 1,
-        ...identity,
-        snapshotBytes: bytes.length,
-        chunks: chunkCount,
-        snapshotSha256,
-        observedAt: now()
-      };
-      const chunks = [];
-      for (let index = 0; index < chunkCount; index++) {
-        const start = index * TRANSCRIPT_REVISION_CHUNK_BYTES;
-        const slice = bytes.subarray(start, start + TRANSCRIPT_REVISION_CHUNK_BYTES);
-        chunks.push({
-          v: 1,
-          sessionId: identity.sessionId,
-          producerEpoch: identity.producerEpoch,
-          revision: identity.revision,
-          index,
-          chunks: chunkCount,
-          dataBase64: bytesToBase64(slice)
-        });
-      }
-      const commit2 = {
-        v: 1,
-        ...identity,
-        snapshotBytes: bytes.length,
-        chunks: chunkCount,
-        snapshotSha256,
-        committedAt: now()
-      };
-      return { ok: true, begin, chunks, commit: commit2 };
-    }
-    function validateSnapshotBody(parsed, identity) {
-      const snapshot = parsed;
-      if (!snapshot || snapshot.schemaVersion !== 1) return "schema_version_unsupported";
-      if (snapshot.sessionId !== identity.sessionId) return "wrong_session";
-      if (!daemonIdsEquivalent4(snapshot.producerDaemonId, identity.producerDaemonId) || snapshot.producerWriterId !== identity.producerWriterId || snapshot.producerEpoch !== identity.producerEpoch || snapshot.revision !== identity.revision) {
-        return "wrong_owner";
+    function parseChatKey(key2) {
+      if (key2.startsWith("m:") && key2.length > 2) return { id: key2.slice(2), k: null };
+      if (key2.startsWith("p:")) {
+        const sep17 = key2.lastIndexOf(":");
+        if (sep17 <= 2) return null;
+        const k = Number(key2.slice(sep17 + 1));
+        if (!Number.isSafeInteger(k) || k < 0) return null;
+        return { id: key2.slice(2, sep17), k };
       }
       return null;
     }
-    var TRANSCRIPT_REVISION_BEGIN_KIND;
-    var TRANSCRIPT_REVISION_CHUNK_KIND;
-    var TRANSCRIPT_REVISION_COMMIT_KIND;
-    var TRANSCRIPT_REVISION_CHUNK_BYTES;
-    var MAX_TRANSCRIPT_REVISION_ROWS;
-    var MAX_TRANSCRIPT_REVISION_CHUNKS;
-    var SNAPSHOT_TEXT_DECODER;
-    var BASE64_RE;
-    var TranscriptRevisionAssembler;
-    var init_transcript_revision_codec = __esm2({
-      "src/seqscribe/transcript-revision-codec.ts"() {
-        "use strict";
-        init_dist();
-        init_dist2();
-        TRANSCRIPT_REVISION_BEGIN_KIND = "transcript.revision.begin.v1";
-        TRANSCRIPT_REVISION_CHUNK_KIND = "transcript.revision.chunk.v1";
-        TRANSCRIPT_REVISION_COMMIT_KIND = "transcript.revision.commit.v1";
-        TRANSCRIPT_REVISION_CHUNK_BYTES = 36 * 1024;
-        MAX_TRANSCRIPT_REVISION_ROWS = 240;
-        MAX_TRANSCRIPT_REVISION_CHUNKS = MAX_TRANSCRIPT_REVISION_ROWS - 2;
-        SNAPSHOT_TEXT_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false });
-        BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
-        TranscriptRevisionAssembler = class {
-          constructor(expectedOwnerWriterId) {
-            this.expectedOwnerWriterId = expectedOwnerWriterId;
-          }
-          inFlight = null;
-          complete = null;
-          /**
-           * SHA-256 of the JSON behind `complete`, for the re-decode short-circuit in
-           * `ingestCommit`. Kept beside `complete` (rather than re-derived) because it
-           * is the ONE value that proves a re-delivered revision carries byte-identical
-           * content to what is already held.
-           */
-          completeSha256 = null;
-          /** The last verified complete revision, or null if none has landed yet. */
-          getLatestComplete() {
-            return this.complete;
-          }
-          ingestRow(row) {
-            if (this.expectedOwnerWriterId !== void 0 && row.writer !== this.expectedOwnerWriterId) {
-              return { status: "rejected", reason: "wrong_writer" };
-            }
-            switch (row.kind) {
-              case TRANSCRIPT_REVISION_BEGIN_KIND:
-                return this.ingestBegin(row.payload);
-              case TRANSCRIPT_REVISION_CHUNK_KIND:
-                return this.ingestChunk(row.payload);
-              case TRANSCRIPT_REVISION_COMMIT_KIND:
-                return this.ingestCommit(row.payload);
-              default:
-                return { status: "rejected", reason: "schema_version_unsupported" };
-            }
-          }
-          ingestBegin(payload) {
-            const begin = payload;
-            if (!begin || begin.v !== 1 || typeof begin.sessionId !== "string" || typeof begin.producerDaemonId !== "string" || typeof begin.producerWriterId !== "string" || typeof begin.producerEpoch !== "string" || typeof begin.revision !== "number" || typeof begin.snapshotBytes !== "number" || typeof begin.chunks !== "number" || typeof begin.snapshotSha256 !== "string") {
-              return { status: "rejected", reason: "schema_version_unsupported" };
-            }
-            this.inFlight = {
-              identity: {
-                sessionId: begin.sessionId,
-                producerDaemonId: begin.producerDaemonId,
-                producerWriterId: begin.producerWriterId,
-                producerEpoch: begin.producerEpoch,
-                revision: begin.revision
-              },
-              totalChunks: begin.chunks,
-              snapshotBytes: begin.snapshotBytes,
-              snapshotSha256: begin.snapshotSha256,
-              chunkBuffers: /* @__PURE__ */ new Map()
-            };
-            return { status: "begin_accepted" };
-          }
-          ingestChunk(payload) {
-            const chunk = payload;
-            if (!chunk || chunk.v !== 1) return { status: "rejected", reason: "schema_version_unsupported" };
-            const inFlight3 = this.inFlight;
-            if (!inFlight3) return { status: "rejected", reason: "chunk_without_begin" };
-            if (chunk.sessionId !== inFlight3.identity.sessionId || chunk.producerEpoch !== inFlight3.identity.producerEpoch || chunk.revision !== inFlight3.identity.revision) {
-              this.inFlight = null;
-              return { status: "rejected", reason: "wrong_session" };
-            }
-            if (chunk.chunks !== inFlight3.totalChunks) {
-              this.inFlight = null;
-              return { status: "rejected", reason: "chunk_count_mismatch" };
-            }
-            if (typeof chunk.index !== "number" || chunk.index < 0 || chunk.index >= inFlight3.totalChunks) {
-              this.inFlight = null;
-              return { status: "rejected", reason: "chunk_index_out_of_range" };
-            }
-            if (inFlight3.chunkBuffers.has(chunk.index)) {
-              this.inFlight = null;
-              return { status: "rejected", reason: "duplicate_chunk_index" };
-            }
-            if (typeof chunk.dataBase64 !== "string" || !BASE64_RE.test(chunk.dataBase64)) {
-              this.inFlight = null;
-              return { status: "rejected", reason: "invalid_base64" };
-            }
-            let decoded;
-            try {
-              decoded = base64ToBytes(chunk.dataBase64);
-            } catch {
-              this.inFlight = null;
-              return { status: "rejected", reason: "invalid_base64" };
-            }
-            inFlight3.chunkBuffers.set(chunk.index, decoded);
-            return { status: "chunk_accepted" };
-          }
-          ingestCommit(payload) {
-            const commit2 = payload;
-            if (!commit2 || commit2.v !== 1) return { status: "rejected", reason: "schema_version_unsupported" };
-            const inFlight3 = this.inFlight;
-            if (!inFlight3) return { status: "rejected", reason: "commit_without_begin" };
-            this.inFlight = null;
-            if (commit2.sessionId !== inFlight3.identity.sessionId || commit2.producerDaemonId !== inFlight3.identity.producerDaemonId || // canon-ok: begin/commit envelope self-consistency (one identity object, one encode call), not cross-path daemon-id resolution — see comment above
-            commit2.producerWriterId !== inFlight3.identity.producerWriterId || commit2.producerEpoch !== inFlight3.identity.producerEpoch || commit2.revision !== inFlight3.identity.revision) {
-              return { status: "rejected", reason: "revision_identity_mismatch" };
-            }
-            if (commit2.chunks !== inFlight3.totalChunks || commit2.snapshotBytes !== inFlight3.snapshotBytes || commit2.snapshotSha256 !== inFlight3.snapshotSha256) {
-              return { status: "rejected", reason: "chunk_count_mismatch" };
-            }
-            if (inFlight3.chunkBuffers.size !== inFlight3.totalChunks) {
-              return { status: "rejected", reason: "missing_chunk" };
-            }
-            const ordered = [];
-            for (let index = 0; index < inFlight3.totalChunks; index++) {
-              const buf = inFlight3.chunkBuffers.get(index);
-              if (!buf) return { status: "rejected", reason: "missing_chunk" };
-              ordered.push(buf);
-            }
-            const combined = concatBytes(ordered);
-            if (combined.length !== inFlight3.snapshotBytes) {
-              return { status: "rejected", reason: "byte_count_mismatch" };
-            }
-            let json3;
-            try {
-              json3 = SNAPSHOT_TEXT_DECODER.decode(combined);
-            } catch {
-              return { status: "rejected", reason: "invalid_utf8" };
-            }
-            if (sha256HexUtf8(json3) !== inFlight3.snapshotSha256) {
-              return { status: "rejected", reason: "hash_mismatch" };
-            }
-            const cached5 = this.complete;
-            if (cached5 && this.completeSha256 === inFlight3.snapshotSha256) {
-              const cachedRejection = validateSnapshotBody(cached5.snapshot, inFlight3.identity);
-              if (cachedRejection) return { status: "rejected", reason: cachedRejection };
-              this.complete = { snapshot: cached5.snapshot, identity: inFlight3.identity };
-              return { status: "complete", snapshot: cached5.snapshot, identity: inFlight3.identity };
-            }
-            let parsed;
-            try {
-              parsed = JSON.parse(json3);
-            } catch {
-              return { status: "rejected", reason: "invalid_json" };
-            }
-            const rejection = validateSnapshotBody(parsed, inFlight3.identity);
-            if (rejection) return { status: "rejected", reason: rejection };
-            this.complete = { snapshot: parsed, identity: inFlight3.identity };
-            this.completeSha256 = inFlight3.snapshotSha256;
-            return { status: "complete", snapshot: this.complete.snapshot, identity: inFlight3.identity };
-          }
-        };
-      }
-    });
     function stringField(value) {
       return typeof value === "string" ? value : null;
+    }
+    function boundedString(value, max) {
+      const s2 = stringField(value);
+      return s2 === null ? null : s2.length > max ? s2.slice(0, max) : s2;
     }
     function numberField(value) {
       return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -117243,189 +117171,798 @@ ${marker}`,
     function booleanField(value) {
       return typeof value === "boolean" ? value : null;
     }
+    function recordField(value) {
+      return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+    }
     function bubbleStateField(value) {
       return typeof value === "string" && BUBBLE_STATES.includes(value) ? value : null;
     }
     function terminalOutcomeField(value) {
       return typeof value === "string" && TERMINAL_OUTCOMES.includes(value) ? value : "stalled";
     }
-    function coverageModeField(value) {
-      return typeof value === "string" && COVERAGE_MODES.includes(value) ? value : "tail";
+    function chatCoverageModeField(value) {
+      return typeof value === "string" && COVERAGE_MODES.includes(value) ? value : "full";
     }
-    function toolBlockRefField(value) {
-      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-      const raw = value;
-      const sourceMtimeMs = numberField(raw.sourceMtimeMs);
-      const recordIndex = numberField(raw.recordIndex);
-      const blockIndex = numberField(raw.blockIndex);
-      if (sourceMtimeMs == null || recordIndex == null || blockIndex == null) return null;
-      if (!Number.isInteger(recordIndex) || !Number.isInteger(blockIndex)) return null;
-      if (recordIndex < 0 || blockIndex < -1) return null;
-      return { sourceMtimeMs, recordIndex, blockIndex };
-    }
-    function stringArrayField(value) {
+    function boundedStringList(value) {
       if (!Array.isArray(value)) return [];
-      return value.filter((item) => typeof item === "string");
+      const out = [];
+      for (const item of value) {
+        if (typeof item !== "string") continue;
+        out.push(item.length > CHAT_META_LABEL_MAX ? item.slice(0, CHAT_META_LABEL_MAX) : item);
+        if (out.length >= CHAT_META_LIST_MAX) break;
+      }
+      return out;
     }
-    function encodeTranscriptMessage(candidate) {
-      const meta3 = candidate.meta;
-      const streaming = meta3 && typeof meta3 === "object" && !Array.isArray(meta3) ? booleanField(meta3.streaming) : null;
+    function encodeChatMessageHead(candidate, stamp2) {
+      const meta3 = recordField(candidate.meta);
       return {
+        v: 2,
+        id: stamp2.id,
+        rev: stamp2.rev,
+        epoch: stamp2.epoch,
+        frame: stamp2.frame,
+        ord: stamp2.ord,
         role: stringField(candidate.role) ?? "unknown",
         kind: stringField(candidate.kind) ?? "standard",
-        content: candidate.content,
-        receivedAt: numberField(candidate.receivedAt),
-        timestamp: numberField(candidate.timestamp),
         turnKey: stringField(candidate.turnKey) ?? stringField(candidate._turnKey),
-        // Absent/non-numeric → null (UNKNOWN), never 0. See the field's doc on
-        // `ReplicatedTranscriptMessageV1`.
-        sequence: numberField(candidate.sequence),
         bubbleState: bubbleStateField(candidate.bubbleState),
+        streaming: meta3 ? booleanField(meta3.streaming) : null,
         senderName: stringField(candidate.senderName),
         toolName: stringField(candidate.toolName),
-        streaming,
-        toolBlockRef: toolBlockRefField(candidate.toolBlockRef)
+        receivedAt: numberField(candidate.receivedAt),
+        timestamp: numberField(candidate.timestamp),
+        expandable: candidate.expandable === true,
+        srcId: stamp2.srcId,
+        body: stamp2.body
       };
     }
-    function encodeTranscriptTerminalMarker(candidate) {
+    function encodeChatPart(id22, k, rev, epoch, frame2, text) {
+      return { v: 2, id: id22, k, rev, epoch, frame: frame2, text };
+    }
+    function encodeChatDel(id22, k, rev, epoch, frame2) {
+      return { v: 2, id: id22, k, rev, epoch, frame: frame2 };
+    }
+    function encodeModal(value) {
+      const raw = recordField(value);
+      if (!raw) return null;
+      const message = boundedString(raw.message, CHAT_META_TEXT_MAX);
+      if (message === null) return null;
+      return { message, buttons: boundedStringList(raw.buttons) };
+    }
+    function encodePrompt(value) {
+      const raw = recordField(value);
+      if (!raw) return null;
+      const message = boundedString(raw.message, CHAT_META_TEXT_MAX);
+      if (message === null) return null;
+      return { message, options: boundedStringList(raw.options) };
+    }
+    function encodeTurn(value) {
+      const raw = recordField(value);
+      if (!raw) return null;
       return {
-        receivedAt: numberField(candidate.receivedAt) ?? 0,
-        outcome: terminalOutcomeField(candidate.outcome),
-        turnId: stringField(candidate.turnId),
-        summary: stringField(candidate.summary)
+        authority: stringField(raw.authority) ?? "provider_fsm_fallback",
+        status: stringField(raw.status) ?? "idle",
+        stage: stringField(raw.stage),
+        terminalOutcome: stringField(raw.terminalOutcome),
+        terminalReason: stringField(raw.terminalReason),
+        meshId: stringField(raw.meshId),
+        taskId: stringField(raw.taskId),
+        attemptId: stringField(raw.attemptId),
+        attemptSeq: numberField(raw.attemptSeq),
+        sessionId: stringField(raw.sessionId),
+        nodeId: stringField(raw.nodeId),
+        providerType: stringField(raw.providerType),
+        acceptedAt: stringField(raw.acceptedAt),
+        deliveredAt: stringField(raw.deliveredAt),
+        consumedAt: stringField(raw.consumedAt),
+        terminalAt: stringField(raw.terminalAt),
+        updatedAt: stringField(raw.updatedAt)
       };
     }
-    function encodeTranscriptCoverage(candidate) {
-      return {
-        mode: coverageModeField(candidate.mode),
-        totalMessageCount: numberField(candidate.totalMessageCount) ?? 0,
-        returnedMessageCount: numberField(candidate.returnedMessageCount) ?? 0,
-        omittedBefore: booleanField(candidate.omittedBefore) ?? false
-      };
-    }
-    function messageSourceField(value) {
+    function provenanceScalar(value) {
       if (typeof value === "string") return value;
-      if (value && typeof value === "object" && !Array.isArray(value)) {
-        return stringField(value.selected);
+      const raw = recordField(value);
+      return raw ? stringField(raw.selected) : null;
+    }
+    function encodeProvenance(value) {
+      const raw = recordField(value);
+      return {
+        messageSource: provenanceScalar(raw?.messageSource),
+        transcriptProvenance: provenanceScalar(raw?.transcriptProvenance)
+      };
+    }
+    function encodeTerminalMarkers(value) {
+      if (!Array.isArray(value)) return [];
+      const out = [];
+      for (const item of value) {
+        const raw = recordField(item);
+        if (!raw) continue;
+        out.push({
+          receivedAt: numberField(raw.receivedAt) ?? 0,
+          outcome: terminalOutcomeField(raw.outcome),
+          turnId: boundedString(raw.turnId, CHAT_META_LABEL_MAX),
+          summary: boundedString(raw.summary, CHAT_META_LABEL_MAX)
+        });
+        if (out.length >= CHAT_TERMINAL_MARKERS_MAX) break;
       }
-      return null;
+      return out;
     }
-    function encodeTranscriptProvenance(candidate) {
+    function encodeChatMeta(candidate, stamp2) {
       return {
-        messageSource: messageSourceField(candidate?.messageSource),
-        transcriptProvenance: stringField(candidate?.transcriptProvenance)
-      };
-    }
-    function encodeTranscriptModal(candidate) {
-      if (!candidate) return null;
-      const message = stringField(candidate.message);
-      if (message === null) return null;
-      return { message, buttons: stringArrayField(candidate.buttons) };
-    }
-    function encodeTranscriptPrompt(candidate) {
-      if (!candidate) return null;
-      const message = stringField(candidate.message);
-      if (message === null) return null;
-      return { message, options: stringArrayField(candidate.options) };
-    }
-    function encodeTranscriptTurn(candidate) {
-      if (!candidate) return null;
-      return {
-        authority: stringField(candidate.authority) ?? "provider_fsm_fallback",
-        status: stringField(candidate.status) ?? "idle",
-        stage: stringField(candidate.stage),
-        terminalOutcome: stringField(candidate.terminalOutcome),
-        terminalReason: stringField(candidate.terminalReason),
-        meshId: stringField(candidate.meshId),
-        taskId: stringField(candidate.taskId),
-        attemptId: stringField(candidate.attemptId),
-        attemptSeq: numberField(candidate.attemptSeq),
-        sessionId: stringField(candidate.sessionId),
-        nodeId: stringField(candidate.nodeId),
-        providerType: stringField(candidate.providerType),
-        acceptedAt: stringField(candidate.acceptedAt),
-        deliveredAt: stringField(candidate.deliveredAt),
-        consumedAt: stringField(candidate.consumedAt),
-        terminalAt: stringField(candidate.terminalAt),
-        updatedAt: stringField(candidate.updatedAt)
-      };
-    }
-    function encodeTranscriptSnapshot(candidate) {
-      return {
-        schemaVersion: 1,
+        v: 2,
+        rev: stamp2.rev,
+        epoch: stamp2.epoch,
+        frame: stamp2.frame,
         sessionId: candidate.sessionId,
         historySessionId: stringField(candidate.historySessionId),
         providerType: candidate.providerType,
         providerSessionId: stringField(candidate.providerSessionId),
-        producerDaemonId: candidate.producerDaemonId,
-        producerWriterId: candidate.producerWriterId,
-        producerEpoch: candidate.producerEpoch,
-        revision: candidate.revision,
-        observedAt: candidate.observedAt,
+        producerDaemonId: stamp2.producerDaemonId,
         status: candidate.status,
         providerObservedStatus: stringField(candidate.providerObservedStatus),
-        title: stringField(candidate.title),
-        activeModal: encodeTranscriptModal(candidate.activeModal),
-        activeInteractivePrompt: encodeTranscriptPrompt(candidate.activeInteractivePrompt),
-        turn: encodeTranscriptTurn(candidate.turn),
-        provenance: encodeTranscriptProvenance(candidate.provenance),
-        messages: candidate.messages.map(encodeTranscriptMessage),
-        terminalMarkers: (candidate.terminalMarkers ?? []).map(encodeTranscriptTerminalMarker),
-        coverage: encodeTranscriptCoverage(candidate.coverage)
+        title: boundedString(candidate.title, CHAT_META_LABEL_MAX),
+        activeModal: encodeModal(candidate.activeModal),
+        activeInteractivePrompt: encodePrompt(candidate.activeInteractivePrompt),
+        turn: encodeTurn(candidate.turn),
+        provenance: encodeProvenance(candidate.provenance),
+        terminalMarkers: encodeTerminalMarkers(candidate.terminalMarkers),
+        coverage: { mode: stamp2.coverage.mode, omittedBefore: stamp2.coverage.omittedBefore },
+        ledgerEpoch: stamp2.ledgerEpoch
       };
     }
-    function canonicalizeTranscriptSnapshot(snapshot) {
-      return jcs(snapshot);
+    function computeChatCommitDigest(live, metaRev) {
+      const pairs2 = Array.from(live, ([id22, rev]) => [id22, rev]);
+      pairs2.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+      return sha256HexUtf8(jcs({ live: pairs2, metaRev }));
     }
-    function hashTranscriptSnapshot(snapshot) {
-      return sha256HexUtf8(canonicalizeTranscriptSnapshot(snapshot));
+    function jcsCodePointBytes(cp) {
+      if (cp === 34 || cp === 92) return 2;
+      if (cp < 32) return cp === 8 || cp === 9 || cp === 10 || cp === 12 || cp === 13 ? 2 : 6;
+      if (cp < 128) return 1;
+      if (cp < 2048) return 2;
+      if (cp >= 55296 && cp <= 57343) return 6;
+      if (cp < 65536) return 3;
+      return 4;
     }
+    function chatJcsTextBytes(text) {
+      let bytes = 0;
+      for (let i = 0; i < text.length; i += 1) {
+        const c = text.charCodeAt(i);
+        if (c >= 55296 && c <= 56319 && i + 1 < text.length) {
+          const d = text.charCodeAt(i + 1);
+          if (d >= 56320 && d <= 57343) {
+            bytes += 4;
+            i += 1;
+            continue;
+          }
+        }
+        bytes += jcsCodePointBytes(c);
+      }
+      return bytes;
+    }
+    function splitChatBody(text, maxBytes = CHAT_PART_MAX_JCS_BYTES) {
+      const parts = [];
+      let start = 0;
+      let bytes = 0;
+      for (let i = 0; i < text.length; ) {
+        const c = text.charCodeAt(i);
+        let width = 1;
+        let cpBytes;
+        if (c >= 55296 && c <= 56319 && i + 1 < text.length) {
+          const d = text.charCodeAt(i + 1);
+          if (d >= 56320 && d <= 57343) {
+            width = 2;
+            cpBytes = 4;
+          } else {
+            cpBytes = jcsCodePointBytes(c);
+          }
+        } else {
+          cpBytes = jcsCodePointBytes(c);
+        }
+        if (bytes + cpBytes > maxBytes && i > start) {
+          parts.push(text.slice(start, i));
+          start = i;
+          bytes = 0;
+        }
+        bytes += cpBytes;
+        i += width;
+      }
+      parts.push(text.slice(start));
+      return parts;
+    }
+    function isRev(value) {
+      return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+    }
+    function readChatMsg(payload) {
+      const raw = recordField(payload);
+      if (!raw || raw.v !== 2 || typeof raw.id !== "string" || !raw.id) return null;
+      if (!isRev(raw.rev) || typeof raw.epoch !== "string" || !isRev(raw.frame) || typeof raw.ord !== "string") return null;
+      const body = recordField(raw.body);
+      if (!body) return null;
+      if (typeof body.text !== "string") {
+        if (!isRev(body.parts) || body.parts < 1 || !Array.isArray(body.partRevs) || body.partRevs.length !== body.parts) return null;
+        if (!body.partRevs.every(isRev)) return null;
+      }
+      return raw;
+    }
+    function readChatPart(payload) {
+      const raw = recordField(payload);
+      if (!raw || raw.v !== 2 || typeof raw.id !== "string" || !isRev(raw.k) || !isRev(raw.rev)) return null;
+      if (typeof raw.epoch !== "string" || !isRev(raw.frame) || typeof raw.text !== "string") return null;
+      return raw;
+    }
+    function readChatDel(payload) {
+      const raw = recordField(payload);
+      if (!raw || raw.v !== 2 || typeof raw.id !== "string" || !isRev(raw.rev)) return null;
+      if (typeof raw.epoch !== "string" || !isRev(raw.frame)) return null;
+      if (raw.k !== null && !isRev(raw.k)) return null;
+      return raw;
+    }
+    function readChatMeta(payload) {
+      const raw = recordField(payload);
+      if (!raw || raw.v !== 2 || !isRev(raw.rev) || typeof raw.epoch !== "string" || !isRev(raw.frame)) return null;
+      if (typeof raw.sessionId !== "string" || typeof raw.providerType !== "string" || typeof raw.status !== "string") return null;
+      if (typeof raw.producerDaemonId !== "string" || !recordField(raw.coverage) || !recordField(raw.provenance)) return null;
+      return raw;
+    }
+    function readChatCommit(payload) {
+      const raw = recordField(payload);
+      if (!raw || raw.v !== 2 || typeof raw.sessionId !== "string" || typeof raw.writer !== "string") return null;
+      if (typeof raw.producerDaemonId !== "string" || typeof raw.epoch !== "string" || !isRev(raw.frame)) return null;
+      if (!isRev(raw.liveCount) || !isRev(raw.metaRev) || typeof raw.digest !== "string") return null;
+      if (raw.basis !== "delta" && raw.basis !== "base") return null;
+      return raw;
+    }
+    function chatMessageFromWire(head, content) {
+      return {
+        messageId: head.id,
+        ord: head.ord,
+        rev: head.rev,
+        role: head.role,
+        kind: head.kind,
+        content,
+        receivedAt: head.receivedAt,
+        timestamp: head.timestamp,
+        turnKey: head.turnKey,
+        bubbleState: head.bubbleState,
+        senderName: head.senderName,
+        toolName: head.toolName,
+        streaming: head.streaming,
+        expandable: head.expandable === true,
+        srcId: head.srcId
+      };
+    }
+    function compareChatOrd(a, b) {
+      if (a.ord !== b.ord) return a.ord < b.ord ? -1 : 1;
+      return a.messageId < b.messageId ? -1 : a.messageId > b.messageId ? 1 : 0;
+    }
+    var CHAT_MSG_KIND;
+    var CHAT_PART_KIND;
+    var CHAT_DEL_KIND;
+    var CHAT_META_KIND;
+    var CHAT_COMMIT_KIND;
+    var CHAT_META_KEY;
+    var CHAT_COMMIT_KEY;
+    var CHAT_PART_MAX_JCS_BYTES;
+    var CHAT_LIVE_BYTES_MAX;
+    var CHAT_META_TEXT_MAX;
+    var CHAT_META_LABEL_MAX;
+    var CHAT_META_LIST_MAX;
+    var CHAT_TERMINAL_MARKERS_MAX;
     var BUBBLE_STATES;
     var TERMINAL_OUTCOMES;
     var COVERAGE_MODES;
-    var init_transcript_projection = __esm2({
-      "src/seqscribe/transcript-projection.ts"() {
+    var init_transcript_keyed_codec = __esm2({
+      "src/seqscribe/transcript-keyed-codec.ts"() {
         "use strict";
         init_dist2();
+        CHAT_MSG_KIND = "chat.msg.v2";
+        CHAT_PART_KIND = "chat.part.v2";
+        CHAT_DEL_KIND = "chat.del.v2";
+        CHAT_META_KIND = "chat.meta.v2";
+        CHAT_COMMIT_KIND = "chat.commit.v2";
+        CHAT_META_KEY = "meta";
+        CHAT_COMMIT_KEY = "commit";
+        CHAT_PART_MAX_JCS_BYTES = 24 * 1024;
+        CHAT_LIVE_BYTES_MAX = 16 * 1024 * 1024;
+        CHAT_META_TEXT_MAX = 16 * 1024;
+        CHAT_META_LABEL_MAX = 1024;
+        CHAT_META_LIST_MAX = 32;
+        CHAT_TERMINAL_MARKERS_MAX = 32;
         BUBBLE_STATES = ["draft", "streaming", "final", "removed"];
         TERMINAL_OUTCOMES = ["completed", "failed", "cancelled", "stalled"];
-        COVERAGE_MODES = ["full", "tail", "current-turn"];
+        COVERAGE_MODES = ["full", "tail", "window", "current-turn"];
       }
     });
-    function stampTranscriptObservation(observation, identity, observedAt) {
-      return {
-        ...observation,
-        producerDaemonId: identity.producerDaemonId,
-        producerWriterId: identity.producerWriterId,
-        producerEpoch: identity.producerEpoch,
-        revision: identity.revision,
-        observedAt
+    function sha1(text) {
+      return (0, import_node_crypto32.createHash)("sha1").update(text).digest("base64");
+    }
+    function headChangeKey(head, text) {
+      const fields = {
+        ord: head.ord,
+        role: head.role,
+        kind: head.kind,
+        turnKey: head.turnKey,
+        bubbleState: head.bubbleState,
+        streaming: head.streaming,
+        senderName: head.senderName,
+        toolName: head.toolName,
+        receivedAt: head.receivedAt,
+        timestamp: head.timestamp,
+        expandable: head.expandable,
+        srcId: head.srcId
       };
+      return sha1(`${jcs(fields)}\0${text}`);
     }
-    function hashTranscriptObservation(observation) {
-      const projected = encodeTranscriptSnapshot(
-        stampTranscriptObservation(observation, DEDUP_HASH_IDENTITY, DEDUP_HASH_OBSERVED_AT)
-      );
-      return sha256HexUtf8(jcs(projected));
+    function metaChangeKey(meta3) {
+      return sha1(jcs({ ...meta3, rev: 0, epoch: "", frame: 0 }));
     }
+    function utf8Bytes2(text) {
+      return Buffer.byteLength(text, "utf8");
+    }
+    function jcsBytesOf(payload) {
+      return utf8Bytes2(jcs(payload));
+    }
+    var import_node_crypto32;
+    var HEAD_OVERHEAD_BYTES;
+    var TRIPWIRE_REWRITE_SHARE;
+    var TRIPWIRE_MIN_LIVE;
+    var CHAT_BASE_FRAME_MIN_INTERVAL_MS;
+    var DELETED_REV_MEMORY;
+    var STAGED;
+    var KeyedChatSessionState;
+    var init_transcript_keyed_frame = __esm2({
+      "src/seqscribe/transcript-keyed-frame.ts"() {
+        "use strict";
+        import_node_crypto32 = require("crypto");
+        init_dist2();
+        init_transcript_keyed_codec();
+        HEAD_OVERHEAD_BYTES = 256;
+        TRIPWIRE_REWRITE_SHARE = 0.5;
+        TRIPWIRE_MIN_LIVE = 8;
+        CHAT_BASE_FRAME_MIN_INTERVAL_MS = 10 * 60 * 1e3;
+        DELETED_REV_MEMORY = 256;
+        STAGED = /* @__PURE__ */ Symbol("keyedChatStaged");
+        KeyedChatSessionState = class {
+          constructor(sessionId, epoch) {
+            this.sessionId = sessionId;
+            this.epoch = epoch;
+          }
+          bubbles = /* @__PURE__ */ new Map();
+          metaRev = 0;
+          metaHash = null;
+          historySessionId = void 0;
+          frameNo = 0;
+          deletedRevs = /* @__PURE__ */ new Map();
+          /** Keys above W at restore: id → highest rev seen, and their part indexes. */
+          tornIds = /* @__PURE__ */ new Map();
+          tornParts = /* @__PURE__ */ new Map();
+          tornMetaRev = null;
+          pendingBase = null;
+          restoredNonEmpty = false;
+          firstFrame = true;
+          lastBaseAtMs = null;
+          /** Bubbles written by another writer at restore; a base frame supersedes them. */
+          otherWriterRows = false;
+          get liveCount() {
+            return this.bubbles.size;
+          }
+          get frame() {
+            return this.frameNo;
+          }
+          /** Ask for a full rewrite on the next frame (a reader's digest-mismatch report). */
+          requestBase(reason) {
+            this.pendingBase = reason;
+          }
+          /**
+           * Rebuild the published state from the topic (§4.10). Call once, before the
+           * first `build`. `writerId` is this process's writer: rows committed by any
+           * other writer make the first frame a `writer_change` base frame.
+           */
+          restore(persisted, writerId) {
+            const heads = /* @__PURE__ */ new Map();
+            const parts = /* @__PURE__ */ new Map();
+            let commitWriter = null;
+            for (const row of persisted.committed) {
+              if (row.kind === CHAT_MSG_KIND) {
+                const head = readChatMsg(row.payload);
+                if (head) heads.set(head.id, { head, writer: row.writer });
+              } else if (row.kind === CHAT_PART_KIND) {
+                const part = readChatPart(row.payload);
+                if (!part) continue;
+                let map3 = parts.get(part.id);
+                if (!map3) parts.set(part.id, map3 = /* @__PURE__ */ new Map());
+                map3.set(part.k, { text: part.text, rev: part.rev });
+              } else if (row.kind === CHAT_DEL_KIND) {
+                const del = readChatDel(row.payload);
+                if (del && del.k === null) this.rememberDeleted(del.id, del.rev);
+              } else if (row.kind === CHAT_META_KIND) {
+                const meta3 = readChatMeta(row.payload);
+                if (meta3) {
+                  this.metaRev = meta3.rev;
+                  this.metaHash = metaChangeKey(meta3);
+                  this.historySessionId = meta3.historySessionId;
+                }
+              } else if (row.kind === CHAT_COMMIT_KIND) {
+                const commit2 = readChatCommit(row.payload);
+                if (commit2) {
+                  commitWriter = commit2.writer;
+                  if (commit2.epoch === this.epoch) this.frameNo = Math.max(this.frameNo, commit2.frame);
+                }
+              }
+            }
+            for (const { head, writer } of heads.values()) {
+              if (writer !== writerId) this.otherWriterRows = true;
+              let text;
+              let partHashes = [];
+              let partRevs = [];
+              if ("text" in head.body) {
+                text = head.body.text;
+              } else {
+                const map3 = parts.get(head.id);
+                const pieces = [];
+                let complete = true;
+                for (let k = 0; k < head.body.parts; k += 1) {
+                  const piece = map3?.get(k);
+                  if (!piece || piece.rev !== head.body.partRevs[k]) complete = false;
+                  pieces.push(piece?.text ?? "");
+                }
+                text = pieces.join("");
+                partHashes = pieces.map((piece) => sha1(piece));
+                partRevs = [...head.body.partRevs];
+                if (!complete) this.markTorn(head.id, head.rev, map3 ? Array.from(map3.keys()) : []);
+              }
+              this.bubbles.set(head.id, {
+                rev: head.rev,
+                hash: headChangeKey(head, text),
+                ord: head.ord,
+                partHashes,
+                partRevs,
+                bytes: utf8Bytes2(text) + HEAD_OVERHEAD_BYTES,
+                final: head.bubbleState === "final"
+              });
+            }
+            for (const row of persisted.torn) {
+              const parsed = parseChatKey(row.key);
+              if (row.key === CHAT_META_KEY) {
+                const meta3 = readChatMeta(row.payload);
+                this.tornMetaRev = Math.max(this.tornMetaRev ?? 0, meta3?.rev ?? 0, this.metaRev);
+                continue;
+              }
+              const tornAt = row.payload;
+              if (tornAt && tornAt.epoch === this.epoch && typeof tornAt.frame === "number") {
+                this.frameNo = Math.max(this.frameNo, tornAt.frame);
+              }
+              if (!parsed) continue;
+              const rev = typeof row.payload?.rev === "number" ? row.payload.rev : 0;
+              this.markTorn(parsed.id, rev, parsed.k === null ? [] : [parsed.k]);
+            }
+            if (commitWriter !== null && commitWriter !== writerId) this.otherWriterRows = true;
+            if (this.otherWriterRows) this.pendingBase = "writer_change";
+            this.restoredNonEmpty = this.bubbles.size > 0;
+          }
+          markTorn(id22, rev, partIndexes) {
+            this.tornIds.set(id22, Math.max(this.tornIds.get(id22) ?? 0, rev));
+            if (partIndexes.length > 0) {
+              let set3 = this.tornParts.get(id22);
+              if (!set3) this.tornParts.set(id22, set3 = /* @__PURE__ */ new Set());
+              for (const k of partIndexes) set3.add(k);
+            }
+          }
+          rememberDeleted(id22, rev) {
+            this.deletedRevs.delete(id22);
+            this.deletedRevs.set(id22, rev);
+            while (this.deletedRevs.size > DELETED_REV_MEMORY) {
+              this.deletedRevs.delete(this.deletedRevs.keys().next().value);
+            }
+          }
+          /**
+           * Build the next frame, or report that nothing changed. The returned frame
+           * is NOT applied: call `commit(frame)` once its rows are durably appended,
+           * and drop this state (re-`restore` on the next observation) if the append
+           * failed.
+           */
+          build(observation, ctx) {
+            const observed = [];
+            const seen = /* @__PURE__ */ new Set();
+            for (const message of observation.messages) {
+              const id22 = typeof message.messageId === "string" ? message.messageId : "";
+              const ord = typeof message.ord === "string" ? message.ord : "";
+              if (!id22 || !ord) return { status: "unidentified" };
+              if (seen.has(id22)) continue;
+              seen.add(id22);
+              const text = typeof message.content === "string" ? message.content : "";
+              observed.push({ message, id: id22, ord, text, bytes: utf8Bytes2(text) + HEAD_OVERHEAD_BYTES });
+            }
+            const retained = /* @__PURE__ */ new Set();
+            for (const id22 of observation.coverage.retainedMessageIds ?? []) {
+              if (!seen.has(id22) && this.bubbles.has(id22)) retained.add(id22);
+            }
+            if (ctx.verifiedClear) retained.clear();
+            const byOrd = [
+              ...observed.map((b) => ({ id: b.id, ord: b.ord, bytes: b.bytes })),
+              ...Array.from(retained, (id22) => {
+                const b = this.bubbles.get(id22);
+                return { id: id22, ord: b.ord, bytes: b.bytes };
+              })
+            ];
+            let total = byOrd.reduce((sum, b) => sum + b.bytes, 0);
+            const capped = /* @__PURE__ */ new Set();
+            if (total > CHAT_LIVE_BYTES_MAX) {
+              byOrd.sort((a, b) => a.ord < b.ord ? -1 : a.ord > b.ord ? 1 : a.id < b.id ? -1 : 1);
+              for (let i = 0; i < byOrd.length - 1 && total > CHAT_LIVE_BYTES_MAX; i += 1) {
+                capped.add(byOrd[i].id);
+                total -= byOrd[i].bytes;
+              }
+            }
+            const omittedBefore = capped.size > 0 || retained.size > 0 || observation.coverage.omittedBefore === true;
+            const nextHistory = typeof observation.historySessionId === "string" ? observation.historySessionId : null;
+            let baseReason = this.pendingBase;
+            if (!baseReason && this.historySessionId !== void 0 && this.historySessionId !== null && nextHistory !== null && nextHistory !== this.historySessionId) {
+              baseReason = "lineage_switch";
+            }
+            const forceAll = baseReason === "resync_request" || baseReason === "writer_change";
+            const epoch = this.epoch;
+            const frameNo = this.frameNo + 1;
+            const partRows = [];
+            const headRows = [];
+            const staged = /* @__PURE__ */ new Map();
+            const deleted = /* @__PURE__ */ new Map();
+            let supersededRows = 0;
+            let supersededBytes = 0;
+            let rewritten = 0;
+            let finalized = false;
+            const nextRev = (id22, prior) => Math.max(prior?.rev ?? 0, this.tornIds.get(id22) ?? 0, this.deletedRevs.get(id22) ?? 0) + 1;
+            for (const bubble of observed) {
+              if (capped.has(bubble.id)) continue;
+              const prior = this.bubbles.get(bubble.id);
+              const probe = encodeChatMessageHead(bubble.message, {
+                id: bubble.id,
+                ord: bubble.ord,
+                rev: 0,
+                epoch: "",
+                frame: 0,
+                srcId: typeof bubble.message.srcId === "string" ? bubble.message.srcId : null,
+                body: { text: "" }
+              });
+              const hash2 = headChangeKey(probe, bubble.text);
+              const torn = this.tornIds.has(bubble.id);
+              if (prior && prior.hash === hash2 && !forceAll && !torn) continue;
+              const rev = nextRev(bubble.id, prior);
+              const pieces = chatJcsTextBytes(bubble.text) <= CHAT_PART_MAX_JCS_BYTES ? null : splitChatBody(bubble.text);
+              const partHashes = [];
+              const partRevs = [];
+              if (pieces) {
+                for (let k = 0; k < pieces.length; k += 1) {
+                  const partHash = sha1(pieces[k]);
+                  const unchanged = !forceAll && !torn && prior !== void 0 && prior.partHashes[k] === partHash;
+                  partHashes.push(partHash);
+                  if (unchanged) {
+                    partRevs.push(prior.partRevs[k]);
+                    continue;
+                  }
+                  partRevs.push(rev);
+                  partRows.push({
+                    key: chatPartKey(bubble.id, k),
+                    kind: CHAT_PART_KIND,
+                    payload: encodeChatPart(bubble.id, k, rev, epoch, frameNo, pieces[k])
+                  });
+                  if (prior && k < prior.partHashes.length) {
+                    supersededRows += 1;
+                    supersededBytes += Math.min(pieces[k].length, CHAT_PART_MAX_JCS_BYTES);
+                  }
+                }
+              }
+              const staleParts = /* @__PURE__ */ new Set();
+              for (let k = pieces ? pieces.length : 0; k < (prior?.partHashes.length ?? 0); k += 1) staleParts.add(k);
+              for (const k of this.tornParts.get(bubble.id) ?? []) if (k >= (pieces ? pieces.length : 0)) staleParts.add(k);
+              for (const k of staleParts) {
+                headRows.push({
+                  key: chatPartKey(bubble.id, k),
+                  kind: CHAT_DEL_KIND,
+                  payload: encodeChatDel(bubble.id, k, rev, epoch, frameNo)
+                });
+                supersededRows += 1;
+              }
+              const head = encodeChatMessageHead(bubble.message, {
+                id: bubble.id,
+                ord: bubble.ord,
+                rev,
+                epoch,
+                frame: frameNo,
+                srcId: probe.srcId,
+                body: pieces ? { parts: pieces.length, partRevs } : { text: bubble.text }
+              });
+              headRows.push({ key: chatMessageKey(bubble.id), kind: CHAT_MSG_KIND, payload: head });
+              if (prior) {
+                rewritten += 1;
+                supersededRows += 1;
+                supersededBytes += pieces ? 512 : prior.bytes;
+              }
+              const final = head.bubbleState === "final";
+              if (final && !prior?.final) finalized = true;
+              staged.set(bubble.id, {
+                rev,
+                hash: hash2,
+                ord: bubble.ord,
+                partHashes,
+                partRevs,
+                bytes: bubble.bytes,
+                final
+              });
+            }
+            const tombstone = (id22, prior) => {
+              const rev = nextRev(id22, prior);
+              const partCount = Math.max(prior?.partHashes.length ?? 0, 0);
+              const parts = /* @__PURE__ */ new Set();
+              for (let k = 0; k < partCount; k += 1) parts.add(k);
+              for (const k of this.tornParts.get(id22) ?? []) parts.add(k);
+              for (const k of parts) {
+                headRows.push({
+                  key: chatPartKey(id22, k),
+                  kind: CHAT_DEL_KIND,
+                  payload: encodeChatDel(id22, k, rev, epoch, frameNo)
+                });
+                supersededRows += 1;
+              }
+              headRows.push({
+                key: chatMessageKey(id22),
+                kind: CHAT_DEL_KIND,
+                payload: encodeChatDel(id22, null, rev, epoch, frameNo)
+              });
+              supersededRows += 1;
+              supersededBytes += prior?.bytes ?? 0;
+              deleted.set(id22, rev);
+            };
+            for (const [id22, prior] of this.bubbles) {
+              if (seen.has(id22) && !capped.has(id22) || retained.has(id22) && !capped.has(id22)) continue;
+              tombstone(id22, prior);
+            }
+            for (const id22 of this.tornIds.keys()) {
+              if (staged.has(id22) || deleted.has(id22) || this.bubbles.has(id22) || seen.has(id22) && !capped.has(id22)) continue;
+              tombstone(id22, void 0);
+            }
+            const coverageMode = chatCoverageModeField(observation.coverage.mode);
+            const metaProbe = encodeChatMeta(observation, {
+              rev: 0,
+              epoch: "",
+              frame: 0,
+              producerDaemonId: ctx.producerDaemonId,
+              ledgerEpoch: typeof observation.ledgerEpoch === "string" ? observation.ledgerEpoch : "",
+              coverage: { mode: coverageMode, omittedBefore }
+            });
+            const metaHash = metaChangeKey(metaProbe);
+            let metaRow = null;
+            let metaRev = this.metaRev;
+            if (metaHash !== this.metaHash || forceAll || this.tornMetaRev !== null) {
+              metaRev = Math.max(this.metaRev, this.tornMetaRev ?? 0) + 1;
+              const meta3 = { ...metaProbe, rev: metaRev, epoch, frame: frameNo };
+              metaRow = { key: CHAT_META_KEY, kind: CHAT_META_KIND, payload: meta3 };
+              if (this.metaHash !== null) supersededRows += 1;
+            }
+            if (partRows.length === 0 && headRows.length === 0 && metaRow === null) {
+              return { status: "unchanged" };
+            }
+            const live = /* @__PURE__ */ new Map();
+            for (const [id22, b] of this.bubbles) live.set(id22, b.rev);
+            for (const [id22, b] of staged) live.set(id22, b.rev);
+            for (const id22 of deleted.keys()) live.delete(id22);
+            const priorLive = this.bubbles.size;
+            if (!baseReason && this.firstFrame && this.restoredNonEmpty && priorLive > 0 && rewritten > priorLive * TRIPWIRE_REWRITE_SHARE) {
+              baseReason = "epoch_start";
+            }
+            const basis = baseReason ? "base" : "delta";
+            const tripwire = basis === "delta" && priorLive >= TRIPWIRE_MIN_LIVE && rewritten > priorLive * TRIPWIRE_REWRITE_SHARE;
+            const baseRateExceeded = basis === "base" && this.lastBaseAtMs !== null && ctx.nowMs - this.lastBaseAtMs < CHAT_BASE_FRAME_MIN_INTERVAL_MS;
+            const commit2 = {
+              v: 2,
+              sessionId: observation.sessionId,
+              writer: ctx.writerId,
+              producerDaemonId: ctx.producerDaemonId,
+              epoch,
+              frame: frameNo,
+              observedAt: ctx.observedAt,
+              liveCount: live.size,
+              metaRev,
+              digest: computeChatCommitDigest(live, metaRev),
+              basis,
+              baseReason
+            };
+            const rows = [
+              ...partRows,
+              ...headRows,
+              ...metaRow ? [metaRow] : [],
+              { key: CHAT_COMMIT_KEY, kind: CHAT_COMMIT_KIND, payload: commit2 }
+            ];
+            let bytes = 0;
+            for (const row of rows) bytes += jcsBytesOf(row.payload);
+            supersededRows += 1;
+            const staging = {
+              staged,
+              deleted,
+              metaRev,
+              metaHash,
+              historySessionId: nextHistory ?? this.historySessionId ?? null,
+              basis
+            };
+            const frame2 = {
+              sessionId: this.sessionId,
+              epoch,
+              frame: frameNo,
+              rows,
+              commit: commit2,
+              changedBubbles: headRows.filter((r) => parseChatKey(r.key)?.k === null).length,
+              rewrittenBubbles: rewritten,
+              priorLive,
+              bytes,
+              supersededRows,
+              supersededBytes,
+              finalized,
+              capped: capped.size > 0,
+              tripwire,
+              baseRateExceeded,
+              live,
+              expectedMessages: () => observed.filter((b) => live.has(b.id)).map((b) => {
+                const head = encodeChatMessageHead(b.message, {
+                  id: b.id,
+                  ord: b.ord,
+                  rev: live.get(b.id),
+                  epoch,
+                  frame: frameNo,
+                  srcId: typeof b.message.srcId === "string" ? b.message.srcId : null,
+                  body: { text: b.text }
+                });
+                return chatMessageFromWire(head, b.text);
+              }),
+              [STAGED]: staging
+            };
+            return { status: "frame", frame: frame2 };
+          }
+          /** Apply a frame whose rows are durably appended. */
+          commit(frame2, nowMs2) {
+            const staging = frame2[STAGED];
+            if (!staging || frame2.frame !== this.frameNo + 1) return;
+            for (const [id22, bubble] of staging.staged) {
+              this.bubbles.set(id22, bubble);
+              this.deletedRevs.delete(id22);
+            }
+            for (const [id22, rev] of staging.deleted) {
+              this.bubbles.delete(id22);
+              this.rememberDeleted(id22, rev);
+            }
+            this.metaRev = staging.metaRev;
+            this.metaHash = staging.metaHash;
+            this.historySessionId = staging.historySessionId;
+            this.frameNo = frame2.frame;
+            this.tornIds.clear();
+            this.tornParts.clear();
+            this.tornMetaRev = null;
+            this.pendingBase = null;
+            this.firstFrame = false;
+            if (staging.basis === "base") {
+              this.lastBaseAtMs = nowMs2;
+              this.otherWriterRows = false;
+            }
+          }
+          /** Live bytes the session currently holds (§11 Q1 accounting). */
+          liveBytes() {
+            let total = 0;
+            for (const b of this.bubbles.values()) total += b.bytes;
+            return total;
+          }
+          /** Live ids (tests/diagnostics). */
+          liveIds() {
+            return Array.from(this.bubbles.keys());
+          }
+        };
+      }
+    });
     function isEmptyTranscriptObservation(observation) {
       return observation.messages.length === 0 && !observation.title && !observation.activeModal && !observation.activeInteractivePrompt;
     }
-    var DEDUP_HASH_IDENTITY;
-    var DEDUP_HASH_OBSERVED_AT;
     var init_transcript_observation = __esm2({
       "src/seqscribe/transcript-observation.ts"() {
         "use strict";
-        init_dist2();
-        init_transcript_projection();
-        DEDUP_HASH_IDENTITY = {
-          sessionId: "",
-          producerDaemonId: "",
-          producerWriterId: "",
-          producerEpoch: "",
-          revision: 0
-        };
-        DEDUP_HASH_OBSERVED_AT = "";
       }
     });
     function warnOnce2(message) {
@@ -117607,45 +118144,31 @@ ${marker}`,
         };
       }
     });
+    function freshCounters() {
+      return {
+        compared: 0,
+        missingCompleteRevision: 0,
+        fieldMismatch: 0,
+        missingMessage: 0,
+        extraMessage: 0,
+        revRegression: 0,
+        wrongSession: 0,
+        wrongOwner: 0,
+        digestMismatch: 0,
+        mismatches: 0,
+        persistentMismatches: 0,
+        runs: 0,
+        sessionsObserved: 0,
+        sessionsRepeated: 0,
+        pendingMissingRevisits: 0,
+        pendingMissingOpen: 0,
+        since: Date.now()
+      };
+    }
     function redactSessionId(id22) {
       return id22.length <= 8 ? id22 : `${id22.slice(0, 8)}\u2026(${id22.length})`;
     }
-    function diffMessages(expected, actual) {
-      const fields = [];
-      const len = Math.min(expected.messages.length, actual.messages.length);
-      for (let i = 0; i < len; i++) {
-        const e = expected.messages[i];
-        const a = actual.messages[i];
-        if (e.role !== a.role) fields.push(`messages[${i}].role`);
-        if (e.kind !== a.kind) fields.push(`messages[${i}].kind`);
-        if (e.content !== a.content) fields.push(`messages[${i}].content`);
-        if (e.bubbleState !== a.bubbleState) fields.push(`messages[${i}].bubbleState`);
-        if (e.turnKey !== a.turnKey) fields.push(`messages[${i}].turnKey`);
-      }
-      return fields;
-    }
-    function contentDigest(snapshot) {
-      return hashTranscriptSnapshot({
-        ...snapshot,
-        producerDaemonId: "",
-        producerWriterId: "",
-        producerEpoch: "",
-        revision: 0,
-        observedAt: ""
-      });
-    }
-    function diffScalars(expected, actual) {
-      const fields = [];
-      if (expected.status !== actual.status) fields.push("status");
-      if (expected.providerObservedStatus !== actual.providerObservedStatus) fields.push("providerObservedStatus");
-      if (expected.title !== actual.title) fields.push("title");
-      if (expected.providerType !== actual.providerType) fields.push("providerType");
-      if (expected.coverage.mode !== actual.coverage.mode) fields.push("coverage.mode");
-      if (expected.coverage.totalMessageCount !== actual.coverage.totalMessageCount) fields.push("coverage.totalMessageCount");
-      if (expected.coverage.returnedMessageCount !== actual.coverage.returnedMessageCount) fields.push("coverage.returnedMessageCount");
-      return fields;
-    }
-    function compareTranscriptRevision(sessionKey2, expected, actual) {
+    function compareTranscriptChat(sessionKey2, expected, actual) {
       counters3.runs++;
       counters3.compared++;
       const seen = (observedSessions.get(sessionKey2) ?? 0) + 1;
@@ -117655,6 +118178,10 @@ ${marker}`,
       if (pendingMissing.has(sessionKey2)) counters3.pendingMissingRevisits++;
       const redacted = redactSessionId(sessionKey2);
       const mismatches = [];
+      const persistent = (kind, fields) => {
+        mismatches.push({ kind, session: redacted, ...fields ? { fields } : {} });
+        counters3.persistentMismatches++;
+      };
       if (actual.status === "missing") {
         mismatches.push({ kind: "missing_complete_revision", session: redacted });
         counters3.missingCompleteRevision++;
@@ -117665,39 +118192,61 @@ ${marker}`,
         pendingMissing.add(sessionKey2);
       } else {
         pendingMissing.delete(sessionKey2);
-        if (expected.sessionId !== actual.snapshot.sessionId) {
-          mismatches.push({ kind: "wrong_session", session: redacted });
+        const view = actual.view;
+        if (expected.sessionId !== view.sessionId) {
           counters3.wrongSession++;
-          counters3.persistentMismatches++;
-        } else if (!daemonIdsEquivalent4(expected.producerDaemonId, actual.snapshot.producerDaemonId)) {
-          mismatches.push({ kind: "wrong_owner", session: redacted });
+          persistent("wrong_session");
+        } else if (!daemonIdsEquivalent4(expected.producerDaemonId, actual.commit.producerDaemonId)) {
           counters3.wrongOwner++;
-          counters3.persistentMismatches++;
-        } else if (expected.messages.length !== actual.snapshot.messages.length) {
-          mismatches.push({ kind: "extra_message", session: redacted });
-          counters3.extraMessage++;
-          counters3.persistentMismatches++;
+          persistent("wrong_owner");
         } else {
-          const fields = [...diffScalars(expected, actual.snapshot), ...diffMessages(expected, actual.snapshot)];
-          if (fields.length > 0) {
-            mismatches.push({ kind: "field_mismatch", session: redacted, fields });
+          const actualById = new Map(view.messages.map((m) => [m.messageId, m]));
+          let missing = 0;
+          let regressed = 0;
+          for (const [id22, rev] of expected.live) {
+            const found = actualById.get(id22);
+            if (!found) missing++;
+            else if (found.rev < rev) regressed++;
+          }
+          let extra = 0;
+          for (const id22 of actualById.keys()) if (!expected.live.has(id22)) extra++;
+          if (missing > 0) {
+            counters3.missingMessage++;
+            persistent("missing_message");
+          }
+          if (extra > 0) {
+            counters3.extraMessage++;
+            persistent("extra_message");
+          }
+          if (regressed > 0) {
+            counters3.revRegression++;
+            persistent("rev_regression");
+          }
+          const fields = /* @__PURE__ */ new Set();
+          for (const message of expected.messages) {
+            const found = actualById.get(message.messageId);
+            if (!found) continue;
+            for (const field2 of COMPARED_FIELDS) {
+              if (message[field2] !== found[field2]) fields.add(field2);
+            }
+            if (found.rev !== message.rev && !(found.rev < message.rev)) fields.add("rev");
+          }
+          if (fields.size > 0) {
             counters3.fieldMismatch++;
-            counters3.persistentMismatches++;
-          } else if (contentDigest(expected) !== contentDigest(actual.snapshot)) {
-            mismatches.push({ kind: "digest_mismatch", session: redacted });
+            persistent("field_mismatch", [...fields].sort());
+          }
+          if (actual.commit.digest !== expected.digest && mismatches.length === 0) {
             counters3.digestMismatch++;
-            counters3.persistentMismatches++;
+            persistent("digest_mismatch");
           }
         }
       }
       counters3.mismatches += mismatches.length;
-      if (mismatches.length > 0) {
-        for (const m of mismatches) {
-          LOG.info(
-            "Seqscribe",
-            `transcript parity mismatch kind=${m.kind} session=${m.session}` + (m.fields?.length ? ` fields=${m.fields.join(",")}` : "")
-          );
-        }
+      for (const m of mismatches) {
+        LOG.info(
+          "Seqscribe",
+          `transcript parity mismatch kind=${m.kind} session=${m.session}` + (m.fields?.length ? ` fields=${m.fields.join(",")}` : "")
+        );
       }
       return mismatches;
     }
@@ -117705,63 +118254,26 @@ ${marker}`,
       return { ...counters3, pendingMissingOpen: pendingMissing.size };
     }
     function __resetTranscriptParityForTests() {
-      counters3.compared = 0;
-      counters3.missingCompleteRevision = 0;
-      counters3.fieldMismatch = 0;
-      counters3.extraMessage = 0;
-      counters3.wrongSession = 0;
-      counters3.wrongOwner = 0;
-      counters3.digestMismatch = 0;
-      counters3.mismatches = 0;
-      counters3.persistentMismatches = 0;
-      counters3.runs = 0;
-      counters3.sessionsObserved = 0;
-      counters3.sessionsRepeated = 0;
-      counters3.pendingMissingRevisits = 0;
-      counters3.pendingMissingOpen = 0;
-      counters3.since = Date.now();
+      counters3 = freshCounters();
       pendingMissing.clear();
       observedSessions.clear();
     }
     var counters3;
     var observedSessions;
     var pendingMissing;
+    var COMPARED_FIELDS;
     var init_transcript_parity = __esm2({
       "src/seqscribe/transcript-parity.ts"() {
         "use strict";
         init_dist();
         init_logger();
-        init_transcript_projection();
-        counters3 = {
-          compared: 0,
-          missingCompleteRevision: 0,
-          fieldMismatch: 0,
-          extraMessage: 0,
-          wrongSession: 0,
-          wrongOwner: 0,
-          digestMismatch: 0,
-          mismatches: 0,
-          persistentMismatches: 0,
-          runs: 0,
-          sessionsObserved: 0,
-          sessionsRepeated: 0,
-          pendingMissingRevisits: 0,
-          pendingMissingOpen: 0,
-          since: Date.now()
-        };
+        counters3 = freshCounters();
         observedSessions = /* @__PURE__ */ new Map();
         pendingMissing = /* @__PURE__ */ new Set();
+        COMPARED_FIELDS = ["ord", "role", "kind", "content", "bubbleState", "turnKey", "toolName", "expandable"];
       }
     });
-    function ptyDirtyWindowMs(lastSnapshotBytes) {
-      const bytes = Number.isFinite(lastSnapshotBytes) ? lastSnapshotBytes : 0;
-      const extraMs = Math.max(0, bytes - TRANSCRIPT_PTY_DIRTY_SIZE_FREE_BYTES) / 1024;
-      return Math.min(
-        TRANSCRIPT_PTY_DIRTY_MAX_WINDOW_MS,
-        Math.max(TRANSCRIPT_PTY_DIRTY_THROTTLE_MS, TRANSCRIPT_PTY_DIRTY_THROTTLE_MS + extraMs)
-      );
-    }
-    function freshCounters() {
+    function freshCounters2() {
       return {
         published: 0,
         publishFailed: 0,
@@ -117772,8 +118284,20 @@ ${marker}`,
         collectorUnavailable: 0,
         sourcePending: 0,
         collectFailed: 0,
-        ptyDirtyCoalesced: 0
+        ptyDirtyCoalesced: 0,
+        unidentified: 0,
+        chatRowsWritten: 0,
+        chatBytesWritten: 0,
+        chatBaseFrames: { epoch_start: 0, writer_change: 0, lineage_switch: 0, resync_request: 0, unexpected: 0 },
+        chatBaseRateExceeded: 0,
+        chatTripwireRefused: 0
       };
+    }
+    function transcriptTripwireArmed(env2 = process.env) {
+      return env2.ADHDEV_TRANSCRIPT_TRIPWIRE === "throw" || env2.NODE_ENV === "development";
+    }
+    function newProducerEpoch() {
+      return (0, import_node_crypto4.randomUUID)().replace(/-/g, "").slice(0, 12);
     }
     function configureTranscriptProjection(deps) {
       activeService?.dispose();
@@ -117783,6 +118307,11 @@ ${marker}`,
     function activeTranscriptProjectionService() {
       return activeService;
     }
+    function requestTranscriptBaseFrame(sessionId) {
+      if (!activeService) return false;
+      activeService.requestBase(sessionId);
+      return true;
+    }
     function notifyTranscriptObservation(sessionId, observation) {
       activeService?.observe(sessionId, observation);
     }
@@ -117790,11 +118319,9 @@ ${marker}`,
       activeService?.markPtyOutputActivity(sessionId);
     }
     var fs39;
-    var import_node_crypto32;
+    var import_node_crypto4;
     var MAX_TRACKED_SESSIONS;
     var TRANSCRIPT_PTY_DIRTY_THROTTLE_MS;
-    var TRANSCRIPT_PTY_DIRTY_SIZE_FREE_BYTES;
-    var TRANSCRIPT_PTY_DIRTY_MAX_WINDOW_MS;
     var TRANSCRIPT_STAT_POLL_INTERVAL_MS;
     var TranscriptProjectionService;
     var activeService;
@@ -117802,30 +118329,23 @@ ${marker}`,
       "src/seqscribe/transcript-publisher.ts"() {
         "use strict";
         fs39 = __toESM2(require("fs"));
-        import_node_crypto32 = require("crypto");
+        import_node_crypto4 = require("crypto");
         init_logger();
-        init_transcript_revision_codec();
-        init_transcript_projection();
+        init_message_identity_ledger();
+        init_transcript_keyed_frame();
         init_transcript_observation();
         init_transcript_mode();
         init_transcript_latency();
         init_transcript_parity();
         MAX_TRACKED_SESSIONS = 512;
         TRANSCRIPT_PTY_DIRTY_THROTTLE_MS = 350;
-        TRANSCRIPT_PTY_DIRTY_SIZE_FREE_BYTES = 64 * 1024;
-        TRANSCRIPT_PTY_DIRTY_MAX_WINDOW_MS = 3e3;
         TRANSCRIPT_STAT_POLL_INTERVAL_MS = 3e3;
         TranscriptProjectionService = class {
           deps;
           epoch;
-          counters = freshCounters();
+          counters = freshCounters2();
+          /** Per-session published state (LRU order: most recently published last). */
           sessionState = /* @__PURE__ */ new Map();
-          /**
-           * Size of each session's most recently encoded snapshot — including an
-           * oversized one, which is exactly the case that most needs a longer PTY
-           * window. Feeds `ptyDirtyWindowMs`; cleared by `forgetSession`.
-           */
-          lastSnapshotBytes = /* @__PURE__ */ new Map();
           // Per-session coalescing bookkeeping. `inFlight` gates concurrent work for
           // a session; `pendingObservation`/`pendingPull` hold "arrived while busy,
           // replace/reschedule" — never queued, always the latest wins.
@@ -117855,7 +118375,7 @@ ${marker}`,
           statPollTimer = null;
           constructor(deps) {
             this.deps = deps;
-            this.epoch = deps.epoch ?? (0, import_node_crypto32.randomUUID)();
+            this.epoch = deps.epoch ?? newProducerEpoch();
           }
           mode(env2) {
             return resolveTranscriptMode(env2);
@@ -117944,7 +118464,7 @@ ${marker}`,
               this.ptyDirtyTimers.delete(sessionId);
               this.armPtyDirtyTimer(sessionId);
               this.markDirty(sessionId, "pty_output");
-            }, ptyDirtyWindowMs(this.lastSnapshotBytes.get(sessionId) ?? 0));
+            }, TRANSCRIPT_PTY_DIRTY_THROTTLE_MS);
             timer.unref?.();
             this.ptyDirtyTimers.set(sessionId, timer);
           }
@@ -117977,7 +118497,6 @@ ${marker}`,
             if (!sessionId) return;
             this.stopPolling(sessionId);
             this.sessionState.delete(sessionId);
-            this.lastSnapshotBytes.delete(sessionId);
             this.pendingObservation.delete(sessionId);
             this.pendingPull.delete(sessionId);
             this.pendingContext.delete(sessionId);
@@ -117985,6 +118504,7 @@ ${marker}`,
             if (timer) clearTimeout(timer);
             this.ptyDirtyTimers.delete(sessionId);
             this.ptyDirtyTrailing.delete(sessionId);
+            dropMessageIdentityLedger(sessionId.trim());
           }
           runStatPoll() {
             for (const sessionId of this.pollingSessions) {
@@ -118023,6 +118543,43 @@ ${marker}`,
            */
           seedSession(sessionId) {
             this.markDirty(sessionId, "seed");
+          }
+          /**
+           * A reader reported repeated digest mismatches (`request_transcript_base`,
+           * §5.2): make the session's next frame a full `resync_request` base frame,
+           * and pull one now.
+           */
+          requestBase(sessionId) {
+            if (!sessionId) return;
+            if (this.mode() === "off") return;
+            this.stateFor(sessionId).requestBase("resync_request");
+            this.markDirty(sessionId, "unspecified");
+          }
+          /** The session's published state, restored from the topic on first use. */
+          stateFor(sessionId) {
+            let state = this.sessionState.get(sessionId);
+            if (state) {
+              this.sessionState.delete(sessionId);
+              this.sessionState.set(sessionId, state);
+              return state;
+            }
+            state = new KeyedChatSessionState(sessionId, this.epoch);
+            try {
+              const persisted = this.deps.readPersistedChat?.(sessionId) ?? null;
+              if (persisted) state.restore(persisted, this.deps.writerId());
+            } catch (error48) {
+              LOG.warn(
+                "Seqscribe",
+                `transcript chat restore failed session=${redactSessionId(sessionId)}: ${error48 instanceof Error ? error48.message : String(error48)}`
+              );
+            }
+            this.sessionState.set(sessionId, state);
+            while (this.sessionState.size > MAX_TRACKED_SESSIONS) {
+              const oldest = this.sessionState.keys().next().value;
+              if (oldest === sessionId) break;
+              this.sessionState.delete(oldest);
+            }
+            return state;
           }
           admitSession(sessionId) {
             if (this.inFlight.size >= MAX_TRACKED_SESSIONS && !this.sessionState.has(sessionId)) {
@@ -118103,61 +118660,83 @@ ${marker}`,
           async publishObservation(sessionId, observation, verifiedClear) {
             const mode = this.mode();
             if (mode === "off") return;
-            const last = this.sessionState.get(sessionId);
-            if (last && isEmptyTranscriptObservation(observation) && !verifiedClear) {
+            const state = this.stateFor(sessionId);
+            if (state.liveCount > 0 && isEmptyTranscriptObservation(observation) && !verifiedClear) {
               this.counters.emptyGuarded++;
               return;
             }
-            const contentHash = hashTranscriptObservation(observation);
-            if (last && last.hash === contentHash) {
+            if (verifiedClear) {
+              try {
+                peekMessageIdentityLedger(sessionId.trim())?.reset();
+              } catch {
+              }
+            }
+            const nowIso = (this.deps.now ?? (() => (/* @__PURE__ */ new Date()).toISOString()))();
+            const nowMs2 = Date.now();
+            const built = state.build(observation, {
+              writerId: this.deps.writerId(),
+              producerDaemonId: this.deps.daemonId(),
+              observedAt: nowIso,
+              nowMs: nowMs2,
+              verifiedClear
+            });
+            if (built.status === "unchanged") {
               this.counters.deduped++;
               return;
             }
-            const revision = (last?.revision ?? 0) + 1;
-            const identity = {
-              sessionId: observation.sessionId,
-              producerDaemonId: this.deps.daemonId(),
-              producerWriterId: this.deps.writerId(),
-              producerEpoch: this.epoch,
-              revision
-            };
-            const now = this.deps.now ?? (() => (/* @__PURE__ */ new Date()).toISOString());
-            const candidate = stampTranscriptObservation(observation, identity, now());
-            const snapshot = encodeTranscriptSnapshot(candidate);
-            const encoded = encodeTranscriptRevision(snapshot, identity, now);
-            this.lastSnapshotBytes.set(sessionId, encoded.ok ? encoded.begin.snapshotBytes : encoded.snapshotBytes);
-            if (!encoded.ok) {
-              this.counters.oversized++;
-              LOG.warn(
-                "Seqscribe",
-                `transcript projection_oversize session=${redactSessionId(sessionId)} chunks=${encoded.chunkCount} bytes=${encoded.snapshotBytes}`
-              );
-              this.deps.onOversize?.(sessionId, encoded.chunkCount, encoded.snapshotBytes);
+            if (built.status === "unidentified") {
+              this.counters.unidentified++;
               return;
             }
-            this.sessionState.set(sessionId, { revision, hash: contentHash });
+            const frame2 = built.frame;
+            if (frame2.tripwire) {
+              LOG.warn(
+                "Seqscribe",
+                `transcript chat tripwire session=${redactSessionId(sessionId)} rewritten=${frame2.rewrittenBubbles}/${frame2.priorLive} frame=${frame2.frame}`
+              );
+              if (transcriptTripwireArmed()) {
+                this.counters.chatTripwireRefused++;
+                this.sessionState.delete(sessionId);
+                return;
+              }
+              this.counters.chatBaseFrames.unexpected++;
+            }
             if (mode === "shadow" || mode === "primary") {
               const encodedAt = this.latency.now();
               try {
-                await this.deps.publishRevision(sessionId, { begin: encoded.begin, chunks: encoded.chunks, commit: encoded.commit });
-                this.counters.published++;
-                const ctx = this.triggerContext.get(sessionId);
-                this.latency.recordStage("collect_to_publish", this.latency.now() - encodedAt);
-                if (ctx) {
-                  this.latency.recordPublished(ctx.source);
-                  this.latency.recordTriggerToPublish(ctx.source, this.latency.now() - ctx.startedAt);
-                }
+                await this.deps.appendChatFrame(sessionId, frame2, observation);
               } catch (error48) {
                 this.counters.publishFailed++;
+                this.sessionState.delete(sessionId);
                 LOG.warn(
                   "Seqscribe",
                   `transcript publish failed session=${redactSessionId(sessionId)}: ${error48 instanceof Error ? error48.message : String(error48)}`
                 );
+                return;
+              }
+              state.commit(frame2, nowMs2);
+              this.counters.published++;
+              this.counters.chatRowsWritten += frame2.rows.length;
+              this.counters.chatBytesWritten += frame2.bytes;
+              if (frame2.capped) this.counters.oversized++;
+              if (frame2.commit.baseReason) this.counters.chatBaseFrames[frame2.commit.baseReason]++;
+              if (frame2.baseRateExceeded) {
+                this.counters.chatBaseRateExceeded++;
+                LOG.warn(
+                  "Seqscribe",
+                  `transcript chat base frames too frequent session=${redactSessionId(sessionId)} reason=${frame2.commit.baseReason}`
+                );
+              }
+              const ctx = this.triggerContext.get(sessionId);
+              this.latency.recordStage("collect_to_publish", this.latency.now() - encodedAt);
+              if (ctx) {
+                this.latency.recordPublished(ctx.source);
+                this.latency.recordTriggerToPublish(ctx.source, this.latency.now() - ctx.startedAt);
               }
             }
           }
           getCounters() {
-            return { ...this.counters };
+            return { ...this.counters, chatBaseFrames: { ...this.counters.chatBaseFrames } };
           }
           /**
            * Trigger attribution + daemon-side stage latencies.
@@ -118337,16 +118916,17 @@ ${marker}`,
       const visibleMessages = includeActivity ? filteredMessages.filter((m) => isUserFacingChatMessage(m) || isActivityChatMessage(m)) : filterUserFacingChatMessages(filteredMessages);
       const observationMessages = filteredMessages.filter((m) => isUserFacingChatMessage(m) || isActivityChatMessage(m) && isWireSafeActivityKind(m.kind));
       let messageIds = null;
+      let identity = null;
+      let identityCoverage = "full";
       try {
         const identityScope = messages.filter((m) => isUserFacingChatMessage(m) || isActivityChatMessage(m));
         const ledgerKey = presentationSessionIdHint || `provider:${providerHint || "unknown"}`;
-        messageIds = assignReadChatMessageIds(
-          ledgerKey,
-          identityScope,
-          resolveReadChatIdentityCoverage(validatedPayload.coverage, presentation.identityCoverage)
-        ).ids;
+        identityCoverage = resolveReadChatIdentityCoverage(validatedPayload.coverage, presentation.identityCoverage);
+        identity = assignReadChatMessageIds(ledgerKey, identityScope, identityCoverage);
+        messageIds = identity.ids;
       } catch {
         messageIds = null;
+        identity = null;
       }
       const sync = buildFullTail(visibleMessages, normalizeReadChatTailLimit(args));
       const hiddenMsgCount = Math.max(0, messages.length - visibleMessages.length);
@@ -118371,11 +118951,13 @@ ${marker}`,
           turn: turnPresentation.authority === "turn_reducer" ? turnPresentation : null,
           provenance: preservedPayloadFields,
           messages: observationMessages,
+          // The keyed chat lane stores bubbles by these ids (design 2026-09-28
+          // §4.2); without them the publisher refuses the observation rather
+          // than inventing identity.
+          identity: identity ? { assignments: identity.assignments, retainedIds: identity.retainedIds, ledgerEpoch: identity.frame.epoch } : null,
           coverage: {
-            mode: "full",
-            totalMessageCount: messages.length,
-            returnedMessageCount: observationMessages.length,
-            omittedBefore: false
+            mode: identityCoverage,
+            omittedBefore: identityCoverage === "window" && (identity?.retainedIds.length ?? 0) > 0
           }
         });
         if (observation) notifyTranscriptObservation(observation.sessionId, observation);
@@ -119890,7 +120472,7 @@ ${marker}`,
     function createChatDebugBundleId(targetSessionId) {
       const timestamp2 = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:.]/g, "").replace("T", "T").replace("Z", "Z");
       const sessionSegment = safeBundleIdSegment(targetSessionId, "unknown-session");
-      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto4.randomUUID)().slice(0, 8)}`;
+      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto5.randomUUID)().slice(0, 8)}`;
     }
     function buildChatDebugBundleSummary(bundle) {
       const target = bundle.target && typeof bundle.target === "object" ? bundle.target : {};
@@ -120130,7 +120712,7 @@ ${marker}`,
     }
     var fs41;
     var path48;
-    var import_node_crypto4;
+    var import_node_crypto5;
     var DEFAULT_DEBUG_SANITIZE_OPTIONS;
     var SECRET_KEY_PATTERN;
     var init_chat_commands_debug_bundle = __esm2({
@@ -120138,7 +120720,7 @@ ${marker}`,
         "use strict";
         fs41 = __toESM2(require("fs"));
         path48 = __toESM2(require("path"));
-        import_node_crypto4 = require("crypto");
+        import_node_crypto5 = require("crypto");
         init_config();
         init_logger();
         init_debug_trace();
@@ -120161,12 +120743,24 @@ ${marker}`,
     function canExpand(adapter) {
       return !!adapter && typeof adapter.expandToolBlock === "function";
     }
+    function ledgerKeyOf(h, args) {
+      const raw = typeof args?.targetSessionId === "string" && args.targetSessionId.trim() ? args.targetSessionId : typeof args?.sessionId === "string" && args.sessionId.trim() ? args.sessionId : h.currentSession?.sessionId;
+      return typeof raw === "string" ? raw.trim() : "";
+    }
+    function resolveToolBlockRefByMessageId(h, args) {
+      const messageId = typeof args?.messageId === "string" ? args.messageId.trim() : "";
+      if (!messageId) return void 0;
+      const key2 = ledgerKeyOf(h, args);
+      if (!key2) return void 0;
+      const locator = peekMessageIdentityLedger(key2)?.locatorOf(messageId);
+      return locator && typeof locator === "object" ? locator : void 0;
+    }
     function handleExpandToolBlock(h, args) {
-      const ref = args?.toolBlockRef;
+      const ref = args?.toolBlockRef ?? resolveToolBlockRefByMessageId(h, args);
       const sessionId = String(args?.targetSessionId || h.currentSession?.sessionId || "unknown-session");
       if (!ref || typeof ref !== "object") {
         LOG.warn("Command", `[expand_tool_block] refused session=${sessionId} reason=missing_ref`);
-        return { success: false, error: "toolBlockRef is required" };
+        return { success: false, error: "toolBlockRef or a known messageId is required" };
       }
       const adapter = getTargetedCliAdapter(h, args);
       if (!canExpand(adapter)) {
@@ -120197,6 +120791,7 @@ ${marker}`,
         "use strict";
         init_chat_commands_shared();
         init_logger();
+        init_message_identity_ledger();
       }
     });
     function readStatus(target) {
@@ -122915,7 +123510,15 @@ ${marker}`,
         handlerCommands = {
           // ─── Chat commands (chat-commands.ts) ───────────────
           read_chat: run((h, a) => handleReadChat(h, a)),
-          expand_tool_block: run((h, a) => handleExpandToolBlock(h, a)),
+          expand_tool_block: run(async (h, a) => {
+            if (!a?.toolBlockRef && typeof a?.messageId === "string" && !resolveToolBlockRefByMessageId(h, a)) {
+              try {
+                await handleReadChat(h, { targetSessionId: a?.targetSessionId ?? a?.sessionId });
+              } catch {
+              }
+            }
+            return handleExpandToolBlock(h, a);
+          }),
           get_chat_debug_bundle: run((h, a) => handleGetChatDebugBundle(h, a)),
           chat_history: run((h, a) => handleChatHistory(h, a)),
           send_chat: run((h, a) => handleSendChat(h, a)),
@@ -129868,6 +130471,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     var init_transcript_replica = __esm2({
       "src/commands/low-family/transcript-replica.ts"() {
         "use strict";
+        init_transcript_publisher();
         init_command_registry();
         NO_NODE = "no_node";
         IPC_UNAVAILABLE = "ipc_unavailable";
@@ -129897,7 +130501,12 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             if (!store2) return { success: true, available: false, reason: NO_NODE };
             const read = store2.getReplica(key2);
             if (!read.available) return { success: true, available: false, reason: read.reason };
-            return { success: true, available: true, snapshot: read.snapshot, identity: read.identity };
+            return { success: true, available: true, view: read.view, identity: read.identity };
+          },
+          request_transcript_base: async (_ctx, args) => {
+            const rawSessionId = typeof args?.rawSessionId === "string" ? args.rawSessionId.trim() : typeof args?.sessionId === "string" ? args.sessionId.trim() : "";
+            if (!rawSessionId) return { success: false, error: "rawSessionId required" };
+            return { success: true, accepted: requestTranscriptBaseFrame(rawSessionId) };
           }
         };
         transcriptReplicaSpecs = defineCommandSpecs("low", transcriptReplicaHandlers, {}, { meshSender: "authenticated_peer" });
@@ -134843,7 +135452,7 @@ ${text}` : text;
       }
     });
     var fs56;
-    var import_node_crypto5;
+    var import_node_crypto6;
     var SpecCliAdapter;
     var init_cli_adapter = __esm2({
       "src/providers/spec/cli-adapter.ts"() {
@@ -134857,7 +135466,7 @@ ${text}` : text;
         init_background_task_detector();
         init_antigravity_screen_messages();
         fs56 = __toESM2(require("fs"));
-        import_node_crypto5 = require("crypto");
+        import_node_crypto6 = require("crypto");
         init_interrupt_capability();
         init_provider_cli_shared();
         init_logger();
@@ -135333,7 +135942,7 @@ ${text}` : text;
             } catch {
             }
             const truncation = truncateToByteTailByLine(rawViewport, cap);
-            const hash2 = (0, import_node_crypto5.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
+            const hash2 = (0, import_node_crypto6.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
             return {
               text: truncation.text,
               cursor: { col: cursor.col, row: cursor.row },
@@ -142323,6 +142932,13 @@ ${buttons.join("\n")}`;
            */
           acpMessageSeq = 0;
           acpTurnSeq = 0;
+          /**
+           * When the current turn started. The streaming thought/answer partials are
+           * stamped with it rather than `Date.now()`, so re-reading an unchanged
+           * partial yields an identical bubble — the keyed transcript lane writes
+           * only bubbles whose fields changed (design 2026-09-28 §3.1, §8.1-2).
+           */
+          acpTurnStartedAt = 0;
           /** Guard: prevent concurrent sendPrompt calls from racing on shared state */
           _sendPromptInFlight = false;
           // Error tracking
@@ -142381,7 +142997,7 @@ ${buttons.join("\n")}`;
               });
             }));
             if (this.currentStatus === "generating") {
-              const partialThoughtMessage = this.buildPartialThoughtMessage(Date.now());
+              const partialThoughtMessage = this.buildPartialThoughtMessage(this.acpTurnStartedAt || Date.now());
               if (partialThoughtMessage) recentMessages.push(this.withAcpSource(partialThoughtMessage, this.turnSourceId("thought")));
             }
             if (this.currentStatus === "generating" && (this.partialContent || this.partialBlocks.length > 0)) {
@@ -142389,7 +143005,7 @@ ${buttons.join("\n")}`;
               if (blocks.length > 0) {
                 recentMessages.push(this.withAcpSource(buildAssistantChatMessage({
                   content: blocks,
-                  timestamp: Date.now(),
+                  timestamp: this.acpTurnStartedAt || Date.now(),
                   toolCalls: this.turnToolCalls.length > 0 ? [...this.turnToolCalls] : void 0
                 }), this.turnSourceId("answer")));
               }
@@ -143013,6 +143629,7 @@ ${buttons.join("\n")}`;
               return { type: "text", text: flattenContent([b]) };
             }) : [{ type: "text", text }];
             this.acpTurnSeq += 1;
+            this.acpTurnStartedAt = Date.now();
             this.messages.push(this.withAcpSource(buildUserChatMessage({
               content: contentBlocks && contentBlocks.length > 0 ? contentBlocks : text,
               timestamp: Date.now()
@@ -160595,14 +161212,14 @@ ${e?.stderr || ""}`;
     function derivePreparedNodeId(graphId, workspaceRef) {
       const graphStem = sanitizeNodeIdPart(graphId).slice(0, 8);
       const refStem = sanitizeNodeIdPart(workspaceRef).slice(0, 32);
-      const digest = (0, import_node_crypto6.createHash)("sha256").update(deriveWorkspaceCloneIdempotencyKey(graphId, workspaceRef)).digest("hex").slice(0, 8);
+      const digest = (0, import_node_crypto7.createHash)("sha256").update(deriveWorkspaceCloneIdempotencyKey(graphId, workspaceRef)).digest("hex").slice(0, 8);
       return `node_gws_${graphStem}_${refStem}_${digest}`;
     }
     function sanitizeNodeIdPart(value) {
       return value.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "ws";
     }
     var import_node_child_process14;
-    var import_node_crypto6;
+    var import_node_crypto7;
     var import_node_fs9;
     var import_node_util9;
     var execFileAsync7;
@@ -160613,7 +161230,7 @@ ${e?.stderr || ""}`;
       "src/mesh/mesh-graph-workspace-ports.ts"() {
         "use strict";
         import_node_child_process14 = require("child_process");
-        import_node_crypto6 = require("crypto");
+        import_node_crypto7 = require("crypto");
         import_node_fs9 = require("fs");
         import_node_util9 = require("util");
         init_git_locale();
@@ -161309,6 +161926,7 @@ ${e?.stderr || ""}`;
       CHAT_MESSAGE_SOURCES: () => CHAT_MESSAGE_SOURCES,
       CHAT_MESSAGE_TRANSCRIPT_VISIBILITIES: () => CHAT_MESSAGE_TRANSCRIPT_VISIBILITIES,
       CHAT_MESSAGE_VISIBILITIES: () => CHAT_MESSAGE_VISIBILITIES,
+      CHAT_TOMBSTONE_KIND: () => CHAT_TOMBSTONE_KIND,
       COMMAND_PREFIX_DEFAULTS: () => COMMAND_PREFIX_DEFAULTS,
       COMPACT_STATUS_GOAL_PREVIEW_MAX: () => COMPACT_STATUS_GOAL_PREVIEW_MAX2,
       CONFIG_SETTINGS_TOPIC: () => CONFIG_SETTINGS_TOPIC,
@@ -161479,7 +162097,6 @@ ${e?.stderr || ""}`;
       SEQSCRIBE_DB_SUFFIX_ENV_VAR: () => SEQSCRIBE_DB_SUFFIX_ENV_VAR,
       SESSION_BUSY_WITH_TASK_CODE: () => SESSION_BUSY_WITH_TASK_CODE2,
       SESSION_LAUNCHED_BY: () => SESSION_LAUNCHED_BY,
-      SESSION_TRANSCRIPT_RING: () => SESSION_TRANSCRIPT_RING,
       STALE_MAGI_WINDOW_MS: () => STALE_MAGI_WINDOW_MS,
       STALE_TERMINAL_REFINE_WINDOW_MS: () => STALE_TERMINAL_REFINE_WINDOW_MS,
       STANDALONE_CDP_SCAN_INTERVAL_MS: () => STANDALONE_CDP_SCAN_INTERVAL_MS,
@@ -161881,7 +162498,7 @@ ${e?.stderr || ""}`;
       machineCoreFromDaemonId: () => machineCoreFromDaemonId,
       magiAutoLaunchedSessionCleanupDecision: () => magiAutoLaunchedSessionCleanupDecision,
       makeUsage: () => makeUsage,
-      mapTranscriptSnapshotToReadChatPayload: () => mapTranscriptSnapshotToReadChatPayload3,
+      mapTranscriptViewToReadChatPayload: () => mapTranscriptViewToReadChatPayload3,
       markSetupComplete: () => markSetupComplete,
       maxEntryBytes: () => maxEntryBytes,
       maybeInjectIdleActiveMissionReminder: () => maybeInjectIdleActiveMissionReminder,
@@ -162105,8 +162722,9 @@ ${e?.stderr || ""}`;
       saveState: () => saveState,
       seqscribeSlot: () => seqscribeSlot,
       serializeMeshJsonConfigScaffold: () => serializeMeshJsonConfigScaffold,
-      sessionTranscriptPolicy: () => sessionTranscriptPolicy,
-      sessionTranscriptTopic: () => sessionTranscriptTopic,
+      sessionChatPolicy: () => sessionChatPolicy,
+      sessionChatTopic: () => sessionChatTopic,
+      sessionSegmentFromChatTopic: () => sessionSegmentFromChatTopic,
       setActiveTurnLedgerForIpc: () => setActiveTurnLedgerForIpc,
       setConsoleLogLevel: () => setConsoleLogLevel,
       setDebugRuntimeConfig: () => setDebugRuntimeConfig,
@@ -162158,6 +162776,7 @@ ${e?.stderr || ""}`;
       toDaemonStatusEventName: () => toDaemonStatusEventName,
       toJsonValue: () => toJsonValue,
       totalTokens: () => totalTokens,
+      transcriptChatRuntimeCounters: () => transcriptChatRuntimeCounters,
       transcriptParityCounters: () => transcriptParityCounters,
       transcriptTopicSessionSegment: () => transcriptTopicSessionSegment,
       triggerMeshQueue: () => triggerMeshQueue,
@@ -168883,25 +169502,25 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const dotRegex = /params\?\.([a-zA-Z_]+)|params\.([a-zA-Z_]+)/g;
           let dm;
           while ((dm = dotRegex.exec(funcBody)) !== null) {
-            const field3 = dm[1] || dm[2];
-            if (field3 === "length") continue;
-            if (!(field3 in paramFields)) {
-              if (/index|count|port|timeout/i.test(field3)) paramFields[field3] = 0;
-              else if (/action|text|title|message|model|mode|button|name|filter/i.test(field3)) paramFields[field3] = "";
-              else paramFields[field3] = "";
+            const field2 = dm[1] || dm[2];
+            if (field2 === "length") continue;
+            if (!(field2 in paramFields)) {
+              if (/index|count|port|timeout/i.test(field2)) paramFields[field2] = 0;
+              else if (/action|text|title|message|model|mode|button|name|filter/i.test(field2)) paramFields[field2] = "";
+              else paramFields[field2] = "";
             }
           }
           const typeofRegex = /typeof params === 'string' \? params : params\?\.([a-zA-Z_]+)/g;
           let tm;
           while ((tm = typeofRegex.exec(funcBody)) !== null) {
-            const field3 = tm[1];
-            if (!(field3 in paramFields)) paramFields[field3] = "";
+            const field2 = tm[1];
+            if (!(field2 in paramFields)) paramFields[field2] = "";
           }
           const numRegex = /typeof params === 'number' \? params : params\?\.([a-zA-Z_]+)/g;
           let nm;
           while ((nm = numRegex.exec(funcBody)) !== null) {
-            const field3 = nm[1];
-            if (!(field3 in paramFields)) paramFields[field3] = 0;
+            const field2 = nm[1];
+            if (!(field2 in paramFields)) paramFields[field2] = 0;
           }
           const descriptions = {
             readChat: "No params required",
@@ -171743,7 +172362,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/exercise \\`);
       lines.push('  -H "Content-Type: application/json" \\');
       lines.push(`  -d '${exerciseJson}' > "$EXERCISE_JSON"`);
-      lines.push(`jq '{timedOut,statusesSeen,approvalsResolved,inspect:{${verificationInspectFields.map((field3, index) => `f${index + 1}: .${field3}`).join(", ")}}}' "$EXERCISE_JSON"`);
+      lines.push(`jq '{timedOut,statusesSeen,approvalsResolved,inspect:{${verificationInspectFields.map((field2, index) => `f${index + 1}: .${field2}`).join(", ")}}}' "$EXERCISE_JSON"`);
       lines.push("```");
       lines.push("");
       if (verificationMustContainAny.length > 0 || verificationMustNotContainAny.length > 0 || verificationMustMatchAny.length > 0 || verificationMustNotMatchAny.length > 0 || verificationLastAssistantMustContainAny.length > 0 || verificationLastAssistantMustNotContainAny.length > 0 || verificationLastAssistantMustMatchAny.length > 0 || verificationLastAssistantMustNotMatchAny.length > 0) {
@@ -175205,66 +175824,21 @@ data: ${JSON.stringify(msg.data)}
         );
       };
     }
-    init_transcript_revision_codec();
-    var PAGE_ROWS = 64;
-    function isSessionTranscriptTopic(topic) {
-      return topic.startsWith("session.") && topic.endsWith(".transcript") && topic.length > "session..transcript".length;
+    init_topics2();
+    init_transcript_keyed_codec();
+    function isSessionChatTopic(topic) {
+      return sessionSegmentFromChatTopic(topic) !== null;
     }
-    function field2(payload, name) {
-      return payload !== null && typeof payload === "object" && !Array.isArray(payload) ? payload[name] : void 0;
-    }
-    function revisionKeyOf(entry) {
-      const producerEpoch = field2(entry.payload, "producerEpoch");
-      const revision = field2(entry.payload, "revision");
-      const chunks = field2(entry.payload, "chunks");
-      if (typeof producerEpoch !== "string" || typeof revision !== "number" || typeof chunks !== "number") return null;
-      return { writer: entry.writer, producerEpoch, revision, chunks };
-    }
-    function sameRevision(a, b) {
-      return a.writer === b.writer && a.producerEpoch === b.producerEpoch && a.revision === b.revision && a.chunks === b.chunks;
-    }
-    function selectTranscriptTailSnapshot(src) {
-      const newestFirst = [];
-      let target = null;
-      let seenChunks = /* @__PURE__ */ new Set();
-      let before = null;
-      const limit = Math.min(src.defaultLimit, 2 * MAX_TRANSCRIPT_REVISION_ROWS + 20);
-      while (newestFirst.length < limit) {
-        const page = src.page(before, Math.min(PAGE_ROWS, limit - newestFirst.length));
-        if (page.length === 0) return null;
-        for (const { entry, rowid } of page) {
-          before = rowid;
-          newestFirst.push(entry);
-          if (target === null) {
-            if (entry.kind === TRANSCRIPT_REVISION_COMMIT_KIND) {
-              target = revisionKeyOf(entry);
-              seenChunks = /* @__PURE__ */ new Set();
-            }
-            continue;
-          }
-          const key2 = revisionKeyOf(entry);
-          if (entry.kind === TRANSCRIPT_REVISION_CHUNK_KIND) {
-            const index = field2(entry.payload, "index");
-            if (key2 && sameRevision(key2, target) && typeof index === "number") seenChunks.add(index);
-            continue;
-          }
-          if (entry.kind === TRANSCRIPT_REVISION_BEGIN_KIND && key2 && sameRevision(key2, target)) {
-            if (seenChunks.size === target.chunks) return newestFirst.reverse();
-            target = null;
-            continue;
-          }
-          if (entry.kind === TRANSCRIPT_REVISION_COMMIT_KIND) {
-            target = revisionKeyOf(entry);
-            seenChunks = /* @__PURE__ */ new Set();
-          }
-        }
-      }
-      return null;
+    function selectChatTailSnapshot(src) {
+      if (!src.keyed) return null;
+      const head = src.keyHead(CHAT_COMMIT_KEY);
+      if (!head) return src.rowsAfter(0).map((r) => r.entry);
+      const committed = src.latestPerKey(head.rowid);
+      const after = src.rowsAfter(head.rowid);
+      return [...committed.map((r) => r.entry), ...after.map((r) => r.entry)];
     }
     function installTranscriptTailSnapshotSelector(node) {
-      node.setTailSnapshotSelector(
-        (src) => isSessionTranscriptTopic(src.topic) ? selectTranscriptTailSnapshot(src) : null
-      );
+      node.setTailSnapshotSelector((src) => isSessionChatTopic(src.topic) ? selectChatTailSnapshot(src) : null);
     }
     var SEQSCRIBE_DB_NAME = "seqscribe.db";
     var WRITER_ID_PREFIX = "adhdev";
@@ -176096,7 +176670,9 @@ data: ${JSON.stringify(msg.data)}
               persistentMismatches: tp.persistentMismatches ?? 0,
               missingCompleteRevision: tp.missingCompleteRevision ?? 0,
               fieldMismatch: tp.fieldMismatch ?? 0,
+              missingMessage: tp.missingMessage ?? 0,
               extraMessage: tp.extraMessage ?? 0,
+              revRegression: tp.revRegression ?? 0,
               wrongSession: tp.wrongSession ?? 0,
               wrongOwner: tp.wrongOwner ?? 0,
               digestMismatch: tp.digestMismatch ?? 0,
@@ -176111,6 +176687,7 @@ data: ${JSON.stringify(msg.data)}
           // Deep-copied by the recorder's own `detail()`, so a caller holding
           // this cannot see it mutate on the next trigger.
           ...opts.transcriptLatency ? { transcriptLatencyDetail: opts.transcriptLatency } : {},
+          ...opts.transcriptChat ? { transcriptChatDetail: { ...opts.transcriptChat, chatBaseFrames: { ...opts.transcriptChat.chatBaseFrames } } } : {},
           // Emitted only when the caller passed the full counter object. A
           // status-reporter caller supplying just the five bucket fields
           // leaves these undefined, and the key is then omitted entirely
@@ -177042,16 +177619,16 @@ data: ${JSON.stringify(msg.data)}
     );
     var TRANSCRIPT_TERMINAL_EVIDENCE_MAX_AGE_MS = 8e3;
     function decline(reason) {
-      return { snapshot: null, fallbackReason: reason };
+      return { view: null, fallbackReason: reason };
     }
-    function isUsableSnapshot3(value) {
+    function isUsableView(value) {
       if (!value || typeof value !== "object") return false;
       const snapshot = value;
-      if (snapshot.schemaVersion !== 1) return false;
+      if (snapshot.schemaVersion !== 2) return false;
       if (typeof snapshot.sessionId !== "string" || !snapshot.sessionId) return false;
       if (typeof snapshot.status !== "string" || !snapshot.status) return false;
       if (typeof snapshot.observedAt !== "string" || !snapshot.observedAt) return false;
-      if (typeof snapshot.revision !== "number") return false;
+      if (typeof snapshot.frame !== "number") return false;
       if (!Array.isArray(snapshot.messages)) return false;
       if (snapshot.messages.some((message) => !message || typeof message !== "object")) return false;
       const coverage = snapshot.coverage;
@@ -177081,19 +177658,23 @@ data: ${JSON.stringify(msg.data)}
       if (!read.available) {
         return decline("no_complete_revision");
       }
-      if (!isUsableSnapshot3(read.snapshot)) return decline("revision_invalid");
+      if (!isUsableView(read.view)) return decline("revision_invalid");
       if (!daemonIdsEquivalent4(read.identity.producerDaemonId, ownerDaemonId)) {
         return decline("owner_mismatch");
       }
-      if (read.snapshot.sessionId !== rawSessionId) return decline("owner_mismatch");
-      const observedAtMs = Date.parse(read.snapshot.observedAt);
+      if (read.view.sessionId !== rawSessionId) return decline("owner_mismatch");
+      const observedAtMs = Date.parse(read.view.observedAt);
       if (!Number.isFinite(observedAtMs)) return decline("revision_invalid");
       const nowMs2 = request.nowMs ?? Date.now();
       if (nowMs2 - observedAtMs > request.maxAgeMs) return decline("stale_active_session");
-      return { snapshot: read.snapshot, fallbackReason: null };
+      return { view: read.view, fallbackReason: null };
     }
     function mapTranscriptMessage(message) {
       const mapped = {
+        id: message.messageId,
+        messageId: message.messageId,
+        ord: message.ord,
+        rev: message.rev,
         role: message.role,
         kind: message.kind,
         content: message.content
@@ -177103,11 +177684,10 @@ data: ${JSON.stringify(msg.data)}
       if (message.bubbleState !== null) mapped.bubbleState = message.bubbleState;
       if (message.senderName !== null) mapped.senderName = message.senderName;
       if (message.toolName !== null) mapped.toolName = message.toolName;
-      if (message.toolBlockRef !== null) mapped.toolBlockRef = message.toolBlockRef;
+      if (message.expandable) mapped.expandable = message.expandable;
       if (message.turnKey !== null) {
         mapped._turnKey = message.turnKey;
       }
-      if (typeof message.sequence === "number") mapped.sequence = message.sequence;
       if (message.streaming !== null) mapped.meta = { streaming: message.streaming };
       return mapped;
     }
@@ -177118,7 +177698,7 @@ data: ${JSON.stringify(msg.data)}
     function isActivityWireMessage(message) {
       return typeof message.kind === "string" && ACTIVITY_MESSAGE_KINDS.has(message.kind.trim().toLowerCase());
     }
-    function mapTranscriptSnapshotToReadChatPayload3(snapshot, options) {
+    function mapTranscriptViewToReadChatPayload3(snapshot, options) {
       const messageSource = mapProvenanceScalar(snapshot.provenance.messageSource);
       const transcriptProvenance = mapProvenanceScalar(snapshot.provenance.transcriptProvenance);
       return {
@@ -177144,7 +177724,8 @@ data: ${JSON.stringify(msg.data)}
         omittedBefore: options.omittedBefore,
         stale: options.stale,
         transcriptReadSource: "replica",
-        replicaRevision: snapshot.revision,
+        replicaEpoch: snapshot.epoch,
+        replicaFrame: snapshot.frame,
         replicaObservedAt: snapshot.observedAt
       };
     }
@@ -177314,7 +177895,7 @@ data: ${JSON.stringify(msg.data)}
       };
     }
     function replicaPayload(snapshot) {
-      return mapTranscriptSnapshotToReadChatPayload3(snapshot, {
+      return mapTranscriptViewToReadChatPayload3(snapshot, {
         omittedBefore: snapshot.coverage.omittedBefore,
         stale: false
       });
@@ -177375,8 +177956,8 @@ data: ${JSON.stringify(msg.data)}
           maxAgeMs: TRANSCRIPT_TERMINAL_EVIDENCE_MAX_AGE_MS,
           store: components.transcriptReplicaStore
         });
-        if (replica.snapshot) {
-          return { presence: "present", ...status ? { status } : {}, transcript: analyze(replicaPayload(replica.snapshot), attempt) };
+        if (replica.view) {
+          return { presence: "present", ...status ? { status } : {}, transcript: analyze(replicaPayload(replica.view), attempt) };
         }
         try {
           const result = await dispatch2(daemonId, "read_chat", readArgsFor(attempt, workspace));
@@ -177925,6 +178506,718 @@ data: ${JSON.stringify(msg.data)}
     init_mesh_event_projection();
     init_transcript_parity();
     init_transcript_publisher();
+    init_logger();
+    init_message_identity_ledger();
+    init_transcript_mode();
+    init_logger();
+    init_mesh_publisher();
+    init_topics2();
+    var DEFINED_TRANSCRIPT_TOPICS = /* @__PURE__ */ Symbol.for("adhdev.seqscribe.definedTranscriptTopics");
+    function definedTopicsFor(node) {
+      const host = node;
+      let map3 = host[DEFINED_TRANSCRIPT_TOPICS];
+      if (!map3) {
+        map3 = /* @__PURE__ */ new Map();
+        Object.defineProperty(node, DEFINED_TRANSCRIPT_TOPICS, {
+          value: map3,
+          enumerable: false,
+          writable: false,
+          configurable: true
+        });
+      }
+      return map3;
+    }
+    function ensureSessionChatTopic(node, claims, rawSessionId, ownerDaemonId) {
+      const topic = sessionChatTopic(rawSessionId);
+      const claimResult = claims.claim({ topic, rawSessionId, ownerDaemonId });
+      if (!claimResult.ok) {
+        return { ok: false, reason: claimResult.reason, existing: claimResult.existing };
+      }
+      const cache3 = definedTopicsFor(node);
+      const known = cache3.get(topic);
+      if (known === true) return { ok: true, topic };
+      if (known === false) return { ok: false, reason: "define_failed" };
+      if (!node.authorityEnabled) {
+        return { ok: false, reason: "authority_unavailable" };
+      }
+      if (node.topics.some((d) => d.topic === topic)) {
+        cache3.set(topic, true);
+        return { ok: true, topic };
+      }
+      try {
+        const policy = sessionChatPolicy();
+        node.node.defineTopic(topic, policy);
+        node.topics.push({ topic, policy });
+        cache3.set(topic, true);
+        LOG.info("Seqscribe", `transcript topic defined topic=${topic}`);
+        announceTopicActivated(node, topic);
+        return { ok: true, topic };
+      } catch (error48) {
+        cache3.set(topic, false);
+        LOG.warn(
+          "Seqscribe",
+          `transcript topic activation failed topic=${topic}: ${error48 instanceof Error ? error48.message : String(error48)}`
+        );
+        return { ok: false, reason: "define_failed" };
+      }
+    }
+    function releaseSessionChatTopic(claims, rawSessionId) {
+      claims.release(sessionChatTopic(rawSessionId));
+    }
+    init_transcript_keyed_codec();
+    init_topics2();
+    init_transcript_keyed_codec();
+    init_dist();
+    init_transcript_keyed_codec();
+    function parseChatSubRow(row) {
+      if (typeof row.writer !== "string" || typeof row.kind !== "string" || typeof row.payload !== "string") return null;
+      if (typeof row.seq !== "number" || !Number.isSafeInteger(row.seq) || row.seq < 0) return null;
+      try {
+        return { writer: row.writer, seq: row.seq, kind: row.kind, payload: JSON.parse(row.payload) };
+      } catch {
+        return null;
+      }
+    }
+    function emptyState() {
+      return { heads: /* @__PURE__ */ new Map(), parts: /* @__PURE__ */ new Map(), meta: null, commit: null };
+    }
+    var PENDING_FRAMES_MAX = 8;
+    var PENDING_ROWS_MAX = 5e4;
+    function frameKey(epoch, frame2) {
+      return `${epoch}\0${frame2}`;
+    }
+    function frameOf(payload) {
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+      const raw = payload;
+      if (typeof raw.epoch !== "string" || typeof raw.frame !== "number" || !Number.isSafeInteger(raw.frame)) return null;
+      return { epoch: raw.epoch, frame: raw.frame };
+    }
+    var KeyedTranscriptFolder = class {
+      constructor(options = {}) {
+        this.options = options;
+      }
+      state = emptyState();
+      pending = /* @__PURE__ */ new Map();
+      pendingRows = 0;
+      cachedView = null;
+      resync = null;
+      counters = {
+        commitsApplied: 0,
+        rejectedRows: 0,
+        digestMismatches: 0,
+        tornFramesDropped: 0,
+        lastRejectReason: null
+      };
+      /** The committed view, or null before the first verified commit. */
+      view() {
+        if (!this.state.commit || !this.state.meta) return null;
+        if (!this.cachedView) this.cachedView = this.materialize();
+        return this.cachedView;
+      }
+      /** The last applied commit (identity/diagnostics). */
+      lastCommit() {
+        return this.state.commit;
+      }
+      /** Set when a frame failed verification — restart the subscription (SNAP reset). */
+      get needsResync() {
+        return this.resync;
+      }
+      stats() {
+        return { ...this.counters };
+      }
+      /**
+       * A SNAP: rebuild from scratch. Rows up to and including the LAST commit are
+       * the committed baseline (verified against that commit); rows after it are
+       * pending. A SNAP that fails verification leaves the previous view in place
+       * and flags a resync.
+       */
+      ingestSnapshot(rows) {
+        let lastCommitAt = -1;
+        let commit2 = null;
+        for (let i = rows.length - 1; i >= 0; i -= 1) {
+          if (rows[i].kind !== CHAT_COMMIT_KIND) continue;
+          const parsed = readChatCommit(rows[i].payload);
+          if (parsed && parsed.writer === rows[i].writer) {
+            lastCommitAt = i;
+            commit2 = parsed;
+            break;
+          }
+        }
+        this.pending.clear();
+        this.pendingRows = 0;
+        if (!commit2) {
+          if (rows.length === 0) {
+            this.state = emptyState();
+            this.cachedView = null;
+            this.resync = null;
+          }
+          for (const row of rows) this.stash(row);
+          return null;
+        }
+        const rejected = this.checkCommitIdentity(commit2);
+        if (rejected) {
+          this.reject(rejected, true);
+          return null;
+        }
+        const next = emptyState();
+        for (let i = 0; i < lastCommitAt; i += 1) {
+          const row = rows[i];
+          if (row.writer !== commit2.writer) continue;
+          this.applyRow(next, row, null);
+        }
+        const verdict = this.verify(next, commit2);
+        if (verdict) {
+          this.counters.digestMismatches += verdict === "digest_mismatch" ? 1 : 0;
+          this.reject(verdict, true);
+          return null;
+        }
+        next.commit = commit2;
+        this.state = next;
+        this.cachedView = null;
+        this.resync = null;
+        this.counters.commitsApplied++;
+        for (let i = lastCommitAt + 1; i < rows.length; i += 1) this.stash(rows[i]);
+        const view = this.view();
+        const delta = {
+          sessionId: commit2.sessionId,
+          epoch: commit2.epoch,
+          frame: commit2.frame,
+          reset: true,
+          upserts: view ? view.messages : [],
+          deletes: [],
+          meta: view ? this.materializeMeta() : null
+        };
+        this.options.onFrame?.(delta);
+        return delta;
+      }
+      /** DELTA rows. Returns the delta of every commit applied by this batch. */
+      ingestRows(rows) {
+        const out = [];
+        for (const row of rows) {
+          if (row.kind === CHAT_COMMIT_KIND) {
+            const delta = this.ingestCommit(row);
+            if (delta) out.push(delta);
+          } else {
+            this.stash(row);
+          }
+        }
+        return out;
+      }
+      // ── internals ───────────────────────────────────────────────────────────
+      stash(row) {
+        if (row.kind === CHAT_COMMIT_KIND) return;
+        const at = frameOf(row.payload);
+        if (!at) {
+          this.reject("malformed_row", false);
+          return;
+        }
+        const key2 = frameKey(at.epoch, at.frame);
+        let list = this.pending.get(key2);
+        if (!list) {
+          list = [];
+          this.pending.set(key2, list);
+          while (this.pending.size > PENDING_FRAMES_MAX) {
+            const oldest = this.pending.keys().next().value;
+            this.pendingRows -= this.pending.get(oldest).length;
+            this.pending.delete(oldest);
+            this.counters.tornFramesDropped++;
+          }
+        }
+        list.push(row);
+        this.pendingRows += 1;
+        if (this.pendingRows > PENDING_ROWS_MAX) {
+          this.pending.clear();
+          this.pendingRows = 0;
+          this.reject("pending_overflow", true);
+        }
+      }
+      checkCommitIdentity(commit2) {
+        if (this.options.expectedSessionId !== void 0 && commit2.sessionId !== this.options.expectedSessionId) {
+          return "session_mismatch";
+        }
+        if (this.options.expectedOwnerDaemonId !== void 0 && !daemonIdsEquivalent4(commit2.producerDaemonId, this.options.expectedOwnerDaemonId)) {
+          return "owner_mismatch";
+        }
+        return null;
+      }
+      ingestCommit(row) {
+        const commit2 = readChatCommit(row.payload);
+        if (!commit2 || commit2.writer !== row.writer) {
+          this.reject("malformed_row", false);
+          return null;
+        }
+        const rejected = this.checkCommitIdentity(commit2);
+        if (rejected) {
+          this.reject(rejected, false);
+          return null;
+        }
+        const key2 = frameKey(commit2.epoch, commit2.frame);
+        const rows = (this.pending.get(key2) ?? []).filter((r) => r.writer === commit2.writer);
+        for (const [k, list] of Array.from(this.pending)) {
+          const [epoch, frameText] = k.split("\0");
+          if (epoch !== commit2.epoch || Number(frameText) <= commit2.frame) {
+            if (k !== key2) this.counters.tornFramesDropped++;
+            this.pendingRows -= list.length;
+            this.pending.delete(k);
+          }
+        }
+        const writerChanged = this.state.commit !== null && this.state.commit.writer !== commit2.writer;
+        if (writerChanged) {
+          const next = emptyState();
+          for (const r of rows) this.applyRow(next, r, null);
+          const verdict2 = this.verify(next, commit2);
+          if (verdict2) {
+            this.counters.digestMismatches += verdict2 === "digest_mismatch" ? 1 : 0;
+            this.reject(verdict2, true);
+            return null;
+          }
+          next.commit = commit2;
+          this.state = next;
+          this.cachedView = null;
+          this.resync = null;
+          this.counters.commitsApplied++;
+          const view2 = this.view();
+          const delta2 = {
+            sessionId: commit2.sessionId,
+            epoch: commit2.epoch,
+            frame: commit2.frame,
+            reset: true,
+            upserts: view2 ? view2.messages : [],
+            deletes: [],
+            meta: view2 ? this.materializeMeta() : null
+          };
+          this.options.onFrame?.(delta2);
+          return delta2;
+        }
+        const undo = [];
+        const touched = /* @__PURE__ */ new Set();
+        let metaChanged = false;
+        for (const r of rows) {
+          const effect = this.applyRow(this.state, r, undo);
+          if (effect === "meta") metaChanged = true;
+          else if (effect) touched.add(effect);
+        }
+        const verdict = this.verify(this.state, commit2);
+        if (verdict) {
+          this.rollback(undo);
+          this.counters.digestMismatches += verdict === "digest_mismatch" ? 1 : 0;
+          this.reject(verdict, true);
+          return null;
+        }
+        undo.push({ t: "commit", prev: this.state.commit });
+        const first = this.state.commit === null;
+        this.state.commit = commit2;
+        this.cachedView = null;
+        this.resync = null;
+        this.counters.commitsApplied++;
+        const upserts = [];
+        const deletes = [];
+        for (const id22 of touched) {
+          const message = this.materializeMessage(id22);
+          if (message) upserts.push(message);
+          else deletes.push(id22);
+        }
+        upserts.sort(compareChatOrd);
+        const view = first ? this.view() : null;
+        const delta = {
+          sessionId: commit2.sessionId,
+          epoch: commit2.epoch,
+          frame: commit2.frame,
+          reset: first,
+          upserts: first && view ? view.messages : upserts,
+          deletes: first ? [] : deletes,
+          meta: first || metaChanged ? this.materializeMeta() : null
+        };
+        this.options.onFrame?.(delta);
+        return delta;
+      }
+      /**
+       * Apply one non-commit row to `state`. Returns the bubble id it touched,
+       * `'meta'`, or null. Rows of an unknown kind are ignored (forward
+       * compatibility), malformed ones are counted.
+       */
+      applyRow(state, row, undo) {
+        switch (row.kind) {
+          case CHAT_MSG_KIND: {
+            const head = readChatMsg(row.payload);
+            if (!head) return this.malformed();
+            undo?.push({ t: "head", id: head.id, prev: state.heads.get(head.id) });
+            state.heads.set(head.id, head);
+            if ("text" in head.body) this.dropParts(state, head.id, 0, undo);
+            else this.dropParts(state, head.id, head.body.parts, undo);
+            return head.id;
+          }
+          case CHAT_PART_KIND: {
+            const part = readChatPart(row.payload);
+            if (!part) return this.malformed();
+            let map3 = state.parts.get(part.id);
+            if (!map3) {
+              map3 = /* @__PURE__ */ new Map();
+              state.parts.set(part.id, map3);
+            }
+            undo?.push({ t: "part", id: part.id, k: part.k, prev: map3.get(part.k) });
+            map3.set(part.k, part);
+            return part.id;
+          }
+          case CHAT_DEL_KIND: {
+            const del = readChatDel(row.payload);
+            if (!del) return this.malformed();
+            if (del.k === null) {
+              undo?.push({ t: "head", id: del.id, prev: state.heads.get(del.id) });
+              state.heads.delete(del.id);
+              this.dropParts(state, del.id, 0, undo);
+            } else {
+              const map3 = state.parts.get(del.id);
+              if (map3?.has(del.k)) {
+                undo?.push({ t: "part", id: del.id, k: del.k, prev: map3.get(del.k) });
+                map3.delete(del.k);
+              }
+            }
+            return del.id;
+          }
+          case CHAT_META_KIND: {
+            const meta3 = readChatMeta(row.payload);
+            if (!meta3) return this.malformed();
+            if (this.options.expectedSessionId !== void 0 && meta3.sessionId !== this.options.expectedSessionId) {
+              this.reject("session_mismatch", false);
+              return null;
+            }
+            undo?.push({ t: "meta", prev: state.meta });
+            state.meta = meta3;
+            return "meta";
+          }
+          default:
+            return null;
+        }
+      }
+      malformed() {
+        this.reject("malformed_row", false);
+        return null;
+      }
+      /** Drop part slots `k >= from` of a bubble (fewer parts, inline body, or deletion). */
+      dropParts(state, id22, from, undo) {
+        const map3 = state.parts.get(id22);
+        if (!map3) return;
+        for (const k of Array.from(map3.keys())) {
+          if (k < from) continue;
+          undo?.push({ t: "part", id: id22, k, prev: map3.get(k) });
+          map3.delete(k);
+        }
+        if (map3.size === 0) state.parts.delete(id22);
+      }
+      rollback(undo) {
+        for (let i = undo.length - 1; i >= 0; i -= 1) {
+          const op = undo[i];
+          if (op.t === "head") {
+            if (op.prev) this.state.heads.set(op.id, op.prev);
+            else this.state.heads.delete(op.id);
+          } else if (op.t === "part") {
+            let map3 = this.state.parts.get(op.id);
+            if (op.prev) {
+              if (!map3) {
+                map3 = /* @__PURE__ */ new Map();
+                this.state.parts.set(op.id, map3);
+              }
+              map3.set(op.k, op.prev);
+            } else if (map3) {
+              map3.delete(op.k);
+              if (map3.size === 0) this.state.parts.delete(op.id);
+            }
+          } else if (op.t === "meta") {
+            this.state.meta = op.prev;
+          } else {
+            this.state.commit = op.prev;
+          }
+        }
+      }
+      /** Commit verification (§4.5): displayable bubbles, live count, digest. */
+      verify(state, commit2) {
+        for (const head of state.heads.values()) {
+          if ("text" in head.body) continue;
+          const map3 = state.parts.get(head.id);
+          for (let k = 0; k < head.body.parts; k += 1) {
+            if (map3?.get(k)?.rev !== head.body.partRevs[k]) return "incomplete_bubble";
+          }
+        }
+        const metaRev = state.meta?.rev ?? 0;
+        if (state.heads.size !== commit2.liveCount || metaRev !== commit2.metaRev) return "digest_mismatch";
+        const digest = computeChatCommitDigest(
+          Array.from(state.heads.values(), (h) => [h.id, h.rev]),
+          metaRev
+        );
+        return digest === commit2.digest ? null : "digest_mismatch";
+      }
+      reject(reason, needsResync) {
+        this.counters.rejectedRows++;
+        this.counters.lastRejectReason = reason;
+        if (needsResync) this.resync = reason;
+      }
+      bodyOf(head) {
+        if ("text" in head.body) return head.body.text;
+        const map3 = this.state.parts.get(head.id);
+        let text = "";
+        for (let k = 0; k < head.body.parts; k += 1) text += map3?.get(k)?.text ?? "";
+        return text;
+      }
+      materializeMessage(id22) {
+        const head = this.state.heads.get(id22);
+        return head ? chatMessageFromWire(head, this.bodyOf(head)) : null;
+      }
+      materialize() {
+        const messages = Array.from(this.state.heads.values(), (head) => chatMessageFromWire(head, this.bodyOf(head)));
+        messages.sort(compareChatOrd);
+        return { ...this.materializeMeta(), messages };
+      }
+      /** The view without `messages` — O(1) in the transcript size. */
+      materializeMeta() {
+        const commit2 = this.state.commit;
+        const meta3 = this.state.meta;
+        const live = this.state.heads.size;
+        return {
+          schemaVersion: 2,
+          sessionId: meta3.sessionId,
+          historySessionId: meta3.historySessionId,
+          providerType: meta3.providerType,
+          providerSessionId: meta3.providerSessionId,
+          producerDaemonId: commit2.producerDaemonId,
+          producerWriterId: commit2.writer,
+          epoch: commit2.epoch,
+          frame: commit2.frame,
+          observedAt: commit2.observedAt,
+          status: meta3.status,
+          providerObservedStatus: meta3.providerObservedStatus,
+          title: meta3.title,
+          activeModal: meta3.activeModal,
+          activeInteractivePrompt: meta3.activeInteractivePrompt,
+          turn: meta3.turn,
+          provenance: meta3.provenance,
+          terminalMarkers: meta3.terminalMarkers,
+          coverage: {
+            mode: meta3.coverage.mode,
+            omittedBefore: meta3.coverage.omittedBefore,
+            totalMessageCount: live,
+            returnedMessageCount: live
+          }
+        };
+      }
+    };
+    var CHAT_SCAN_PAGE_ROWS = 2e3;
+    function scanAllLatestPerKey(node, topic, options = {}) {
+      const out = [];
+      let after = options.afterRowid ?? 0;
+      for (; ; ) {
+        const page = node.node.scanLatestPerKey(topic, {
+          ...options.uptoRowid !== void 0 ? { uptoRowid: options.uptoRowid } : {},
+          afterRowid: after,
+          limit: CHAT_SCAN_PAGE_ROWS
+        });
+        out.push(...page.entries);
+        if (page.complete || page.nextAfterRowid === void 0 || page.nextAfterRowid <= after) break;
+        after = page.nextAfterRowid;
+      }
+      return out;
+    }
+    function chatRowFromEntry(entry) {
+      return { writer: entry.writer, seq: entry.seq, kind: entry.kind, payload: entry.payload };
+    }
+    function readLocalChatParityActual(node, rawSessionId, options = {}) {
+      const topic = sessionChatTopic(rawSessionId);
+      try {
+        const watermark = options.uptoRowid ?? node.node.keyHead(topic, CHAT_COMMIT_KEY)?.rowid;
+        if (watermark === void 0) return { status: "missing" };
+        const rows = scanAllLatestPerKey(node, topic, { uptoRowid: watermark }).map(({ entry }) => chatRowFromEntry(entry));
+        const folder = new KeyedTranscriptFolder({ expectedSessionId: rawSessionId });
+        folder.ingestSnapshot(rows);
+        const view = folder.view();
+        const commit2 = folder.lastCommit();
+        if (!view || !commit2) return { status: "missing" };
+        return { status: "found", view, commit: commit2 };
+      } catch {
+        return { status: "missing" };
+      }
+    }
+    init_transcript_parity();
+    init_transcript_publisher();
+    var CHAT_PRUNE_TRIGGER_ROWS = 64;
+    var CHAT_PRUNE_TRIGGER_BYTES = 1024 * 1024;
+    var CHAT_PRUNE_STEP_ROWS = 250;
+    var CHAT_PRUNE_MAX_STEPS = 200;
+    var runtimeCounters = freshRuntimeCounters();
+    function freshRuntimeCounters() {
+      return { prunePasses: 0, prunedRows: 0, pruneErrors: 0, parityReadBacks: 0, ledgerSeeds: 0 };
+    }
+    function transcriptChatRuntimeCounters() {
+      return { ...runtimeCounters };
+    }
+    function yieldToEventLoop() {
+      return new Promise((resolve38) => setImmediate(resolve38));
+    }
+    var TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS = 1e4;
+    var TRANSCRIPT_PARITY_SAMPLE_EVERY_N = 50;
+    function resolveParitySampleIntervalMs(env2 = process.env) {
+      const raw = env2.ADHDEV_TRANSCRIPT_PARITY_SAMPLE_MS;
+      if (raw === void 0 || raw.trim() === "") return TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS;
+      const parsed = Number(raw);
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS;
+    }
+    function createParitySampler() {
+      const state = /* @__PURE__ */ new Map();
+      return (sessionId) => {
+        const intervalMs = resolveParitySampleIntervalMs();
+        const now = Date.now();
+        const row = state.get(sessionId);
+        if (row) state.delete(sessionId);
+        const readBack = !row || intervalMs === 0 || now - row.lastAt >= intervalMs || row.since + 1 >= TRANSCRIPT_PARITY_SAMPLE_EVERY_N;
+        state.set(sessionId, readBack ? { lastAt: now, since: 0 } : { lastAt: row.lastAt, since: row.since + 1 });
+        while (state.size > MAX_TRACKED_SESSIONS) state.delete(state.keys().next().value);
+        return readBack;
+      };
+    }
+    function persistedRow(entry) {
+      return typeof entry.key === "string" ? { key: entry.key, kind: entry.kind, writer: entry.writer, payload: entry.payload } : null;
+    }
+    function readPersistedChatTopic(node, topic) {
+      const watermark = node.node.keyHead(topic, CHAT_COMMIT_KEY)?.rowid ?? null;
+      const committed = watermark === null ? [] : scanAllLatestPerKey(node, topic, { uptoRowid: watermark }).map(({ entry }) => persistedRow(entry));
+      const torn = scanAllLatestPerKey(node, topic, { afterRowid: watermark ?? 0 }).map(({ entry }) => persistedRow(entry));
+      return {
+        committed: committed.filter((r) => r !== null),
+        torn: torn.filter((r) => r !== null)
+      };
+    }
+    function ledgerSeedFromPersisted(persisted) {
+      let epoch = "";
+      const parts = /* @__PURE__ */ new Map();
+      const heads = [];
+      for (const row of persisted.committed) {
+        if (row.key === CHAT_META_KEY) {
+          epoch = readChatMeta(row.payload)?.ledgerEpoch ?? epoch;
+        } else if (row.kind === CHAT_PART_KIND) {
+          const part = readChatPart(row.payload);
+          if (!part) continue;
+          let map3 = parts.get(part.id);
+          if (!map3) parts.set(part.id, map3 = /* @__PURE__ */ new Map());
+          map3.set(part.k, part.text);
+        } else if (row.kind === CHAT_MSG_KIND) {
+          const head = readChatMsg(row.payload);
+          if (head) heads.push({ id: head.id, ord: head.ord, rev: head.rev, role: head.role, kind: head.kind, body: head.body, srcId: head.srcId });
+        }
+      }
+      if (!epoch && heads.length === 0) return null;
+      const entries = heads.map((h) => {
+        const body = h.body;
+        let text = typeof body.text === "string" ? body.text : "";
+        if (typeof body.parts === "number") {
+          const map3 = parts.get(h.id);
+          text = "";
+          for (let k = 0; k < body.parts; k += 1) text += map3?.get(k) ?? "";
+        }
+        return { messageId: h.id, ord: h.ord, rev: h.rev, role: h.role, kind: h.kind, text, srcId: h.srcId };
+      });
+      return { epoch, entries };
+    }
+    function createLiveChatPublisher(node, claims, ownerDaemonId) {
+      const shouldReadBack = createParitySampler();
+      const backlog = /* @__PURE__ */ new Map();
+      const activate = (sessionId) => {
+        const activation = ensureSessionChatTopic(node, claims, sessionId, ownerDaemonId);
+        return activation.ok ? activation.topic : null;
+      };
+      const prune = async (topic, entry) => {
+        const watermark = node.node.keyHead(topic, CHAT_COMMIT_KEY)?.rowid;
+        if (watermark === void 0) return;
+        const supersedeOtherWriters = entry.supersedeOtherWriters;
+        entry.supersedeOtherWriters = false;
+        runtimeCounters.prunePasses++;
+        try {
+          for (let step = 0; step < CHAT_PRUNE_MAX_STEPS; step += 1) {
+            const { prunedRows } = await node.node.pruneSuperseded(topic, {
+              uptoRowid: watermark,
+              maxRows: CHAT_PRUNE_STEP_ROWS,
+              ...supersedeOtherWriters ? { supersedeOtherWriters: true } : {}
+            });
+            runtimeCounters.prunedRows += prunedRows;
+            if (prunedRows < CHAT_PRUNE_STEP_ROWS) break;
+            await yieldToEventLoop();
+          }
+        } catch (error48) {
+          runtimeCounters.pruneErrors++;
+          LOG.warn("Seqscribe", `transcript chat prune failed topic=${topic}: ${error48 instanceof Error ? error48.message : String(error48)}`);
+        }
+      };
+      const scheduleCompaction = (topic, frame2) => {
+        let entry = backlog.get(topic);
+        if (!entry) {
+          entry = { rows: 0, bytes: 0, running: null, supersedeOtherWriters: false };
+          backlog.set(topic, entry);
+          while (backlog.size > MAX_TRACKED_SESSIONS) backlog.delete(backlog.keys().next().value);
+        }
+        entry.rows += frame2.supersededRows;
+        entry.bytes += frame2.supersededBytes;
+        if (frame2.commit.baseReason === "writer_change") entry.supersedeOtherWriters = true;
+        const due = entry.rows >= CHAT_PRUNE_TRIGGER_ROWS || entry.bytes >= CHAT_PRUNE_TRIGGER_BYTES || frame2.finalized || entry.supersedeOtherWriters;
+        if (!due || entry.running) return;
+        entry.rows = 0;
+        entry.bytes = 0;
+        const owned = entry;
+        owned.running = prune(topic, owned).finally(() => {
+          owned.running = null;
+        });
+      };
+      const readBack = (sessionId, frame2) => {
+        if (!shouldReadBack(sessionId)) return;
+        try {
+          runtimeCounters.parityReadBacks++;
+          const actual = readLocalChatParityActual(node, sessionId);
+          compareTranscriptChat(
+            `${ownerDaemonId}:${sessionId}`,
+            {
+              sessionId: frame2.commit.sessionId,
+              producerDaemonId: frame2.commit.producerDaemonId,
+              live: frame2.live,
+              digest: frame2.commit.digest,
+              messages: frame2.expectedMessages()
+            },
+            actual
+          );
+        } catch (error48) {
+          LOG.warn(
+            "Seqscribe",
+            `transcript parity self-check failed session=${redactSessionId(sessionId)}: ${error48 instanceof Error ? error48.message : String(error48)}`
+          );
+        }
+      };
+      return {
+        async appendChatFrame(sessionId, frame2) {
+          const topic = activate(sessionId);
+          if (!topic) throw new Error(`transcript chat topic unavailable session=${redactSessionId(sessionId)}`);
+          const log = node.node.log(topic);
+          const appends = frame2.rows.map(
+            (row) => log.append(row.kind, row.payload, { key: row.key })
+          );
+          await Promise.all(appends);
+          scheduleCompaction(topic, frame2);
+          readBack(sessionId, frame2);
+        },
+        readPersistedChat(sessionId) {
+          const topic = activate(sessionId);
+          if (!topic) return null;
+          return readPersistedChatTopic(node, topic);
+        },
+        installLedgerSeed() {
+          setMessageIdentitySeedProvider((sessionKey2) => {
+            if (!sessionKey2 || sessionKey2.startsWith("provider:")) return null;
+            if (resolveTranscriptMode() === "off") return null;
+            const topic = activate(sessionKey2);
+            if (!topic) return null;
+            const seed = ledgerSeedFromPersisted(readPersistedChatTopic(node, topic));
+            if (seed) runtimeCounters.ledgerSeeds++;
+            return seed;
+          });
+          return () => setMessageIdentitySeedProvider(null);
+        }
+      };
+    }
     init_logger();
     init_dist2();
     init_logger();
@@ -178998,209 +180291,181 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
-    init_dist();
     init_logger();
-    init_logger();
-    init_mesh_publisher();
-    init_topics2();
-    var DEFINED_TRANSCRIPT_TOPICS = /* @__PURE__ */ Symbol.for("adhdev.seqscribe.definedTranscriptTopics");
-    function definedTopicsFor(node) {
-      const host = node;
-      let map3 = host[DEFINED_TRANSCRIPT_TOPICS];
-      if (!map3) {
-        map3 = /* @__PURE__ */ new Map();
-        Object.defineProperty(node, DEFINED_TRANSCRIPT_TOPICS, {
-          value: map3,
-          enumerable: false,
-          writable: false,
-          configurable: true
-        });
-      }
-      return map3;
-    }
-    function ensureSessionTranscriptTopic(node, claims, rawSessionId, ownerDaemonId) {
-      const topic = sessionTranscriptTopic(rawSessionId);
-      const claimResult = claims.claim({ topic, rawSessionId, ownerDaemonId });
-      if (!claimResult.ok) {
-        return { ok: false, reason: claimResult.reason, existing: claimResult.existing };
-      }
-      const cache3 = definedTopicsFor(node);
-      const known = cache3.get(topic);
-      if (known === true) return { ok: true, topic };
-      if (known === false) return { ok: false, reason: "define_failed" };
-      if (!node.authorityEnabled) {
-        return { ok: false, reason: "authority_unavailable" };
-      }
-      if (node.topics.some((d) => d.topic === topic)) {
-        cache3.set(topic, true);
-        return { ok: true, topic };
-      }
-      try {
-        const policy = sessionTranscriptPolicy();
-        node.node.defineTopic(topic, policy);
-        node.topics.push({ topic, policy });
-        cache3.set(topic, true);
-        LOG.info("Seqscribe", `transcript topic defined topic=${topic}`);
-        announceTopicActivated(node, topic);
-        return { ok: true, topic };
-      } catch (error48) {
-        cache3.set(topic, false);
-        LOG.warn(
-          "Seqscribe",
-          `transcript topic activation failed topic=${topic}: ${error48 instanceof Error ? error48.message : String(error48)}`
-        );
-        return { ok: false, reason: "define_failed" };
-      }
-    }
-    function releaseSessionTranscriptTopic(claims, rawSessionId) {
-      claims.release(sessionTranscriptTopic(rawSessionId));
-    }
-    init_transcript_revision_codec();
     var TRANSCRIPT_REPLICA_SUB_VIEW = "tail";
+    var TRANSCRIPT_REPLICA_BASE_REQUEST_AFTER = 3;
     function replicaKeyString(key2) {
       return `${key2.ownerDaemonId}:${key2.rawSessionId}`;
     }
-    function isFiniteNonNegativeInt(value) {
-      return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-    }
-    function parseReplicaRow(row) {
-      if (typeof row.writer !== "string" || !isFiniteNonNegativeInt(row.seq) || typeof row.kind !== "string") {
-        return null;
-      }
-      if (typeof row.payload !== "string") return null;
-      try {
-        return { writer: row.writer, seq: row.seq, kind: row.kind, payload: JSON.parse(row.payload) };
-      } catch {
-        return null;
-      }
+    function identityOf(commit2, view) {
+      return {
+        sessionId: view.sessionId,
+        producerDaemonId: commit2.producerDaemonId,
+        producerWriterId: commit2.writer,
+        epoch: commit2.epoch,
+        frame: commit2.frame,
+        observedAt: commit2.observedAt
+      };
     }
     var TranscriptReplicaStore = class {
-      constructor(node, claims) {
+      constructor(node, claims, hooks = {}) {
         this.node = node;
         this.claims = claims;
+        this.hooks = hooks;
       }
       active = /* @__PURE__ */ new Map();
       nextGeneration = 1;
       stopped = false;
+      counters = { resubscribes: 0, baseRequests: 0, digestMismatches: 0 };
       /**
-       * Define the topic locally (both ends must independently define — design
-       * §3.1) and attach a `tail` SUB to `peer` for `key`. Idempotent per key:
-       * a second call with the SAME key re-derives readiness without tearing
-       * down a healthy subscription; a call with a DIFFERENT peer object for an
-       * ALREADY-subscribed key first closes the stale subscription (peer
-       * reconnect case).
+       * Late-bind the base-frame requester: the store is built with the node,
+       * before the host's mesh dispatch exists (boot S7 binds it).
+       */
+      setBaseRequester(requestBase) {
+        this.hooks = { ...this.hooks, requestBase: requestBase ?? void 0 };
+      }
+      /**
+       * Define the topic locally (both ends must independently define) and attach
+       * a `tail` SUB to `peer` for `key`. Idempotent per key.
        */
       ensureSubscription(key2, peer) {
         if (this.stopped) return { ok: false, reason: "subscribe_failed" };
-        const activation = ensureSessionTranscriptTopic(this.node, this.claims, key2.rawSessionId, key2.ownerDaemonId);
-        if (!activation.ok) {
-          return { ok: false, reason: activation.reason };
-        }
+        const activation = ensureSessionChatTopic(this.node, this.claims, key2.rawSessionId, key2.ownerDaemonId);
+        if (!activation.ok) return { ok: false, reason: activation.reason };
         const keyStr = replicaKeyString(key2);
-        const existing = this.active.get(keyStr);
-        if (existing) return { ok: true, alreadySubscribed: true };
-        const generation = this.nextGeneration++;
-        const assembler = new TranscriptRevisionAssembler();
-        let subscription = null;
-        let unsubscribeSnapshot = null;
-        let unsubscribeDelta = null;
-        const ingest = (rows) => {
-          const current2 = this.active.get(keyStr);
-          if (!current2 || current2.generation !== generation) return;
-          for (const row of rows) {
-            const parsed = parseReplicaRow(row);
-            if (!parsed) {
-              current2.rejectedRows++;
-              continue;
-            }
-            const result = current2.assembler.ingestRow(parsed);
-            if (result.status === "rejected") {
-              current2.rejectedRows++;
-              current2.lastRejectReason = result.reason;
-              continue;
-            }
-            if (result.status !== "complete") continue;
-            if (result.identity.sessionId !== key2.rawSessionId) {
-              current2.rejectedRows++;
-              current2.lastRejectReason = "session_mismatch";
-              LOG.warn(
-                "Seqscribe",
-                `transcript replica session mismatch expected=${key2.rawSessionId.length <= 8 ? key2.rawSessionId : `${key2.rawSessionId.slice(0, 8)}\u2026`} \u2014 discarding revision`
-              );
-              continue;
-            }
-            if (!daemonIdsEquivalent4(result.identity.producerDaemonId, key2.ownerDaemonId)) {
-              current2.rejectedRows++;
-              current2.lastRejectReason = "owner_mismatch";
-              LOG.warn("Seqscribe", "transcript replica owner mismatch \u2014 discarding revision");
-              continue;
-            }
-            current2.lastGood = { snapshot: result.snapshot, identity: result.identity };
-          }
-        };
-        try {
-          subscription = this.node.node.subscribe(peer, {
-            view: TRANSCRIPT_REPLICA_SUB_VIEW,
-            params: { topic: activation.topic }
-          });
-          unsubscribeSnapshot = subscription.onSnapshot((rows) => ingest(rows));
-          unsubscribeDelta = subscription.onDelta((changes) => ingest(changes.upserts));
-        } catch (error48) {
-          try {
-            unsubscribeSnapshot?.();
-          } catch {
-          }
-          try {
-            unsubscribeDelta?.();
-          } catch {
-          }
-          try {
-            subscription?.close();
-          } catch {
-          }
-          LOG.warn(
-            "Seqscribe",
-            `transcript replica subscribe failed topic=${activation.topic}: ${error48 instanceof Error ? error48.message : String(error48)}`
-          );
-          return { ok: false, reason: "subscribe_failed" };
-        }
-        this.active.set(keyStr, {
-          generation,
-          assembler,
-          subscription,
-          unsubscribeSnapshot,
-          unsubscribeDelta,
-          lastGood: null,
+        if (this.active.has(keyStr)) return { ok: true, alreadySubscribed: true };
+        const entry = {
+          generation: this.nextGeneration++,
+          peer,
+          topic: activation.topic,
+          folder: new KeyedTranscriptFolder({ expectedSessionId: key2.rawSessionId, expectedOwnerDaemonId: key2.ownerDaemonId }),
+          subscription: null,
+          unsubscribeSnapshot: null,
+          unsubscribeDelta: null,
           rejectedRows: 0,
-          lastRejectReason: null
-        });
+          lastRejectReason: null,
+          resyncStreak: null,
+          resyncScheduled: false
+        };
+        if (!this.attach(key2, entry)) return { ok: false, reason: "subscribe_failed" };
+        this.active.set(keyStr, entry);
         return { ok: true, alreadySubscribed: false };
       }
-      /** Close one key's SUB and drop its assembler state. */
+      attach(key2, entry) {
+        const keyStr = replicaKeyString(key2);
+        const generation = entry.generation;
+        const parse3 = (rows) => {
+          const out = [];
+          for (const row of rows) {
+            const parsed = parseChatSubRow(row);
+            if (parsed) out.push(parsed);
+            else {
+              entry.rejectedRows++;
+              entry.lastRejectReason = "malformed_row";
+            }
+          }
+          return out;
+        };
+        const after = (rejectedBefore) => {
+          const current2 = this.active.get(keyStr);
+          if (current2 !== entry || entry.generation !== generation) return;
+          const stats = entry.folder.stats();
+          entry.rejectedRows += stats.rejectedRows - rejectedBefore;
+          entry.lastRejectReason = stats.lastRejectReason ?? entry.lastRejectReason;
+          const reason = entry.folder.needsResync;
+          if (!reason) {
+            entry.resyncStreak = null;
+            return;
+          }
+          if (stats.rejectedRows > rejectedBefore) this.scheduleResync(key2, entry, reason);
+        };
+        try {
+          const subscription = this.node.node.subscribe(entry.peer, {
+            view: TRANSCRIPT_REPLICA_SUB_VIEW,
+            params: { topic: entry.topic }
+          });
+          entry.subscription = subscription;
+          entry.unsubscribeSnapshot = subscription.onSnapshot((rows) => {
+            if (entry.generation !== generation) return;
+            const before = entry.folder.stats().rejectedRows;
+            entry.folder.ingestSnapshot(parse3(rows));
+            after(before);
+          });
+          entry.unsubscribeDelta = subscription.onDelta((changes) => {
+            if (entry.generation !== generation) return;
+            const before = entry.folder.stats().rejectedRows;
+            entry.folder.ingestRows(parse3(changes.upserts));
+            after(before);
+          });
+          return true;
+        } catch (error48) {
+          this.detachSub(entry);
+          LOG.warn(
+            "Seqscribe",
+            `transcript replica subscribe failed topic=${entry.topic}: ${error48 instanceof Error ? error48.message : String(error48)}`
+          );
+          return false;
+        }
+      }
+      detachSub(entry) {
+        try {
+          entry.unsubscribeSnapshot?.();
+        } catch {
+        }
+        try {
+          entry.unsubscribeDelta?.();
+        } catch {
+        }
+        try {
+          entry.subscription?.close();
+        } catch {
+        }
+        entry.unsubscribeSnapshot = null;
+        entry.unsubscribeDelta = null;
+        entry.subscription = null;
+      }
+      /** Restart the SUB (→ fresh reset SNAP); escalate a repeating reason to a base request. */
+      scheduleResync(key2, entry, reason) {
+        if (reason === "digest_mismatch") this.counters.digestMismatches++;
+        entry.resyncStreak = entry.resyncStreak?.reason === reason ? { reason, count: entry.resyncStreak.count + 1 } : { reason, count: 1 };
+        if (entry.resyncStreak.count >= TRANSCRIPT_REPLICA_BASE_REQUEST_AFTER) {
+          entry.resyncStreak = null;
+          this.counters.baseRequests++;
+          LOG.warn("Seqscribe", `transcript replica requesting a base frame topic=${entry.topic} reason=${reason}`);
+          try {
+            this.hooks.requestBase?.(key2);
+          } catch {
+          }
+        }
+        if (entry.resyncScheduled) return;
+        entry.resyncScheduled = true;
+        const keyStr = replicaKeyString(key2);
+        const timer = setTimeout(() => {
+          entry.resyncScheduled = false;
+          if (this.stopped || this.active.get(keyStr) !== entry) return;
+          this.detachSub(entry);
+          entry.generation = this.nextGeneration++;
+          this.counters.resubscribes++;
+          if (!this.attach(key2, entry)) this.active.delete(keyStr);
+        }, 0);
+        timer.unref?.();
+      }
+      /** Close one key's SUB and drop its folder. */
       detachSubscription(key2) {
         const keyStr = replicaKeyString(key2);
         const entry = this.active.get(keyStr);
         if (!entry) return;
         this.active.delete(keyStr);
-        try {
-          entry.unsubscribeSnapshot();
-        } catch {
-        }
-        try {
-          entry.unsubscribeDelta();
-        } catch {
-        }
-        try {
-          entry.subscription.close();
-        } catch {
-        }
+        this.detachSub(entry);
       }
       /** Pure in-memory read — the `read_transcript_replica` IPC's data source. */
       getReplica(key2) {
         const entry = this.active.get(replicaKeyString(key2));
         if (!entry) return { available: false, reason: "no_subscription" };
-        if (!entry.lastGood) return { available: false, reason: "no_complete_revision" };
-        return { available: true, snapshot: entry.lastGood.snapshot, identity: entry.lastGood.identity };
+        const view = entry.folder.view();
+        const commit2 = entry.folder.lastCommit();
+        if (!view || !commit2) return { available: false, reason: "no_complete_revision" };
+        return { available: true, view, identity: identityOf(commit2, view) };
       }
       /** Diagnostics only — never gates a read. */
       diagnostics(key2) {
@@ -179208,25 +180473,17 @@ ${notice.notice}${supersededHint}`;
         if (!entry) return { subscribed: false, rejectedRows: 0, lastRejectReason: null };
         return { subscribed: true, rejectedRows: entry.rejectedRows, lastRejectReason: entry.lastRejectReason };
       }
+      /** Local-only counters (`chatDigestMismatch` among them). */
+      getCounters() {
+        return { ...this.counters };
+      }
       /** Close every SUB — daemon shutdown, before `node.close()`. */
       stop() {
         if (this.stopped) return;
         this.stopped = true;
-        for (const keyStr of Array.from(this.active.keys())) {
-          const entry = this.active.get(keyStr);
+        for (const [keyStr, entry] of Array.from(this.active)) {
           this.active.delete(keyStr);
-          try {
-            entry.unsubscribeSnapshot();
-          } catch {
-          }
-          try {
-            entry.unsubscribeDelta();
-          } catch {
-          }
-          try {
-            entry.subscription.close();
-          } catch {
-          }
+          this.detachSub(entry);
         }
       }
     };
@@ -179415,6 +180672,35 @@ ${notice.notice}${supersededHint}`;
           // distributions would defeat the status-frame dedup. The cloud
           // status-report supplier deliberately does NOT pass this.
           transcriptLatency: transcriptService?.getLatencyDetail() ?? null,
+          // Keyed chat write/compaction/read health (design 2026-09-28 §8.3).
+          // Local-only like the latency block above.
+          transcriptChat: (() => {
+            const chatRuntime = transcriptChatRuntimeCounters();
+            const replica = rt.transcriptReplica?.getCounters?.() ?? { digestMismatches: 0, resubscribes: 0, baseRequests: 0 };
+            return {
+              chatFramesPublished: transcriptCounters?.published ?? 0,
+              chatRowsWritten: transcriptCounters?.chatRowsWritten ?? 0,
+              chatBytesWritten: transcriptCounters?.chatBytesWritten ?? 0,
+              chatBaseFrames: transcriptCounters?.chatBaseFrames ?? {
+                epoch_start: 0,
+                writer_change: 0,
+                lineage_switch: 0,
+                resync_request: 0,
+                unexpected: 0
+              },
+              chatBaseRateExceeded: transcriptCounters?.chatBaseRateExceeded ?? 0,
+              chatTripwireRefused: transcriptCounters?.chatTripwireRefused ?? 0,
+              chatUnidentified: transcriptCounters?.unidentified ?? 0,
+              chatPrunedRows: chatRuntime.prunedRows,
+              chatPrunePasses: chatRuntime.prunePasses,
+              chatPruneErrors: chatRuntime.pruneErrors,
+              chatParityReadBacks: chatRuntime.parityReadBacks,
+              chatLedgerSeeds: chatRuntime.ledgerSeeds,
+              chatDigestMismatch: replica.digestMismatches,
+              chatReplicaResubscribes: replica.resubscribes,
+              chatBaseRequests: replica.baseRequests
+            };
+          })(),
           // `active` follows the SERVICE, not the mode: mode `shadow` still
           // publishes, so keying off the mode would read `false` on a daemon
           // that is actively appending.
@@ -179588,147 +180874,6 @@ ${notice.notice}${supersededHint}`;
     init_native_history_executor();
     init_mesh_publisher();
     init_transcript_publisher();
-    init_logger();
-    init_topics2();
-    init_transcript_revision_codec();
-    var TRANSCRIPT_PARITY_SCAN_ROWS = SESSION_TRANSCRIPT_RING;
-    var TRANSCRIPT_PARITY_NARROW_SLACK_ROWS = 8;
-    function readLocalTranscriptParityActual(node, rawSessionId, expectedWriterId, options = {}) {
-      const topic = sessionTranscriptTopic(rawSessionId);
-      let contig;
-      try {
-        const writerVec = node.node.vectors()[topic]?.writers[expectedWriterId];
-        contig = writerVec && "contig" in writerVec ? writerVec.contig : 0;
-      } catch {
-        return { status: "missing" };
-      }
-      const expectedRows = options.expectedRows;
-      if (typeof expectedRows === "number" && Number.isFinite(expectedRows) && expectedRows > 0) {
-        const width = Math.floor(expectedRows) + TRANSCRIPT_PARITY_NARROW_SLACK_ROWS;
-        if (width < TRANSCRIPT_PARITY_SCAN_ROWS) {
-          const narrow = scanLatestComplete(node, topic, expectedWriterId, contig, width);
-          if (narrow === "failed") return { status: "missing" };
-          if (narrow) return { status: "found", snapshot: narrow.snapshot };
-        }
-      }
-      const full = scanLatestComplete(node, topic, expectedWriterId, contig, TRANSCRIPT_PARITY_SCAN_ROWS);
-      if (!full || full === "failed") return { status: "missing" };
-      return { status: "found", snapshot: full.snapshot };
-    }
-    function scanLatestComplete(node, topic, expectedWriterId, contig, width) {
-      let entries;
-      try {
-        const fromSeq = Math.max(1, contig - width + 1);
-        const result = node.node.scanEntries(topic, {
-          writer: expectedWriterId,
-          fromSeq,
-          limit: width
-        });
-        entries = result.entries;
-      } catch {
-        return "failed";
-      }
-      const assembler = new TranscriptRevisionAssembler(expectedWriterId);
-      for (const entry of entries) {
-        assembler.ingestRow(entry);
-      }
-      return assembler.getLatestComplete();
-    }
-    init_transcript_parity();
-    init_transcript_publisher();
-    init_transcript_revision_codec();
-    function decodeOwnEnvelope(writerId, envelope) {
-      const assembler = new TranscriptRevisionAssembler(writerId);
-      assembler.ingestRow({ writer: writerId, seq: 0, kind: TRANSCRIPT_REVISION_BEGIN_KIND, payload: envelope.begin });
-      envelope.chunks.forEach((chunk, index) => {
-        assembler.ingestRow({ writer: writerId, seq: index + 1, kind: TRANSCRIPT_REVISION_CHUNK_KIND, payload: chunk });
-      });
-      return assembler.ingestRow({
-        writer: writerId,
-        seq: envelope.chunks.length + 1,
-        kind: TRANSCRIPT_REVISION_COMMIT_KIND,
-        payload: envelope.commit
-      });
-    }
-    var TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS = 1e4;
-    var TRANSCRIPT_PARITY_SAMPLE_EVERY_N = 50;
-    var TRANSCRIPT_PARITY_SAMPLE_IDLE_EVICT_MS = 60 * 60 * 1e3;
-    var TRANSCRIPT_PARITY_SAMPLE_MAX_SESSIONS = MAX_TRACKED_SESSIONS;
-    function resolveParitySampleIntervalMs(env2 = process.env) {
-      const raw = env2.ADHDEV_TRANSCRIPT_PARITY_SAMPLE_MS;
-      if (raw === void 0 || raw.trim() === "") return TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS;
-      const parsed = Number(raw);
-      return Number.isFinite(parsed) && parsed >= 0 ? parsed : TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS;
-    }
-    function createParitySampler() {
-      const state = /* @__PURE__ */ new Map();
-      return (sessionId) => {
-        const intervalMs = resolveParitySampleIntervalMs();
-        const now = Date.now();
-        const row = state.get(sessionId);
-        if (row) state.delete(sessionId);
-        let readBack;
-        if (!row || intervalMs === 0) {
-          readBack = true;
-        } else {
-          const publishes = row.publishesSinceReadBack + 1;
-          readBack = now - row.lastReadBackAt >= intervalMs || publishes >= TRANSCRIPT_PARITY_SAMPLE_EVERY_N;
-        }
-        const next = readBack ? { lastReadBackAt: now, publishesSinceReadBack: 0, lastSeenAt: now } : { lastReadBackAt: row.lastReadBackAt, publishesSinceReadBack: row.publishesSinceReadBack + 1, lastSeenAt: now };
-        if (!row) {
-          for (const [id22, other] of state) {
-            if (now - other.lastSeenAt > TRANSCRIPT_PARITY_SAMPLE_IDLE_EVICT_MS) state.delete(id22);
-          }
-          while (state.size >= TRANSCRIPT_PARITY_SAMPLE_MAX_SESSIONS) {
-            const oldest = state.keys().next().value;
-            if (oldest === void 0) break;
-            state.delete(oldest);
-          }
-        }
-        state.set(sessionId, next);
-        return readBack;
-      };
-    }
-    function createLiveTranscriptPublisher(node, claims, ownerDaemonId) {
-      const shouldReadBack = createParitySampler();
-      return async (sessionId, envelope) => {
-        const activation = ensureSessionTranscriptTopic(node, claims, sessionId, ownerDaemonId);
-        if (!activation.ok) {
-          throw new Error(
-            `transcript topic unavailable session=${redactSessionId(sessionId)} reason=${activation.reason}`
-          );
-        }
-        const log = node.node.log(activation.topic);
-        const appends = [
-          log.append(TRANSCRIPT_REVISION_BEGIN_KIND, envelope.begin)
-        ];
-        for (const chunk of envelope.chunks) {
-          appends.push(log.append(TRANSCRIPT_REVISION_CHUNK_KIND, chunk));
-        }
-        appends.push(log.append(TRANSCRIPT_REVISION_COMMIT_KIND, envelope.commit));
-        await Promise.all(appends);
-        try {
-          const expected = decodeOwnEnvelope(node.writerId, envelope);
-          if (expected.status !== "complete") {
-            LOG.warn(
-              "Seqscribe",
-              `transcript self-decode failed session=${redactSessionId(sessionId)} status=${expected.status}`
-            );
-            return;
-          }
-          if (!shouldReadBack(sessionId)) return;
-          const actual = readLocalTranscriptParityActual(node, sessionId, node.writerId, {
-            expectedRows: envelope.chunks.length + 2
-          });
-          compareTranscriptRevision(`${ownerDaemonId}:${sessionId}`, expected.snapshot, actual);
-        } catch (error48) {
-          LOG.warn(
-            "Seqscribe",
-            `transcript parity self-check failed session=${redactSessionId(sessionId)}: ${error48 instanceof Error ? error48.message : String(error48)}`
-          );
-        }
-      };
-    }
     function isTranscriptStatusTrigger(eventName) {
       return typeof eventName === "string" && (eventName.startsWith("agent:") || eventName.startsWith("monitor:"));
     }
@@ -179755,12 +180900,10 @@ ${notice.notice}${supersededHint}`;
       };
     }
     init_logger();
+    init_authority_id();
     init_topics2();
-    init_transcript_revision_codec();
+    init_transcript_keyed_codec();
     var TRANSCRIPT_PRUNE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
-    var TRANSCRIPT_TAIL_WINDOW_ROWS = 500;
-    var TRANSCRIPT_PRUNE_MARGIN_ROWS = 100;
-    var TRANSCRIPT_PRUNE_MAX_ENTRIES = Math.max(TRANSCRIPT_TAIL_WINDOW_ROWS, 2 * MAX_TRANSCRIPT_REVISION_ROWS) + TRANSCRIPT_PRUNE_MARGIN_ROWS;
     var TRANSCRIPT_PRUNE_INTERVAL_MS = 60 * 60 * 1e3;
     var TRANSCRIPT_PRUNE_INITIAL_DELAY_MS = 5 * 60 * 1e3;
     var TRANSCRIPT_PRUNE_CONTINUATION_DELAY_MS = 30 * 1e3;
@@ -179769,12 +180912,21 @@ ${notice.notice}${supersededHint}`;
     var TRANSCRIPT_DISCOVERY_MAX_TOPICS_PER_SWEEP = 32;
     var INCREMENTAL_VACUUM_PAGES_PER_STEP = 1024;
     var INCREMENTAL_VACUUM_MAX_STEPS_PER_SWEEP = 64;
-    var TRANSCRIPT_TOPIC_PREFIX = "session.";
-    var TRANSCRIPT_TOPIC_SUFFIX = ".transcript";
-    var TRANSCRIPT_TOPIC_LIKE = "session.%.transcript";
-    var DISCOVERED_TRANSCRIPT_TOPIC_RE = /^session\.[a-z0-9_-]+\.transcript$/;
-    function isTranscriptTopic(topic) {
-      return topic.startsWith(TRANSCRIPT_TOPIC_PREFIX) && topic.endsWith(TRANSCRIPT_TOPIC_SUFFIX);
+    var LEGACY_TRANSCRIPT_TOPIC_LIKE = "session.%.transcript";
+    var CHAT_TOPIC_LIKE = "session.%.chat";
+    var LEGACY_TRANSCRIPT_TOPIC_RE = /^session\.[a-z0-9_-]+\.transcript$/;
+    var CHAT_TOPIC_RE = /^session\.[a-z0-9_-]+\.chat$/;
+    function isLegacyTranscriptTopic(topic) {
+      return LEGACY_TRANSCRIPT_TOPIC_RE.test(topic);
+    }
+    function legacyTranscriptPolicy() {
+      return {
+        kind: "append",
+        retention: { mode: "full" },
+        replication: "subscribe-only",
+        access: "content",
+        finalityAuthority: ADHDEV_AUTHORITY_ID
+      };
     }
     var ACTIVE_TAIL_SUBSCRIBER_MARKER = "active tail subscriber";
     function isActiveTailSubscriberRefusal(error48) {
@@ -179785,8 +180937,10 @@ ${notice.notice}${supersededHint}`;
         runs: 0,
         topicsInspected: 0,
         topicsDiscovered: 0,
-        overCapTopics: 0,
+        legacyTopicsCleared: 0,
+        legacyRowsPruned: 0,
         rowsPruned: 0,
+        deadTopicsRemoved: 0,
         skippedActive: 0,
         budgetExhausted: 0,
         vacuumedPages: 0,
@@ -179795,60 +180949,30 @@ ${notice.notice}${supersededHint}`;
     }
     var counters7 = zeroCounters();
     function emptyResult() {
-      return { overCap: [], discovered: [], budgetExhausted: false, vacuumedPages: 0 };
+      return { legacyCleared: [], discovered: [], budgetExhausted: false, vacuumedPages: 0 };
     }
-    function yieldToEventLoop() {
+    function yieldToEventLoop2() {
       return new Promise((resolve38) => setImmediate(resolve38));
     }
-    async function pruneOneBound(handle, topic, bound) {
-      try {
-        const result = await handle.node.pruneTopic(topic, bound);
-        if (result.prunedRows > 0) {
-          counters7.rowsPruned += result.prunedRows;
-          LOG.info(
-            "Seqscribe",
-            `transcript writer-gc pruned topic=${topic} rows=${result.prunedRows} bound=${JSON.stringify(bound)}`
-          );
-        }
-        return { status: "pruned", prunedRows: result.prunedRows };
-      } catch (error48) {
-        if (isActiveTailSubscriberRefusal(error48)) {
-          LOG.debug(
-            "Seqscribe",
-            `transcript writer-gc skipped topic=${topic}: active tail subscriber`
-          );
-          return { status: "skippedActive" };
-        }
-        counters7.errors++;
-        LOG.warn(
-          "Seqscribe",
-          `transcript writer-gc prune failed topic=${topic}: ${error48 instanceof Error ? error48.message : String(error48)}`
-        );
-        return { status: "error" };
-      }
+    function errText2(error48) {
+      return error48 instanceof Error ? error48.message : String(error48);
     }
-    function discoverStoredTranscriptTopics(handle, definedTopics2, bounds, maxTopics) {
+    function discoverStoredTopics(handle, definedTopics2, like, re, policy, maxTopics) {
       const maintenance = handle.maintenance;
       if (!maintenance || !handle.authorityEnabled || maxTopics <= 0) return [];
       const discovered = [];
-      for (const topic of maintenance.storedTopicsLike(TRANSCRIPT_TOPIC_LIKE)) {
+      for (const topic of maintenance.storedTopicsLike(like)) {
         if (discovered.length >= maxTopics) break;
-        if (definedTopics2.has(topic) || !DISCOVERED_TRANSCRIPT_TOPIC_RE.test(topic)) continue;
-        if (!maintenance.topicHasPrunableRows(topic, bounds)) continue;
+        if (definedTopics2.has(topic) || !re.test(topic)) continue;
+        if (!maintenance.topicHasPrunableRows(topic, { keepNewest: 0, olderThanEpochMs: 0 })) continue;
         try {
-          handle.node.defineTopic(topic, sessionTranscriptPolicy());
+          handle.node.defineTopic(topic, policy());
           discovered.push(topic);
           counters7.topicsDiscovered++;
         } catch (error48) {
           counters7.errors++;
-          LOG.warn(
-            "Seqscribe",
-            `transcript writer-gc could not define stored topic=${topic}: ${error48 instanceof Error ? error48.message : String(error48)}`
-          );
+          LOG.warn("Seqscribe", `transcript writer-gc could not define stored topic=${topic}: ${errText2(error48)}`);
         }
-      }
-      if (discovered.length > 0) {
-        LOG.info("Seqscribe", `transcript writer-gc discovered ${discovered.length} stored transcript topic(s) to prune`);
       }
       return discovered;
     }
@@ -179861,7 +180985,7 @@ ${notice.notice}${supersededHint}`;
         if (!result) break;
         freed += result.freedPages;
         if (result.remainingFreePages === 0 || result.freedPages === 0) break;
-        await yieldToEventLoop();
+        await yieldToEventLoop2();
       }
       if (freed > 0) {
         maintenance.checkpoint("TRUNCATE");
@@ -179871,91 +180995,99 @@ ${notice.notice}${supersededHint}`;
       return freed;
     }
     async function runTranscriptWriterGcSweep(handle, opts = {}) {
-      const maxEntries = Math.max(1, opts.maxEntries ?? TRANSCRIPT_PRUNE_MAX_ENTRIES);
       const maxAgeMs = opts.maxAgeMs ?? TRANSCRIPT_PRUNE_MAX_AGE_MS;
       const stepRows = Math.max(1, opts.stepRows ?? TRANSCRIPT_PRUNE_STEP_ROWS);
       const now = opts.now ?? Date.now;
       const shouldContinue = opts.shouldContinue ?? (() => true);
+      const maxDiscovered = opts.maxDiscoveredTopics ?? TRANSCRIPT_DISCOVERY_MAX_TOPICS_PER_SWEEP;
       let budget = Math.max(1, opts.sweepRowBudget ?? TRANSCRIPT_PRUNE_SWEEP_ROW_BUDGET);
       const result = emptyResult();
       counters7.runs++;
       try {
         const definedTopics2 = new Set(Object.keys(handle.node.stats().topics));
-        result.discovered = discoverStoredTranscriptTopics(
-          handle,
-          definedTopics2,
-          { keepNewest: maxEntries, olderThanEpochMs: now() - maxAgeMs },
-          opts.maxDiscoveredTopics ?? TRANSCRIPT_DISCOVERY_MAX_TOPICS_PER_SWEEP
+        result.discovered.push(
+          ...discoverStoredTopics(handle, definedTopics2, LEGACY_TRANSCRIPT_TOPIC_LIKE, LEGACY_TRANSCRIPT_TOPIC_RE, legacyTranscriptPolicy, maxDiscovered),
+          ...discoverStoredTopics(handle, definedTopics2, CHAT_TOPIC_LIKE, CHAT_TOPIC_RE, sessionChatPolicy, maxDiscovered)
         );
-        const stats = handle.node.stats();
-        for (const [topic, topicStats] of Object.entries(stats.topics)) {
-          if (!isTranscriptTopic(topic)) continue;
-          if (!shouldContinue()) break;
-          counters7.topicsInspected++;
+        const topics = handle.node.stats().topics;
+        for (const [topic, topicStats] of Object.entries(topics)) {
+          if (!isLegacyTranscriptTopic(topic)) continue;
+          if (!shouldContinue() || budget <= 0) break;
           let rows = topicStats.logRows;
-          if (rows > maxEntries) {
-            result.overCap.push({ topic, logRows: rows });
-            counters7.overCapTopics++;
-          }
-          let skipped = false;
-          let countErrored = false;
-          let countDone = rows <= maxEntries;
-          if (!countDone) {
-            while (rows > maxEntries && budget > 0 && shouldContinue()) {
-              const step = Math.min(stepRows, rows - maxEntries, budget);
-              const outcome = await pruneOneBound(handle, topic, { keepNewest: rows - step });
-              if (outcome.status === "skippedActive") {
-                skipped = true;
-                break;
+          while (rows > 0 && budget > 0 && shouldContinue()) {
+            const step = Math.min(stepRows, rows, budget);
+            let pruned = 0;
+            try {
+              pruned = (await handle.node.pruneTopic(topic, { keepNewest: rows - step })).prunedRows;
+            } catch (error48) {
+              if (isActiveTailSubscriberRefusal(error48)) counters7.skippedActive++;
+              else {
+                counters7.errors++;
+                LOG.warn("Seqscribe", `transcript writer-gc legacy prune failed topic=${topic}: ${errText2(error48)}`);
               }
-              if (outcome.status === "error") {
-                countErrored = true;
-                break;
-              }
-              if (outcome.prunedRows === 0) {
-                countDone = true;
-                break;
-              }
-              rows -= outcome.prunedRows;
-              budget -= outcome.prunedRows;
-              await yieldToEventLoop();
-            }
-            if (rows <= maxEntries) countDone = true;
-          } else {
-            const outcome = await pruneOneBound(handle, topic, { keepNewest: maxEntries });
-            if (outcome.status === "skippedActive") skipped = true;
-            else if (outcome.status === "error") countErrored = true;
-            else rows -= outcome.prunedRows;
-          }
-          if (skipped) {
-            counters7.skippedActive++;
-            continue;
-          }
-          if (!countDone && !countErrored) {
-            if (!shouldContinue()) break;
-            result.budgetExhausted = true;
-            break;
-          }
-          while (budget > 0 && shouldContinue()) {
-            const step = Math.min(stepRows, budget);
-            const bound = rows > step ? { olderThanMs: maxAgeMs, keepNewest: rows - step } : { olderThanMs: maxAgeMs };
-            const outcome = await pruneOneBound(handle, topic, bound);
-            if (outcome.status === "skippedActive") {
-              counters7.skippedActive++;
               break;
             }
-            if (outcome.status === "error") break;
-            rows -= outcome.prunedRows;
-            budget -= outcome.prunedRows;
-            if (outcome.prunedRows < step || !("keepNewest" in bound)) break;
-            await yieldToEventLoop();
+            if (pruned === 0) break;
+            rows -= pruned;
+            budget -= pruned;
+            counters7.legacyRowsPruned += pruned;
+            await yieldToEventLoop2();
           }
-          if (budget <= 0) {
-            result.budgetExhausted = true;
-            break;
+          if (rows <= 0) {
+            result.legacyCleared.push(topic);
+            counters7.legacyTopicsCleared++;
+            LOG.info("Seqscribe", `transcript writer-gc removed legacy topic rows topic=${topic}`);
           }
         }
-        if (result.budgetExhausted) counters7.budgetExhausted++;
+        for (const topic of Object.keys(topics)) {
+          if (sessionSegmentFromChatTopic(topic) === null) continue;
+          if (!shouldContinue() || budget <= 0) break;
+          counters7.topicsInspected++;
+          let head;
+          try {
+            head = handle.node.keyHead(topic, CHAT_COMMIT_KEY);
+          } catch (error48) {
+            counters7.errors++;
+            LOG.warn("Seqscribe", `transcript writer-gc keyHead failed topic=${topic}: ${errText2(error48)}`);
+            continue;
+          }
+          if (!head) continue;
+          const dead = now() - head.entry.hlc.l > maxAgeMs && handle.node.tailSubscriberCount(topic) === 0;
+          if (dead) {
+            try {
+              const { prunedRows } = await handle.node.pruneTopic(topic, { keepNewest: 0 });
+              budget -= prunedRows;
+              counters7.rowsPruned += prunedRows;
+              if (prunedRows > 0) {
+                counters7.deadTopicsRemoved++;
+                LOG.info("Seqscribe", `transcript writer-gc removed dead chat topic=${topic} rows=${prunedRows}`);
+              }
+            } catch (error48) {
+              if (isActiveTailSubscriberRefusal(error48)) counters7.skippedActive++;
+              else counters7.errors++;
+            }
+            continue;
+          }
+          while (budget > 0 && shouldContinue()) {
+            const maxRows = Math.min(stepRows, budget);
+            let pruned = 0;
+            try {
+              pruned = (await handle.node.pruneSuperseded(topic, { uptoRowid: head.rowid, maxRows })).prunedRows;
+            } catch (error48) {
+              counters7.errors++;
+              LOG.warn("Seqscribe", `transcript writer-gc pruneSuperseded failed topic=${topic}: ${errText2(error48)}`);
+              break;
+            }
+            budget -= pruned;
+            counters7.rowsPruned += pruned;
+            if (pruned < maxRows) break;
+            await yieldToEventLoop2();
+          }
+        }
+        if (budget <= 0) {
+          result.budgetExhausted = true;
+          counters7.budgetExhausted++;
+        }
         result.vacuumedPages = await reclaimFreePages(
           handle,
           Math.max(1, opts.vacuumPagesPerStep ?? INCREMENTAL_VACUUM_PAGES_PER_STEP),
@@ -179964,10 +181096,7 @@ ${notice.notice}${supersededHint}`;
         );
       } catch (error48) {
         counters7.errors++;
-        LOG.warn(
-          "Seqscribe",
-          `transcript writer-gc sweep failed: ${error48 instanceof Error ? error48.message : String(error48)}`
-        );
+        LOG.warn("Seqscribe", `transcript writer-gc sweep failed: ${errText2(error48)}`);
       }
       return result;
     }
@@ -180066,14 +181195,19 @@ ${notice.notice}${supersededHint}`;
       undo.push(["fleet-parity", () => {
         configureFleetStatusParity(null);
       }]);
-      s5.sessionRegistry.setTranscriptTopicRelease((rawSessionId) => releaseSessionTranscriptTopic(rt.transcriptClaims, rawSessionId));
+      s5.sessionRegistry.setTranscriptTopicRelease((rawSessionId) => releaseSessionChatTopic(rt.transcriptClaims, rawSessionId));
       const transcriptOwnerDaemonId = node.daemonId ?? node.writerId;
       let transcript = null;
+      let removeLedgerSeed = () => {
+      };
       tryStep("Seqscribe", "transcript projection", () => {
+        const chat = createLiveChatPublisher(node, rt.transcriptClaims, transcriptOwnerDaemonId);
+        removeLedgerSeed = chat.installLedgerSeed();
         transcript = configureTranscriptProjection({
           daemonId: () => transcriptOwnerDaemonId,
           writerId: () => node.writerId,
-          publishRevision: createLiveTranscriptPublisher(node, rt.transcriptClaims, transcriptOwnerDaemonId),
+          appendChatFrame: (sessionId, frame2, observation) => chat.appendChatFrame(sessionId, frame2, observation),
+          readPersistedChat: (sessionId) => chat.readPersistedChat(sessionId),
           resolveSourcePath: (sessionId) => {
             const session = s5.sessionRegistry.get(sessionId);
             if (!session) return null;
@@ -180099,9 +181233,6 @@ ${notice.notice}${supersededHint}`;
               throw error48;
             }
             return null;
-          },
-          onOversize: (sessionId) => {
-            LOG.warn("Seqscribe", `transcript projection oversize session=${shortId2(sessionId)} \u2014 caller must fall back to legacy read_chat/chat_history`);
           }
         });
       });
@@ -180111,6 +181242,7 @@ ${notice.notice}${supersededHint}`;
       undo.push(["transcript", () => {
         offTranscript();
         configureTranscriptProjection(null);
+        removeLedgerSeed();
         s5.sessionRegistry.setTranscriptTopicRelease(null);
       }]);
       tryStep("Seqscribe", "transcript writer-gc", () => {
@@ -180526,6 +181658,13 @@ ${notice.notice}${supersededHint}`;
     init_dist();
     function assembleDaemonComponents(s6) {
       const { cfg, seqscribe } = s6;
+      const dispatch2 = cfg.mesh?.dispatchMeshCommand;
+      if (seqscribe && dispatch2) {
+        seqscribe.transcriptReplica.setBaseRequester((key2) => {
+          void dispatch2(key2.ownerDaemonId, "request_transcript_base", { rawSessionId: key2.rawSessionId }).catch(() => {
+          });
+        });
+      }
       const components = {
         providerLoader: s6.providerLoader,
         instanceManager: s6.instanceManager,
@@ -182422,14 +183561,12 @@ ${notice.notice}${supersededHint}`;
     init_dist2();
     init_logger();
     init_mesh_publisher();
+    init_topics2();
     var STANDALONE_SEQSCRIBE_WS_PATH = "/ws/seqscribe";
     var STANDALONE_SEQSCRIBE_PEER_CLASS = "content";
     var MAX_STANDALONE_SEQSCRIBE_LANES = 8;
     function transcriptTopicSessionSegment(topic) {
-      if (!topic.startsWith("session.") || !topic.endsWith(".transcript")) return null;
-      const segment = topic.slice("session.".length, -".transcript".length);
-      if (segment.length === 0 || segment.includes(".")) return null;
-      return segment;
+      return sessionSegmentFromChatTopic(topic);
     }
     function deriveStandaloneTranscriptGrants(topics) {
       const grants = {};
@@ -188604,7 +189741,7 @@ function narrowReason(value, fallback) {
 }
 function isUsableSnapshot(value) {
   if (!value || typeof value !== "object") return false;
-  if (value.schemaVersion !== 1) return false;
+  if (value.schemaVersion !== 2) return false;
   if (typeof value.sessionId !== "string" || !value.sessionId) return false;
   if (typeof value.status !== "string" || !value.status) return false;
   if (!Array.isArray(value.messages)) return false;
@@ -188613,7 +189750,7 @@ function isUsableSnapshot(value) {
   if (typeof value.coverage.totalMessageCount !== "number") return false;
   if (typeof value.coverage.omittedBefore !== "boolean") return false;
   if (!value.provenance || typeof value.provenance !== "object") return false;
-  if (typeof value.revision !== "number") return false;
+  if (typeof value.frame !== "number") return false;
   if (typeof value.observedAt !== "string" || !value.observedAt) return false;
   const modal = value.activeModal;
   if (modal !== null && modal !== void 0) {
@@ -188647,10 +189784,10 @@ async function readTranscriptReplicaForSemanticConsumer(transport, request) {
   if (read?.available !== true) {
     return { payload: null, fallbackReason: ensureReason ?? narrowReason(read, "no_complete_revision") };
   }
-  if (!isUsableSnapshot(read.snapshot)) {
+  if (!isUsableSnapshot(read.view)) {
     return { payload: null, fallbackReason: "revision_invalid" };
   }
-  const snapshot = read.snapshot;
+  const snapshot = read.view;
   if (!request.acceptCoverage.includes(snapshot.coverage.mode)) {
     return { payload: null, fallbackReason: "coverage_insufficient" };
   }
@@ -188662,7 +189799,7 @@ async function readTranscriptReplicaForSemanticConsumer(transport, request) {
     }
   }
   return {
-    payload: (0, import_daemon_core8.mapTranscriptSnapshotToReadChatPayload)(snapshot, {
+    payload: (0, import_daemon_core8.mapTranscriptViewToReadChatPayload)(snapshot, {
       omittedBefore: snapshot.coverage.omittedBefore,
       stale: read.stale === true
     }),
@@ -194645,7 +195782,7 @@ function readReason(value, fallback) {
 }
 function isUsableSnapshot2(value) {
   if (!value || typeof value !== "object") return false;
-  if (value.schemaVersion !== 1) return false;
+  if (value.schemaVersion !== 2) return false;
   if (typeof value.sessionId !== "string" || !value.sessionId) return false;
   if (typeof value.status !== "string" || !value.status) return false;
   if (!Array.isArray(value.messages)) return false;
@@ -194653,7 +195790,7 @@ function isUsableSnapshot2(value) {
   if (typeof value.coverage.totalMessageCount !== "number") return false;
   if (typeof value.coverage.omittedBefore !== "boolean") return false;
   if (!value.provenance || typeof value.provenance !== "object") return false;
-  if (typeof value.revision !== "number") return false;
+  if (typeof value.frame !== "number") return false;
   if (typeof value.observedAt !== "string" || !value.observedAt) return false;
   return true;
 }
@@ -194677,12 +195814,12 @@ async function readTranscriptReplicaForDisplay(transport, key) {
   if (read?.available !== true) {
     return { payload: null, fallbackReason: ensureReason ?? readReason(read, "no_complete_revision") };
   }
-  if (!isUsableSnapshot2(read.snapshot)) {
+  if (!isUsableSnapshot2(read.view)) {
     return { payload: null, fallbackReason: "revision_invalid" };
   }
-  const snapshot = read.snapshot;
+  const snapshot = read.view;
   return {
-    payload: (0, import_daemon_core17.mapTranscriptSnapshotToReadChatPayload)(snapshot, {
+    payload: (0, import_daemon_core17.mapTranscriptViewToReadChatPayload)(snapshot, {
       omittedBefore: snapshot.coverage.omittedBefore,
       stale: read.stale === true
     }),

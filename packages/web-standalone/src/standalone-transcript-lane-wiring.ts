@@ -12,9 +12,10 @@
  * SharedArrayBuffer.
  */
 import {
-    applyTranscriptReplicaSnapshotToControllers,
+    applyTranscriptReplicaViewToControllers,
     collectRetainedTranscriptSessionInterest,
     reportTranscriptReplicaFallbackForSession,
+    requestTranscriptBaseForSession,
     subscribeTranscriptSessionInterest,
 } from '@adhdev/web-core'
 import { startTranscriptWorkerHost } from '@adhdev/web-core/transcript-transport'
@@ -39,13 +40,14 @@ export function startStandaloneTranscriptLane(): () => void {
     const url = buildStandaloneSeqscribeWsUrl(window.location, getStandaloneToken())
     const client = new StandaloneTranscriptLaneClient({
         createSocket: () => new WebSocket(url),
-        startHost: (transport, onSnapshot) =>
+        startHost: (transport, onView, onBaseRequest) =>
             startTranscriptWorkerHost(transport, {
                 writerId: STANDALONE_TRANSCRIPT_WRITER_ID,
                 // One database per origin; each session is its own seqscribe
                 // TOPIC inside it (same rationale as web-cloud).
                 sessionKey: 'transcript',
-                onSnapshot,
+                onView,
+                onBaseRequest,
                 createWorker: () =>
                     new Worker(
                         new URL('@adhdev/web-core/transcript-transport/worker-entry', import.meta.url),
@@ -55,7 +57,8 @@ export function startStandaloneTranscriptLane(): () => void {
             }),
         collectInterest: collectRetainedTranscriptSessionInterest,
         subscribeInterest: subscribeTranscriptSessionInterest,
-        applySnapshot: applyTranscriptReplicaSnapshotToControllers,
+        applyView: (daemonId, sessionId, view) => applyTranscriptReplicaViewToControllers(daemonId, sessionId, view),
+        requestBase: requestTranscriptBaseForSession,
         reportFallback: reportTranscriptReplicaFallbackForSession,
         setTimer: (cb, ms) => setTimeout(cb, ms),
         clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),

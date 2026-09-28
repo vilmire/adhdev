@@ -21,9 +21,11 @@ import type { MessageSourceAddress } from '../../chat/message-source-address.js'
  * block on demand (see `expand_tool_block`).
  *
  * Every field is an integer. There is no text, no path, and no hash of content
- * here, which is what makes the ref safe to carry on the replicated transcript
- * wire (`seqscribe/transcript-projection.ts`) where content-derived identity —
- * notably `providerUnitKey` — is deliberately excluded.
+ * here — it is content-free. It still does NOT travel the keyed replica wire
+ * (`seqscribe/transcript-keyed-codec.ts`): the mtime seal changes on every
+ * append, so carrying it would rewrite every past tool bubble. The wire carries
+ * `expandable` instead and a replica reader expands by `messageId`, which the
+ * daemon resolves back to this ref through its identity ledger.
  *
  * `sourceMtimeMs` is the freshness seal, not just an address component: an
  * expand request that carries a stale mtime is refused outright rather than

@@ -9,9 +9,9 @@ import {
     deriveStandaloneTranscriptGrants,
     transcriptTopicSessionSegment,
 } from '../../src/seqscribe/standalone-transcript-lane.js';
-import { ensureSessionTranscriptTopic } from '../../src/seqscribe/transcript-activation.js';
+import { ensureSessionChatTopic } from '../../src/seqscribe/transcript-activation.js';
 import { TranscriptTopicClaimRegistry } from '../../src/seqscribe/transcript-topic-claim.js';
-import { fleetStatusPolicy, sessionTranscriptPolicy, sessionTranscriptTopic } from '../../src/seqscribe/topics.js';
+import { fleetStatusPolicy, sessionChatPolicy, sessionChatTopic } from '../../src/seqscribe/topics.js';
 
 /**
  * G6 prerequisite — the standalone dashboard replica lane, driven over a fake
@@ -22,7 +22,7 @@ import { fleetStatusPolicy, sessionTranscriptPolicy, sessionTranscriptTopic } fr
  * (`ensureSessionTranscriptTopic`), and a `StandaloneTranscriptLane.accept`
  * on the server half of the socket. The "browser" side mirrors the web-core
  * transcript worker: it attaches with `peerClass:'content'`, grants NOTHING
- * back, defines `sessionTranscriptPolicy()` locally, and SUBs `view:'tail'`
+ * back, defines `sessionChatPolicy()` locally, and SUBs `view:'tail'`
  * (`transcript-session-subscription.ts`).
  *
  * The auth gate is NOT tested here — it lives in the HTTP upgrade router
@@ -32,7 +32,7 @@ import { fleetStatusPolicy, sessionTranscriptPolicy, sessionTranscriptTopic } fr
 
 const FLEET_SECRET = 'standalone-lane-test-secret';
 const SESSION_ID = 'sess-standalone-lane-1';
-const TOPIC = sessionTranscriptTopic(SESSION_ID);
+const TOPIC = sessionChatTopic(SESSION_ID);
 
 const tmpDirs: string[] = [];
 const handles: SeqscribeNodeHandle[] = [];
@@ -146,7 +146,7 @@ async function waitReady(peer: PeerHandle): Promise<void> {
 }
 
 function defineTranscript(daemon: SeqscribeNodeHandle, sessionId: string, claims = new TranscriptTopicClaimRegistry()) {
-    const result = ensureSessionTranscriptTopic(daemon, claims, sessionId, 'standalone_mach_test');
+    const result = ensureSessionChatTopic(daemon, claims, sessionId, 'standalone_mach_test');
     expect(result.ok).toBe(true);
     return claims;
 }
@@ -154,19 +154,21 @@ function defineTranscript(daemon: SeqscribeNodeHandle, sessionId: string, claims
 describe('deriveStandaloneTranscriptGrants', () => {
     it('grants serve on subscribe-only session transcript topics and nothing else', () => {
         const grants = deriveStandaloneTranscriptGrants([
-            { topic: TOPIC, policy: sessionTranscriptPolicy() },
+            { topic: TOPIC, policy: sessionChatPolicy() },
             { topic: 'fleet.status', policy: fleetStatusPolicy() },
             { topic: 'mesh.m1.events', policy: { kind: 'append', retention: { mode: 'full' }, replication: 'full-sync', access: 'content' } },
             // A full-sync topic that happens to look like a transcript must not be granted `serve`-as-`full` or at all.
-            { topic: 'session.odd.transcript', policy: { kind: 'append', retention: { mode: 'full' }, replication: 'full-sync', access: 'content' } },
+            { topic: 'session.odd.chat', policy: { kind: 'append', retention: { mode: 'full' }, replication: 'full-sync', access: 'content' } },
+            // The removed v1 whole-snapshot topic is never served (design 2026-09-28 §6).
+            { topic: 'session.old.transcript', policy: { kind: 'append', retention: { mode: 'full' }, replication: 'subscribe-only', access: 'content' } },
         ] as SeqscribeNodeHandle['topics']);
         expect(grants).toEqual({ [TOPIC]: 'serve' });
     });
 
     it('parses the transcript session segment strictly', () => {
         expect(transcriptTopicSessionSegment(TOPIC)).not.toBeNull();
-        expect(transcriptTopicSessionSegment('session..transcript')).toBeNull();
-        expect(transcriptTopicSessionSegment('session.a.b.transcript')).toBeNull();
+        expect(transcriptTopicSessionSegment('session..chat')).toBeNull();
+        expect(transcriptTopicSessionSegment('session.a.b.chat')).toBeNull();
         expect(transcriptTopicSessionSegment('session.a.chat_tail')).toBeNull();
     });
 });
@@ -176,7 +178,7 @@ describe('StandaloneTranscriptLane over a WebSocket pair (real nodes)', () => {
         const daemon = openNode('daemon');
         const browser = openNode('browser');
         defineTranscript(daemon, SESSION_ID);
-        await daemon.node.log(TOPIC).append('transcript.revision.begin', { n: 1 });
+        await daemon.node.log(TOPIC).append('chat.meta.v2', { n: 1 }, { key: 'meta' });
 
         const lane = newLane(daemon);
         const [serverSock, browserSock] = socketPair();
@@ -185,16 +187,16 @@ describe('StandaloneTranscriptLane over a WebSocket pair (real nodes)', () => {
 
         const peer = attachBrowser(browser, browserSock);
         await waitReady(peer);
-        browser.node.defineTopic(TOPIC, sessionTranscriptPolicy());
+        browser.node.defineTopic(TOPIC, sessionChatPolicy());
         const { snaps, deltas } = subscribeTail(browser, peer, TOPIC);
 
         await waitFor(() => snaps.length > 0, 'SNAP');
-        expect(snaps[0]!.map((r) => r.kind)).toEqual(['transcript.revision.begin']);
+        expect(snaps[0]!.map((r) => r.kind)).toEqual(['chat.meta.v2']);
         expect(snaps[0]![0]!.writer).toBe(daemon.writerId);
 
-        await daemon.node.log(TOPIC).append('transcript.revision.commit', { n: 2 });
+        await daemon.node.log(TOPIC).append('chat.commit.v2', { n: 2 }, { key: 'commit' });
         await waitFor(() => deltas.length > 0, 'DELTA');
-        expect(deltas.flat().map((r) => r.kind)).toContain('transcript.revision.commit');
+        expect(deltas.flat().map((r) => r.kind)).toContain('chat.commit.v2');
     });
 
     it('a transcript topic activated AFTER the lane attached is re-advertised and becomes SUB-able', async () => {
@@ -211,14 +213,14 @@ describe('StandaloneTranscriptLane over a WebSocket pair (real nodes)', () => {
         // Production activation path — announces to the lane's listener.
         defineTranscript(daemon, SESSION_ID);
         expect(lane.grants()).toEqual({ [TOPIC]: 'serve' });
-        await daemon.node.log(TOPIC).append('transcript.revision.begin', { n: 1 });
+        await daemon.node.log(TOPIC).append('chat.meta.v2', { n: 1 }, { key: 'meta' });
         // Let the re-advertised HELLO land before the SUB goes out.
         await new Promise((r) => setTimeout(r, 150));
 
-        browser.node.defineTopic(TOPIC, sessionTranscriptPolicy());
+        browser.node.defineTopic(TOPIC, sessionChatPolicy());
         const { snaps } = subscribeTail(browser, peer, TOPIC);
         await waitFor(() => snaps.length > 0, 'SNAP after runtime activation');
-        expect(snaps[0]!.map((r) => r.kind)).toEqual(['transcript.revision.begin']);
+        expect(snaps[0]!.map((r) => r.kind)).toEqual(['chat.meta.v2']);
     });
 
     it('a SUB sent before the topic existed stays dead; a fresh SUB after activation succeeds (why the dashboard re-SUBs)', async () => {
@@ -229,12 +231,12 @@ describe('StandaloneTranscriptLane over a WebSocket pair (real nodes)', () => {
         lane.accept(serverSock);
         const peer = attachBrowser(browser, browserSock);
         await waitReady(peer);
-        browser.node.defineTopic(TOPIC, sessionTranscriptPolicy());
+        browser.node.defineTopic(TOPIC, sessionChatPolicy());
         const early = subscribeTail(browser, peer, TOPIC);
         await new Promise((r) => setTimeout(r, 150));
 
         defineTranscript(daemon, SESSION_ID);
-        await daemon.node.log(TOPIC).append('transcript.revision.begin', { n: 1 });
+        await daemon.node.log(TOPIC).append('chat.meta.v2', { n: 1 }, { key: 'meta' });
         await new Promise((r) => setTimeout(r, 400));
         // seqscribe answered the early SUB with SUB_ERR and does not retry it.
         expect(early.snaps).toEqual([]);
@@ -243,7 +245,7 @@ describe('StandaloneTranscriptLane over a WebSocket pair (real nodes)', () => {
         early.sub.close();
         const late = subscribeTail(browser, peer, TOPIC);
         await waitFor(() => late.snaps.length > 0, 'SNAP on re-SUB');
-        expect(late.snaps[0]!.map((r) => r.kind)).toEqual(['transcript.revision.begin']);
+        expect(late.snaps[0]!.map((r) => r.kind)).toEqual(['chat.meta.v2']);
     });
 
     it('a subscribe-only topic outside the transcript grant is refused (no SNAP)', async () => {

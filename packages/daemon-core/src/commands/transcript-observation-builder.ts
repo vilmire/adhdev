@@ -1,26 +1,32 @@
 /**
  * Builds a `TranscriptObservation` (seqscribe/transcript-observation.ts) from
  * the real `ChatMessage[]`/`SessionTurnPresentation` shapes `read_chat`'s
- * last mile already has in hand (design §5.2, §8 unit 2).
+ * last mile already has in hand (design §5.2, §8 unit 2), stamping each bubble
+ * with the identity the message identity ledger assigned at the same choke
+ * point (keyed storage 2026-09-28 §3.3): `messageId`, `ord`, adopted `srcId`.
  *
  * Lives in `commands/`, NOT `seqscribe/`, because it needs
- * `providers/contracts.ts#flattenContent` — the producer-side MessagePart[]
- * normalization transcript-projection.ts's header explicitly defers to this
- * unit — and `check:boundaries` forbids `seqscribe/** -> providers/**` value
- * imports. `commands/**` carries no such restriction.
+ * `providers/contracts.ts#flattenContent` and `check:boundaries` forbids
+ * `seqscribe/** -> providers/**` value imports. `commands/**` carries no such
+ * restriction.
  */
 
 import type { ChatMessage } from '../types.js';
 import { flattenContent } from '../providers/contracts.js';
 import type { SessionTurnPresentation } from '../mesh/mesh-turn-presentation.js';
+import type { MessageIdentityAssignment } from '../chat/message-identity-ledger.js';
 import type {
     TranscriptObservation,
+    TranscriptObservationMessage,
 } from '../seqscribe/transcript-observation.js';
-import type {
-    TranscriptSnapshotCandidateCoverage,
-    TranscriptSnapshotCandidateModal,
-    TranscriptSnapshotCandidatePrompt,
-} from '../seqscribe/transcript-projection.js';
+
+/** The choke point's identity output for this read (null when the ledger failed). */
+export interface TranscriptObservationIdentity {
+    readonly assignments: ReadonlyMap<ChatMessage, MessageIdentityAssignment>;
+    /** Ids a window source scrolled out of view — kept, not deleted (§3.5). */
+    readonly retainedIds: readonly string[];
+    readonly ledgerEpoch: string;
+}
 
 export interface BuildTranscriptObservationInput {
     readonly sessionId: string;
@@ -30,8 +36,8 @@ export interface BuildTranscriptObservationInput {
     readonly status: string;
     readonly providerObservedStatus: string | null;
     readonly title?: string | null;
-    readonly activeModal?: TranscriptSnapshotCandidateModal | null;
-    readonly activeInteractivePrompt?: TranscriptSnapshotCandidatePrompt | null;
+    readonly activeModal?: unknown;
+    readonly activeInteractivePrompt?: unknown;
     /** Pass only when the reducer is the status authority (design §5.2 mirrors read-chat-presentation.ts's own gate). */
     readonly turn: SessionTurnPresentation | null;
     readonly provenance?: {
@@ -43,36 +49,34 @@ export interface BuildTranscriptObservationInput {
      * `buildFullTail`'s tailLimit slicing (design §5.2: "tail slicing 전에").
      */
     readonly messages: readonly ChatMessage[];
-    readonly coverage: TranscriptSnapshotCandidateCoverage;
+    readonly identity?: TranscriptObservationIdentity | null;
+    readonly coverage: { readonly mode: 'full' | 'window'; readonly omittedBefore: boolean };
 }
 
 /**
  * @message-projection l3 identity
- * @message-projection-excludes providerUnitKey: this narrowing feeds the L2
- * replica wire, which excludes it by design — it embeds a content hash.
- * @message-projection-excludes bubbleId: same reason; the wire has no consumer
- * for per-bubble daemon identity, and `sequence` + `turnKey` carry what readers
- * actually need.
+ * @message-projection-excludes providerUnitKey: this narrowing feeds the keyed replica wire, which excludes it by design — it embeds a content hash.
+ * @message-projection-excludes bubbleId: same reason; per-bubble identity on the keyed wire is the ledger's `messageId`.
+ * @message-projection-excludes sequence: the keyed wire orders bubbles by the ledger's `ord`, never by a reader ordinal.
+ * @message-projection-excludes toolBlockRef: mtime-sealed, so carrying it would rewrite every past tool bubble on each append; the keyed wire carries `expandable` and expand resolves by messageId through the ledger.
  * @message-projection-excludes _src: daemon-internal reader address for the message identity ledger; it must never reach the replica wire.
  *
  * The single observation publisher's narrowing. Widening the downstream wire
  * encoder's allow-list alone is NOT enough — a field has to survive here first
  * or the encoder only ever sees undefined.
  */
-function flattenMessage(message: ChatMessage): TranscriptObservation['messages'][number] {
+function flattenMessage(message: ChatMessage, identity: MessageIdentityAssignment | undefined): TranscriptObservationMessage {
     const meta = message.meta && typeof message.meta === 'object' ? message.meta : undefined;
     return {
+        messageId: identity?.messageId,
+        ord: identity?.ord,
+        srcId: identity?.srcId ?? null,
         role: message.role,
         kind: message.kind,
         content: flattenContent(message.content),
         receivedAt: message.receivedAt,
         timestamp: message.timestamp,
         turnKey: message._turnKey,
-        // Per-MESSAGE ordinal. This map is an explicit field-by-field narrowing,
-        // so widening the downstream encoder's allow-list alone is NOT enough —
-        // the field has to survive here first or the encoder only ever sees
-        // undefined.
-        sequence: message.sequence,
         bubbleState: message.bubbleState,
         senderName: message.senderName,
         // TOOL-LABEL (2026-09-25): the invoked tool's name rides the wire so the
@@ -80,14 +84,10 @@ function flattenMessage(message: ChatMessage): TranscriptObservation['messages']
         // `meta.label` never travels (only `meta.streaming` does), so this typed
         // field is the only way the label reaches the durable transcript lane.
         toolName: typeof message.toolName === 'string' && message.toolName ? message.toolName : undefined,
-        // (TOOL-EXPAND) The expand ref must survive THIS hop too. It is three
-        // integers addressing a block in the provider's own transcript file —
-        // content-free, so it is safe on the P2P transcript wire — and without
-        // it a truncated tool bubble reaches the dashboard with no way to fetch
-        // the rest, which is exactly the defect the caps would otherwise create.
-        // The downstream encoder re-validates it field by field; this map only
-        // has to stop dropping it (see the `sequence` note above).
-        toolBlockRef: message.toolBlockRef,
+        // (TOOL-EXPAND) Only the affordance travels: a truncated tool bubble the
+        // daemon can expand. The address itself stays on the ledger entry
+        // (design §5.9) — see the `toolBlockRef` exclusion above.
+        expandable: message.kind === 'tool' && !!message.toolBlockRef,
         meta,
     };
 }
@@ -96,8 +96,8 @@ function flattenMessage(message: ChatMessage): TranscriptObservation['messages']
  * Pure — no I/O, no seqscribe node, no throw on malformed input (a message
  * whose content cannot be flattened just becomes an empty string; this must
  * never be the thing that breaks a read_chat response). Structural provenance
- * fields are copied by name only, matching the allow-list discipline
- * `encodeTranscriptSnapshot` re-applies downstream.
+ * fields are copied by name only, matching the allow-list discipline the keyed
+ * encoder (`encodeChatMeta`) re-applies downstream.
  */
 export function buildTranscriptObservationFromReadChat(
     input: BuildTranscriptObservationInput,
@@ -117,8 +117,13 @@ export function buildTranscriptObservationFromReadChat(
         turn: input.turn as unknown as TranscriptObservation['turn'],
 
         provenance: input.provenance,
-        messages: input.messages.map(flattenMessage),
+        messages: input.messages.map((message) => flattenMessage(message, input.identity?.assignments.get(message))),
         terminalMarkers: [],
-        coverage: input.coverage,
+        coverage: {
+            mode: input.coverage.mode,
+            omittedBefore: input.coverage.omittedBefore,
+            ...(input.identity && input.identity.retainedIds.length > 0 ? { retainedMessageIds: input.identity.retainedIds } : {}),
+        },
+        ...(input.identity ? { ledgerEpoch: input.identity.ledgerEpoch } : {}),
     };
 }
