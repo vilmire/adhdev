@@ -119774,6 +119774,18 @@ ${marker}`,
       if (!messageId && policy.mode !== "queue") {
         messageId = await service.findParkedMessageIdByText(sessionKey2, input.textFallback);
         if (messageId) LOG.debug("Command", `[send_chat] legacy text-keyed ${policy.mode} resolved to parked ${messageId}`);
+        else {
+          LOG.info(
+            "Command",
+            `[send_chat] ${policy.mode} refused \u2014 no parked body matched (session ${sessionKey2}); refusing rather than minting a new messageId, which would bypass the messageId dedupe and double-send`
+          );
+          return {
+            success: false,
+            sent: false,
+            reason: "not_parked",
+            error: "That message is no longer waiting to be sent \u2014 it was already delivered or the queue was cleared."
+          };
+        }
       }
       if (!messageId) messageId = mintLegacyMessageId();
       const outcome = await service.submit({
