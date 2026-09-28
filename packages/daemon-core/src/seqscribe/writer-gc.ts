@@ -57,14 +57,24 @@
  *   - never deletes past any registered `onEntry` consumer's cursor
  *     (`store.cursorsForTopic`), the same floor `ArchiveHub.archiveNow`
  *     honors;
- *   - REFUSES outright (`ERR_MISUSE`, message containing "active tail
- *     subscriber") while a `tail`-view SUB subscriber is attached to the
- *     topic — there is no per-subscriber durable cursor to narrow around,
- *     so the library blocks the whole call rather than silently serving a
- *     truncated window out from under a live subscriber. This module treats
- *     that specific refusal as a SKIPPED topic (debug log + `skippedActive`
- *     counter), not an error — a live transcript with an attached viewer is
- *     the expected common case, not a fault.
+ *   - while a `tail`-view SUB subscriber is attached, prunes only strictly
+ *     BELOW the tail window (the newest `TRANSCRIPT_TAIL_WINDOW_ROWS` rows a
+ *     SNAP(reset) can serve — no subscriber state re-reads anything older),
+ *     and REFUSES outright (`ERR_MISUSE`, message containing "active tail
+ *     subscriber") a call whose floor would reach into that window. This
+ *     module's count-bound steps always keep `rows - step >=
+ *     TRANSCRIPT_PRUNE_MAX_ENTRIES > TRANSCRIPT_TAIL_WINDOW_ROWS` rows, so
+ *     they proceed on a watched topic; only an age-bound call that would dip
+ *     into the window is refused. This module treats that refusal as a
+ *     SKIPPED topic (debug log + `skippedActive` counter), not an error.
+ *     (Before 2026-09-28 the library refused EVERY prune while subscribed, so
+ *     a session with a permanently open viewer was never pruned — measured
+ *     160k rows / 2.3 GB on one topic.)
+ *   - computes the `keepNewest` floor with a rowid-only index walk. It used
+ *     to read the kept rows in full, which for this module's
+ *     `keepNewest = rows - step` calls was a whole-topic materialization —
+ *     the 2026-09-28 preview-daemon OOM (V8 heap exhausted from the append
+ *     queue's flush timer).
  *
  * ── Prune policy: two INDEPENDENT bounds, not one intersected call ─────────
  * The owner decision is "prune entries older than `maxAgeMs` OR beyond
@@ -242,8 +252,9 @@ export interface TranscriptWriterGcCounters {
     /** Rows actually pruned, summed across every `pruneTopic` call this process has made. */
     rowsPruned: number;
     /**
-     * Times a TOPIC's sweep pass was skipped because it has an active `tail`
-     * SUB subscriber (the vendor's own precondition — see module header).
+     * Times a TOPIC's sweep pass was skipped because the vendor refused a
+     * prune reaching into the tail window of a topic with an active `tail`
+     * SUB subscriber (see module header).
      * Counted once per topic per sweep; the sweep stops working on that
      * topic after the first refusal. Not an error: a transcript with a live
      * viewer attached is the expected common case, and the sweep simply
