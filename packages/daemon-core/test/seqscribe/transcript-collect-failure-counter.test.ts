@@ -44,7 +44,6 @@ function makeService(collect: TranscriptProjectionDeps['collectObservation']): T
         collectObservation: collect,
     };
     const service = new TranscriptProjectionService(deps);
-    vi.spyOn(service, 'mode').mockReturnValue('on');
     return service;
 }
 

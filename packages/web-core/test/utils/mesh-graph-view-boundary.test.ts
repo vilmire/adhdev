@@ -65,8 +65,10 @@ describe('mesh graph view interaction boundaries', () => {
         // popover so it need not load the canvas module).
         const edgeStyleSource = readSource('components/MeshGraph/meshGraphEdgeLegend.tsx')
         expect(source).toContain("import { edgeColor } from './meshGraphEdgeLegend'")
-        expect(edgeStyleSource).toContain("case 'submoduleLink':")
-        expect(edgeStyleSource).toContain("return '#c084fc'")
+        // Edges are neutral theme-token lines; kinds (incl. submodule links) are
+        // told apart by a dedicated dash pattern shared with the Legend.
+        expect(edgeStyleSource).toContain("submoduleLink: '8 3 2 3'")
+        expect(source).toContain('strokeDasharray: edgeDash(edge.type)')
     })
 
     it('surfaces non-converged drift inside node cards instead of falling back to a quiet +0 / -0 style summary', () => {

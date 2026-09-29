@@ -185,17 +185,18 @@ describe('SessionInfoDialog asks the coordinator', () => {
 describe('RepoMesh.tsx — coordinator-only triggers, refresh:false on automatic reads', () => {
     const source = read('pages/RepoMesh.tsx')
 
-    it('the revision hook watches the coordinator daemon only (no member daemon ids)', () => {
-        const start = source.indexOf('useMeshStateRevisionRefresh({')
-        const block = source.slice(start, source.indexOf('onRevisionAdvance', start))
-        expect(block).toContain('[resolvedActiveDaemonId].filter(Boolean)')
+    it('the graph is pushed by the coordinator only (mesh.status), never member daemons', () => {
+        const start = source.indexOf('useMeshStatusSubscription({')
+        const block = source.slice(start, source.indexOf('})', start))
+        expect(block).toContain('daemonId: resolvedActiveDaemonId || null')
         expect(source).not.toContain('meshNodeDaemonIds')
         expect(source).not.toContain('extraDaemonIds')
     })
 
-    it('background / revision / mesh-switch reads are refresh:false; only the Refresh button is refresh:true', () => {
-        expect(source).toContain('void Promise.resolve(loadGraphRef.current(resolvedActiveDaemonId, selectedMeshId, false))')
-        expect(source).toContain('void loadGraph(resolvedActiveDaemonId, selectedMeshId, false)')
+    it('no poll / backstop / revision refetch; only the Refresh button reads (refresh:true)', () => {
+        expect(source).not.toContain('setInterval(')
+        expect(source).not.toContain('useMeshStateRevisionRefresh')
+        expect(source).not.toContain('meshStatePushRefresh')
         const trueCalls = source.split('\n').filter(line => /loadGraph(Ref\.current)?\([^)]*,\s*true\)/.test(line))
         expect(trueCalls).toHaveLength(1)
         const refreshButton = source.slice(source.indexOf('onRefreshGraph={() => {'), source.indexOf('onRefreshGraph={() => {') + 200)

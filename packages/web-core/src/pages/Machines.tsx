@@ -1,9 +1,8 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { isManagedStatusWaiting, isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
-import type { FleetStatusPeerEntry } from '@adhdev/daemon-core'
-import { canonicalDaemonId, daemonIdsEquivalent } from '@adhdev/mesh-shared'
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared'
 import { useDaemons } from '../compat'
 import { useDaemonMachineRuntimeSubscription } from '../hooks/useDaemonMachineRuntimeSubscription'
 import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
@@ -12,12 +11,10 @@ import {
     buildProviderMaps, PLATFORM_ICONS,
     formatUptime, formatBytes,
     isAgentActive, groupByMachine, getWorkspaceDisplayLabel,
-    countDaemonFleetSessions,
 } from '../utils/daemon-utils'
 import { getDashboardActiveTabHref } from '../utils/dashboard-route-paths'
 import ProgressBar from '../components/ProgressBar'
 import { buildBeaconAdvisory } from '../components/BeaconAdvisoryBadge'
-import { buildFleetPeerDivergence } from '../components/FleetStatusPeerViewBadge'
 import { Tooltip } from '../components/ui/InfoTip'
 import InstallCommand from '../components/InstallCommand'
 import { IconServer, IconMonitor, IconEyeOff, IconZap, IconShuffle } from '../components/Icons'
@@ -124,21 +121,6 @@ export default function MachinesPage() {
     const retryConnection = daemonCtx.retryConnection
     const { labels: providerLabels } = buildProviderMaps(daemons)
     const machines = groupByMachine(daemons, providerLabels)
-    // Every rich P2P daemon payload carries what THAT daemon received from its
-    // seqscribe peers. Fold those observations by target daemon and retain the
-    // newest one, so a card can cross-check its WS routing view even when the
-    // observation arrived through a different machine's P2P link.
-    const fleetPeerEntriesByDaemon = useMemo(() => {
-        const entries = new Map<string, FleetStatusPeerEntry>()
-        for (const source of daemons) {
-            for (const peer of source.fleetStatusPeerView?.peers || []) {
-                const key = canonicalDaemonId(peer.daemonId) || peer.daemonId
-                const current = entries.get(key)
-                if (!current || Date.parse(peer.at) > Date.parse(current.at)) entries.set(key, peer)
-            }
-        }
-        return entries
-    }, [daemons])
     const machineIdsKey = Array.from(new Set(machines.map((machine) => machine.machineId).filter(Boolean))).join('|')
     const onlineCount = machines.filter(m => m.daemonIde.status === 'online').length
 
@@ -309,23 +291,10 @@ export default function MachinesPage() {
                         const isBlocked = isOnline && !!retryStatus?.blocked
                         const isConnecting = isOnline && !isBlocked && (connState === 'new' || connState === 'connecting')
                         const totalAgents = machine.ideSessions.length + machine.cliSessions.length + machine.acpSessions.length
-                        // ★ A SEPARATE count for the peer-view badge only. The
-                        // badge compares against a remote daemon's
-                        // `countFleetSessions`, which uses a different rule than
-                        // `totalAgents` on four axes (children, dedupe, IDE
-                        // bucket, owner attribution) — comparing the two made
-                        // the badge read "diverged" permanently. `totalAgents`
-                        // is untouched and remains what the card displays.
-                        const fleetComparableCount = countDaemonFleetSessions(daemons, machine.machineId)
-                        const fleetPeerEntry = fleetPeerEntriesByDaemon.get(
-                            canonicalDaemonId(machine.daemonIde.id)
-                                || canonicalDaemonId(machine.machineId)
-                                || machine.daemonIde.id,
-                        )
                         // `beacon` describes the daemon that PRODUCED the rich
-                        // P2P payload. Unlike a fleet.status peer entry, it is
-                        // not a diagnosis of every machine mentioned by that
-                        // payload and must never be rebound transitively.
+                        // payload. It is not a diagnosis of every machine
+                        // mentioned by that payload and must never be rebound
+                        // transitively.
                         //
                         // Cloud status ingestion keys an entry by the transport
                         // target while retaining the producer's `instanceId`.
@@ -344,14 +313,13 @@ export default function MachinesPage() {
                         // relay) and background sync advisories live in its tooltip
                         // instead of four separate badges.
                         const beaconAdvisory = buildBeaconAdvisory(machineBeacon, t)
-                        const fleetDivergence = buildFleetPeerDivergence(fleetPeerEntry, isOnline, fleetComparableCount, t)
                         const machineStatus: MachineStatusTone = !isOnline
                             ? 'offline'
                             : isBlocked
                                 ? 'failed'
                                 : isConnecting
                                     ? 'connecting'
-                                    : (beaconAdvisory || fleetDivergence)
+                                    : beaconAdvisory
                                         ? 'attention'
                                         : 'online'
                         const machineStatusTooltip = [
@@ -360,7 +328,6 @@ export default function MachinesPage() {
                                 ? (transport === 'relay' ? t('machine.card.transportRelay') : t('machine.card.transportDirect'))
                                 : null,
                             beaconAdvisory?.tooltip || null,
-                            fleetDivergence,
                         ].filter(Boolean).join('\n')
 
                         return (

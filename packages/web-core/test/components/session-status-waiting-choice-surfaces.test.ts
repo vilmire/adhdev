@@ -6,10 +6,9 @@ import {
     type InboxSurfaceStateSource,
 } from '../../src/components/dashboard/DashboardMobileChatShared'
 import {
-    WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES,
-    shouldGuardTailShrinkForStatus,
-    isBusyChatTailStatus,
-} from '../../src/components/dashboard/chat-tail-status-classification'
+    WARM_SESSION_CHAT_ACTIVE_STATUSES,
+    isBusyChatStatus,
+} from '../../src/components/dashboard/chat-status-classification'
 
 /**
  * SESSIONSTATUS-TYPE-FORK — web-core half.
@@ -118,31 +117,18 @@ describe('waiting_choice across web-core surfaces', () => {
         })
     })
 
-    // ── C: chat-tail shrink guard ──────────────────────────────────────────
-    describe('C — chat tail shrink guard', () => {
-        it('treats waiting_choice as a warm/active status', () => {
-            // Same CHATFLICKER hazard the set was created for: while parked, the
-            // daemon can emit a short partial tail that would replace the longer
-            // hydrated liveMessages and make the assistant bubble blink out.
-            expect(WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES.has('waiting_choice')).toBe(true)
-            expect(shouldGuardTailShrinkForStatus('waiting_choice')).toBe(true)
+    // ── C: warm-controller selection + busy predicate ──────────────────────
+    describe('C — chat status classification', () => {
+        it('keeps a waiting_choice session warm, exactly like waiting_approval', () => {
+            expect(WARM_SESSION_CHAT_ACTIVE_STATUSES.has('waiting_choice')).toBe(true)
+            expect(WARM_SESSION_CHAT_ACTIVE_STATUSES.has('waiting_approval')).toBe(true)
+            expect(WARM_SESSION_CHAT_ACTIVE_STATUSES.has('idle')).toBe(false)
         })
 
-        it('guards waiting_choice exactly as it guards waiting_approval', () => {
-            expect(shouldGuardTailShrinkForStatus('waiting_choice'))
-                .toBe(shouldGuardTailShrinkForStatus('waiting_approval'))
-        })
-
-        it('leaves the strict busy predicate untouched', () => {
-            // isBusyChatTailStatus deliberately EXCLUDES the parked states; only the
-            // shrink-defer gate is widened.
-            expect(isBusyChatTailStatus('waiting_choice')).toBe(false)
-            expect(isBusyChatTailStatus('waiting_approval')).toBe(false)
-            expect(isBusyChatTailStatus('generating')).toBe(true)
-        })
-
-        it('does not guard a genuinely idle session', () => {
-            expect(shouldGuardTailShrinkForStatus('idle')).toBe(false)
+        it('leaves the strict busy predicate excluding the parked states', () => {
+            expect(isBusyChatStatus('waiting_choice')).toBe(false)
+            expect(isBusyChatStatus('waiting_approval')).toBe(false)
+            expect(isBusyChatStatus('generating')).toBe(true)
         })
     })
 })

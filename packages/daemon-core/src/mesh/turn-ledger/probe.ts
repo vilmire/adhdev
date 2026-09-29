@@ -21,12 +21,16 @@
 //
 // Kept from mesh-remote-event-pull.ts (its pull half is deleted — cross-machine
 // delivery is topic replication now): the read_chat envelope helpers, the
-// P-γ per-daemon 5 s `get_status_metadata` cache, the registry-backed local
-// session list (B4: 0 `get_status_metadata` calls for the local node), and
-// `reprobeWorkerStatus` (transcript roster id 4).
+// registry-backed local session list (B4: 0 `get_status_metadata` calls for the
+// local node), and `reprobeWorkerStatus` (transcript roster id 4).
+//
+// A REMOTE session's presence / status comes ONLY from the coordinator-held
+// runtime the member pushes (mesh-node-git-state.ts) — there is no per-daemon
+// `get_status_metadata` pull (data-path audit 2026-09-29, owner principle ④).
+// No live hold → `unknown` plus a push request (`requestHeldPush`), never a read.
 // ---------------------------------------------------------------------------
 
-import { canonicalDaemonId, type LivenessResult, type SummaryRef, type TurnEvidence } from '@adhdev/mesh-shared';
+import { type LivenessResult, type SummaryRef, type TurnEvidence } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../../boot/daemon-components.js';
 import {
     readTranscriptForDaemonConsumer,
@@ -42,7 +46,7 @@ function str(value: unknown): string {
     return typeof value === 'string' ? value.trim() : '';
 }
 
-// ─── read_chat / get_status_metadata envelope helpers (moved verbatim) ────
+// ─── read_chat envelope helpers (moved verbatim) ────
 
 /**
  * Pull the read_chat payload out of whatever envelope the transport returned.
@@ -75,67 +79,6 @@ export function readChatPayloadStatus(payload: Record<string, unknown> | null): 
 export function readChatPayloadProviderObservedStatus(payload: Record<string, unknown> | null): string {
     const observed = str(payload?.providerObservedStatus).toLowerCase();
     return observed || readChatPayloadStatus(payload);
-}
-
-/**
- * Pull the live session list out of a get_status_metadata result, tolerating
- * the same envelope shapes unwrapReadChatPayload handles.
- */
-export function extractStatusMetadataSessions(raw: unknown): any[] {
-    let cursor: unknown = raw;
-    for (let depth = 0; depth < 4 && cursor && typeof cursor === 'object'; depth++) {
-        const record = cursor as Record<string, unknown>;
-        const status = record.status && typeof record.status === 'object' ? record.status as Record<string, unknown> : undefined;
-        if (status && Array.isArray(status.sessions)) return status.sessions;
-        if (Array.isArray(record.sessions)) return record.sessions;
-        if (record.payload && typeof record.payload === 'object') { cursor = record.payload; continue; }
-        if (record.result && typeof record.result === 'object') { cursor = record.result; continue; }
-        if (record.data && typeof record.data === 'object') { cursor = record.data; continue; }
-        break;
-    }
-    return [];
-}
-
-// ─── remote status probe (P-γ cache, moved verbatim) ──────────────────────
-
-/** Same TTL as the MCP-side `probeStatusMetadataForNode` cache (P-γ). */
-export const REMOTE_STATUS_PROBE_CACHE_TTL_MS = 5_000;
-
-interface RemoteStatusProbeEntry {
-    expiresAt: number;
-    result: Promise<unknown>;
-}
-
-/** Per-components cache so two daemons (or two test fixtures) never share entries. */
-const remoteStatusProbeCache = new WeakMap<object, Map<string, RemoteStatusProbeEntry>>();
-
-/**
- * `get_status_metadata` for a REMOTE daemon, deduped + cached per canonical
- * daemon id. A rejected probe is evicted, never cached, so a transient failure
- * cannot poison the next tick.
- */
-export function probeRemoteStatusMetadata(
-    components: Pick<DaemonComponents, 'dispatchMeshCommand'>,
-    daemonId: string,
-    now: number = Date.now(),
-): Promise<unknown> {
-    const dispatchMeshCommand = components.dispatchMeshCommand;
-    if (!dispatchMeshCommand) return Promise.reject(new Error('no mesh transport'));
-    let cache = remoteStatusProbeCache.get(components);
-    if (!cache) {
-        cache = new Map();
-        remoteStatusProbeCache.set(components, cache);
-    }
-    const key = canonicalDaemonId(daemonId) || daemonId;
-    const cached = cache.get(key);
-    if (cached && cached.expiresAt > now) return cached.result;
-    const result = Promise.resolve().then(() => dispatchMeshCommand(daemonId, 'get_status_metadata', {}));
-    cache.set(key, { expiresAt: now + REMOTE_STATUS_PROBE_CACHE_TTL_MS, result });
-    result.catch(() => {
-        const entry = cache!.get(key);
-        if (entry && entry.result === result) cache!.delete(key);
-    });
-    return result;
 }
 
 /**
@@ -413,13 +356,19 @@ export const HELD_ABSENCE_MARGIN_MS = 10_000;
 
 export interface ComponentsProbeReaderOptions {
     analyzer: TranscriptAnalyzer;
-    now?: () => number;
     /**
-     * Held remote session presence/status. When it answers, the per-daemon
-     * `get_status_metadata` round trip is skipped; transcript content still
-     * comes from the replica / read_chat.
+     * Held remote session presence/status — the ONLY source for a remote
+     * session's presence (members push; the coordinator never reads a member's
+     * session list). Transcript content still comes from the replica / read_chat.
      */
     readHeldSessions?: (attempt: TurnAttempt, daemonId: string) => HeldRemoteSessions | null;
+    /**
+     * Nothing live is held for the attempt's node (the member is not pushing yet,
+     * its push lapsed, or a handshake is pending): ask the member to PUSH (a
+     * `mesh_node_state_nudge`, rate-limited by the refresher). Never a read —
+     * this probe tick answers `unknown`; the next one reads what was pushed.
+     */
+    requestHeldPush?: (attempt: TurnAttempt, daemonId: string, workspace?: string) => void;
 }
 
 type ProbeComponents = Pick<DaemonComponents,
@@ -447,9 +396,8 @@ function replicaPayload(snapshot: ReplicatedTranscriptViewV2): Record<string, un
     }) as unknown as Record<string, unknown>;
 }
 
-/** The production reader: registry + in-process read_chat locally; cached status + replica/P2P read remotely. */
+/** The production reader: registry + in-process read_chat locally; coordinator-held status + replica/P2P read remotely. */
 export function createComponentsProbeReader(components: ProbeComponents, options: ComponentsProbeReaderOptions): TurnProbeReader {
-    const now = options.now ?? (() => Date.now());
     const analyze = (payload: Record<string, unknown> | null, attempt: TurnAttempt): TranscriptObservation | null => {
         if (!payload || (payload as { success?: boolean }).success === false) return null;
         return options.analyzer(payload, {
@@ -482,28 +430,23 @@ export function createComponentsProbeReader(components: ProbeComponents, options
             const peer = getPeer(daemonId);
             if (!peer || String(peer.state) !== 'connected') return { presence: 'unknown' };
         }
-        // Presence / status from the coordinator-HELD runtime when it is live
-        // (member-pushed, still pushing). "Absent" from held state is trusted only
-        // when the observation postdates this attempt's dispatch — a session just
-        // launched may not have been pushed yet — and the list was not truncated;
-        // otherwise (and for older members) the live per-daemon probe answers.
-        let row: any;
+        // Presence / status from the coordinator-HELD runtime (member-pushed, still
+        // pushing) — the only source. "Absent" is trusted only when the observation
+        // postdates this attempt's dispatch (a session just launched may not have been
+        // pushed yet), the list is non-empty (a member's boot push may precede its
+        // session restore) and was not truncated; otherwise this tick is `unknown`.
+        // Nothing live held → ask the member to push, answer `unknown`.
         const held = options.readHeldSessions?.(attempt, daemonId) ?? null;
-        const heldRow = held?.sessions.find((s) => str(s.id) === attempt.sessionId || str(s.sessionId) === attempt.sessionId || str(s.instanceId) === attempt.sessionId);
-        if (heldRow) {
-            row = heldRow;
-        } else if (held && !held.truncated && held.sessions.length > 0
-            && held.observedAt > turnStartBoundary(attempt) + HELD_ABSENCE_MARGIN_MS) {
-            return { presence: 'absent' };
-        } else {
-            let sessions: any[];
-            try {
-                sessions = extractStatusMetadataSessions(await probeRemoteStatusMetadata(components, daemonId, now()));
-            } catch {
-                return { presence: 'unknown' };
-            }
-            row = sessions.find((s) => str(s?.id) === attempt.sessionId || str(s?.sessionId) === attempt.sessionId);
-            if (!row) return sessions.length > 0 ? { presence: 'absent' } : { presence: 'unknown' };
+        if (!held) {
+            try { options.requestHeldPush?.(attempt, daemonId, workspace); } catch { /* best-effort */ }
+            return { presence: 'unknown' };
+        }
+        const row = held.sessions.find((s) => str(s.id) === attempt.sessionId || str(s.sessionId) === attempt.sessionId || str(s.instanceId) === attempt.sessionId);
+        if (!row) {
+            return !held.truncated && held.sessions.length > 0
+                && held.observedAt > turnStartBoundary(attempt) + HELD_ABSENCE_MARGIN_MS
+                ? { presence: 'absent' }
+                : { presence: 'unknown' };
         }
         const status = str(row.status).toLowerCase() || undefined;
         if (!wantsTranscript(attempt, holds, status)) return { presence: 'present', ...(status ? { status } : {}) };

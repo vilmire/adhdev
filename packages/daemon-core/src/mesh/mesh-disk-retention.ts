@@ -7,10 +7,14 @@
 // RETENTION so it does not recur.
 //
 // What it prunes (all thresholds defensive — never touches a live/in-use file):
-//   1. JSONL files             ~/.adhdev/mesh-ledger/*.jsonl  older than 30 days
-//      (the retired event-ledger mirror, its rotations/archives and the
-//      turn-ledger migration exports — C-W9a stopped writing the mirror, so
-//      this pass ages the leftovers out).
+//   1. Ledger files            ~/.adhdev/mesh-ledger/: the RETIRED event-ledger mirror
+//      (`mesh_<id>.jsonl`, its `.N.jsonl` rotations, `.archive.jsonl` and the two
+//      `.archived-*.json` sidecars) and the turn-ledger migration exports
+//      (`turn-ledger-premigrate-*.jsonl`) older than 7 days — nothing reads them
+//      (C-W9a stopped writing the mirror; the migration exports are a one-time
+//      rollback copy) — and any other `*.jsonl` older than 30 days.
+//   1b. Per-process seqscribe DBs `~/.adhdev/seqscribe-standalone-<pid>.db*` whose
+//      pid is dead and that are older than a day (see stale-suffix-db-cleanup.ts).
 //   2. session-host runtimes   ~/.adhdev/session-host/*/runtimes/*.json for
 //      TERMINATED (dead) runtimes older than 14 days (live runtimes never touched).
 //   3. DB backups              ~/.adhdev/mesh-ledger/mesh-runtime.db.bak-* older
@@ -44,12 +48,15 @@ import { listWorktrees } from '../git/git-worktree.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
 import { checkDiskSpace, logDiskSpaceStatus, type DiskSpaceLevel } from '../diagnostics/disk-space-preflight.js';
+import { pruneStaleSuffixSeqscribeDbs } from '../seqscribe/stale-suffix-db-cleanup.js';
 import { pruneExpiredHandoffNotes, HANDOFF_RETENTION_DAYS } from './worker-handoff-notes.js';
 
 // ─── Thresholds (all defensive) ────────────────────────────────────────────
 export const DAY_MS = 24 * 60 * 60 * 1000;
 /** JSONL ledger files are legacy after the SQLite ledger — 30-day lifetime. */
 export const LEDGER_JSONL_MAX_AGE_MS = 30 * DAY_MS;
+/** Retired mirror files and migration exports: 7 days (nothing reads them any more). */
+export const LEDGER_RETIRED_FILE_MAX_AGE_MS = 7 * DAY_MS;
 /** Terminated session-host runtimes: conservative 14-day retention. */
 export const SESSION_HOST_RUNTIME_MAX_AGE_MS = 14 * DAY_MS;
 /** mesh-runtime.db.bak-* backups: 7-day retention. */
@@ -64,17 +71,33 @@ export interface AgedFile {
 }
 
 /**
- * PURE. Select the JSONL ledger files whose mtime is older than `maxAgeMs`
- * relative to `now`. A file exactly at the threshold is KEPT (strict `>`), so a
- * 30-day-old file survives its 30th day and is pruned on the 31st. Deterministic:
- * no fs access, no clock read.
+ * True for a file of the RETIRED mesh-ledger mirror or a turn-ledger migration
+ * export (basename only): `mesh_<id>*.jsonl`, `mesh_<id>*.json` sidecars and
+ * `turn-ledger-premigrate-*.jsonl`. Never `mesh-runtime.db*` (hyphen, not
+ * underscore) and never `worktree-node-retention-state.json`.
  */
-export function selectExpiredLedgerJsonl(
+export function isRetiredLedgerFileName(name: string): boolean {
+    if (/^mesh_[^/\\]+\.jsonl?$/.test(name)) return true;
+    return /^turn-ledger-premigrate-[^/\\]+\.jsonl$/.test(name);
+}
+
+/**
+ * PURE. Select the mesh-ledger files to delete: retired-class files older than
+ * `retiredMaxAgeMs` (7d) and any other `*.jsonl` older than `maxAgeMs` (30d).
+ * Anything that is neither (the live `.db` / `-wal` / `-shm`, state files) is
+ * never selected. Strict `>` on both windows.
+ */
+export function selectExpiredLedgerFiles(
     files: AgedFile[],
     now: number,
     maxAgeMs: number = LEDGER_JSONL_MAX_AGE_MS,
+    retiredMaxAgeMs: number = LEDGER_RETIRED_FILE_MAX_AGE_MS,
 ): AgedFile[] {
-    return files.filter(f => now - f.mtimeMs > maxAgeMs);
+    return files.filter(f => {
+        const name = f.path.split(/[/\\]/).pop() || '';
+        if (isRetiredLedgerFileName(name)) return now - f.mtimeMs > retiredMaxAgeMs;
+        return name.endsWith('.jsonl') && now - f.mtimeMs > maxAgeMs;
+    });
 }
 
 // ─── (2) session-host runtime retention ─────────────────────────────────────
@@ -213,17 +236,16 @@ function listDirFiles(dir: string): AgedFile[] {
 }
 
 /**
- * Prune expired legacy JSONL ledger files under ~/.adhdev/mesh-ledger/.
- * Matches only `*.jsonl` (never the SQLite .db / -wal / -shm files). Returns the
- * count deleted. Best-effort: individual unlink failures are logged, not thrown.
+ * Prune expired retired ledger files under ~/.adhdev/mesh-ledger/ (see
+ * `selectExpiredLedgerFiles`; never the SQLite .db / -wal / -shm files).
+ * Returns the count deleted. Best-effort: individual unlink failures are
+ * logged, not thrown.
  */
 export function pruneExpiredLedgerJsonl(now: number = Date.now()): number {
-    const dir = getLedgerDir();
-    const jsonl = listDirFiles(dir).filter(f => f.path.endsWith('.jsonl'));
-    const expired = selectExpiredLedgerJsonl(jsonl, now);
+    const expired = selectExpiredLedgerFiles(listDirFiles(getLedgerDir()), now);
     let deleted = 0;
     for (const f of expired) if (safeUnlink(f.path)) deleted++;
-    if (deleted > 0) LOG.info('DiskRetention', `Pruned ${deleted} JSONL ledger file(s) older than 30d`);
+    if (deleted > 0) LOG.info('DiskRetention', `Pruned ${deleted} retired ledger file(s) (mirror/export ≥7d, other jsonl ≥30d)`);
     return deleted;
 }
 
@@ -293,6 +315,8 @@ export function runDiskRetentionSweep(now: number = Date.now()): {
     ledgerJsonl: number;
     dbBackups: number;
     sessionHostRuntimes: number;
+    /** Dead per-process `seqscribe-standalone-<pid>.db*` files removed. */
+    staleSeqscribeDbs: number;
     /** Handoff-note ledger rows dropped past their 30-day window. */
     handoffNotes: number;
     /** Volume health after reclaiming ('ok' when unmeasurable). */
@@ -301,10 +325,12 @@ export function runDiskRetentionSweep(now: number = Date.now()): {
     let ledgerJsonl = 0;
     let dbBackups = 0;
     let sessionHostRuntimes = 0;
+    let staleSeqscribeDbs = 0;
     let handoffNotes = 0;
     try { ledgerJsonl = pruneExpiredLedgerJsonl(now); } catch (e: any) { LOG.warn('DiskRetention', `Ledger JSONL prune failed: ${e?.message || e}`); }
     try { dbBackups = pruneExpiredDbBackups(now); } catch (e: any) { LOG.warn('DiskRetention', `DB backup prune failed: ${e?.message || e}`); }
     try { sessionHostRuntimes = pruneExpiredSessionHostRuntimes(now); } catch (e: any) { LOG.warn('DiskRetention', `Session-host runtime prune failed: ${e?.message || e}`); }
+    try { staleSeqscribeDbs = pruneStaleSuffixSeqscribeDbs(getConfigDir(), now); } catch (e: any) { LOG.warn('DiskRetention', `Stale seqscribe DB prune failed: ${e?.message || e}`); }
     // WORKER-MCP decision G / owner §12-4: handoff notes expire 30 days out.
     // A DB-row pass rather than a file pass — the notes live in turn_events
     // — but it belongs on the same hourly cadence as its file-based siblings.
@@ -326,7 +352,7 @@ export function runDiskRetentionSweep(now: number = Date.now()): {
         logDiskSpaceStatus(status, 'disk retention sweep');
         if (status) diskLevel = status.level;
     } catch (e: any) { LOG.warn('DiskRetention', `Disk space check failed: ${e?.message || e}`); }
-    return { ledgerJsonl, dbBackups, sessionHostRuntimes, handoffNotes, diskLevel };
+    return { ledgerJsonl, dbBackups, sessionHostRuntimes, staleSeqscribeDbs, handoffNotes, diskLevel };
 }
 
 // ─── Orphan worktree detection (detection-only, emits cleanup_candidate) ──────

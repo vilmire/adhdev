@@ -1,7 +1,7 @@
 /**
- * Public surface of the Phase 3 worker transport foundation (design §3.6,
- * §8 unit 4). Consumer cutover (§8 units 5+) builds ON these primitives; it
- * does not live here yet.
+ * Public surface of the transcript worker transport — the dashboard's only
+ * live chat lane (design 2026-09-28 §5.4, §6.4). Always on: there is no build
+ * flag; the web-cloud and web-standalone assemblies start it unconditionally.
  *
  * `transcript-worker-entry.ts` (the real browser Worker global-scope script)
  * is intentionally NOT re-exported here — it is loaded as a Worker module
@@ -63,6 +63,12 @@ export {
     type SessionInterestFrame,
 } from './session-interest-protocol.js';
 export {
+    MAX_TRANSCRIPT_TOPICS_AVAILABLE,
+    TRANSCRIPT_TOPICS_AVAILABLE_TYPE,
+    parseTranscriptTopicsAvailable,
+    sessionsToResubscribeOnAvailable,
+} from './topic-availability.js';
+export {
     bridgeTranscriptTransport,
     type BridgeOverflowReason,
     type MainThreadBridgeHandle,
@@ -83,7 +89,6 @@ export {
     sessionChatPolicy,
     sessionChatTopic,
 } from './topic-addressing.js';
-export { isTranscriptWorkerEnabled, type TranscriptFlagEnv } from './web-transcript-flag.js';
 export {
     TranscriptWorkerNode,
     type TranscriptWorkerAttachOptions,

@@ -2103,7 +2103,7 @@ export function summarizeMeshSessionRecord(record: any): Record<string, unknown>
     const sessionId = readStringValue(record?.sessionId) || 'unknown';
     const turn = resolveSessionTurnPresentation({
         sessionId: sessionId === 'unknown' ? undefined : sessionId,
-        legacyStatus: chatStatus || state,
+        providerStatus: chatStatus || state,
         providerType: readStringValue(record?.providerType) || undefined,
         surface: 'mesh_status',
     });

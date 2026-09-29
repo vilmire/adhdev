@@ -8,6 +8,7 @@ import { meshEnqueueTask } from '../src/tools/mesh-tools.js';
 import { getQueue, getLedgerDir, upsertMeshMission } from '@adhdev/daemon-core';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 // MISSION-STATUS-TASK-WARNING: mission status is never auto-transitioned (only an
 // explicit mesh_mission_upsert moves it). A task attached via mission_id to a
 // paused/completed/abandoned mission must still enqueue (warn-only, mirroring the
@@ -23,10 +24,10 @@ function nextMeshId(): string {
 }
 
 function recordingTransport() {
-  return {
+  return fakeCoordinatorTransport({
     command: async (__ipcCmd: string, __ipcArgs?: Record<string, unknown>) => { if (isTurnIpcCommand(__ipcCmd)) return answerTurnIpc(__ipcCmd, __ipcArgs ?? {}); return ({ success: true }); },
     getStatus: async () => ({ sessions: [] }),
-  } as any;
+  } as any);
 }
 
 function makeCtx(meshId: string) {

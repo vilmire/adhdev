@@ -18,7 +18,7 @@ import {
     type AvailableCliProviderOption,
 } from '../utils/provider-priority'
 import { useMeshGraphMetadataSubscription } from '../hooks/useMeshGraphMetadataSubscription'
-import { useMeshStateRevisionRefresh } from '../hooks/useMeshStateRevisionRefresh'
+import { useMeshStatusSubscription } from '../hooks/useMeshStatusSubscription'
 import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
 import {
     useRepoMeshContext,
@@ -31,12 +31,6 @@ import { useMeshNodeActions } from './repo-mesh/useMeshNodeActions'
 import { useMeshQueue } from './repo-mesh/useMeshQueue'
 import { useMeshGraph } from './repo-mesh/useMeshGraph'
 import { resolveFirstSetupSeedDaemonId, readAuthoritativeMeshHostPin } from './repo-mesh/host-seed'
-import {
-    createGraphPollBackoffState,
-    recordGraphSnapshot,
-    resetGraphPollBackoff,
-    resolvePollIntervalMs,
-} from './repo-mesh/graph-poll-backoff'
 import type { MeshNode, MeshQueueEntry, AvailableCliAgent } from './repo-mesh/types'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
 
@@ -45,38 +39,6 @@ export type { MeshNode, MeshQueueEntry, AvailableCliAgent }
 export { RepoMeshHermesMcpConfig } from './repo-mesh/MeshHermesMcpConfig'
 export { getNodeActiveAssignments, describeNodeActiveAssignmentLabel } from './repo-mesh/MeshNodeList'
 
-// Interval for the visibility-gated automatic graph revalidation. Node
-// git/topology/health is pull-only (no server push), so without this the graph
-// stays stale until a manual Refresh. Kept conservative: revalidation triggers
-// a git probe that is heavy on win32, and we never want to pile reloads onto a
-// coordinator's own in-flight refresh. Polling only runs while the tab is
-// visible and the detail view is open.
-//
-// This is the FAST rate — deliberately unchanged from the original conservative
-// choice (see commit 12d206c1). What changed is that it no longer runs forever:
-// once several consecutive ticks report an identical graph (repo-mesh/graph-poll-
-// backoff.ts), the effective interval backs off to BACKOFF_SLOW_INTERVAL_MS. Any
-// detected change — or an explicit reload (mesh switch, manual Refresh) — snaps
-// straight back to this rate, since that's exactly when the operator is watching
-// for convergence.
-const GRAPH_AUTO_REVALIDATE_INTERVAL_MS = 7000
-
-// When the daemon pushes per-mesh revision counters (cloud), the graph refreshes
-// event-driven on push, so the interval poll is demoted to a slow safety net that
-// only catches a dropped/missed push. Kept well above the push cadence so it never
-// competes with the event-driven path. Backoff (above) still applies on top of
-// this — an already-slow cloud safety net can back off further when stable.
-const GRAPH_PUSH_FALLBACK_INTERVAL_MS = 45000
-
-// P-II item 4: on cloud (features.meshStatePushRefresh), useMeshStateRevisionRefresh
-// is the PRIMARY trigger — every daemon.metadata push observation (advance or not)
-// resets a liveness clock. The interval above is retired in favor of a much slower
-// WARN-only reconciliation tick: it only fires a background refresh (and logs) when
-// no push has been observed for this long, i.e. there is actual evidence the event
-// path went quiet. A healthy push channel means this backstop never refreshes at
-// all. Standalone has no revision-counter push equivalent, so it keeps the original
-// fast poll + backoff untouched.
-const GRAPH_PUSH_BACKSTOP_STALE_MS = 5 * 60 * 1000
 
 // ─── Main page ───────────────────────────────────────────────────
 
@@ -511,161 +473,20 @@ export default function RepoMesh() {
         }
     }, [newMeshDaemonId, newMeshWorkspace, createPickerWorkspaces, features.createDaemonPicker])
 
-    // Load graph on mesh or coordinator daemon selection.
-    //
-    // The shared coordinator status store is keyed by mesh, so a mesh switch shows
-    // that mesh's last-held answer (if any) at once and a same-mesh command-daemon
-    // change keeps the current nodes on screen. Every automatic read is
-    // refresh=false: the coordinator answers from the state it holds and refreshes
-    // stale nodes in the background itself; refresh=true is the manual button only.
-    const graphLoadedForMeshRef = useRef<string | null>(null)
-    // Poll-rate backoff state (repo-mesh/graph-poll-backoff.ts). A mesh switch is
-    // exactly the "operator just acted, watch closely" moment, so it also resets
-    // the backoff to the fast rate below.
-    const pollBackoffRef = useRef(createGraphPollBackoffState())
-    // Fast rate: cloud demotes to the push-fallback safety-net rate; standalone
-    // (no push) uses the original conservative interval directly.
-    const fastPollIntervalMs = features.meshStatePushRefresh
-        ? GRAPH_PUSH_FALLBACK_INTERVAL_MS
-        : GRAPH_AUTO_REVALIDATE_INTERVAL_MS
-    // Effective interval for the auto-revalidate timer, widened once the graph has
-    // been observed stable for BACKOFF_STABLE_TICKS_THRESHOLD consecutive snapshots.
-    // Held in state (not a ref) so flipping it re-subscribes the setInterval below
-    // with the new period instead of silently drifting.
-    const [pollIntervalMs, setPollIntervalMs] = useState(fastPollIntervalMs)
+    // The graph is PUSHED by the coordinator: one `mesh.status` subscription —
+    // a snapshot on subscribe (so a mesh switch paints at once), keyed per-node /
+    // per-task deltas after (an unchanged mesh sends nothing). Same lane on cloud
+    // (P2P) and standalone (WS); there is no poll, backstop or revision refetch.
+    // The Refresh button (onRefreshGraph) is the only command read, and asks the
+    // coordinator to nudge its members (refresh:true).
     useEffect(() => {
-        if (!selectedMeshId) return
-        const meshChanged = graphLoadedForMeshRef.current !== selectedMeshId
-        graphLoadedForMeshRef.current = selectedMeshId
-        if (meshChanged) {
-            resetGraphPollBackoff(pollBackoffRef.current)
-            setPollIntervalMs(fastPollIntervalMs)
-        }
         setGraphError(null)
-        void loadGraph(resolvedActiveDaemonId, selectedMeshId, false)
     }, [selectedMeshId, resolvedActiveDaemonId])
-
-    // Visibility-gated automatic graph revalidation (SWR-style).
-    // `loadGraph` is recreated each render, so we read it through a ref to keep
-    // the interval stable (re-creating it every render would reset the timer and
-    // it would never fire). A guard ref drops a tick while a prior auto-reload is
-    // still in flight, so a slow git probe cannot pile up overlapping refreshes.
-    // The manual Refresh button (onRefreshGraph) remains the explicit path.
-    //
-    // When the daemon pushes mesh revision counters (features.meshStatePushRefresh,
-    // cloud), the revision hook below drives refreshes event-driven and this timer
-    // is demoted to a slow safety net (GRAPH_PUSH_FALLBACK_INTERVAL_MS). Standalone
-    // (no push) keeps the original fast poll.
-    const loadGraphRef = useRef(loadGraph)
-    loadGraphRef.current = loadGraph
-    const autoRevalidateInFlight = useRef(false)
-    // Single SWR background-refresh entrypoint shared by the revision-push hook and
-    // the interval fallback. Held in a ref and reassigned each render so it always
-    // closes over the current mesh/daemon without resetting the interval timer.
-    const refreshGraphInBackground = useRef<() => void>(() => {})
-    refreshGraphInBackground.current = () => {
-        if (autoRevalidateInFlight.current) return
-        if (!selectedMeshId || !resolvedActiveDaemonId) return
-        autoRevalidateInFlight.current = true
-        // refresh=false: re-read the coordinator's HELD answer (the current graph
-        // stays on screen). Automatic reads never ask the coordinator to re-probe
-        // peers — that is what made every revision push trigger another push.
-        void Promise.resolve(loadGraphRef.current(resolvedActiveDaemonId, selectedMeshId, false))
-            .finally(() => { autoRevalidateInFlight.current = false })
-    }
-
-    // Every committed graph snapshot — regardless of which path produced it
-    // (interval tick, event-driven push refresh, mesh switch, manual Refresh) —
-    // feeds the backoff comparison (graph-poll-backoff.ts) so a real change
-    // anywhere snaps the poll rate back to fast.
-    useEffect(() => {
-        recordGraphSnapshot(pollBackoffRef.current, meshGraphStatus)
-        setPollIntervalMs(resolvePollIntervalMs(pollBackoffRef.current, fastPollIntervalMs))
-    }, [meshGraphStatus, fastPollIntervalMs])
-
-    // Wall-clock time this instance last OBSERVED a meshStateRevisions push for the
-    // viewed mesh (advance or not) — the liveness signal the cloud backstop below
-    // gates on. Reset on mesh/daemon-set change so a switch doesn't inherit a stale
-    // "channel is alive" verdict from the previous mesh.
-    const lastPushObservedAtRef = useRef<number | null>(null)
-    useEffect(() => {
-        lastPushObservedAtRef.current = null
-    }, [selectedMeshId, resolvedActiveDaemonId])
-
-    // Event-driven refresh: re-read mesh_status the moment the COORDINATOR reports
-    // the viewed mesh's state advanced, instead of waiting out the poll interval.
-    // Only the coordinator is watched — it is the one holding every node's state.
-    // No-op on standalone (revision counters absent → hook never fires).
-    useMeshStateRevisionRefresh({
-        daemonIds: useMemo(
-            () => [resolvedActiveDaemonId].filter(Boolean),
-            [resolvedActiveDaemonId],
-        ),
+    useMeshStatusSubscription({
         meshId: selectedMeshId,
+        daemonId: resolvedActiveDaemonId || null,
         sendData,
-        onRevisionAdvance: () => {
-            if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
-            refreshGraphInBackground.current()
-        },
-        onRevisionObserved: () => {
-            lastPushObservedAtRef.current = Date.now()
-        },
     })
-
-    useEffect(() => {
-        if (!selectedMeshId || !resolvedActiveDaemonId) return
-        if (typeof document === 'undefined') return
-
-        // Cloud: the revision-push hook above is the primary trigger. This tick only
-        // exists to WARN and refresh when there is EVIDENCE the push path went quiet
-        // (no observation — advance or not — within GRAPH_PUSH_BACKSTOP_STALE_MS),
-        // matching the safety-net policy applied elsewhere in this program (flush
-        // only on evidence of a missed event, never unconditionally). Standalone has
-        // no push equivalent, so it keeps the original always-refresh poll below.
-        if (features.meshStatePushRefresh) {
-            const meshIdForWarn = selectedMeshId
-            const timer = setInterval(() => {
-                if (document.visibilityState !== 'visible') return
-                const lastObserved = lastPushObservedAtRef.current
-                const staleMs = lastObserved === null ? Infinity : Date.now() - lastObserved
-                if (staleMs < GRAPH_PUSH_BACKSTOP_STALE_MS) return
-                console.warn(
-                    `[repo-mesh] mesh_state push backstop firing for mesh ${meshIdForWarn}: no revision push observed in ${Math.round(staleMs / 1000)}s — refreshing via poll fallback`,
-                )
-                refreshGraphInBackground.current()
-            }, GRAPH_PUSH_BACKSTOP_STALE_MS)
-            return () => clearInterval(timer)
-        }
-
-        let timer: ReturnType<typeof setInterval> | null = null
-
-        const tick = () => {
-            if (document.visibilityState !== 'visible') return
-            refreshGraphInBackground.current()
-        }
-
-        const start = () => {
-            if (timer === null) timer = setInterval(tick, pollIntervalMs)
-        }
-        const stop = () => {
-            if (timer !== null) { clearInterval(timer); timer = null }
-        }
-
-        // Poll only while the tab is visible; pause immediately when hidden and
-        // resume when the user returns. No leading tick — the selection effect
-        // above already does the first paint.
-        const onVisibilityChange = () => {
-            if (document.visibilityState === 'visible') start()
-            else stop()
-        }
-        if (document.visibilityState === 'visible') start()
-        document.addEventListener('visibilitychange', onVisibilityChange)
-
-        return () => {
-            stop()
-            document.removeEventListener('visibilitychange', onVisibilityChange)
-        }
-    }, [selectedMeshId, resolvedActiveDaemonId, pollIntervalMs, features.meshStatePushRefresh])
 
     // Mesh list load. The first mount (no meshes held yet) does a plain load that
     // shows the 'Loading meshes...' state; every subsequent re-fire — triggered
@@ -746,7 +567,6 @@ export default function RepoMesh() {
             graphLoading={graphLoading}
             graphError={graphError}
             onRefreshGraph={() => {
-                resetGraphPollBackoff(pollBackoffRef.current)
                 void loadGraph(resolvedActiveDaemonId, selectedMeshId, true)
             }}
             savingPolicy={savingPolicy}

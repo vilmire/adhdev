@@ -12,7 +12,6 @@ import {
 } from '../../src/seqscribe/local-authority.js';
 import { openSeqscribeNode, type SeqscribeNodeHandle } from '../../src/seqscribe/node.js';
 import {
-    ASSISTANT_JOURNAL_TOPIC,
     CONFIG_SETTINGS_TOPIC,
     meshHandoffTopic,
 } from '../../src/seqscribe/topics.js';
@@ -127,7 +126,8 @@ describe('openSeqscribeNode with a local authority (C7-3 default)', () => {
         handles.push(handle);
 
         const topics = handle.topics.map((d) => d.topic);
-        expect(topics).toContain(ASSISTANT_JOURNAL_TOPIC);
+        // The retired assistant.journal topic is never defined again.
+        expect(topics).not.toContain('assistant.journal');
         expect(topics).toContain(CONFIG_SETTINGS_TOPIC);
         expect(topics).toContain(meshHandoffTopic('mesh_abc'));
         expect(handle.authorityEnabled).toBe(true);
@@ -205,6 +205,6 @@ describe('priority: env fleet secret > stored fleet secret > local secret', () =
         handles.push(handle);
         expect(handle.authorityEnabled).toBe(false);
         expect(handle.authorityIsLocal).toBe(false);
-        expect(handle.topics.map((d) => d.topic)).not.toContain(ASSISTANT_JOURNAL_TOPIC);
+        expect(handle.topics.map((d) => d.topic)).not.toContain('assistant.journal');
     });
 });

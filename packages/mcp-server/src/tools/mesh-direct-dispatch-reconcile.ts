@@ -54,6 +54,7 @@ import { turnObserve, TurnIpcCommandError } from '../ipc/turn-commands.js';
 import type { TurnEvidence } from '@adhdev/mesh-shared';
 import { readString } from './mesh-tool-shared.js';
 import { readTranscriptReplicaForSemanticConsumer } from './mesh-transcript-semantic-read.js';
+import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
 import type { MeshContext } from './mesh-tools-internal.js';
 import {
     commandForNode,
@@ -142,6 +143,7 @@ export async function reconcileDirectDispatchesFromTranscriptEvidence(
             // regression the veto exists to prevent. Freshness is required
             // because synthesizing a completion writes a terminal (§5.5:
             // irreversible judgements never read a stale snapshot).
+            await ensureMeshNodeRoutes(ctx);
             const replicaTransport = resolveSemanticReplicaTransport(ctx, node);
             let payload: any = null;
             if (replicaTransport) {

@@ -7,16 +7,12 @@
  * and the daemon boots without replication.
  */
 
-import { getDaemonBuildInfo } from '../../build-info.js';
-import { currentRefineExecutorBootId } from '../../mesh/mesh-refine-executor-liveness.js';
 import { openSeqscribeRuntime } from '../../seqscribe/runtime.js';
 import type { SeqscribeNodeStage, SessionCoreStage } from './types.js';
 
 export function bootSeqscribeNode(s3: SessionCoreStage): SeqscribeNodeStage {
     const seqscribe = openSeqscribeRuntime({
         daemonId: s3.cfg.statusInstanceId,
-        version: s3.cfg.statusVersion ?? getDaemonBuildInfo().version,
-        bootId: currentRefineExecutorBootId(),
     });
     return { ...s3, seqscribe };
 }

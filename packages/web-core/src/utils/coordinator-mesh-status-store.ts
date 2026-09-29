@@ -10,14 +10,17 @@
  * loader, cache, and retry loop.
  *
  * Rules this store enforces:
- *  - Requests for the same mesh are de-duplicated: while one is in flight a
- *    second caller gets the same promise. A `refresh:true` request that arrives
- *    while a plain read is in flight is queued behind it (once).
+ *  - The writer is the coordinator's PUSH: the `mesh.status` subscription
+ *    (hooks/useMeshStatusSubscription.ts) — a snapshot on subscribe, then keyed
+ *    per-node / per-task deltas folded by SubscriptionManager — commits every
+ *    change here (`commitCoordinatorMeshStatusPush`). Nothing polls.
+ *  - A command read (`loadCoordinatorMeshStatus`) is for explicit user actions
+ *    only (the Refresh button: `refresh:true`, which asks the coordinator to
+ *    nudge its members). Requests for the same mesh are de-duplicated: while
+ *    one is in flight a second caller gets the same promise; a `refresh:true`
+ *    that arrives while a plain read is in flight is queued behind it (once).
  *  - Nothing here retries or escalates. Freshness is the coordinator's job: each
- *    node carries `gitObservation` / `heldRuntime` (age, refreshing,
- *    unreachable), and the coordinator bumps the mesh revision when a background
- *    refresh lands. Callers re-read on that signal with `refresh:false`;
- *    `refresh:true` is reserved for an explicit user action.
+ *    node carries `gitObservation` / `heldRuntime` (age, refreshing, unreachable).
  *  - A failed read keeps the last good status on screen and records the error.
  */
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
@@ -102,6 +105,18 @@ export function subscribeCoordinatorMeshStatus(meshId: string, listener: () => v
 /** Seed / overwrite the held status (tests, or a surface that already holds a fresh answer). */
 export function primeCoordinatorMeshStatus(meshId: string, status: RepoMeshStatus | null, daemonId: string | null = null): void {
     update(meshId, { status, daemonId, loadedAt: status ? Date.now() : null, error: null })
+}
+
+/** The mesh.status push delivered a (materialized) status — the store's main writer. */
+export function commitCoordinatorMeshStatusPush(meshId: string, status: RepoMeshStatus, daemonId: string): void {
+    update(meshId, { status, daemonId, loadedAt: Date.now(), error: null, loading: false })
+}
+
+/** A mesh.status subscription opened: show loading until its snapshot lands (keeps a held status on screen). */
+export function markCoordinatorMeshStatusAwaitingPush(meshId: string): void {
+    const entry = getEntry(meshId)
+    if (entry.snapshot.status) return
+    update(meshId, { loading: true, error: null })
 }
 
 /** Test helper: forget everything. */

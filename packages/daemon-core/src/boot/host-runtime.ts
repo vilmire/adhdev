@@ -32,20 +32,20 @@ import { buildStatusSnapshot } from '../status/snapshot.js';
 import { createStatusEventEmitter } from '../status/status-event.js';
 import {
     TopicSubscriptionRegistry,
-    type ChatTailEngineOptions,
+    type DaemonMetadataScope,
     type DaemonMetadataUpdateBody,
     type TopicEngineOptions,
     type TopicSink,
 } from '../subscriptions/topic-registry.js';
 import type { DaemonMetadataSubscriptionParams } from '../shared-types.js';
 import type { DaemonRuntime } from './daemon-components.js';
+import { markTranscriptPtyOutputActivity } from '../seqscribe/transcript-publisher.js';
 import {
-    subscribeHostChatTail,
     subscribeHostCommandTopics,
     subscribeHostMeshState,
     subscribeHostModal,
-    subscribeHostSessionPurge,
     subscribeHostStatusFacts,
+    subscribeHostTopicPump,
     subscribeHostTopicReconciliation,
     subscribeHostTurnSnapshots,
     type StatusFactsEvent,
@@ -72,19 +72,6 @@ export interface DaemonHostTransport {
     version: string;
     /** Topic delivery: P2P peer (cloud) / WS connection (standalone). */
     topicSink: TopicSink;
-    chatTail: {
-        flushDebounceMs: number;
-        /** Transport gate checked before arming the output-activity debounce. */
-        scheduleGate(): boolean;
-        /** The host's hot (onlyActive) chat-subscription flush. */
-        flushActive(): void;
-        /** Forced flush of just-completed sessions (guaranteed completion tail). */
-        flushCompleted?(sessionIds: ReadonlySet<string>): void;
-        /** Source the chat-tail engine's `read_chat` is executed as. */
-        readSource: CommandSource;
-        onMissingSession?: ChatTailEngineOptions['onMissingSession'];
-        onPrepared?: ChatTailEngineOptions['onPrepared'];
-    };
     onFlushError?: TopicEngineOptions['onFlushError'];
     sessionHostDiagnostics?(opts: { includeSessions: boolean; limit?: number }): Promise<SessionHostDiagnosticsSnapshot> | null;
     /** Raw output send (the CLI gate and activity mark already ran). */
@@ -93,14 +80,23 @@ export interface DaemonHostTransport {
     sendStatusEvent(payload: P2PStatusEventPayload): void;
     /** Server `status_event` delivery (cloud only). */
     sendServerStatusEvent?(payload: DaemonStatusEventPayload): void;
-    /** Daemon facts changed — push the host's session/status view. */
-    onStatusFacts(e: StatusFactsEvent): void;
+    /**
+     * Daemon facts changed — host extras (cloud: the server status_report).
+     * The dashboard's daemon.metadata flush is the runtime's own
+     * (host.metadata-pump), not the host's.
+     */
+    onStatusFacts?(e: StatusFactsEvent): void;
     /** Host extras after the shared topic invalidation of an executed command. */
     onCommandExecuted?(e: EventOf<'command_executed'>): void;
     /** Host extras before the daemon.metadata flush on a mesh state change. */
     onMeshState?(meshId: string): void;
     /** Host-owned part of daemon.metadata (may append to `status.sessions`). */
     metadataExtras?(status: HostStatusSnapshot, params: DaemonMetadataSubscriptionParams | undefined): Partial<DaemonMetadataUpdateBody>;
+    /**
+     * Per-connection daemon.metadata projection (cloud: a share-link peer sees
+     * only its shared session, as its permission allows). null = the full body.
+     */
+    metadataScope?(connectionId: string): DaemonMetadataScope | null;
     /** Refuse a command before the router runs it. Return the failure result, or null to admit. */
     admit?(ctx: HostAdmissionContext): CommandRouterResult | null;
 }
@@ -202,41 +198,34 @@ export function createDaemonHostRuntime(runtime: DaemonRuntime, transport: Daemo
             daemonMetadataBody: (params) => buildDaemonMetadataBody(params),
             sessionModalState: (sessionId) => findSessionModalState(sessionId),
             sessionHostDiagnostics: (opts) => transport.sessionHostDiagnostics?.(opts) ?? null,
-            readChatTail: (args) => execute('read_chat', {
-                targetSessionId: args.targetSessionId,
-                ...(args.historySessionId ? { historySessionId: args.historySessionId } : {}),
-                ...(args.tailLimit ? { tailLimit: args.tailLimit } : {}),
-                ...(args.includeActivity === true ? { includeActivity: true } : {}),
-            }, transport.chatTail.readSource) as any,
+            // The mesh view's lane: the SAME body the `mesh_status` command returns
+            // (coordinator-held state; never a remote read on this path).
+            meshStatus: async (meshId) => {
+                const result = await components.router.execute('mesh_status', { meshId }, 'internal', { inProcess: true });
+                if (!result || result.success === false) return null;
+                const { interactionId: _interactionId, ...status } = result as Record<string, unknown>;
+                return status;
+            },
         },
-        chatTail: {
-            flushDebounceMs: transport.chatTail.flushDebounceMs,
-            isCliSession,
-            scheduleGate: () => transport.chatTail.scheduleGate(),
-            onDebouncedFlush: () => transport.chatTail.flushActive(),
-            ...(transport.chatTail.onMissingSession ? { onMissingSession: transport.chatTail.onMissingSession } : {}),
-            ...(transport.chatTail.onPrepared ? { onPrepared: transport.chatTail.onPrepared } : {}),
-        },
+        ...(transport.metadataScope ? { metadataScope: (connectionId: string) => transport.metadataScope!(connectionId) } : {}),
         ...(transport.onFlushError ? { onFlushError: transport.onFlushError } : {}),
     });
 
-    // SessionOutputFanout sink: the CLI gate and the activity mark (which also
-    // drives the transcript replica's throttled dirty trigger) run for every
-    // chunk, whether or not a dashboard is connected; then the raw send.
+    // SessionOutputFanout sink: the CLI gate and the keyed chat lane's
+    // throttled dirty trigger run for every chunk, whether or not a dashboard
+    // is connected; then the raw send. This is the chat lane's ONLY
+    // streaming-rate trigger (TRANSCRIPT_PTY_DIRTY_THROTTLE_MS) — its other
+    // dirty triggers fire on status transitions and once post-chat.
     const detachOutput = components.outputFanout.attach((sessionId, data) => {
         if (!isCliSession(sessionId)) return;
-        topics.markChatOutputActivity(sessionId);
+        markTranscriptPtyOutputActivity(sessionId);
         transport.broadcastSessionOutput(sessionId, data);
     });
 
     const offs: Unsubscribe[] = [
-        subscribeHostStatusFacts(bus, (e) => transport.onStatusFacts(e)),
-        subscribeHostChatTail(bus, {
-            flushActive: () => transport.chatTail.flushActive(),
-            ...(transport.chatTail.flushCompleted ? { flushCompleted: (ids: ReadonlySet<string>) => transport.chatTail.flushCompleted!(ids) } : {}),
-        }),
+        subscribeHostStatusFacts(bus, (e) => transport.onStatusFacts?.(e)),
+        subscribeHostTopicPump(bus, topics),
         subscribeHostModal(bus, topics),
-        subscribeHostSessionPurge(bus, topics),
         subscribeHostCommandTopics(bus, topics, transport.onCommandExecuted?.bind(transport)),
         subscribeHostMeshState(bus, topics, transport.onMeshState?.bind(transport)),
         subscribeHostTurnSnapshots(bus, {

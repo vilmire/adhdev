@@ -45,6 +45,7 @@ import type {
 import { ledgerQuery, missionListQuery, missionUpsert, missionQuery, noteForget, noteUpsert, recordLocal, taskStatsQuery, TurnIpcCommandError } from '../ipc/turn-commands.js';
 import { buildMeshRecordReconciliationEvidence, buildMeshRecordReplicaEvidence } from './mesh-record-reconcile-evidence.js';
 import type { MeshMissionStatusValue, MissionBriefWire } from '@adhdev/mesh-shared';
+import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
 
 /**
  * Result of {@link coerceBriefArg}: the coerced wire brief (or `undefined`/`null`
@@ -379,6 +380,8 @@ export async function meshReconcileLedger(
     // the SHORT connect-wait budget — an offline (powered-off) node is rejected in ~2s with
     // PEER_NOT_CONNECTED instead of sinking into the 90s connect deadline. Order-preserving:
     // results are collected back in `nodes` order so the aggregated evidence is unchanged.
+    // Which nodes this daemon serves in-process is the daemon's answer (mesh_node_route).
+    await ensureMeshNodeRoutes(ctx);
     const reconcileNode = async (node: (typeof nodes)[number]): Promise<any> => {
         try {
             if (isLocalControlPlaneNode(ctx, node) || !node.daemonId) {

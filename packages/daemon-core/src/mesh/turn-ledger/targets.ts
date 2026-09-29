@@ -22,8 +22,8 @@
 // owns are probed — a foreign attempt's owner probes it.
 //
 // Locality: local = the session registry has the session (0 get_status_metadata
-// for the local node, B4); remote = the node's daemon via the P-γ 5 s cached
-// status probe (probe.ts).
+// for the local node, B4); remote = the node's daemon, answered from the
+// coordinator-held runtime that daemon pushes (probe.ts — no status pull).
 // ---------------------------------------------------------------------------
 
 import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';

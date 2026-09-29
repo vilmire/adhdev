@@ -450,7 +450,7 @@ export default function DashboardMobileChatInbox({
             visibleMessages: liveMessages,
             actionLogs,
             visibleBarControlCount: 0,
-            chatTailState: {
+            chatState: {
                 hasMoreHistory: false,
                 historyError: null,
                 historyMessages: [],

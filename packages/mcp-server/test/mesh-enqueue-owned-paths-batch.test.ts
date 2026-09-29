@@ -8,6 +8,7 @@ import { meshEnqueueTask, meshEnqueueBatch } from '../src/tools/mesh-tools.js';
 import { getQueue, getLedgerDir } from '@adhdev/daemon-core';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 
 /**
  * rc.37 owned_paths audit — BREAK-ONCE round-trip proof.
@@ -43,10 +44,10 @@ function nextMeshId(): string {
 }
 
 function recordingTransport() {
-  return {
+  return fakeCoordinatorTransport({
     command: async (__ipcCmd: string, __ipcArgs?: Record<string, unknown>) => { if (isTurnIpcCommand(__ipcCmd)) return answerTurnIpc(__ipcCmd, __ipcArgs ?? {}); return ({ success: true }); },
     getStatus: async () => ({ sessions: [] }),
-  } as any;
+  } as any);
 }
 
 function makeCtx(meshId: string) {

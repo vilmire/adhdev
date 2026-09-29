@@ -229,10 +229,9 @@ export interface BeaconBoardSnapshot {
  * i.e. a `full-sync` topic, where lagging behind is a real, closable gap.
  *
  * On a `subscribe-only` topic it is meaningless, and confidently wrong:
- * `fleet.status` and `session.*.chat` are subscribe-only topics whose peer entries
- * arrive over a connection-scoped SUB and live in an in-memory slot map
- * (see `fleet-status-peer-view.ts` — "ring payloads are in-memory and
- * subscribe-only by contract"). They are NEVER written into our vectors. So
+ * `session.*.chat` (like the deleted `fleet.status` ring before it) is a
+ * subscribe-only topic whose peer entries arrive over a connection-scoped SUB
+ * and are NEVER written into our vectors. So
  * `mine` is permanently 0 for every peer writer, and the arithmetic reports:
  *
  *   - `behind` = the peer's ENTIRE LIFETIME append count, growing forever and

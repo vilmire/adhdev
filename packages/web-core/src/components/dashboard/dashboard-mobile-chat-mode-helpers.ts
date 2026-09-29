@@ -6,7 +6,7 @@ import { isConversationGenerating } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
 import { getConversationMachineId } from './conversation-selectors'
 import { getConversationMachineCardPreview } from './conversation-presenters'
-import { getSessionChatTailSnapshotForConversation } from './session-chat-tail-controller'
+import { getSessionChatSnapshotForConversation } from './session-chat-controller'
 
 export interface MobileInboxBuckets {
     attentionItems: MobileConversationListItem[]
@@ -212,11 +212,11 @@ export function buildMobileMachineCards(
             latestTimestamp: latestItem?.timestamp || 0,
             fallbackActivityAt,
             preview: latestConversation
-                // (B2) Same chat_tail snapshot authority as the inbox rows so the
+                // (B2) Same keyed-chat snapshot authority as the inbox rows so the
                 // machine card preview stays consistent with the opened chat body.
                 ? getConversationMachineCardPreview(
                     latestConversation,
-                    getSessionChatTailSnapshotForConversation(latestConversation),
+                    getSessionChatSnapshotForConversation(latestConversation),
                 )
                 : 'No active conversations yet. Open the machine, choose a workspace, then launch an IDE, CLI, or ACP session.',
         }

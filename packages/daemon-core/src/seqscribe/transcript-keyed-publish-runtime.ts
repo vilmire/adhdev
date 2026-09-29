@@ -21,8 +21,6 @@
  *   - restart — `readPersistedChat` (newest-per-key at/below W plus the torn
  *     tail above it) for the publisher state, and a message identity ledger
  *     seed (`d.*` ids, ords, revs, adopted `srcId`s) so ids survive a restart.
- *   - parity — a sampled read-back of the committed state compared against the
- *     frame just built from the legacy read_chat observation (§5.5).
  */
 
 import type { JsonValue } from 'seqscribe';
@@ -33,7 +31,6 @@ import {
     type MessageIdentitySeedEntry,
 } from '../chat/message-identity-ledger.js';
 import type { SeqscribeNodeHandle } from './node.js';
-import { resolveTranscriptMode } from './transcript-mode.js';
 import { ensureSessionChatTopic } from './transcript-activation.js';
 import {
     CHAT_COMMIT_KEY,
@@ -46,8 +43,8 @@ import {
 } from './transcript-keyed-codec.js';
 import type { KeyedChatFrame, PersistedChatRow, PersistedChatState } from './transcript-keyed-frame.js';
 import type { TranscriptObservation } from './transcript-observation.js';
-import { readLocalChatParityActual, scanAllLatestPerKey } from './transcript-parity-actual.js';
-import { compareTranscriptChat, redactSessionId } from './transcript-parity.js';
+import { scanAllLatestPerKey } from './transcript-parity-actual.js';
+import { redactSessionId } from './transcript-parity.js';
 import { MAX_TRACKED_SESSIONS } from './transcript-publisher.js';
 import type { TranscriptTopicClaimRegistry } from './transcript-topic-claim.js';
 
@@ -68,8 +65,6 @@ export interface TranscriptChatRuntimeCounters {
     /** Rows deleted by those passes (`chatPrunedRows`). */
     prunedRows: number;
     pruneErrors: number;
-    /** Parity read-backs run. */
-    parityReadBacks: number;
     /** Ledger seeds built from the topic after a restart. */
     ledgerSeeds: number;
 }
@@ -77,7 +72,7 @@ export interface TranscriptChatRuntimeCounters {
 let runtimeCounters: TranscriptChatRuntimeCounters = freshRuntimeCounters();
 
 function freshRuntimeCounters(): TranscriptChatRuntimeCounters {
-    return { prunePasses: 0, prunedRows: 0, pruneErrors: 0, parityReadBacks: 0, ledgerSeeds: 0 };
+    return { prunePasses: 0, prunedRows: 0, pruneErrors: 0, ledgerSeeds: 0 };
 }
 
 /** Local-only diagnostics (`adhdev status`). */
@@ -92,39 +87,6 @@ export function __resetTranscriptChatRuntimeForTests(): void {
 
 function yieldToEventLoop(): Promise<void> {
     return new Promise((resolve) => setImmediate(resolve));
-}
-
-// ─── Parity sampling ────────────────────────────────────────────────────────
-
-/**
- * Minimum gap between two parity READ-BACKS for one session. The read-back
- * scans and folds the whole live set, so it is sampled; a systematic defect
- * still shows on the first frame and at least every interval thereafter.
- * Override with `ADHDEV_TRANSCRIPT_PARITY_SAMPLE_MS` (`0` = every frame).
- */
-export const TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS = 10_000;
-/** Every Nth frame of a session is read back even inside the interval. */
-export const TRANSCRIPT_PARITY_SAMPLE_EVERY_N = 50;
-
-function resolveParitySampleIntervalMs(env: NodeJS.ProcessEnv = process.env): number {
-    const raw = env.ADHDEV_TRANSCRIPT_PARITY_SAMPLE_MS;
-    if (raw === undefined || raw.trim() === '') return TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS;
-    const parsed = Number(raw);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : TRANSCRIPT_PARITY_SAMPLE_INTERVAL_MS;
-}
-
-function createParitySampler(): (sessionId: string) => boolean {
-    const state = new Map<string, { lastAt: number; since: number }>();
-    return (sessionId: string): boolean => {
-        const intervalMs = resolveParitySampleIntervalMs();
-        const now = Date.now();
-        const row = state.get(sessionId);
-        if (row) state.delete(sessionId);
-        const readBack = !row || intervalMs === 0 || now - row.lastAt >= intervalMs || row.since + 1 >= TRANSCRIPT_PARITY_SAMPLE_EVERY_N;
-        state.set(sessionId, readBack ? { lastAt: now, since: 0 } : { lastAt: row!.lastAt, since: row!.since + 1 });
-        while (state.size > MAX_TRACKED_SESSIONS) state.delete(state.keys().next().value as string);
-        return readBack;
-    };
 }
 
 // ─── Restart reads ──────────────────────────────────────────────────────────
@@ -188,6 +150,11 @@ export function ledgerSeedFromPersisted(persisted: PersistedChatState): MessageI
 export interface LiveChatPublisher {
     appendChatFrame(sessionId: string, frame: KeyedChatFrame, observation: TranscriptObservation): Promise<void>;
     readPersistedChat(sessionId: string): PersistedChatState | null;
+    /**
+     * Claim + define + announce the session's topic without appending — the
+     * projection's `activateSession` (first-paint warm-up). True when defined.
+     */
+    activateSession(sessionId: string): boolean;
     /** Registers the ledger seed provider; returns its disposer. */
     installLedgerSeed(): () => void;
 }
@@ -209,7 +176,6 @@ export function createLiveChatPublisher(
     claims: TranscriptTopicClaimRegistry,
     ownerDaemonId: string,
 ): LiveChatPublisher {
-    const shouldReadBack = createParitySampler();
     const backlog = new Map<string, PruneBacklog>();
 
     const activate = (sessionId: string): string | null => {
@@ -264,30 +230,6 @@ export function createLiveChatPublisher(
         });
     };
 
-    const readBack = (sessionId: string, frame: KeyedChatFrame): void => {
-        if (!shouldReadBack(sessionId)) return;
-        try {
-            runtimeCounters.parityReadBacks++;
-            const actual = readLocalChatParityActual(node, sessionId);
-            compareTranscriptChat(
-                `${ownerDaemonId}:${sessionId}`,
-                {
-                    sessionId: frame.commit.sessionId,
-                    producerDaemonId: frame.commit.producerDaemonId,
-                    live: frame.live,
-                    digest: frame.commit.digest,
-                    messages: frame.expectedMessages(),
-                },
-                actual,
-            );
-        } catch (error) {
-            LOG.warn(
-                'Seqscribe',
-                `transcript parity self-check failed session=${redactSessionId(sessionId)}: ${error instanceof Error ? error.message : String(error)}`,
-            );
-        }
-    };
-
     return {
         async appendChatFrame(sessionId: string, frame: KeyedChatFrame): Promise<void> {
             const topic = activate(sessionId);
@@ -303,7 +245,10 @@ export function createLiveChatPublisher(
             );
             await Promise.all(appends);
             scheduleCompaction(topic, frame);
-            readBack(sessionId, frame);
+        },
+
+        activateSession(sessionId: string): boolean {
+            return activate(sessionId) !== null;
         },
 
         readPersistedChat(sessionId: string): PersistedChatState | null {
@@ -315,10 +260,8 @@ export function createLiveChatPublisher(
         installLedgerSeed(): () => void {
             setMessageIdentitySeedProvider((sessionKey) => {
                 // Ledger keys fall back to `provider:<type>` when a read has no
-                // session id — there is no topic to rebuild those from. With the
-                // lane off nothing is published, so nothing is read or claimed.
+                // session id — there is no topic to rebuild those from.
                 if (!sessionKey || sessionKey.startsWith('provider:')) return null;
-                if (resolveTranscriptMode() === 'off') return null;
                 const topic = activate(sessionKey);
                 if (!topic) return null;
                 const seed = ledgerSeedFromPersisted(readPersistedChatTopic(node, topic));

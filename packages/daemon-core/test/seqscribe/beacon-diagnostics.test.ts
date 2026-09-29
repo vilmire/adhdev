@@ -49,12 +49,20 @@ import {
 } from '../../src/seqscribe/beacon-diagnostics.js';
 import { openSeqscribeNode, type SeqscribeNodeHandle } from '../../src/seqscribe/node.js';
 import {
-    ASSISTANT_JOURNAL_TOPIC,
     baseTopicDefinitions,
     CONFIG_SETTINGS_TOPIC,
-    FLEET_STATUS_TOPIC,
     meshEventsTopic,
+    sessionChatPolicy,
+    sessionChatTopic,
 } from '../../src/seqscribe/topics.js';
+
+/**
+ * A subscribe-only RING topic fixture. The production ring this file was
+ * written against (`fleet.status`) was deleted (data-path audit 2026-09-29
+ * P0-4); the subscribe-only / ring-size semantics it pins are generic and
+ * still apply to every subscribe-only topic (e.g. `session.*.chat`).
+ */
+const FLEET_STATUS_TOPIC = 'test.status.ring';
 
 const CHAIN_A = 'a'.repeat(64);
 const CHAIN_B = 'b'.repeat(64);
@@ -120,6 +128,9 @@ const TOPIC_POLICY = {
     [MESH_TOPIC]: { replicates: true },
     [MESH_TOPIC_B]: { replicates: true },
 };
+
+/** Historical fixture: the retired content-class topic the rc.36 capture was taken on. */
+const ASSISTANT_JOURNAL_TOPIC = 'assistant.journal';
 
 describe('computeBeaconDiagnostics — per-peer, per-topic lag (①wake-up lag)', () => {
     it('measures how far each peer is ahead of THIS node, per topic', () => {
@@ -827,12 +838,15 @@ describe('buildTopicPolicyMap — derives the policy from the live topic table',
         expect(map['topic.future']?.replicates).toBe(true);
     });
 
-    it('agrees with the real topic table: fleet.status is excluded, mesh events are not', () => {
+    it('agrees with the real topic table: subscribe-only chat is excluded, mesh events are not', () => {
         // Pins the fix to the ACTUAL production policies rather than to a
-        // hand-written fixture — if topics.ts ever flips fleet.status to
-        // full-sync, this fails and the exclusion gets re-examined.
-        const map = buildTopicPolicyMap({ topics: baseTopicDefinitions(['mesh_abc123']) });
-        expect(map[FLEET_STATUS_TOPIC]?.replicates).toBe(false);
+        // hand-written fixture — if topics.ts ever flips a subscribe-only
+        // topic to full-sync, this fails and the exclusion gets re-examined.
+        const chat = sessionChatTopic('sess-1');
+        const map = buildTopicPolicyMap({
+            topics: [...baseTopicDefinitions(['mesh_abc123']), { topic: chat, policy: sessionChatPolicy() }],
+        });
+        expect(map[chat]?.replicates).toBe(false);
         expect(map[MESH_TOPIC]?.replicates).toBe(true);
     });
 });

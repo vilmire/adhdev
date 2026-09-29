@@ -192,10 +192,10 @@ function resolveSessionStatusUnified(args: {
     activeChat: { status?: string | null; activeModal?: { buttons?: unknown[] | null } | null } | null | undefined;
     providerStatus?: string | null;
 }): { status: ManagedStatus; turn: SessionTurnPresentation } {
-    const legacyStatus = resolveSessionStatus(args.activeChat, args.providerStatus);
+    const providerStatus = resolveSessionStatus(args.activeChat, args.providerStatus);
     const turn = resolveSessionTurnPresentation({
         sessionId: args.sessionId,
-        legacyStatus,
+        providerStatus,
         providerType: args.providerType,
         surface: 'session_status',
     });

@@ -25,7 +25,6 @@ import {
   WORKER_REPORT_MAX_DELIVERY_DELAY_MS,
 } from '../../src/mesh/worker-report'
 import { __resetWorkerDeliveryReplayForTests } from '../../src/mesh/worker-report-idempotency'
-import { __resetHandoffNotesForTest } from '../../src/mesh/worker-handoff-notes'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
 import {
   __resetWorkerSessionBindsForTest,
@@ -75,7 +74,6 @@ let progressNotices: Array<{ taskId: string }> = []
 
 beforeEach(() => {
   __resetReportedSummariesForTest()
-  __resetHandoffNotesForTest()
   __resetWorkerTaskTokensForTest()
   __resetWorkerSessionBindsForTest()
   __resetWorkerDeliveryReplayForTests()

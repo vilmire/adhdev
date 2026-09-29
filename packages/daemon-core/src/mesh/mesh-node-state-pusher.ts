@@ -3,20 +3,28 @@
  * for a mesh node to the coordinator that holds it, instead of waiting to be
  * probed (mesh-node-git-state.ts is the coordinator's store).
  *
- * Subscription: a coordinator's background `git_status` probe carries
- * `meshStateSubscription: { meshId, nodeId }`. Answering it registers
- * (coordinator daemon, mesh, node, workspace) here. From then on this daemon
+ * Subscription: a coordinator's `mesh_node_state_nudge` (first contact, a
+ * (re)connect handshake, an explicit refresh) carrying the node's workspace
+ * registers (coordinator daemon, mesh, node, workspace) here when it is not
+ * registered yet — the coordinator never probes. From then on this daemon
  * re-reads the workspace's git every check interval (the upstream is refreshed
  * on the slower heartbeat cadence) and sends `mesh_node_git_report` over the
  * existing daemon↔daemon mesh command channel when the visible state changed,
- * plus a heartbeat so the coordinator's observation age stays honest.
+ * plus a heartbeat so the coordinator's observation age stays honest. A report
+ * whose git did not change since the coordinator last acked it (the heartbeat,
+ * a nudge over an unchanged checkout) carries only `gitSignature` + the
+ * upstream fetch stamp; the coordinator confirms it against what it holds and
+ * `gitHeld: false` makes this daemon send the body at once (same read).
  *
  * Runtime half: the same report carries this daemon's content-free RUNTIME
  * summary (sessions / build / upgrade marker / facts incl. quota —
  * mesh-node-runtime-summary.ts) so the coordinator answers those from held
- * state too. It is re-read on every check tick and, between ticks, a session
- * lifecycle change (`noteRuntimeChanged`, wired to the lifecycle bus) schedules
- * a debounced runtime-only push. Unchanged runtime stays quiet until the heartbeat.
+ * state too — but only when its signature changed since the coordinator last
+ * acked it; otherwise the report carries just `runtimeSignature`, which the
+ * coordinator confirms against what it holds (`runtimeHeld: false` makes the
+ * next push carry the summary again). It is re-read on every check tick and,
+ * between ticks, a session lifecycle change (`noteRuntimeChanged`, wired to
+ * the lifecycle bus) schedules a debounced runtime-only push.
  *
  * Lifetime: the coordinator's ack renews the subscription; an explicit refusal
  * (node no longer on its roster, sender gate, a coordinator that does not know
@@ -39,18 +47,23 @@
  * so the coordinator adopts any its roster lost. When a plain push reveals a new
  * boot id, one follow-up push carries the list right away.
  *
- * Every (re-)registration makes the next check tick push, so the coordinator's
- * held state flips from its own probe's snapshot to `member_push` within one
- * check interval — and a probe never postpones the heartbeat. A coordinator
- * that wants fresh state now (an explicit refresh) sends `mesh_node_state_nudge`
- * (`nudge`), which pushes immediately instead of waiting for the tick.
+ * A nudge pushes immediately instead of waiting for the tick.
+ *
+ * Change detector: every subscribed workspace's git dir is watched
+ * (workspace-git-watcher.ts — HEAD / index / refs / packed-refs, debounced, no
+ * git spawned by the watch itself). A commit / checkout / `git add` made from a
+ * terminal is re-read and pushed within about a second; while a workspace is
+ * watched the check tick does NOT re-read its git (the heartbeat still does,
+ * with the upstream fetch). A workspace that cannot be watched keeps the
+ * per-tick re-read.
  *
  * P2P only — no server path, no seqscribe topic.
  */
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import { readMeshTimeoutEnvMs } from '../runtime-defaults.js';
-import { carryUpstreamFreshness, computeMeshNodeGitSignature, sanitizeObservedGit } from './mesh-node-git-state.js';
+import * as fs from 'fs';
+import { carryUpstreamFreshness, computeMeshNodeGitSignature, digestMeshNodeStateSignature, sanitizeObservedGit } from './mesh-node-git-state.js';
 import { computeMeshNodeRuntimeSignature, sanitizeMeshNodeRuntimeSummary, type MeshNodeRuntimeSummary } from './mesh-node-runtime-summary.js';
 import { sanitizeMemberWorktreeNodes, type MemberWorktreeNodeRecord } from './mesh-remote-worktree-membership.js';
 
@@ -68,6 +81,13 @@ export const MESH_NODE_RUNTIME_PUSH_DEBOUNCE_MS = readMeshTimeoutEnvMs('MESH_NOD
 
 /** A forced push (nudge / reconnect / boot) of one subscription is skipped when the last one is younger than this. */
 export const MESH_NODE_STATE_FORCED_PUSH_MIN_INTERVAL_MS = 5_000;
+/**
+ * A git-dir change within this long after this daemon's own read of that
+ * workspace is its own write (`git status` refreshing the index, the heartbeat's
+ * upstream fetch moving remote-tracking refs) — ignored, so a read never
+ * re-triggers itself.
+ */
+export const MESH_NODE_STATE_SELF_READ_QUIET_MS = 1_500;
 
 /** The restart-surviving part of a subscription: who to push which node's state to. */
 export interface MeshNodeStatePushTarget {
@@ -91,7 +111,7 @@ export interface MeshNodeStatePushSubscription {
     lastSignature: string | null;
     lastPushedAt: number | null;
     lastUpstreamRefreshAt: number | null;
-    /** Last read that verified the upstream (the registering probe, or a refresh tick). */
+    /** Last read that verified the upstream (a refresh tick / forced push). */
     lastUpstreamGit: Record<string, unknown> | null;
     /** Signature of the runtime summary the coordinator last acked (null = never sent). */
     lastRuntimeSignature: string | null;
@@ -103,6 +123,10 @@ export interface MeshNodeStatePushSubscription {
     worktreeFollowUpFor?: string | null;
     /** Epoch ms of the last forced push (nudge / reconnect / boot). */
     lastForcedPushAt?: number | null;
+    /** The last git read (post freshness carry) — reused by a check tick of a watched, unchanged workspace. */
+    lastGit?: Record<string, unknown> | null;
+    /** The change detector fired (or a read is owed) since the last git read. */
+    gitDirty?: boolean;
 }
 
 export interface MeshNodeStatePusherOptions {
@@ -123,6 +147,16 @@ export interface MeshNodeStatePusherOptions {
     startTimer?: (fn: () => void, ms: number) => { stop(): void };
     /** Restart-surviving subscription set (absent = in-memory only). */
     persistence?: MeshNodeStatePushPersistence;
+    /**
+     * Change detector for a subscribed workspace's git dir (workspace-git-watcher.ts).
+     * Returns a handle while the workspace is watched, null when it cannot be.
+     * A watched workspace's git is re-read only when the detector fires, on the
+     * heartbeat (upstream refresh) or on a forced push — never on the check tick.
+     * Absent / null → the check tick re-reads it (the unwatched fallback).
+     */
+    watchGit?: (workspace: string, onChange: () => void, onError: () => void) => { stop(): void } | null;
+    /** A detector callback within this long after this daemon's OWN git read is ignored (its status / fetch writes). */
+    selfReadQuietMs?: number;
 }
 
 function readRecord(value: unknown): Record<string, unknown> {
@@ -133,12 +167,18 @@ function readString(value: unknown): string {
     return typeof value === 'string' ? value.trim() : '';
 }
 
-/** Parse the coordinator's `meshStateSubscription` marker off a git_status request. */
-export function readMeshStateSubscription(args: unknown): { meshId: string; nodeId: string } | null {
-    const marker = readRecord(readRecord(args).meshStateSubscription);
-    const meshId = readString(marker.meshId);
-    const nodeId = readString(marker.nodeId);
-    return meshId && nodeId ? { meshId, nodeId } : null;
+/** The coordinator's verdict on a signature-only runtime report (null = not answered). */
+function readRuntimeHeld(response: unknown): boolean | null {
+    const root = readRecord(response);
+    const held = root.runtimeHeld ?? readRecord(root.result).runtimeHeld;
+    return typeof held === 'boolean' ? held : null;
+}
+
+/** The coordinator's verdict on a signature-only git report (null = not answered — e.g. an older coordinator). */
+function readGitHeld(response: unknown): boolean | null {
+    const root = readRecord(response);
+    const held = root.gitHeld ?? readRecord(root.result).gitHeld;
+    return typeof held === 'boolean' ? held : null;
 }
 
 function readBootId(response: unknown): string | null {
@@ -175,6 +215,14 @@ export class MeshNodeStatePusher {
     private runtimeDebounce: { stop(): void } | null = null;
     private runtimePushing: Promise<void> | null = null;
     private runtimeDirtyWhilePushing = false;
+    /** workspace → its git change detector (null handle = could not watch → the tick re-reads it). */
+    private readonly gitWatches = new Map<string, { stop(): void } | null>();
+    /** workspace → own git reads in flight / epoch ms until which detector callbacks are ignored. */
+    private readonly gitReadsInFlight = new Map<string, number>();
+    private readonly gitQuietUntil = new Map<string, number>();
+    /** Subscription keys whose change-triggered check is running (a callback meanwhile re-runs it after). */
+    private readonly changeChecks = new Map<string, boolean>();
+    private readonly selfReadQuietMs: number;
 
     constructor(private readonly options: MeshNodeStatePusherOptions) {
         this.now = options.now ?? Date.now;
@@ -182,6 +230,85 @@ export class MeshNodeStatePusher {
         this.heartbeatMs = options.heartbeatMs ?? MESH_NODE_STATE_PUSH_HEARTBEAT_MS;
         this.ttlMs = options.ttlMs ?? MESH_NODE_STATE_PUSH_TTL_MS;
         this.runtimeDebounceMs = options.runtimeDebounceMs ?? MESH_NODE_RUNTIME_PUSH_DEBOUNCE_MS;
+        this.selfReadQuietMs = options.selfReadQuietMs ?? MESH_NODE_STATE_SELF_READ_QUIET_MS;
+    }
+
+    // ─── git change detector (member side) ───────────────────────────────────
+
+    private ensureGitWatch(workspace: string): void {
+        if (!this.options.watchGit || this.gitWatches.has(workspace)) return;
+        let handle: { stop(): void } | null = null;
+        try {
+            handle = this.options.watchGit(
+                workspace,
+                () => this.onGitChanged(workspace),
+                // The watch died (the dir went away, an FS error): the tick re-reads it from now on.
+                () => { if (this.gitWatches.has(workspace)) this.gitWatches.set(workspace, null); },
+            );
+        } catch (error: any) {
+            LOG.debug('MeshNodeState', `git watch failed for ${workspace}: ${error?.message || error}`);
+            handle = null;
+        }
+        this.gitWatches.set(workspace, handle);
+    }
+
+    private releaseGitWatch(workspace: string): void {
+        for (const sub of this.subscriptions.values()) if (sub.workspace === workspace) return;
+        const handle = this.gitWatches.get(workspace);
+        this.gitWatches.delete(workspace);
+        try { handle?.stop(); } catch { /* noop */ }
+    }
+
+    /** Whether `workspace`'s git is covered by a live change detector. */
+    isGitWatched(workspace: string): boolean {
+        return !!this.gitWatches.get(workspace);
+    }
+
+    /**
+     * The detector saw the workspace's git dir move: re-read it now for every
+     * subscription on it and push when the visible state changed. A callback
+     * inside this daemon's own read window is its own write and is ignored.
+     */
+    private onGitChanged(workspace: string): void {
+        if ((this.gitReadsInFlight.get(workspace) ?? 0) > 0) return;
+        if (this.now() < (this.gitQuietUntil.get(workspace) ?? 0)) return;
+        let runtime: MeshNodeRuntimeSummary | null | undefined;
+        const readRuntimeOnce = async () => {
+            if (runtime === undefined) runtime = await this.readRuntimeSummary();
+            return runtime;
+        };
+        for (const [key, sub] of this.subscriptions) {
+            if (sub.workspace !== workspace) continue;
+            sub.gitDirty = true;
+            if (this.changeChecks.has(key)) {
+                this.changeChecks.set(key, true); // re-run once the running check settles
+                continue;
+            }
+            void this.runChangeCheck(key, sub, readRuntimeOnce);
+        }
+    }
+
+    private async runChangeCheck(key: string, sub: MeshNodeStatePushSubscription, readRuntime: () => Promise<MeshNodeRuntimeSummary | null>): Promise<void> {
+        this.changeChecks.set(key, false);
+        try {
+            await this.checkOne(key, sub, readRuntime);
+        } catch { /* best-effort */ } finally {
+            const again = this.changeChecks.get(key) === true;
+            this.changeChecks.delete(key);
+            if (again && this.subscriptions.get(key) === sub) void this.runChangeCheck(key, sub, readRuntime);
+        }
+    }
+
+    private async readGitTracked(workspace: string, refreshUpstream: boolean): Promise<Record<string, unknown> | null> {
+        this.gitReadsInFlight.set(workspace, (this.gitReadsInFlight.get(workspace) ?? 0) + 1);
+        try {
+            return sanitizeObservedGit(await this.options.readGit(workspace, { refreshUpstream }));
+        } finally {
+            const left = (this.gitReadsInFlight.get(workspace) ?? 1) - 1;
+            if (left > 0) this.gitReadsInFlight.set(workspace, left);
+            else this.gitReadsInFlight.delete(workspace);
+            this.gitQuietUntil.set(workspace, this.now() + this.selfReadQuietMs);
+        }
     }
 
     private key(coordinatorDaemonId: string, meshId: string, nodeId: string): string {
@@ -193,56 +320,11 @@ export class MeshNodeStatePusher {
     }
 
     /**
-     * Register (or renew) from an answered coordinator probe. `git` is the state
-     * just returned to the coordinator. The next check tick pushes regardless
-     * (lastPushedAt cleared): the coordinator learns the subscription is live and
-     * its held state becomes member-pushed, so it stops probing this node.
-     */
-    register(args: { coordinatorDaemonId: string; meshId: string; nodeId: string; workspace: string; git?: unknown }): boolean {
-        if (!this.options.dispatch) return false;
-        const coordinatorDaemonId = readString(args.coordinatorDaemonId);
-        const workspace = readString(args.workspace);
-        if (!coordinatorDaemonId || !args.meshId || !args.nodeId || !workspace) return false;
-        const key = this.key(coordinatorDaemonId, args.meshId, args.nodeId);
-        const now = this.now();
-        const git = sanitizeObservedGit(args.git);
-        const existing = this.subscriptions.get(key);
-        this.subscriptions.set(key, {
-            coordinatorDaemonId,
-            meshId: args.meshId,
-            nodeId: args.nodeId,
-            workspace,
-            expiresAt: now + this.ttlMs,
-            lastSignature: git ? computeMeshNodeGitSignature(git) : (existing?.lastSignature ?? null),
-            // Push on the next tick (see above) — never "just pushed", which used to
-            // postpone the heartbeat every time the coordinator probed.
-            lastPushedAt: null,
-            // The probe that registered us refreshed the upstream already.
-            lastUpstreamRefreshAt: now,
-            lastUpstreamGit: git ?? existing?.lastUpstreamGit ?? null,
-            lastRuntimeSignature: existing?.lastRuntimeSignature ?? null,
-            coordinatorBootId: existing?.coordinatorBootId ?? null,
-            // A probe means the coordinator wants fresh state: re-report the worktree list.
-            worktreeNodesDeliveredFor: null,
-        });
-        if (!existing) {
-            LOG.info('MeshNodeState', `pushing git state of node ${args.nodeId} (mesh ${args.meshId}) to coordinator ${coordinatorDaemonId.slice(0, 12)}`);
-            // Land the runtime half now instead of on the next check tick.
-            this.noteRuntimeChanged();
-            this.persistTargets();
-        } else if (existing.workspace !== workspace) {
-            this.persistTargets();
-        }
-        this.ensureTimer();
-        return true;
-    }
-
-    /**
-     * Register a subscription this daemon knows of WITHOUT a coordinator probe —
-     * a restored one after a restart, or a membership derived from its mesh host
-     * records. Nothing is held for it yet, so the first push (pushNow / the next
-     * tick) carries the full git + runtime + worktree list. An existing
-     * subscription is left untouched. Returns whether one was added.
+     * Register a subscription — from a coordinator's nudge, a restored one after
+     * a restart, or a membership derived from this daemon's mesh host records.
+     * Nothing is held for it yet, so the first push carries the full git +
+     * runtime + worktree list. An existing subscription is left untouched.
+     * Returns whether one was added.
      */
     selfRegister(target: MeshNodeStatePushTarget): boolean {
         if (!this.options.dispatch) return false;
@@ -266,8 +348,11 @@ export class MeshNodeStatePusher {
             lastRuntimeSignature: null,
             coordinatorBootId: null,
             worktreeNodesDeliveredFor: null,
+            gitDirty: true,
         });
+        this.ensureGitWatch(workspace);
         this.ensureTimer();
+        this.persistTargets();
         return true;
     }
 
@@ -340,20 +425,32 @@ export class MeshNodeStatePusher {
     }
 
     private dropSubscription(key: string): void {
-        if (this.subscriptions.delete(key)) this.persistTargets();
+        const sub = this.subscriptions.get(key);
+        if (!this.subscriptions.delete(key)) return;
+        this.persistTargets();
+        if (sub) this.releaseGitWatch(sub.workspace);
     }
 
     /**
-     * A coordinator asks for this node's state now (explicit refresh). Returns
-     * whether a subscription exists — false tells the coordinator to fall back
-     * to its handshake probe, which (re-)registers one. The push itself runs in
-     * the background; the upstream is re-fetched only when the last refresh is
-     * older than MESH_NODE_STATE_NUDGE_UPSTREAM_MIN_MS.
+     * A coordinator asks for this node's state now (first contact, handshake,
+     * explicit refresh). A node not yet pushed to that coordinator is
+     * subscribed on the spot when `workspace` is given and exists on this
+     * machine. Returns whether a subscription exists (false = refused). The
+     * push itself runs in the background; the upstream is re-fetched only when
+     * the last refresh is older than MESH_NODE_STATE_NUDGE_UPSTREAM_MIN_MS.
      */
-    nudge(coordinatorDaemonId: string, meshId: string, nodeId: string): boolean {
-        const key = this.key(readString(coordinatorDaemonId), readString(meshId), readString(nodeId));
+    nudge(coordinatorDaemonId: string, meshId: string, nodeId: string, workspace?: string): boolean {
+        if (!this.options.dispatch) return false;
+        const coordinator = readString(coordinatorDaemonId);
+        const key = this.key(coordinator, readString(meshId), readString(nodeId));
+        if (!this.subscriptions.has(key)) {
+            const path = readString(workspace);
+            if (!path || !fs.existsSync(path)) return false;
+            if (!this.selfRegister({ coordinatorDaemonId: coordinator, meshId, nodeId, workspace: path })) return false;
+            LOG.info('MeshNodeState', `pushing state of node ${nodeId} (mesh ${meshId}) to coordinator ${coordinator.slice(0, 12)}`);
+        }
         const sub = this.subscriptions.get(key);
-        if (!sub || !this.options.dispatch) return false;
+        if (!sub) return false;
         let runtime: MeshNodeRuntimeSummary | null | undefined;
         const readRuntimeOnce = async () => {
             if (runtime === undefined) runtime = await this.readRuntimeSummary();
@@ -369,6 +466,10 @@ export class MeshNodeStatePusher {
      * subscribed coordinator whose held runtime differs.
      */
     noteRuntimeChanged(): void {
+        // A session did something (a turn ended, a session launched / exited) — the
+        // working tree it works in may have changed in ways the git-dir detector
+        // cannot see (edited files): the next check re-reads git.
+        for (const sub of this.subscriptions.values()) sub.gitDirty = true;
         if (!this.options.readRuntime || !this.options.dispatch || this.subscriptions.size === 0) return;
         if (this.runtimePushing) {
             this.runtimeDirtyWhilePushing = true;
@@ -460,6 +561,10 @@ export class MeshNodeStatePusher {
         this.timer = null;
         this.runtimeDebounce?.stop();
         this.runtimeDebounce = null;
+        for (const handle of this.gitWatches.values()) {
+            try { handle?.stop(); } catch { /* noop */ }
+        }
+        this.gitWatches.clear();
     }
 
     /** One check pass over every subscription. Exposed for tests. */
@@ -499,21 +604,32 @@ export class MeshNodeStatePusher {
         const heartbeatDue = force || sub.lastPushedAt === null || now - sub.lastPushedAt >= this.heartbeatMs;
         const upstreamRefreshEvery = force ? Math.min(MESH_NODE_STATE_NUDGE_UPSTREAM_MIN_MS, this.heartbeatMs) : this.heartbeatMs;
         const refreshUpstream = sub.lastUpstreamRefreshAt === null || now - sub.lastUpstreamRefreshAt >= upstreamRefreshEvery;
+        // A watched workspace whose git dir has not moved is not re-read on the
+        // check tick (no git spawn when nothing changed): the last read stands until
+        // the detector fires, the heartbeat refreshes the upstream, or a push is forced.
+        const reuse = !force && !heartbeatDue && !refreshUpstream && sub.gitDirty !== true
+            && !!sub.lastGit && this.isGitWatched(sub.workspace);
         let git: Record<string, unknown> | null = null;
-        try {
-            git = sanitizeObservedGit(await this.options.readGit(sub.workspace, { refreshUpstream }));
-        } catch (error: any) {
-            LOG.debug('MeshNodeState', `git read failed for ${sub.workspace}: ${error?.message || error}`);
-            return;
-        }
-        if (!git) return;
-        if (refreshUpstream) {
-            sub.lastUpstreamRefreshAt = now;
-            sub.lastUpstreamGit = git;
+        if (reuse) {
+            git = sub.lastGit!;
         } else {
-            // Between upstream refreshes the read says 'unchecked'; report the
-            // freshness verified at the last refresh instead (see carryUpstreamFreshness).
-            git = carryUpstreamFreshness(sub.lastUpstreamGit, git, now);
+            try {
+                git = await this.readGitTracked(sub.workspace, refreshUpstream);
+            } catch (error: any) {
+                LOG.debug('MeshNodeState', `git read failed for ${sub.workspace}: ${error?.message || error}`);
+                return;
+            }
+            if (!git) return;
+            sub.gitDirty = false;
+            if (refreshUpstream) {
+                sub.lastUpstreamRefreshAt = now;
+                sub.lastUpstreamGit = git;
+            } else {
+                // Between upstream refreshes the read says 'unchecked'; report the
+                // freshness verified at the last refresh instead (see carryUpstreamFreshness).
+                git = carryUpstreamFreshness(sub.lastUpstreamGit, git, now);
+            }
+            sub.lastGit = git;
         }
         const signature = computeMeshNodeGitSignature(git);
         const runtime = await readRuntime();
@@ -522,17 +638,34 @@ export class MeshNodeStatePusher {
         if (signature === sub.lastSignature && !heartbeatDue && !runtimeChanged) return;
         const observedAt = typeof git.lastCheckedAt === 'number' ? git.lastCheckedAt : now;
         const worktreeNodes = await this.worktreeNodesDue(sub);
+        const gitBody = git;
+        const report = (fullGit: boolean): Record<string, unknown> => ({
+            meshId: sub.meshId,
+            nodeId: sub.nodeId,
+            workspace: sub.workspace,
+            // The git body only when it changed since the coordinator last acked it;
+            // otherwise its signature (+ the upstream fetch stamp the coordinator's
+            // auto-ff precheck reads), which the coordinator confirms (gitHeld).
+            ...(fullGit
+                ? { git: gitBody }
+                : { gitSignature: digestMeshNodeStateSignature(signature), ...(typeof gitBody.upstreamFetchedAt === 'number' ? { upstreamFetchedAt: gitBody.upstreamFetchedAt } : {}) }),
+            observedAt,
+            // The summary only when it changed since the coordinator last acked it;
+            // otherwise its signature, which the coordinator confirms (runtimeHeld).
+            ...(runtime && runtimeChanged ? { runtime, runtimeObservedAt: now } : {}),
+            ...(runtime && !runtimeChanged && runtimeSignature ? { runtimeSignature: digestMeshNodeStateSignature(runtimeSignature), runtimeObservedAt: now } : {}),
+            ...(worktreeNodes ? { memberWorktreeNodes: worktreeNodes } : {}),
+        });
+        const signatureOnly = signature === sub.lastSignature;
         let response: unknown;
         try {
-            response = await this.options.dispatch!(sub.coordinatorDaemonId, MESH_NODE_STATE_REPORT_COMMAND, {
-                meshId: sub.meshId,
-                nodeId: sub.nodeId,
-                workspace: sub.workspace,
-                git,
-                observedAt,
-                ...(runtime ? { runtime, runtimeObservedAt: now } : {}),
-                ...(worktreeNodes ? { memberWorktreeNodes: worktreeNodes } : {}),
-            });
+            response = await this.options.dispatch!(sub.coordinatorDaemonId, MESH_NODE_STATE_REPORT_COMMAND, report(!signatureOnly));
+            // The coordinator does not hold this git state (it restarted without the
+            // row, a restart handshake is pending, or it predates signature-only
+            // reports): send the body now — the same read, no second git spawn.
+            if (signatureOnly && readAck(response) !== false && readGitHeld(response) !== true) {
+                response = await this.options.dispatch!(sub.coordinatorDaemonId, MESH_NODE_STATE_REPORT_COMMAND, report(true));
+            }
         } catch {
             // Coordinator unreachable right now — keep the subscription until its TTL.
             return;
@@ -549,6 +682,12 @@ export class MeshNodeStatePusher {
             sub.expiresAt = now + this.ttlMs;
             if (runtimeSignature !== null) sub.lastRuntimeSignature = runtimeSignature;
             this.noteWorktreeAck(key, sub, response, worktreeNodes !== null);
+            // The coordinator does not hold this summary (it restarted without the row,
+            // or a restart handshake wants the new process's): send it on the next push.
+            if (runtime && !runtimeChanged && readRuntimeHeld(response) === false) {
+                sub.lastRuntimeSignature = null;
+                this.noteRuntimeChanged();
+            }
         }
     }
 

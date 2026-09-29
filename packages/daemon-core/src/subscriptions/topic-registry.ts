@@ -13,14 +13,11 @@
  *
  * | topic                    | cloud engine (packages/daemon-cloud/src)                  | standalone engine (oss/packages/daemon-standalone/src/index.ts) | throttle                              | seq mechanism                                   | dedup mechanism                       |
  * |--------------------------|-----------------------------------------------------------|-----------------------------------------------------------------|---------------------------------------|--------------------------------------------------|---------------------------------------|
- * | session.chat_tail        | adhdev-daemon.ts:457 (build) + :601 (flush coalescing);    | index.ts:1851 (build), :2061 (flush coalescing),                | event debounce (cloud 700ms, standalone| per-subscription via                             | lastDeliveredSignature via            |
- * |                          | daemon-p2p/index.ts:422 (fan-out, concurrency 4)           | concurrency 4 (:2129), hot-session classification               | markWsChatOutputActivity debounce) +   | prepareSessionChatTailUpdate (core)              | prepareSessionChatTailUpdate (core)   |
- * |                          |                                                            |                                                                 | 2.5s cloud interval / status-driven    |                                                  | + missing-session backoff (core)      |
- * | machine.runtime          | adhdev-daemon.ts:633                                       | index.ts:2143                                                   | intervalMs (min 5s, default 15s)      | per-subscription `seq += 1`                      | none (throttle only)                  |
- * | session_host.diagnostics | adhdev-daemon.ts:663                                       | index.ts:2180                                                   | intervalMs (min 5s, default 10s)      | per-subscription `seq += 1`                      | none (throttle only)                  |
+ * | machine.runtime          | adhdev-daemon.ts:633                                       | index.ts:2143                                                   | intervalMs (min 5s, default 15s)      | per-subscription `seq += 1`                      | (2026-09-29) signature — send on change |
+ * | session_host.diagnostics | adhdev-daemon.ts:663                                       | index.ts:2180                                                   | intervalMs (min 5s, default 10s)      | per-subscription `seq += 1`                      | (2026-09-29) signature — send on change |
  * | session.modal            | adhdev-daemon.ts:713 (interactionId + debug trace)         | index.ts:2230 (no interactionId)                                | none (event/status driven)            | per-subscription via prepareSessionModalUpdate    | lastDeliveredSignature (core helper)  |
- * | daemon.metadata          | adhdev-daemon.ts:783                                       | index.ts:2273                                                   | none (always builds)                  | per-subscription `seq += 1`                      | none                                  |
- * | workspace.git            | adhdev-daemon.ts:838 (build, per-sub seq, NO concurrency   | index.ts:2330 (flush, concurrency 2 via runAsyncBatch,          | intervalMs (min 1s, default 5s via    | cloud: per-subscription `seq += 1`;              | none (throttle only)                  |
+ * | daemon.metadata          | adhdev-daemon.ts:783                                       | index.ts:2273                                                   | none (always builds)                  | per-subscription `seq += 1`                      | (2026-09-29) keyed snapshot/delta     |
+ * | workspace.git            | adhdev-daemon.ts:838 (build, per-sub seq, NO concurrency   | index.ts:2330 (flush, concurrency 2 via runAsyncBatch,          | intervalMs (min 1s, default 5s via    | cloud: per-subscription `seq += 1`;              | (2026-09-29) signature — send on change |
  * |                          | cap — sequential per peer)                                 | monitor-global seq)                                             | GitWorkspaceMonitor normalize)        | standalone: GitWorkspaceMonitor global seq       |                                       |
  *
  * ── Union decisions applied for the workspace.git cohort (S2) ──
@@ -33,34 +30,31 @@
  * 3. workspace trimming: engine trims `params.workspace` (cloud did, standalone
  *    did not — standalone gains the trim).
  * 4. interactionId stamping (`opts.interactionId`) is declared here per the design
- *    but is NOT used by workspace.git — cloud stamps interactionId only on
- *    session.chat_tail / session.modal, which migrated in S3.
+ *    but is NOT used by workspace.git — only session.modal stamps it.
  *
  * ── Union decisions applied for the S3 cohorts (daemon.metadata → session.modal
- *    → session.chat_tail → machine.runtime → session_host.diagnostics) ──
- * 5. chat_tail flush debounce: NOT unified — exposed as a per-daemon injected
- *    option ({@link ChatTailEngineOptions.flushDebounceMs}). Both daemons
- *    measured at 700ms on 2026-08-24 (cloud CHAT_OUTPUT_FLUSH_DEBOUNCE_MS,
- *    standalone CHAT_OUTPUT_FLUSH_DEBOUNCE_MS), but each daemon keeps supplying
- *    its own constant so the values can diverge again without touching core.
- * 6. daemon.metadata stays throttle-free (both daemons always built + sent on
- *    every flush pass; seq/lastSentAt bookkeeping only).
- * 7. interactionId stamping + debug-trace recording on session.chat_tail /
- *    session.modal are hooks ({@link TopicEngineOptions.interactionId} /
+ *    → machine.runtime → session_host.diagnostics) ──
+ * 5. (retired) The legacy chat push topic that used to sit in this cohort was
+ *    removed on 2026-09-29: dashboard chat is served only by the keyed
+ *    `session.<id>.chat` seqscribe lane (design 2026-09-28 §6.4).
+ * 6. daemon.metadata stays throttle-free, and since 2026-09-29 (data-path
+ *    audit P0-3) it is the ONE dashboard state lane: the first frame per
+ *    subscription is a snapshot, later frames carry only the keyed difference
+ *    (see {@link DaemonMetadataDelta}); an unchanged daemon sends nothing.
+ *
+ * ── Change-only delivery (2026-09-29, audit P1-9 / P2) ──
+ * machine.runtime / session_host.diagnostics / workspace.git keep their
+ * interval throttle but also dedupe by a content signature, so a quiet
+ * machine / session host / repo sends nothing. workspace.git runs git only
+ * while watched (subscribe, invalidation, the host's sample tick) — the
+ * monitor's own refreshes (turn end, send_chat) reach subscribers through its
+ * listener without another git run.
+ * 7. interactionId stamping + debug-trace recording on session.modal are hooks ({@link TopicEngineOptions.interactionId} /
  *    {@link TopicEngineOptions.recordTrace}): cloud passes its subsystems and
  *    stays byte-identical; standalone passes none in S3 and gains both in S4.
  * 8. session.modal subscribe validation = cloud semantics (trimmed non-empty
  *    targetSessionId); standalone only rejected falsy ids — whitespace-only ids
  *    are now rejected for both (no dashboard sends those).
- * 9. session.chat_tail is a HYBRID cohort: per-subscription BUILD engine
- *    (read → missing-session backoff bookkeeping → prepare → seq/cursor/
- *    signature mutation → hooks) and the output-activity debounce live here,
- *    but subscription STORAGE and flush fan-out (runAsyncBatch concurrency 4,
- *    hot-session classification, coalescing of overlapping flushes, the D8
- *    guaranteed-delivery ACK gate) stay daemon-side as transport/flush-policy
- *    mechanics — cloud keeps peer.chatSubscriptions, standalone keeps
- *    wsSubscriptions. `subscribe()` therefore still returns false for
- *    session.chat_tail.
  *
  * ── Deviation from the design sketch ──
  * The sketch's `sink.isActive(topic)` ("does a subscriber exist") became
@@ -74,12 +68,13 @@
  */
 
 import type {
+    DaemonMetadataDelta,
     DaemonMetadataSubscriptionParams,
     DaemonMetadataUpdate,
     MachineInfo,
+    MeshStatusDeltaUpdate,
+    MeshStatusSnapshotUpdate,
     MachineRuntimeSubscriptionParams,
-    SessionChatTailSubscriptionParams,
-    SessionChatTailUpdate,
     SessionHostDiagnosticsSnapshot,
     SessionHostDiagnosticsSubscriptionParams,
     SessionModalSubscriptionParams,
@@ -89,23 +84,22 @@ import type {
 } from '../shared-types.js';
 import type { TopicUpdateEnvelope } from '../shared-types.js';
 import type { GitWorkspaceSubscription, GitWorkspaceMonitor, NormalizedWorkspaceGitSubscriptionParams } from '../git/git-monitor.js';
+import type { GitWorkspaceUpdate } from '../git/git-types.js';
+import {
+    diffKeyedDoc,
+    diffKeyedStatus,
+    digestKeyedDoc,
+    digestKeyedStatus,
+    MESH_STATUS_DOC_SPEC,
+    type KeyedDocDigest,
+    type KeyedStatusBody,
+    type KeyedStatusDigest,
+} from '@adhdev/mesh-shared';
 import { createGitWorkspaceMonitor } from '../git/git-monitor.js';
 import type { WorkspaceGitSubscriptionParams } from '../git/git-types.js';
 import { runAsyncBatch } from '../chat/async-batch.js';
-import {
-    prepareSessionChatTailUpdate,
-    prepareSessionModalUpdate,
-    type ChatTailSubscriptionCursor,
-    type SessionChatTailCommandResult,
-} from '../chat/subscription-updates.js';
-import {
-    isMissingLiveSessionResult,
-    recordMissingSessionAttempt,
-    shouldWarnForMissingSession,
-    type ChatTailMissingSessionState,
-} from '../chat/chat-tail-missing-session-backoff.js';
+import { prepareSessionModalUpdate } from '../chat/subscription-updates.js';
 import { buildMachineInfo } from '../status/snapshot.js';
-import { DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS } from '../status/chat-tail-hot-sessions.js';
 import {
     DEFAULT_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
     DEFAULT_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS,
@@ -114,7 +108,6 @@ import {
 } from '../runtime-defaults.js';
 import type { SessionModalState } from '../providers/provider-instance.js';
 import type { DebugTraceEvent } from '../logging/debug-trace.js';
-import { markTranscriptPtyOutputActivity } from '../seqscribe/transcript-publisher.js';
 
 /**
  * Transport sink injected by each daemon. The registry never sees WS framing
@@ -140,12 +133,6 @@ export interface TopicSink {
 /** Default git refresh parallelism (union decision — was standalone-only). */
 export const DEFAULT_GIT_REFRESH_CONCURRENCY = 2;
 
-/**
- * Default chat-tail output-activity flush debounce. Both daemons measured at
- * 700ms pre-extraction, but the value is deliberately per-daemon injectable
- * (S3 union decision #5) — this default only backs tests / omitted config.
- */
-export const DEFAULT_CHAT_TAIL_FLUSH_DEBOUNCE_MS = 700;
 
 /**
  * Daemon-injected data sources for the push-style topic engines. The engine
@@ -175,71 +162,96 @@ export interface TopicEngineSources {
      */
     daemonMetadataBody?: (params: DaemonMetadataSubscriptionParams | undefined) => DaemonMetadataUpdateBody;
     /**
-     * session.chat_tail read. `tailLimit` is present only when > 0, so the
-     * daemon can compose byte-identical read_chat args. Cloud routes through
-     * router.execute('read_chat', …, 'p2p'); standalone through its
-     * executeCommand (which also runs the invalidation gate — preserved).
+     * mesh.status payload: the coordinator's held `mesh_status` result for one
+     * mesh (the body the `mesh_status` command returns), or null when this
+     * daemon cannot answer for it right now.
      */
-    readChatTail?: (args: { targetSessionId: string; historySessionId?: string; tailLimit?: number; includeActivity?: boolean }) =>
-        Promise<SessionChatTailCommandResult | null | undefined>;
+    meshStatus?: (meshId: string) => Promise<Record<string, unknown> | null>;
 }
 
-export type DaemonMetadataUpdateBody = Omit<DaemonMetadataUpdate, 'topic' | 'key' | 'seq' | 'timestamp'>;
+/**
+ * A per-connection projection of daemon.metadata (a share-link peer sees only
+ * what its permission allows — daemon-cloud decides). `key` names the
+ * projection so connections with the same scope share one built body.
+ */
+export interface DaemonMetadataScope {
+    key: string;
+    project(body: DaemonMetadataUpdateBody): DaemonMetadataUpdateBody;
+}
+
+export type DaemonMetadataUpdateBody = Omit<DaemonMetadataUpdate, 'topic' | 'key' | 'seq' | 'timestamp' | 'mode'>;
 
 /**
- * chat_tail engine wiring (hybrid cohort — see union decision #9 in the
- * header). The debounce/activity engine and the per-subscription build engine
- * live in the registry; the daemon injects transport gates + policy hooks.
+ * daemon.metadata digest options: `daemonId` is envelope identity, the build
+ * `timestamp` changes every pass, and a session's `lastUpdated` is stamped at
+ * build time (providers return `Date.now()`), so none of them is a change.
  */
-export interface ChatTailEngineOptions {
-    /** Output-activity flush debounce — per-daemon constant (union decision #5). */
-    flushDebounceMs?: number;
-    /** Activity hot window. Default {@link DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS} (both daemons). */
-    activityHotMs?: number;
-    /** Only CLI sessions mark output activity (both daemons). */
-    isCliSession?: (sessionId: string) => boolean;
-    /**
-     * Transport gate checked before arming the debounce timer (cloud:
-     * p2p connected && has chat subscriptions; standalone: clients present).
-     */
-    scheduleGate?: () => boolean;
-    /** Debounced flush trigger — the daemon's own onlyActive flush wrapper. */
-    onDebouncedFlush?: () => void;
-    /**
-     * Missing-live-session bookkeeping hook — the engine records the backoff
-     * state; the daemon owns the log line wording. `warnNow` is true exactly
-     * once per miss streak.
-     */
-    onMissingSession?: (ctx: { sessionId: string; consecutiveMisses: number; warnNow: boolean }) => void;
-    /**
-     * Post-prepare hook, fired BEFORE the null-update check (standalone's D8
-     * guaranteed-delivery gate records the flushed tail signature here even
-     * when the update deduped to null). Cloud passes none.
-     */
-    onPrepared?: (ctx: {
-        sessionId: string;
-        lastDeliveredSignature: string;
-        update: SessionChatTailUpdate | null;
-        result: unknown;
-    }) => void;
+const METADATA_DIGEST_OPTIONS = {
+    ignoreTopLevel: ['daemonId'],
+    ignoreStatus: ['timestamp'],
+    volatileSessionFields: ['lastUpdated'],
+} as const;
+
+function signatureOf(value: unknown): string {
+    try {
+        return JSON.stringify(value) ?? '';
+    } catch {
+        return '';
+    }
+}
+
+/**
+ * machine.runtime change signature. `uptime` counts seconds and memory / load
+ * move by a few bytes every sample, so the signature coarsens them (uptime to
+ * the minute, memory to 1% of total, load to 0.1) — the frame that IS sent
+ * carries the exact values.
+ */
+export function machineRuntimeSignature(machine: MachineInfo): string {
+    const total = typeof machine.totalMem === 'number' && machine.totalMem > 0 ? machine.totalMem : 0;
+    const pct = (value: unknown) => (typeof value === 'number' && total > 0 ? Math.round((value / total) * 100) : value);
+    return signatureOf({
+        ...machine,
+        uptime: typeof machine.uptime === 'number' ? Math.floor(machine.uptime / 60) : machine.uptime,
+        freeMem: pct(machine.freeMem),
+        availableMem: pct(machine.availableMem),
+        loadavg: Array.isArray(machine.loadavg) ? machine.loadavg.map((v) => Math.round(v * 10) / 10) : machine.loadavg,
+    });
+}
+
+/**
+ * session_host.diagnostics change signature — the snapshot minus the trace of
+ * the `get_host_diagnostics` requests this topic itself issues (each poll
+ * would otherwise show up as a change in the next one).
+ */
+export function sessionHostDiagnosticsSignature(diagnostics: SessionHostDiagnosticsSnapshot): string {
+    const requests = Array.isArray(diagnostics?.recentRequests)
+        ? diagnostics.recentRequests.filter((trace) => trace?.type !== 'get_host_diagnostics')
+        : diagnostics?.recentRequests;
+    return signatureOf({ ...diagnostics, recentRequests: requests });
+}
+
+/** workspace.git change signature — status + diff, minus the per-check `lastCheckedAt` stamp. */
+export function workspaceGitSignature(update: Pick<GitWorkspaceUpdate, 'status' | 'diffSummary'>): string {
+    const { lastCheckedAt: _checked, ...status } = (update.status ?? {}) as unknown as Record<string, unknown>;
+    return signatureOf({ status, diffSummary: update.diffSummary ?? null });
 }
 
 export interface TopicEngineOptions {
     /**
      * Debug-trace correlation id provider (cloud's interactionId subsystem).
-     * Consumed by the session.chat_tail / session.modal engines; workspace.git
+     * Consumed by the session.modal engine; workspace.git
      * does not stamp it. Standalone gains a provider in S4.
      */
     interactionId?: (sessionId?: string) => string | undefined;
     /**
-     * Debug-trace sink for the chat_tail/modal publish stages (cloud passes
+     * Debug-trace sink for the modal publish stage (cloud passes
      * recordDebugTrace; standalone gains it in S4).
      */
     recordTrace?: (event: DebugTraceEvent) => void;
     /** Daemon-injected payload sources for the push-style topic engines. */
     sources?: TopicEngineSources;
-    /** chat_tail hybrid-engine wiring. */
-    chatTail?: ChatTailEngineOptions;
+    /** daemon.metadata projection per connection (null / absent = the full body). */
+    metadataScope?: (connectionId: string) => DaemonMetadataScope | null;
     /** Max concurrent git refreshes per flush pass. Default {@link DEFAULT_GIT_REFRESH_CONCURRENCY}. */
     gitRefreshConcurrency?: number;
     /**
@@ -261,14 +273,6 @@ export interface TopicEngineOptions {
     ) => void;
 }
 
-/** Mutable per-subscription chat_tail engine state (storage stays daemon-side — union decision #9). */
-export interface ChatTailEngineState {
-    seq: number;
-    cursor: ChatTailSubscriptionCursor;
-    lastDeliveredSignature: string;
-    missingSession?: ChatTailMissingSessionState;
-}
-
 interface WorkspaceGitSubscriptionEntry {
     readonly connectionId: string;
     readonly key: string;
@@ -278,12 +282,16 @@ interface WorkspaceGitSubscriptionEntry {
     lastSentAt: number;
     /** Last flush PASS that reached this entry (throttle cleared), whether or not it sent — a dedup no-op still counts. Reconciliation reads this, not `lastSentAt`. */
     lastFlushedAt: number;
+    /** Signature of the last DELIVERED frame ('' = none yet). */
+    lastSignature: string;
+    /** Status-only part of {@link lastSignature} (decides whether a diff-less refresh warrants a diff run). */
+    lastStatusSignature: string;
 }
 
 /** Registry-stored push-style topics (subscription storage owned here). */
-type PushTopic = 'machine.runtime' | 'session_host.diagnostics' | 'session.modal' | 'daemon.metadata';
+type PushTopic = 'machine.runtime' | 'session_host.diagnostics' | 'session.modal' | 'daemon.metadata' | 'mesh.status';
 
-const PUSH_TOPICS: ReadonlyArray<PushTopic> = ['machine.runtime', 'session_host.diagnostics', 'session.modal', 'daemon.metadata'];
+const PUSH_TOPICS: ReadonlyArray<PushTopic> = ['machine.runtime', 'session_host.diagnostics', 'session.modal', 'daemon.metadata', 'mesh.status'];
 
 interface PushTopicEntry {
     readonly connectionId: string;
@@ -294,14 +302,15 @@ interface PushTopicEntry {
     /** Last flush PASS that reached this entry (throttle cleared), whether or not it sent — a dedup no-op still counts. Reconciliation reads this, not `lastSentAt`. */
     lastFlushedAt: number;
     lastDeliveredSignature: string;
+    /** daemon.metadata: digest of the last DELIVERED body; null = next frame is a snapshot. */
+    metadataBaseline: KeyedStatusDigest | null;
+    /** mesh.status: digest of the last DELIVERED document; null = next frame is a snapshot. */
+    meshBaseline: KeyedDocDigest | null;
 }
 
 /**
  * Topics whose engine has migrated into the registry (S3 complete: all five
- * remaining cohorts). session.chat_tail is deliberately absent — its
- * subscription STORAGE stays daemon-side (hybrid cohort, union decision #9),
- * so `subscribe`/`unsubscribe` return false and daemons keep their transport
- * storage while consuming the registry's build/debounce engine.
+ * remaining cohorts).
  */
 const MIGRATED_TOPICS: ReadonlySet<TransportTopic> = new Set<TransportTopic>([
     'workspace.git',
@@ -311,7 +320,7 @@ const MIGRATED_TOPICS: ReadonlySet<TransportTopic> = new Set<TransportTopic>([
 /**
  * Topics the registry flushes when {@link TopicSubscriptionRegistry.invalidate}
  * consumes a CommandSpec.invalidates set (machine.runtime is never in the
- * invalidation table; chat_tail is not invalidation-driven in either daemon).
+ * invalidation table).
  */
 const INVALIDATABLE_TOPICS: ReadonlyArray<TransportTopic> = [
     'daemon.metadata',
@@ -330,15 +339,25 @@ export class TopicSubscriptionRegistry {
     private readonly gitSubscriptions = new Map<string, Map<string, WorkspaceGitSubscriptionEntry>>();
     /** topic → connectionId → key → subscription engine state (push-style topics). */
     private readonly pushSubscriptions = new Map<PushTopic, Map<string, Map<string, PushTopicEntry>>>();
-    /** chat_tail output-activity engine state (sessionId → last output at). */
-    private readonly chatOutputActiveAt = new Map<string, number>();
-    private chatOutputFlushTimer: NodeJS.Timeout | null = null;
+    /** mesh.status: meshes with a build in flight, and those asked again meanwhile. */
+    private readonly meshFlushInflight = new Map<string, Promise<void>>();
+    private readonly meshFlushAgain = new Set<string>();
 
     constructor(sink: TopicSink, opts: TopicEngineOptions = {}) {
         this.sink = sink;
         this.opts = opts;
         this.now = opts.now ?? Date.now;
         this.gitMonitor = opts.gitMonitor ?? createGitWorkspaceMonitor();
+        // A monitor refresh from ANY cause (turn end, send_chat, another
+        // subscription's pass) reaches every subscriber of that workspace
+        // without running git again; unchanged content sends nothing.
+        this.gitMonitor.onUpdate((update) => {
+            try {
+                this.deliverWorkspaceGitUpdate(update);
+            } catch (error) {
+                this.opts.onFlushError?.('workspace.git', error, { connectionId: '', key: '', detail: update.workspace });
+            }
+        });
         const requested = Math.floor(opts.gitRefreshConcurrency ?? DEFAULT_GIT_REFRESH_CONCURRENCY);
         this.gitRefreshConcurrency = Number.isFinite(requested) && requested > 0
             ? requested
@@ -357,8 +376,8 @@ export class TopicSubscriptionRegistry {
     /**
      * Register (or replace — same key resets seq/throttle/dedup state, matching
      * both daemons' overwrite-on-resubscribe behavior) a subscription.
-     * Returns false when the topic is not registry-stored (chat_tail /
-     * runtime_output stay daemon-side) or params are invalid, so callers can
+     * Returns false when the topic is not registry-stored (runtime_output
+     * stays daemon-side) or params are invalid, so callers can
      * fall through to their local engine / ignore.
      */
     subscribe(connectionId: string, request: SubscribeRequest): boolean {
@@ -383,6 +402,8 @@ export class TopicSubscriptionRegistry {
                 seq: 0,
                 lastSentAt: 0,
                 lastFlushedAt: 0,
+                lastSignature: '',
+                lastStatusSignature: '',
             });
             return true;
         }
@@ -392,6 +413,11 @@ export class TopicSubscriptionRegistry {
             // Cloud validation semantics (union decision #8): trimmed non-empty id.
             const targetSessionId = typeof params.targetSessionId === 'string' ? params.targetSessionId.trim() : '';
             if (!targetSessionId) return false;
+        }
+        if (request.topic === 'mesh.status') {
+            const meshId = typeof params.meshId === 'string' ? params.meshId.trim() : '';
+            if (!meshId) return false;
+            params.meshId = meshId;
         }
         const byConn = this.pushSubscriptions.get(request.topic) ?? new Map<string, Map<string, PushTopicEntry>>();
         this.pushSubscriptions.set(request.topic, byConn);
@@ -405,6 +431,8 @@ export class TopicSubscriptionRegistry {
             lastSentAt: 0,
             lastFlushedAt: 0,
             lastDeliveredSignature: '',
+            metadataBaseline: null,
+            meshBaseline: null,
         });
         return true;
     }
@@ -527,7 +555,10 @@ export class TopicSubscriptionRegistry {
             if (!topics.has(topic)) continue;
             if (options.skip?.includes(topic)) continue;
             if (!this.hasSubscriptions(topic)) continue;
-            await this.flushNow(topic);
+            // An invalidation is the explicit "the repo changed" signal: it
+            // runs git regardless of the per-subscription sampling interval.
+            if (topic === 'workspace.git') await this.flushWorkspaceGit(undefined, undefined, true);
+            else await this.flushNow(topic);
         }
     }
 
@@ -543,18 +574,19 @@ export class TopicSubscriptionRegistry {
     }
 
     /**
-     * Run one flush pass now (optionally scoped to a single connection, e.g.
-     * the targeted first flush right after subscribe). The per-subscription
+     * Run one flush pass now (optionally scoped to a single connection — and
+     * key — e.g. the targeted first flush right after subscribe). The per-subscription
      * interval throttle still applies — identical to both daemons' historic
      * flush functions.
      */
-    async flushNow(topic: TransportTopic, connectionId?: string): Promise<void> {
+    async flushNow(topic: TransportTopic, connectionId?: string, key?: string): Promise<void> {
         switch (topic) {
-            case 'workspace.git': return this.flushWorkspaceGit(connectionId);
-            case 'machine.runtime': return this.flushMachineRuntime(connectionId);
-            case 'session_host.diagnostics': return this.flushSessionHostDiagnostics(connectionId);
-            case 'session.modal': return this.flushSessionModal(connectionId);
-            case 'daemon.metadata': return this.flushDaemonMetadata(connectionId);
+            case 'workspace.git': return this.flushWorkspaceGit(connectionId, key);
+            case 'machine.runtime': return this.flushMachineRuntime(connectionId, key);
+            case 'session_host.diagnostics': return this.flushSessionHostDiagnostics(connectionId, key);
+            case 'session.modal': return this.flushSessionModal(connectionId, key);
+            case 'daemon.metadata': return this.flushDaemonMetadata(connectionId, key);
+            case 'mesh.status': return this.flushMeshStatusEntries(this.collectPushEntries('mesh.status', connectionId, key));
             default: return;
         }
     }
@@ -564,7 +596,7 @@ export class TopicSubscriptionRegistry {
      * lazily pruned (cloud peers have no per-peer close hook that reaches the
      * registry); alive-but-undeliverable connections are skipped, not dropped.
      */
-    private collectPushEntries(topic: PushTopic, connectionId?: string): PushTopicEntry[] {
+    private collectPushEntries(topic: PushTopic, connectionId?: string, key?: string): PushTopicEntry[] {
         const byConn = this.pushSubscriptions.get(topic);
         if (!byConn) return [];
         const entries: PushTopicEntry[] = [];
@@ -575,76 +607,87 @@ export class TopicSubscriptionRegistry {
                 continue;
             }
             if (!this.sink.isDeliverable(connId)) continue;
-            for (const entry of subs.values()) entries.push(entry);
+            for (const entry of subs.values()) {
+                if (key === undefined || entry.key === key) entries.push(entry);
+            }
         }
         return entries;
     }
 
     /**
      * machine.runtime engine — interval throttle (min 5s / default 15s) +
-     * per-subscription monotonic seq. Identical pre-extraction in cloud
-     * (buildMachineRuntimeUpdateForSubscription) and standalone
-     * (buildMachineRuntimeUpdate).
+     * per-subscription monotonic seq + change-only delivery
+     * ({@link machineRuntimeSignature}).
      */
-    private async flushMachineRuntime(connectionId?: string): Promise<void> {
+    private async flushMachineRuntime(connectionId?: string, key?: string): Promise<void> {
         const source = this.opts.sources?.machineInfo ?? (() => buildMachineInfo('full'));
-        for (const entry of this.collectPushEntries('machine.runtime', connectionId)) {
+        let sample: { machine: MachineInfo; signature: string } | null = null;
+        for (const entry of this.collectPushEntries('machine.runtime', connectionId, key)) {
             const params = entry.params as MachineRuntimeSubscriptionParams;
             const intervalMs = Math.max(
                 MIN_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
                 Number(params.intervalMs || DEFAULT_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS),
             );
             const now = this.now();
-            if (entry.lastSentAt > 0 && (now - entry.lastSentAt) < intervalMs) continue;
+            if (entry.lastFlushedAt > 0 && (now - entry.lastFlushedAt) < intervalMs) continue;
+            entry.lastFlushedAt = now;
+            if (!sample) {
+                const machine = source();
+                sample = { machine, signature: machineRuntimeSignature(machine) };
+            }
+            if (sample.signature === entry.lastDeliveredSignature) continue;
             entry.seq += 1;
             entry.lastSentAt = now;
-            entry.lastFlushedAt = now;
-            this.sink.send(entry.connectionId, 'machine.runtime', {
+            const delivered = this.sink.send(entry.connectionId, 'machine.runtime', {
                 topic: 'machine.runtime',
                 key: entry.key,
-                machine: source(),
+                machine: sample.machine,
                 seq: entry.seq,
                 timestamp: now,
             });
+            entry.lastDeliveredSignature = delivered === false ? '' : sample.signature;
         }
     }
 
     /**
      * session_host.diagnostics engine — interval throttle (min 5s / default
      * 10s); a null source result (controller unavailable) skips WITHOUT
-     * mutating state. seq/lastSentAt advance only after the diagnostics
-     * snapshot resolves (both daemons awaited before bumping).
+     * mutating state. Change-only delivery
+     * ({@link sessionHostDiagnosticsSignature}).
      */
-    private async flushSessionHostDiagnostics(connectionId?: string): Promise<void> {
+    private async flushSessionHostDiagnostics(connectionId?: string, key?: string): Promise<void> {
         const source = this.opts.sources?.sessionHostDiagnostics;
         if (!source) return;
-        for (const entry of this.collectPushEntries('session_host.diagnostics', connectionId)) {
+        for (const entry of this.collectPushEntries('session_host.diagnostics', connectionId, key)) {
             const params = entry.params as SessionHostDiagnosticsSubscriptionParams;
             const intervalMs = Math.max(
                 MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS,
                 Number(params.intervalMs || DEFAULT_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS),
             );
             const now = this.now();
-            if (entry.lastSentAt > 0 && (now - entry.lastSentAt) < intervalMs) continue;
+            if (entry.lastFlushedAt > 0 && (now - entry.lastFlushedAt) < intervalMs) continue;
             const pending = source({
                 includeSessions: params.includeSessions !== false,
                 limit: Number(params.limit) || undefined,
             });
             if (!pending) continue;
             const diagnostics = await pending;
-            entry.seq += 1;
-            entry.lastSentAt = now;
             entry.lastFlushedAt = now;
+            const signature = sessionHostDiagnosticsSignature(diagnostics);
+            if (signature === entry.lastDeliveredSignature) continue;
             // Standalone re-checked ws OPEN after the await; cloud's send is a
             // no-op on a disconnected peer — the recheck is safe for both.
             if (!this.sink.isDeliverable(entry.connectionId)) continue;
-            this.sink.send(entry.connectionId, 'session_host.diagnostics', {
+            entry.seq += 1;
+            entry.lastSentAt = now;
+            const delivered = this.sink.send(entry.connectionId, 'session_host.diagnostics', {
                 topic: 'session_host.diagnostics',
                 key: entry.key,
                 diagnostics,
                 seq: entry.seq,
                 timestamp: now,
             });
+            entry.lastDeliveredSignature = delivered === false ? '' : signature;
         }
     }
 
@@ -653,10 +696,10 @@ export class TopicSubscriptionRegistry {
      * prepareSessionModalUpdate's delivery signature. interactionId stamping +
      * debug-trace recording ride the optional hooks (cloud-only until S4).
      */
-    private async flushSessionModal(connectionId?: string): Promise<void> {
+    private async flushSessionModal(connectionId?: string, key?: string): Promise<void> {
         const source = this.opts.sources?.sessionModalState;
         if (!source) return;
-        for (const entry of this.collectPushEntries('session.modal', connectionId)) {
+        for (const entry of this.collectPushEntries('session.modal', connectionId, key)) {
             const params = entry.params as unknown as SessionModalSubscriptionParams;
             const sessionId = params.targetSessionId;
             const state = source(sessionId);
@@ -700,242 +743,165 @@ export class TopicSubscriptionRegistry {
     }
 
     /**
-     * daemon.metadata engine — no throttle (always builds + sends; union
-     * decision #6), per-subscription monotonic seq. The daemon-specific body
-     * (daemonId prefix, mesh-owned session append, meshStateRevisions/userName)
-     * comes from the injected source.
+     * daemon.metadata engine — the ONE dashboard state lane (audit P0-3).
+     *
+     * No throttle (union decision #6): every pass builds the body, but what a
+     * subscription RECEIVES is keyed: its first frame is a `snapshot`, later
+     * frames are the {@link DaemonMetadataDelta} against the digest of the
+     * last frame delivered to it, and an unchanged body sends nothing and
+     * bumps no seq. A failed send clears the baseline so the next frame is a
+     * snapshot again — a gap can never be papered over by a later delta.
+     *
+     * The body depends on exactly ONE input, `includeSessions`, so a pass
+     * builds (and digests) at most one body per cohort, lazily; S dashboards
+     * watching the same daemon share it. Envelope fields stay per entry.
      */
-    private async flushDaemonMetadata(connectionId?: string): Promise<void> {
+    private async flushDaemonMetadata(connectionId?: string, key?: string): Promise<void> {
         const source = this.opts.sources?.daemonMetadataBody;
         if (!source) return;
-        // ── PER-PASS COHORT SHARING (perf) ───────────────────────────────────
-        // `source(...)` is the daemon's buildDaemonMetadataBody: a full
-        // collectAllStates() + buildStatusSnapshot('metadata') over every
-        // provider/session, plus (when includeSessions) the mesh-owned session
-        // append. It was invoked once PER SUBSCRIBER, so S dashboards watching
-        // the same daemon each paid an independent O(N) snapshot — measured
-        // 1.03ms → 2.92ms → 4.80ms for S=1/3/5 at N=500, on a path that is
-        // event-driven and fires on every status change.
-        //
-        // The body depends on exactly ONE input: `includeSessions`
-        // (DaemonMetadataSubscriptionParams has no other field). So within a
-        // single flush pass there are at most TWO distinct bodies, and every
-        // subscriber in a cohort is entitled to byte-identical content — they
-        // are reading the same daemon at the same instant.
-        //
-        // Build at most one body per cohort, lazily: a pass with only
-        // includeSessions:false subscribers never builds the (more expensive)
-        // sessions-inclusive body, and a pass with no subscribers at all builds
-        // nothing. Envelope fields stay strictly per-subscription: `key` and the
-        // monotonic `seq` are read from each entry, and `timestamp` is stamped
-        // per entry exactly as before, so no subscriber observes another's seq.
-        //
-        // ★ The shared object is spread into each envelope (`...body`) rather
-        // than sent by reference, so per-entry envelope keys cannot mutate a
-        // sibling's payload. The nested `status` object IS shared by reference —
-        // which is correct here because the send path serializes it and no
-        // consumer in this pass mutates it — and matches what a single
-        // subscriber already received.
-        const entries = this.collectPushEntries('daemon.metadata', connectionId);
+        const entries = this.collectPushEntries('daemon.metadata', connectionId, key);
         if (entries.length === 0) return;
-        const cohortBodies = new Map<boolean, DaemonMetadataUpdateBody>();
-        const bodyFor = (cohort: boolean): DaemonMetadataUpdateBody => {
-            const cached = cohortBodies.get(cohort);
-            if (cached !== undefined) return cached;
-            // Pass a NORMALIZED params object, not the first cohort member's
-            // own. The cohort key is `includeSessions`, so handing the source a
-            // params object carrying only that field keeps the shared body a
-            // pure function of the key. If a future field is added to
-            // DaemonMetadataSubscriptionParams and read by the source, this
-            // call breaks at the type level (the object literal below must
-            // gain it) — which forces the cohort key to be widened here rather
-            // than letting one subscriber's unread field silently decide the
-            // payload for the whole cohort.
-            const built = source({ includeSessions: cohort });
-            cohortBodies.set(cohort, built);
+        const bodies = new Map<boolean, DaemonMetadataUpdateBody>();
+        const cohorts = new Map<string, { body: DaemonMetadataUpdateBody; digest: KeyedStatusDigest }>();
+        const cohortFor = (includeSessions: boolean, scope: DaemonMetadataScope | null) => {
+            const cohortKey = `${includeSessions ? 1 : 0}|${scope?.key ?? ''}`;
+            const cached = cohorts.get(cohortKey);
+            if (cached) return cached;
+            // A NORMALIZED params object keeps the shared body a pure function
+            // of the cohort key (a new params field must widen the key here).
+            let full = bodies.get(includeSessions);
+            if (!full) {
+                full = source({ includeSessions });
+                bodies.set(includeSessions, full);
+            }
+            const body = scope ? scope.project(full) : full;
+            const built = {
+                body,
+                digest: digestKeyedStatus(body as unknown as KeyedStatusBody, METADATA_DIGEST_OPTIONS),
+            };
+            cohorts.set(cohortKey, built);
             return built;
         };
         for (const entry of entries) {
             const now = this.now();
+            entry.lastFlushedAt = now;
+            const scope = this.opts.metadataScope?.(entry.connectionId) ?? null;
+            const { body, digest } = cohortFor((entry.params as DaemonMetadataSubscriptionParams | undefined)?.includeSessions === true, scope);
+            let update: DaemonMetadataUpdate | DaemonMetadataDelta;
+            if (!entry.metadataBaseline) {
+                update = { topic: 'daemon.metadata', key: entry.key, mode: 'snapshot', ...body, seq: entry.seq + 1, timestamp: now };
+            } else {
+                const delta = diffKeyedStatus(entry.metadataBaseline, digest);
+                if (!delta) continue;
+                update = {
+                    topic: 'daemon.metadata',
+                    key: entry.key,
+                    mode: 'delta',
+                    daemonId: body.daemonId,
+                    ...(delta as Omit<DaemonMetadataDelta, 'topic' | 'key' | 'mode' | 'daemonId' | 'seq' | 'timestamp'>),
+                    seq: entry.seq + 1,
+                    timestamp: now,
+                };
+            }
             entry.seq += 1;
             entry.lastSentAt = now;
-            entry.lastFlushedAt = now;
-            const body = bodyFor((entry.params as DaemonMetadataSubscriptionParams | undefined)?.includeSessions === true);
-            this.sink.send(entry.connectionId, 'daemon.metadata', {
-                topic: 'daemon.metadata',
-                key: entry.key,
-                ...body,
-                seq: entry.seq,
-                timestamp: now,
-            });
+            const delivered = this.sink.send(entry.connectionId, 'daemon.metadata', update);
+            entry.metadataBaseline = delivered === false ? null : digest;
         }
     }
 
-    // ─── session.chat_tail hybrid engine (storage + fan-out stay daemon-side) ───
-
     /**
-     * Record CLI chat output activity and arm the debounced onlyActive flush.
-     * Engine-owned copy of cloud markP2PChatOutputActivity / standalone
-     * markWsChatOutputActivity — the debounce constant and transport gate are
-     * per-daemon injected (union decision #5).
+     * mesh.status: flush every subscriber of `meshId` (or of every mesh). The
+     * source runs at most once per mesh per pass; a request that arrives while
+     * that mesh is being built runs ONE more pass after it (never overlapping).
      */
-    markChatOutputActivity(sessionId: string): void {
-        const cfg = this.opts.chatTail;
-        if (!sessionId || !(cfg?.isCliSession?.(sessionId) ?? false)) return;
-        // Fires the replica lane's transcript dirty trigger, throttled: the
-        // first chunk pulls immediately, the rest of the paint burst collapses
-        // into one trailing pull per 350ms window
-        // (TRANSCRIPT_PTY_DIRTY_THROTTLE_MS). Then records output-activity and
-        // arms the legacy chat_tail debounce, below.
-        //
-        // This is the replica lane's ONLY streaming-rate trigger. Its other two
-        // dirty triggers fire on status transitions (status/reporter.ts) and
-        // once post-chat (commands/router.ts), never per streamed token, and
-        // the 3000ms stat poll is a safety net whose first tick is discarded
-        // (worst case ~6s).
-        //
-        // History, because this line has been removed once already: 172ec64f
-        // dropped it in favour of that stat poll, which was survivable only
-        // while the legacy session.chat_tail PUSH still carried the fast path
-        // on its 700ms debounce. §8 unit 9 (e48165c9) retired legacy and the
-        // lane lost its low-latency observer — user-visible as slow chat. It
-        // returns THROTTLED rather than raw: a raw markDirty per chunk costs a
-        // full snapshot re-encode each time (measured 20 events → 20 reparses;
-        // the publisher's inFlight guard merges concurrent work only, never a
-        // serial stream), which is the cost 172ec64f was right to avoid.
-        markTranscriptPtyOutputActivity(sessionId);
-        this.chatOutputActiveAt.set(sessionId, this.now());
-        if (this.chatOutputFlushTimer) return;
-        if (cfg?.scheduleGate && !cfg.scheduleGate()) return;
-        this.chatOutputFlushTimer = setTimeout(() => {
-            this.chatOutputFlushTimer = null;
-            cfg?.onDebouncedFlush?.();
-        }, cfg?.flushDebounceMs ?? DEFAULT_CHAT_TAIL_FLUSH_DEBOUNCE_MS);
+    async flushMeshStatus(meshId?: string): Promise<void> {
+        const entries = this.collectPushEntries('mesh.status')
+            .filter((entry) => !meshId || entry.params.meshId === meshId);
+        await this.flushMeshStatusEntries(entries);
     }
 
-    /**
-     * Sessions with CLI output inside the activity hot window (default 8s —
-     * DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS in both daemons). Prunes
-     * expired entries, identical to both daemons' local copies. Consumed by
-     * the daemon-side hot-session classification.
-     */
-    getRecentlyOutputActiveChatSessionIds(now: number): Set<string> {
-        const hotMs = this.opts.chatTail?.activityHotMs ?? DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS;
-        const active = new Set<string>();
-        for (const [sessionId, lastOutputAt] of this.chatOutputActiveAt) {
-            if (now - lastOutputAt <= hotMs) {
-                active.add(sessionId);
-            } else {
-                this.chatOutputActiveAt.delete(sessionId);
-            }
+    /** Subscribed mesh ids (the host's triggers are scoped to them). */
+    meshStatusMeshIds(): string[] {
+        const ids = new Set<string>();
+        for (const subs of this.pushSubscriptions.get('mesh.status')?.values() ?? []) {
+            for (const entry of subs.values()) ids.add(String(entry.params.meshId));
         }
-        return active;
+        return [...ids];
+    }
+
+    private async flushMeshStatusEntries(entries: PushTopicEntry[]): Promise<void> {
+        const source = this.opts.sources?.meshStatus;
+        if (!source || entries.length === 0) return;
+        const byMesh = new Set<string>();
+        for (const entry of entries) {
+            const meshId = String(entry.params.meshId || '');
+            if (meshId) byMesh.add(meshId);
+        }
+        await Promise.all([...byMesh.keys()].map((meshId) => this.flushOneMesh(meshId, source)));
+    }
+
+    private async flushOneMesh(meshId: string, source: (meshId: string) => Promise<Record<string, unknown> | null>): Promise<void> {
+        const inflight = this.meshFlushInflight.get(meshId);
+        if (inflight) {
+            this.meshFlushAgain.add(meshId);
+            return inflight;
+        }
+        const run = (async () => {
+            do {
+                this.meshFlushAgain.delete(meshId);
+                let status: Record<string, unknown> | null = null;
+                try {
+                    status = await source(meshId);
+                } catch (error) {
+                    this.opts.onFlushError?.('mesh.status', error, { connectionId: '', key: '', detail: meshId });
+                }
+                if (!status) return;
+                const digest = digestKeyedDoc(status, MESH_STATUS_DOC_SPEC);
+                // Every live subscriber of this mesh is served from this one build (a
+                // subscriber that joined meanwhile gets its snapshot; a baselined one
+                // its delta, or nothing when its view is unchanged).
+                for (const entry of this.collectPushEntries('mesh.status')) {
+                    if (entry.params.meshId === meshId) this.deliverMeshStatus(entry, meshId, status, digest);
+                }
+            } while (this.meshFlushAgain.has(meshId));
+        })().finally(() => {
+            this.meshFlushInflight.delete(meshId);
+        });
+        this.meshFlushInflight.set(meshId, run);
+        return run;
+    }
+
+    private deliverMeshStatus(entry: PushTopicEntry, meshId: string, status: Record<string, unknown>, digest: KeyedDocDigest): void {
+        const now = this.now();
+        entry.lastFlushedAt = now;
+        let update: MeshStatusSnapshotUpdate | MeshStatusDeltaUpdate;
+        if (!entry.meshBaseline) {
+            update = { topic: 'mesh.status', key: entry.key, mode: 'snapshot', meshId, status, seq: entry.seq + 1, timestamp: now };
+        } else {
+            const delta = diffKeyedDoc(entry.meshBaseline, digest, MESH_STATUS_DOC_SPEC);
+            if (!delta) return;
+            update = { topic: 'mesh.status', key: entry.key, mode: 'delta', meshId, delta, seq: entry.seq + 1, timestamp: now };
+        }
+        entry.seq += 1;
+        entry.lastSentAt = now;
+        const delivered = this.sink.send(entry.connectionId, 'mesh.status', update);
+        entry.meshBaseline = delivered === false ? null : digest;
     }
 
     /**
-     * Drop a terminated session's chat-output-activity entry immediately,
-     * instead of waiting out the hot-window expiry above (wiring-unification
-     * B2 item 14 / B residue cleanup). Purely an eager-cleanup optimization —
-     * the lazy expiry in {@link getRecentlyOutputActiveChatSessionIds} already
-     * makes a stale entry harmless (bounded by `activityHotMs`, default 8s),
-     * so this is safe to call from a `terminated` bus subscriber the host
-     * wires (see REQUESTED EDIT in the wiring-unification B report — this
-     * registry has no bus access itself). A no-op for an unknown sessionId.
+     * workspace.git engine — runs git only while a subscription watches the
+     * workspace: on subscribe, on an invalidation (unthrottled), and on the
+     * host's sample tick (throttled by the subscription's intervalMs). Delivery is
+     * the monitor listener's job ({@link deliverWorkspaceGitUpdate}), so a
+     * refresh from any cause reaches every subscriber of that workspace once
+     * and only when its content changed.
      */
-    purgeChatOutputActivity(sessionId: string): void {
-        this.chatOutputActiveAt.delete(sessionId);
-    }
-
-    /**
-     * Per-subscription chat_tail build engine: read (daemon source) →
-     * missing-session backoff bookkeeping → prepare (seq/dedup) →
-     * cursor/seq/signature mutation → hooks. The caller (daemon fan-out) sends
-     * the returned update over its own transport.
-     */
-    async buildChatTailUpdate(input: {
-        key: string;
-        params: SessionChatTailSubscriptionParams;
-        state: ChatTailEngineState;
-    }): Promise<SessionChatTailUpdate | null> {
-        const read = this.opts.sources?.readChatTail;
-        if (!read) return null;
-        const { key, params, state } = input;
-        const result = await read({
-            targetSessionId: params.targetSessionId,
-            ...(params.historySessionId ? { historySessionId: params.historySessionId } : {}),
-            ...(state.cursor.tailLimit > 0 ? { tailLimit: state.cursor.tailLimit } : {}),
-            // Dashboard activity toggle opt-in — read_chat keeps its prose-only
-            // default when the subscriber did not ask for activity rows.
-            ...(params.includeActivity === true ? { includeActivity: true } : {}),
-        });
-
-        // The session vanished from the live registry (stopped agent, reclaimed
-        // mesh worker). The subscription itself survives — only an explicit
-        // client unsubscribe removes one — so record the miss and let the
-        // daemon flush loop's backoff pace (and eventually drop) it. Publishing
-        // nothing here is deliberate: the pane keeps its last rendered
-        // transcript rather than being blanked by a transient miss.
-        if (isMissingLiveSessionResult(result)) {
-            const now = this.now();
-            const missing = recordMissingSessionAttempt(state.missingSession, now);
-            state.missingSession = missing;
-            // One warn per streak — the daemon owns the log line wording.
-            const warnNow = shouldWarnForMissingSession(missing);
-            if (warnNow) missing.warned = true;
-            this.opts.chatTail?.onMissingSession?.({
-                sessionId: params.targetSessionId,
-                consecutiveMisses: missing.consecutiveMisses,
-                warnNow,
-            });
-            return null;
-        }
-        // A successful read clears the streak so a session that recovers (or
-        // was merely slow to attach) returns to the normal flush cadence.
-        if (state.missingSession) state.missingSession = undefined;
-        const interactionId = this.opts.interactionId?.(params.targetSessionId);
-        const prepared = prepareSessionChatTailUpdate({
-            key,
-            sessionId: params.targetSessionId,
-            ...(params.historySessionId ? { historySessionId: params.historySessionId } : {}),
-            seq: state.seq,
-            timestamp: this.now(),
-            ...(interactionId ? { interactionId } : {}),
-            cursor: state.cursor,
-            lastDeliveredSignature: state.lastDeliveredSignature,
-            result: result as SessionChatTailCommandResult,
-        });
-        state.cursor = prepared.cursor;
-        state.seq = prepared.seq;
-        state.lastDeliveredSignature = prepared.lastDeliveredSignature;
-        // D8 hook fires BEFORE the null-update check: standalone records the
-        // flushed tail signature even when the update deduped to null.
-        this.opts.chatTail?.onPrepared?.({
-            sessionId: params.targetSessionId,
-            lastDeliveredSignature: prepared.lastDeliveredSignature,
-            update: prepared.update,
-            result,
-        });
-        if (!prepared.update) {
-            return null;
-        }
-        this.opts.recordTrace?.({
-            interactionId,
-            category: 'topic',
-            stage: 'session.chat_tail_published',
-            level: 'info',
-            sessionId: params.targetSessionId,
-            payload: {
-                returnedMessages: prepared.update.messages.length,
-                hasModal: !!prepared.update.activeModal,
-                hasTitle: typeof prepared.update.title === 'string',
-            },
-        });
-        return prepared.update;
-    }
-
-    private async flushWorkspaceGit(connectionId?: string): Promise<void> {
+    private async flushWorkspaceGit(connectionId?: string, key?: string, force = false): Promise<void> {
         const now = this.now();
         const tasks: WorkspaceGitSubscriptionEntry[] = [];
+        // One git run per (workspace, includeDiffSummary) per pass.
+        const seen = new Set<string>();
         for (const [connId, subs] of Array.from(this.gitSubscriptions.entries())) {
             if (connectionId && connId !== connectionId) continue;
             if (!this.sink.isAlive(connId)) {
@@ -946,25 +912,20 @@ export class TopicSubscriptionRegistry {
             }
             if (!this.sink.isDeliverable(connId)) continue;
             for (const entry of subs.values()) {
+                if (key !== undefined && entry.key !== key) continue;
                 const intervalMs = Math.max(1, Number(entry.params.intervalMs || 0));
-                if (entry.lastSentAt > 0 && (now - entry.lastSentAt) < intervalMs) continue;
+                if (!force && entry.lastFlushedAt > 0 && (now - entry.lastFlushedAt) < intervalMs) continue;
+                entry.lastFlushedAt = now;
+                const runKey = `${entry.params.includeDiffSummary ? 1 : 0}:${entry.params.workspace}`;
+                if (seen.has(runKey)) continue;
+                seen.add(runKey);
                 tasks.push(entry);
             }
         }
         if (tasks.length === 0) return;
         await runAsyncBatch(tasks, async (entry) => {
             try {
-                const monitorUpdate = await entry.subscription.refresh();
-                const current = this.gitSubscriptions.get(entry.connectionId)?.get(entry.key);
-                if (current !== entry || !this.sink.isDeliverable(entry.connectionId)) return;
-                entry.seq += 1;
-                entry.lastSentAt = monitorUpdate.timestamp;
-                entry.lastFlushedAt = now;
-                this.sink.send(entry.connectionId, 'workspace.git', {
-                    ...monitorUpdate,
-                    key: entry.key,
-                    seq: entry.seq,
-                });
+                await entry.subscription.refresh();
             } catch (error) {
                 this.opts.onFlushError?.('workspace.git', error, {
                     connectionId: entry.connectionId,
@@ -973,5 +934,44 @@ export class TopicSubscriptionRegistry {
                 });
             }
         }, { concurrency: this.gitRefreshConcurrency });
+    }
+
+    /** Push one monitor update to every subscriber of its workspace whose content differs. */
+    private deliverWorkspaceGitUpdate(update: GitWorkspaceUpdate): void {
+        const signature = workspaceGitSignature(update);
+        const statusSignature = workspaceGitSignature({ status: update.status });
+        for (const [connId, subs] of Array.from(this.gitSubscriptions.entries())) {
+            if (!this.sink.isDeliverable(connId)) continue;
+            for (const entry of subs.values()) {
+                if (entry.params.workspace !== update.workspace) continue;
+                if (entry.params.includeDiffSummary && update.diffSummary === undefined) {
+                    // A status-only refresh (turn end, send_chat) must not wipe
+                    // this subscriber's diff: if the status moved, re-run with
+                    // the diff; the result comes back through this listener.
+                    if (statusSignature !== entry.lastStatusSignature) {
+                        void entry.subscription.refresh().catch((error) => {
+                            this.opts.onFlushError?.('workspace.git', error, {
+                                connectionId: entry.connectionId,
+                                key: entry.key,
+                                detail: entry.params.workspace,
+                            });
+                        });
+                    }
+                    continue;
+                }
+                const wanted = entry.params.includeDiffSummary ? signature : statusSignature;
+                if (wanted === entry.lastSignature) continue;
+                entry.seq += 1;
+                entry.lastSentAt = update.timestamp;
+                const delivered = this.sink.send(entry.connectionId, 'workspace.git', {
+                    ...update,
+                    ...(entry.params.includeDiffSummary ? {} : { diffSummary: undefined }),
+                    key: entry.key,
+                    seq: entry.seq,
+                });
+                entry.lastSignature = delivered === false ? '' : wanted;
+                entry.lastStatusSignature = delivered === false ? '' : statusSignature;
+            }
+        }
     }
 }

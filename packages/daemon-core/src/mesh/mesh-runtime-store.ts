@@ -22,7 +22,7 @@ import type { Database as DatabaseHandle } from 'better-sqlite3';
 import { WalCheckpointScheduler, DEFAULT_WAL_CHECKPOINT_POLICY } from './mesh-runtime-store-wal.js';
 import {
     findAssignedBySession as findAssignedBySessionImpl, getQueueHeads as getQueueHeadsImpl,
-    pruneTerminalQueueEntries as pruneTerminalQueueEntriesImpl, selectActiveDirectDispatches, selectSoleActiveDirectDispatchTaskId, type DirectDispatchView,
+    pruneTerminalQueueEntries as pruneTerminalQueueEntriesImpl, pruneTerminalQueueEntriesDetailed as pruneTerminalQueueEntriesDetailedImpl, selectActiveDirectDispatches, selectSoleActiveDirectDispatchTaskId, type DirectDispatchView,
     type MeshQueueHead,
     getQueueFacts as getQueueFactsImpl, getQueueStatusCounts as getQueueStatusCountsImpl,
     getQueueDependencyHeads as getQueueDependencyHeadsImpl, type MeshQueueFacts,
@@ -1290,6 +1290,14 @@ export class MeshRuntimeStore {
      */
     pruneTerminalQueueEntries(olderThanMs: number): number {
         return pruneTerminalQueueEntriesImpl(this, olderThanMs);
+    }
+
+    /**
+     * Same prune, also reporting the non-graph `mesh_task_outputs` rows removed in the
+     * same transaction (their retention IS the queue's — see the impl's header).
+     */
+    pruneTerminalQueue(olderThanMs: number): { queue: number; taskOutputs: number } {
+        return pruneTerminalQueueEntriesDetailedImpl(this, olderThanMs);
     }
 
     // ── M3: Mission Records ─────────────────────────────────────────────────

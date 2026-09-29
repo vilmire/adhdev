@@ -6,6 +6,7 @@ import { meshEnqueueTask, meshEnqueueBatch } from '../src/tools/mesh-tools.js';
 import { getQueue } from '@adhdev/daemon-core';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 
 /**
  * CANONICAL-FIRST ALIAS PRECEDENCE (2026-09-25).
@@ -49,13 +50,13 @@ function nextMeshId(): string {
 }
 
 function recordingTransport() {
-  return {
+  return fakeCoordinatorTransport({
     command: async (cmd: string, args?: Record<string, unknown>) => {
       if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {});
       return { success: true };
     },
     getStatus: async () => ({ sessions: [] }),
-  } as any;
+  } as any);
 }
 
 function makeCtx(meshId: string) {

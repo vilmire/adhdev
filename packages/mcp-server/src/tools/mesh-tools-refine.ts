@@ -13,6 +13,7 @@ import {
 import type {
     MeshContext,
 } from './mesh-tools-internal.js';
+import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
 
 // The config SCHEMAS are static daemon-core data, identical on every node — they
 // are read from the local coordinator daemon, never relayed to a member.
@@ -25,6 +26,7 @@ export async function meshValidateRefineConfig(
     ctx: MeshContext,
     args: { node_id?: string; config?: Record<string, unknown> },
 ): Promise<string> {
+    await ensureMeshNodeRoutes(ctx);
     const node = resolveRefineConfigNode(ctx, args.node_id);
     const result = await commandForNode(ctx, node, 'validate_mesh_refine_config', {
         workspace: node.workspace,
@@ -38,6 +40,7 @@ export async function meshSuggestRefineConfig(
     ctx: MeshContext,
     args: { node_id?: string },
 ): Promise<string> {
+    await ensureMeshNodeRoutes(ctx);
     const node = resolveRefineConfigNode(ctx, args.node_id);
     const result = await commandForNode(ctx, node, 'suggest_mesh_refine_config', {
         workspace: node.workspace,
@@ -82,6 +85,7 @@ export async function meshValidateChangeImpactConfig(
     ctx: MeshContext,
     args: { node_id?: string; config?: Record<string, unknown> },
 ): Promise<string> {
+    await ensureMeshNodeRoutes(ctx);
     const node = resolveRefineConfigNode(ctx, args.node_id);
     const result = await commandForNode(ctx, node, 'validate_mesh_change_impact_config', {
         workspace: node.workspace,
@@ -94,6 +98,7 @@ export async function meshSuggestChangeImpactConfig(
     ctx: MeshContext,
     args: { node_id?: string },
 ): Promise<string> {
+    await ensureMeshNodeRoutes(ctx);
     const node = resolveRefineConfigNode(ctx, args.node_id);
     const result = await commandForNode(ctx, node, 'suggest_mesh_change_impact_config', {
         workspace: node.workspace,
@@ -132,6 +137,7 @@ export async function meshInit(
     ctx: MeshContext,
     args: { node_id?: string; write?: boolean; overwrite?: boolean },
 ): Promise<string> {
+    await ensureMeshNodeRoutes(ctx);
     const node = resolveRefineConfigNode(ctx, args.node_id);
     const result = await commandForNode(ctx, node, 'mesh_init', {
         workspace: node.workspace,
@@ -162,6 +168,7 @@ export async function meshReinit(
     ctx: MeshContext,
     args: { node_id?: string; write?: boolean; overwrite?: boolean },
 ): Promise<string> {
+    await ensureMeshNodeRoutes(ctx);
     const node = resolveRefineConfigNode(ctx, args.node_id);
     // overwrite defaults to true for reinit (an existing config is expected); callers
     // can still pass overwrite=false to fall back to existing-wins. write defaults to
@@ -197,6 +204,7 @@ export async function meshWriteMeshJsonConfig(
     ctx: MeshContext,
     args: { node_id?: string; write?: boolean; overwrite?: boolean; workspace?: string } = {},
 ): Promise<string> {
+    await ensureMeshNodeRoutes(ctx);
     const node = resolveRefineConfigNode(ctx, args.node_id);
     const result = await commandForNode(ctx, node, 'write_mesh_json_config', {
         meshId: ctx.mesh.id,

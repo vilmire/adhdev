@@ -87,15 +87,53 @@ function renderArgsForLog(args: readonly string[]): string {
 }
 
 /**
- * Flags declared by `extraArgs`, normalized to their bare form so both the
- * `--flag value` and `--flag=value` spellings collapse to `--flag`.
+ * A separate value token shaped like `dotted.key=value` — the argument of a
+ * REPEATABLE keyed option such as codex's `-c key=value` / `--config key=value`.
+ * The key must start the token and be identifier-like (letters, digits, `_`,
+ * `-`, `.`, quoted segments), so free text that merely contains `=` somewhere is
+ * not mistaken for one.
+ */
+const KEYED_OPTION_VALUE = /^([A-Za-z_][\w-]*(?:\.(?:[\w-]+|"[^"]*"))*)=/;
+
+/**
+ * Identity of the option starting at `args[i]`, used to decide collisions.
+ *
+ *  - `--flag=value`           → `--flag`
+ *  - `--flag value`           → `--flag`
+ *  - `-c key=value` (keyed)   → `-c key`
+ *
+ * ★The keyed form is why this is not just the bare flag (CODEX-UPDATE-PROMPT-EXIT,
+ * 2026-09-29). codex takes every config override as `-c key=value`, and a
+ * delegated launch always appends several (`-c model=…`, `-c mcp_servers.…`).
+ * Keyed by the bare `-c`, ANY per-launch override erased EVERY `-c` the spec
+ * declared — so the spec's `-c check_for_update_on_startup=false` never reached a
+ * worker's argv, and a worker whose CODEX_HOME cached a newer release landed on
+ * the "Update now" prompt, where the task's Enter ran a global npm install and
+ * the CLI exited. Two overrides of DIFFERENT keys are not a collision; two of the
+ * SAME key still are (last wins, as before).
+ */
+function optionIdentity(args: readonly string[], i: number): string {
+    const arg = args[i];
+    const eq = arg.indexOf('=');
+    if (eq > 0) return arg.slice(0, eq);
+    const next = args[i + 1];
+    if (typeof next === 'string' && !isFlagToken(next)) {
+        const keyed = KEYED_OPTION_VALUE.exec(next);
+        if (keyed) return `${arg} ${keyed[1]}`;
+    }
+    return arg;
+}
+
+/**
+ * Option identities declared by `extraArgs` (see `optionIdentity`), so both the
+ * `--flag value` and `--flag=value` spellings collapse to `--flag`, while keyed
+ * repeatable options stay distinct per key.
  */
 function collectDeclaredFlags(extraArgs: readonly string[]): Set<string> {
     const flags = new Set<string>();
-    for (const arg of extraArgs) {
-        if (!isFlagToken(arg)) continue;
-        const eq = arg.indexOf('=');
-        flags.add(eq > 0 ? arg.slice(0, eq) : arg);
+    for (let i = 0; i < extraArgs.length; i += 1) {
+        if (!isFlagToken(extraArgs[i])) continue;
+        flags.add(optionIdentity(extraArgs, i));
     }
     return flags;
 }
@@ -174,8 +212,7 @@ export function dedupeBaseArgsAgainstExtraArgs(
             continue;
         }
         const eq = arg.indexOf('=');
-        const bare = eq > 0 ? arg.slice(0, eq) : arg;
-        if (!declared.has(bare)) {
+        if (!declared.has(optionIdentity(baseArgs, i))) {
             kept.push(arg);
             continue;
         }

@@ -16,11 +16,12 @@ import {
     summarizeMeshMagiActivity,
     buildNodeCapabilityExposure,
     buildNodeMachineIdentity,
-    collectLiveStatusProbe,
     collectRelatedRepoStatuses,
     compactActiveWorkRecords,
     compactMeshStatusNode,
     compactNodeSeverity,
+    buildMeshCoordinatorToolCallArgs,
+    buildPendingMeshEventsDrainArgs,
     drainCoordinatorPendingEvents,
     latestActiveLaunchFailureFromEntries,
     summarizeMeshUsage,
@@ -55,9 +56,13 @@ import {
     findHeldNodeStatus,
     heldNodeStatusProbe,
     readCoordinatorHeldNodeState,
-    usesHeldNodeRuntime,
+    type NodeStatusProbe,
 } from './mesh-status-held-git.js';
-import { scheduleBackgroundDirectReconcile } from './mesh-status-background.js';
+import { createMeshStatusViewTransport, readMeshStatusView, type MeshStatusView } from './mesh-status-view.js';
+import { isLocalControlPlaneNode } from './mesh-node-identity.js';
+import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
+import { extractStatusMetadataSessions, unwrapCommandPayload } from './mesh-session-helpers.js';
+import { extractDaemonBuildInfo, extractUpgradeFailureSummary } from './mesh-tools-internal-core.js';
 
 // The v2 protocol version literal (mirrors MESH_PROTOCOL_VERSION_V2 in
 // daemon-core mesh/contracts.ts). Kept as a local literal so this MCP-side
@@ -125,34 +130,66 @@ function withoutGraphUsage<T>(summary: T): T {
     return rest as unknown as T;
 }
 
+/** This daemon's own status (the view's `get_status_metadata`) as a node status probe. */
+function localStatusProbe(localStatus: unknown): NodeStatusProbe {
+    if (!localStatus || typeof localStatus !== 'object' || (localStatus as any).success === false) return { sessions: [] };
+    const payload = unwrapCommandPayload(localStatus);
+    const daemonId = typeof payload?.status?.instanceId === 'string' ? payload.status.instanceId.trim() : '';
+    const daemonBuild = extractDaemonBuildInfo(localStatus);
+    const upgradeFailure = extractUpgradeFailureSummary(localStatus);
+    return {
+        sessions: extractStatusMetadataSessions(localStatus),
+        ...(daemonId ? { daemonId } : {}),
+        ...(daemonBuild ? { daemonBuild } : {}),
+        ...(upgradeFailure ? { upgradeFailure } : {}),
+    };
+}
+
 // ─── Tool Implementations ───────────────────────
 
-export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean; includeTerminalDirectWork?: boolean; includeSessions?: boolean; includeUsage?: boolean; compact?: boolean; verbose?: boolean; refresh?: boolean } = {}): Promise<string> {
-    const rateResult = await recordMeshCoordinatorToolCall(ctx, 'mesh_status');
+export async function meshStatus(outerCtx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean; includeTerminalDirectWork?: boolean; includeSessions?: boolean; includeUsage?: boolean; compact?: boolean; verbose?: boolean; refresh?: boolean } = {}): Promise<string> {
     // Default to the slim payload for LLM callers; verbose forces the full payload.
     const compact = args.verbose === true ? false : (args.compact ?? true);
-    // Audit #7 (P7): bypass the shared get_status_metadata probe cache/dedupe
-    // (mesh-tools-internal.ts probeStatusMetadataForNode) when the caller explicitly
-    // asks for a fresh read — e.g. right after a launch/dispatch where a <=5s-old
-    // cached probe would still show the pre-change state.
-    const probeOpts = args.refresh === true ? { refresh: true } : undefined;
+
+    // ONE daemon call (mesh-status-view.ts): the coordinator composes every input
+    // this tool reads — its held mesh_status (the dashboard's view: git,
+    // submodules, gitObservation, remote nodes' pushed runtime), membership, its
+    // own status, recovery contexts, active work, missions, this caller's
+    // pending-event drain and the polling-rate record. Everything below renders.
+    // `refresh` only asks the coordinator to nudge members to push (never a read).
+    let view: MeshStatusView;
+    try {
+        view = await readMeshStatusView(outerCtx, {
+            refresh: args.refresh === true,
+            compact,
+            includeTerminalDirect: args.includeTerminalDirectWork === true,
+            pendingEvents: buildPendingMeshEventsDrainArgs(outerCtx),
+            toolCall: buildMeshCoordinatorToolCallArgs(outerCtx, 'mesh_status'),
+        });
+    } catch (error: any) {
+        return JSON.stringify({
+            success: false,
+            code: 'mesh_coordinator_unavailable',
+            meshId: outerCtx.mesh.id,
+            error: `The coordinator daemon could not answer mesh_status: ${error?.message || error}`,
+        });
+    }
+    // The renderer's shared helpers read through a transport: this one answers
+    // from the view and refuses anything else (no member is ever read).
+    const ctx: MeshContext = { ...outerCtx, transport: createMeshStatusViewTransport(outerCtx.transport, view) } as MeshContext;
+    const rateResult = await recordMeshCoordinatorToolCall(ctx, 'mesh_status');
 
     await refreshMeshFromDaemon(ctx);
+    // Every node's locality is the coordinator's answer, carried in the view.
+    await ensureMeshNodeRoutes(ctx, { force: true });
     const { mesh } = ctx;
 
-    // ONE local read of the coordinator daemon's held node state (git, submodules,
-    // gitObservation, freshness, remote nodes' runtime — `sections: ['nodes']`),
-    // alongside ONE batched recovery-context read for every node. Never waits on a
-    // remote peer; `refresh` only kicks the daemon's background refresh (see
-    // mesh-status-held-git.ts). The record summary, the scheduling runtime and
-    // active work come from ONE active_work_query after the node assembly below
-    // (read-latency pass 2026-09-27: was two active_work_query calls — one shipping
-    // the whole mesh — plus a duplicate ledger_query tail and one
-    // recovery_context_query per node).
     const [heldNodeState, recoveryByNode] = await Promise.all([
         readCoordinatorHeldNodeState(ctx, { refresh: args.refresh === true }),
         readRecoveryContexts(ctx, mesh.nodes.map(n => n.id)).catch(() => new Map<string, Record<string, unknown>>()),
     ]);
+    // This daemon's own nodes read its status from the view (a local read in the daemon).
+    const localProbe = localStatusProbe(view.localStatus);
 
     // Assemble all nodes in parallel — held git (above) + session collection per node.
     //
@@ -208,16 +245,16 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         if (relatedRepos.length) entry.relatedRepos = relatedRepos;
 
         // Sessions / daemon build / upgrade marker: a node served by ANOTHER daemon
-        // answers from the coordinator-held runtime (member push, content-free) —
-        // no per-daemon get_status_metadata round trip on the request path. The
-        // coordinator's own nodes are read directly (one local, cached IPC call).
-        let statusProbe: Awaited<ReturnType<typeof collectLiveStatusProbe>>;
-        if (usesHeldNodeRuntime(ctx, node, heldNodeState)) {
+        // answers ONLY from the coordinator-held runtime (member push, content-free;
+        // `source: 'none'` = nothing held yet — never a live read of the member).
+        // The coordinator's own nodes read its own status from the view.
+        let statusProbe: NodeStatusProbe;
+        if (node.daemonId && !isLocalControlPlaneNode(ctx, node)) {
             const held = heldNodeStatusProbe(heldNode);
             statusProbe = held.probe;
             entry.runtimeObservation = held.observation;
         } else {
-            statusProbe = await collectLiveStatusProbe(ctx, node, probeOpts);
+            statusProbe = localProbe;
             if (heldNodeState.runtimeHeld) entry.runtimeObservation = { source: 'local_read', observedAt: Date.now(), refreshing: false };
         }
         const liveSessions = statusProbe.sessions;
@@ -325,11 +362,6 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             activeLaunchFailure: latestActiveLaunchFailureFromEntries(recordTail, node.id),
         });
     }
-    // Idle direct dispatches: transcript evidence is gathered in the BACKGROUND
-    // (mesh-status-background.ts) — it may read a remote worker's transcript, and
-    // its only effect is a terminal the daemon's turn ledger commits, which the
-    // next mesh_status shows. This response never waits on it.
-    scheduleBackgroundDirectReconcile(ctx, results, activeWorkView.directDispatches, activeWorkView.records);
     const activeWorkEvidence = activeWorkView.activeWork!;
     // The record tail the refine-job and MAGI folds below read (the same window as before).
     const ledgerEntries = activeWorkView.records;
@@ -948,6 +980,10 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         // Non-fatal: pending events are best-effort.
     }
 
+    // The drain's bookkeeping lands on the caller's context.
+    outerCtx.noticeDrainCount = ctx.noticeDrainCount;
+    outerCtx.lastNoticeReplication = ctx.lastNoticeReplication;
+
     // Serialized WITHOUT indentation, deliberately.
     //
     // Two reasons. (1) Cost: this payload is consumed by an LLM coordinator, so
@@ -1045,6 +1081,8 @@ export function applyNodeSchedulingAndHints(entry: any, node: LocalMeshNodeEntry
 
 export async function meshListNodes(ctx: MeshContext): Promise<string> {
     await refreshMeshFromDaemon(ctx);
+    // Every node's locality is the coordinator's answer, carried in the view.
+    await ensureMeshNodeRoutes(ctx, { force: true });
     const { mesh } = ctx;
     return JSON.stringify({
         meshId: mesh.id,

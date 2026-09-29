@@ -17,7 +17,7 @@ import type { TranscriptObservation } from '../../src/seqscribe/transcript-obser
 
 /**
  * `TranscriptProjectionService` over the keyed chat lane (design 2026-09-28):
- * mode gate, "unchanged writes nothing", empty-guard, failure → re-diff,
+ * "unchanged writes nothing", empty-guard, failure → re-diff,
  * coalescing, the fixed PTY window, the tripwire and base requests.
  */
 
@@ -58,8 +58,8 @@ async function flush(): Promise<void> {
     for (let i = 0; i < 6; i += 1) await Promise.resolve();
 }
 
-function shadow(service: TranscriptProjectionService): TranscriptProjectionService {
-    vi.spyOn(service, 'mode').mockReturnValue('shadow');
+/** Keyed publishing is always on — this only names the construction. */
+function publisher(service: TranscriptProjectionService): TranscriptProjectionService {
     return service;
 }
 
@@ -67,19 +67,10 @@ afterEach(() => {
     delete process.env.ADHDEV_TRANSCRIPT_TRIPWIRE;
 });
 
-describe('TranscriptProjectionService.observe — mode gate + changed-only frames', () => {
-    it('off mode never publishes', async () => {
+describe('TranscriptProjectionService.observe — changed-only frames', () => {
+    it('publishes one frame: head + meta + commit', async () => {
         const { deps, published } = makeDeps();
-        const service = new TranscriptProjectionService(deps);
-        vi.spyOn(service, 'mode').mockReturnValue('off');
-        service.observe('sess-1', obs());
-        await flush();
-        expect(published).toEqual([]);
-    });
-
-    it('shadow mode publishes one frame: head + meta + commit', async () => {
-        const { deps, published } = makeDeps();
-        const service = shadow(new TranscriptProjectionService(deps));
+        const service = publisher(new TranscriptProjectionService(deps));
         service.observe('sess-1', obs());
         await flush();
         expect(published).toHaveLength(1);
@@ -93,7 +84,7 @@ describe('TranscriptProjectionService.observe — mode gate + changed-only frame
 
     it('an unchanged observation writes nothing (deduped)', async () => {
         const { deps, published } = makeDeps();
-        const service = shadow(new TranscriptProjectionService(deps));
+        const service = publisher(new TranscriptProjectionService(deps));
         service.observe('sess-1', obs());
         await flush();
         service.observe('sess-1', obs());
@@ -104,7 +95,7 @@ describe('TranscriptProjectionService.observe — mode gate + changed-only frame
 
     it('a changed bubble publishes a frame carrying only that bubble', async () => {
         const { deps, published } = makeDeps();
-        const service = shadow(new TranscriptProjectionService(deps));
+        const service = publisher(new TranscriptProjectionService(deps));
         service.observe('sess-1', obs({ messages: [msg('d.t.1', 'hi'), msg('d.t.2', 'there', 'a1')] }));
         await flush();
         service.observe('sess-1', obs({ messages: [msg('d.t.1', 'hi'), msg('d.t.2', 'there!', 'a1')] }));
@@ -115,7 +106,7 @@ describe('TranscriptProjectionService.observe — mode gate + changed-only frame
 
     it('an empty observation does not clobber published bubbles', async () => {
         const { deps, published } = makeDeps();
-        const service = shadow(new TranscriptProjectionService(deps));
+        const service = publisher(new TranscriptProjectionService(deps));
         service.observe('sess-1', obs());
         await flush();
         service.observe('sess-1', obs({ messages: [] }));
@@ -129,7 +120,7 @@ describe('TranscriptProjectionService.observe — mode gate + changed-only frame
             async (): Promise<TranscriptObservationCollectResult> => ({ observation: obs({ messages: [] }), verifiedClear: true }),
         );
         const { deps, published } = makeDeps({ collectObservation });
-        const service = shadow(new TranscriptProjectionService(deps));
+        const service = publisher(new TranscriptProjectionService(deps));
         service.observe('sess-1', obs());
         await flush();
         service.markDirty('sess-1');
@@ -141,7 +132,7 @@ describe('TranscriptProjectionService.observe — mode gate + changed-only frame
 
     it('an observation without message ids is refused, not published', async () => {
         const { deps, published } = makeDeps();
-        const service = shadow(new TranscriptProjectionService(deps));
+        const service = publisher(new TranscriptProjectionService(deps));
         service.observe('sess-1', obs({ messages: [{ role: 'assistant', content: 'no id' }] }));
         await flush();
         expect(published).toEqual([]);
@@ -158,7 +149,7 @@ describe('TranscriptProjectionService.observe — mode gate + changed-only frame
                 published.push({ sessionId, frame });
             },
         });
-        const service = shadow(new TranscriptProjectionService(deps));
+        const service = publisher(new TranscriptProjectionService(deps));
         expect(() => service.observe('sess-1', obs())).not.toThrow();
         await flush();
         expect(service.getCounters().publishFailed).toBe(1);
@@ -177,7 +168,7 @@ describe('TranscriptProjectionService — tripwire and base frames (§8.2c, §4.
 
     it('production: a mass-rewrite delta frame is published and counted unexpected', async () => {
         const { deps, published } = makeDeps();
-        const service = shadow(new TranscriptProjectionService(deps));
+        const service = publisher(new TranscriptProjectionService(deps));
         service.observe('sess-1', obs({ messages: many((i) => `a${i}`) }));
         await flush();
         service.observe('sess-1', obs({ messages: many((i) => `b${i}`) }));
@@ -189,7 +180,7 @@ describe('TranscriptProjectionService — tripwire and base frames (§8.2c, §4.
     it('armed (ADHDEV_TRANSCRIPT_TRIPWIRE=throw): the same frame is refused', async () => {
         process.env.ADHDEV_TRANSCRIPT_TRIPWIRE = 'throw';
         const { deps, published } = makeDeps();
-        const service = shadow(new TranscriptProjectionService(deps));
+        const service = publisher(new TranscriptProjectionService(deps));
         service.observe('sess-1', obs({ messages: many((i) => `a${i}`) }));
         await flush();
         service.observe('sess-1', obs({ messages: many((i) => `b${i}`) }));
@@ -201,7 +192,7 @@ describe('TranscriptProjectionService — tripwire and base frames (§8.2c, §4.
     it('requestBase makes the next frame a resync_request base frame', async () => {
         const collectObservation = vi.fn(async (): Promise<TranscriptObservationCollectResult> => ({ observation: obs() }));
         const { deps, published } = makeDeps({ collectObservation });
-        const service = shadow(new TranscriptProjectionService(deps));
+        const service = publisher(new TranscriptProjectionService(deps));
         service.observe('sess-1', obs());
         await flush();
         service.requestBase('sess-1');
@@ -224,7 +215,7 @@ describe('TranscriptProjectionService — per-session coalescing', () => {
                 published.push({ sessionId, frame });
             },
         });
-        const service = shadow(new TranscriptProjectionService(deps));
+        const service = publisher(new TranscriptProjectionService(deps));
         service.observe('sess-1', obs({ messages: [msg('d.t.1', 'A')] }));
         await Promise.resolve();
         service.observe('sess-1', obs({ messages: [msg('d.t.1', 'B')] }));
@@ -239,7 +230,7 @@ describe('TranscriptProjectionService — per-session coalescing', () => {
 
     it('markDirty without a configured collectObservation is an inert no-op, counted', () => {
         const { deps, published } = makeDeps();
-        const service = shadow(new TranscriptProjectionService(deps));
+        const service = publisher(new TranscriptProjectionService(deps));
         service.markDirty('sess-1');
         expect(published).toEqual([]);
         expect(service.getCounters().collectorUnavailable).toBe(1);
@@ -248,7 +239,7 @@ describe('TranscriptProjectionService — per-session coalescing', () => {
     it('seedSession is an alias for markDirty', async () => {
         const collectObservation = vi.fn(async (): Promise<TranscriptObservationCollectResult> => ({ observation: obs() }));
         const { deps, published } = makeDeps({ collectObservation });
-        const service = shadow(new TranscriptProjectionService(deps));
+        const service = publisher(new TranscriptProjectionService(deps));
         service.seedSession('sess-1');
         await flush();
         expect(collectObservation).toHaveBeenCalledWith('sess-1');
@@ -265,7 +256,7 @@ describe('TranscriptProjectionService — per-session coalescing', () => {
                     return { observation: obs({ messages: [msg('d.t.1', `${'x'.repeat(2 * 1024 * 1024)}${pulls.length}`)] }) };
                 },
             });
-            const service = shadow(new TranscriptProjectionService(deps));
+            const service = publisher(new TranscriptProjectionService(deps));
             const drain = async () => { for (let i = 0; i < 10; i += 1) await Promise.resolve(); };
             service.markPtyOutputActivity('sess-1');
             await drain();

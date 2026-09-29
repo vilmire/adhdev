@@ -6,8 +6,9 @@
  * `p2p-manager.ts` + `transcript-worker-transport.ts`. Everything that is not
  * transport lives in web-core and is reused unchanged: the worker host
  * (`startTranscriptWorkerHost`), the worker itself (node + OPFS + reject-all
- * browser authority + `view:'tail'` SUB), and the chat-tail controller registry
- * that arbitrates replica vs legacy. This module only:
+ * browser authority + `view:'tail'` SUB), and the session chat controller
+ * registry. This lane is the standalone dashboard's ONLY live chat path
+ * (design 2026-09-28 §6.4). This module only:
  *
  *   1. opens `ws(s)://<host>/ws/seqscribe` (same token/cookie as `/ws`) — a
  *      real `WebSocket` is already the `WebSocketLike` the host takes, so there
@@ -16,19 +17,14 @@
  *      subscribe (the retained controller registry — same derivation as
  *      web-cloud's `bindTranscriptSessionInterest`);
  *   3. feeds each verified keyed view to the controllers
- *      (`applyTranscriptReplicaViewToControllers`), which is what flips
- *      `replicaHealthy` and makes the controller report `replica` via
- *      `report_transcript_transport`;
- *   4. on lane close: stops the host (the worker never resumes across a gap),
- *      labels the affected sessions `no_node` so they fall back to legacy, and
- *      reopens with backoff.
+ *      (`applyTranscriptViewToControllers`);
+ *   4. on lane close: stops the host (the worker never resumes across a gap)
+ *      and reopens with backoff — panes keep their last committed view until
+ *      the fresh host's reset SNAP lands.
  *
  * Everything web-core-valued is INJECTED (`StandaloneTranscriptLaneDeps`) so
  * this file imports types only and is unit-testable under node:test; the real
  * assembly is `standalone-transcript-lane-wiring.ts`.
- *
- * Legacy `session.chat_tail` is NOT touched here — the controller keeps it
- * running until a verified replica view lands (G6 proper deletes it later).
  */
 import type { TranscriptSessionView, TranscriptWorkerHostHandle } from '@adhdev/web-core/transcript-transport'
 
@@ -50,22 +46,16 @@ export const LANE_HEALTHY_OPEN_MS = 30_000
 /**
  * Re-SUB cadence for sessions that have not delivered a snapshot yet on the
  * current host (doubling, capped). See `rearmUndelivered`.
+ *
+ * ★ LAST RESORT only. The primary path is the daemon's
+ * `transcript_topics_available` push (`handleTopicsAvailable`), which re-SUBs
+ * the moment a session's topic becomes grantable. The retry exists for a lost
+ * push / an older daemon, so it starts short (the old 3 s first step alone was
+ * a visible blank pane) and still backs off to stay cheap for a session whose
+ * topic has rows but no verifiable commit.
  */
-export const SUB_RETRY_INITIAL_MS = 3_000
+export const SUB_RETRY_INITIAL_MS = 1_000
 export const SUB_RETRY_MAX_MS = 60_000
-
-/**
- * Build-time switch. Unlike web-cloud (default OFF, preview-only opt-in) the
- * standalone lane defaults ON: the daemon and the page are the same local
- * install, the controller keeps legacy running until a verified snapshot
- * applies, and G6 needs the standalone replica live to retire chat-tail at
- * all. `VITE_ADHDEV_TRANSCRIPT_WORKER=off` is the one opt-out spelling (the
- * daemon has its own: `ADHDEV_STANDALONE_TRANSCRIPT_LANE=off`).
- */
-export function isStandaloneTranscriptLaneEnabled(env: Record<string, unknown> | undefined): boolean {
-    const raw = env?.VITE_ADHDEV_TRANSCRIPT_WORKER
-    return !(typeof raw === 'string' && raw.trim().toLowerCase() === 'off')
-}
 
 export function buildStandaloneSeqscribeWsUrl(
     location: { readonly protocol: string; readonly host: string },
@@ -77,21 +67,19 @@ export function buildStandaloneSeqscribeWsUrl(
 }
 
 /**
- * Commands the chat-tail controller sends on the `/ws` JSON lane (`sendData`).
- * Both are fire-and-forget and content-free:
- *   - `report_transcript_transport` — closed two-value enum, see
- *     `SessionChatTailController.reportTransportSelection`. Before it was
- *     allowed, the report was silently dropped by a subscribe-only filter,
- *     which is half of why standalone read `transcriptTransportSelection = {0,0}`.
- *   - `request_transcript_base` — the worker's folder kept rejecting a
- *     session's keyed commits, so ask the daemon for one base frame (design
- *     2026-09-28 §5.2, `SessionChatTailController.requestTranscriptBase`).
+ * Commands the session chat controller sends on the `/ws` JSON lane
+ * (`sendData`). Fire-and-forget and content-free:
+ *   - `request_transcript_base` — ask the daemon for one keyed base frame
+ *     (design 2026-09-28 §5.2, `SessionChatController.requestTranscriptBase`):
+ *     the worker's folder kept rejecting a session's commits, the session has
+ *     not delivered a view yet (its topic may not be defined since a daemon
+ *     restart), or the status lane contradicts the last committed view.
  *     Carries only the raw session id.
  */
-export const STANDALONE_WS_DATA_COMMANDS: readonly string[] = ['report_transcript_transport', 'request_transcript_base']
+export const STANDALONE_WS_DATA_COMMANDS: readonly string[] = ['request_transcript_base']
 
 /**
- * What `sendDataViaWs` may put on the `/ws` JSON lane: legacy topic
+ * What `sendDataViaWs` may put on the `/ws` JSON lane: topic
  * subscribe/unsubscribe, plus exactly the `STANDALONE_WS_DATA_COMMANDS`.
  */
 export function isStandaloneWsDataFrame(data: unknown): boolean {
@@ -101,6 +89,27 @@ export function isStandaloneWsDataFrame(data: unknown): boolean {
     return frame.type === 'command'
         && typeof frame.commandType === 'string'
         && STANDALONE_WS_DATA_COMMANDS.includes(frame.commandType)
+}
+
+/**
+ * Page-wide feed of the daemon's `transcript_topics_available` frames. The
+ * frame arrives on the `/ws` JSON lane (StandaloneDaemonContext parses it with
+ * web-core `parseTranscriptTopicsAvailable`), while its consumer is this lane
+ * — a different socket — so the two meet here rather than threading the
+ * lane client through the context.
+ */
+const topicsAvailableListeners = new Set<(topics: readonly string[]) => void>()
+
+export function publishStandaloneTranscriptTopicsAvailable(topics: readonly string[]): void {
+    if (topics.length === 0) return
+    for (const listener of [...topicsAvailableListeners]) {
+        try { listener(topics) } catch { /* one consumer must not starve the others */ }
+    }
+}
+
+export function subscribeStandaloneTranscriptTopicsAvailable(listener: (topics: readonly string[]) => void): () => void {
+    topicsAvailableListeners.add(listener)
+    return () => { topicsAvailableListeners.delete(listener) }
 }
 
 /** The `WebSocket` surface this lane uses (a real DOM `WebSocket` satisfies it). */
@@ -125,17 +134,36 @@ export interface StandaloneTranscriptLaneDeps {
     collectInterest(): Map<string, string[]>
     /** web-core `subscribeTranscriptSessionInterest`. */
     subscribeInterest(listener: () => void): () => void
-    /** web-core `applyTranscriptReplicaViewToControllers`. */
+    /** web-core `applyTranscriptViewToControllers`. */
     applyView(daemonId: string, sessionId: string, view: TranscriptSessionView['view']): number
     /** web-core `requestTranscriptBaseForSession`. */
     requestBase(daemonId: string, sessionId: string): boolean
-    /** web-core `reportTranscriptReplicaFallbackForSession`. */
-    reportFallback(daemonId: string, sessionId: string, reason: string): void
+    /**
+     * The daemon's `transcript_topics_available` feed (newly SUB-able chat
+     * topics, off the `/ws` JSON lane). Optional: without it the lane falls
+     * back to the retry timer alone.
+     */
+    subscribeTopicsAvailable?(listener: (topics: readonly string[]) => void): () => void
+    /**
+     * web-core `sessionsToResubscribeOnAvailable` — which active, undelivered
+     * sessions a set of newly available topics unblocks.
+     */
+    selectResubscribe?(
+        activeSessionIds: readonly string[],
+        delivered: { has(sessionId: string): boolean },
+        topics: readonly string[],
+    ): string[]
     /** `purpose` is diagnostic only (tests tell the two timers apart by it). */
     setTimer(cb: () => void, ms: number, purpose: 'reconnect' | 'sub-retry'): unknown
     clearTimer(handle: unknown): void
     now(): number
     log?(message: string): void
+    /**
+     * Override of the last-resort re-SUB schedule (`SUB_RETRY_INITIAL_MS` /
+     * `SUB_RETRY_MAX_MS`). Tests only — the first-paint measurement replays the
+     * pre-push schedule through the same client to report before/after.
+     */
+    subRetrySchedule?: { readonly initialMs: number; readonly maxMs: number }
 }
 
 export class StandaloneTranscriptLaneClient {
@@ -145,22 +173,30 @@ export class StandaloneTranscriptLaneClient {
     private reconnectTimer: unknown = null
     private reconnectDelay = LANE_RECONNECT_INITIAL_MS
     private unsubscribeInterest: (() => void) | null = null
+    private unsubscribeTopicsAvailable: (() => void) | null = null
     /** sessionId → daemonIds that are reading it (retained controllers). */
     private sessionDaemons = new Map<string, string[]>()
     private activeSessions: string[] = []
     /** Sessions that delivered at least one verified view on the CURRENT host. */
     private delivered = new Set<string>()
     private subRetryTimer: unknown = null
-    private subRetryDelay = SUB_RETRY_INITIAL_MS
+    private subRetryDelay: number
+    private readonly subRetryInitialMs: number
+    private readonly subRetryMaxMs: number
     private started = false
     private stopped = false
 
-    constructor(private readonly deps: StandaloneTranscriptLaneDeps) {}
+    constructor(private readonly deps: StandaloneTranscriptLaneDeps) {
+        this.subRetryInitialMs = deps.subRetrySchedule?.initialMs ?? SUB_RETRY_INITIAL_MS
+        this.subRetryMaxMs = deps.subRetrySchedule?.maxMs ?? SUB_RETRY_MAX_MS
+        this.subRetryDelay = this.subRetryInitialMs
+    }
 
     start(): void {
         if (this.started || this.stopped) return
         this.started = true
         this.unsubscribeInterest = this.deps.subscribeInterest(() => this.syncInterest())
+        this.unsubscribeTopicsAvailable = this.deps.subscribeTopicsAvailable?.((topics) => this.handleTopicsAvailable(topics)) ?? null
         this.syncInterest()
         this.connect()
     }
@@ -170,11 +206,13 @@ export class StandaloneTranscriptLaneClient {
         this.stopped = true
         this.unsubscribeInterest?.()
         this.unsubscribeInterest = null
+        this.unsubscribeTopicsAvailable?.()
+        this.unsubscribeTopicsAvailable = null
         if (this.reconnectTimer !== null) this.deps.clearTimer(this.reconnectTimer)
         this.reconnectTimer = null
         const socket = this.socket
         this.socket = null
-        this.stopHost(false)
+        this.stopHost()
         try { socket?.close() } catch { /* already closing */ }
     }
 
@@ -206,7 +244,7 @@ export class StandaloneTranscriptLaneClient {
     private handleOpen(socket: LaneSocket): void {
         if (this.stopped || socket !== this.socket) return
         this.openedAt = this.deps.now()
-        this.stopHost(false)
+        this.stopHost()
         const host = this.deps.startHost(
             socket,
             (update) => this.deliver(update),
@@ -215,7 +253,7 @@ export class StandaloneTranscriptLaneClient {
         if (!host) {
             // No Worker / OPFS in this browser: the lane can never carry a
             // replica here. Stop trying rather than reconnect-loop.
-            this.deps.log?.('[Transcript] standalone lane: transcript worker unavailable — staying on legacy chat-tail')
+            this.deps.log?.('[Transcript] standalone lane: transcript worker unavailable — live chat cannot be shown')
             this.stopped = true
             this.socket = null
             try { socket.close() } catch { /* noop */ }
@@ -232,7 +270,7 @@ export class StandaloneTranscriptLaneClient {
         const openedFor = this.openedAt === null ? 0 : this.deps.now() - this.openedAt
         this.openedAt = null
         if (openedFor >= LANE_HEALTHY_OPEN_MS) this.reconnectDelay = LANE_RECONNECT_INITIAL_MS
-        this.stopHost(true)
+        this.stopHost()
         this.scheduleReconnect()
     }
 
@@ -246,7 +284,7 @@ export class StandaloneTranscriptLaneClient {
         }, delay, 'reconnect')
     }
 
-    private stopHost(reportFallback: boolean): void {
+    private stopHost(): void {
         const host = this.host
         if (!host) return
         this.host = null
@@ -254,16 +292,6 @@ export class StandaloneTranscriptLaneClient {
         if (this.subRetryTimer !== null) this.deps.clearTimer(this.subRetryTimer)
         this.subRetryTimer = null
         host.stop()
-        if (!reportFallback) return
-        // The lane is gone, so whatever it fed is stale: label those panes
-        // `legacy` (`no_node`, the closed-union reason web-cloud uses). The
-        // legacy subscription the controller re-arms is what renders next.
-        for (const [sessionId, daemonIds] of this.sessionDaemons) {
-            for (const daemonId of daemonIds) {
-                console.warn(`[Transcript] standalone replica fallback — session=${sessionId} reason=no_node`)
-                this.deps.reportFallback(daemonId, sessionId, 'no_node')
-            }
-        }
     }
 
     /** Recompute the absolute session set from the retained controller registry. */
@@ -296,8 +324,10 @@ export class StandaloneTranscriptLaneClient {
      * library does not retry it. The daemon defines `session.<id>.chat`
      * lazily, on that session's first publish after (re)start, so a pane opened
      * on a brand-new session — or on any idle session right after a daemon
-     * restart — would otherwise sit on legacy until the lane happened to
-     * reconnect. The grant does reach the lane once the topic appears
+     * restart — would otherwise show nothing live until the lane happened to
+     * reconnect. Each retry therefore first asks the daemon for one keyed base
+     * frame per undelivered session (`request_transcript_base`), which makes it
+     * (re)define and publish that session's topic. The grant does reach the lane once the topic appears
      * (daemon-side `onTopicActivated` → `updateGrants`); only the dead SUB
      * needs replacing.
      *
@@ -309,7 +339,7 @@ export class StandaloneTranscriptLaneClient {
      * more than one SNAP a minute.
      */
     private armSubRetry(reset: boolean): void {
-        if (reset) this.subRetryDelay = SUB_RETRY_INITIAL_MS
+        if (reset) this.subRetryDelay = this.subRetryInitialMs
         if (!this.host || this.subRetryTimer !== null) return
         if (!this.activeSessions.some((id) => !this.delivered.has(id))) return
         const delay = this.subRetryDelay
@@ -319,14 +349,33 @@ export class StandaloneTranscriptLaneClient {
         }, delay, 'sub-retry')
     }
 
+    /**
+     * The daemon says these chat topics just became SUB-able. Any activated,
+     * not-yet-delivered session among them had its SUB refused (or never got
+     * one that could succeed) — re-SUB exactly those now. The grant is already
+     * in place daemon-side when this frame is sent, so the new SUB is accepted.
+     * No base request: a defined topic already holds (or is about to receive)
+     * the session's committed frame.
+     */
+    private handleTopicsAvailable(topics: readonly string[]): void {
+        const host = this.host
+        if (!host || this.stopped || !this.deps.selectResubscribe) return
+        const pending = this.deps.selectResubscribe(this.activeSessions, this.delivered, topics)
+        if (pending.length === 0) return
+        const unblocked = new Set(pending)
+        host.activateSessions(this.activeSessions.filter((id) => !unblocked.has(id)))
+        host.activateSessions(this.activeSessions)
+    }
+
     private rearmUndelivered(): void {
         const host = this.host
         if (!host || this.stopped) return
         const pending = this.activeSessions.filter((id) => !this.delivered.has(id))
         if (pending.length === 0) return
+        for (const sessionId of pending) this.requestBase(sessionId)
         host.activateSessions(this.activeSessions.filter((id) => this.delivered.has(id)))
         host.activateSessions(this.activeSessions)
-        this.subRetryDelay = Math.min(this.subRetryDelay * 2, SUB_RETRY_MAX_MS)
+        this.subRetryDelay = Math.min(this.subRetryDelay * 2, this.subRetryMaxMs)
         this.armSubRetry(false)
     }
 

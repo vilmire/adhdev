@@ -17,6 +17,7 @@ import {
 import { readLocalRecords } from '@adhdev/daemon-core';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 // ★PROVIDER-PIN-BYPASS (D2) — `required_tags: ["provider=X"]` was silently bypassed on
 // the enqueue-and-push (`via: p2p_direct`) path. (That push is retired since rc.37
 // Finding B — enqueue now delivers only through a claim — but ipcDispatchToRemoteAgent's
@@ -82,7 +83,7 @@ function recordingIpcTransport(sessions: any[] = []) {
     getStatus: async () => ({ sessions: [] }),
   } as any;
   Object.setPrototypeOf(t, IpcTransport.prototype);
-  return t;
+  return fakeCoordinatorTransport(t);
 }
 
 /** The provider each dispatched agent_command actually targeted. */

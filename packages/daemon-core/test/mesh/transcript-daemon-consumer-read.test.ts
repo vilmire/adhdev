@@ -37,8 +37,6 @@ const SESSION = 'sess-1';
 const OBSERVED_AT = '2026-09-02T00:00:00.000Z';
 const OBSERVED_AT_MS = Date.parse(OBSERVED_AT);
 
-/** `primary` is the only mode any roster consumer reads under (§5.1). */
-const PRIMARY = { ADHDEV_SEQSCRIBE_TRANSCRIPT: 'primary' } as unknown as NodeJS.ProcessEnv;
 
 function snapshot(overrides: Partial<ReplicatedTranscriptViewV2> = {}): ReplicatedTranscriptViewV2 {
     return {
@@ -99,7 +97,6 @@ function read(overrides: Parameters<typeof readTranscriptForDaemonConsumer>[0] e
         maxAgeMs: TRANSCRIPT_STATUS_PROBE_MAX_AGE_MS,
         store: availableStore(snapshot()),
         nowMs: OBSERVED_AT_MS,
-        env: PRIMARY,
         ...overrides,
     } as Parameters<typeof readTranscriptForDaemonConsumer>[0]);
 }
@@ -111,20 +108,7 @@ describe('§8 unit 7 — daemon consumer readiness gate (design §5.5)', () => {
         expect(outcome.view?.status).toBe('idle');
     });
 
-    // ── §5.5 condition 1 — mode + roster enablement ────────────────────────
-    it.each([
-        ['shadow', 'mode_not_primary'],
-        ['off', 'mode_not_primary'],
-        // Unset resolves to `shadow` (transcript-mode.ts's safe default), so a
-        // daemon that never opted in cannot read the replica by accident.
-        [undefined, 'mode_not_primary'],
-    ])('declines mode=%s with %s', (mode, reason) => {
-        const env = (mode === undefined ? {} : { ADHDEV_SEQSCRIBE_TRANSCRIPT: mode }) as NodeJS.ProcessEnv;
-        const outcome = read({ env });
-        expect(outcome.view).toBeNull();
-        expect(outcome.fallbackReason).toBe(reason);
-    });
-
+    // ── §5.5 condition 1 — roster enablement ───────────────────────────────
     it('both unit-7 roster ids are enabled, and the gate honours that flag', () => {
         // ★ Scoped to THIS unit's ids only. Asserting another unit's `enabled`
         // here is what broke twice (see the roster header's "Test authority"
@@ -220,7 +204,6 @@ describe('§8 unit 7 — daemon consumer readiness gate (design §5.5)', () => {
             maxAgeMs: TRANSCRIPT_TERMINAL_EVIDENCE_MAX_AGE_MS,
             store: availableStore(snapshot()),
             nowMs: OBSERVED_AT_MS + TRANSCRIPT_TERMINAL_EVIDENCE_MAX_AGE_MS + 1,
-            env: PRIMARY,
         });
         expect(outcome.view).toBeNull();
         expect(outcome.fallbackReason).toBe('stale_active_session');
@@ -356,7 +339,6 @@ describe('§8 unit 7 — roster id 4 cutover (reprobeWorkerStatus)', () => {
 
     it('answers from the replica for a REMOTE worker, without any transport call', async () => {
         const reprobeWorkerStatus = await loadReprobe();
-        vi.stubEnv('ADHDEV_SEQSCRIBE_TRANSCRIPT', 'primary');
         const dispatchMeshCommand = vi.fn();
         try {
             const status = await reprobeWorkerStatus({
@@ -378,7 +360,7 @@ describe('§8 unit 7 — roster id 4 cutover (reprobeWorkerStatus)', () => {
 
     it('falls through to the legacy remote read_chat when the replica declines', async () => {
         const reprobeWorkerStatus = await loadReprobe();
-        // Default mode (shadow) — the production state today.
+        // A replica older than the probe's freshness budget declines.
         const dispatchMeshCommand = vi.fn().mockResolvedValue({ messages: [], status: 'idle' });
         const status = await reprobeWorkerStatus({
             transcriptReplicaStore: availableStore(snapshot()),
@@ -392,7 +374,6 @@ describe('§8 unit 7 — roster id 4 cutover (reprobeWorkerStatus)', () => {
 
     it('never takes the replica hop for a LOCAL node', async () => {
         const reprobeWorkerStatus = await loadReprobe();
-        vi.stubEnv('ADHDEV_SEQSCRIBE_TRANSCRIPT', 'primary');
         try {
             const handle = vi.fn().mockResolvedValue({ messages: [], status: 'idle' });
             const getReplica = vi.fn();

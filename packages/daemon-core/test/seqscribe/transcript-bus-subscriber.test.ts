@@ -11,7 +11,7 @@ import { subscribeTranscriptProjection } from '../../src/seqscribe/transcript-bu
 import { TranscriptProjectionService } from '../../src/seqscribe/transcript-publisher.js'
 
 function stubService() {
-  return { markDirty: vi.fn(), startPolling: vi.fn(), stopPolling: vi.fn(), forgetSession: vi.fn() }
+  return { markDirty: vi.fn(), startPolling: vi.fn(), stopPolling: vi.fn(), forgetSession: vi.fn(), warmSession: vi.fn() }
 }
 
 function providerEvent(event: string, sessionId = 'sess-1') {
@@ -57,13 +57,15 @@ describe('subscribeTranscriptProjection', () => {
     expect(service.markDirty.mock.calls).toEqual([['sess-2', 'post_chat']])
   })
 
-  it('registered starts stat polling; terminated stops it and forgets the session (C9)', () => {
+  it('registered starts stat polling and warms the session (first paint); terminated stops it and forgets the session (C9)', () => {
     const bus = createSessionLifecycleBus()
     const registry = new SessionRegistry(bus)
     const service = stubService()
     subscribeTranscriptProjection(bus, service)
     registry.register({ sessionId: 'sess-3', parentSessionId: null, providerType: 'codex-cli', transport: 'pty' }, 'launch')
     expect(service.startPolling).toHaveBeenCalledWith('sess-3')
+    expect(service.warmSession).toHaveBeenCalledWith('sess-3')
+    expect(bus.stats().handlerErrors).toBe(0)
     registry.terminate('sess-3', 'pty_exit')
     expect(service.stopPolling).toHaveBeenCalledWith('sess-3')
     expect(service.forgetSession).toHaveBeenCalledWith('sess-3')

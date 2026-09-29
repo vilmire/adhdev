@@ -17,7 +17,7 @@ import { getConversationInboxSurfaceState } from './DashboardMobileChatShared'
 import { getConversationMachineId } from './conversation-selectors'
 import { useConversationPrefs } from '../../hooks/useConversationPrefs'
 import { getConversationPreviewText } from './conversation-presenters'
-import { getSessionChatTailSnapshotForConversation, useWarmSessionChatTailSnapshotVersion } from './session-chat-tail-controller'
+import { getSessionChatSnapshotForConversation, useWarmSessionChatSnapshotVersion } from './session-chat-controller'
 import { compareMachineEntries } from '../../utils/daemon-utils'
 import {
     areConversationsLoaded,
@@ -146,10 +146,10 @@ export default function DashboardMobileChatMode({
         conversations,
     })
 
-    // Bumps when any warm chat_tail controller emits a new snapshot, so the
+    // Bumps when any warm chat controller emits a new snapshot, so the
     // `items` memo below re-derives preview/timestamp from the updated snapshot
     // as soon as a message push lands — without requiring conversation re-entry.
-    const warmChatTailVersion = useWarmSessionChatTailSnapshotVersion(conversations)
+    const warmChatVersion = useWarmSessionChatSnapshotVersion(conversations)
 
     const items = useMemo<MobileConversationListItem[]>(() => conversations.map(conversation => {
         const isOpenConversation = screen === 'chat' && selectedConversation?.tabKey === conversation.tabKey
@@ -158,11 +158,11 @@ export default function DashboardMobileChatMode({
             isOpenConversation,
         })
         const timestamp = getConversationTimestamp(conversation)
-        // (B2) Feed the warm chat_tail snapshot into the preview so the inbox row
+        // (B2) Feed the warm keyed-chat snapshot into the preview so the inbox row
         // shows the same last message ChatPane renders (falls back to
         // conversation.messages when no warm snapshot exists for this session).
-        const chatTailSnapshot = getSessionChatTailSnapshotForConversation(conversation)
-        const preview = getConversationPreviewText(conversation, chatTailSnapshot)
+        const chatSnapshot = getSessionChatSnapshotForConversation(conversation)
+        const preview = getConversationPreviewText(conversation, chatSnapshot)
 
         return {
             conversation,
@@ -173,7 +173,7 @@ export default function DashboardMobileChatMode({
             isWorking: surfaceState.isWorking,
             inboxBucket: surfaceState.inboxBucket,
         }
-    }), [conversations, liveSessionInboxState, screen, selectedConversation, warmChatTailVersion])
+    }), [conversations, liveSessionInboxState, screen, selectedConversation, warmChatVersion])
     const { markConversationRead } = useDashboardMobileChatEffects({
         conversations,
         machineEntries,

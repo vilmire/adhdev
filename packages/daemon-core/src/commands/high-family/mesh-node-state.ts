@@ -7,11 +7,14 @@
  *   aggregate snapshot + publishes a mesh-state revision so dashboards refetch.
  *   Sender gate `node_owner`: only the daemon that owns the node on this
  *   coordinator's roster may report it. The report may also carry (or, between
- *   git ticks, carry ONLY) the member's content-free runtime summary — sessions,
+ *   git ticks, carry ONLY) the member's content-free runtime summary — or, when
+ *   it did not change, only its `runtimeSignature` (answered with `runtimeHeld`) — sessions,
  *   build, upgrade marker, facts incl. quota (mesh/mesh-node-runtime-summary.ts,
- *   re-sanitized at ingest). A runtime change is served by the per-call overlay;
- *   only a facts (quota/build) change publishes a revision, so session status
- *   churn does not make every dashboard refetch.
+ *   re-sanitized at ingest). Any runtime change flushes the mesh's keyed
+ *   mesh.status lane (only the changed node's fields travel). The git half is
+ *   symmetric: an unchanged checkout (heartbeat / nudge) travels as
+ *   `gitSignature` + its upstream fetch stamp only, answered with `gitHeld`;
+ *   `false` (nothing / something else held) makes the member send the body at once.
  *
  *   The pushed facts bundle also self-heals the node's config record (platform /
  *   arch / nickname / provider + build versions) — the held runtime, not a probe
@@ -24,8 +27,10 @@
  *   to ask a member which nodes exist.
  *
  * mesh_node_state_nudge: member side. A coordinator asks this daemon to push a
- *   node's state NOW (explicit refresh). Answers whether a push subscription
- *   from that coordinator exists; the push itself runs in the background.
+ *   node's state NOW (first contact, (re)connect handshake, explicit refresh);
+ *   a node not yet pushed to that coordinator is subscribed on the spot (the
+ *   nudge carries its workspace). Answers whether a subscription exists; the
+ *   push itself runs in the background.
  *
  * mesh_node_git_log: the node detail's "recent commits" read, routed THROUGH the
  *   coordinator (the dashboard never talks to a remote node's daemon itself):
@@ -72,8 +77,11 @@ export const meshNodeStateHandlers: Record<string, HighFamilyHandler> = {
         if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
         const git = readRecord(args?.git);
         const runtime = readRecord(args?.runtime);
+        // Unchanged runtime / git travel as their signature only (mesh-node-state-pusher.ts).
+        const runtimeSignature = !runtime ? readString(args?.runtimeSignature) : '';
         const hasGit = !!git && typeof git.isGitRepo === 'boolean';
-        if (!hasGit && !runtime) return { success: false, error: 'git status required' };
+        const gitSignature = !hasGit ? readString(args?.gitSignature) : '';
+        if (!hasGit && !runtime && !gitSignature) return { success: false, error: 'git status required' };
         const resolved = await resolveMeshNode(ctx, meshId, nodeId);
         if (!resolved.ok) return resolved.result;
         const nodeWorkspace = readString(resolved.node.workspace);
@@ -84,9 +92,20 @@ export const meshNodeStateHandlers: Record<string, HighFamilyHandler> = {
         }
         const observedAt = typeof args?.observedAt === 'number' && Number.isFinite(args.observedAt) ? args.observedAt : undefined;
         const workspace = nodeWorkspace || reportedWorkspace;
-        const changed = hasGit
+        let changed = hasGit
             ? ctx.meshNodeGitState.recordObservation({ meshId, nodeId, workspace, git, source: 'member_push', observedAt }).changed
             : false;
+        // Signature-only git (a heartbeat / nudge over an unchanged checkout): renew the
+        // held observation when it matches, else ask for the body (`gitHeld: false`).
+        let gitHeld: boolean | undefined;
+        if (gitSignature) {
+            const upstreamFetchedAt = typeof args?.upstreamFetchedAt === 'number' && Number.isFinite(args.upstreamFetchedAt)
+                ? args.upstreamFetchedAt
+                : undefined;
+            const confirmed = ctx.meshNodeGitState.confirmObservation({ meshId, nodeId, signature: gitSignature, observedAt, upstreamFetchedAt });
+            gitHeld = confirmed.held;
+            changed = changed || confirmed.changed;
+        }
         let runtimeChanged = false;
         let factsChanged = false;
         let sessionsChanged = false;
@@ -124,6 +143,25 @@ export const meshNodeStateHandlers: Record<string, HighFamilyHandler> = {
                 if (siblingRecorded.factsChanged && siblingRecorded.entry?.runtime?.nodeFacts) heal(siblingId, siblingRecorded.entry.runtime.nodeFacts);
             }
         }
+        // Signature-only runtime: renew the held summary's age when it matches — for
+        // every node of that daemon, like a full report — else ask for the summary.
+        let runtimeHeld: boolean | undefined;
+        if (runtimeSignature) {
+            const runtimeObservedAt = typeof args?.runtimeObservedAt === 'number' && Number.isFinite(args.runtimeObservedAt)
+                ? args.runtimeObservedAt
+                : undefined;
+            runtimeHeld = ctx.meshNodeGitState.confirmRuntime(meshId, nodeId, runtimeSignature, runtimeObservedAt);
+            const ownerDaemonId = readMeshNodeDaemonId(resolved.node) ?? '';
+            if (runtimeHeld && ownerDaemonId) {
+                for (const sibling of Array.isArray(resolved.mesh.nodes) ? resolved.mesh.nodes : []) {
+                    if (!sibling || sibling === resolved.node || meshNodeIdMatches(sibling, nodeId)) continue;
+                    const siblingDaemonId = readMeshNodeDaemonId(sibling) ?? '';
+                    const siblingId = readString(sibling.id);
+                    if (!siblingId || !siblingDaemonId || !daemonIdsEquivalent(siblingDaemonId, ownerDaemonId)) continue;
+                    ctx.meshNodeGitState.confirmRuntime(meshId, siblingId, runtimeSignature, runtimeObservedAt);
+                }
+            }
+        }
         // MEMBER-WORKTREE-RECONCILE: once per coordinator boot the member also lists the
         // worktree nodes it owns on this mesh; adopt the ones this roster lost
         // (owner-gated inside adoptMemberWorktreeNodes). Never fails the push itself.
@@ -142,18 +180,21 @@ export const meshNodeStateHandlers: Record<string, HighFamilyHandler> = {
                 };
             } catch { /* best-effort: the member re-reports after the next coordinator boot */ }
         }
-        // A revision only for what a viewer sees change: git content, the facts
-        // bundle / provider catalog, a session launched / terminated (the node's
-        // active sessions render from this held runtime), or a restarted /
-        // upgraded daemon. Session STATUS churn is served by the per-call overlay
-        // without a refetch nudge.
+        // Anything a viewer sees change — git content, or any held-runtime change
+        // (session status, facts / provider catalog, a launch / terminate, a
+        // restarted / upgraded daemon) — flushes the mesh's mesh.status
+        // subscribers. That lane is keyed per node, so it carries only this
+        // node's changed fields; a confirming (signature-only) heartbeat changes
+        // nothing and sends nothing.
         if (changed) ctx.invalidateAggregateMeshStatus(meshId);
-        else if (factsChanged || sessionsChanged || instanceChanged) ctx.deps.onMeshStateChange?.(meshId);
+        else if (runtimeChanged || factsChanged || sessionsChanged || instanceChanged) ctx.deps.onMeshStateChange?.(meshId);
         return {
             success: true,
             accepted: true,
             changed,
             ...(runtime ? { runtimeChanged } : {}),
+            ...(runtimeHeld !== undefined ? { runtimeHeld } : {}),
+            ...(gitHeld !== undefined ? { gitHeld } : {}),
             ...(ctx.meshCoordinatorBootId ? { coordinatorBootId: ctx.meshCoordinatorBootId } : {}),
             ...(reconciliation ?? {}),
         };
@@ -164,8 +205,9 @@ export const meshNodeStateHandlers: Record<string, HighFamilyHandler> = {
         const nodeId = readString(args?.nodeId);
         if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
         const coordinatorDaemonId = readMeshSender(args);
-        // Keyed by the SENDER: a peer can only nudge the subscriptions it owns.
-        const subscribed = !!coordinatorDaemonId && ctx.meshNodeStatePusher?.nudge(coordinatorDaemonId, meshId, nodeId) === true;
+        // Keyed by the SENDER: a peer can only nudge (or subscribe) pushes to itself.
+        const subscribed = !!coordinatorDaemonId
+            && ctx.meshNodeStatePusher?.nudge(coordinatorDaemonId, meshId, nodeId, readString(args?.workspace)) === true;
         return { success: true, subscribed };
     },
 

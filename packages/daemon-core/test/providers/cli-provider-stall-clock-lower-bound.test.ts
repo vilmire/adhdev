@@ -137,7 +137,7 @@ describe('stall watchdog — causal freshness needs a lower bound on age', () =>
         // updatedAt is null — so the premise has to be pinned one layer down.
         const raw = resolveTurnAttemptRow({
             sessionId,
-            legacyStatus: 'generating',
+            providerStatus: 'generating',
             providerType: 'codex-cli',
             surface: 'stall_watchdog',
             nowMs: observeAt,
@@ -154,7 +154,7 @@ describe('stall watchdog — causal freshness needs a lower bound on age', () =>
         // reducer authority, so the Stage 6 clock branch is not even reachable.
         const presentation = resolveSessionTurnPresentation({
             sessionId,
-            legacyStatus: 'generating',
+            providerStatus: 'generating',
             providerType: 'codex-cli',
             surface: 'stall_watchdog',
             nowMs: observeAt,

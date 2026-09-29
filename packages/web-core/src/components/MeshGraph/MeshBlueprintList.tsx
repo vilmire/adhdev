@@ -17,7 +17,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
-import type { MeshGraphTheme } from './meshGraphTheme'
+import { meshToggleChipClass, type MeshGraphTheme } from './meshGraphTheme'
 import { buildTaskDag } from './taskDagViewModel'
 import { buildGraphMiniDag, buildQueueMiniDag, type MiniDagModel } from './miniDagViewModel'
 import MeshMiniDag from './MeshMiniDag'
@@ -177,10 +177,10 @@ export default function MeshBlueprintList({ tasks, status, graphs, meshTheme, no
     }
 
     const sectionHeader = (section: BlueprintSection, count: number) => (
-        <div className={`flex items-center gap-2 pt-1 text-4xs font-semibold uppercase tracking-[0.14em] ${meshTheme.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+        <div className="flex items-center gap-2 pt-1 text-3xs font-medium text-text-muted">
             <span>{t(`mesh.blueprint.list.section${section.charAt(0).toUpperCase()}${section.slice(1)}`)}</span>
             <span className="opacity-70">{count}</span>
-            <span className={`h-px flex-1 ${meshTheme.isDark ? 'bg-white/8' : 'bg-slate-200'}`} aria-hidden />
+            <span className="h-px flex-1 bg-border-subtle" aria-hidden />
         </div>
     )
 
@@ -202,11 +202,11 @@ export default function MeshBlueprintList({ tasks, status, graphs, meshTheme, no
 
             <div className="min-h-0 flex-1 overflow-y-auto">
                 {tasks.length === 0 && groups.blocked.length === 0 ? (
-                    <div className="flex h-full min-h-[200px] items-center justify-center px-6 text-center text-sm text-slate-400">
+                    <div className="flex h-full min-h-[200px] items-center justify-center px-6 text-center text-sm text-text-muted">
                         {emptyMessage ?? t('mesh.taskDag.empty')}
                     </div>
                 ) : nothingVisible ? (
-                    <div className="flex h-full min-h-[200px] items-center justify-center px-6 text-center text-sm text-slate-400">
+                    <div className="flex h-full min-h-[200px] items-center justify-center px-6 text-center text-sm text-text-muted">
                         {t('mesh.blueprint.list.emptyActive')}
                     </div>
                 ) : missionGroups ? (
@@ -222,14 +222,14 @@ export default function MeshBlueprintList({ tasks, status, graphs, meshTheme, no
                                 <button
                                     type="button"
                                     onClick={openGroup}
-                                    className={`flex items-center gap-2 pt-1 text-left text-3xs font-semibold ${meshTheme.isDark ? 'text-indigo-300' : 'text-indigo-700'} ${openGroup ? 'cursor-pointer hover:underline' : 'cursor-default'}`}
+                                    className={`flex items-center gap-2 pt-1 text-left text-3xs font-semibold text-text-primary ${openGroup ? 'cursor-pointer hover:text-accent hover:underline' : 'cursor-default'}`}
                                     title={group.kind === 'chain' ? group.anchorTaskId : group.missionId ?? undefined}
                                 >
                                     <span>{group.kind === 'chain'
                                         ? `⛓ ${t('mesh.blueprint.list.chainGroup', { title: group.title })}`
                                         : `⚑ ${group.title || group.missionId?.slice(0, 10) || t('mesh.blueprint.list.noMission')}`}</span>
                                     <span className="opacity-60">{group.rows.length}</span>
-                                    <span className={`h-px flex-1 ${meshTheme.isDark ? 'bg-indigo-400/20' : 'bg-indigo-200'}`} aria-hidden />
+                                    <span className="h-px flex-1 bg-border-subtle" aria-hidden />
                                 </button>
                                 {group.rows.map(renderRow)}
                             </div>
@@ -264,9 +264,7 @@ export default function MeshBlueprintList({ tasks, status, graphs, meshTheme, no
                                     <button
                                         type="button"
                                         onClick={() => setHistoryLimit(limit => limit + BLUEPRINT_HISTORY_LOAD_STEP)}
-                                        className={`self-start rounded-full border px-2.5 py-0.5 text-3xs font-medium transition-colors ${meshTheme.isDark
-                                            ? 'border-sky-400/25 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
-                                            : 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'}`}
+                                        className={`self-start ${meshToggleChipClass(false)}`}
                                     >
                                         {t('mesh.blueprint.list.loadMore', {
                                             count: Math.min(BLUEPRINT_HISTORY_LOAD_STEP, groups.historyHiddenCount),

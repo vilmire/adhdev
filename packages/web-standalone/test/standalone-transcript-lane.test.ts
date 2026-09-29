@@ -1,6 +1,6 @@
 /**
- * Standalone dashboard transcript replica lane (wiring-unification G6
- * prerequisite) — the browser half, with every web-core / DOM dependency
+ * Standalone dashboard keyed chat lane — the dashboard's only live chat path
+ * (design 2026-09-28 §6.4) — the browser half, with every web-core / DOM dependency
  * injected as a fake. The daemon half is covered in daemon-core
  * (`standalone-transcript-lane.test.ts`, real nodes) and daemon-standalone
  * (`standalone-transcript-lane-e2e.vitest.ts`, real `ws` + auth gate).
@@ -15,7 +15,6 @@ import {
     SUB_RETRY_MAX_MS,
     StandaloneTranscriptLaneClient,
     buildStandaloneSeqscribeWsUrl,
-    isStandaloneTranscriptLaneEnabled,
     isStandaloneWsDataFrame,
     type LaneSocket,
     type StandaloneTranscriptLaneDeps,
@@ -52,7 +51,6 @@ function harness(initialInterest: Map<string, string[]> = new Map([['standalone_
     const hosts: FakeHost[] = []
     const applied: Array<{ daemonId: string; sessionId: string; view: unknown }> = []
     const baseRequests: Array<{ daemonId: string; sessionId: string }> = []
-    const fallbacks: Array<{ daemonId: string; sessionId: string; reason: string }> = []
     const allTimers: Array<{ cb: () => void; ms: number; cleared: boolean; fired: boolean; purpose: string }> = []
     let interest = initialInterest
     let interestListener: (() => void) | null = null
@@ -89,7 +87,6 @@ function harness(initialInterest: Map<string, string[]> = new Map([['standalone_
             baseRequests.push({ daemonId, sessionId })
             return true
         },
-        reportFallback: (daemonId, sessionId, reason) => { fallbacks.push({ daemonId, sessionId, reason }) },
         setTimer: (cb, ms, purpose) => {
             const t = { cb, ms, cleared: false, fired: false, purpose }
             allTimers.push(t)
@@ -100,7 +97,7 @@ function harness(initialInterest: Map<string, string[]> = new Map([['standalone_
     }
     return {
         client: new StandaloneTranscriptLaneClient(deps),
-        sockets, hosts, applied, fallbacks, baseRequests,
+        sockets, hosts, applied, baseRequests,
         /** Reconnect timers ever scheduled, in order. */
         get timers() { return allTimers.filter((t) => t.purpose === 'reconnect') },
         /** Sub-retry timers that are still pending. */
@@ -139,20 +136,12 @@ describe('standalone transcript lane — wire constants', () => {
         )
     })
 
-    it('is on by default; only the explicit off spelling disables it', () => {
-        assert.equal(isStandaloneTranscriptLaneEnabled({}), true)
-        assert.equal(isStandaloneTranscriptLaneEnabled(undefined), true)
-        assert.equal(isStandaloneTranscriptLaneEnabled({ VITE_ADHDEV_TRANSCRIPT_WORKER: 'off' }), false)
-        assert.equal(isStandaloneTranscriptLaneEnabled({ VITE_ADHDEV_TRANSCRIPT_WORKER: ' OFF ' }), false)
-        assert.equal(isStandaloneTranscriptLaneEnabled({ VITE_ADHDEV_TRANSCRIPT_WORKER: 'on' }), true)
-    })
-
-    it('lets the controller report / base-request frames onto /ws, and nothing else beyond subscribe/unsubscribe', () => {
-        assert.equal(isStandaloneWsDataFrame({ type: 'subscribe', topic: 'session.chat_tail' }), true)
+    it('lets the controller base-request frames onto /ws, and nothing else beyond subscribe/unsubscribe', () => {
+        assert.equal(isStandaloneWsDataFrame({ type: 'subscribe', topic: 'session.modal' }), true)
         assert.equal(isStandaloneWsDataFrame({ type: 'unsubscribe', topic: 'x', key: 'k' }), true)
-        // The exact frame SessionChatTailController.reportTransportSelection sends.
-        assert.equal(isStandaloneWsDataFrame({ type: 'command', commandType: 'report_transcript_transport', data: { selection: 'replica' } }), true)
-        // The exact frame SessionChatTailController.requestTranscriptBase sends (design 2026-09-28 §5.2).
+        // The transport-selection report was removed with the second chat lane.
+        assert.equal(isStandaloneWsDataFrame({ type: 'command', commandType: 'report_transcript_transport', data: { selection: 'replica' } }), false)
+        // The exact frame SessionChatController.requestTranscriptBase sends (design 2026-09-28 §5.2).
         assert.equal(isStandaloneWsDataFrame({ type: 'command', commandType: 'request_transcript_base', data: { rawSessionId: 's1' } }), true)
         assert.equal(isStandaloneWsDataFrame({ type: 'command', commandType: 'send_chat', data: {} }), false)
         assert.equal(isStandaloneWsDataFrame({ type: 'status' }), false)
@@ -213,13 +202,12 @@ describe('StandaloneTranscriptLaneClient', () => {
         assert.deepEqual(h.applied.map((a) => a.daemonId).sort(), ['standalone', 'standalone_mach_1'])
     })
 
-    it('on lane close: stops the host, labels sessions no_node, and reconnects with backoff + fresh host', () => {
+    it('on lane close: stops the host and reconnects with backoff + fresh host (no fallback lane)', () => {
         const h = harness()
         h.client.start()
         h.sockets[0]!.fire('open')
         h.sockets[0]!.fire('close')
         assert.equal(h.hosts[0]!.stopped, true)
-        assert.deepEqual(h.fallbacks, [{ daemonId: 'standalone_mach_1', sessionId: 's1', reason: 'no_node' }])
         assert.equal(h.timers.length, 1)
         assert.equal(h.timers[0]!.ms, LANE_RECONNECT_INITIAL_MS)
         h.runLastTimer()
@@ -242,11 +230,9 @@ describe('StandaloneTranscriptLaneClient', () => {
         h.advance(LANE_HEALTHY_OPEN_MS)
         h.sockets[2]!.fire('close')
         assert.equal(h.timers[2]!.ms, LANE_RECONNECT_INITIAL_MS)
-        // A refused upgrade never started a host, so there is nothing to fall back from.
-        assert.equal(h.fallbacks.length, 1)
     })
 
-    it('stop() closes the lane and host without reconnecting or reporting fallback', () => {
+    it('stop() closes the lane and host without reconnecting', () => {
         const h = harness()
         h.client.start()
         h.sockets[0]!.fire('open')
@@ -254,7 +240,6 @@ describe('StandaloneTranscriptLaneClient', () => {
         assert.equal(h.sockets[0]!.closeCalls, 1)
         assert.equal(h.hosts[0]!.stopped, true)
         assert.equal(h.timers.length, 0)
-        assert.deepEqual(h.fallbacks, [])
         assert.equal(h.hasInterestListener(), false)
     })
 
@@ -278,6 +263,9 @@ describe('re-SUB of sessions whose topic the daemon had not defined yet', () => 
         assert.equal(h.pendingSubRetries().length, 1)
         const first = h.runSubRetry()
         assert.equal(first, SUB_RETRY_INITIAL_MS)
+        // Each retry first asks the daemon for one base frame per undelivered
+        // session, so a topic it has not published since a restart gets defined.
+        assert.deepEqual(h.baseRequests, [{ daemonId: 'standalone_mach_1', sessionId: 's2' }])
         // close+reopen exactly s2's subscription; the delivered s1 stays subscribed throughout.
         assert.deepEqual(h.hosts[0]!.activations, [['s1', 's2'], ['s1'], ['s1', 's2']])
         assert.equal(h.pendingSubRetries()[0]!.ms, SUB_RETRY_INITIAL_MS * 2)

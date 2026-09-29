@@ -141,7 +141,7 @@ describe('stall watchdog — a generating attempt with an open adapter turn', ()
         // Sampled >6 minutes later — the row has NOT been written again.
         const presentation = resolveSessionTurnPresentation({
             sessionId,
-            legacyStatus: 'generating',
+            providerStatus: 'generating',
             providerType: 'codex-cli',
             surface: 'stall_watchdog',
             nowMs: startedAt + QUIET_AT_FIRE,

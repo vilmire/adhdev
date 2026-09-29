@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // lifecycle retention Slice 3 — terminal-graph seven-table cascade (30d) +
-// delivered/failed outbox sweep (14d), both OBSERVE-mode by default.
+// delivered/failed outbox sweep (14d), both always enforced.
 //
 // What these tests actually defend, and why each case exists:
 //
@@ -11,9 +11,10 @@
 //     written as a per-table assertion for exactly that reason: a missed table is
 //     otherwise completely silent.
 //
-//   ★ Deletion is irreversible, so the shipped default is observe mode. The
-//     observe case pins that the selection runs in full while nothing is
-//     deleted — that is the whole safety property of the first landing.
+//   ★ Deletion is irreversible, so the exception filters (pending outbox,
+//     compensation_required, live leases) are pinned to keep holding a graph
+//     back. The former observe-only mode and MESH_GRAPH_RETENTION_ENFORCE were
+//     removed 2026-09-29 (preview owner rule: one behavior, no switches).
 //
 // ISOLATION: a per-run TEMP config root (vi.mock of config.js getConfigDir), so
 // nothing here ever touches the real ~/.adhdev runtime DB.
@@ -45,7 +46,6 @@ import {
     DEFAULT_GRAPH_OUTBOX_RETENTION_MS,
     resolveGraphRetentionMs,
     resolveGraphOutboxRetentionMs,
-    resolveGraphRetentionEnforce,
 } from '../../src/mesh/mesh-retention-config.js';
 import type {
     MeshGraphStatus,
@@ -69,7 +69,6 @@ const GRAPH_TABLES = [
 const ENV_VARS = [
     'MESH_GRAPH_RETENTION_MS',
     'MESH_GRAPH_OUTBOX_RETENTION_MS',
-    'MESH_GRAPH_RETENTION_ENFORCE',
 ] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
@@ -187,7 +186,7 @@ describe('pruneTerminalGraphs — non-terminal graphs are never collected', () =
         ['compensation_required', 'a real worktree is still on disk; the intent row is its only ledger'],
     ] as const)('keeps a %s graph even when ancient (%s)', (status) => {
         const graphId = seedGraph({ status, terminalAt: undefined });
-        const r = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS, { enforce: true });
+        const r = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS);
         expect(r.graphs).toBe(0);
         for (const t of GRAPH_TABLES) expect(count(t, graphId)).toBeGreaterThan(0);
     });
@@ -197,14 +196,14 @@ describe('pruneTerminalGraphs — non-terminal graphs are never collected', () =
         // with terminal=true) sets it, so a row whose status was touched outside
         // that path must not be treated as rolled-up.
         const graphId = seedGraph({ status: 'completed', terminalAt: undefined });
-        const r = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS, { enforce: true });
+        const r = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS);
         expect(r.graphs).toBe(0);
         expect(count('mesh_task_graphs', graphId)).toBe(1);
     });
 
     it('keeps a terminal graph that is still INSIDE the window', () => {
         const graphId = seedGraph({ status: 'completed', terminalAt: recent() });
-        const r = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS, { enforce: true });
+        const r = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS);
         expect(r.graphs).toBe(0);
         expect(count('mesh_task_graphs', graphId)).toBe(1);
     });
@@ -215,7 +214,7 @@ describe('pruneTerminalGraphs — cascade completeness', () => {
         const graphId = seedPrunable();
         for (const t of GRAPH_TABLES) expect(count(t, graphId)).toBeGreaterThan(0);
 
-        const r = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS, { enforce: true });
+        const r = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS);
 
         // Per-table, because there are no FKs: a forgotten table is silent.
         for (const t of GRAPH_TABLES) {
@@ -224,7 +223,7 @@ describe('pruneTerminalGraphs — cascade completeness', () => {
         expect(r).toMatchObject({
             graphs: 1, nodes: 2, edges: 1, outputs: 1,
             gates: 1, workspaceIntents: 1, outbox: 1,
-            skippedGraphs: 0, enforced: true,
+            skippedGraphs: 0,
         });
     });
 
@@ -232,7 +231,7 @@ describe('pruneTerminalGraphs — cascade completeness', () => {
         const dead = seedPrunable('dead');
         const live = seedGraph({ status: 'active', terminalAt: undefined, id: 'live' });
 
-        graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS, { enforce: true });
+        graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS);
 
         for (const t of GRAPH_TABLES) {
             expect(count(t, dead)).toBe(0);
@@ -242,7 +241,7 @@ describe('pruneTerminalGraphs — cascade completeness', () => {
 
     it('handles more graphs than one bind-parameter chunk (500)', () => {
         for (let i = 0; i < 520; i++) seedPrunable(`bulk${i}`);
-        const r = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS, { enforce: true });
+        const r = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS);
         expect(r.graphs).toBe(520);
         for (const t of GRAPH_TABLES) expect(count(t)).toBe(0);
     });
@@ -261,7 +260,7 @@ describe('pruneTerminalGraphs — anchors that must survive', () => {
         });
         seedPrunable();
 
-        graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS, { enforce: true });
+        graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS);
 
         expect(graphStore.getLatestOutput('legacy_task')?.version).toBe(1);
         const db = (store as any).db;
@@ -277,7 +276,7 @@ describe('pruneTerminalGraphs — anchors that must survive', () => {
         const graphId = seedGraph({
             status: 'completed', terminalAt: ancient(), outboxStatus: 'pending',
         });
-        const r = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS, { enforce: true });
+        const r = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS);
 
         expect(r.graphs).toBe(0);
         expect(r.skippedGraphs).toBe(1);
@@ -290,7 +289,7 @@ describe('pruneTerminalGraphs — anchors that must survive', () => {
             status: 'completed', terminalAt: ancient(),
             sagaState: 'compensation_required',
         });
-        const r = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS, { enforce: true });
+        const r = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS);
 
         expect(r.graphs).toBe(0);
         expect(r.skippedGraphs).toBe(1);
@@ -307,7 +306,7 @@ describe('pruneTerminalGraphs — anchors that must survive', () => {
             leaseExpiresAt: iso(60 * 60 * 1000),
         });
 
-        const r = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS, { enforce: true });
+        const r = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS);
 
         expect(r.skippedGraphs).toBe(1);
         expect(count('mesh_task_graphs', held)).toBe(1);
@@ -327,7 +326,7 @@ describe('pruneTerminalGraphs — anchors that must survive', () => {
         });
         expect(graphStore.getLatestOutput(taskId)?.version).toBe(2);
 
-        graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS, { enforce: true });
+        graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS);
         expect(graphStore.getLatestOutput(taskId)).toBeNull();
 
         const fresh = seedPrunable('reuse');
@@ -344,7 +343,7 @@ describe('pruneTerminalOutbox — cross-graph sweep', () => {
                 status, attemptCount: 1, createdAt: ancient(), updatedAt: ancient(),
             });
         }
-        const n = graphStore.pruneTerminalOutbox(DEFAULT_GRAPH_OUTBOX_RETENTION_MS, { enforce: true });
+        const n = graphStore.pruneTerminalOutbox(DEFAULT_GRAPH_OUTBOX_RETENTION_MS);
         expect(n).toBe(2);
         expect(count('mesh_graph_outbox')).toBe(0);
     });
@@ -357,7 +356,7 @@ describe('pruneTerminalOutbox — cross-graph sweep', () => {
             status: 'pending', attemptCount: 0,
             createdAt: iso(365 * DAY_MS), updatedAt: iso(365 * DAY_MS),
         });
-        const n = graphStore.pruneTerminalOutbox(DEFAULT_GRAPH_OUTBOX_RETENTION_MS, { enforce: true });
+        const n = graphStore.pruneTerminalOutbox(DEFAULT_GRAPH_OUTBOX_RETENTION_MS);
         expect(n).toBe(0);
         expect(count('mesh_graph_outbox')).toBe(1);
     });
@@ -371,7 +370,7 @@ describe('pruneTerminalOutbox — cross-graph sweep', () => {
             status: 'failed', attemptCount: 3, nextAttemptAtMs: Date.now() + 30_000,
             createdAt: ancient(), updatedAt: recent(),
         });
-        const n = graphStore.pruneTerminalOutbox(DEFAULT_GRAPH_OUTBOX_RETENTION_MS, { enforce: true });
+        const n = graphStore.pruneTerminalOutbox(DEFAULT_GRAPH_OUTBOX_RETENTION_MS);
         expect(n).toBe(0);
         expect(count('mesh_graph_outbox')).toBe(1);
     });
@@ -381,71 +380,40 @@ describe('pruneTerminalOutbox — cross-graph sweep', () => {
             id: 'obx_null_graph', meshId: MESH, kind: 'k', payload: '{}',
             status: 'delivered', attemptCount: 1, createdAt: ancient(), updatedAt: ancient(),
         });
-        expect(graphStore.pruneTerminalOutbox(DEFAULT_GRAPH_OUTBOX_RETENTION_MS, { enforce: true })).toBe(1);
+        expect(graphStore.pruneTerminalOutbox(DEFAULT_GRAPH_OUTBOX_RETENTION_MS)).toBe(1);
     });
 });
 
-describe('observe mode (the shipped default)', () => {
-    it('deletes NOTHING while reporting exactly what it would delete', () => {
-        const graphId = seedPrunable();
-        graphStore.insertOutboxEvent({
-            id: 'obx_loose', meshId: MESH, kind: 'k', payload: '{}',
-            status: 'delivered', attemptCount: 1, createdAt: ancient(), updatedAt: ancient(),
-        });
-
-        const observed = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS);
-        expect(observed.enforced).toBe(false);
-        expect(observed).toMatchObject({
-            graphs: 1, nodes: 2, edges: 1, outputs: 1,
-            gates: 1, workspaceIntents: 1, outbox: 1,
-        });
-        expect(graphStore.pruneTerminalOutbox(DEFAULT_GRAPH_OUTBOX_RETENTION_MS)).toBe(2);
-
-        // Nothing moved.
+describe('exceptions still hold now that the sweep always deletes', () => {
+    it('a terminal graph with an undrained outbox row is held back and counted, never deleted', () => {
+        const graphId = seedGraph({ status: 'completed', terminalAt: ancient(), outboxStatus: 'pending' });
+        const r = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS);
+        expect(r.graphs).toBe(0);
+        expect(r.skippedGraphs).toBe(1);
         for (const t of GRAPH_TABLES) expect(count(t, graphId)).toBeGreaterThan(0);
-        expect(count('mesh_graph_outbox')).toBe(2);
-
-        // And the observed counts are the counts enforce actually removes.
-        const enforced = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS, { enforce: true });
-        expect(enforced.enforced).toBe(true);
-        for (const k of ['graphs', 'nodes', 'edges', 'outputs', 'gates', 'workspaceIntents', 'outbox'] as const) {
-            expect(enforced[k], k).toBe(observed[k]);
-        }
-    });
-
-    it('still applies every exception filter, so observed counts are not inflated', () => {
-        seedGraph({ status: 'completed', terminalAt: ancient(), outboxStatus: 'pending' });
-        const observed = graphStore.pruneTerminalGraphs(DEFAULT_GRAPH_RETENTION_MS);
-        expect(observed.graphs).toBe(0);
-        expect(observed.skippedGraphs).toBe(1);
     });
 });
 
 describe('pruneMeshRuntimeRetention wiring', () => {
-    it('runs the graph sweep in observe mode by default and reports its counts', () => {
+    it('ALWAYS deletes terminal graphs (no observe mode, no env switch) and reports the counts', () => {
         const graphId = seedPrunable();
         const result = pruneMeshRuntimeRetention();
 
-        expect(result.graph.enforced).toBe(false);
         expect(result.graph.graphs).toBe(1);
-        // Observe mode ⇒ the rows are all still there.
-        for (const t of GRAPH_TABLES) expect(count(t, graphId)).toBeGreaterThan(0);
+        expect(result.graph).not.toHaveProperty('enforced');
+        for (const t of GRAPH_TABLES) expect(count(t, graphId)).toBe(0);
     });
 
-    it('actually deletes once MESH_GRAPH_RETENTION_ENFORCE is set', () => {
+    it('ignores the removed MESH_GRAPH_RETENTION_ENFORCE variable in either direction', () => {
         const graphId = seedPrunable();
-        process.env.MESH_GRAPH_RETENTION_ENFORCE = '1';
-
-        const result = pruneMeshRuntimeRetention();
-
-        expect(result.graph.enforced).toBe(true);
-        expect(result.graph.graphs).toBe(1);
+        process.env.MESH_GRAPH_RETENTION_ENFORCE = '0';
+        expect(pruneMeshRuntimeRetention().graph.graphs).toBe(1);
         for (const t of GRAPH_TABLES) expect(count(t, graphId)).toBe(0);
+        delete process.env.MESH_GRAPH_RETENTION_ENFORCE;
     });
 
     it('is idempotent — a second sweep with nothing left is a no-op', () => {
         seedPrunable();
-        process.env.MESH_GRAPH_RETENTION_ENFORCE = '1';
         expect(pruneMeshRuntimeRetention().graph.graphs).toBe(1);
         expect(pruneMeshRuntimeRetention().graph.graphs).toBe(0);
     });
@@ -475,18 +443,6 @@ describe('retention config resolvers', () => {
         for (const bad of [String(1 * DAY_MS - 1), String(90 * DAY_MS + 1), '0', '-1', 'abc', '']) {
             process.env[envVar] = bad;
             expect(resolve(), `env=${JSON.stringify(bad)}`).toBe(fallback);
-        }
-    });
-
-    it('enforce is off unless explicitly 1/true', () => {
-        expect(resolveGraphRetentionEnforce()).toBe(false);
-        for (const on of ['1', 'true', 'TRUE', ' true ']) {
-            process.env.MESH_GRAPH_RETENTION_ENFORCE = on;
-            expect(resolveGraphRetentionEnforce(), on).toBe(true);
-        }
-        for (const off of ['0', 'false', 'yes', 'on', '']) {
-            process.env.MESH_GRAPH_RETENTION_ENFORCE = off;
-            expect(resolveGraphRetentionEnforce(), off).toBe(false);
         }
     });
 });

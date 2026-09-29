@@ -35,7 +35,7 @@ export function getConversationPreviewText(
     // (B3) The preview always surfaces the actual final answer (last assistant
     // message) rather than an "Agent is generating…" placeholder — the generating
     // state is conveyed by the inbox 'Live' badge instead. (B2) When the warm
-    // chat_tail snapshot is passed, the last message is derived from the same
+    // keyed-chat snapshot is passed, the last message is derived from the same
     // transcript authority ChatPane renders, keeping inbox and chat in sync.
     const preview = getConversationLastMessagePreview(conversation, snapshot)
     if (preview) return preview

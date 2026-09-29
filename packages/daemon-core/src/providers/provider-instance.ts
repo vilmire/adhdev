@@ -252,9 +252,9 @@ export interface ProviderInstance {
     getState(): ProviderState;
 
     /**
-     * Return the cheap session metadata needed to decide whether chat-tail
-     * subscriptions should be flushed. Implementations must avoid rich transcript
-     * parsing here; callers use this on P2P hot flush paths.
+     * Return the cheap session metadata (status / last message time) for hot
+     * paths that must not run rich transcript parsing (e.g. quota refresh's
+     * recent-CLI-activity check).
      */
     getHotChatSessionState?(): HotChatSessionState | HotChatSessionState[] | null;
 

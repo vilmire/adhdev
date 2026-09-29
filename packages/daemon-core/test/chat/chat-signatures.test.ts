@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildChatMessageSignature,
-  buildChatTailDeliverySignature,
   buildSessionModalDeliverySignature,
   hashSignatureParts,
 } from '../../src/chat/chat-signatures'
@@ -51,36 +50,6 @@ describe('chat signature helpers', () => {
     })
 
     expect(after).not.toBe(before)
-  })
-
-  it('changes chat-tail delivery signatures when any delivered field changes', () => {
-    const base = buildChatTailDeliverySignature({
-      sessionId: 'session-1',
-      historySessionId: 'provider-1',
-      messages: [{ id: 'msg-1', content: 'hello' }],
-      status: 'idle',
-      title: 'Repo',
-      activeModal: null,
-      syncMode: 'append',
-      replaceFrom: 0,
-      totalMessages: 1,
-      lastMessageSignature: 'sig-1',
-    })
-
-    const changed = buildChatTailDeliverySignature({
-      sessionId: 'session-1',
-      historySessionId: 'provider-1',
-      messages: [{ id: 'msg-1', content: 'hello world' }],
-      status: 'idle',
-      title: 'Repo',
-      activeModal: null,
-      syncMode: 'append',
-      replaceFrom: 0,
-      totalMessages: 1,
-      lastMessageSignature: 'sig-1',
-    })
-
-    expect(changed).not.toBe(base)
   })
 
   it('changes modal delivery signatures when modal buttons change', () => {

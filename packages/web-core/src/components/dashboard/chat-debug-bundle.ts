@@ -72,7 +72,7 @@ export interface BuildChatFrontendDebugSnapshotOptions {
     controls?: readonly unknown[]
     controlValues?: Record<string, unknown>
     visibleBarControlCount: number
-    chatTailState: {
+    chatState: {
         liveMessages?: readonly unknown[]
         hasLiveSnapshot?: boolean
         hasMoreHistory?: boolean
@@ -117,16 +117,16 @@ export function buildChatFrontendDebugSnapshot(options: BuildChatFrontendDebugSn
             lastMessageHash: activeConv.lastMessageHash,
         },
         messageCounts: {
-            live: options.chatTailState.liveMessages?.length ?? activeConv.messages.length,
+            live: options.chatState.liveMessages?.length ?? activeConv.messages.length,
             activeConversation: activeConv.messages.length,
             visible: options.visibleMessages.length,
-            history: options.chatTailState.historyMessages?.length || 0,
+            history: options.chatState.historyMessages?.length || 0,
             hiddenLive: options.ui.hiddenLiveCount,
         },
-        liveMessagesTail: tail(options.chatTailState.liveMessages ?? activeConv.messages, 10),
+        liveMessagesTail: tail(options.chatState.liveMessages ?? activeConv.messages, 10),
         activeConversationMessagesTail: tail(activeConv.messages, 10),
         visibleMessagesTail: tail(options.visibleMessages, 5),
-        historyMessagesTail: tail(options.chatTailState.historyMessages, 5),
+        historyMessagesTail: tail(options.chatState.historyMessages, 5),
         actionLogsTail: tail(options.actionLogs.filter((entry) => entry.routeId === activeConv.tabKey), 20),
         controls: {
             visibleBarControlCount: options.visibleBarControlCount,
@@ -134,10 +134,10 @@ export function buildChatFrontendDebugSnapshot(options: BuildChatFrontendDebugSn
             values: options.controlValues || {},
             visible: options.ui.controlsVisible,
         },
-        chatTail: {
-            hasLiveSnapshot: !!options.chatTailState.hasLiveSnapshot,
-            hasMoreHistory: !!options.chatTailState.hasMoreHistory,
-            historyError: options.chatTailState.historyError || null,
+        chat: {
+            hasLiveSnapshot: !!options.chatState.hasLiveSnapshot,
+            hasMoreHistory: !!options.chatState.hasMoreHistory,
+            historyError: options.chatState.historyError || null,
         },
         ui: options.ui,
         browser: typeof navigator !== 'undefined' ? {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { meshNodeSlotsSet, meshNodeSlotsList } from '../src/tools/mesh-tools.js';
+import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 
 /**
  * mesh_node_slots action=set — the orchestrator's propose→approve surface for node
@@ -14,11 +15,11 @@ const NODE = 'node_alpha';
 
 function recordingTransport() {
   const commands: Array<{ cmd: string; args: any }> = [];
-  return {
+  return fakeCoordinatorTransport({
     commands,
     command: async (cmd: string, args: any) => { commands.push({ cmd, args }); return { success: true }; },
     getStatus: async () => ({ sessions: [] }),
-  } as any;
+  } as any);
 }
 
 function makeCtx(transport: any, nodeSlots?: any[]) {

@@ -60,7 +60,6 @@ import {
     type PersistedChatState,
 } from './transcript-keyed-frame.js';
 import { isEmptyTranscriptObservation, type TranscriptObservation } from './transcript-observation.js';
-import { resolveTranscriptMode, type TranscriptMode } from './transcript-mode.js';
 import {
     TranscriptLatencyRecorder,
     type TranscriptLatencyDetail,
@@ -69,14 +68,14 @@ import {
 import { redactSessionId } from './transcript-parity.js';
 
 /** Hard bound on distinct sessions tracked at once — mirrors MAX_INFLIGHT's
- * role in mesh-dual-write.ts: a shadow that OOMs a daemon is worse than a
- * shadow that skips sessions, and the skip is counted, never silent. */
+ * role in mesh-dual-write.ts: a publisher that OOMs a daemon is worse than one
+ * that skips sessions, and the skip is counted, never silent. */
 export const MAX_TRACKED_SESSIONS = 512;
 
 /**
  * PTY paint bursts commonly deliver one callback per small terminal chunk.
- * Keep this below the legacy 700ms chat-tail UI debounce — so the replica lane
- * is still faster than what it replaced — while leaving enough room to collapse
+ * Keep this below the retired chat push lane's 700ms debounce — so the keyed
+ * lane is still faster than what it replaced — while leaving enough room to collapse
  * the dozens/hundreds of chunks emitted by one repaint into a single reparse.
  */
 export const TRANSCRIPT_PTY_DIRTY_THROTTLE_MS = 350;
@@ -125,6 +124,14 @@ export interface TranscriptProjectionDeps {
      * propagate into the read_chat hot path that triggered it.
      */
     appendChatFrame(sessionId: string, frame: KeyedChatFrame, observation: TranscriptObservation): Promise<void>;
+    /**
+     * Claim + define + announce the session's `.chat` topic NOW, without
+     * appending (`transcript-activation.ts#ensureSessionChatTopic`). Called by
+     * `warmSession` so a dashboard SUB is grantable the moment the session
+     * exists — not only after its first publish. Returns whether the topic is
+     * defined. Omit for "no node" (tests); `warmSession` then only seeds.
+     */
+    activateSession?(sessionId: string): boolean;
     resolveSourcePath?: (sessionId: string) => string | null;
     /**
      * Pull a fresh observation for `markDirty`-triggered publishes. Omit to
@@ -243,20 +250,23 @@ export class TranscriptProjectionService {
     private readonly knownPaths = new Map<string, string>();
     private readonly lastSignatures = new Map<string, string>();
     private statPollTimer: NodeJS.Timeout | null = null;
+    /**
+     * Sessions already warmed in this process (topic activated + one seed pull
+     * scheduled). A re-register of a live id (meta refresh, reconcile) is an
+     * upsert on the bus, so without this every upsert would cost a read_chat.
+     * Bounded like the other per-session maps; dropped on `forgetSession`.
+     */
+    private readonly warmed = new Set<string>();
+    private readonly seedTimers = new Map<string, NodeJS.Timeout>();
 
     constructor(deps: TranscriptProjectionDeps) {
         this.deps = deps;
         this.epoch = deps.epoch ?? newProducerEpoch();
     }
 
-    mode(env?: NodeJS.ProcessEnv): TranscriptMode {
-        return resolveTranscriptMode(env);
-    }
-
     /** PUSH entry point — the read_chat last-mile choke point already has a full observation. */
     observe(sessionId: string, observation: TranscriptObservation): void {
         if (!sessionId) return;
-        if (this.mode() === 'off') return;
         if (this.inFlight.has(sessionId)) {
             this.pendingObservation.set(sessionId, observation);
             // A nested observe() arriving during a pull is that pull's own
@@ -287,7 +297,6 @@ export class TranscriptProjectionService {
      */
     markDirty(sessionId: string, source: TranscriptTriggerSource = 'unspecified'): void {
         if (!sessionId) return;
-        if (this.mode() === 'off') return;
         this.latency.recordTriggered(source);
         if (!this.deps.collectObservation) {
             this.counters.collectorUnavailable++;
@@ -323,7 +332,6 @@ export class TranscriptProjectionService {
      */
     markPtyOutputActivity(sessionId: string): void {
         if (!sessionId) return;
-        if (this.mode() === 'off') return;
         if (!this.deps.collectObservation) {
             this.latency.recordTriggered('pty_output');
             this.counters.collectorUnavailable++;
@@ -368,7 +376,6 @@ export class TranscriptProjectionService {
 
     startPolling(sessionId: string): void {
         if (!sessionId) return;
-        if (this.mode() === 'off') return;
         this.pollingSessions.add(sessionId);
         if (!this.statPollTimer) {
             this.statPollTimer = setInterval(() => this.runStatPoll(), TRANSCRIPT_STAT_POLL_INTERVAL_MS);
@@ -404,6 +411,10 @@ export class TranscriptProjectionService {
         if (timer) clearTimeout(timer);
         this.ptyDirtyTimers.delete(sessionId);
         this.ptyDirtyTrailing.delete(sessionId);
+        this.warmed.delete(sessionId);
+        const seedTimer = this.seedTimers.get(sessionId);
+        if (seedTimer) clearTimeout(seedTimer);
+        this.seedTimers.delete(sessionId);
         // The session's identity ledger holds its bubble texts for alignment;
         // a terminated session no longer needs them (a later read re-seeds
         // from the topic).
@@ -441,6 +452,54 @@ export class TranscriptProjectionService {
     }
 
     /**
+     * First-paint warm-up for a session that just came into existence on this
+     * daemon (launch / restore after restart / attach — the `registered` bus
+     * event): define its `.chat` topic synchronously, so a dashboard SUB is
+     * granted immediately and the attached lanes are told the topic exists
+     * (`announceTopicActivated` → lane re-advertisement → availability push),
+     * then schedule ONE seed pull that publishes the session's first frame.
+     *
+     * Why both halves: the definition alone makes an idle session restored
+     * after a daemon restart servable at once — its committed rows are already
+     * on disk, and a SUB's SNAP carries them. The seed pull covers a session
+     * that has never published (a fresh launch): its first frame is a commit
+     * with the current live set (possibly empty), which is what gives the
+     * browser a verified view instead of an indefinitely pending pane. Before
+     * this, the topic was defined only on the first PTY-driven publish, so an
+     * idle session was never SUB-able and a fresh one only after ~seconds.
+     *
+     * The pull is deferred off the caller's stack: `registered` fires inside
+     * `SessionRegistry.register`, before the launching code has finished
+     * wiring the session, and the collector re-enters `read_chat`.
+     * Idempotent per session until `forgetSession`.
+     */
+    warmSession(sessionId: string): void {
+        if (!sessionId) return;
+        if (this.deps.activateSession) {
+            try {
+                this.deps.activateSession(sessionId);
+            } catch (error) {
+                LOG.warn(
+                    'Seqscribe',
+                    `transcript topic warm-up failed session=${redactSessionId(sessionId)}: ${error instanceof Error ? error.message : String(error)}`,
+                );
+            }
+        }
+        if (this.warmed.has(sessionId)) return;
+        this.warmed.add(sessionId);
+        while (this.warmed.size > MAX_TRACKED_SESSIONS) {
+            const oldest = this.warmed.values().next().value as string;
+            this.warmed.delete(oldest);
+        }
+        const timer = setTimeout(() => {
+            this.seedTimers.delete(sessionId);
+            this.seedSession(sessionId);
+        }, 0);
+        timer.unref?.();
+        this.seedTimers.set(sessionId, timer);
+    }
+
+    /**
      * Explicit alias for the restart/activation seed-read entry point (design
      * §5.2: "activation 직후와 daemon restart 직후에는 해당 세션을 즉시
      * seed-read한다"). Behaviourally identical to `markDirty` — the separate
@@ -457,7 +516,6 @@ export class TranscriptProjectionService {
      */
     requestBase(sessionId: string): void {
         if (!sessionId) return;
-        if (this.mode() === 'off') return;
         this.stateFor(sessionId).requestBase('resync_request');
         this.markDirty(sessionId, 'unspecified');
     }
@@ -588,9 +646,6 @@ export class TranscriptProjectionService {
         observation: TranscriptObservation,
         verifiedClear: boolean,
     ): Promise<void> {
-        const mode = this.mode();
-        if (mode === 'off') return;
-
         const state = this.stateFor(sessionId);
 
         // "pending:true, unsafe mapping, transient empty read는 이미 non-empty
@@ -641,42 +696,40 @@ export class TranscriptProjectionService {
             this.counters.chatBaseFrames.unexpected++;
         }
 
-        if (mode === 'shadow' || mode === 'primary') {
-            const encodedAt = this.latency.now();
-            try {
-                await this.deps.appendChatFrame(sessionId, frame, observation);
-            } catch (error) {
-                this.counters.publishFailed++;
-                // What landed is unknown (a group commit rolls back whole, but
-                // an earlier frame may have been torn): re-diff against the
-                // topic on the next frame instead of trusting this state.
-                this.sessionState.delete(sessionId);
-                LOG.warn(
-                    'Seqscribe',
-                    `transcript publish failed session=${redactSessionId(sessionId)}: ${error instanceof Error ? error.message : String(error)}`,
-                );
-                return;
-            }
-            state.commit(frame, nowMs);
-            this.counters.published++;
-            this.counters.chatRowsWritten += frame.rows.length;
-            this.counters.chatBytesWritten += frame.bytes;
-            if (frame.capped) this.counters.oversized++;
-            if (frame.commit.baseReason) this.counters.chatBaseFrames[frame.commit.baseReason]++;
-            if (frame.baseRateExceeded) {
-                this.counters.chatBaseRateExceeded++;
-                LOG.warn(
-                    'Seqscribe',
-                    `transcript chat base frames too frequent session=${redactSessionId(sessionId)} reason=${frame.commit.baseReason}`,
-                );
-            }
-            // Only a SUCCESSFUL publish is sampled — `publishFailed` counts the rest.
-            const ctx = this.triggerContext.get(sessionId);
-            this.latency.recordStage('collect_to_publish', this.latency.now() - encodedAt);
-            if (ctx) {
-                this.latency.recordPublished(ctx.source);
-                this.latency.recordTriggerToPublish(ctx.source, this.latency.now() - ctx.startedAt);
-            }
+        const encodedAt = this.latency.now();
+        try {
+            await this.deps.appendChatFrame(sessionId, frame, observation);
+        } catch (error) {
+            this.counters.publishFailed++;
+            // What landed is unknown (a group commit rolls back whole, but
+            // an earlier frame may have been torn): re-diff against the
+            // topic on the next frame instead of trusting this state.
+            this.sessionState.delete(sessionId);
+            LOG.warn(
+                'Seqscribe',
+                `transcript publish failed session=${redactSessionId(sessionId)}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+            return;
+        }
+        state.commit(frame, nowMs);
+        this.counters.published++;
+        this.counters.chatRowsWritten += frame.rows.length;
+        this.counters.chatBytesWritten += frame.bytes;
+        if (frame.capped) this.counters.oversized++;
+        if (frame.commit.baseReason) this.counters.chatBaseFrames[frame.commit.baseReason]++;
+        if (frame.baseRateExceeded) {
+            this.counters.chatBaseRateExceeded++;
+            LOG.warn(
+                'Seqscribe',
+                `transcript chat base frames too frequent session=${redactSessionId(sessionId)} reason=${frame.commit.baseReason}`,
+            );
+        }
+        // Only a SUCCESSFUL publish is sampled — `publishFailed` counts the rest.
+        const ctx = this.triggerContext.get(sessionId);
+        this.latency.recordStage('collect_to_publish', this.latency.now() - encodedAt);
+        if (ctx) {
+            this.latency.recordPublished(ctx.source);
+            this.latency.recordTriggerToPublish(ctx.source, this.latency.now() - ctx.startedAt);
         }
     }
 
@@ -714,6 +767,9 @@ export class TranscriptProjectionService {
         for (const timer of this.ptyDirtyTimers.values()) clearTimeout(timer);
         this.ptyDirtyTimers.clear();
         this.ptyDirtyTrailing.clear();
+        for (const timer of this.seedTimers.values()) clearTimeout(timer);
+        this.seedTimers.clear();
+        this.warmed.clear();
         this.triggerContext.clear();
         this.pendingContext.clear();
     }
@@ -774,8 +830,8 @@ export function transcriptLatencyDetail(): TranscriptLatencyDetail | null {
 
 /**
  * PTY-only throughput guard; status/finalization/post-chat callers stay
- * immediate. Safe no-op when unconfigured — see markChatOutputActivity in
- * subscriptions/topic-registry.ts.
+ * immediate. Safe no-op when unconfigured — called from the host runtime's
+ * output fanout (boot/host-runtime.ts) for every CLI chunk.
  */
 export function markTranscriptPtyOutputActivity(sessionId: string): void {
     activeService?.markPtyOutputActivity(sessionId);

@@ -25,7 +25,6 @@ import {
     resolveTurnAttemptRow,
     turnStageToSurfaceStatus,
     isRestartBlockingPresentation,
-    classifyShadowDivergence,
     getTurnPresentationMetrics,
     STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS,
     __resetTurnPresentationMetricsForTests,
@@ -78,7 +77,7 @@ describe('authority selector', () => {
         for (const providerType of ['kimi-cli', 'codex-cli', 'claude-cli', 'hermes-cli']) {
             const p = resolveSessionTurnPresentation({
                 sessionId: `sess-${providerType}`,
-                legacyStatus: 'generating',
+                providerStatus: 'generating',
                 providerType,
                 surface: 'session_status',
             });
@@ -98,7 +97,7 @@ describe('authority selector', () => {
         openAttempt({ taskId, sessionId, providerType: 'codex-cli' });
         const p = resolveSessionTurnPresentation({
             sessionId,
-            legacyStatus: 'idle',
+            providerStatus: 'idle',
             providerType: 'codex-cli',
             surface: 'read_chat',
         });
@@ -113,7 +112,7 @@ describe('authority selector', () => {
     it('a plain-scope (non-mesh) ledger attempt never takes authority — the provider FSM governs (C-W8)', () => {
         const sessionId = `sess-${randomUUID().slice(0, 8)}`;
         seedMeshAttempt({ meshId: MESH, taskId: `plain-${randomUUID().slice(0, 8)}`, sessionId, scope: 'plain', stage: 'generating' });
-        const p = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'idle', providerType: 'claude-cli', surface: 'session_status' });
+        const p = resolveSessionTurnPresentation({ sessionId, providerStatus: 'idle', providerType: 'claude-cli', surface: 'session_status' });
         expect(p.authority).toBe('provider_fsm_fallback');
         expect(p.status).toBe('idle');
         expect(resolveTurnAttemptRow({ sessionId })).toBeNull();
@@ -125,11 +124,11 @@ describe('authority selector', () => {
         const attempt = openAttempt({ taskId, sessionId });
         driveToGenerating(MESH, taskId, sessionId);
 
-        const byTask = resolveSessionTurnPresentation({ meshId: MESH, taskId, legacyStatus: 'generating', surface: 'active_work' });
-        const bySession = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'generating', surface: 'session_status' });
-        const byReadChat = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'generating', surface: 'read_chat' });
-        const byMeshStatus = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'generating', surface: 'mesh_status' });
-        const byDashboard = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'generating', surface: 'dashboard' });
+        const byTask = resolveSessionTurnPresentation({ meshId: MESH, taskId, providerStatus: 'generating', surface: 'active_work' });
+        const bySession = resolveSessionTurnPresentation({ sessionId, providerStatus: 'generating', surface: 'session_status' });
+        const byReadChat = resolveSessionTurnPresentation({ sessionId, providerStatus: 'generating', surface: 'read_chat' });
+        const byMeshStatus = resolveSessionTurnPresentation({ sessionId, providerStatus: 'generating', surface: 'mesh_status' });
+        const byDashboard = resolveSessionTurnPresentation({ sessionId, providerStatus: 'generating', surface: 'dashboard' });
 
         for (const p of [byTask, bySession, byReadChat, byMeshStatus, byDashboard]) {
             expect(p.authority).toBe('turn_reducer');
@@ -177,16 +176,12 @@ describe('Kimi/Codex mid-turn point samples cannot override the projection', () 
         // Fresh point-sample reads idle (Kimi native transcript growing / PTY quiet)
         // or a settled Codex prompt sample — the projection still says generating.
         for (const sample of ['idle', 'no_progress', 'long_generating'] as const) {
-            const p = resolveSessionTurnPresentation({ sessionId, legacyStatus: sample, providerType: 'kimi-cli', surface: 'read_chat' });
+            const p = resolveSessionTurnPresentation({ sessionId, providerStatus: sample, providerType: 'kimi-cli', surface: 'read_chat' });
             expect(p.status).toBe('generating');
             expect(p.stage).toBe('generating');
         }
-        const metrics = getTurnPresentationMetrics();
-        // normalizeManagedStatus folds no_progress/long_generating to generating
-        // through the shared alias table (wiring-unification A1), so those two
-        // samples AGREE with the projection; only the raw idle sample diverges.
-        expect(metrics.shadowDivergences['legacy_idle_turn_active|read_chat|kimi-cli']).toBe(1);
-        expect(metrics.shadowAgreements).toBe(2);
+        // The reducer is the only source: every resolution counts as turn_reducer.
+        expect(getTurnPresentationMetrics().projectionSource.turn_reducer).toBeGreaterThanOrEqual(3);
     });
 });
 
@@ -199,7 +194,7 @@ describe('provider idle while the reducer is finalizing', () => {
         advance(taskId, 'finalizing');
 
         for (const surface of ['read_chat', 'session_status', 'mesh_status', 'dashboard', 'mcp_pending', 'restart_gate'] as const) {
-            const p = resolveSessionTurnPresentation({ meshId: MESH, taskId, sessionId, legacyStatus: 'idle', surface });
+            const p = resolveSessionTurnPresentation({ meshId: MESH, taskId, sessionId, providerStatus: 'idle', surface });
             expect(p.status).toBe('finalizing');
             expect(p.stage).toBe('finalizing');
             expect(p.terminalOutcome).toBeNull();
@@ -226,8 +221,8 @@ describe('waiting_approval vs waiting_choice stay distinct', () => {
         advance(approvalTask, 'waiting_approval');
         advance(choiceTask, 'waiting_choice');
 
-        const approval = resolveSessionTurnPresentation({ sessionId: approvalSession, legacyStatus: 'waiting_approval', surface: 'read_chat' });
-        const choice = resolveSessionTurnPresentation({ sessionId: choiceSession, legacyStatus: 'idle', surface: 'dashboard' });
+        const approval = resolveSessionTurnPresentation({ sessionId: approvalSession, providerStatus: 'waiting_approval', surface: 'read_chat' });
+        const choice = resolveSessionTurnPresentation({ sessionId: choiceSession, providerStatus: 'idle', surface: 'dashboard' });
         expect(approval.status).toBe('waiting_approval');
         expect(approval.stage).toBe('waiting_approval');
         expect(approval.approvalAgeMs).not.toBeNull();
@@ -235,12 +230,9 @@ describe('waiting_approval vs waiting_choice stay distinct', () => {
         expect(choice.stage).toBe('waiting_choice');
         expect(choice.choiceAgeMs).not.toBeNull();
 
-        // Choice is NEVER mapped to approval by the divergence classifier either.
-        expect(classifyShadowDivergence('waiting_approval', choice)).toBe('legacy_approval_choice_confusion');
-
         // Resume (generating) continues the SAME attempt — no new attemptId.
         advance(approvalTask, 'generating');
-        const resumed = resolveSessionTurnPresentation({ sessionId: approvalSession, legacyStatus: 'generating', surface: 'session_status' });
+        const resumed = resolveSessionTurnPresentation({ sessionId: approvalSession, providerStatus: 'generating', surface: 'session_status' });
         expect(resumed.stage).toBe('generating');
         expect(resumed.attemptId).toBe(approvalAttempt.attemptId);
         expect(resumed.attemptId).not.toBe(choiceAttempt.attemptId);
@@ -256,7 +248,7 @@ describe('committed terminal projection', () => {
 
         advance(taskId, 'completed');
 
-        const first = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'generating', surface: 'notification' });
+        const first = resolveSessionTurnPresentation({ sessionId, providerStatus: 'generating', surface: 'notification' });
         expect(first.stage).toBe('completed');
         expect(first.status).toBe('idle'); // availability, not a completion writer
         expect(first.terminalOutcome).toBe('completed');
@@ -267,11 +259,9 @@ describe('committed terminal projection', () => {
 
         // Repeated reads are stable (exactly-once commit is the reducer's contract,
         // covered by test/turn-ledger/**).
-        const second = resolveSessionTurnPresentation({ meshId: MESH, taskId, legacyStatus: 'generating', surface: 'mcp_pending' });
+        const second = resolveSessionTurnPresentation({ meshId: MESH, taskId, providerStatus: 'generating', surface: 'mcp_pending' });
         expect(second.attemptId).toBe(first.attemptId);
         expect(second.terminalOutcome).toBe('completed');
-        const metrics = getTurnPresentationMetrics();
-        expect(metrics.shadowDivergences['legacy_busy_turn_terminal|notification|kimi-cli']).toBe(1);
     });
 
     it('cancelled is terminal and maps to stopped', () => {
@@ -285,38 +275,25 @@ describe('committed terminal projection', () => {
     });
 });
 
-describe('shadow comparator', () => {
-    it('records deterministic divergences by reason/surface/provider without changing authority', () => {
+describe('single authority (no legacy shadow path)', () => {
+    it('a mesh attempt ignores the provider status entirely', () => {
         const taskId = `task-${randomUUID().slice(0, 8)}`;
         const sessionId = `sess-${randomUUID().slice(0, 8)}`;
         openAttempt({ taskId, sessionId, providerType: 'codex-cli' });
         driveToGenerating(MESH, taskId, sessionId);
-
-        // Legacy mid-tool valley sample says idle — divergence recorded, projection wins.
-        const p = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'idle', providerType: 'codex-cli', surface: 'read_chat' });
+        const p = resolveSessionTurnPresentation({ sessionId, providerStatus: 'idle', providerType: 'codex-cli', surface: 'read_chat' });
         expect(p.authority).toBe('turn_reducer');
         expect(p.status).toBe('generating');
-        let metrics = getTurnPresentationMetrics();
-        expect(metrics.shadowDivergenceTotal).toBe(1);
-        expect(metrics.shadowDivergences['legacy_idle_turn_active|read_chat|codex-cli']).toBe(1);
-
-        // Deterministic: the same comparison again increments the same key, never a new one.
-        resolveSessionTurnPresentation({ sessionId, legacyStatus: 'idle', providerType: 'codex-cli', surface: 'read_chat' });
-        metrics = getTurnPresentationMetrics();
-        expect(Object.keys(metrics.shadowDivergences)).toHaveLength(1);
-        expect(metrics.shadowDivergences['legacy_idle_turn_active|read_chat|codex-cli']).toBe(2);
+        const metrics = getTurnPresentationMetrics() as unknown as Record<string, unknown>;
+        expect(Object.keys(metrics).some((key) => /shadow/i.test(key))).toBe(false);
     });
 
-    it('does not compare when the legacy surface produced no status', () => {
-        const taskId = `task-${randomUUID().slice(0, 8)}`;
-        const sessionId = `sess-${randomUUID().slice(0, 8)}`;
-        openAttempt({ taskId, sessionId });
-        resolveSessionTurnPresentation({ sessionId, surface: 'restart_gate' });
-        const metrics = getTurnPresentationMetrics();
-        expect(metrics.shadowDivergenceTotal).toBe(0);
-        expect(metrics.shadowAgreements).toBe(0);
+    it('the presentation module carries no shadow comparator', async () => {
+        const mod = await import('../../src/mesh/mesh-turn-presentation.js') as Record<string, unknown>;
+        expect(mod.classifyShadowDivergence).toBeUndefined();
     });
 });
+
 
 describe('restart / deferred-restart gate', () => {
     it('blocks on every nonterminal stage and never on terminal, regardless of the sample', () => {
@@ -325,26 +302,26 @@ describe('restart / deferred-restart gate', () => {
         openAttempt({ taskId, sessionId });
 
         // accepted: blocks even though the provider sample is idle.
-        let p = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'idle', surface: 'restart_gate' });
+        let p = resolveSessionTurnPresentation({ sessionId, providerStatus: 'idle', surface: 'restart_gate' });
         expect(isRestartBlockingPresentation(p, false)).toBe(true);
 
         driveToGenerating(MESH, taskId, sessionId);
         advance(taskId, 'waiting_choice');
-        p = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'idle', surface: 'restart_gate' });
+        p = resolveSessionTurnPresentation({ sessionId, providerStatus: 'idle', surface: 'restart_gate' });
         expect(isRestartBlockingPresentation(p, false)).toBe(true);
 
         advance(taskId, 'finalizing');
-        p = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'idle', surface: 'restart_gate' });
+        p = resolveSessionTurnPresentation({ sessionId, providerStatus: 'idle', surface: 'restart_gate' });
         expect(isRestartBlockingPresentation(p, false)).toBe(true);
 
         advance(taskId, 'failed');
-        p = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'generating', surface: 'restart_gate' });
+        p = resolveSessionTurnPresentation({ sessionId, providerStatus: 'generating', surface: 'restart_gate' });
         expect(p.status).toBe('error');
         expect(isRestartBlockingPresentation(p, true)).toBe(false);
     });
 
     it('non-mesh sessions keep the legacy sample verdict', () => {
-        const p = resolveSessionTurnPresentation({ sessionId: `sess-${randomUUID().slice(0, 8)}`, legacyStatus: 'generating', surface: 'restart_gate' });
+        const p = resolveSessionTurnPresentation({ sessionId: `sess-${randomUUID().slice(0, 8)}`, providerStatus: 'generating', surface: 'restart_gate' });
         expect(p.authority).toBe('provider_fsm_fallback');
         expect(isRestartBlockingPresentation(p, true)).toBe(true);
         expect(isRestartBlockingPresentation(p, false)).toBe(false);
@@ -384,14 +361,14 @@ describe('restart reconstruction', () => {
         const attempt = openAttempt({ taskId, sessionId });
         driveToGenerating(MESH, taskId, sessionId);
 
-        const before = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'generating', surface: 'session_status' });
+        const before = resolveSessionTurnPresentation({ sessionId, providerStatus: 'generating', surface: 'session_status' });
         expect(before.stage).toBe('generating');
 
         // Simulate a daemon restart: drop the in-memory store singleton — the
         // attempt rows persist in SQLite and the next resolve reopens them.
         MeshRuntimeStore.resetForTests();
 
-        const after = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'generating', surface: 'session_status' });
+        const after = resolveSessionTurnPresentation({ sessionId, providerStatus: 'generating', surface: 'session_status' });
         expect(after.authority).toBe('turn_reducer');
         expect(after.attemptId).toBe(attempt.attemptId);
         expect(after.stage).toBe(before.stage);
@@ -423,8 +400,8 @@ describe('observability', () => {
         driveToGenerating(MESH, taskId, sessionId);
         advance(taskId, 'waiting_approval');
 
-        resolveSessionTurnPresentation({ sessionId, legacyStatus: 'waiting_approval', surface: 'dashboard' });
-        resolveSessionTurnPresentation({ sessionId: `sess-${randomUUID().slice(0, 8)}`, legacyStatus: 'idle', surface: 'dashboard' });
+        resolveSessionTurnPresentation({ sessionId, providerStatus: 'waiting_approval', surface: 'dashboard' });
+        resolveSessionTurnPresentation({ sessionId: `sess-${randomUUID().slice(0, 8)}`, providerStatus: 'idle', surface: 'dashboard' });
 
         const metrics = getTurnPresentationMetrics();
         expect(metrics.projectionSource.turn_reducer).toBe(1);
@@ -464,7 +441,7 @@ describe('stale in-flight attempt max-age gate', () => {
 
         const p = resolveSessionTurnPresentation({
             sessionId,
-            legacyStatus: 'idle',
+            providerStatus: 'idle',
             surface: 'read_chat',
             nowMs: startedMs + STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS + 60_000,
         });
@@ -479,7 +456,7 @@ describe('stale in-flight attempt max-age gate', () => {
 
         const p = resolveSessionTurnPresentation({
             sessionId,
-            legacyStatus: 'idle',
+            providerStatus: 'idle',
             surface: 'read_chat',
             nowMs: startedMs + 1_000,
         });
@@ -494,7 +471,7 @@ describe('stale in-flight attempt max-age gate', () => {
 
         const atBoundary = resolveSessionTurnPresentation({
             sessionId,
-            legacyStatus: 'idle',
+            providerStatus: 'idle',
             surface: 'read_chat',
             nowMs: startedMs + STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS,
         });
@@ -502,7 +479,7 @@ describe('stale in-flight attempt max-age gate', () => {
 
         const pastBoundary = resolveSessionTurnPresentation({
             sessionId,
-            legacyStatus: 'idle',
+            providerStatus: 'idle',
             surface: 'read_chat',
             nowMs: startedMs + STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS + 1,
         });
@@ -523,7 +500,7 @@ describe('stale in-flight attempt max-age gate', () => {
 
         const p = resolveSessionTurnPresentation({
             sessionId,
-            legacyStatus: 'idle',
+            providerStatus: 'idle',
             surface: 'read_chat',
             nowMs: startedMs + STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS * 10,
         });

@@ -4,7 +4,7 @@ import {
     LEDGER_JSONL_MAX_AGE_MS,
     SESSION_HOST_RUNTIME_MAX_AGE_MS,
     DB_BAK_MAX_AGE_MS,
-    selectExpiredLedgerJsonl,
+    selectExpiredLedgerFiles,
     selectExpiredSessionHostRuntimes,
     selectExpiredDbBackups,
     isDbBackupFileName,
@@ -13,6 +13,7 @@ import {
     type SessionHostRuntimeFile,
     type WorktreePathLike,
     type LiveNodeWorkspaceLike,
+    isRetiredLedgerFileName,
 } from '../../src/mesh/mesh-disk-retention.js';
 
 // All pure selectors take an explicit `now` so the tests are deterministic and need
@@ -28,7 +29,7 @@ describe('mesh-disk-retention — thresholds', () => {
     });
 });
 
-describe('selectExpiredLedgerJsonl (30-day JSONL ledger retention)', () => {
+describe('selectExpiredLedgerFiles (30-day jsonl / 7-day retired mirror + export retention)', () => {
     it('selects only files strictly older than 30 days', () => {
         const files: AgedFile[] = [
             { path: '/a/fresh.jsonl', mtimeMs: daysAgo(1) },
@@ -36,24 +37,56 @@ describe('selectExpiredLedgerJsonl (30-day JSONL ledger retention)', () => {
             { path: '/a/old-31.jsonl', mtimeMs: daysAgo(31) },
             { path: '/a/ancient-90.jsonl', mtimeMs: daysAgo(90) },
         ];
-        const expired = selectExpiredLedgerJsonl(files, NOW);
+        const expired = selectExpiredLedgerFiles(files, NOW);
         expect(expired.map(f => f.path)).toEqual(['/a/old-31.jsonl', '/a/ancient-90.jsonl']);
     });
 
     it('keeps a file exactly at the 30-day boundary (strict >, not >=)', () => {
         const files: AgedFile[] = [{ path: '/a/exactly-30.jsonl', mtimeMs: NOW - LEDGER_JSONL_MAX_AGE_MS }];
-        expect(selectExpiredLedgerJsonl(files, NOW)).toEqual([]);
+        expect(selectExpiredLedgerFiles(files, NOW)).toEqual([]);
     });
 
     it('prunes a file one ms past the 30-day boundary', () => {
         const files: AgedFile[] = [{ path: '/a/just-past.jsonl', mtimeMs: NOW - LEDGER_JSONL_MAX_AGE_MS - 1 }];
-        expect(selectExpiredLedgerJsonl(files, NOW).map(f => f.path)).toEqual(['/a/just-past.jsonl']);
+        expect(selectExpiredLedgerFiles(files, NOW).map(f => f.path)).toEqual(['/a/just-past.jsonl']);
     });
 
     it('honors a custom maxAge override', () => {
         const files: AgedFile[] = [{ path: '/a/x.jsonl', mtimeMs: daysAgo(2) }];
-        expect(selectExpiredLedgerJsonl(files, NOW, 1 * DAY_MS).map(f => f.path)).toEqual(['/a/x.jsonl']);
-        expect(selectExpiredLedgerJsonl(files, NOW, 5 * DAY_MS)).toEqual([]);
+        expect(selectExpiredLedgerFiles(files, NOW, 1 * DAY_MS).map(f => f.path)).toEqual(['/a/x.jsonl']);
+        expect(selectExpiredLedgerFiles(files, NOW, 5 * DAY_MS)).toEqual([]);
+    });
+});
+
+describe('selectExpiredLedgerFiles — retired mirror files and migration exports (7 days)', () => {
+    const at = (name: string, days: number): AgedFile => ({ path: `/led/${name}`, mtimeMs: daysAgo(days) });
+
+    it('recognizes exactly the retired mirror + export file names', () => {
+        for (const name of [
+            'mesh_271444af.jsonl', 'mesh_271444af.1.jsonl', 'mesh_271444af.archive.jsonl',
+            'mesh_271444af.archived-counts.json', 'mesh_271444af.archived-terminal-keys.json',
+            'turn-ledger-premigrate-1790188812860.jsonl', 'turn-ledger-premigrate-1790188814123.v2.jsonl',
+        ]) expect(isRetiredLedgerFileName(name), name).toBe(true);
+        for (const name of [
+            'mesh-runtime.db', 'mesh-runtime.db-wal', 'mesh-runtime.db-shm', 'mesh-runtime.db.bak-1',
+            'worktree-node-retention-state.json', 'other.jsonl',
+        ]) expect(isRetiredLedgerFileName(name), name).toBe(false);
+    });
+
+    it('deletes retired files past 7 days, keeps younger ones, and NEVER selects the live DB files at any age', () => {
+        const files = [
+            at('mesh_x.1.jsonl', 8), at('mesh_x.archived-counts.json', 8), at('turn-ledger-premigrate-1.jsonl', 8),
+            at('mesh_x.jsonl', 6), at('turn-ledger-premigrate-2.jsonl', 1),
+            at('mesh-runtime.db', 400), at('mesh-runtime.db-wal', 400), at('worktree-node-retention-state.json', 400),
+            at('unrelated.jsonl', 8), at('unrelated.jsonl.old', 400),
+        ];
+        expect(selectExpiredLedgerFiles(files, NOW).map(f => f.path.split('/').pop())).toEqual([
+            'mesh_x.1.jsonl', 'mesh_x.archived-counts.json', 'turn-ledger-premigrate-1.jsonl',
+        ]);
+    });
+
+    it('a non-retired *.jsonl still follows the 30-day window', () => {
+        expect(selectExpiredLedgerFiles([at('unrelated.jsonl', 29), at('unrelated2.jsonl', 31)], NOW).map(f => f.path.split('/').pop())).toEqual(['unrelated2.jsonl']);
     });
 });
 

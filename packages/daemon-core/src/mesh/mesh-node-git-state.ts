@@ -6,23 +6,24 @@
  * `mesh_status` from it instantly — never by waiting on a live P2P probe to a
  * remote machine while the dashboard's 30s command deadline runs out.
  *
- * Inputs (all write here, never the request path):
- *   - `member_push`       — a member daemon pushes its own git state on change and
- *                            on a heartbeat (`mesh_node_git_report`,
- *                            mesh-node-state-pusher.ts on the member side).
- *   - `coordinator_probe` — the coordinator's own background freshness probe
- *                            (mesh-node-git-refresher.ts), only when a node's
- *                            observation is older than the stale threshold.
+ * Input (the ONE writer, never the request path): `member_push` — a member
+ * daemon pushes its own git state on change and on a heartbeat
+ * (`mesh_node_git_report`, mesh-node-state-pusher.ts on the member side). The
+ * coordinator never reads a member itself; it only asks one to push
+ * (mesh-node-git-refresher.ts: explicit refresh / (re)connect handshake).
+ * `coordinator_probe` survives only as the source of rows persisted by the
+ * retired pull path — nothing writes it any more, and it is never "live".
  *
  * Persistence: a table in the EXISTING mesh-runtime.db (MeshRuntimeStore), so a
  * coordinator restart still answers with the last-known state (marked with its
  * age) instead of an empty graph. Not meshes.json (config — per-minute git writes
- * would churn it and its write lock) and not a seqscribe topic (fleet.status is an
- * allow-listed counters-only ring; mesh.<id>.events is a metadata-class log a
- * cloud peer may hold — branch names / commit subjects must not enter either).
+ * would churn it and its write lock) and not a seqscribe topic (mesh.<id>.events
+ * is a metadata-class log a cloud peer may hold — branch names / commit subjects
+ * must not enter it).
  * This data never leaves the daemons: mesh_status travels over P2P only, and the
  * status_report allow-list (RoutingSessionEntry) does not carry it.
  */
+import { createHash } from 'crypto';
 import type { Database as DatabaseHandle } from 'better-sqlite3';
 import { daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
@@ -46,7 +47,7 @@ export interface MeshNodeGitStateEntry {
     source: MeshNodeGitObservationSource | null;
     /** Content signature of `git` — changes only when something a viewer can see changed. */
     signature: string | null;
-    /** Epoch ms the coordinator last started a background probe for this node. */
+    /** Epoch ms the coordinator last asked this node's member to push (nudge / handshake). */
     lastAttemptAt: number | null;
     /** Set on the first failed refresh after a success; cleared by the next observation. */
     unreachableSince: number | null;
@@ -61,10 +62,6 @@ export interface MeshNodeGitStateEntry {
     runtimeObservedAt: number | null;
     runtimeSource: MeshNodeGitObservationSource | null;
     runtimeSignature: string | null;
-    /** Epoch ms the coordinator last started a background runtime probe (not persisted). */
-    runtimeLastAttemptAt: number | null;
-    /** Epoch ms of the last failed background runtime probe (not persisted). */
-    runtimeLastFailureAt: number | null;
     /**
      * The node's roster daemon id (the id the coordinator dispatches to), learned
      * from the runtime observation that landed the summary. Not persisted — after
@@ -166,6 +163,22 @@ export function computeMeshNodeGitSignature(git: Record<string, unknown> | null 
 }
 
 /**
+ * The wire form of a git / runtime content signature in a signature-only
+ * report. The signatures themselves are canonical JSON of the visible fields
+ * (as large as the body they stand for), so a report that carried them raw
+ * would not be proportional to change; 128 bits of SHA-256 is.
+ */
+export function digestMeshNodeStateSignature(signature: string): string {
+    return createHash('sha256').update(signature).digest('hex').slice(0, 32);
+}
+
+/** Whether a reported (digest, or an older member's raw) signature names the held one. */
+export function meshNodeStateSignatureMatches(held: string | null | undefined, reported: string): boolean {
+    if (!held || !reported) return false;
+    return reported === held || reported === digestMeshNodeStateSignature(held);
+}
+
+/**
  * A pushed/probed snapshot read WITHOUT an upstream fetch reports
  * `upstreamStatus: 'unchecked'` even though the remote-tracking ref was fetched
  * minutes ago. Read raw, that flips a clean `main` to blocked_review
@@ -212,8 +225,6 @@ function emptyEntry(meshId: string, nodeId: string, workspace: string): MeshNode
         runtimeObservedAt: null,
         runtimeSource: null,
         runtimeSignature: null,
-        runtimeLastAttemptAt: null,
-        runtimeLastFailureAt: null,
         daemonId: null,
         handshakePendingSince: null,
         handshakePendingReason: null,
@@ -326,6 +337,45 @@ export class MeshNodeGitStateStore {
         return { changed, entry };
     }
 
+    /**
+     * A member push that carries only the SIGNATURE of its git state (the body
+     * is sent only when it changed — a heartbeat or a nudge over an unchanged
+     * checkout). When it matches the held member-pushed state the observation
+     * age is renewed (plus the upstream fetch stamp the auto-ff precheck reads)
+     * and `held: true` is returned; otherwise (nothing held, a different state,
+     * a coordinator that restarted without the row, a pending restart
+     * handshake) `held: false` tells the member to send the full body.
+     * `changed` = the node recovered from unreachable (a visible change).
+     */
+    confirmObservation(args: {
+        meshId: string;
+        nodeId: string;
+        signature: string;
+        observedAt?: number;
+        upstreamFetchedAt?: number;
+    }): { held: boolean; changed: boolean } {
+        const entry = this.get(args.meshId, args.nodeId);
+        if (!entry?.git || entry.source !== 'member_push' || !meshNodeStateSignatureMatches(entry.signature, args.signature)) {
+            return { held: false, changed: false };
+        }
+        // A restart must be confirmed by the NEW process's runtime, not a git signature.
+        if (entry.handshakePendingSince !== null && entry.handshakePendingReason === 'restart') return { held: false, changed: false };
+        if (entry.handshakePendingSince !== null) clearHandshakePending(entry);
+        const recovered = entry.unreachableSince !== null;
+        const at = typeof args.observedAt === 'number' && Number.isFinite(args.observedAt) ? Math.min(args.observedAt, this.now()) : this.now();
+        if (entry.observedAt === null || at > entry.observedAt) entry.observedAt = at;
+        const fetchedAt = args.upstreamFetchedAt;
+        if (typeof fetchedAt === 'number' && Number.isFinite(fetchedAt)) {
+            const held = typeof entry.git.upstreamFetchedAt === 'number' ? entry.git.upstreamFetchedAt : null;
+            if (held === null || fetchedAt > held) entry.git = { ...entry.git, upstreamFetchedAt: Math.min(fetchedAt, this.now()) };
+        }
+        entry.unreachableSince = null;
+        entry.lastFailureAt = null;
+        entry.lastFailureReason = null;
+        this.persist(entry);
+        return { held: true, changed: recovered };
+    }
+
     recordProbeAttempt(meshId: string, nodeId: string, workspace: string, at: number = this.now()): void {
         if (!meshId || !nodeId) return;
         const entry = this.upsertBase(meshId, nodeId, workspace);
@@ -345,8 +395,7 @@ export class MeshNodeGitStateStore {
     }
 
     /**
-     * Record an observed runtime summary (member push or the coordinator's
-     * background get_status_metadata probe). Re-sanitized here: the allow-list is
+     * Record an observed runtime summary (member push). Re-sanitized here: the allow-list is
      * enforced at ingest, whatever the sender did. `changed` = visible content
      * changed; `factsChanged` = the facts bundle (quota / build) changed — the
      * part the dashboard renders, so only that publishes a mesh-state revision.
@@ -393,7 +442,6 @@ export class MeshNodeGitStateStore {
         entry.runtimeObservedAt = observedAt;
         entry.runtimeSource = args.source;
         entry.runtimeSignature = signature;
-        entry.runtimeLastFailureAt = null;
         this.persist(entry);
         return { changed: changed || instanceChanged, factsChanged, sessionsChanged, instanceChanged, entry };
     }
@@ -415,14 +463,26 @@ export class MeshNodeGitStateStore {
         return true;
     }
 
-    recordRuntimeProbeAttempt(meshId: string, nodeId: string, workspace: string, at: number = this.now()): void {
-        if (!meshId || !nodeId) return;
-        this.upsertBase(meshId, nodeId, workspace).runtimeLastAttemptAt = at;
-    }
-
-    recordRuntimeProbeFailure(meshId: string, nodeId: string, workspace: string, at: number = this.now()): void {
-        if (!meshId || !nodeId) return;
-        this.upsertBase(meshId, nodeId, workspace).runtimeLastFailureAt = at;
+    /**
+     * A member push that carries only the SIGNATURE of its runtime summary (the
+     * summary itself is sent only when it changed). When it matches the held
+     * member-pushed summary the observation age is renewed and `true` is
+     * returned; otherwise (nothing held, a different summary, a coordinator
+     * that restarted without the row, a pending restart handshake) `false`
+     * tells the member to send the full summary.
+     */
+    confirmRuntime(meshId: string, nodeId: string, signature: string, observedAt?: number): boolean {
+        const entry = this.get(meshId, nodeId);
+        if (!entry?.runtime || entry.runtimeSource !== 'member_push' || !meshNodeStateSignatureMatches(entry.runtimeSignature, signature)) return false;
+        if (entry.handshakePendingSince !== null) {
+            // A restart must be confirmed by the NEW process's (different) summary.
+            if (entry.handshakePendingReason === 'restart') return false;
+            clearHandshakePending(entry);
+        }
+        const at = typeof observedAt === 'number' && Number.isFinite(observedAt) ? Math.min(observedAt, this.now()) : this.now();
+        if (entry.runtimeObservedAt === null || at > entry.runtimeObservedAt) entry.runtimeObservedAt = at;
+        this.persist(entry);
+        return true;
     }
 
     /**
@@ -539,8 +599,6 @@ export function createDbMeshNodeGitStatePersistence(getDb: () => DatabaseHandle)
                     runtimeObservedAt: runtime ? readNullableNumber(row.runtime_observed_at) : null,
                     runtimeSource: runtime ? runtimeSource : null,
                     runtimeSignature: runtime ? (typeof row.runtime_signature === 'string' ? row.runtime_signature : computeMeshNodeRuntimeSignature(runtime)) : null,
-                    runtimeLastAttemptAt: null,
-                    runtimeLastFailureAt: null,
                     daemonId: null,
                     handshakePendingSince: null,
                     handshakePendingReason: null,

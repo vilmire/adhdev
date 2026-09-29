@@ -409,7 +409,7 @@ function turnObserveCalls(calls: Array<{ command: string; args: Record<string, u
   return calls.filter(call => call.command === 'turn_observe').map(call => (call.args as any).evidence);
 }
 
-test('mesh_status reports an idle direct dispatch\'s final transcript as ONE content-free turn_observe(transcript_final, mcp_probe) — never an in-process terminal write', async () => {
+test('the queue view (not mesh_status) reports an idle direct dispatch\'s final transcript as ONE content-free turn_observe(transcript_final, mcp_probe) — never an in-process terminal write', async () => {
   const meshId = 'mesh-direct-transcript-status-completion-test';
   cleanupMesh(meshId);
   const taskId = 'direct-transcript-status-task';
@@ -431,9 +431,14 @@ test('mesh_status reports an idle direct dispatch\'s final transcript as ONE con
   try {
     await seedDirectTranscriptDispatch(meshId, taskId);
 
+    // mesh_status only renders the coordinator's view — it never reads a transcript.
     await meshStatus(ctx as any, { includeStaleDirectWorkDetails: true, includeTerminalDirectWork: true });
-    // The transcript read is BACKGROUND work (mesh-status-background.ts): the
-    // response never waits on a (possibly remote) read_chat.
+    await awaitMeshStatusBackgroundWork(ctx as any);
+    assert.equal(calls.some(call => call.command === 'read_chat'), false);
+    assert.equal(turnObserveCalls(calls).length, 0);
+
+    // The queue view's reconcile pass is what reports the turn end (in the background).
+    await meshViewQueue(ctx as any, {});
     await awaitMeshStatusBackgroundWork(ctx as any);
     assert.equal(calls.some(call => call.command === 'read_chat'), true);
     const observed = turnObserveCalls(calls);
@@ -450,7 +455,7 @@ test('mesh_status reports an idle direct dispatch\'s final transcript as ONE con
 
     // A second poll over the SAME turn end re-sends the SAME eventId (the ledger
     // collapses it on its primary key) rather than a fresh evidence row per poll.
-    await meshStatus(ctx as any, { includeTerminalDirectWork: true });
+    await meshViewQueue(ctx as any, {});
     await awaitMeshStatusBackgroundWork(ctx as any);
     const observedAgain = turnObserveCalls(calls);
     assert.equal(observedAgain.length, 2);

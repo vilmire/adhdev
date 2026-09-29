@@ -154,7 +154,6 @@ export const DAEMON_TO_DASHBOARD_P2P_TYPES = [
     'ping',
     'pong',
     'p2p_evicted',
-    'status_report',
     'status_event',
     'topic_update',
     'topic_update_chunk',
@@ -164,12 +163,10 @@ export const DAEMON_TO_DASHBOARD_P2P_TYPES = [
     'command_result',
     'command_result_chunk',
     'response',
+    'transcript_topics_available',
 ] as const
 export type DaemonToDashboardP2PType = typeof DAEMON_TO_DASHBOARD_P2P_TYPES[number]
 export const isDaemonToDashboardP2PType = makeTypeGuard(DAEMON_TO_DASHBOARD_P2P_TYPES)
-
-/** Rich P2P status snapshot (daemon-core `StatusReportPayload`, or a `_delta` partial of it). Dynamic by design on this plane. */
-export type P2PStatusReportWirePayload = Record<string, unknown>
 
 /** The server-bound event plus the P2P-only structured prompt (daemon-core `P2PStatusEventPayload`). */
 export type P2PStatusEventWirePayload = DaemonStatusEventWirePayload & {
@@ -184,7 +181,6 @@ export type TopicUpdateWireEnvelope = { topic: string; key: string }
 export type P2PFileEntry = { name: string; type: string; size?: number }
 
 export type P2PEvictedMsg = { type: 'p2p_evicted'; reason: string; maxconnections: number }
-export type P2PStatusReportMsg = { type: 'status_report'; payload: P2PStatusReportWirePayload; timestamp: number }
 export type P2PStatusEventMsg = { type: 'status_event'; payload: P2PStatusEventWirePayload; timestamp: number }
 export type P2PTopicUpdateMsg = { type: 'topic_update'; update: TopicUpdateWireEnvelope }
 export type P2PTopicUpdateChunkMsg = ChunkFrame<'topic_update_chunk'>
@@ -205,11 +201,19 @@ export type P2PResponseMsg = {
     entries?: P2PFileEntry[]
 }
 
+/**
+ * `session.<id>.chat` topics that just became SUB-able for THIS peer (the
+ * topic was defined, or the peer's declared session interest widened to it).
+ * Sent only after the grant is in place, so a seqscribe SUB issued on receipt
+ * is accepted; without it the browser can only guess when to re-SUB a refused
+ * subscription. Topic names only — the P2P plane already carries the ids.
+ */
+export type P2PTranscriptTopicsAvailableMsg = { type: 'transcript_topics_available'; topics: string[] }
+
 export type DaemonToDashboardP2PMsg =
     | P2PPingMsg
     | P2PPongMsg
     | P2PEvictedMsg
-    | P2PStatusReportMsg
     | P2PStatusEventMsg
     | P2PTopicUpdateMsg
     | P2PTopicUpdateChunkMsg
@@ -219,6 +223,7 @@ export type DaemonToDashboardP2PMsg =
     | P2PCommandResultMsg
     | P2PCommandResultChunkMsg
     | P2PResponseMsg
+    | P2PTranscriptTopicsAvailableMsg
 
 const _daemonToDashboardNamesCoverUnion: AssertSameMembers<typeof DAEMON_TO_DASHBOARD_P2P_TYPES, DaemonToDashboardP2PMsg['type']> = true
 void _daemonToDashboardNamesCoverUnion
@@ -241,7 +246,6 @@ export function decodeDaemonToDashboardP2P(raw: unknown): DaemonToDashboardP2PMs
         case 'pong':
         case 'p2p_evicted':
             return raw as DaemonToDashboardP2PMsg
-        case 'status_report':
         case 'status_event':
             return isRecord(raw.payload) ? (raw as DaemonToDashboardP2PMsg) : null
         case 'topic_update':
@@ -263,6 +267,10 @@ export function decodeDaemonToDashboardP2P(raw: unknown): DaemonToDashboardP2PMs
         case 'command_result':
         case 'response':
             return isNonEmptyString(raw.id) ? (raw as DaemonToDashboardP2PMsg) : null
+        case 'transcript_topics_available':
+            return Array.isArray(raw.topics) && raw.topics.every((topic) => typeof topic === 'string')
+                ? { type: raw.type, topics: raw.topics as string[] }
+                : null
     }
 }
 

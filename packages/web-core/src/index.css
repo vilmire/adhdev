@@ -4396,13 +4396,15 @@
 
 /* end @layer base */
 
-@keyframes mesh-glow-breathe {
-    0%, 100% { box-shadow: 0 0 0 1px rgba(34,211,238,0.25), 0 0 12px 2px rgba(34,211,238,0.12), 0 18px 48px rgba(3,7,18,0.22); }
-    50%       { box-shadow: 0 0 0 1px rgba(34,211,238,0.55), 0 0 22px 6px rgba(34,211,238,0.28), 0 18px 48px rgba(3,7,18,0.22); }
+/* A node with a generating session: the app accent on the 1px border, gently
+   breathing between two opacities — live state, but no halo / glow. */
+@keyframes mesh-border-breathe {
+    0%, 100% { border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent); }
+    50%       { border-color: color-mix(in srgb, var(--accent-primary) 90%, transparent); }
 }
 .mesh-node-generating {
-    animation: mesh-glow-breathe 2s ease-in-out infinite;
-    border-color: rgba(34,211,238,0.55) !important;
+    animation: mesh-border-breathe 2s ease-in-out infinite;
+    border-color: color-mix(in srgb, var(--accent-primary) 70%, transparent);
 }
 
 /* Honor OS reduced-motion on the mesh canvases.

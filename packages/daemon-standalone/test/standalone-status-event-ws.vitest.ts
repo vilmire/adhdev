@@ -1,6 +1,7 @@
 /**
  * Standalone `status_event` over the dashboard WS (wiring-unification B5,
- * checklist item 3) and the IPC / HTTP → metadata push (item 8).
+ * checklist item 3), the fast-flush → daemon.metadata push, and the
+ * subscription-scoped terminal output (audit P1-10).
  *
  * The standalone transport is fed by the SAME status-event emitter cloud uses
  * (daemon-core status/status-event.ts): provider_event on the bus → the
@@ -33,19 +34,19 @@ function fakeWs(readyState: number) {
   return { readyState, frames, send: (raw: string) => frames.push(JSON.parse(raw)) };
 }
 
-function setup() {
+function setup(runtimeTargets: Record<string, any[]> = {}) {
   const open = fakeWs(OPEN);
   const closed = fakeWs(CLOSED);
-  const scheduleBroadcastStatus = vi.fn();
+  const flushTopic = vi.fn();
   const transport = createStandaloneHostTransport({
     statusInstanceId: 'standalone_mach_test',
     version: 'test',
     clients: new Set([open, closed]) as any,
     wsByConnectionId: new Map(),
-    chatTail: { flush: vi.fn(async () => {}), onPrepared: vi.fn() } as any,
     getRuntime: () => null,
     getSessionHostControl: () => null,
-    scheduleBroadcastStatus,
+    runtimeOutputTargets: (sessionId) => runtimeTargets[sessionId] ?? [],
+    flushTopic,
   });
   const bus = createSessionLifecycleBus();
   createStatusEventEmitter(bus, {
@@ -53,7 +54,7 @@ function setup() {
     sendDashboard: (payload) => transport.sendStatusEvent(payload),
     ...(transport.sendServerStatusEvent ? { sendServer: (p: any) => transport.sendServerStatusEvent!(p) } : {}),
   });
-  return { open, closed, transport, bus, scheduleBroadcastStatus };
+  return { open, closed, transport, bus, flushTopic };
 }
 
 describe('standalone status_event over WS', () => {
@@ -104,14 +105,22 @@ describe('standalone status_event over WS', () => {
     expect(open.frames).toEqual([]);
   });
 
-  it('pushes the status snapshot for a command that invalidates daemon.metadata or fast-flushes (any entry — C11)', () => {
-    const { transport, scheduleBroadcastStatus } = setup();
+  it('flushes daemon.metadata immediately only for a successful fast-flush command (invalidations ride the runtime)', () => {
+    const { transport, flushTopic } = setup();
     const base = { kind: 'command_executed', at: 0, success: true, postChat: false, interactionId: 'i' } as const;
     transport.onCommandExecuted!({ ...base, command: 'read_chat', source: 'ipc', invalidates: new Set(), fastFlush: false } as any);
-    expect(scheduleBroadcastStatus).not.toHaveBeenCalled();
     transport.onCommandExecuted!({ ...base, command: 'stop_cli', source: 'ipc', invalidates: new Set(['daemon.metadata']), fastFlush: false } as any);
-    expect(scheduleBroadcastStatus).toHaveBeenCalledTimes(1);
+    expect(flushTopic).not.toHaveBeenCalled();
     transport.onCommandExecuted!({ ...base, command: 'interactive_prompt_response', source: 'standalone', invalidates: new Set(), fastFlush: true } as any);
-    expect(scheduleBroadcastStatus).toHaveBeenCalledTimes(2);
+    expect(flushTopic).toHaveBeenCalledWith('daemon.metadata');
+  });
+
+  it('sends terminal output only to clients subscribed to that session (P1-10)', () => {
+    const watcher = fakeWs(OPEN);
+    const { open, transport } = setup({ s1: [watcher] });
+    transport.broadcastSessionOutput('s1', 'hello');
+    transport.broadcastSessionOutput('s2', 'nobody');
+    expect(watcher.frames).toEqual([{ type: 'session_output', sessionId: 's1', data: 'hello' }]);
+    expect(open.frames).toEqual([]);
   });
 });

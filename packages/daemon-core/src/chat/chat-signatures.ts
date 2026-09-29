@@ -7,15 +7,6 @@ export interface ChatMessageSignatureInput {
   content?: unknown
 }
 
-export interface ChatTailDeliverySignatureInput {
-  sessionId: string
-  historySessionId?: string
-  messages: unknown[]
-  status: string
-  title?: string
-  activeModal?: { message: string; buttons: string[] } | null
-}
-
 export interface SessionModalDeliverySignatureInput {
   sessionId: string
   status: string
@@ -46,14 +37,6 @@ function stringifySignatureContent(content: unknown): string {
   }
 }
 
-function stringifySignatureMessages(messages: unknown[]): string {
-  try {
-    return JSON.stringify(messages)
-  } catch {
-    return String(messages.length)
-  }
-}
-
 export function buildChatMessageSignature(message: ChatMessageSignatureInput | null | undefined): string {
   if (!message) return ''
   return hashSignatureParts([
@@ -62,17 +45,6 @@ export function buildChatMessageSignature(message: ChatMessageSignatureInput | n
     String(message.role || ''),
     String(message.receivedAt ?? message.timestamp ?? ''),
     stringifySignatureContent(message.content),
-  ])
-}
-
-export function buildChatTailDeliverySignature(payload: ChatTailDeliverySignatureInput): string {
-  return hashSignatureParts([
-    payload.sessionId,
-    payload.historySessionId || '',
-    payload.status,
-    payload.title || '',
-    payload.activeModal ? `${payload.activeModal.message}|${payload.activeModal.buttons.join('\u001f')}` : '',
-    stringifySignatureMessages(payload.messages),
   ])
 }
 

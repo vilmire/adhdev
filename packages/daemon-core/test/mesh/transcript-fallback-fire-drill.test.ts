@@ -65,8 +65,6 @@ const OWNER = 'daemon_mach_owner';
 const SESSION = 'sess-fire-drill';
 const OBSERVED_AT = '2026-09-04T00:00:00.000Z';
 
-/** `primary` is the only mode a roster consumer reads under (§5.1). */
-const PRIMARY = { ADHDEV_SEQSCRIBE_TRANSCRIPT: 'primary' } as unknown as NodeJS.ProcessEnv;
 
 /** Mirrors `transcript-activation.test.ts#fakeNode` — same shape, same reasons. */
 function fakeNode(overrides: Partial<{ authorityEnabled: boolean }> = {}): SeqscribeNodeHandle {
@@ -195,7 +193,6 @@ describe('★ §5.6 fire drill — no_complete_revision at its real origin', () 
             rawSessionId: SESSION,
             maxAgeMs: 10_000,
             store: storeReturning({ available: false, reason: 'no_complete_revision' }),
-            env: PRIMARY,
         });
 
         // ★ The load-bearing pair: NO snapshot (so the caller runs its legacy
@@ -215,7 +212,6 @@ describe('★ §5.6 fire drill — no_complete_revision at its real origin', () 
             rawSessionId: SESSION,
             maxAgeMs: 10_000,
             store: storeReturning({ available: false, reason: 'no_subscription' }),
-            env: PRIMARY,
         });
 
         expect(outcome.view).toBeNull();
@@ -234,7 +230,6 @@ describe('★ §5.6 fire drill — no_complete_revision at its real origin', () 
                 identity: { sessionId: SESSION, producerDaemonId: OWNER },
             }),
             nowMs: Date.parse(OBSERVED_AT) + 1_000,
-            env: PRIMARY,
         });
 
         expect(outcome.fallbackReason).toBeNull();
@@ -262,7 +257,6 @@ describe('★ §5.6 fire drill — the router never answers from a declined read
             rawSessionId: SESSION,
             maxAgeMs: 8_000,
             store: storeReturning(storeResult),
-            env: PRIMARY,
         });
 
         expect(outcome.view).toBeNull();
@@ -279,7 +273,6 @@ describe('★ §5.6 fire drill — the router never answers from a declined read
             rawSessionId: SESSION,
             maxAgeMs: 8_000,
             store: null,
-            env: PRIMARY,
         });
 
         expect(outcome.view).toBeNull();

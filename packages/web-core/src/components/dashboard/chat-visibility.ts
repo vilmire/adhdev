@@ -5,10 +5,6 @@ export function getDefaultVisibleLiveMessages(options: { isCliLike?: boolean } =
     return options.isCliLike ? DEFAULT_VISIBLE_CLI_MESSAGES : DEFAULT_VISIBLE_STANDARD_MESSAGES
 }
 
-export function getDefaultChatTailHydrateLimit(options: { isCliLike?: boolean } = {}): number {
-    return getDefaultVisibleLiveMessages(options)
-}
-
 /**
  * (CHAT-TAB-SWITCH-STALE-FALLBACK ②) Per-tab "how many live bubbles are
  * expanded" memory.

@@ -140,7 +140,7 @@ test('mesh_status answers remote sessions / build / upgrade marker from the coor
     assert.equal(peerC.sessions, undefined);
 });
 
-test('mesh_status does not wait on an idle direct dispatch transcript read — it runs in the background', async () => {
+test('mesh_status reports an idle direct dispatch from held state and never reads its transcript (render only)', async () => {
     const { ctx, meshCommands } = buildCtx({ held: true, readChatDelayMs: SLOW_PEER_MS, idleDirectDispatch: true });
     const taskId = `bg-reconcile-${Date.now()}`;
     const opened = await answerTurnIpc('turn_observe', { v: 1, evidence: {
@@ -159,16 +159,7 @@ test('mesh_status does not wait on an idle direct dispatch transcript read — i
     assert.ok(result.activeWork.some((row: any) => row.taskId === taskId), 'the open direct dispatch is reported');
 
     await awaitMeshStatusBackgroundWork(ctx as any);
-    assert.equal(meshCommands.filter((c) => c.command === 'read_chat').length, 1, 'the transcript read still happens, after the response');
-    assert.equal(meshCommands.filter((c) => c.command === 'get_status_metadata').length, 0);
+    // mesh_status renders the coordinator's view: no transcript read, no member read.
+    assert.equal(meshCommands.length, 0, meshCommands.map((c) => c.command).join(','));
 });
 
-test('a coordinator daemon that does not hold runtime (older build) keeps the legacy per-daemon session probe', async () => {
-    const { ctx, meshCommands } = buildCtx({ held: false });
-    const result = JSON.parse(await meshStatus(ctx as any, { verbose: true }));
-    const probed = new Set(meshCommands.filter((c) => c.command === 'get_status_metadata').map((c) => c.daemonId));
-    assert.deepEqual([...probed].sort(), ['daemon-peer-a', 'daemon-peer-b', 'daemon-peer-c']);
-    const peer = result.nodes.find((n: any) => n.nodeId === 'node-1');
-    assert.equal(peer.sessions[0].id, 'live-daemon-peer-a');
-    assert.equal(peer.runtimeObservation, undefined);
-});

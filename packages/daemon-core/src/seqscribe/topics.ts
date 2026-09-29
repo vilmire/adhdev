@@ -102,9 +102,6 @@ export function meshIdFromEventsTopic(topic: string): string | null {
     return segment;
 }
 
-/** Cross-daemon assistant journal — the Phase 1 greenfield consumer. */
-export const ASSISTANT_JOURNAL_TOPIC = 'assistant.journal';
-
 /**
  * Per-session keyed chat transcript (design 2026-09-28 message-keyed storage
  * §4.1). One row per changed bubble/part plus a small `meta` and a per-frame
@@ -144,16 +141,10 @@ export function meshHandoffTopic(meshId: string): string {
     return `mesh.${safeMeshId(meshId)}.handoff`;
 }
 
-/** Fleet-wide daemon status tail (Phase 4). */
-export const FLEET_STATUS_TOPIC = 'fleet.status';
-
 /** Replicated settings register (Phase 5 — key whitelist enforced separately). */
 export const CONFIG_SETTINGS_TOPIC = 'config.settings';
 
 // ─── Policies ───────────────────────────────────────────────────────────────
-
-/** Ring size for the fleet status tail (design §1). */
-export const FLEET_STATUS_RING = 50;
 
 /**
  * `mesh.<id>.events` — metadata class ON PURPOSE.
@@ -163,6 +154,12 @@ export const FLEET_STATUS_RING = 50;
  * online windows). That is only sound because mesh events are routing/lifecycle
  * records — ids, enums, counters — and never chat content. The §6.1 rule that
  * forbids secrets in any payload applies here with the least slack.
+ *
+ * Bounded by `writer-gc.ts` §3 (acknowledged retention, seqscribe host-guide
+ * §4.8): rows older than 30 days that every mesh peer has acknowledged are
+ * deleted, and a peer below that floor recovers with TRUNCATED. No policy
+ * field is involved — `pruneAcked` is a host call — so nothing here changes
+ * `topicSchemaHash`.
  */
 export function meshEventsPolicy(): TopicPolicy {
     return {
@@ -173,35 +170,24 @@ export function meshEventsPolicy(): TopicPolicy {
     };
 }
 
-/** `assistant.journal` — content class; full history, offline-durable. */
-export function assistantJournalPolicy(): TopicPolicy {
-    return {
-        kind: 'append',
-        retention: { mode: 'full' },
-        replication: 'full-sync',
-        access: 'content',
-        // Content topics name the fleet authority (see the header note on
-        // finalityAuthority): required for proposeFinality/cert ingestion, and
-        // inside topicSchemaHash, so this is one constant fleet-wide.
-        finalityAuthority: ADHDEV_AUTHORITY_ID,
-    };
-}
-
 /**
- * `mesh.<id>.handoff` — worker handoff notes; content class, full history.
+ * `mesh.<id>.handoff` — content-class text a mesh turn entry links to by `ref`
+ * (turn summaries, `appendMeshHandoff`); full history, full-sync.
  *
- * `full` retention rather than a ring, unlike the session transcript: a note's
- * whole purpose is to be read by work that has not been dispatched yet, which
- * can be days later. A ring would silently evict exactly the older notes a
- * long-running mission most needs. Volume is bounded in practice by shape —
- * at most one note per completed task, not one per message.
+ * Worker handoff NOTES are no longer written here (2026-09-29): they live only
+ * in `mesh_handoff_note_text` (SQLite, 30-day retention) — nothing ever read
+ * them back from the topic.
  *
- * `full-sync` so a worker on another machine in the same mesh can receive a
- * note written here; that is the cross-node handoff case the feature exists for.
+ * ★`full-sync`, so the library refuses `pruneTopic` on it (a local prune would
+ * leave a false gap for a peer syncing below the floor). It is bounded like
+ * the events topic, by `writer-gc.ts` §3's acknowledged retention (30 days,
+ * every peer acknowledged, TRUNCATED for a peer below the floor) — its turn
+ * summaries are only ever resolved through refs on events entries of the same
+ * age, and the resolver tolerates a missing entry (a pointer line).
  *
- * ★Content class, so it never reaches a metadata-only cloud peer. That is what
- * lets decision C avoid asking for a new exception to the server content
- * boundary: the note text stays on daemons.
+ * ★Content class, so it never reaches a metadata-only cloud peer: the text
+ * stays on daemons and decision C needs no exception to the server content
+ * boundary.
  */
 export function meshHandoffPolicy(): TopicPolicy {
     return {
@@ -249,16 +235,6 @@ export function sessionChatPolicy(): TopicPolicy {
         replication: 'subscribe-only',
         access: 'content',
         finalityAuthority: ADHDEV_AUTHORITY_ID,
-    };
-}
-
-/** `fleet.status` — status counters only; ring tail, metadata class. */
-export function fleetStatusPolicy(): TopicPolicy {
-    return {
-        kind: 'append',
-        retention: { mode: 'ring', size: FLEET_STATUS_RING },
-        replication: 'subscribe-only',
-        access: 'metadata',
     };
 }
 
@@ -319,8 +295,6 @@ export interface TopicDefinition {
  */
 export function baseTopicDefinitions(meshIds: readonly string[]): TopicDefinition[] {
     const defs: TopicDefinition[] = [
-        { topic: ASSISTANT_JOURNAL_TOPIC, policy: assistantJournalPolicy() },
-        { topic: FLEET_STATUS_TOPIC, policy: fleetStatusPolicy() },
         { topic: CONFIG_SETTINGS_TOPIC, policy: configSettingsPolicy() },
     ];
     // De-dupe: two meshIds that differ only outside the charter alphabet

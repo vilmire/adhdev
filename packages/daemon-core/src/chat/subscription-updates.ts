@@ -1,43 +1,6 @@
-import type {
-  ReadChatSyncResult,
-  SessionChatTailUpdate,
-  SessionModalUpdate,
-} from '../shared-types.js'
-import {
-  buildChatTailDeliverySignature,
-  buildSessionModalDeliverySignature,
-} from './chat-signatures.js'
+import type { SessionModalUpdate } from '../shared-types.js'
+import { buildSessionModalDeliverySignature } from './chat-signatures.js'
 import { normalizeManagedStatus } from '../status/normalize.js'
-import { normalizeChatMessages } from '../providers/chat-message-normalization.js'
-
-export interface ChatTailSubscriptionCursor {
-  tailLimit: number
-}
-
-export type SessionChatTailCommandResult = Partial<Omit<ReadChatSyncResult, 'activeModal'>> & {
-  success?: boolean
-  activeModal?: unknown
-  messagesTail?: unknown
-}
-
-export interface PrepareSessionChatTailUpdateInput {
-  key: string
-  sessionId: string
-  historySessionId?: string
-  seq: number
-  timestamp: number
-  interactionId?: string
-  cursor: ChatTailSubscriptionCursor
-  lastDeliveredSignature: string
-  result: SessionChatTailCommandResult | null | undefined
-}
-
-export interface PreparedSessionChatTailUpdate {
-  cursor: ChatTailSubscriptionCursor
-  seq: number
-  lastDeliveredSignature: string
-  update: SessionChatTailUpdate | null
-}
 
 export interface PrepareSessionModalUpdateInput {
   key: string
@@ -67,18 +30,6 @@ function normalizeModalMessage(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
-export function normalizeChatTailActiveModal(activeModal: unknown): { message: string; buttons: string[] } | null {
-  if (!activeModal || typeof activeModal !== 'object') return null
-  const message = normalizeModalMessage((activeModal as { message?: unknown }).message)
-  if (!message) return null
-  const rawButtons = (activeModal as { buttons?: unknown }).buttons
-  if (!Array.isArray(rawButtons)) return null
-  return {
-    message,
-    buttons: normalizeModalButtons(rawButtons),
-  }
-}
-
 export function normalizeSessionModalFields(activeModal: unknown): { modalMessage?: string; modalButtons: string[] } {
   if (!activeModal || typeof activeModal !== 'object') {
     return { modalButtons: [] }
@@ -87,81 +38,6 @@ export function normalizeSessionModalFields(activeModal: unknown): { modalMessag
   return {
     modalMessage: normalizeModalMessage((activeModal as { message?: unknown }).message),
     modalButtons: normalizeModalButtons((activeModal as { buttons?: unknown }).buttons),
-  }
-}
-
-export function prepareSessionChatTailUpdate(
-  input: PrepareSessionChatTailUpdateInput,
-): PreparedSessionChatTailUpdate {
-  const result = input.result
-  if (!result?.success) {
-    return {
-      cursor: input.cursor,
-      seq: input.seq,
-      lastDeliveredSignature: input.lastDeliveredSignature,
-      update: null,
-    }
-  }
-
-  const rawMessages = Array.isArray(result.messages)
-    ? result.messages as any[]
-    : (Array.isArray(result.messagesTail) ? result.messagesTail as any[] : [])
-  const fullMessages = normalizeChatMessages(rawMessages)
-  const messages = fullMessages
-  const title = typeof result.title === 'string' ? result.title : undefined
-  const activeModal = normalizeChatTailActiveModal(result.activeModal)
-  const activeInteractivePrompt = (result as { activeInteractivePrompt?: unknown }).activeInteractivePrompt
-  const promptForUpdate = activeInteractivePrompt && typeof activeInteractivePrompt === 'object'
-    ? activeInteractivePrompt as Record<string, unknown>
-    : null
-  const status = typeof result.status === 'string' ? result.status : 'idle'
-  // (A3) messageSource passthrough. v1 deliberately dropped this on the
-  // subscription wire so the frontend had to infer source from message
-  // count heuristics. The frontend now consumes ChatSourceMachine's
-  // decision (selected, lockState, fallbackReason, etc.) directly to
-  // render the source debug badge and SourceTimeline.
-  const messageSource = result.messageSource && typeof result.messageSource === 'object'
-    ? result.messageSource as Record<string, unknown>
-    : undefined
-  const deliverySignature = buildChatTailDeliverySignature({
-    sessionId: input.sessionId,
-    ...(input.historySessionId ? { historySessionId: input.historySessionId } : {}),
-    messages,
-    status,
-    ...(title ? { title } : {}),
-    ...(activeModal ? { activeModal } : {}),
-    ...(promptForUpdate ? { activeInteractivePrompt: promptForUpdate } : {}),
-  })
-  const seq = input.seq + 1
-
-  if (deliverySignature === input.lastDeliveredSignature) {
-    return {
-      cursor: input.cursor,
-      seq,
-      lastDeliveredSignature: input.lastDeliveredSignature,
-      update: null,
-    }
-  }
-
-  return {
-    cursor: input.cursor,
-    seq,
-    lastDeliveredSignature: deliverySignature,
-    update: {
-      topic: 'session.chat_tail',
-      key: input.key,
-      sessionId: input.sessionId,
-      ...(input.historySessionId ? { historySessionId: input.historySessionId } : {}),
-      ...(input.interactionId ? { interactionId: input.interactionId } : {}),
-      seq,
-      timestamp: input.timestamp,
-      messages,
-      status,
-      ...(title ? { title } : {}),
-      ...(activeModal ? { activeModal } : {}),
-      ...(promptForUpdate ? { activeInteractivePrompt: promptForUpdate as any } : {}),
-      ...(messageSource ? { messageSource } : {}),
-    },
   }
 }
 

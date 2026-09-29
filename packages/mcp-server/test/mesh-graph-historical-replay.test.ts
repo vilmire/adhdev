@@ -11,6 +11,7 @@ import { IpcTransport } from '../src/transports/ipc.js';
 import { getQueue, __writeTaskStatusForTests, taskDependenciesSatisfied } from '@adhdev/daemon-core';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 // GRAPH-ORCHESTRATION Phase G — historical replay + backward compatibility.
 //
 //   Design SoT: docs/design/2026-08-18-graph-orchestration-full.md
@@ -33,12 +34,12 @@ function nextMeshId(): string {
 
 function recordingLocalTransport() {
     const commands: Array<{ cmd: string; args: any }> = [];
-    return {
+    return fakeCoordinatorTransport({
         commands,
         command: async (cmd: string, args: any) => {
     if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>); commands.push({ cmd, args }); return { success: true }; },
         getStatus: async () => ({ sessions: [] }),
-    } as any;
+    } as any);
 }
 
 function recordingIpcTransport() {
@@ -56,7 +57,7 @@ function recordingIpcTransport() {
         getStatus: async () => ({ sessions: [] }),
     } as any;
     Object.setPrototypeOf(t, IpcTransport.prototype);
-    return t;
+    return fakeCoordinatorTransport(t);
 }
 
 function makeCtx(meshId: string, transport: any, coordinatorSessionId = 'sess-coord') {

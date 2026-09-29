@@ -5,10 +5,6 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { buildStatusSnapshot, getSessionCompletionMarker, getLastDisplayMessage } from '../../src/status/snapshot.js'
 import { markSessionSeen } from '../../src/config/recent-activity.js'
 import { saveState } from '../../src/config/state-store.js'
-import {
-  classifyHotChatSessionsForSubscriptionFlush,
-  DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS,
-} from '../../src/status/chat-tail-hot-sessions.js'
 
 describe('status snapshot message time fallbacks', () => {
   const originalConfigDir = process.env.ADHDEV_CONFIG_DIR
@@ -157,9 +153,9 @@ describe('status snapshot message time fallbacks', () => {
     } as any)).toBe(`ts:${ts}`)
   })
 
-  it('keeps timestamp-only idle completions hot long enough to flush the live chat tail', () => {
+  it('stamps lastMessageAt from a timestamp-only idle completion', () => {
     const ts = 1_717_000_000_456
-    const now = ts + (DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS - 250)
+    const now = ts + (7_750)
     const snapshot = buildStatusSnapshot({
       allStates: [
         {
@@ -197,10 +193,6 @@ describe('status snapshot message time fallbacks', () => {
       profile: 'live',
     })
 
-    const hotSessions = classifyHotChatSessionsForSubscriptionFlush(snapshot.sessions, new Set(), { now })
-
-    expect(Array.from(hotSessions.active)).toEqual(['cli-1'])
-    expect(Array.from(hotSessions.finalizing)).toEqual([])
     expect(snapshot.sessions.find((entry) => entry.id === 'cli-1')?.lastMessageAt).toBe(ts)
   })
 
@@ -313,9 +305,9 @@ describe('status snapshot message time fallbacks', () => {
     expect(session?.inboxBucket).toBe('idle')
   })
 
-  it('carries runtime recovery metadata into live snapshots so restored stopped sessions are excluded from hot polling', () => {
+  it('carries runtime recovery metadata into live snapshots', () => {
     const ts = 1_717_000_100_000
-    const now = ts + (DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS - 250)
+    const now = ts + (7_750)
     const snapshot = buildStatusSnapshot({
       allStates: [
         {
@@ -363,12 +355,8 @@ describe('status snapshot message time fallbacks', () => {
     })
 
     const session = snapshot.sessions.find((entry) => entry.id === 'cli-recovery')
-    const hotSessions = classifyHotChatSessionsForSubscriptionFlush(snapshot.sessions, new Set(['cli-recovery']), { now })
-
     expect(session?.runtimeLifecycle).toBe('stopped')
     expect(session?.runtimeRestoredFromStorage).toBe(true)
     expect(session?.runtimeRecoveryState).toBe('orphan_snapshot')
-    expect(Array.from(hotSessions.active)).toEqual([])
-    expect(Array.from(hotSessions.finalizing)).toEqual([])
   })
 })

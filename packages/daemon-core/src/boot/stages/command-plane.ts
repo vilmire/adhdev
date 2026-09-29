@@ -138,7 +138,6 @@ export function bootCommandPlane(s4: SeqscribeNodeStage): CommandPlaneStage {
                 return null;
             }
         },
-        getFleetStatusPeerView: () => seqscribe?.fleetPeerView?.snapshot() ?? null,
         getTranscriptReplicaStore: () => seqscribe?.transcriptReplica ?? null,
         // G3: cloud-only — see CommandRouterDeps.resolveTranscriptPeer's doc
         // comment and DaemonBootConfig.mesh.resolveTranscriptPeer. Absent

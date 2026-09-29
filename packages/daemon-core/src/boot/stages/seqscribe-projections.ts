@@ -10,8 +10,6 @@
  * Arm order (each step's reason is the old boot comment it replaces):
  *   1. mesh publisher (wiring-unification C7-1; was the dual-write shadow) —
  *      before any mesh ledger append / meshRecord (S7+).
- *   2. fleet.status shadow, then 3. fleet.status parity (only arms over an
- *      active shadow).
  *   4. keyed chat transcript projection + its bus subscriber (+ the registry's
  *      claim release, + the message identity ledger's restart seed).
  *   5. transcript writer-gc (`writer-gc.ts`: the v1 `.transcript` row sweep and
@@ -37,8 +35,6 @@ import { LOG } from '../../logging/logger.js';
 import { listMeshesReadOnly } from '../../config/mesh-config.js';
 import { resolveJsonlSourcePath } from '../../providers/spec/native-history-executor.js';
 import { activateMeshTopicsAtBoot, configureMeshPublisher } from '../../seqscribe/mesh-publisher.js';
-import { configureFleetStatusShadow } from '../../seqscribe/fleet-status-shadow.js';
-import { configureFleetStatusParity } from '../../seqscribe/fleet-status-parity.js';
 import { configureTranscriptProjection } from '../../seqscribe/transcript-publisher.js';
 import { createLiveChatPublisher } from '../../seqscribe/transcript-keyed-publish-runtime.js';
 import { releaseSessionChatTopic } from '../../seqscribe/transcript-activation.js';
@@ -82,16 +78,10 @@ function armProjections(rt: SeqscribeRuntime, s5: CommandPlaneStage, hooks: ArmS
     step('slot');
     undo.push(['slot', () => bindSeqscribeRuntime(null)]);
 
-    // 1–3. Mesh publisher, fleet.status shadow + parity.
+    // 1. Mesh publisher.
     tryStep('Seqscribe', 'mesh publisher', () => configureMeshPublisher(node));
     step('publisher');
     undo.push(['publisher', () => configureMeshPublisher(null)]);
-    tryStep('Seqscribe', 'fleet.status shadow', () => configureFleetStatusShadow(node));
-    step('fleet-shadow');
-    undo.push(['fleet-shadow', () => configureFleetStatusShadow(null)]);
-    tryStep('Seqscribe', 'fleet.status parity', () => { configureFleetStatusParity(node); });
-    step('fleet-parity');
-    undo.push(['fleet-parity', () => { configureFleetStatusParity(null); }]);
 
     // 4. Keyed chat transcript projection (design 2026-09-28). Releasing the
     // in-memory claim on session removal lets a later session reuse a colliding
@@ -108,6 +98,7 @@ function armProjections(rt: SeqscribeRuntime, s5: CommandPlaneStage, hooks: ArmS
             writerId: () => node.writerId,
             appendChatFrame: (sessionId, frame, observation) => chat.appendChatFrame(sessionId, frame, observation),
             readPersistedChat: (sessionId) => chat.readPersistedChat(sessionId),
+            activateSession: (sessionId) => chat.activateSession(sessionId),
             resolveSourcePath: (sessionId: string) => {
                 const session = s5.sessionRegistry.get(sessionId);
                 if (!session) return null;
@@ -136,7 +127,14 @@ function armProjections(rt: SeqscribeRuntime, s5: CommandPlaneStage, hooks: ArmS
             },
         });
     });
-    const offTranscript = transcript ? subscribeTranscriptProjection(s5.bus, transcript) : () => {};
+    // Sessions registered before this stage (none on a normal boot — restore
+    // runs in S8 — but the registry exists since S3) are warmed once here, so
+    // every live session's chat topic is defined before any dashboard SUBs it.
+    const offTranscript = transcript
+        ? subscribeTranscriptProjection(s5.bus, transcript, {
+            existingSessionIds: s5.sessionRegistry.list().map((session) => session.sessionId),
+        })
+        : () => {};
     step('transcript');
     undo.push(['transcript', () => {
         offTranscript();

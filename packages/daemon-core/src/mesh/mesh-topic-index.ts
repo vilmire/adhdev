@@ -209,6 +209,28 @@ export class MeshTopicIndex {
     }
 
     /**
+     * Retention: delete index rows older than `cutoffMs` (`at_ms`), in bounded
+     * batches. The index is a derived read model of `mesh.<id>.events` (second
+     * copy: measured 2026-09-29 at ~60 MB for 66k rows) fed by a durable cursor
+     * that RESUMES, so deleting rows below the cursor never causes a re-read; a
+     * cursor reset would re-ingest them and the next sweep would drop them
+     * again. Every reader operates on a recent window far narrower than the
+     * cutoff (lifecycle tails, own-task attempts, dispatch-after-terminal).
+     * Returns rows deleted.
+     */
+    pruneOlderThan(cutoffMs: number, batchRows = 5_000): number {
+        const del = this.stmt(`DELETE FROM mesh_topic_index WHERE rowid IN (
+                SELECT rowid FROM mesh_topic_index WHERE at_ms < ? LIMIT ?)`);
+        let total = 0;
+        for (;;) {
+            const changes = del.run(cutoffMs, batchRows).changes;
+            total += changes;
+            if (changes < batchRows) break;
+        }
+        return total;
+    }
+
+    /**
      * Filtered read. Every filter — writer first — is applied in SQL before
      * the tail, so unrelated traffic can never crowd a relevant row out of the
      * window (LEDGER-KIND-TAIL-BLINDSPOT, and the C3 own-writer rule).

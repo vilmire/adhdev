@@ -140,6 +140,8 @@ import {
     isLocalControlPlaneNode,
 } from './mesh-node-identity.js';
 import { isHeldDispatchPickDecisive, readHeldDispatchSessions } from './mesh-held-node-state.js';
+import type { MeshNodeRoutesCache } from './mesh-node-routes.js';
+import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
 
 // Re-exported so the public `./tools/mesh-tools.js` path still exposes it.
 export { resolveCoordinatorDaemonId } from './mesh-node-identity.js';
@@ -482,6 +484,11 @@ export interface MeshContext {
      * the same call (see mesh-pending-events-attach.ts).
      */
     noticeDrainCount?: number;
+    /**
+     * The coordinator daemon's route per node id (`mesh_node_route`), held for a
+     * few seconds — locality is the daemon's decision (mesh-node-routes.ts).
+     */
+    nodeRoutes?: MeshNodeRoutesCache;
 }
 
 /**
@@ -504,14 +511,17 @@ export interface MeshContext {
  * transport failure must never block the tool call the rate check is merely
  * advisory for, so it degrades to "not rate limited" rather than throwing.
  */
-export async function recordMeshCoordinatorToolCall(ctx: MeshContext, tool: string): Promise<MeshToolCallRateResult> {
+/** The `tool_call_record` identity of this caller (shared with the mesh_status_view request). */
+export function buildMeshCoordinatorToolCallArgs(ctx: MeshContext, tool: string): { tool: string; sessionId?: string; callerRole: 'coordinator' | 'unknown' } {
     const sessionId = ctx.coordinatorSessionId ?? null;
+    return { tool, ...(sessionId ? { sessionId } : {}), callerRole: sessionId ? 'coordinator' : 'unknown' };
+}
+
+export async function recordMeshCoordinatorToolCall(ctx: MeshContext, tool: string): Promise<MeshToolCallRateResult> {
     try {
         return await toolCallRecord(ctx.transport, {
             meshId: ctx.mesh.id,
-            tool,
-            ...(sessionId ? { sessionId } : {}),
-            callerRole: sessionId ? 'coordinator' : 'unknown',
+            ...buildMeshCoordinatorToolCallArgs(ctx, tool),
         });
     } catch {
         // Fire-and-forget advisory — see doc comment. A daemon-less/overloaded
@@ -635,6 +645,11 @@ export async function refreshMeshFromDaemon(ctx: MeshContext): Promise<{ settled
             .map((n: any) => n as LocalMeshNodeEntry);
 
         const merged: LocalMeshNodeEntry[] = [...refreshedNodes];
+        // A node this process knows that the daemon's roster no longer lists: whether
+        // the daemon serves it (so its silence settles the removal) is the daemon's call.
+        if ((ctx.mesh.nodes as LocalMeshNodeEntry[]).some((n) => (n as any)?.id && !refreshedNodes.some((r: any) => meshNodeIdMatches(r, (n as any).id)))) {
+            await ensureMeshNodeRoutes(ctx);
+        }
         for (const existing of ctx.mesh.nodes as LocalMeshNodeEntry[]) {
             const existingId = (existing as any)?.id;
             if (!existingId) continue;
@@ -1810,6 +1825,7 @@ export async function collectRelatedRepoStatuses(
 ): Promise<Array<Record<string, unknown>>> {
     const relatedRepos = readRelatedRepos(node);
     if (!relatedRepos.length) return [];
+    await ensureMeshNodeRoutes(ctx);
     // mesh_status (localOnly): related-repo git is not part of the coordinator-held
     // node state, and the request path never probes a remote peer — list the repo
     // without status. mesh_git_status(node_id) is the explicit live detail read.
@@ -2079,6 +2095,44 @@ export async function collectMeshViewQueueNodesWithLiveSessionsVerified(
 }
 
 
+/** The coordinator daemon's routing decision for a direct dispatch (`mesh_dispatch_route`). */
+export type MeshDispatchRoute =
+    | { route: 'local' | 'remote' | 'unreachable'; ownerDaemonId?: string; reason: string }
+    | { route: 'error'; reason: string };
+
+/**
+ * Ask the coordinator daemon how to reach `nodeId` — it decides from its roster
+ * and its own identity (daemon-core mesh-status-view.ts decideDispatchRoute);
+ * this process never guesses locality for a dispatch.
+ */
+export async function resolveMeshDispatchRoute(ctx: MeshContext, nodeId: string): Promise<MeshDispatchRoute> {
+    const node = ctx.mesh.nodes.find((n) => meshNodeIdMatches(n as any, nodeId)) as any;
+    // The node's identity fields only (the daemon's own roster wins when it has the node).
+    const described = node ? { id: node.id, ...(node.daemonId ? { daemonId: node.daemonId } : {}), ...(node.machineId ? { machineId: node.machineId } : {}), ...(node.workspace ? { workspace: node.workspace } : {}) } : undefined;
+    let raw: any;
+    try {
+        raw = await ctx.transport.command('mesh_dispatch_route', {
+            meshId: ctx.mesh.id,
+            nodeId,
+            ...(described ? { node: described } : {}),
+            // The daemon refuses when it is not the one this process believes it talks to.
+            ...(ctx.localDaemonId ? { callerDaemonId: ctx.localDaemonId } : {}),
+        });
+    } catch (error: any) {
+        return { route: 'error', reason: error?.message || 'mesh_dispatch_route failed' };
+    }
+    const result = unwrapCommandPayload(raw) ?? raw;
+    const route = result?.route;
+    if (result?.success === false || (route !== 'local' && route !== 'remote' && route !== 'unreachable')) {
+        return { route: 'error', reason: typeof result?.error === 'string' ? result.error : 'no route in the daemon answer' };
+    }
+    return {
+        route,
+        ...(typeof result.ownerDaemonId === 'string' && result.ownerDaemonId ? { ownerDaemonId: result.ownerDaemonId } : {}),
+        reason: typeof result.reason === 'string' ? result.reason : '',
+    };
+}
+
 export async function commandForNode(
     ctx: MeshContext,
     node: LocalMeshNodeEntry,
@@ -2086,6 +2140,8 @@ export async function commandForNode(
     args: Record<string, unknown> = {},
     opts?: { statusProbe?: boolean },
 ): Promise<any> {
+    // Where the node is served is the coordinator daemon's decision (mesh_node_route).
+    await ensureMeshNodeRoutes(ctx);
     const isLocalNode = isLocalControlPlaneNode(ctx, node);
 
     if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
@@ -2143,21 +2199,20 @@ export function resolveSemanticReplicaTransport(
  * `opts.nodeIds` is accepted for call-site compatibility (it scoped the retired
  * remote pull) and ignored.
  */
-export async function drainCoordinatorPendingEvents(
-    ctx: MeshContext,
-    _opts?: { nodeIds?: string[] },
-): Promise<any[]> {
-    const matchesCurrentMesh = (event: any) => readString(event?.meshId) === ctx.mesh.id;
+/**
+ * This caller's pending-event drain args (shared with the mesh_status_view request).
+ *
+ * NOTICE-THEFT: only an MCP server that IS a PTY-hosted coordinator (the
+ * daemon injected ADHDEV_COORDINATOR_SESSION_ID at its launch) may claim
+ * notices while that daemon hosts a live CLI coordinator — it is reading its
+ * own inbox. An external / per-call MCP client has no coordinator session:
+ * it omits the flag, so the daemon leaves notices to the live coordinator's
+ * cursor (`deliveredByCursor`, empty) and only hands this client the
+ * no-coordinator backlog when no CLI coordinator is hosted there.
+ */
+export function buildPendingMeshEventsDrainArgs(ctx: MeshContext): Record<string, unknown> {
     const coordinatorDaemonId = readString(ctx.localDaemonId);
-    // NOTICE-THEFT: only an MCP server that IS a PTY-hosted coordinator (the
-    // daemon injected ADHDEV_COORDINATOR_SESSION_ID at its launch) may claim
-    // notices while that daemon hosts a live CLI coordinator — it is reading its
-    // own inbox. An external / per-call MCP client has no coordinator session:
-    // it omits the flag, so the daemon leaves notices to the live coordinator's
-    // cursor (`deliveredByCursor`, empty) and only hands this client the
-    // no-coordinator backlog when no CLI coordinator is hosted there.
-    const args = {
-        meshId: ctx.mesh.id,
+    return {
         ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
         ...(ctx.coordinatorSessionId
             ? {
@@ -2168,6 +2223,14 @@ export async function drainCoordinatorPendingEvents(
             }
             : {}),
     };
+}
+
+export async function drainCoordinatorPendingEvents(
+    ctx: MeshContext,
+    _opts?: { nodeIds?: string[] },
+): Promise<any[]> {
+    const matchesCurrentMesh = (event: any) => readString(event?.meshId) === ctx.mesh.id;
+    const args = { meshId: ctx.mesh.id, ...buildPendingMeshEventsDrainArgs(ctx) };
     ctx.noticeDrainCount = (ctx.noticeDrainCount ?? 0) + 1;
     let raw: any;
     try {

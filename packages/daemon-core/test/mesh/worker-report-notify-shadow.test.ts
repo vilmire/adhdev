@@ -28,7 +28,6 @@ import {
   WORKER_REPORT_EVENT_KIND,
 } from '../../src/mesh/worker-report'
 import {
-  __resetHandoffNotesForTest,
   getStoredHandoffNote,
   selectRelevantHandoffNotes,
   storeHandoffNote,
@@ -61,7 +60,6 @@ function freshIds(): { meshId: string; taskId: string; attemptId: string } {
 beforeEach(() => {
   __resetReportedSummariesForTest()
   __resetProgressSurfaceForTest()
-  __resetHandoffNotesForTest()
   __resetWorkerTaskTokensForTest()
 })
 afterEach(() => {
@@ -69,7 +67,6 @@ afterEach(() => {
   __setWorkerProgressNoticeSinkForTests(null)
   __resetReportedSummariesForTest()
   __resetProgressSurfaceForTest()
-  __resetHandoffNotesForTest()
   __resetWorkerTaskTokensForTest()
 })
 
@@ -183,7 +180,6 @@ describe('F2 — handoff note text survives a restart', () => {
     // SQLite rows survive. Before F2 this made the note permanently
     // undeliverable — and report_completion had already told the worker it
     // "will be delivered to related future tasks automatically".
-    __resetHandoffNotesForTest()
 
     const afterRestart = getStoredHandoffNote(ids.meshId, ids.taskId)
     expect(afterRestart).not.toBeNull()
@@ -211,7 +207,6 @@ describe('F2 — handoff note text survives a restart', () => {
       recordedAtIso,
     })
 
-    __resetHandoffNotesForTest() // restart
 
     const selected = selectRelevantHandoffNotes({
       meshId: ids.meshId,

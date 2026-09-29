@@ -125,7 +125,7 @@ function collectBlockingSessions(deps: CommandRouterDeps, meshId: string): Block
         // Sessions with no attempt keep the legacy sample verdict.
         const turn = resolveSessionTurnPresentation({
             sessionId: instanceId,
-            legacyStatus: status,
+            providerStatus: status,
             surface: 'restart_gate',
         });
         if (!pendingOutbound && !isRestartBlockingPresentation(turn, RESTART_BLOCKING_STATES.has(status))) return;

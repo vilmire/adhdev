@@ -22,7 +22,7 @@ import { __resetProviderSessionPinsForTest, handleReadChat } from '../../src/com
 // history-only read path therefore has NO PTY transcript to fall back to — so
 // if the source FSM declines native (e.g. a post-turn read where coverage came
 // back 'partial'), the pty-parser selection returns an EMPTY array and the
-// assistant answer disappears from chat_tail / read_chat. These tests pin the
+// assistant answer disappears from read_chat. These tests pin the
 // content-preservation guard: when the native read resolved real, safely-mapped
 // rows for THIS session, they must be returned even if the FSM selected
 // pty-parser.

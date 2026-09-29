@@ -60,32 +60,16 @@ export type TranscriptTriggerSource =
     | 'status_event'
     /** The post-chat command hook, right after send_chat and friends. */
     | 'post_chat'
-    /**
-     * Chat-tail liveness watchdog tick.
-     *
-     * ★ Reserved, and currently never recorded — see `unspecified` below. The
-     * watchdog lives in the BROWSER controller
-     * (web-core `session-chat-tail-controller.ts`), and its daemon-visible
-     * effect is an ordinary `read_chat` command carrying no source marker. The
-     * member exists so that wiring an explicit marker later is an additive
-     * change rather than a rename of a live key.
-     */
-    | 'watchdog'
-    /** Busy-quiet lease expiry falling the session back to legacy. Reserved and
-     * currently never recorded, for the same reason as `watchdog`. */
-    | 'lease_expiry'
     /** Activation / restart seed-read. */
     | 'seed'
     /**
      * A trigger whose origin this process cannot attribute.
      *
-     * ★ Read this as "browser-originated `read_chat`, source unknown" rather
+     * ★ Read this as "`read_chat` from some caller, source unknown" rather
      * than as a residual bucket. The PUSH choke point
-     * (`commands/read-chat-presentation.ts`) fires on every `read_chat`, and the
-     * daemon has no way to tell a watchdog tick from a lease-expiry re-pull from
-     * a user opening a pane — the command carries no marker. Attributing them to
-     * `watchdog` by guesswork would manufacture precision that does not exist;
-     * counting them honestly here does not.
+     * (`commands/read-chat-presentation.ts`) fires on every `read_chat`
+     * (mesh, MCP, an explicit dashboard command), and the command carries no
+     * marker — counting them honestly here beats guessing.
      */
     | 'unspecified';
 
@@ -94,8 +78,6 @@ export const TRANSCRIPT_TRIGGER_SOURCES: readonly TranscriptTriggerSource[] = [
     'stat_poll',
     'status_event',
     'post_chat',
-    'watchdog',
-    'lease_expiry',
     'seed',
     'unspecified',
 ] as const;
@@ -259,8 +241,6 @@ export class TranscriptLatencyRecorder {
             stat_poll: freshTriggerCounts(),
             status_event: freshTriggerCounts(),
             post_chat: freshTriggerCounts(),
-            watchdog: freshTriggerCounts(),
-            lease_expiry: freshTriggerCounts(),
             seed: freshTriggerCounts(),
             unspecified: freshTriggerCounts(),
         };

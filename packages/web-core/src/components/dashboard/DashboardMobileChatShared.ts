@@ -135,6 +135,35 @@ export function getConversationViewStates(conversation: { status?: string, conne
 }
 
 /**
+ * What the chat pane shows while the keyed chat lane has not delivered its
+ * first committed view yet (fresh page, new session, session switch, daemon
+ * restart — design 2026-09-28 §5.4).
+ *
+ * `awaitingFirstView`: no committed view AND nothing to show from the status
+ * meta either — the pane renders a NEUTRAL loading state.
+ *
+ * `showWorkingIndicator`: the "Agent generating…" typing bubble. Once a view
+ * is on screen it follows the status lane's working class as before. BEFORE
+ * the first view it is shown only when the status source says `generating`
+ * outright: a `starting`/`finalizing` session (or one whose status merely
+ * folds into the working class) with an empty pane would otherwise read as an
+ * agent busy answering a conversation the user cannot see — which is what a
+ * pane waiting on its first SUB used to look like.
+ */
+export function getChatPaneFirstViewState(input: {
+    status?: string
+    connectionState?: string
+    hasLiveSnapshot: boolean
+    visibleMessageCount: number
+}): { awaitingFirstView: boolean, showWorkingIndicator: boolean } {
+    const awaitingFirstView = !input.hasLiveSnapshot && input.visibleMessageCount === 0
+    const { isGenerating } = getConversationViewStates(input)
+    const showWorkingIndicator = isGenerating
+        && (!awaitingFirstView || normalizeManagedStatus(input.status) === 'generating')
+    return { awaitingFirstView, showWorkingIndicator }
+}
+
+/**
  * Centralized "is this conversation generating" test — the single source of
  * truth for every surface (mobile machine cards, mobile hidden group, desktop
  * hidden indicator). Always route through `getConversationViewStates` so the

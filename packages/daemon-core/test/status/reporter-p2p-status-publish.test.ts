@@ -57,10 +57,7 @@ import { DaemonStatusReporter } from '../../src/status/reporter.js'
 function createReporter(overrides: {
   serverConnected?: boolean
   p2pConnected?: boolean
-  fleetStatusPeerView?: Record<string, unknown>
 } = {}) {
-  const sendStatus = vi.fn()
-  const sendStatusEvent = vi.fn()
   const sendMessage = vi.fn()
 
   const reporter = new DaemonStatusReporter({
@@ -76,8 +73,6 @@ function createReporter(overrides: {
       connectionState: 'connected',
       connectedPeerCount: 1,
       screenshotActive: false,
-      sendStatus,
-      sendStatusEvent,
     },
     providerLoader: {
       resolve: () => null,
@@ -90,14 +85,17 @@ function createReporter(overrides: {
       collectAllStates: () => [],
       collectStatesByCategory: () => [],
     },
-    getScreenshotUsage: () => null,
-    getFleetStatusPeerView: () => overrides.fleetStatusPeerView as any ?? null,
   })
 
-  return { reporter, sendStatus, sendStatusEvent, sendMessage }
+  return { reporter, sendMessage }
 }
 
-describe('DaemonStatusReporter P2P publish behavior', () => {
+/**
+ * The reporter is SERVER-only since data-path audit 2026-09-29 P0-3: the
+ * dashboard's state lane is the keyed daemon.metadata topic, and the old P2P
+ * `status_report` full-snapshot push (and its 5s tick) is gone.
+ */
+describe('DaemonStatusReporter — server status_report only', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-21T12:10:00Z'))
@@ -109,121 +107,33 @@ describe('DaemonStatusReporter P2P publish behavior', () => {
     vi.useRealTimers()
   })
 
-  it('still sends p2pOnly rich status when server connection is down', async () => {
-    const { reporter, sendStatus, sendMessage } = createReporter({
-      serverConnected: false,
-      p2pConnected: true,
-    })
-
-    await reporter.sendUnifiedStatusReport({ p2pOnly: true, reason: 'test' })
-
-    expect(buildSessionEntriesMock).not.toHaveBeenCalled()
-    expect(sendStatus).toHaveBeenCalledTimes(1)
-    expect(sendStatus.mock.calls[0]?.[0]?.sessions?.[0]).toMatchObject({
-      id: 'cli-1',
-      unread: true,
-      inboxBucket: 'task_complete',
-      completionMarker: 'id:msg_1',
-      seenCompletionMarker: '',
-    })
+  it('sends nothing at all when the server connection is down (no P2P lane)', async () => {
+    const { reporter, sendMessage } = createReporter({ serverConnected: false, p2pConnected: true })
+    await reporter.sendUnifiedStatusReport({ reason: 'test' })
+    expect(buildStatusSnapshotMock).not.toHaveBeenCalled()
     expect(sendMessage).not.toHaveBeenCalled()
   })
 
-  it('reuses the live status snapshot sessions for p2p plus server reports instead of building server sessions up front', async () => {
-    const { reporter, sendStatus, sendMessage } = createReporter({
-      serverConnected: true,
-      p2pConnected: true,
-    })
-
+  it('projects the live status snapshot sessions into the server routing frame', async () => {
+    const { reporter, sendMessage } = createReporter()
     await reporter.sendUnifiedStatusReport({ reason: 'combined' })
-
     expect(buildSessionEntriesMock).not.toHaveBeenCalled()
-    expect(sendStatus).toHaveBeenCalledTimes(1)
     expect(sendMessage).toHaveBeenCalledTimes(1)
+    expect(sendMessage.mock.calls[0]?.[0]).toBe('status_report')
     expect(sendMessage.mock.calls[0]?.[1]?.sessions?.[0]).toMatchObject({
       id: 'cli-1',
       providerType: 'hermes-cli',
       status: 'idle',
     })
+    expect(sendMessage.mock.calls[0]?.[1]?.p2p).toEqual({ available: true, state: 'connected', peers: 1, screenshotActive: false })
   })
 
-  it('exposes the SUB peer view on rich P2P status but never on the server status_report', async () => {
-    const fleetStatusPeerView = {
-      peers: [{
-        daemonId: 'daemon_mach_peer',
-        at: '2026-04-21T12:09:59.000Z',
-        onlineState: 'online',
-        p2pActive: true,
-        sessionCounts: {
-          ideCount: 1, cliCount: 0, acpCount: 0, idleCount: 1,
-          generatingCount: 0, waitingApprovalCount: 0, erroredCount: 0,
-        },
-      }],
-      diagnostics: {
-        subscribedPeers: 1, receivedEntries: 1, comparedEntries: 1,
-        matchedEntries: 1, mismatchedEntries: 0, invalidEntries: 0,
-        viewReplacements: 1,
-      },
-      serverBoundaryCanary: 'FLEET_STATUS_PEER_VIEW_MUST_STAY_P2P_ONLY',
-    }
-    const { reporter, sendStatus, sendMessage } = createReporter({ fleetStatusPeerView })
-
-    await reporter.sendUnifiedStatusReport({ reason: 'fleet-status-boundary' })
-
-    expect(sendStatus.mock.calls[0]?.[0]?.fleetStatusPeerView).toBe(fleetStatusPeerView)
-    const serverPayload = sendMessage.mock.calls.find(([type]) => type === 'status_report')?.[1]
-    expect(serverPayload).not.toHaveProperty('fleetStatusPeerView')
-    expect(JSON.stringify(serverPayload)).not.toContain('FLEET_STATUS_PEER_VIEW_MUST_STAY_P2P_ONLY')
+  it('exposes no P2P send surface and no fleet.status producer', () => {
+    const { reporter } = createReporter()
+    expect((reporter as any).sendP2PPayload).toBeUndefined()
+    expect((reporter as any).resetP2PHash).toBeUndefined()
+    expect((reporter as any).p2pTimer).toBeUndefined()
   })
-
-  it('debounces rapid p2p status changes while preserving full status payloads', async () => {
-    const { reporter, sendStatus } = createReporter({
-      serverConnected: false,
-      p2pConnected: true,
-    })
-
-    await reporter.sendUnifiedStatusReport({ p2pOnly: true, reason: 'initial' })
-    expect(sendStatus).toHaveBeenCalledTimes(1)
-    expect(sendStatus.mock.calls[0]?.[0]?._delta).toBeUndefined()
-    expect(sendStatus.mock.calls[0]?.[0]?.sessions).toHaveLength(1)
-
-    buildStatusSnapshotMock.mockReturnValue({
-      instanceId: 'daemon-1',
-      machine: { platform: 'darwin', hostname: 'test-host' },
-      timestamp: 456,
-      p2p: { available: true, state: 'connected', peers: 1, screenshotActive: false },
-      sessions: [
-        {
-          id: 'cli-1',
-          parentId: null,
-          providerType: 'hermes-cli',
-          providerName: 'Hermes Agent',
-          kind: 'agent',
-          transport: 'pty',
-          status: 'generating',
-          workspace: '/repo',
-          title: 'Hermes task',
-          unread: true,
-          inboxBucket: 'task_complete',
-          completionMarker: 'id:msg_2',
-          seenCompletionMarker: '',
-          lastUpdated: 456,
-        },
-      ],
-    })
-
-    await reporter.sendUnifiedStatusReport({ p2pOnly: true, reason: 'rapid' })
-    expect(sendStatus).toHaveBeenCalledTimes(1)
-
-    await vi.advanceTimersByTimeAsync(500)
-    expect(sendStatus).toHaveBeenCalledTimes(2)
-    expect(sendStatus.mock.calls[1]?.[0]?._delta).toBeUndefined()
-    expect(sendStatus.mock.calls[1]?.[0]?.sessions?.[0]).toMatchObject({
-      id: 'cli-1',
-      status: 'generating',
-    })
-  })
-
 })
 
 /**

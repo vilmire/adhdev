@@ -1,5 +1,5 @@
 import { execFileSync, type ExecFileSyncOptions } from 'child_process';
-import { spawn } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 import { hiddenExecFileSync } from '../process/hidden-spawn.js';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -9,6 +9,7 @@ import {
   createDefaultWindowsAtomicHooks,
   findPortableNode22,
   performWindowsAtomicUpgrade,
+  probeLocalDaemonHealth,
   resolveWindowsInstallerLayout,
   verifyStagedConptyPrebuild,
 } from './windows-atomic-upgrade.js';
@@ -24,6 +25,17 @@ import { getConfigDir } from '../config/config.js';
 import { openCaptureLogFd } from '../logging/logger.js';
 import { IDENTITY } from '../track-identity.js';
 import { isPidAlive } from '../system/process-utils.js';
+import {
+  clearPosixUpgradeJournal,
+  describePosixHealthGateSkip,
+  gatePosixUpgradeRestart,
+  inspectPosixUpgradeJournal,
+  resolvePosixHealthGatePort,
+  writePosixUpgradeJournal,
+  type PosixUpgradeGateHooks,
+  type PosixUpgradeJournal,
+  type SpawnedDaemonHandle,
+} from './posix-upgrade-health-gate.js';
 
 const UPGRADE_HELPER_ENV = 'ADHDEV_DAEMON_UPGRADE_HELPER';
 
@@ -69,6 +81,12 @@ export interface DaemonUpgradeHelperPayload {
    * lock). Default off: POSIX leaves the host running so sessions rebind.
    */
   killSessionHost?: boolean;
+  /**
+   * POSIX boot health gate budget (ms) for the replacement daemon to report
+   * the target version, and for a rolled-back daemon to report the previous
+   * one. Defaults to DEFAULT_HEALTH_TIMEOUT_MS (the Windows gate's budget).
+   */
+  healthTimeoutMs?: number;
 }
 
 export interface CurrentGlobalInstallSurface {
@@ -1094,16 +1112,144 @@ function backupPosixInstall(options: {
 
 /** Restore a backupPosixInstall snapshot over the live prefix. Throws on failure. */
 function restorePosixInstall(backup: PosixInstallBackup): void {
+  // Verify the snapshot BEFORE deleting the live tree: removing the live
+  // package and then failing to copy a missing snapshot would turn a
+  // recoverable state into no install at all.
+  const snapshotPackage = path.join(backup.backupDir, 'package');
+  if (!fs.existsSync(path.join(snapshotPackage, 'package.json'))) {
+    throw new Error(`rollback snapshot is missing or incomplete: ${snapshotPackage}`);
+  }
   fs.rmSync(backup.packageRoot, { recursive: true, force: true });
-  fs.cpSync(path.join(backup.backupDir, 'package'), backup.packageRoot, { recursive: true });
+  fs.cpSync(snapshotPackage, backup.packageRoot, { recursive: true });
   for (const shim of backup.binShims) {
     fs.cpSync(path.join(backup.backupDir, `bin-${path.basename(shim)}`), shim, { recursive: true });
   }
 }
 
 /**
- * POSIX in-place upgrade with the two protections the rc.17 incident proved
- * necessary ("실패해도 데몬은 살고 CLI는 동작한다"):
+ * Error thrown after the helper already wrote a specific, actionable failure
+ * notice. The top-level catch must not overwrite that notice with its generic
+ * "upgrade failed: <message>" wrapper (which also drops the target marker).
+ */
+class UpgradeNoticeEmittedError extends Error {
+  readonly upgradeNoticeEmitted = true;
+}
+
+function readInstalledPackageVersion(packageRoot: string | null): string | null {
+  if (!packageRoot) return null;
+  try {
+    const version = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'))?.version;
+    return typeof version === 'string' && version.trim() ? version.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The pinned install command re-targeted at another version (same npm, same --prefix). */
+function retargetInstallCommand(
+  installCommand: PinnedGlobalInstallCommand,
+  packageName: string,
+  fromVersion: string,
+  toVersion: string,
+): PinnedGlobalInstallCommand {
+  const fromSpec = `${packageName}@${fromVersion || 'latest'}`;
+  return {
+    ...installCommand,
+    args: installCommand.args.map((arg) => (arg === fromSpec ? `${packageName}@${toVersion}` : arg)),
+  };
+}
+
+/** Graceful stop, then forced — POSIX only (this path never runs on win32). */
+async function stopPosixPid(pid: number): Promise<boolean> {
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch (error: any) {
+    return error?.code === 'ESRCH';
+  }
+  if (await waitForPidExit(pid, 10_000)) return true;
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // noop — it may have exited between the checks
+  }
+  return waitForPidExit(pid, 3_000);
+}
+
+/**
+ * The real hooks behind the POSIX boot health gate: spawn via the same
+ * detached restart the helper always used, probe the same /health +
+ * /api/v1/status endpoints the Windows gate polls, restore from the pre-install
+ * snapshot, and fall back to reinstalling the exact previous version into the
+ * same prefix when the snapshot is unusable.
+ */
+function buildPosixGateHooks(options: {
+  payload: DaemonUpgradeHelperPayload;
+  installCommand: PinnedGlobalInstallCommand;
+  backup: PosixInstallBackup | null;
+  previousVersion: string | null;
+  configDir: string;
+}): PosixUpgradeGateHooks {
+  const { payload, installCommand, backup, previousVersion, configDir } = options;
+  const log = (message: string) => appendUpgradeLog(message, configDir);
+  return {
+    spawnDaemon: (argv): SpawnedDaemonHandle | null => {
+      const child = spawnDetachedDaemonRestart(argv, payload.cwd);
+      if (!child) return null;
+      let exit: { code: number | null; signal: string | null } | null = null;
+      // Record an exit so a crash during boot fails the gate immediately
+      // instead of after the full budget. The 'error' listener also keeps an
+      // async spawn failure (ENOENT) from crashing the helper mid-gate.
+      if (typeof child.on === 'function') {
+        child.on('exit', (code, signal) => { exit = { code, signal }; });
+        child.on('error', (error) => {
+          log(`Daemon spawn error: ${error?.message || String(error)}`);
+          exit = { code: null, signal: null };
+        });
+      }
+      return { pid: child.pid ?? null, exitStatus: () => exit };
+    },
+    probe: async (port) => {
+      try {
+        return await probeLocalDaemonHealth(port);
+      } catch {
+        return { alive: false, pid: null, version: null };
+      }
+    },
+    stopPid: stopPosixPid,
+    restorePrevious: () => {
+      if (backup) {
+        try {
+          restorePosixInstall(backup);
+          return 'snapshot';
+        } catch (error: any) {
+          log(`Snapshot restore failed (${error?.code || 'error'}): ${error?.message || String(error)} — falling back to reinstalling the previous version`);
+        }
+      }
+      if (!previousVersion || !installCommand.surface.installPrefix) {
+        throw new Error(backup
+          ? 'snapshot restore failed and the previous version/prefix is unknown, so it cannot be reinstalled'
+          : 'no snapshot was taken and the previous version/prefix is unknown');
+      }
+      const reinstall = retargetInstallCommand(installCommand, payload.packageName, payload.targetVersion, previousVersion);
+      log(`Reinstalling previous version: ${buildManualRecoveryCommand(reinstall)}`);
+      hiddenExecFileSync(reinstall.command, reinstall.args, {
+        encoding: 'utf8',
+        stdio: 'pipe',
+        maxBuffer: 20 * 1024 * 1024,
+        env: buildInstallEnvWithNodeOnPath(),
+        ...reinstall.execOptions,
+      });
+      return 'reinstall';
+    },
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now: () => Date.now(),
+    log,
+  };
+}
+
+/**
+ * POSIX in-place upgrade with the protections the rc.17 and rc.62 incidents
+ * proved necessary ("실패해도 데몬은 살고 CLI는 동작한다"):
  *
  *   1. PRE-FLIGHT GATE — install the target into a throwaway prefix and
  *      smoke-run `<bin> --version` BEFORE the old install is touched. A
@@ -1111,150 +1257,308 @@ function restorePosixInstall(backup: PosixInstallBackup): void {
  *   2. BACKUP + ROLLBACK — snapshot the live package root + bin shims; if the
  *      in-place install throws or the freshly-installed CLI fails the same
  *      smoke test, restore the snapshot.
+ *   3. BOOT HEALTH GATE (rc.62) — restart the daemon from the new install and
+ *      require it to answer its loopback IPC port with status.version == target
+ *      within a bounded budget. A crash on boot, no health or a wrong version
+ *      stops what was started, restores the previous install (snapshot, else a
+ *      pinned reinstall of the exact previous version into the same prefix),
+ *      restarts it and verifies that comes back healthy. See
+ *      posix-upgrade-health-gate.ts. The snapshot is kept until this passes.
  *
  * On EVERY failure path the daemon is re-spawned from the (untouched or
  * restored) previous install before the error propagates: the parent daemon
  * has already exited by the time this helper runs, so failing to re-spawn is
  * what turned a bad package into a dead daemon requiring manual npm surgery.
  *
+ * A journal (daemon-upgrade-journal.json) tracks the phase so a concurrent
+ * helper stands down and an interrupted one leaves a trail; SIGTERM/SIGINT/
+ * SIGHUP while the live install is unverified trigger a synchronous restore +
+ * restart before exiting.
+ *
  * POSIX-only by construction — the caller dispatches here only when
  * process.platform !== 'win32'. The win32 fallback keeps its existing
  * conpty-gated flow untouched.
  */
-function runPosixInPlaceUpgrade(options: {
+async function runPosixInPlaceUpgrade(options: {
   payload: DaemonUpgradeHelperPayload;
   installCommand: PinnedGlobalInstallCommand;
   restartArgv: string[];
-}): void {
+}): Promise<void> {
   const { payload, installCommand, restartArgv } = options;
   const configDir = getConfigDir();
   const spec = `${payload.packageName}@${payload.targetVersion || 'latest'}`;
   const { packageRoot, installPrefix } = installCommand.surface;
+  const previousVersion = readInstalledPackageVersion(packageRoot);
 
-  // Step 0: sweep disposable scratch dirs from earlier attempts. Only the
-  // pre-flight dirs are safe to remove unconditionally — a leftover backup dir
-  // may be the user's last recovery copy after a failed rollback, so keep it.
-  try {
-    for (const entry of fs.readdirSync(configDir)) {
-      if (entry.startsWith('upgrade-preflight-')) {
-        safeRemoveStaleEntry(path.join(configDir, entry), 'Removed stale pre-flight staging prefix');
-      }
-    }
-  } catch {
-    // noop — housekeeping must never abort the upgrade
-  }
-
-  // Step 1: pre-flight gate. Install the target into a throwaway prefix and
-  // prove the installed CLI actually runs before the live install is touched.
-  const preflightPrefix = (() => {
-    fs.mkdirSync(configDir, { recursive: true });
-    return fs.mkdtempSync(path.join(configDir, 'upgrade-preflight-'));
-  })();
-  try {
-    appendUpgradeLog(`Pre-flight: installing ${spec} into throwaway prefix ${preflightPrefix}`);
-    execNpmCommandSync(
-      ['install', '-g', spec, '--prefix', preflightPrefix],
-      {
-        encoding: 'utf8',
-        stdio: 'pipe',
-        maxBuffer: 20 * 1024 * 1024,
-        env: buildInstallEnvWithNodeOnPath(),
-      },
-      installCommand.surface,
+  // Step -1: journal. A live helper that already owns it will gate and
+  // restart the daemon itself — stand down rather than install underneath it.
+  const journalState = inspectPosixUpgradeJournal(configDir);
+  if (journalState.state === 'busy') {
+    appendUpgradeLog(
+      `Another upgrade helper (pid ${journalState.journal.helperPid}) is mid-upgrade to `
+      + `${journalState.journal.targetVersion} (phase ${journalState.journal.phase}); this helper stands down and leaves the restart to it`,
     );
-    smokeTestInstalledBins(preflightPrefix, payload.packageName);
-    appendUpgradeLog(`Pre-flight smoke gate passed for ${spec}`);
-  } catch (error: any) {
-    const detail = error?.message || String(error);
-    appendUpgradeLog(`Pre-flight smoke gate FAILED for ${spec}: ${detail} — existing install left untouched`);
-    emitUpgradeFailureNotice([
-      `adhdev ${spec} was NOT installed: the package installs but its CLI does not run (\`--version\` failed).`,
-      `Detail: ${detail}`,
-      'Your previous version is untouched and the daemon was restarted on it.',
-      'This is a broken published package — retry once a fixed version is published.',
-    ], configDir, { targetVersion: payload.targetVersion });
-    spawnDetachedDaemonRestart(restartArgv, payload.cwd);
-    throw new Error(`Pre-flight smoke gate failed for ${spec}: ${detail}`);
-  } finally {
-    safeRemoveStaleEntry(preflightPrefix, 'Removed pre-flight staging prefix');
+    return;
   }
-
-  // Step 2: snapshot the live install so a failed swap can be rolled back.
-  const backup = packageRoot && installPrefix
-    ? backupPosixInstall({ packageRoot, installPrefix, packageName: payload.packageName, configDir })
-    : null;
-  if (backup) {
-    appendUpgradeLog(`Backed up current install to ${backup.backupDir}`);
-  } else {
-    appendUpgradeLog('No rollback snapshot available (package root unresolved or backup failed); relying on the pre-flight gate alone');
+  if (journalState.state === 'stale') {
+    const stale = journalState.journal;
+    appendUpgradeLog(
+      `Previous upgrade helper (pid ${stale.helperPid}) was interrupted during "${stale.phase}" while upgrading `
+      + `${stale.previousVersion ?? '?'} → ${stale.targetVersion}`
+      + (stale.backupDir ? `; its pre-install snapshot is retained at ${stale.backupDir}` : ''),
+    );
   }
+  const journal: PosixUpgradeJournal = {
+    helperPid: process.pid,
+    packageName: payload.packageName,
+    targetVersion: payload.targetVersion,
+    previousVersion,
+    installPrefix,
+    packageRoot,
+    backupDir: null,
+    restartArgv,
+    phase: 'preflight',
+    spawnedPid: null,
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const advanceJournal = (patch: Partial<PosixUpgradeJournal>): void => {
+    Object.assign(journal, patch);
+    writePosixUpgradeJournal(configDir, journal);
+  };
+  advanceJournal({});
 
-  const rollbackAndRestart = (cause: string): void => {
+  let backup: PosixInstallBackup | null = null;
+  // Synchronous emergency rollback for a signal delivered while the live
+  // install is unverified. Conservative by design: if the replacement was in
+  // fact healthy, this undoes a good upgrade — recoverable by retrying,
+  // whereas an unverified install left behind by a killed helper is exactly
+  // the rc.62 dead-machine state.
+  const onSignal = (signal: NodeJS.Signals): void => {
+    appendUpgradeLog(`Upgrade helper received ${signal} during "${journal.phase}" — restoring the previous install before exiting`);
+    if (journal.spawnedPid && journal.spawnedPid !== process.pid) {
+      try { process.kill(journal.spawnedPid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+    let restored = false;
     if (backup) {
       try {
         restorePosixInstall(backup);
-        appendUpgradeLog('Rollback restored the previous install');
-        safeRemoveStaleEntry(backup.backupDir, 'Removed upgrade backup after rollback');
+        restored = true;
       } catch (error: any) {
-        appendUpgradeLog(`ROLLBACK FAILED (${error?.code || 'error'}): ${error?.message || String(error)} — snapshot retained at ${backup.backupDir}`);
-        emitUpgradeFailureNotice([
-          `adhdev ${spec} install failed (${cause}) AND the automatic rollback failed.`,
-          `A snapshot of the previous working install is preserved at: ${backup.backupDir}`,
-          'To recover manually, reinstall the previous version:',
-          `  ${buildManualRecoveryCommand(installCommand)}`,
-        ], configDir, { targetVersion: payload.targetVersion });
-        spawnDetachedDaemonRestart(restartArgv, payload.cwd);
-        throw new Error(`Install failed and rollback failed for ${spec}: ${cause}`);
+        appendUpgradeLog(`Emergency restore failed: ${error?.message || String(error)} — snapshot retained at ${backup.backupDir}`);
       }
     }
+    try { spawnDetachedDaemonRestart(restartArgv, payload.cwd); } catch { /* best effort */ }
     emitUpgradeFailureNotice([
-      `adhdev ${spec} install failed (${cause}); the previous version was ${backup ? 'restored' : 'left as-is (no snapshot available)'}.`,
-      `The daemon was restarted on the previous version. See ${getUpgradeLogPath(configDir)} for the full trace.`,
-      'To retry manually:',
-      `  ${buildManualRecoveryCommand(installCommand)}`,
+      `adhdev ${spec} upgrade was interrupted (${signal}) during "${journal.phase}".`,
+      restored
+        ? `The previous version${previousVersion ? ` (${previousVersion})` : ''} was restored and the daemon restarted on it.`
+        : `The previous install could not be restored${backup ? `; a snapshot is at ${backup.backupDir}` : ''}. Reinstall manually if the daemon does not come back:`,
+      ...(restored ? [] : [`  ${buildManualRecoveryCommand(previousVersion ? retargetInstallCommand(installCommand, payload.packageName, payload.targetVersion, previousVersion) : installCommand)}`]),
     ], configDir, { targetVersion: payload.targetVersion });
-    spawnDetachedDaemonRestart(restartArgv, payload.cwd);
+    clearPosixUpgradeJournal(configDir);
+    process.exit(1);
+  };
+  const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT', 'SIGHUP'];
+  let signalsArmed = false;
+  const armSignals = (): void => {
+    if (signalsArmed) return;
+    signalsArmed = true;
+    for (const sig of signals) process.on(sig, onSignal);
   };
 
-  // Step 3: the in-place install itself. POSIX replaces open files freely and
-  // the pre-flight gate already proved the package runnable, so no retries.
-  let installOutput = '';
   try {
-    installOutput = String(hiddenExecFileSync(
-      installCommand.command,
-      installCommand.args,
-      {
-        encoding: 'utf8',
-        stdio: 'pipe',
-        maxBuffer: 20 * 1024 * 1024,
-        env: buildInstallEnvWithNodeOnPath(),
-        ...installCommand.execOptions,
-      },
-    ));
-  } catch (error: any) {
-    rollbackAndRestart(`npm install exited non-zero: ${error?.message || String(error)}`);
-    throw error;
-  }
-  if (installOutput.trim()) {
-    appendUpgradeLog(installOutput.trim());
-  }
-
-  // Step 4: post-install smoke gate on the LIVE prefix. Catches a swap that
-  // diverged from the pre-flight result (e.g. partial write with a zero exit).
-  if (installPrefix) {
+    // Step 0: sweep disposable scratch dirs from earlier attempts. Only the
+    // pre-flight dirs are safe to remove unconditionally — a leftover backup dir
+    // may be the user's last recovery copy after a failed rollback, so keep it.
     try {
-      smokeTestInstalledBins(installPrefix, payload.packageName);
+      for (const entry of fs.readdirSync(configDir)) {
+        if (entry.startsWith('upgrade-preflight-')) {
+          safeRemoveStaleEntry(path.join(configDir, entry), 'Removed stale pre-flight staging prefix');
+        }
+      }
+    } catch {
+      // noop — housekeeping must never abort the upgrade
+    }
+
+    // Step 1: pre-flight gate. Install the target into a throwaway prefix and
+    // prove the installed CLI actually runs before the live install is touched.
+    const preflightPrefix = (() => {
+      fs.mkdirSync(configDir, { recursive: true });
+      return fs.mkdtempSync(path.join(configDir, 'upgrade-preflight-'));
+    })();
+    try {
+      appendUpgradeLog(`Pre-flight: installing ${spec} into throwaway prefix ${preflightPrefix}`);
+      execNpmCommandSync(
+        ['install', '-g', spec, '--prefix', preflightPrefix],
+        {
+          encoding: 'utf8',
+          stdio: 'pipe',
+          maxBuffer: 20 * 1024 * 1024,
+          env: buildInstallEnvWithNodeOnPath(),
+        },
+        installCommand.surface,
+      );
+      smokeTestInstalledBins(preflightPrefix, payload.packageName);
+      appendUpgradeLog(`Pre-flight smoke gate passed for ${spec}`);
     } catch (error: any) {
-      rollbackAndRestart(`installed CLI failed its --version smoke test: ${error?.message || String(error)}`);
+      const detail = error?.message || String(error);
+      appendUpgradeLog(`Pre-flight smoke gate FAILED for ${spec}: ${detail} — existing install left untouched`);
+      emitUpgradeFailureNotice([
+        `adhdev ${spec} was NOT installed: the package installs but its CLI does not run (\`--version\` failed).`,
+        `Detail: ${detail}`,
+        'Your previous version is untouched and the daemon was restarted on it.',
+        'This is a broken published package — retry once a fixed version is published.',
+      ], configDir, { targetVersion: payload.targetVersion });
+      spawnDetachedDaemonRestart(restartArgv, payload.cwd);
+      throw new Error(`Pre-flight smoke gate failed for ${spec}: ${detail}`);
+    } finally {
+      safeRemoveStaleEntry(preflightPrefix, 'Removed pre-flight staging prefix');
+    }
+
+    // Step 2: snapshot the live install so a failed swap can be rolled back.
+    backup = packageRoot && installPrefix
+      ? backupPosixInstall({ packageRoot, installPrefix, packageName: payload.packageName, configDir })
+      : null;
+    if (backup) {
+      appendUpgradeLog(`Backed up current install${previousVersion ? ` (${previousVersion})` : ''} to ${backup.backupDir}`);
+    } else {
+      appendUpgradeLog('No rollback snapshot available (package root unresolved or backup failed); relying on the pre-flight gate alone');
+    }
+    advanceJournal({ phase: 'installing', backupDir: backup?.backupDir ?? null });
+    armSignals();
+
+    const liveBackup = backup;
+    const rollbackAndRestart = (cause: string): void => {
+      if (liveBackup) {
+        try {
+          restorePosixInstall(liveBackup);
+          appendUpgradeLog('Rollback restored the previous install');
+          safeRemoveStaleEntry(liveBackup.backupDir, 'Removed upgrade backup after rollback');
+        } catch (error: any) {
+          appendUpgradeLog(`ROLLBACK FAILED (${error?.code || 'error'}): ${error?.message || String(error)} — snapshot retained at ${liveBackup.backupDir}`);
+          emitUpgradeFailureNotice([
+            `adhdev ${spec} install failed (${cause}) AND the automatic rollback failed.`,
+            `A snapshot of the previous working install is preserved at: ${liveBackup.backupDir}`,
+            'To recover manually, reinstall the previous version:',
+            `  ${buildManualRecoveryCommand(installCommand)}`,
+          ], configDir, { targetVersion: payload.targetVersion });
+          spawnDetachedDaemonRestart(restartArgv, payload.cwd);
+          throw new Error(`Install failed and rollback failed for ${spec}: ${cause}`);
+        }
+      }
+      emitUpgradeFailureNotice([
+        `adhdev ${spec} install failed (${cause}); the previous version was ${liveBackup ? 'restored' : 'left as-is (no snapshot available)'}.`,
+        `The daemon was restarted on the previous version. See ${getUpgradeLogPath(configDir)} for the full trace.`,
+        'To retry manually:',
+        `  ${buildManualRecoveryCommand(installCommand)}`,
+      ], configDir, { targetVersion: payload.targetVersion });
+      spawnDetachedDaemonRestart(restartArgv, payload.cwd);
+    };
+
+    // Step 3: the in-place install itself. POSIX replaces open files freely and
+    // the pre-flight gate already proved the package runnable, so no retries.
+    let installOutput = '';
+    try {
+      installOutput = String(hiddenExecFileSync(
+        installCommand.command,
+        installCommand.args,
+        {
+          encoding: 'utf8',
+          stdio: 'pipe',
+          maxBuffer: 20 * 1024 * 1024,
+          env: buildInstallEnvWithNodeOnPath(),
+          ...installCommand.execOptions,
+        },
+      ));
+    } catch (error: any) {
+      rollbackAndRestart(`npm install exited non-zero: ${error?.message || String(error)}`);
       throw error;
     }
-  }
+    if (installOutput.trim()) {
+      appendUpgradeLog(installOutput.trim());
+    }
 
-  if (backup) {
-    safeRemoveStaleEntry(backup.backupDir, 'Removed upgrade backup after successful install');
+    // Step 4: post-install smoke gate on the LIVE prefix. Catches a swap that
+    // diverged from the pre-flight result (e.g. partial write with a zero exit).
+    if (installPrefix) {
+      try {
+        smokeTestInstalledBins(installPrefix, payload.packageName);
+      } catch (error: any) {
+        rollbackAndRestart(`installed CLI failed its --version smoke test: ${error?.message || String(error)}`);
+        throw error;
+      }
+    }
+
+    // Step 5: boot health gate. `--version` only proves the CLI entry loads;
+    // rc.62 passed it and then crashed on daemon boot fleet-wide.
+    const skipReason = describePosixHealthGateSkip(payload.packageName, restartArgv);
+    if (skipReason) {
+      appendUpgradeLog(`Boot health gate skipped: ${skipReason}`);
+      if (liveBackup) safeRemoveStaleEntry(liveBackup.backupDir, 'Removed upgrade backup after successful install');
+      spawnDetachedDaemonRestart(restartArgv, payload.cwd);
+      clearUpgradeFailureNotice();
+      return;
+    }
+
+    const port = resolvePosixHealthGatePort({ restartArgv, instanceDir: resolveInstanceDir(configDir) });
+    const result = await gatePosixUpgradeRestart({
+      targetVersion: payload.targetVersion,
+      previousVersion,
+      restartArgv,
+      port,
+      healthTimeoutMs: payload.healthTimeoutMs,
+      excludePids: [payload.parentPid].filter((n) => Number.isFinite(n) && n > 0),
+      hooks: buildPosixGateHooks({ payload, installCommand, backup: liveBackup, previousVersion, configDir }),
+      onPhase: (phase, spawnedPid) => advanceJournal({ phase, spawnedPid }),
+    });
+
+    if (result.outcome === 'healthy') {
+      appendUpgradeLog(`Upgrade to ${spec} verified: daemon${result.pid ? ` pid ${result.pid}` : ''} healthy on ${payload.targetVersion} after ${result.elapsedMs}ms`);
+      if (liveBackup) safeRemoveStaleEntry(liveBackup.backupDir, 'Removed upgrade backup after successful install');
+      clearUpgradeFailureNotice();
+      return;
+    }
+
+    const logPath = getUpgradeLogPath(configDir);
+    const previousLabel = previousVersion ?? 'the previous version';
+    const reinstallPrevious = previousVersion
+      ? buildManualRecoveryCommand(retargetInstallCommand(installCommand, payload.packageName, payload.targetVersion, previousVersion))
+      : null;
+    if (result.outcome === 'rolled_back') {
+      if (liveBackup) safeRemoveStaleEntry(liveBackup.backupDir, 'Removed upgrade backup after rollback');
+      emitUpgradeFailureNotice([
+        `adhdev ${spec} was ROLLED BACK to ${previousLabel}: the upgraded daemon failed its boot health gate — ${result.reason}.`,
+        `The previous version was restored (${result.restoredVia}) and its daemon is running again${result.pid ? ` (pid ${result.pid})` : ''}.`,
+        `See ${logPath} for the full install/health trace.`,
+      ], configDir, { targetVersion: payload.targetVersion });
+      throw new UpgradeNoticeEmittedError(
+        `Upgrade to ${spec} rolled back to ${previousLabel}: boot health gate failed — ${result.reason}`,
+      );
+    }
+
+    // rollback_failed — keep the snapshot; it may be the only good copy left.
+    appendUpgradeLog(`ROLLBACK FAILED for ${spec}: ${result.rollbackError}`);
+    emitUpgradeFailureNotice([
+      `adhdev ${spec} failed its boot health gate (${result.reason}) AND the automatic rollback to ${previousLabel} failed: ${result.rollbackError}.`,
+      result.daemonRunning
+        ? `A daemon is still running${result.runningVersion ? ` on version ${result.runningVersion}` : ''}${result.pid ? ` (pid ${result.pid})` : ''}, but it is not the verified previous version.`
+        : 'NO healthy daemon is running on this machine.',
+      ...(liveBackup ? [`A snapshot of the previous install is preserved at: ${liveBackup.backupDir}`] : []),
+      'To recover manually, reinstall the previous version and start the daemon:',
+      `  ${reinstallPrevious ?? buildManualRecoveryCommand(installCommand)}`,
+      `  ${IDENTITY.binaryName} daemon`,
+      `See ${logPath} for the full install/health trace.`,
+    ], configDir, { targetVersion: payload.targetVersion });
+    throw new UpgradeNoticeEmittedError(
+      `Upgrade to ${spec} failed its boot health gate and the rollback failed: ${result.rollbackError}`,
+    );
+  } finally {
+    if (signalsArmed) {
+      for (const sig of signals) process.removeListener(sig, onSignal);
+    }
+    clearPosixUpgradeJournal(configDir);
   }
-  spawnDetachedDaemonRestart(restartArgv, payload.cwd);
-  clearUpgradeFailureNotice();
 }
 
 export function spawnDetachedDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): void {
@@ -1449,7 +1753,7 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
   // then a backup + rollback + daemon-restart protected in-place install. The
   // win32 fallback below (lock-retry loop + conpty gate) is unchanged.
   if (process.platform !== 'win32') {
-    runPosixInPlaceUpgrade({ payload, installCommand, restartArgv });
+    await runPosixInPlaceUpgrade({ payload, installCommand, restartArgv });
     return;
   }
 
@@ -1551,7 +1855,11 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
   clearUpgradeFailureNotice();
 }
 
-function spawnDetachedDaemonRestart(restartArgv: string[], cwd?: string): void {
+/**
+ * Re-spawn the daemon detached. Returns the child so the POSIX boot health
+ * gate can notice a crash during boot; null when no restart was requested.
+ */
+function spawnDetachedDaemonRestart(restartArgv: string[], cwd?: string): ChildProcess | null {
   if (restartArgv.length > 0) {
     const env = { ...process.env };
     delete env[UPGRADE_HELPER_ENV];
@@ -1581,14 +1889,15 @@ function spawnDetachedDaemonRestart(restartArgv: string[], cwd?: string): void {
         env,
       });
       child.unref();
+      return child;
     } finally {
       // The child inherited the fd; drop our copy so this process does not hold
       // the log open. Runs even if spawn threw.
       closeOutFd();
     }
-  } else {
-    appendUpgradeLog('No restart argv provided; upgrade completed without restart');
   }
+  appendUpgradeLog('No restart argv provided; upgrade completed without restart');
+  return null;
 }
 
 export async function maybeRunDaemonUpgradeHelperFromEnv(): Promise<boolean> {
@@ -1596,8 +1905,10 @@ export async function maybeRunDaemonUpgradeHelperFromEnv(): Promise<boolean> {
   if (!raw) return false;
   delete process.env[UPGRADE_HELPER_ENV];
 
+  let targetVersion: string | null = null;
   try {
     const payload = JSON.parse(raw) as DaemonUpgradeHelperPayload;
+    targetVersion = typeof payload?.targetVersion === 'string' ? payload.targetVersion : null;
     // Fail closed on a conflicting instance identity: a payload naming one
     // config dir handed to a process env-pinned to another must abort, never
     // merge namespaces or retarget mid-upgrade.
@@ -1614,10 +1925,14 @@ export async function maybeRunDaemonUpgradeHelperFromEnv(): Promise<boolean> {
   } catch (error: any) {
     const detail = error?.stack || error?.message || String(error);
     appendUpgradeLog(`Upgrade helper failed: ${detail}`);
-    emitUpgradeFailureNotice([
-      `adhdev upgrade failed: ${error?.message || String(error)}`,
-      `See ${getUpgradeLogPath()} for details. The previous installer-managed version was preserved or restored when available.`,
-    ]);
+    // A path that already wrote a specific notice (the POSIX boot health gate's
+    // rollback report) keeps it — the generic wrapper would bury the reason.
+    if (!(error instanceof UpgradeNoticeEmittedError)) {
+      emitUpgradeFailureNotice([
+        `adhdev upgrade failed: ${error?.message || String(error)}`,
+        `See ${getUpgradeLogPath()} for details. The previous installer-managed version was preserved or restored when available.`,
+      ], getConfigDir(), { targetVersion });
+    }
     process.exit(1);
   }
 }

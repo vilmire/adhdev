@@ -11,6 +11,7 @@ import { daemonIdsEquivalent, meshNodeIdMatches, canonicalDaemonId } from '@adhd
 import type { LocalMeshNodeEntry } from '@adhdev/daemon-core';
 import { readString } from './mesh-tool-shared.js';
 import type { MeshContext } from './mesh-tools.js';
+import { meshNodeRouteOf } from './mesh-node-routes.js';
 
 export function resolveCoordinatorNode(ctx: MeshContext): LocalMeshNodeEntry | undefined {
     // Accept both spellings: mesh.coordinator is written by more than one path
@@ -275,6 +276,15 @@ function isConfiguredCoordinatorNode(ctx: MeshContext, node: LocalMeshNodeEntry)
 }
 
 function getLocalControlPlaneMatchReason(ctx: MeshContext, node: LocalMeshNodeEntry): string | undefined {
+    // The coordinator daemon's routing answer decides; the identity match below
+    // only NAMES why (presentation), and never makes a node the daemon routes
+    // elsewhere look local.
+    const route = meshNodeRouteOf(ctx, node);
+    if (route && route.route !== 'local') return undefined;
+    return describeLocalControlPlaneMatch(ctx, node);
+}
+
+function describeLocalControlPlaneMatch(ctx: MeshContext, node: LocalMeshNodeEntry): string | undefined {
     if (isDirectLocalNode(ctx, node)) return 'matched coordinator daemon or machine id';
     if (isConfiguredCoordinatorNode(ctx, node)) return 'matched configured coordinator node';
     if (node.isLocalWorktree === true) {
@@ -312,6 +322,19 @@ export function resolvePreferredWorktreeNodeId(ctx: MeshContext): string | undef
     return readString(chosen?.id) || readString(chosen?.nodeId) || readString(chosen?.node_id);
 }
 
+/**
+ * Whether the COORDINATOR DAEMON serves `node` in-process (`local`) — its
+ * `mesh_node_route` answer (mesh-node-routes.ts), never a guess made here.
+ * Before the daemon has answered for the node (it was not reachable, or a
+ * caller skipped `ensureMeshNodeRoutes`), only the identity facts decide: a node
+ * that names no daemon, or names the daemon this process is attached to, is
+ * served by it; any other daemon's node is not assumed to be.
+ */
 export function isLocalControlPlaneNode(ctx: MeshContext, node: LocalMeshNodeEntry): boolean {
-    return !!getLocalControlPlaneMatchReason(ctx, node);
+    const route = meshNodeRouteOf(ctx, node);
+    if (route) return route.route === 'local';
+    const nodeDaemonId = readNodeDaemonId(node);
+    if (!nodeDaemonId) return true;
+    return (!!ctx.localDaemonId && daemonIdsEquivalent(nodeDaemonId, ctx.localDaemonId))
+        || (!!ctx.localMachineId && daemonIdsEquivalent(nodeDaemonId, ctx.localMachineId));
 }

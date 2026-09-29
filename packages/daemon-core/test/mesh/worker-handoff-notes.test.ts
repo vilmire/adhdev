@@ -1,7 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
-  __resetHandoffNotesForTest,
   composeTaskDispatchBody,
   getStoredHandoffNote,
   HANDOFF_ENCLOSE_MAX_NOTES,
@@ -16,6 +15,8 @@ import { WORKER_HANDOFF_EVENT_KIND } from '../../src/mesh/worker-report'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
 import { seedWorkerEvent } from '../helpers/turn-attempt-seed'
 import { meshHandoffTopic, meshEventsTopic, baseTopicDefinitions } from '../../src/seqscribe/topics'
+import { bindSeqscribeRuntime } from '../../src/seqscribe/runtime-slot'
+import { pruneExpiredHandoffNotes } from '../../src/mesh/worker-handoff-notes'
 
 // ★Each test gets its OWN mesh id AND attempt id namespace.
 //
@@ -49,7 +50,7 @@ function seedNote(opts: {
     payload: { touchedFiles: opts.files, intentLength: 10, hasConflictGuidance: !!opts.guidance, followUpCount: 0 },
     atMs: opts.recordedAtMs ?? Date.now(),
   })
-  // The TEXT — local mirror + (when configured) the content topic.
+  // The TEXT row (SQLite — the single store).
   storeHandoffNote({
     meshId: MESH,
     taskId: opts.taskId,
@@ -64,11 +65,9 @@ function seedNote(opts: {
 }
 
 beforeEach(() => {
-  __resetHandoffNotesForTest()
   meshSeq += 1
   MESH = `mesh_handoff_test_${meshSeq}`
 })
-afterEach(() => { __resetHandoffNotesForTest() })
 
 // ─── Topic boundary (design §9.1) ────────────────────────────────────────
 
@@ -96,7 +95,7 @@ describe('handoff topic', () => {
     expect(handoffTopics).toEqual(['mesh.m1.handoff', 'mesh.m2.handoff'])
   })
 
-  it('keeps full retention — a note must outlive the ring a transcript would use', () => {
+  it("keeps full retention — summaries are read by ref, a ring would evict them", () => {
     const defs = baseTopicDefinitions(['m1'])
     const handoff = defs.find(d => d.topic === meshHandoffTopic('m1'))
     // A note exists to be read by work dispatched days later; a ring would
@@ -119,6 +118,56 @@ describe('note storage', () => {
     })
     expect(getStoredHandoffNote(MESH, 't1')?.notes.intent).toBe('narrowed the registry key')
     expect(getStoredHandoffNote(MESH, 'nope')).toBeNull()
+  })
+})
+
+describe('single store (SQLite only)', () => {
+  afterEach(() => { bindSeqscribeRuntime(null) })
+
+  it('storeHandoffNote never appends to the seqscribe handoff topic, even with an armed node that defines it', () => {
+    const append = vi.fn(async () => undefined)
+    const log = vi.fn(() => ({ append }))
+    bindSeqscribeRuntime({
+      node: {
+        topics: [{ topic: meshHandoffTopic(MESH), policy: {} }],
+        node: { log },
+        authorityEnabled: true,
+      },
+    } as never)
+    storeHandoffNote({
+      meshId: MESH,
+      taskId: 'tOnce',
+      notes: { intent: 'sql only', touchedFiles: ['src/a.ts'] },
+      recordedAtIso: new Date().toISOString(),
+    })
+    expect(log).not.toHaveBeenCalled()
+    expect(append).not.toHaveBeenCalled()
+    expect(getStoredHandoffNote(MESH, 'tOnce')?.notes.intent).toBe('sql only')
+  })
+
+  it('reads through to the durable row every time — there is no cache to go stale', () => {
+    storeHandoffNote({
+      meshId: MESH,
+      taskId: 'tRead',
+      notes: { intent: 'first', touchedFiles: [] },
+      recordedAtIso: new Date().toISOString(),
+    })
+    MeshRuntimeStore.getInstance().upsertHandoffNoteText({
+      meshId: MESH,
+      taskId: 'tRead',
+      notesJson: JSON.stringify({ intent: 'edited in the table', touchedFiles: [] }),
+      recordedAt: new Date().toISOString(),
+    })
+    expect(getStoredHandoffNote(MESH, 'tRead')?.notes.intent).toBe('edited in the table')
+  })
+
+  it('the 30-day sweep removes the text row together with the index row (bounded, nothing orphaned)', () => {
+    const old = Date.now() - HANDOFF_RETENTION_MS - 60_000
+    seedNote({ taskId: 'tOld', files: ['src/old.ts'], recordedAtMs: old })
+    seedNote({ taskId: 'tNew', files: ['src/new.ts'] })
+    pruneExpiredHandoffNotes()
+    expect(getStoredHandoffNote(MESH, 'tOld')).toBeNull()
+    expect(getStoredHandoffNote(MESH, 'tNew')).not.toBeNull()
   })
 })
 

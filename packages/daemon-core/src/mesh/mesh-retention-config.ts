@@ -27,7 +27,7 @@
 //      mesh_graph_* tables (wired into MeshGraphStore.pruneTerminalGraphs).
 //   6. Delivered/failed outbox-row window, a cross-graph sweep independent of
 //      (5) (MeshGraphStore.pruneTerminalOutbox).
-//   7. The enforce switch that keeps (5)+(6) in OBSERVE mode by default.
+//   (The former (7) observe/enforce switch was removed 2026-09-29: always enforced.)
 // ---------------------------------------------------------------------------
 
 import { readNonEmptyString } from './mesh-events-utils.js';
@@ -159,24 +159,4 @@ export function resolveGraphOutboxRetentionMs(): number {
         if (Number.isFinite(parsed) && parsed >= 1 * DAY_MS && parsed <= 90 * DAY_MS) return parsed;
     }
     return DEFAULT_GRAPH_OUTBOX_RETENTION_MS;
-}
-
-// ─── (7) graph retention enforce switch (Slice 3) ────────────────────────────
-// The graph tables carry NO foreign keys (mesh-graph-schema.ts is ADDITIVE-ONLY;
-// FKs cannot be added retroactively to live DBs), so the seven-table delete order
-// is entirely an application-level invariant: miss a table and the orphan is
-// silent — no error, no constraint violation, just rows nothing will ever reach
-// again. Deletion is also irreversible.
-//
-// So the first shipped default is OBSERVE: the sweep runs its full selection —
-// terminal-graph predicate, every exception filter, the outbox window — and
-// reports the counts it WOULD delete, without issuing a single DELETE. Flipping
-// the default to enforce is a separate, deliberate commit made after live
-// observe counts have been read; it is not something an operator should trip
-// into by accident, which is why only an explicit '1'/'true' enables it.
-export function resolveGraphRetentionEnforce(): boolean {
-    const raw = readNonEmptyString(process.env.MESH_GRAPH_RETENTION_ENFORCE);
-    if (!raw) return false;
-    const normalized = raw.trim().toLowerCase();
-    return normalized === '1' || normalized === 'true';
 }

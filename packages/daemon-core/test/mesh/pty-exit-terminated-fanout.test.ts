@@ -45,7 +45,7 @@ function harness() {
   const bus = createSessionLifecycleBus()
   const registry = new SessionRegistry(bus)
   const port = createSessionEventPort(bus, registry)
-  const transcript = { markDirty: vi.fn(), startPolling: vi.fn(), stopPolling: vi.fn(), forgetSession: vi.fn() }
+  const transcript = { markDirty: vi.fn(), startPolling: vi.fn(), stopPolling: vi.fn(), forgetSession: vi.fn(), warmSession: vi.fn() }
   const live = subscribeLiveSessions(bus)
   const offs = [
     subscribeMeshTermination(bus),

@@ -86,3 +86,41 @@ describe('MeshTopicIndex', () => {
         expect(hasDispatchAfterTerminal(index, 'm1', 's1', 'led-wA-2', ['session_stopped'])).toBe(false);
     });
 });
+
+describe('MeshTopicIndex retention (pruneOlderThan)', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const NOW = Date.UTC(2026, 8, 29);
+
+    it('deletes only rows older than the cutoff, across writers and meshes, and reports the count', () => {
+        const index = new MeshTopicIndex(memDb());
+        index.ingest(record('m1', 'wA', 1, 'task_dispatched', NOW - 40 * DAY, { taskId: 'old' }));
+        index.ingest(record('m2', 'wB', 1, 'session_stopped', NOW - 31 * DAY, { sessionId: 'old2' }));
+        index.ingest(record('m1', 'wA', 2, 'task_dispatched', NOW - 29 * DAY, { taskId: 'recent' }));
+        index.ingest(record('m1', 'wB', 2, 'task_dispatched', NOW - 1 * DAY, { taskId: 'today' }));
+
+        expect(index.pruneOlderThan(NOW - 30 * DAY)).toBe(2);
+
+        const left = index.query('m1', { writer: { scope: 'fleet' } }).map((v) => v.payload.taskId);
+        expect(left).toEqual(['recent', 'today']);
+        expect(index.query('m2', { writer: { scope: 'fleet' } })).toEqual([]);
+        // Idempotent.
+        expect(index.pruneOlderThan(NOW - 30 * DAY)).toBe(0);
+    });
+
+    it('deletes in bounded batches (a backlog larger than one batch is drained fully)', () => {
+        const index = new MeshTopicIndex(memDb());
+        for (let i = 1; i <= 25; i++) index.ingest(record('m1', 'wA', i, 'direct_fast_forward', NOW - 60 * DAY + i));
+        index.ingest(record('m1', 'wA', 99, 'task_dispatched', NOW, { taskId: 'live' }));
+        expect(index.pruneOlderThan(NOW - 30 * DAY, 10)).toBe(25);
+        expect(index.query('m1', { writer: { scope: 'fleet' } }).map((v) => v.payload.taskId)).toEqual(['live']);
+    });
+
+    it('a row the durable cursor already passed is not re-read: re-ingest of a live row is still a no-op, and pruned rows never block ingest of new ones', () => {
+        const index = new MeshTopicIndex(memDb());
+        const fresh = record('m1', 'wA', 5, 'task_dispatched', NOW, { taskId: 'fresh' });
+        expect(index.ingest(fresh)).toBe(true);
+        index.pruneOlderThan(NOW - 30 * DAY);
+        expect(index.ingest(fresh)).toBe(false);
+        expect(index.ingest(record('m1', 'wA', 6, 'task_dispatched', NOW + 1, { taskId: 'next' }))).toBe(true);
+    });
+});

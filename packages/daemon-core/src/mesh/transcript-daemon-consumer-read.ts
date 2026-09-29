@@ -17,7 +17,7 @@
  * ── The readiness gate applied here (design §5.5) ──────────────────────────
  * Common conditions 1, 2, 5 and 7 of §5.5 are enforced in this module or
  * upstream of it:
- *   1. mode `primary` + roster `enabled`      → `mode_not_primary` / `consumer_not_enabled`
+ *   1. roster `enabled`                     → `consumer_not_enabled`
  *   2. node/store present, key resolvable     → `no_node`
  *   5. a verified commit, structurally usable → `no_complete_revision` / `revision_invalid`
  *   7. owner/session identity match           → enforced INSIDE the store on
@@ -46,7 +46,6 @@
  */
 
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
-import { resolveTranscriptMode } from '../seqscribe/transcript-mode.js';
 import type { ReplicatedTranscriptViewV2 } from '../seqscribe/transcript-keyed-codec.js';
 import type { TranscriptReplicaStore } from '../seqscribe/transcript-replica-store.js';
 import {
@@ -132,7 +131,6 @@ export interface TranscriptConsumerReadRequest {
     readonly store: TranscriptReplicaStore | null | undefined;
     /** Injected for tests; production passes nothing and gets the real clock. */
     readonly nowMs?: number;
-    readonly env?: NodeJS.ProcessEnv;
 }
 
 /**
@@ -148,10 +146,7 @@ export interface TranscriptConsumerReadRequest {
 export function readTranscriptForDaemonConsumer(
     request: TranscriptConsumerReadRequest,
 ): TranscriptConsumerReadOutcome {
-    // §5.5 condition 1 — mode + roster enablement.
-    if (resolveTranscriptMode(request.env ?? process.env) !== 'primary') {
-        return decline('mode_not_primary');
-    }
+    // §5.5 condition 1 — roster enablement.
     if (!TRANSCRIPT_CONSUMER_ROSTER[request.consumerId].enabled) {
         return decline('consumer_not_enabled');
     }

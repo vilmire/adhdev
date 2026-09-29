@@ -649,7 +649,12 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                     // local probe reuses the bootstrap hydrate's probe for
                                     // the same workspace (and vice versa) instead of
                                     // re-shelling ~14 git processes across the 1.5s TTL.
-                                    const runLocalProbe = () => getGitRepoStatus(workspace, { timeoutMs: 10_000, refreshUpstream: true }) as unknown as Promise<Record<string, unknown> | null>;
+                                    // A checkout this daemon reads itself: watch its git dir so a commit from a
+                                    // terminal flushes this mesh's view (the read's own writes are ignored).
+                                    const localWatch = ctx.localMeshNodeGitWatch;
+                                    localWatch?.track(meshId, workspace);
+                                    const readLocal = () => getGitRepoStatus(workspace, { timeoutMs: 10_000, refreshUpstream: true }) as unknown as Promise<Record<string, unknown> | null>;
+                                    const runLocalProbe = () => (localWatch ? localWatch.read(workspace, readLocal) : readLocal());
                                     const gitStatus = (await meshGitProbeCache.probeLocal(workspace, runLocalProbe)) as any;
                                     if (!gitStatus) throw new Error('local_git_probe_unavailable');
                                     status.git = gitStatus;
@@ -754,7 +759,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     // of it vanishing silently. Diagnostic-only — never cached (see omit below).
                     const unroutableDeliveries = getRecentUnroutableDeliveries();
                     // Stage 6: unified turn-presentation observability — authority source
-                    // usage, shadow divergences (reason|surface|provider) and age gauges.
+                    // usage and age gauges.
                     // Process-lifetime snapshot (never cached — like meshProtocolV2Counters).
                     const turnPresentationCounters = getTurnPresentationMetrics();
                     const previewFreshness = (() => {

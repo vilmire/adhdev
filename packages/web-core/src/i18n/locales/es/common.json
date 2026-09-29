@@ -1830,7 +1830,6 @@
     },
     "chatPane": {
         "debugBundleFailed": "No se pudo recopilar la información de depuración",
-        "replicaDegradedShort": "Sincronización degradada",
         "connectingToMachine": "Conectando con tu máquina",
         "establishingP2P": "Estableciendo conexión P2P",
         "agentNotMonitored": "Agente no monitorizado",
@@ -1842,7 +1841,6 @@
         "openPanel": "Abrir panel de {{label}}",
         "switchingPanel": "Cambiando...",
         "openingPanel": "Abriendo...",
-        "replicaDegraded": "La sincronización en vivo tiene problemas: se muestran los mensajes del modo anterior",
         "busyNoProgress": "El agente no muestra progreso.",
         "busyGenerating": "El agente está generando una respuesta.",
         "busyWaitingApproval": "Esperando aprobación",

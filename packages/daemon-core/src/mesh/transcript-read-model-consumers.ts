@@ -90,7 +90,6 @@ export type TranscriptConsumerId =
  * source now that a second call site (this roster + the web adapter) needs it.
  */
 export type TranscriptConsumerFallbackReason =
-    | 'mode_not_primary'
     | 'consumer_not_enabled'
     | 'no_node'
     | 'authority_unavailable'
@@ -128,13 +127,13 @@ export interface TranscriptConsumerRosterEntry {
 /** The full roster table (§4) — id → current call site + enablement state. */
 export const TRANSCRIPT_CONSUMER_ROSTER: Readonly<Record<TranscriptConsumerId, TranscriptConsumerRosterEntry>> = {
     web_chat_pane: {
-        currentLocation: 'oss/packages/web-core/src/components/dashboard/session-chat-tail-controller.ts',
-        note: 'Live pane transcript authority + history merge; allow-list preserves every field SessionChatTailUpdate consumers read.',
+        currentLocation: 'oss/packages/web-core/src/components/dashboard/session-chat-controller.ts',
+        note: 'The chat pane\'s ONLY live transcript source (desktop + mobile, cloud + standalone); older-than-cap history is an explicit chat_history page on demand.',
         enabled: true,
         unit: 5,
     },
     web_warm_mobile_preview: {
-        currentLocation: 'oss/packages/web-core/src/components/dashboard/session-chat-tail-controller.ts (useWarmSessionChatTailControllers)',
+        currentLocation: 'oss/packages/web-core/src/components/dashboard/session-chat-controller.ts (useWarmSessionChatControllers)',
         note: 'Selector over the SAME warm controller snapshot web_chat_pane reads — no separate subscription.',
         enabled: true,
         unit: 5,

@@ -275,7 +275,7 @@ function MeshMachinesSection({ status, previewVersion }: { status: RepoMeshStatu
     const unreported = machines.filter(machine => !machine.hasReported)
     return (
         <div className="flex flex-col gap-2">
-            <span className={`px-1 text-2xs font-semibold uppercase tracking-[0.16em] ${meshTheme.textSecondary}`}>
+            <span className={`px-1 text-xs font-semibold ${meshTheme.textPrimary}`}>
                 {t('mesh.status.machinesSection')}
             </span>
             {reported.map(machine => {

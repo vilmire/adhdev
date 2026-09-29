@@ -1827,7 +1827,6 @@
     },
     "chatPane": {
         "debugBundleFailed": "デバッグ情報を収集できませんでした",
-        "replicaDegradedShort": "同期が不安定",
         "connectingToMachine": "マシンに接続中",
         "establishingP2P": "P2P 接続を確立中",
         "agentNotMonitored": "エージェントは監視されていません",
@@ -1839,7 +1838,6 @@
         "openPanel": "{{label}} パネルを開く",
         "switchingPanel": "切り替え中...",
         "openingPanel": "オープン中...",
-        "replicaDegraded": "リアルタイム同期に問題が発生しているため、以前の方式で表示しています",
         "busyNoProgress": "エージェントに進捗がありません。",
         "busyGenerating": "エージェントが応答を生成中です。",
         "busyWaitingApproval": "承認待ち",

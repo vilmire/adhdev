@@ -169,25 +169,25 @@ export function buildHeldRenderMesh(args: {
     return replaced ? { ...args.mesh, nodes } : args.mesh;
 }
 
-/** Step 2. Non-blocking; returns how many background probes / nudges were started. */
+/**
+ * Step 2. Non-blocking; returns how many nudges were started. The coordinator
+ * never reads a member: a node it holds nothing for gets the first-contact
+ * nudge (which subscribes the member), and an explicit refresh nudges members
+ * whose held state is at least MESH_NODE_STATE_REFRESH_MAX_AGE_MS old.
+ */
 export function kickMeshNodeGitRefreshes(args: {
     meshId: string;
     mesh: any;
     store: MeshNodeGitStateStore;
     refresher: MeshNodeGitRefresher;
     locality: MeshNodeLocality;
-    /**
-     * Explicit refresh: ask every remote member whose observation is at least
-     * MESH_NODE_STATE_REFRESH_MAX_AGE_MS old to push now (nudge). Never a forced
-     * probe of a subscribed member.
-     */
+    /** Explicit refresh (user action): ask old-enough members to push now. */
     refresh: boolean;
     now?: number;
 }): number {
     const now = args.now ?? Date.now();
     let started = 0;
     const nodes = Array.isArray(args.mesh?.nodes) ? args.mesh.nodes : [];
-    const runtimeTargetsByDaemon = new Map<string, Array<{ nodeId: string; workspace: string; force: boolean }>>();
     for (const node of nodes) {
         if (!node || typeof node !== 'object') continue;
         if (!isForeignDaemonMeshNode(node, args.locality)) continue;
@@ -197,21 +197,15 @@ export function kickMeshNodeGitRefreshes(args: {
         if (!nodeId || !daemonId || !workspace) continue;
         const entry = args.store.get(args.meshId, nodeId);
         const target = { meshId: args.meshId, nodeId, daemonId, workspace };
-        const gitOld = !entry || entry.observedAt === null || now - entry.observedAt >= MESH_NODE_STATE_REFRESH_MAX_AGE_MS;
-        const runtimeOld = !entry || entry.runtimeObservedAt === null || now - entry.runtimeObservedAt >= MESH_NODE_STATE_REFRESH_MAX_AGE_MS;
-        if (isRemoteMeshNodeForState(node, args.locality)) {
-            // The handshake probe first (nothing held / member stopped pushing);
-            // otherwise an explicit refresh nudges the member to push now.
-            if (args.refresher.kick(target)) started += 1;
-            else if (args.refresh && (gitOld || runtimeOld) && args.refresher.nudge(target)) started += 1;
+        if (args.refresher.firstContact(target)) {
+            started += 1;
+            continue;
         }
-        const targets = runtimeTargetsByDaemon.get(daemonId) ?? [];
-        // `force` only reaches members that do not push their runtime (older builds).
-        targets.push({ nodeId, workspace, force: args.refresh && runtimeOld });
-        runtimeTargetsByDaemon.set(daemonId, targets);
-    }
-    for (const [daemonId, targets] of runtimeTargetsByDaemon) {
-        if (args.refresher.kickRuntime(args.meshId, daemonId, targets)) started += 1;
+        if (!args.refresh) continue;
+        const gitOld = isRemoteMeshNodeForState(node, args.locality)
+            && (!entry || entry.observedAt === null || now - entry.observedAt >= MESH_NODE_STATE_REFRESH_MAX_AGE_MS);
+        const runtimeOld = !entry || entry.runtimeObservedAt === null || now - entry.runtimeObservedAt >= MESH_NODE_STATE_REFRESH_MAX_AGE_MS;
+        if ((gitOld || runtimeOld) && args.refresher.nudge(target)) started += 1;
     }
     return started;
 }

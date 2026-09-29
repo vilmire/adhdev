@@ -5,7 +5,7 @@ import {
 } from '../../../src/components/dashboard/conversation-message-snapshot'
 import { filterChatMessagesForDefaultTranscript } from '../../../src/components/dashboard/chat-activity-visibility'
 import type { ActiveConversation } from '../../../src/components/dashboard/types'
-import type { SessionChatTailSnapshot } from '../../../src/components/dashboard/session-chat-tail-controller'
+import type { SessionChatSnapshot } from '../../../src/components/dashboard/session-chat-controller'
 
 function createConversation(overrides: Partial<ActiveConversation> = {}): ActiveConversation {
     return {
@@ -29,20 +29,20 @@ function createConversation(overrides: Partial<ActiveConversation> = {}): Active
     }
 }
 
-function createSnapshot(messages: ActiveConversation['messages']): SessionChatTailSnapshot {
+function createSnapshot(messages: ActiveConversation['messages']): SessionChatSnapshot {
     return {
         liveMessages: messages,
         hasLiveSnapshot: true,
-        cursor: { tailLimit: 60 },
         historyMessages: [],
         historyOffset: 0,
         hasMoreHistory: true,
         historyError: null,
+        omittedBefore: false,
     }
 }
 
 describe('conversation message authority snapshot', () => {
-    it('uses conversation fallback before any authoritative chat-tail snapshot hydrates', () => {
+    it('uses conversation fallback before any authoritative keyed-chat snapshot hydrates', () => {
         const conversation = createConversation({
             messages: [
                 { role: 'assistant', content: 'pre-hydration fallback', id: 'fallback-1', receivedAt: 1000 },
@@ -54,7 +54,7 @@ describe('conversation message authority snapshot', () => {
         expect(liveMessages.map(message => message.content)).toEqual(['pre-hydration fallback'])
     })
 
-    it('keeps authoritative chat-tail authority even when the live tail is shorter than stale cached conversation rows', () => {
+    it('keeps authoritative keyed-chat authority even when the live tail is shorter than stale cached conversation rows', () => {
         const conversation = createConversation({
             messages: [
                 { role: 'user', content: 'stale cached prompt', id: 'fallback-1', receivedAt: 1000 },
@@ -71,7 +71,7 @@ describe('conversation message authority snapshot', () => {
         expect(liveMessages.map(message => message.content)).toEqual(['authoritative recent live tail'])
     })
 
-    it('respects an authoritative empty chat-tail snapshot instead of resurrecting stale fallback rows', () => {
+    it('respects an authoritative empty keyed-chat snapshot instead of resurrecting stale fallback rows', () => {
         const conversation = createConversation({
             messages: [
                 { role: 'assistant', content: 'stale fallback should stay hidden', id: 'fallback-1', receivedAt: 1000 },
@@ -106,7 +106,7 @@ describe('conversation message authority snapshot', () => {
         expect(visibleMessages.map(message => message.content)).toEqual(['history', 'live two'])
     })
 
-    it('uses a longer chat-tail snapshot when the latest timestamp ties the conversation fallback', () => {
+    it('uses a longer keyed-chat snapshot when the latest timestamp ties the conversation fallback', () => {
         const conversation = createConversation({
             messages: [
                 { role: 'assistant', content: 'fallback latest only', id: 'fallback-1', receivedAt: 3000 },
@@ -125,7 +125,7 @@ describe('conversation message authority snapshot', () => {
         ])
     })
 
-    it('uses an explicit chat-tail snapshot as ChatPane live authority when one exists', () => {
+    it('uses an explicit keyed-chat snapshot as ChatPane live authority when one exists', () => {
         const conversation = createConversation({
             messages: [
                 { role: 'assistant', content: 'new transcript last message', id: 'new-1', receivedAt: 4000 },

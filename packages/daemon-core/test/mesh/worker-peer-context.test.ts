@@ -7,7 +7,7 @@ import {
   mintWorkerSessionBind,
   mintWorkerTaskToken,
 } from '../../src/mesh/worker-mcp-isolation'
-import { __resetHandoffNotesForTest, storeHandoffNote } from '../../src/mesh/worker-handoff-notes'
+import { storeHandoffNote } from '../../src/mesh/worker-handoff-notes'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
 import { meshTopicIndexFor, MESH_RECORD_APPEND_KIND } from '../../src/mesh/mesh-topic-index'
 
@@ -29,12 +29,10 @@ function seedLocalRecord(meshId: string, e: { kind: string; taskId?: string; nod
 beforeEach(() => {
   __resetWorkerTaskTokensForTest()
   __resetWorkerSessionBindsForTest()
-  __resetHandoffNotesForTest()
 })
 afterEach(() => {
   __resetWorkerTaskTokensForTest()
   __resetWorkerSessionBindsForTest()
-  __resetHandoffNotesForTest()
 })
 
 // mesh_queue rows share a process-wide SQLite store keyed by `id` alone (not

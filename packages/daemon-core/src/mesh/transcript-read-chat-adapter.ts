@@ -14,9 +14,9 @@
  * JSON needs a replica-specific code path.
  *
  * This mirrors §8 unit 5's `transcript-chat-pane-adapter.ts` (web-core), which
- * does the same job against `SessionChatTailUpdate` instead. Two adapters
- * rather than one because the two consumers' target shapes genuinely differ
- * (`SessionChatTailUpdate` is a push envelope with `topic`/`key`/`seq`;
+ * does the same job against the chat pane's `DashboardMessage` rows instead.
+ * Two adapters rather than one because the two consumers' target shapes
+ * genuinely differ (the pane keeps bubble objects identity-stable per frame;
  * `read_chat`'s result is a command payload with `totalMessages`/
  * `providerObservedStatus`/`turn`) — the shared part is the SOURCE type, not
  * the destination.

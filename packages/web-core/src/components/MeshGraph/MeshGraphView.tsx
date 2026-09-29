@@ -43,11 +43,12 @@ import {
     getMeshGraphViewportKey,
 } from '../../utils/mesh-graph-viewport'
 import { useTheme } from '../../hooks/useTheme'
-import { getMeshGraphTheme } from './meshGraphTheme'
+import { getMeshGraphTheme, MESH_CHIP_BASE, MESH_EDGE_LABEL_BASE, meshChipTone } from './meshGraphTheme'
 import {
     buildMeshGraphLayout,
     formatMeshGraphAheadBehindLocalized,
     MESH_GRAPH_EDGE_LABEL,
+    estimateMeshGraphNodeHeight,
     getMeshGraphNodeCardWidth,
     getNodeSummaryForLayout,
     type MeshGraphDirection,
@@ -58,6 +59,7 @@ import { formatMeshConnectionRtt, formatMeshConnectionTransport } from '../../ut
 import { sessionElapsedLabel, sessionRoleText, sessionStatusLabel, sessionStatusText } from './MeshObservabilitySurface/meshSurfaceHelpers'
 import { formatElapsedCompact } from '../../utils/time'
 import { edgeColor } from './meshGraphEdgeLegend'
+import { edgeDash } from './meshGraphEdgeLegend'
 export { MeshGraphEdgeLegend } from './meshGraphEdgeLegend'
 import { IconGitBranch } from '../Icons'
 import { requestOpenSessionChat } from '../../utils/session-nav'
@@ -141,118 +143,59 @@ function isNodeStale(node: MeshGraphNode): boolean {
     return node.health === 'offline' || (node.snapshotCompleteness === 'stale' && node.activeSessionCount === 0)
 }
 
-function getHealthClasses(node: MeshGraphNode, selected: boolean, isDark: boolean): string {
-    const isActive = isNodeActive(node)
+function getHealthClasses(node: MeshGraphNode, selected: boolean): string {
     const isStale = isNodeStale(node)
-
-    // Same card family as the task-DAG view: flat shadow-sm + ring selection.
-    // The old bespoke multi-layer glows made the two graph surfaces read as
-    // different design systems.
-    let base: string
-    if (selected) {
-        base = isDark
-            ? 'border-cyan-400/60 ring-2 ring-cyan-300/60 shadow-sm'
-            : 'border-sky-400 ring-2 ring-sky-400/70 shadow-sm'
-    } else if (isActive) {
-        base = isDark ? 'border-emerald-400/40 shadow-sm' : 'border-emerald-400/60 shadow-sm'
-    } else if (isStale) {
-        base = isDark ? 'border-white/6 shadow-sm opacity-60' : 'border-slate-200/70 shadow-sm opacity-60'
-    } else {
-        base = isDark ? 'border-white/10 shadow-sm' : 'border-slate-300/90 shadow-sm'
-    }
-
+    // One neutral card surface for every node (the app's --bg-card), a 1px
+    // border, no tinted fills and no glow. Selection = the single accent;
+    // failure / attention colour only the thin border. Health itself is the
+    // dot in the card header; liveness is the pulsing active-session dot.
+    const surface = 'bg-bg-card'
+    if (selected) return `${surface} border-accent ring-1 ring-accent/50`
     const attention = getMeshGraphAttentionBadge(node)
-
-    if (attention?.tone === 'danger') return `${base} ${isDark ? 'bg-rose-500/12' : 'bg-rose-50/95'}`
-    if (attention?.tone === 'warn') return `${base} ${isDark ? 'bg-amber-500/10' : 'bg-amber-50/95'}`
-    if (attention?.tone === 'info') return `${base} ${isDark ? 'bg-violet-500/10' : 'bg-violet-50/95'}`
-
-    switch (node.health) {
-        case 'online':
-            return `${base} ${isDark ? (isActive ? 'bg-emerald-500/10' : 'bg-emerald-500/8') : (isActive ? 'bg-emerald-50' : 'bg-emerald-50/95')}`
-        case 'dirty':
-            return `${base} ${isDark ? 'bg-amber-500/8' : 'bg-amber-50/95'}`
-        case 'degraded':
-            return `${base} ${isDark ? 'bg-rose-500/10' : 'bg-rose-50/95'}`
-        case 'wrong_branch':
-            return `${base} ${isDark ? 'bg-violet-500/10' : 'bg-violet-50/95'}`
-        case 'offline':
-            return `${base} ${isDark ? 'bg-slate-500/10' : 'bg-slate-100/90'}`
-        default:
-            return `${base} ${isDark ? 'bg-slate-950/78' : 'bg-white/96'}`
-    }
+    const stale = isStale ? ' opacity-60' : ''
+    if (attention?.tone === 'danger' || node.health === 'degraded') return `${surface} border-status-error/40${stale}`
+    if (attention?.tone === 'warn') return `${surface} border-status-warning/40${stale}`
+    if (isStale) return `${surface} border-border-subtle opacity-60`
+    return `${surface} border-border-default`
 }
 
-function getBadgeClasses(kind: 'health' | 'dirty' | 'conflict' | 'orphan' | 'meta' | 'submodule' | 'refineDone', isDark: boolean): string {
+function getBadgeClasses(kind: 'health' | 'dirty' | 'conflict' | 'orphan' | 'meta' | 'submodule' | 'refineDone'): string {
     switch (kind) {
-        case 'refineDone':
-            return isDark
-                ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200'
-                : 'border-emerald-300 bg-emerald-50 text-emerald-700'
+        case 'refineDone': return meshChipTone('good')
+        case 'dirty': return meshChipTone('warn')
+        case 'conflict': return meshChipTone('danger')
+        case 'orphan': return meshChipTone('warn')
         case 'health':
-            return isDark
-                ? 'border-white/10 bg-slate-950/60 text-slate-200'
-                : 'border-slate-300 bg-white/95 text-slate-700'
-        case 'dirty':
-            return isDark
-                ? 'border-amber-400/25 bg-amber-500/10 text-amber-200'
-                : 'border-amber-300 bg-amber-50 text-amber-700'
-        case 'conflict':
-            return isDark
-                ? 'border-rose-400/25 bg-rose-500/10 text-rose-200'
-                : 'border-rose-300 bg-rose-50 text-rose-700'
-        case 'orphan':
-            return isDark
-                ? 'border-fuchsia-400/25 bg-fuchsia-500/10 text-fuchsia-200'
-                : 'border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700'
         case 'submodule':
-            return isDark
-                ? 'border-violet-400/25 bg-violet-500/10 text-violet-200'
-                : 'border-violet-300 bg-violet-50 text-violet-700'
         case 'meta':
-        default:
-            return isDark
-                ? 'border-cyan-400/20 bg-cyan-500/8 text-cyan-100'
-                : 'border-sky-300 bg-sky-50 text-sky-700'
+        default: return meshChipTone('neutral')
     }
 }
 
-function getAttentionBadgeClasses(tone: 'good' | 'warn' | 'danger' | 'info', isDark: boolean): string {
+function getAttentionBadgeClasses(tone: 'good' | 'warn' | 'danger' | 'info'): string {
     switch (tone) {
-        case 'danger':
-            return isDark
-                ? 'border-rose-400/35 bg-rose-500/14 text-rose-50'
-                : 'border-rose-300 bg-rose-50 text-rose-700'
-        case 'warn':
-            return isDark
-                ? 'border-amber-400/35 bg-amber-500/14 text-amber-50'
-                : 'border-amber-300 bg-amber-50 text-amber-700'
+        case 'danger': return meshChipTone('danger')
+        case 'warn': return meshChipTone('warn')
+        case 'good': return meshChipTone('good')
         case 'info':
-            return isDark
-                ? 'border-violet-400/35 bg-violet-500/14 text-violet-50'
-                : 'border-violet-300 bg-violet-50 text-violet-700'
-        case 'good':
-        default:
-            return isDark
-                ? 'border-emerald-400/35 bg-emerald-500/12 text-emerald-50'
-                : 'border-emerald-300 bg-emerald-50 text-emerald-700'
+        default: return meshChipTone('neutral')
     }
 }
 
+/** Health dot colour — theme status tokens (resolved as CSS vars in `style`). */
 function getHealthDot(health: MeshGraphNode['health']): string {
     switch (health) {
         case 'online':
-            return '#34d399'
+            return 'var(--status-online)'
         case 'dirty':
-            return '#fbbf24'
-        case 'degraded':
-            return '#fb7185'
         case 'wrong_branch':
-            return '#a78bfa'
+            return 'var(--status-warning)'
+        case 'degraded':
+            return 'var(--status-error)'
         case 'offline':
-            return '#94a3b8'
+            return 'var(--status-offline)'
         default:
-            return '#64748b'
+            return 'var(--text-muted)'
     }
 }
 
@@ -269,55 +212,22 @@ function hasGeneratingSession(node: MeshGraphNode): boolean {
     return node.sessionDetails?.some(s => formatSessionStatusLabel(s) === 'generating') ?? false
 }
 
-function getSessionStatusBadgeClasses(session: MeshGraphNode['sessionDetails'][number], isDark: boolean): string {
+function getSessionStatusBadgeClasses(session: MeshGraphNode['sessionDetails'][number]): string {
     const label = formatSessionStatusLabel(session)
-    if (label.includes('approval')) {
-        return isDark
-            ? 'border-amber-400/30 bg-amber-500/12 text-amber-100'
-            : 'border-amber-300 bg-amber-50 text-amber-700'
-    }
-    if (label === 'generating') {
-        return isDark
-            ? 'border-cyan-400/30 bg-cyan-500/12 text-cyan-100'
-            : 'border-sky-300 bg-sky-50 text-sky-700'
-    }
-    if (label === 'idle') {
-        return isDark
-            ? 'border-emerald-400/30 bg-emerald-500/12 text-emerald-100'
-            : 'border-emerald-300 bg-emerald-50 text-emerald-700'
-    }
-    if (label.includes('failed') || label.includes('stopped') || label.includes('interrupted')) {
-        return isDark
-            ? 'border-rose-400/30 bg-rose-500/12 text-rose-100'
-            : 'border-rose-300 bg-rose-50 text-rose-700'
-    }
-    return getBadgeClasses('health', isDark)
+    if (label.includes('approval')) return meshChipTone('warn')
+    if (label === 'generating') return 'border-accent/40 text-accent'
+    if (label.includes('failed') || label.includes('stopped') || label.includes('interrupted')) return meshChipTone('danger')
+    return meshChipTone('neutral')
 }
 
 /**
  * SHOW-TASK-DIFFICULTY: session.difficulty is joined from the queue task the
  * session is executing (buildMeshGraph, mesh-visualization.ts) — the session
- * axis itself carries no difficulty. Mirrors getSessionStatusBadgeClasses'
- * severity coloring (emerald=cheap → rose=expensive); 'freeform' has no fixed
- * shape so it isn't a severity level and stays neutral.
+ * axis itself carries no difficulty. Difficulty is a routing attribute, not a
+ * state, so it renders as a neutral chip (the label carries the level).
  */
-function getDifficultyBadgeClasses(difficulty: string, isDark: boolean): string {
-    switch (difficulty) {
-        case 'easy':
-            return isDark
-                ? 'border-emerald-400/30 bg-emerald-500/12 text-emerald-100'
-                : 'border-emerald-300 bg-emerald-50 text-emerald-700'
-        case 'medium':
-            return isDark
-                ? 'border-amber-400/30 bg-amber-500/12 text-amber-100'
-                : 'border-amber-300 bg-amber-50 text-amber-700'
-        case 'difficult':
-            return isDark
-                ? 'border-rose-400/30 bg-rose-500/12 text-rose-100'
-                : 'border-rose-300 bg-rose-50 text-rose-700'
-        default:
-            return getBadgeClasses('health', isDark)
-    }
+function getDifficultyBadgeClasses(): string {
+    return meshChipTone('neutral')
 }
 
 function difficultyLabel(difficulty: string, t: (key: string) => string): string {
@@ -434,8 +344,8 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const observationHint = getMeshGraphObservationHint(node)
     const observationLabel = observationHint ? formatObservationHint(observationHint, t) : null
     const observationPillClass = observationHint?.kind === 'unreachable'
-        ? getBadgeClasses('dirty', meshTheme.isDark)
-        : getBadgeClasses('meta', meshTheme.isDark)
+        ? getBadgeClasses('dirty')
+        : getBadgeClasses('meta')
     // Fresh / fetching / refreshing say nothing on the card — only a degraded
     // observation earns a chip ("Stale" / "Unreachable"); its age is the tooltip.
     const showObservationPill = !!observationLabel && (observationHint?.kind === 'aged' || observationHint?.kind === 'unreachable')
@@ -450,19 +360,17 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
         const attention = getMeshGraphAttentionBadge(node)
         return (
             <div
-                className={`rounded-full border px-4 py-2.5 transition-all ${meshTheme.isDark
-                    ? `border-sky-400/40 bg-sky-500/10 ${selected ? 'ring-2 ring-cyan-300/60' : ''}`
-                    : `border-sky-400 bg-sky-50 ${selected ? 'ring-2 ring-sky-400/70' : ''}`}`}
+                className={`rounded-lg border bg-bg-card px-3 py-2 transition-colors ${selected ? 'border-accent ring-1 ring-accent/50' : 'border-border-default'}`}
                 style={{ width: getMeshGraphNodeCardWidth(node, compact) }}
                 title={[node.label, getNodeSummaryForLayout(node, t), attention ? translateAttentionLabel(attention.label, node, t) : null].filter(Boolean).join('\n')}
             >
                 <Handle type="target" position={direction === 'TB' ? Position.Top : Position.Left} isConnectable={false} style={{ opacity: 0, pointerEvents: 'none' }} />
                 <div className="flex min-w-0 items-center justify-center gap-2">
-                    <span className={`shrink-0 text-sm ${meshTheme.isDark ? 'text-sky-200' : 'text-sky-600'}`} aria-hidden><IconGitBranch size={13} /></span>
-                    <span className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{node.label}</span>
-                    <span className={`shrink-0 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.panel.defaultBranch')}</span>
+                    <span className={`flex shrink-0 items-center ${meshTheme.textMuted}`} aria-hidden><IconGitBranch size={13} /></span>
+                    <span className={`truncate text-sm font-semibold leading-5 ${meshTheme.textPrimary}`}>{node.label}</span>
+                    <span className={`${MESH_CHIP_BASE} ${meshChipTone('neutral')}`}>{t('mesh.panel.defaultBranch')}</span>
                     {attention && (
-                        <span className={`shrink-0 h-2 w-2 rounded-full ${attention.tone === 'danger' ? 'bg-rose-400' : attention.tone === 'warn' ? 'bg-amber-400' : 'bg-sky-400'}`} title={translateAttentionLabel(attention.label, node, t)} aria-hidden />
+                        <span className={`shrink-0 h-2 w-2 rounded-full ${attention.tone === 'danger' ? 'bg-status-error' : attention.tone === 'warn' ? 'bg-status-warning' : 'bg-text-muted'}`} title={translateAttentionLabel(attention.label, node, t)} aria-hidden />
                     )}
                 </div>
                 <Handle type="source" position={direction === 'TB' ? Position.Bottom : Position.Right} isConnectable={false} style={{ opacity: 0, pointerEvents: 'none' }} />
@@ -480,13 +388,13 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 ? t('mesh.panel.tooltipLocalChanges')
                 : t('mesh.panel.submoduleSynced')
         const stateClass = node.outOfSync
-            ? getBadgeClasses('conflict', meshTheme.isDark)
+            ? getBadgeClasses('conflict')
             : node.dirty
-                ? getBadgeClasses('dirty', meshTheme.isDark)
-                : getBadgeClasses('submodule', meshTheme.isDark)
+                ? getBadgeClasses('dirty')
+                : getBadgeClasses('submodule')
         return (
             <div
-                className={`rounded-xl border px-3 py-2 transition-all ${getHealthClasses(node, selected, meshTheme.isDark)}`}
+                className={`rounded-lg border px-3 py-2 transition-colors ${getHealthClasses(node, selected)}`}
                 style={{ width: getMeshGraphNodeCardWidth(node, compact) }}
                 title={[
                     node.label,
@@ -507,7 +415,7 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     )}
                 </div>
                 <div className="mt-1.5 flex min-w-0 items-center gap-1.5">
-                    <span className={`shrink-0 rounded-full border px-1.5 py-px text-4xs ${stateClass}`}>{stateLabel}</span>
+                    <span className={`${MESH_CHIP_BASE} ${stateClass}`}>{stateLabel}</span>
                     {node.submodulePath && node.submodulePath !== node.label && (
                         <span className={`min-w-0 truncate text-4xs ${meshTheme.textMuted}`}>{node.submodulePath}</span>
                     )}
@@ -545,7 +453,7 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     if (compact) {
         return (
             <div
-                className={`rounded-xl border px-3 py-2.5 transition-all ${getHealthClasses(node, selected, meshTheme.isDark)}`}
+                className={`rounded-lg border px-3 py-2.5 transition-colors ${getHealthClasses(node, selected)}`}
                 style={{ width: getMeshGraphNodeCardWidth(node, true) }}
                 title={[
                     node.label,
@@ -568,7 +476,7 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                         {hasActiveSession && (
-                            <span className={`h-1.5 w-1.5 rounded-full ${meshTheme.isDark ? 'bg-emerald-400' : 'bg-emerald-500'} animate-pulse`} aria-label={t('mesh.graph.activeSessionAria')} />
+                            <span className="h-1.5 w-1.5 rounded-full bg-status-online animate-pulse" aria-label={t('mesh.graph.activeSessionAria')} />
                         )}
                         <span
                             className="h-2 w-2 shrink-0 rounded-full"
@@ -577,28 +485,36 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                         />
                     </div>
                 </div>
-                {node.health === 'unknown' && !attentionBadge && (
-                    <div className={`mt-1.5 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-4xs italic ${getBadgeClasses('health', meshTheme.isDark)}`}>
-                        <span className="truncate">{t('mesh.obs.connecting')}</span>
+                {/* One chip row: every chip shares MESH_CHIP_BASE (same height,
+                    centred) inside a single wrapping flex row, so e.g. "Stale"
+                    and the branch chip sit on one centre line instead of two
+                    inline boxes with different fonts/margins. */}
+                {(node.health === 'unknown' && !attentionBadge) || attentionBadge || showObservationPill || (!attentionBadge && node.branch && !isSubmoduleNode && node.health !== 'unknown') ? (
+                    <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1">
+                        {node.health === 'unknown' && !attentionBadge && (
+                            <span className={`${MESH_CHIP_BASE} italic ${getBadgeClasses('health')}`}>
+                                <span className="truncate">{t('mesh.obs.connecting')}</span>
+                            </span>
+                        )}
+                        {attentionBadge && (
+                            <span className={`${MESH_CHIP_BASE} ${getAttentionBadgeClasses(attentionBadge.tone)}`} title={attentionLabel ?? undefined}>
+                                <span className="truncate">{attentionLabel}</span>
+                            </span>
+                        )}
+                        {showObservationPill && (
+                            <span className={`${MESH_CHIP_BASE} ${observationPillClass}`} title={observationLabel ?? undefined}>
+                                <span className="truncate">{observationChipLabel}</span>
+                            </span>
+                        )}
+                        {!attentionBadge && node.branch && !isSubmoduleNode && node.health !== 'unknown' && (
+                            <span className={`${MESH_CHIP_BASE} ${getBadgeClasses('meta')}`} title={node.branch}>
+                                <span className="truncate">{node.branch}</span>
+                            </span>
+                        )}
                     </div>
-                )}
-                {attentionBadge && (
-                    <div className={`mt-1.5 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-4xs font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`} title={attentionLabel ?? undefined}>
-                        <span className="truncate">{attentionLabel}</span>
-                    </div>
-                )}
-                {showObservationPill && (
-                    <div className={`mt-1 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-4xs ${observationPillClass}`} title={observationLabel ?? undefined}>
-                        <span className="truncate">{observationChipLabel}</span>
-                    </div>
-                )}
-                {!attentionBadge && node.branch && !isSubmoduleNode && node.health !== 'unknown' && (
-                    <div className={`mt-1 min-w-0 max-w-full truncate text-3xs ${getBadgeClasses('meta', meshTheme.isDark)} rounded-full border px-1.5 py-px inline-block`} title={node.branch}>
-                        {node.branch}
-                    </div>
-                )}
+                ) : null}
                 {sessionSummaryLabel && (
-                    <div className={`mt-1 min-w-0 max-w-full truncate text-4xs ${meshTheme.isDark ? 'text-cyan-100/85' : 'text-sky-700'}`} title={sessionTooltipLines.join('\n')}>
+                    <div className={`mt-1 min-w-0 max-w-full truncate text-4xs ${meshTheme.textSecondary}`} title={sessionTooltipLines.join('\n')}>
                         {sessionSummaryLabel}
                     </div>
                 )}
@@ -611,7 +527,7 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                 // resolves the tab and closes this dialog. stopPropagation
                                 // keeps the click from also selecting the node card.
                                 onClick={event => { event.stopPropagation(); requestOpenSessionChat({ sessionId: session.sessionId, source: 'mesh-topology-card' }) }}
-                                className={`min-w-0 cursor-pointer rounded-md border px-1.5 py-1 transition-colors ${meshTheme.isDark ? 'border-cyan-400/15 bg-cyan-500/[0.055] hover:bg-cyan-500/[0.12]' : 'border-sky-200 bg-white/80 hover:bg-sky-50'}`}
+                                className="min-w-0 cursor-pointer rounded-md border border-border-subtle bg-bg-glass px-1.5 py-1 transition-colors hover:bg-bg-glass-hover"
                                 title={[
                                     t('sessionNav.openChatHint'),
                                     `${t('mesh.panel.tooltipPrefixStatus')} ${sessionStatusText(session, t)}`,
@@ -623,7 +539,7 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                     <span className={`min-w-0 truncate text-4xs ${meshTheme.textMuted}`}>
                                         {session.providerType || t('mesh.panel.providerUnknown')}
                                     </span>
-                                    <span className={`shrink-0 rounded-full border px-1 py-0 text-5xs font-semibold uppercase tracking-[0.1em] ${getSessionStatusBadgeClasses(session, meshTheme.isDark)}`}>
+                                    <span className={`inline-flex h-4 shrink-0 items-center rounded-full border px-1.5 text-5xs font-medium leading-none ${getSessionStatusBadgeClasses(session)}`}>
                                         {sessionStatusText(session, t)}
                                     </span>
                                 </div>
@@ -666,7 +582,7 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
 
     return (
         <div
-            className={`rounded-2xl border px-4 py-3 transition-all ${getHealthClasses(node, selected, meshTheme.isDark)}${hasGeneratingSession(node) ? ' mesh-node-generating' : ''}`}
+            className={`rounded-xl border px-4 py-3 transition-colors ${getHealthClasses(node, selected)}${hasGeneratingSession(node) ? ' mesh-node-generating' : ''}`}
             style={{ width: getMeshGraphNodeCardWidth(node) }}
             title={tooltipLines}
         >
@@ -683,7 +599,7 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 </div>
                 <div className="flex items-center gap-1.5 mt-0.5 shrink-0">
                     {hasActiveSession && (
-                        <span className={`h-2 w-2 rounded-full ${meshTheme.isDark ? 'bg-emerald-400' : 'bg-emerald-500'} animate-pulse`} aria-label={t('mesh.graph.activeSessionAria')} />
+                        <span className="h-2 w-2 rounded-full bg-status-online animate-pulse" aria-label={t('mesh.graph.activeSessionAria')} />
                     )}
                     <span
                         className="h-2.5 w-2.5 rounded-full"
@@ -693,22 +609,25 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 </div>
             </div>
 
-            {attentionBadge ? (
-                <div className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-2.5 py-0.5 text-3xs font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`} title={attentionLabel ?? undefined}>
-                    <span className="truncate">{attentionLabel}</span>
-                </div>
-            ) : node.branch && !isSubmoduleNode ? (
-                <div className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-3xs ${getBadgeClasses('meta', meshTheme.isDark)}`} title={node.branch}>
-                    <span className="truncate">{node.branch}</span>
-                </div>
-            ) : null}
-
-            {sessionSummaryLabel && (
-                <div
-                    className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-3xs font-medium ${meshTheme.isDark ? 'border-cyan-400/20 bg-cyan-500/8 text-cyan-100' : 'border-sky-300 bg-sky-50 text-sky-700'}`}
-                    title={sessionTooltipLines.join('\n')}
-                >
-                    <span className="truncate">{sessionSummaryLabel}</span>
+            {(attentionBadge || (node.branch && !isSubmoduleNode) || sessionSummaryLabel) && (
+                <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1">
+                    {attentionBadge ? (
+                        <span className={`${MESH_CHIP_BASE} ${getAttentionBadgeClasses(attentionBadge.tone)}`} title={attentionLabel ?? undefined}>
+                            <span className="truncate">{attentionLabel}</span>
+                        </span>
+                    ) : node.branch && !isSubmoduleNode ? (
+                        <span className={`${MESH_CHIP_BASE} ${getBadgeClasses('meta')}`} title={node.branch}>
+                            <span className="truncate">{node.branch}</span>
+                        </span>
+                    ) : null}
+                    {sessionSummaryLabel && (
+                        <span
+                            className={`${MESH_CHIP_BASE} ${meshChipTone('neutral')}`}
+                            title={sessionTooltipLines.join('\n')}
+                        >
+                            <span className="truncate">{sessionSummaryLabel}</span>
+                        </span>
+                    )}
                 </div>
             )}
 
@@ -717,26 +636,26 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 one card. The summary pill above + the labeled list below remain. */}
 
             <div className="mt-3">
-                <div className="flex min-w-0 flex-wrap gap-1 text-4xs">
+                <div className="flex min-w-0 flex-wrap items-center gap-1">
                     {/* Health pill only when it says something the dot cannot: online is
                         the normal state and stays dot-only, so the badge row is quiet on
                         a healthy mesh and loud exactly where something is off. */}
                     {node.health === 'unknown' ? (
-                        <span className={`rounded-full border px-1.5 py-px italic ${getBadgeClasses('health', meshTheme.isDark)}`}>
+                        <span className={`${MESH_CHIP_BASE} italic ${getBadgeClasses('health')}`}>
                             {t('mesh.obs.connecting')}
                         </span>
                     ) : node.health !== 'online' ? (
-                        <span className={`rounded-full border px-1.5 py-px capitalize ${getBadgeClasses('health', meshTheme.isDark)}`}>
+                        <span className={`${MESH_CHIP_BASE} capitalize ${getBadgeClasses('health')}`}>
                             {formatHealth(node.health)}
                         </span>
                     ) : null}
                     {node.locality === 'remote' && (
-                        <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('meta', meshTheme.isDark)}`}>
+                        <span className={`${MESH_CHIP_BASE} ${getBadgeClasses('meta')}`}>
                             {t('mesh.graph.remoteBadge')}
                         </span>
                     )}
                     {showObservationPill && (
-                        <span className={`rounded-full border px-1.5 py-px ${observationPillClass}`} title={observationLabel ?? undefined}>
+                        <span className={`${MESH_CHIP_BASE} ${observationPillClass}`} title={observationLabel ?? undefined}>
                             {observationChipLabel}
                         </span>
                     )}
@@ -744,41 +663,41 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                         relayed link is the only one worth a chip. */}
                     {connectionTransport === 'relay' && (
                         <span
-                            className={`rounded-full border px-1.5 py-px ${getBadgeClasses('meta', meshTheme.isDark)}`}
+                            className={`${MESH_CHIP_BASE} ${getBadgeClasses('meta')}`}
                             title={[t('mesh.panel.tooltipP2PRelayed'), connectionRtt].filter(Boolean).join(' · ')}
                         >
                             {t('mesh.graph.slowLinkChip')}
                         </span>
                     )}
                     {node.dirty && (
-                        <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('dirty', meshTheme.isDark)}`}>
+                        <span className={`${MESH_CHIP_BASE} ${getBadgeClasses('dirty')}`}>
                             {t('mesh.drift.changed', { count: node.dirtyFiles })}
                         </span>
                     )}
                     {node.outOfSync && (
-                        <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('conflict', meshTheme.isDark)}`}>
+                        <span className={`${MESH_CHIP_BASE} ${getBadgeClasses('conflict')}`}>
                             {t('mesh.panel.outOfSyncBadge')}
                         </span>
                     )}
                     {node.hasConflicts && (
-                        <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('conflict', meshTheme.isDark)}`}>
+                        <span className={`${MESH_CHIP_BASE} ${getBadgeClasses('conflict')}`}>
                             {t('mesh.panel.conflictBadge')}
                         </span>
                     )}
                     {!isSubmoduleNode && node.upstream && node.upstreamStatus !== 'fresh' && (
-                        <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('orphan', meshTheme.isDark)}`}>
+                        <span className={`${MESH_CHIP_BASE} ${getBadgeClasses('orphan')}`}>
                             {t('mesh.panel.upstreamUnverified')}
                         </span>
                     )}
                     {node.isOrphan && (
-                        <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('orphan', meshTheme.isDark)}`}>
+                        <span className={`${MESH_CHIP_BASE} ${getBadgeClasses('orphan')}`}>
                             {t('mesh.panel.needsFollowUp')}
                         </span>
                     )}
                     {/* The attention badge above already surfaces in-progress/failed refine state;
                         the card only adds the recent-completed case it does not show. */}
                     {!isSubmoduleNode && node.refineJobStatus === 'completed' && (
-                        <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('refineDone', meshTheme.isDark)}`} title={node.refineJobBranch ? t('mesh.panel.tooltipRefinedBranch', { branch: `${node.refineJobBranch}${node.refineJobInto ? ` → ${node.refineJobInto}` : ''}` }) : t('mesh.panel.tooltipRefineCompleted')}>
+                        <span className={`${MESH_CHIP_BASE} ${getBadgeClasses('refineDone')}`} title={node.refineJobBranch ? t('mesh.panel.tooltipRefinedBranch', { branch: `${node.refineJobBranch}${node.refineJobInto ? ` → ${node.refineJobInto}` : ''}` }) : t('mesh.panel.tooltipRefineCompleted')}>
                             {t('mesh.panel.refined')}
                         </span>
                     )}
@@ -790,7 +709,7 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
 
                 {visibleSessions.length > 0 && (
                     <div className="mt-3">
-                        <div className={`mb-1.5 text-4xs font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>
+                        <div className={`mb-1.5 text-3xs font-medium ${meshTheme.textMuted}`}>
                             {t('mesh.panel.attachedChats')}
                         </div>
                         <div className="flex flex-col gap-1.5">
@@ -801,7 +720,7 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                     <div
                                         key={session.sessionId}
                                         onClick={() => requestOpenSessionChat({ sessionId: session.sessionId, source: 'mesh-topology-panel' })}
-                                        className={`min-w-0 cursor-pointer rounded-lg border px-2.5 py-1.5 transition-colors ${meshTheme.isDark ? 'border-white/8 bg-white/[0.035] hover:bg-white/[0.08]' : 'border-slate-200 bg-white/80 hover:bg-slate-50'}`}
+                                        className="min-w-0 cursor-pointer rounded-lg border border-border-subtle bg-bg-glass px-2.5 py-1.5 transition-colors hover:bg-bg-glass-hover"
                                         title={[
                                             t('sessionNav.openChatHint'),
                                             `${t('mesh.panel.tooltipPrefixStatus')} ${sessionStatusText(session, t)}`,
@@ -814,7 +733,7 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                             <span className={`min-w-0 truncate text-3xs ${meshTheme.textPrimary}`}>
                                                 {session.providerType || t('mesh.panel.providerUnknown')}
                                             </span>
-                                            <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-4xs font-semibold uppercase tracking-[0.12em] ${getSessionStatusBadgeClasses(session, meshTheme.isDark)}`}>
+                                            <span className={`${MESH_CHIP_BASE} ${getSessionStatusBadgeClasses(session)}`}>
                                                 {sessionStatusText(session, t)}
                                             </span>
                                         </div>
@@ -822,7 +741,7 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                             <span>{roleLabel}</span>
                                             {formatElapsedSince(startedAt) && <span>{formatElapsedSince(startedAt)}</span>}
                                             {session.difficulty && (
-                                                <span className={`shrink-0 rounded-full border px-1.5 py-0 text-5xs font-semibold uppercase tracking-[0.1em] ${getDifficultyBadgeClasses(session.difficulty, meshTheme.isDark)}`}>
+                                                <span className={`inline-flex h-4 shrink-0 items-center rounded-full border px-1.5 text-5xs font-medium leading-none ${getDifficultyBadgeClasses()}`}>
                                                     {difficultyLabel(session.difficulty, t)}
                                                 </span>
                                             )}
@@ -846,7 +765,7 @@ export function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
 
                 {shouldShowCallout && calloutText && (
                     <div
-                        className={`mt-3 rounded-xl border px-3 py-2 text-3xs leading-4 ${meshTheme.isDark ? 'border-cyan-400/15 bg-cyan-500/8 text-cyan-50/90' : 'border-sky-300 bg-sky-50 text-sky-700'}`}
+                        className={`mt-3 rounded-lg border border-border-subtle bg-bg-glass px-3 py-2 text-3xs leading-4 ${meshTheme.textSecondary}`}
                         style={calloutTextStyle}
                         data-testid="mesh-node-callout"
                     >
@@ -955,34 +874,13 @@ function getEdgePath(args: EdgeProps<FlowEdge>): [string, number, number] {
     return [result[0], result[1], result[2]]
 }
 
-function getEdgeLabelClasses(edge: MeshGraphEdge, isDark: boolean): string {
-    const base = 'nodrag nopan rounded-md border px-2 py-1 text-3xs font-semibold shadow-sm'
-    switch (edge.type) {
-        case 'orphanLink':
-            return isDark
-                ? `${base} border-orange-400/35 bg-orange-500/14 text-orange-100`
-                : `${base} border-orange-300 bg-orange-50 text-orange-700`
-        case 'submoduleLink':
-            return isDark
-                ? `${base} border-violet-400/30 bg-violet-500/14 text-violet-100`
-                : `${base} border-violet-300 bg-violet-50 text-violet-700`
-        case 'sessionLink':
-            return isDark
-                ? `${base} border-emerald-400/30 bg-emerald-500/14 text-emerald-100`
-                : `${base} border-emerald-300 bg-emerald-50 text-emerald-700`
-        case 'cloneLink':
-            return isDark
-                ? `${base} border-teal-400/30 bg-teal-500/14 text-teal-100`
-                : `${base} border-teal-300 bg-teal-50 text-teal-700`
-        default:
-            return isDark
-                ? `${base} border-sky-400/25 bg-slate-950/78 text-sky-100`
-                : `${base} border-sky-300 bg-white/95 text-sky-700`
-    }
+function getEdgeLabelClasses(edge: MeshGraphEdge): string {
+    // Edge labels are neutral chips; only the needs-follow-up (orphan) link —
+    // the one edge type that signals attention — tints its text amber.
+    return `nodrag nopan ${MESH_EDGE_LABEL_BASE} ${edge.type === 'orphanLink' ? 'text-status-warning' : meshChipTone('neutral')}`
 }
 
 function MeshGraphEdgeLine(args: EdgeProps<FlowEdge>) {
-    const meshTheme = useContext(MeshGraphThemeContext)
     const graphEdge = args.data?.graphEdge
     const [edgePath, labelX, labelY] = getEdgePath(args)
     const labelTitle = typeof args.label === 'string' ? args.label : undefined
@@ -999,7 +897,7 @@ function MeshGraphEdgeLine(args: EdgeProps<FlowEdge>) {
             {args.label && graphEdge && (
                 <EdgeLabelRenderer>
                     <div
-                        className={getEdgeLabelClasses(graphEdge, meshTheme.isDark)}
+                        className={getEdgeLabelClasses(graphEdge)}
                         title={labelTitle}
                         style={{
                             position: 'absolute',
@@ -1048,6 +946,12 @@ function buildFlowLayout(
         type: node.type,
         position: node.position,
         data: { graphNode: node.graphNode, compact },
+        // Controlled nodes never receive `measured` back (no onNodesChange), so
+        // without an initial size the MiniMap skipped every node and drew an
+        // empty grey box with only the viewport rectangle. initialWidth/Height
+        // feed the minimap + fitView without being applied as inline size.
+        initialWidth: getMeshGraphNodeCardWidth(node.graphNode, compact),
+        initialHeight: estimateMeshGraphNodeHeight(node.graphNode, compact),
         selected: node.selected,
         draggable: node.draggable,
         selectable: node.selectable,
@@ -1062,19 +966,22 @@ function buildFlowLayout(
         label: visibleLabelIds.has(edge.id) ? edge.label : undefined,
         type: 'meshEdge',
         data: { graphEdge: edge, routePoints: layout.edgeRoutes.get(edge.id)?.points },
-        animated: edge.type === 'orphanLink',
+        // No marching-ants: the orphan link is a static state, not live activity.
+        animated: false,
         markerEnd: edge.direction === 'directed'
             ? {
                 type: MarkerType.ArrowClosed,
-                width: edge.type === 'submoduleLink' ? 16 : 18,
-                height: edge.type === 'submoduleLink' ? 16 : 18,
+                width: 14,
+                height: 14,
                 color: edgeColor(edge),
             }
             : undefined,
         style: {
             stroke: edgeColor(edge),
-            strokeWidth: edge.type === 'orphanLink' ? 2.25 : edge.type === 'submoduleLink' ? 1.7 : edge.type === 'worktreeLink' ? 1.8 : edge.type === 'cloneLink' ? 1.6 : 2,
-            strokeDasharray: edge.type === 'orphanLink' ? '5 4' : edge.type === 'submoduleLink' ? '4 3' : edge.type === 'cloneLink' ? '6 3' : undefined,
+            // Neutral 1px lines; the dash pattern (shared with the legend) is what
+            // tells edge kinds apart, not a per-kind hue.
+            strokeWidth: 1,
+            strokeDasharray: edgeDash(edge.type),
         },
         labelStyle: {
             fill: meshTheme.edgeLabelTextColor,
@@ -1135,21 +1042,8 @@ function pickVisibleEdgeLabels(edges: MeshGraphEdge[]): Set<string> {
 }
 
 function minimapNodeColor(node: FlowNode): string {
-    const graphNode = node.data.graphNode
-    if (graphNode.locality === 'local') return '#38bdf8'
-    switch (graphNode.health) {
-        case 'online':
-            return '#34d399'
-        case 'dirty':
-            return '#fbbf24'
-        case 'degraded':
-        case 'offline':
-            return '#fb7185'
-        case 'wrong_branch':
-            return '#a78bfa'
-        default:
-            return '#94a3b8'
-    }
+    // Minimap blocks are neutral; only a failing (degraded) node gets colour.
+    return node.data.graphNode.health === 'degraded' ? 'var(--status-error)' : 'var(--text-muted)'
 }
 
 function minimapNodeClassName(node: FlowNode): string {
@@ -1207,6 +1101,9 @@ function MeshViewportController({ data, viewportKey }: { data: MeshGraphData; vi
 
 
 const MINIMAP_NODE_THRESHOLD = 12
+/** Below this canvas width the overview box covers cards and edges (tablet
+ *  split view / phone) — the map pans instead. */
+const MINIMAP_MIN_SURFACE_WIDTH = 900
 
 function getGraphMinHeightClass(nodeCount: number): string {
     // Height floors are capped by viewport height: the canvas is pan/zoomable,
@@ -1253,7 +1150,7 @@ export default function MeshGraphView({
         },
         [directionPrefProp, isNarrowViewport],
     )
-    const showMinimap = data.nodes.length >= MINIMAP_NODE_THRESHOLD
+    const showMinimap = data.nodes.length >= MINIMAP_NODE_THRESHOLD && surfaceSize.width >= MINIMAP_MIN_SURFACE_WIDTH
     // `pass` tracks which layout generation is on screen: the estimated first pass
     // or the measured-heights refinement. The viewport controller re-fits once per
     // pass, so the refined layout can no longer drift outside the fitted viewport
@@ -1355,7 +1252,7 @@ export default function MeshGraphView({
             >
                 {t('mesh.obs.panHint')}
             </div>
-            <div className="w-full min-w-0 flex-1" style={{ height: '100%' }}>
+            <div className="mesh-flow w-full min-w-0 flex-1" style={{ height: '100%' }}>
                 <ReactFlow<FlowNode, FlowEdge>
                     nodes={nodes}
                     edges={layout.edges}
@@ -1401,8 +1298,10 @@ export default function MeshGraphView({
                             zoomable
                             nodeColor={minimapNodeColor}
                             nodeClassName={minimapNodeClassName}
-                            nodeStrokeWidth={3}
-                            className={meshTheme.isDark ? 'overflow-hidden rounded-xl border border-white/10 bg-slate-950/85' : 'overflow-hidden rounded-xl border border-slate-200 bg-white/95'}
+                            nodeStrokeWidth={0}
+                            nodeBorderRadius={2}
+                            ariaLabel={t('mesh.obs.tabMap')}
+                            style={{ width: 168, height: 112 }}
                         />
                     )}
                     <Background variant={BackgroundVariant.Dots} gap={18} size={1.2} color={meshTheme.graphBackgroundDotColor} />

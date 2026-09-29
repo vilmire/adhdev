@@ -4,14 +4,14 @@
  * both hosts used to hand-write around the old `onStatusChange` lambdas:
  *
  *   host.status-facts  status / daemon_facts / registered / terminated / launch_updated
- *                      → transport.onStatusFacts (cloud reporter push, standalone WS status)
- *   host.chat-tail     status → hot chat flush; working|blocked → ready → forced completion tail
- *                      (C17: standalone's completion flush lived in lambdas that never fired
- *                      on a turn transition, so only the 2 s timer delivered it)
+ *                      → transport.onStatusFacts (cloud server status_report)
+ *   host.metadata-pump the same facts → throttled daemon.metadata keyed flush, plus the
+ *                      change-only sample tick (daemon.metadata / machine.runtime /
+ *                      session_host.diagnostics / workspace.git)
  *   host.modal         modal / prompt → session.modal flush (was standalone-only, per poke)
  *   host.topics        command_executed → topic invalidation (covers every router caller,
  *                      incl. the 6 that skipped it before — C11)
- *   host.mesh-state    mesh_state → transport hook + daemon.metadata flush (standalone gains it)
+ *   host.mesh-state    mesh_state → transport hook + that mesh's mesh.status keyed flush
  *   host.turn-snapshots status working|blocked → ready|dead → post-turn git snapshot (D4, both hosts)
  *
  * Each returns its unsubscribe. None throws into the bus: the bus isolates
@@ -31,7 +31,8 @@ import type { GitCommandServices } from '../git/git-commands.js';
 import type { GitWorkspaceMonitor } from '../git/git-monitor.js';
 
 type Bus = Pick<SessionLifecycleBus, 'on'>;
-type Topics = Pick<TopicSubscriptionRegistry, 'hasSubscriptions' | 'flushNow' | 'invalidate'> & Partial<Pick<TopicSubscriptionRegistry, 'purgeChatOutputActivity'>>;
+type Topics = Pick<TopicSubscriptionRegistry, 'hasSubscriptions' | 'flushNow' | 'invalidate'>;
+type MeshTopics = Pick<TopicSubscriptionRegistry, 'hasSubscriptions' | 'flushMeshStatus'>;
 type ReconcileTopics = Pick<TopicSubscriptionRegistry, 'hasSubscriptions' | 'oldestLastFlushedAt'>;
 
 export type StatusFactsEvent =
@@ -62,35 +63,81 @@ export function subscribeHostStatusFacts(bus: Bus, onFacts: (e: StatusFactsEvent
     });
 }
 
-export interface ChatTailHooks {
-    /** Hot (onlyActive) chat-tail flush — every status edge. */
-    flushActive(): void;
-    /** Forced flush of the sessions whose turn just completed (guaranteed completion tail). */
-    flushCompleted?(sessionIds: ReadonlySet<string>): void;
+/** Throttle for the status-fact → daemon.metadata flush (leading + trailing). */
+export const HOST_METADATA_FACT_THROTTLE_MS = 500;
+/**
+ * The sampling tick for state that has no bus edge (CDP-polled chat titles,
+ * machine memory/load, session-host records, a watched repo). It is a SAMPLE,
+ * not a resend: every sampled topic is change-only (daemon.metadata keyed
+ * deltas; machine.runtime / session_host.diagnostics / workspace.git
+ * signatures), and each keeps its own per-subscription interval, so a quiet
+ * daemon sends zero bytes per tick. Same cadence the removed P2P status tick had.
+ */
+export const HOST_TOPIC_SAMPLE_INTERVAL_MS = 5000;
+
+export interface HostTopicPumpOptions {
+    throttleMs?: number;
+    sampleIntervalMs?: number;
+    now?: () => number;
+    setTimeoutFn?: typeof setTimeout;
+    clearTimeoutFn?: typeof clearTimeout;
+    setIntervalFn?: typeof setInterval;
+    clearIntervalFn?: typeof clearInterval;
 }
 
-export function subscribeHostChatTail(bus: Bus, hooks: ChatTailHooks): Unsubscribe {
-    return bus.on('status', (e) => {
-        hooks.flushActive();
-        if (hooks.flushCompleted && isTurnCompletionEdge(e.prev, e.next)) {
-            hooks.flushCompleted(new Set([e.sessionId]));
+/**
+ * daemon.metadata is the dashboard's ONE state lane (audit P0-3). Status facts
+ * schedule a throttled keyed flush; a sample tick covers edge-less state.
+ */
+export function subscribeHostTopicPump(bus: Bus, topics: Topics & Partial<MeshTopics>, opts: HostTopicPumpOptions = {}): Unsubscribe {
+    const now = opts.now ?? Date.now;
+    const throttleMs = opts.throttleMs ?? HOST_METADATA_FACT_THROTTLE_MS;
+    const setTimeoutFn = opts.setTimeoutFn ?? setTimeout;
+    const clearTimeoutFn = opts.clearTimeoutFn ?? clearTimeout;
+    const setIntervalFn = opts.setIntervalFn ?? setInterval;
+    const clearIntervalFn = opts.clearIntervalFn ?? clearInterval;
+    let lastFlushAt = 0;
+    let pending: ReturnType<typeof setTimeout> | null = null;
+    const flushMetadata = () => {
+        lastFlushAt = now();
+        flushTopic(topics, 'daemon.metadata');
+        // The coordinator's own sessions render in its mesh view: same facts,
+        // same throttle, keyed per node (an unchanged mesh sends nothing).
+        if (topics.flushMeshStatus && topics.hasSubscriptions('mesh.status')) {
+            void topics.flushMeshStatus().catch(swallow('mesh.status flush'));
         }
-    }, { name: 'host.chat-tail' });
+    };
+    const offFacts = bus.on(['status', 'daemon_facts', 'registered', 'terminated', 'launch_updated'], () => {
+        const elapsed = now() - lastFlushAt;
+        if (elapsed >= throttleMs) {
+            flushMetadata();
+            return;
+        }
+        if (pending) return;
+        pending = setTimeoutFn(() => {
+            pending = null;
+            flushMetadata();
+        }, throttleMs - elapsed);
+    }, { name: 'host.metadata-pump' });
+    const timer = setIntervalFn(() => {
+        for (const topic of ['daemon.metadata', 'machine.runtime', 'session_host.diagnostics', 'workspace.git'] as const) {
+            if (!topics.hasSubscriptions(topic)) continue;
+            void topics.flushNow(topic).catch(swallow(`${topic} sample`));
+        }
+    }, opts.sampleIntervalMs ?? HOST_TOPIC_SAMPLE_INTERVAL_MS);
+    if (typeof (timer as unknown as { unref?: () => void }).unref === 'function') {
+        (timer as unknown as { unref: () => void }).unref();
+    }
+    return () => {
+        offFacts();
+        clearIntervalFn(timer);
+        if (pending) clearTimeoutFn(pending);
+        pending = null;
+    };
 }
 
 export function subscribeHostModal(bus: Bus, topics: Topics): Unsubscribe {
     return bus.on(['modal', 'prompt'], () => flushTopic(topics, 'session.modal'), { name: 'host.modal' });
-}
-
-/**
- * `terminated` → drop the session's chat-output activity stamp eagerly (design B2
- * registry #12: `chatOutputActiveAt` is a subscriber cache). The 8 s hot-window
- * expiry already makes this safe to miss; this keeps the map from carrying dead ids.
- */
-export function subscribeHostSessionPurge(bus: Bus, topics: Topics): Unsubscribe {
-    return bus.on('terminated', (e) => {
-        try { topics.purgeChatOutputActivity?.(e.sessionId); } catch (err) { swallow('purge chat output activity')(err); }
-    }, { name: 'host.session-purge' });
 }
 
 export function subscribeHostCommandTopics(
@@ -108,10 +155,16 @@ export function subscribeHostCommandTopics(
     }, { name: 'host.topics' });
 }
 
-export function subscribeHostMeshState(bus: Bus, topics: Topics, onMeshState?: (meshId: string) => void): Unsubscribe {
+/**
+ * A mesh's coordinator-held state changed (a member push, a queue / mission /
+ * roster change): flush that mesh's mesh.status subscribers — a keyed delta of
+ * the nodes / tasks / missions that changed (`*` = every subscribed mesh).
+ */
+export function subscribeHostMeshState(bus: Bus, topics: MeshTopics, onMeshState?: (meshId: string) => void): Unsubscribe {
     return bus.on('mesh_state', (e) => {
         onMeshState?.(e.meshId);
-        flushTopic(topics, 'daemon.metadata');
+        if (!topics.hasSubscriptions('mesh.status')) return;
+        void topics.flushMeshStatus(e.meshId && e.meshId !== '*' ? e.meshId : undefined).catch(swallow('mesh.status flush'));
     }, { name: 'host.mesh-state' });
 }
 
@@ -152,7 +205,7 @@ export function subscribeHostTurnSnapshots(bus: Bus, deps: TurnSnapshotDeps): Un
 // Both hosts used to re-flush every push topic on a 2-2.5s `setInterval`,
 // self-labelled "safety net" in both code comments, even though every edge
 // that can invalidate a topic already flushes it through the bus subscribers
-// above (host.chat-tail / host.modal / host.topics / host.mesh-state) or
+// above (host.modal / host.topics / host.mesh-state) or
 // `command_executed.invalidates`. That timer is gone; this is what replaces
 // it — a single slow (default 60s) tick that does NOT flush anything itself.
 // It only checks whether a topic that has live subscribers has gone stale
@@ -179,8 +232,7 @@ export function subscribeHostTurnSnapshots(bus: Bus, deps: TurnSnapshotDeps): Un
 //   session.modal        ← modal, prompt                     (subscribeHostModal: bus.on(['modal','prompt'], () => flushTopic(topics,'session.modal')))
 //                         ← command_executed when invalidates has 'session.modal'
 //                                                              (subscribeHostCommandTopics: topics.invalidate(e.invalidates, …))
-//   daemon.metadata       ← mesh_state                        (subscribeHostMeshState: bus.on('mesh_state', () => { …; flushTopic(topics,'daemon.metadata'); }))
-//                         ← command_executed when invalidates has 'daemon.metadata'
+//   daemon.metadata       ← command_executed when invalidates has 'daemon.metadata'
 //                                                              (subscribeHostCommandTopics, same call — fastFlush just means the flush
 //                                                               already happened through a different immediate path, so the edge is
 //                                                               still real evidence a flush was due; it is not excluded here)
@@ -190,21 +242,18 @@ export function subscribeHostTurnSnapshots(bus: Bus, deps: TurnSnapshotDeps): Un
 //                                                              (subscribeHostCommandTopics)
 //   machine.runtime        ← (none) — no subscriber in this file invalidates it; it is not a
 //                            member of `CommandInvalidationTopic` (command-registry.ts) either.
-//                            It is purely interval-driven inside topic-registry.ts (its own
-//                            throttle), so this pass never has a bus edge to judge it against
-//                            and therefore never WARNs for it.
+//                            It is sampled by host.metadata-pump's tick (its own interval
+//                            throttle applies), so this pass never has a bus edge to judge
+//                            it against and therefore never WARNs for it.
+//
+// `mesh_state` is not in the map: it flushes only the named mesh's
+// `mesh.status` subscribers, so a per-topic "oldest flush" cannot judge it.
 //
 // `status`, `registered`, `terminated`, and `daemon_facts` are NOT in the
-// edge map: `subscribeHostStatusFacts` only forwards them to
-// `transport.onStatusFacts`, a host-specific hook outside this file (cloud's
-// status reporter never touches the topic registry at all; standalone's
-// `broadcastStatus` conditionally flushes `daemon.metadata`, but only behind
-// a 500ms debounce AND a dedup signature check — it is not a flush this file
-// can prove happens on every edge). Counting them here reproduces the same
-// false-positive class this follow-up fixes, so they are left out per the
-// task's explicit fallback ("if status edges do not flush any of the five
-// watched topics directly, drop status from the edge map rather than
-// guessing").
+// edge map: they flush `daemon.metadata` through host.metadata-pump behind a
+// 500ms throttle, and an unchanged body sends nothing — neither is a flush
+// this pass should judge per edge. The pump's 5s sample tick keeps
+// `lastFlushedAt` fresh for every sampled topic regardless.
 
 /** Topics this reconciliation pass watches — every push topic the removed 2-2.5s timers flushed. */
 const RECONCILE_TOPICS: ReadonlyArray<TransportTopic> = [
@@ -220,15 +269,13 @@ const RECONCILE_EDGE_KINDS = [
     'modal',
     'prompt',
     'command_executed',
-    'mesh_state',
-] as const satisfies readonly EventOf<'modal' | 'prompt' | 'command_executed' | 'mesh_state'>['kind'][];
+] as const satisfies readonly EventOf<'modal' | 'prompt' | 'command_executed'>['kind'][];
 type ReconcileEdgeEvent = EventOf<typeof RECONCILE_EDGE_KINDS[number]>;
 
 /** Non-command edge kinds that unconditionally invalidate one fixed topic (see map above). */
 const FIXED_EDGE_TOPIC: Partial<Record<ReconcileEdgeEvent['kind'], TransportTopic>> = {
     modal: 'session.modal',
     prompt: 'session.modal',
-    mesh_state: 'daemon.metadata',
 };
 
 /** Human-readable "what proved this edge counts" label for the WARN message. */

@@ -9,14 +9,11 @@
  * Every expectation is derived from the pre-extraction daemon engines (line
  * refs = 2026-08-24 capture, see the map in src/subscriptions/topic-registry.ts):
  *
- * - throttle window `lastSentAt > 0 && (now - lastSentAt) < intervalMs`:
- *   IDENTICAL in cloud (adhdev-daemon.ts buildWorkspaceGitUpdateForSubscription)
- *   and standalone (index.ts flushWsGitSubscriptions) — golden asserts both.
- * - first flush after subscribe always sends (lastSentAt === 0): both daemons.
- * - invalidation triggers a flush PASS but does NOT bypass the throttle:
- *   both daemons called their plain flush function from the
- *   command-invalidation gate — golden pins the "invalidate inside the
- *   throttle window sends nothing" behavior.
+ * - sampling window `lastFlushedAt > 0 && (now - lastFlushedAt) < intervalMs`
+ *   (2026-09-29, audit P1-9/P2: every sampled topic is change-only — an
+ *   unchanged state is sent nothing; workspace.git runs git only while watched
+ *   and an invalidation runs it regardless of the window).
+ * - first flush after subscribe always sends.
  * - seq = per-subscription monotonic counter: CLOUD semantics (union decision
  *   #2 in the module header). Standalone previously stamped the
  *   GitWorkspaceMonitor's process-global seq; that difference is intentionally
@@ -114,15 +111,21 @@ function createHarness(options: {
 }
 
 describe('TopicSubscriptionRegistry — workspace.git parity golden', () => {
-    it('reproduces the subscribe → throttled flush → command invalidation → unsubscribe sequence', async () => {
-        // Start the clock at a nonzero epoch: both daemons' throttle guard is
-        // `lastSentAt > 0 && …`, i.e. a lastSentAt of literal 0 means
-        // "never sent" — a t=0 first delivery would disable the throttle.
+    it('reproduces the subscribe → sampled flush → invalidation → unsubscribe sequence (git only while watched, send only on change)', async () => {
+        // Start the clock at a nonzero epoch: the throttle guard treats a
+        // lastFlushedAt of literal 0 as "never flushed".
         let now = 10_000;
-        const { registry, calls } = createHarness({ now: () => now });
+        let modified = 0;
+        let gitRuns = 0;
+        const { registry, calls } = createHarness({
+            now: () => now,
+            getStatus: async (workspace) => {
+                gitRuns += 1;
+                return { ...fakeStatus(workspace), modified, lastCheckedAt: now } as GitRepoStatus;
+            },
+        });
 
         // 1. subscribe (dashboard sends { type:'subscribe', topic, key, params }).
-        //    intervalMs 5000 = DEFAULT_GIT_WORKSPACE_POLL_INTERVAL_MS in both daemons.
         const accepted = registry.subscribe('c1', {
             type: 'subscribe',
             topic: 'workspace.git',
@@ -131,60 +134,70 @@ describe('TopicSubscriptionRegistry — workspace.git parity golden', () => {
         });
         expect(accepted).toBe(true);
         expect(registry.hasSubscriptions('workspace.git')).toBe(true);
-        // Workspace trimming = cloud semantics (union decision #3).
 
-        // 2. Initial targeted flush right after subscribe (standalone:
-        //    `await this.flushWsGitSubscriptions(ws)`; cloud: subscriptionChangeHandler
-        //    → flushP2PWorkspaceGitSubscriptions). lastSentAt === 0 → always sends.
-        await registry.flushNow('workspace.git', 'c1');
+        // 2. Targeted first flush right after subscribe → git runs, first frame sent.
+        await registry.flushNow('workspace.git', 'c1', 'git:/repo');
+        expect(gitRuns).toBe(1);
 
-        // 3. Heartbeat flush inside the throttle window → nothing sent
-        //    (both daemons: lastSentAt > 0 && now - lastSentAt < intervalMs).
+        // 3. A sample inside the subscription interval → git does not even run.
         now = 11_000;
         await registry.flushNow('workspace.git');
+        expect(gitRuns).toBe(1);
 
-        // 4. Heartbeat flush at the window edge (elapsed === intervalMs) → sends
-        //    (both daemons use a strict `<` comparison).
+        // 4. A sample at the interval edge → git runs; the repo is unchanged
+        //    (only `lastCheckedAt` moved) → NOTHING is sent (audit P1-9).
         now = 15_000;
         await registry.flushNow('workspace.git');
+        expect(gitRuns).toBe(2);
 
-        // 5. Command invalidation inside the throttle window: `git_stash_push`
-        //    invalidates workspace.git per the CORE table, but invalidation only
-        //    triggers a flush pass — the throttle still applies → nothing sent.
+        // 5. A command invalidation is the explicit "repo changed" signal: it
+        //    runs git even inside the interval, and the change is sent.
         now = 15_001;
+        modified = 1;
         const invalidatedByStash = getDaemonCommandRegistry().invalidationsFor('git_stash_push');
         expect(invalidatedByStash.has('workspace.git')).toBe(true);
         await registry.invalidate(invalidatedByStash);
+        expect(gitRuns).toBe(3);
 
         // 6. A non-git command invalidates nothing for workspace.git.
         now = 30_000;
         const invalidatedByChat = getDaemonCommandRegistry().invalidationsFor('read_chat');
         expect(invalidatedByChat.has('workspace.git')).toBe(false);
         await registry.invalidate(invalidatedByChat);
+        expect(gitRuns).toBe(3);
 
-        // 7. Command invalidation outside the throttle window → sends.
+        // 7. Invalidation with an unchanged repo → git runs, nothing sent;
+        //    then a real change → sent.
         const invalidatedByPush = getDaemonCommandRegistry().invalidationsFor('git_push');
         expect(invalidatedByPush.has('workspace.git')).toBe(true);
         await registry.invalidate(invalidatedByPush);
+        modified = 2;
+        now = 30_001;
+        await registry.invalidate(invalidatedByPush);
 
-        // 8. unsubscribe → engine state dropped → later flush sends nothing.
+        // 8. unsubscribe → engine state dropped → later flush runs no git.
         expect(registry.unsubscribe('c1', { topic: 'workspace.git', key: 'git:/repo' })).toBe(true);
         expect(registry.hasSubscriptions('workspace.git')).toBe(false);
         now = 60_000;
         await registry.flushNow('workspace.git');
+        expect(gitRuns).toBe(5);
 
-        // Inline golden: exactly three deliveries, per-subscription monotonic seq
-        // (cloud semantics — union decision #2), timestamps from the monitor clock.
+        // Inline golden: exactly three deliveries (first frame + two real
+        // changes), per-subscription monotonic seq.
         expect(calls).toEqual([
             { connectionId: 'c1', topic: 'workspace.git', key: 'git:/repo', seq: 1, workspace: '/repo', timestamp: 10_000 },
-            { connectionId: 'c1', topic: 'workspace.git', key: 'git:/repo', seq: 2, workspace: '/repo', timestamp: 15_000 },
-            { connectionId: 'c1', topic: 'workspace.git', key: 'git:/repo', seq: 3, workspace: '/repo', timestamp: 30_000 },
+            { connectionId: 'c1', topic: 'workspace.git', key: 'git:/repo', seq: 2, workspace: '/repo', timestamp: 15_001 },
+            { connectionId: 'c1', topic: 'workspace.git', key: 'git:/repo', seq: 3, workspace: '/repo', timestamp: 30_001 },
         ]);
     });
 
     it('keeps seq independent per subscription and resets it on re-subscribe', async () => {
         let now = 10_000;
-        const { registry, calls } = createHarness({ now: () => now });
+        const modified: Record<string, number> = { '/a': 0, '/b': 0 };
+        const { registry, calls } = createHarness({
+            now: () => now,
+            getStatus: async (workspace) => ({ ...fakeStatus(workspace), modified: modified[workspace] ?? 0 } as GitRepoStatus),
+        });
 
         registry.subscribe('c1', {
             type: 'subscribe',
@@ -200,24 +213,25 @@ describe('TopicSubscriptionRegistry — workspace.git parity golden', () => {
         });
         await registry.flushNow('workspace.git');
         now = 11_000;
+        modified['/a'] = 1; // only /a changes
         await registry.flushNow('workspace.git');
 
-        // Re-subscribe on the same key resets the engine state (both daemons
-        // overwrote the stored subscription on subscribe) → seq restarts at 1.
+        // Re-subscribe on the same key resets the engine state → seq restarts
+        // at 1 and the fresh subscription gets its first frame.
         registry.subscribe('c1', {
             type: 'subscribe',
             topic: 'workspace.git',
             key: 'git:/a',
             params: { workspace: '/a', intervalMs: 1000 },
         });
-        await registry.flushNow('workspace.git', 'c1');
+        await registry.flushNow('workspace.git', 'c1', 'git:/a');
 
         expect(calls).toEqual([
             { connectionId: 'c1', topic: 'workspace.git', key: 'git:/a', seq: 1, workspace: '/a', timestamp: 10_000 },
             { connectionId: 'c1', topic: 'workspace.git', key: 'git:/b', seq: 1, workspace: '/b', timestamp: 10_000 },
+            // /b unchanged at 11s → nothing sent.
             { connectionId: 'c1', topic: 'workspace.git', key: 'git:/a', seq: 2, workspace: '/a', timestamp: 11_000 },
-            { connectionId: 'c1', topic: 'workspace.git', key: 'git:/b', seq: 2, workspace: '/b', timestamp: 11_000 },
-            // post-resubscribe: /a restarts at seq 1; /b untouched (throttled at t=11s).
+            // post-resubscribe: /a restarts at seq 1.
             { connectionId: 'c1', topic: 'workspace.git', key: 'git:/a', seq: 1, workspace: '/a', timestamp: 11_000 },
         ]);
     });
@@ -299,20 +313,20 @@ describe('TopicSubscriptionRegistry — workspace.git parity golden', () => {
         expect(calls).toHaveLength(1);
     });
 
-    it('rejects daemon-stored topics (chat_tail storage stays daemon-side) so daemons keep their local engines', () => {
+    it('rejects daemon-stored topics (runtime_output storage stays daemon-side) so daemons keep their local engines', () => {
         let now = 10_000;
         const { registry } = createHarness({ now: () => now });
         const accepted = registry.subscribe('c1', {
             type: 'subscribe',
-            topic: 'session.chat_tail',
-            key: 'chat:1',
+            topic: 'session.runtime_output',
+            key: 'out:1',
             params: { targetSessionId: 'session-1' },
         } as never);
         expect(accepted).toBe(false);
-        expect(registry.unsubscribe('c1', { topic: 'session.chat_tail', key: 'chat:1' } as never)).toBe(false);
+        expect(registry.unsubscribe('c1', { topic: 'session.runtime_output', key: 'out:1' } as never)).toBe(false);
         expect(registry.handlesTopic('workspace.git')).toBe(true);
         expect(registry.handlesTopic('daemon.metadata')).toBe(true);
-        expect(registry.handlesTopic('session.chat_tail')).toBe(false);
+        expect(registry.handlesTopic('session.runtime_output')).toBe(false);
     });
 });
 
@@ -352,7 +366,7 @@ function createPushHarness(options: {
 }
 
 describe('TopicSubscriptionRegistry — daemon.metadata parity golden', () => {
-    it('always builds and sends (no throttle — both daemons), with per-subscription monotonic seq', async () => {
+    it('always builds (no throttle); sends a snapshot first, then only keyed deltas, with per-subscription monotonic seq', async () => {
         let now = 10_000;
         let bodyBuilds = 0;
         const { registry, calls } = createPushHarness({
@@ -385,9 +399,8 @@ describe('TopicSubscriptionRegistry — daemon.metadata parity golden', () => {
         await registry.flushNow('daemon.metadata', 'c1');
 
         // Two immediate follow-up flush passes: daemon.metadata has NO
-        // throttle in either daemon (union decision #6) — every pass builds
-        // and sends with an advanced seq (cloud adhdev-daemon.ts:783 /
-        // standalone index.ts:2273 both did `seq += 1` unconditionally).
+        // throttle (union decision #6) — every pass builds, and since the
+        // body changed (`build` counter) each sends the keyed delta only.
         await registry.flushNow('daemon.metadata');
         now = 10_001;
         await registry.flushNow('daemon.metadata');
@@ -408,10 +421,10 @@ describe('TopicSubscriptionRegistry — daemon.metadata parity golden', () => {
 
         expect(bodyBuilds).toBe(4);
         expect(calls).toEqual([
-            { connectionId: 'c1', topic: 'daemon.metadata', update: { topic: 'daemon.metadata', key: 'meta:1', daemonId: 'daemon_test', status: { includeSessions: true, build: 1 }, seq: 1, timestamp: 10_000 } },
-            { connectionId: 'c1', topic: 'daemon.metadata', update: { topic: 'daemon.metadata', key: 'meta:1', daemonId: 'daemon_test', status: { includeSessions: true, build: 2 }, seq: 2, timestamp: 10_000 } },
-            { connectionId: 'c1', topic: 'daemon.metadata', update: { topic: 'daemon.metadata', key: 'meta:1', daemonId: 'daemon_test', status: { includeSessions: true, build: 3 }, seq: 3, timestamp: 10_001 } },
-            { connectionId: 'c1', topic: 'daemon.metadata', update: { topic: 'daemon.metadata', key: 'meta:1', daemonId: 'daemon_test', status: { includeSessions: true, build: 4 }, seq: 4, timestamp: 10_001 } },
+            { connectionId: 'c1', topic: 'daemon.metadata', update: { topic: 'daemon.metadata', key: 'meta:1', mode: 'snapshot', daemonId: 'daemon_test', status: { includeSessions: true, build: 1 }, seq: 1, timestamp: 10_000 } },
+            { connectionId: 'c1', topic: 'daemon.metadata', update: { topic: 'daemon.metadata', key: 'meta:1', mode: 'delta', daemonId: 'daemon_test', statusSet: { build: 2 }, seq: 2, timestamp: 10_000 } },
+            { connectionId: 'c1', topic: 'daemon.metadata', update: { topic: 'daemon.metadata', key: 'meta:1', mode: 'delta', daemonId: 'daemon_test', statusSet: { build: 3 }, seq: 3, timestamp: 10_001 } },
+            { connectionId: 'c1', topic: 'daemon.metadata', update: { topic: 'daemon.metadata', key: 'meta:1', mode: 'delta', daemonId: 'daemon_test', statusSet: { build: 4 }, seq: 4, timestamp: 10_001 } },
         ]);
     });
 
@@ -586,7 +599,7 @@ describe('TopicSubscriptionRegistry — machine.runtime parity golden', () => {
             { seq: 1, timestamp: 100_000 },
             { seq: 2, timestamp: 105_000 },
         ]);
-        // machine payload built ONLY for sends (throttled passes never call the source).
+        // machine payload sampled ONLY past the window (throttled passes never call the source).
         expect(builds).toBe(2);
 
         // Unset intervalMs → DEFAULT 15s (both daemons).
@@ -601,9 +614,10 @@ describe('TopicSubscriptionRegistry — machine.runtime parity golden', () => {
 });
 
 describe('TopicSubscriptionRegistry — session_host.diagnostics parity golden', () => {
-    it('interval-throttles (min 5s / default 10s), passes includeSessions/limit, and skips without a controller', async () => {
+    it('interval-throttles (min 5s / default 10s), sends only on change, passes includeSessions/limit, and skips without a controller', async () => {
         let now = 200_000;
         let controllerAvailable = false;
+        let runtimeCount = 1;
         const requests: Array<Record<string, unknown>> = [];
         const { registry, calls } = createPushHarness({
             now: () => now,
@@ -612,7 +626,14 @@ describe('TopicSubscriptionRegistry — session_host.diagnostics parity golden',
                     sessionHostDiagnostics: (opts) => {
                         if (!controllerAvailable) return null;
                         requests.push(opts as unknown as Record<string, unknown>);
-                        return Promise.resolve({ recentLogs: [], recentRequests: [], recentTransitions: [] } as never);
+                        // Every snapshot carries a trace of the diagnostics
+                        // request itself — never a change (see the signature).
+                        return Promise.resolve({
+                            runtimeCount,
+                            recentLogs: [],
+                            recentRequests: [{ type: 'get_host_diagnostics', timestamp: now, requestId: `r${requests.length}`, success: true, durationMs: 1 }],
+                            recentTransitions: [],
+                        } as never);
                     },
                 },
             },
@@ -638,258 +659,23 @@ describe('TopicSubscriptionRegistry — session_host.diagnostics parity golden',
         now = 204_999;
         await registry.flushNow('session_host.diagnostics');  // inside clamped window
         now = 205_000;
-        await registry.flushNow('session_host.diagnostics');  // edge → sends
+        await registry.flushNow('session_host.diagnostics');  // edge → sampled, unchanged → nothing sent
+        now = 210_000;
+        runtimeCount = 2;
+        await registry.flushNow('session_host.diagnostics');  // edge + a real change → sends
         expect(requests).toEqual([
+            { includeSessions: false, limit: 25 },
             { includeSessions: false, limit: 25 },
             { includeSessions: false, limit: 25 },
         ]);
         expect(calls.map((c) => ({ seq: c.update.seq, timestamp: c.update.timestamp }))).toEqual([
             { seq: 1, timestamp: 200_000 },
-            { seq: 2, timestamp: 205_000 },
+            { seq: 2, timestamp: 210_000 },
         ]);
         // includeSessions defaults to true (`!== false`), limit Number()||undefined — both daemons.
         registry.subscribe('c1', { type: 'subscribe', topic: 'session_host.diagnostics', key: 'diag:2', params: {} });
         await registry.flushNow('session_host.diagnostics');
         expect(requests.at(-1)).toEqual({ includeSessions: true, limit: undefined });
-    });
-});
-
-describe('TopicSubscriptionRegistry — session.chat_tail hybrid engine parity golden', () => {
-    // Storage + fan-out stay daemon-side (union decision #9): these goldens
-    // drive the per-subscription BUILD engine (buildChatTailUpdate) and the
-    // output-activity debounce directly, the way both daemons' flush loops do.
-    function chatState() {
-        return { seq: 0, cursor: { tailLimit: 60 }, lastDeliveredSignature: '' } as {
-            seq: number;
-            cursor: { tailLimit: number };
-            lastDeliveredSignature: string;
-            missingSession?: { firstMissingAt: number; lastAttemptAt: number; consecutiveMisses: number; warned?: boolean };
-        };
-    }
-
-    it('read → prepare → seq/signature mutation, signature dedup, interactionId + trace hooks (cloud semantics)', async () => {
-        let now = 10_000;
-        const reads: Array<Record<string, unknown>> = [];
-        const traces: Array<Record<string, unknown>> = [];
-        let readResult: Record<string, unknown> = {
-            success: true,
-            status: 'generating',
-            title: 'Chat One',
-            messages: [{ role: 'assistant', content: 'hello', timestamp: 1 }],
-        };
-        const { registry } = createPushHarness({
-            now: () => now,
-            engine: {
-                interactionId: () => 'itx-chat',
-                recordTrace: (event) => { traces.push(event as unknown as Record<string, unknown>); },
-                sources: {
-                    readChatTail: async (args) => {
-                        reads.push(args as unknown as Record<string, unknown>);
-                        return readResult as never;
-                    },
-                },
-            },
-        });
-
-        const state = chatState();
-        // First build: cloud adhdev-daemon.ts:457 / standalone index.ts:1851 —
-        // read_chat args carry tailLimit only when cursor.tailLimit > 0.
-        const first = await registry.buildChatTailUpdate({
-            key: 'chat:1',
-            params: { targetSessionId: 'session-1', historySessionId: 'hist-1' },
-            state,
-        });
-        expect(reads).toEqual([{ targetSessionId: 'session-1', historySessionId: 'hist-1', tailLimit: 60 }]);
-        expect(first).toMatchObject({
-            topic: 'session.chat_tail',
-            key: 'chat:1',
-            sessionId: 'session-1',
-            historySessionId: 'hist-1',
-            interactionId: 'itx-chat',
-            seq: 1,
-            timestamp: 10_000,
-            status: 'generating',
-            title: 'Chat One',
-        });
-        expect(state.seq).toBe(1);
-        expect(state.lastDeliveredSignature).not.toBe('');
-        // Trace payload shape = cloud recordDebugTrace call, verbatim.
-        expect(traces).toEqual([{
-            interactionId: 'itx-chat',
-            category: 'topic',
-            stage: 'session.chat_tail_published',
-            level: 'info',
-            sessionId: 'session-1',
-            payload: { returnedMessages: 1, hasModal: false, hasTitle: true },
-        }]);
-
-        // Same result again → delivery-signature dedup: null update, seq STILL
-        // advances (prepareSessionChatTailUpdate contract — both daemons).
-        now = 10_100;
-        const second = await registry.buildChatTailUpdate({
-            key: 'chat:1',
-            params: { targetSessionId: 'session-1', historySessionId: 'hist-1' },
-            state,
-        });
-        expect(second).toBeNull();
-        expect(state.seq).toBe(2);
-        expect(traces).toHaveLength(1);
-
-        // New content → published again with the advanced seq.
-        readResult = {
-            success: true,
-            status: 'idle',
-            title: 'Chat One',
-            messages: [
-                { role: 'assistant', content: 'hello', timestamp: 1 },
-                { role: 'assistant', content: 'done', timestamp: 2 },
-            ],
-        };
-        const third = await registry.buildChatTailUpdate({
-            key: 'chat:1',
-            params: { targetSessionId: 'session-1', historySessionId: 'hist-1' },
-            state,
-        });
-        expect(third).toMatchObject({ seq: 3, status: 'idle' });
-        expect((third as { messages: unknown[] }).messages).toHaveLength(2);
-    });
-
-    it('missing-session results record backoff state, warn exactly once per streak, and clear on recovery', async () => {
-        let now = 10_000;
-        let missing = true;
-        const missingEvents: Array<Record<string, unknown>> = [];
-        const { registry } = createPushHarness({
-            now: () => now,
-            engine: {
-                sources: {
-                    readChatTail: async () => (missing
-                        ? { success: false, error: 'Live session not found for targetSessionId: session-1' } as never
-                        : { success: true, status: 'idle', messages: [{ role: 'assistant', content: 'back', timestamp: 3 }] } as never),
-                },
-                chatTail: {
-                    onMissingSession: (ctx) => { missingEvents.push(ctx as unknown as Record<string, unknown>); },
-                },
-            },
-        });
-
-        const state = chatState();
-        const params = { targetSessionId: 'session-1' };
-        // Cloud logged WARN on the first miss of a streak and DEBUG afterwards
-        // (shouldWarnForMissingSession + missing.warned) — standalone identical.
-        expect(await registry.buildChatTailUpdate({ key: 'chat:1', params, state })).toBeNull();
-        now = 10_050;
-        expect(await registry.buildChatTailUpdate({ key: 'chat:1', params, state })).toBeNull();
-        expect(missingEvents).toEqual([
-            { sessionId: 'session-1', consecutiveMisses: 1, warnNow: true },
-            { sessionId: 'session-1', consecutiveMisses: 2, warnNow: false },
-        ]);
-        expect(state.missingSession?.consecutiveMisses).toBe(2);
-        expect(state.seq).toBe(0);
-
-        // Recovery clears the streak (both daemons: `state.missingSession = undefined`).
-        missing = false;
-        const update = await registry.buildChatTailUpdate({ key: 'chat:1', params, state });
-        expect(update).not.toBeNull();
-        expect(state.missingSession).toBeUndefined();
-    });
-
-    it('fires the D8 onPrepared hook before the null-update check (standalone guaranteed-delivery gate)', async () => {
-        const prepared: Array<{ sessionId: string; hasUpdate: boolean; signature: string }> = [];
-        const readResult = { success: true, status: 'idle', messages: [{ role: 'assistant', content: 'x', timestamp: 1 }] };
-        const { registry } = createPushHarness({
-            now: () => 10_000,
-            engine: {
-                sources: { readChatTail: async () => readResult as never },
-                chatTail: {
-                    onPrepared: ({ sessionId, update, lastDeliveredSignature }) => {
-                        prepared.push({ sessionId, hasUpdate: !!update, signature: lastDeliveredSignature });
-                    },
-                },
-            },
-        });
-        const state = chatState();
-        const params = { targetSessionId: 'session-1' };
-        await registry.buildChatTailUpdate({ key: 'chat:1', params, state });
-        // Deduped second build STILL fires the hook (standalone records the
-        // flushed signature even for a null update — index.ts D8 comment).
-        await registry.buildChatTailUpdate({ key: 'chat:1', params, state });
-        expect(prepared).toHaveLength(2);
-        expect(prepared[0]!.hasUpdate).toBe(true);
-        expect(prepared[1]!.hasUpdate).toBe(false);
-        expect(prepared[1]!.signature).toBe(prepared[0]!.signature);
-    });
-
-    it('debounces output activity with the per-daemon injected constant and prunes the hot window', () => {
-        vi.useFakeTimers();
-        try {
-            let now = 10_000;
-            let flushes = 0;
-            let gate = true;
-            const { registry } = createPushHarness({
-                now: () => now,
-                engine: {
-                    chatTail: {
-                        // Union decision #5: injected per daemon (both 700ms today).
-                        flushDebounceMs: 700,
-                        isCliSession: (id) => id.startsWith('cli-'),
-                        scheduleGate: () => gate,
-                        onDebouncedFlush: () => { flushes += 1; },
-                    },
-                },
-            });
-
-            // Non-CLI sessions never mark activity (both daemons' isCliSession gate).
-            registry.markChatOutputActivity('ide-1');
-            expect(registry.getRecentlyOutputActiveChatSessionIds(now).size).toBe(0);
-
-            // CLI output arms ONE debounce timer; repeated output within the
-            // window does not re-arm (cloud markP2PChatOutputActivity /
-            // standalone markWsChatOutputActivity: `if (timer …) return`).
-            registry.markChatOutputActivity('cli-1');
-            registry.markChatOutputActivity('cli-1');
-            registry.markChatOutputActivity('cli-2');
-            vi.advanceTimersByTime(699);
-            expect(flushes).toBe(0);
-            vi.advanceTimersByTime(1);
-            expect(flushes).toBe(1);
-
-            // Activity map: hot inside the 8s grace window, pruned after
-            // (DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS — both daemons).
-            expect(Array.from(registry.getRecentlyOutputActiveChatSessionIds(now)).sort()).toEqual(['cli-1', 'cli-2']);
-            now = 18_001;
-            expect(registry.getRecentlyOutputActiveChatSessionIds(now).size).toBe(0);
-
-            // Transport gate closed → activity recorded but no timer armed
-            // (cloud: p2p disconnected / no chat subs; standalone: no clients).
-            gate = false;
-            registry.markChatOutputActivity('cli-3');
-            vi.advanceTimersByTime(2_000);
-            expect(flushes).toBe(1);
-            expect(registry.getRecentlyOutputActiveChatSessionIds(now).has('cli-3')).toBe(true);
-        } finally {
-            vi.useRealTimers();
-        }
-    });
-
-    it('micro-bench: N sequential builds through the engine stay cheap (hot-path guard)', async () => {
-        const readResult = { success: true, status: 'generating', messages: [{ role: 'assistant', content: 'streaming…', timestamp: 1 }] };
-        const { registry } = createPushHarness({
-            now: () => Date.now(),
-            engine: { sources: { readChatTail: async () => readResult as never } },
-        });
-        const state = chatState();
-        const params = { targetSessionId: 'session-1' };
-        const N = 500;
-        const startedAt = performance.now();
-        for (let i = 0; i < N; i += 1) {
-            await registry.buildChatTailUpdate({ key: 'chat:1', params, state });
-        }
-        const elapsed = performance.now() - startedAt;
-        // Generous bound: the pre-extraction daemon-local engine did the same
-        // work (prepare + signature) at well under 1ms/build; the registry
-        // indirection must not change the complexity class. CI-slack of >4ms
-        // per build would indicate an accidental heavy path.
-        expect(elapsed).toBeLessThan(N * 4);
     });
 });
 

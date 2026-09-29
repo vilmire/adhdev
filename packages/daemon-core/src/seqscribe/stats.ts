@@ -35,6 +35,7 @@ import type { NodeStats } from 'seqscribe';
 // dependency-free leaf written by a providers/ hop and read here. Same reason
 // `mesh-event-trace.ts` and `usage-normalize.ts` were moved to shared/.
 import { projectionCarryCounters } from '../shared/projection-carry-counters.js';
+import { transcriptWriterGcCounters } from './writer-gc.js';
 import type { SeqscribeThroughputSnapshot } from './throughput-collector.js';
 import type { TranscriptLatencyDetail } from './transcript-latency.js';
 
@@ -77,12 +78,40 @@ export interface TranscriptChatDetail {
     chatPrunedRows: number;
     chatPrunePasses: number;
     chatPruneErrors: number;
-    chatParityReadBacks: number;
     chatLedgerSeeds: number;
     /** Replica-side commits rejected by the digest/count check. */
     chatDigestMismatch: number;
     chatReplicaResubscribes: number;
     chatBaseRequests: number;
+}
+
+/**
+ * Acknowledged retention on full-sync topics (seqscribe host-guide §4.8;
+ * data-path audit P0-1) — library counters summed over every eligible topic
+ * plus the writer-gc sweep's mesh pass. Integers only, no topic or peer names.
+ */
+export interface FullSyncRetentionDetail {
+    /** Topics the library applies acknowledged retention to (full-sync, full, non-keyed append). */
+    topics: number;
+    /** Rows deleted below acknowledged floors, cumulative since start (library). */
+    prunedRows: number;
+    /** Streams this node advanced past a peer's floor (TRUNCATED / import). */
+    floorsAdopted: number;
+    /** WANTs this node answered with TRUNCATED. */
+    truncatedServed: number;
+    /** WANTs below a floor from a proto < 3 peer (answered with an empty completion). */
+    truncatedUnservable: number;
+    /** Gauge: streams holding a retention floor. */
+    floorStreams: number;
+    /** Gauge: max peer nodes with recorded acknowledgments on any one topic. */
+    ackNodesMax: number;
+    /** writer-gc mesh pass: sweeps' mesh topics inspected, rows deleted, errors (cumulative). */
+    sweepTopicsInspected: number;
+    sweepRowsPruned: number;
+    sweepErrors: number;
+    /** writer-gc mesh pass gauges from the last sweep. */
+    sweepStreamsPinned: number;
+    sweepLaggingMembers: number;
 }
 
 export interface SeqscribeStatusSummary {
@@ -105,56 +134,10 @@ export interface SeqscribeStatusSummary {
     /** True when a fleet secret is configured and certificates can be verified. */
     authority: boolean;
 
-    // ── Phase 2 Stage 3: mesh parity ──────────────────────────────────────
-    // (C-W3: the dual-write shadow is gone — the publisher is the one write
-    // path — so its `dualWrite*` buckets were dropped. The parity fields stay
-    // on the wire shape until the server allow-list drops them; with the parity
-    // loop deleted they report never-run.)
-    /**
-     * Bucketed count of parity mismatches observed since boot.
-     *
-     * ★ DETECTION, not the gate. A nonzero value here is EXPECTED in normal
-     * operation: the mcp-server process appends ledger entries with no armed
-     * shadow leg, every sweep reports them, and the backfill repairs them (see
-     * the process-boundary note in mesh-dual-write.ts). Read it together with
-     * `parityPersistentMismatchBucket` — this one nonzero while that one is 0 is
-     * the self-healing cycle working as designed.
-     * Bucketed rather than raw for the dedup reason above — a nonzero bucket is
-     * the signal; the exact count lives in the daemon log and `get_status_metadata`.
-     */
-    parityMismatchBucket: number;
-    /**
-     * Bucketed count of mismatches that SURVIVED a repair attempt.
-     *
-     * ★ THIS is the number the read-path cutover needs at 0 — it is the
-     * readiness gate's actual condition 4 (mesh-read-readiness.ts). A
-     * `missing_in_shadow` counts here only once a later sweep reports the same
-     * id again; `field_mismatch` and `extra_in_shadow` count on sight, being
-     * unrepairable. Nonzero means a genuine replication failure and the whole
-     * process has fallen back to the ledger.
-     */
-    parityPersistentMismatchBucket: number;
-    /** True once at least one parity comparison has run. */
-    parityRan: boolean;
-    /**
-     * Bucketed breakdown of `parityMismatchBucket` by mismatch class.
-     *
-     * The combined bucket answers "is Stage 4 blocked"; these three answer
-     * "blocked by what" without adding a live counter — same bucket discipline
-     * as everything else in this summary.
-     */
-    parityMissingInShadowBucket: number;
-    parityExtraInShadowBucket: number;
-    parityFieldMismatchBucket: number;
-
     // ── §8 unit 2: transcript single-observation publisher + parity ────────
-    // Same bucket discipline as the mesh dual-write/parity fields above,
-    // `transcript*`-prefixed rather than `dualWrite*`/`parity*` so the two
-    // legs (mesh events shadow vs. session transcript publisher) never share a
-    // key. `transcriptParityPersistentMismatchBucket` mirrors
-    // `parityPersistentMismatchBucket`'s omission from
-    // `buildCloudSeqscribeSummary` (status/reporter.ts) below — kept local-only
-    // for consistency with that existing asymmetry, not a new decision.
+    // Bucketed like the fields above. `transcriptParityPersistentMismatchBucket`
+    // is omitted from `buildCloudSeqscribeSummary` (status/reporter.ts) — it
+    // stays local-only.
     /** True when the transcript publisher is configured (mode != off). */
     transcriptPublish: boolean;
     /** Bucketed count of complete revisions handed to the publish sink. */
@@ -384,6 +367,13 @@ export interface SeqscribeStatusSummary {
      * No topic names or ids — `buildCloudSeqscribeSummary` does not name it.
      */
     transcriptChatDetail?: TranscriptChatDetail;
+    /**
+     * Full-sync acknowledged retention (mesh events/handoff bound, P0-1).
+     * ★ LOCAL-ONLY for the same reasons as `transcriptChatDetail`: raw
+     * monotonic counters, no server use; `buildCloudSeqscribeSummary` does not
+     * name it.
+     */
+    fullSyncRetentionDetail?: FullSyncRetentionDetail;
     transcriptCounterDetail?: {
         /** PTY dirty triggers collapsed behind the per-session throttle window. */
         ptyDirtyCoalesced: number;
@@ -415,15 +405,8 @@ export interface SeqscribeStatusSummary {
     meshDelivery?: Record<string, number>;
     /**
      * G2 transcript-transport handshake diagnostics (design §7e, 2026-09-23
-     * RCA `scratchpad/transcript-handshake-rca.md`). The RCA's own finding #5:
-     * before that investigation there was no daemon-side counter for how
-     * often a dashboard peer's seqscribe transport ("replica") is selected
-     * versus falling back to the legacy chat-tail delivery path
-     * (`session-chat-tail-controller.ts` `shouldRunLegacySubscription`), so
-     * the true production wedge rate could not be distinguished from the
-     * single 99-minute host-sleep artifact the RCA traced in one preview
-     * daemon's logs. `zombieRecovered` is the companion counter for the fix
-     * itself: how many times a dashboard peer's `RTCPeerConnection` was
+     * RCA `scratchpad/transcript-handshake-rca.md`). `zombieRecovered` counts
+     * how many times a dashboard peer's `RTCPeerConnection` was
      * judged zombie (its own `state()` stale, or HELLO timing out past the
      * threshold despite claiming `'connected'`) and handed off for daemon-
      * side peer-connection recovery instead of being redialed forever on the
@@ -438,10 +421,7 @@ export interface SeqscribeStatusSummary {
      * `buildCloudSeqscribeSummary` (status/reporter.ts) is a fixed-key
      * allow-list that does not name this key, and
      * `test/status/cloud-status-content-boundary.test.ts` must keep it out —
-     * do not add it there without an explicit content-boundary review, since
-     * (unlike the other local-only fields) `replicaSelected`/`legacySelected`
-     * are session-transport-routing counts, not obviously content-free the
-     * way a bucketed backlog size is.
+     * do not add it there without an explicit content-boundary review.
      */
     /**
      * The vendor SubHub's SUB serving counters (`NodeStats.subs`, seqscribe
@@ -472,11 +452,7 @@ export interface SeqscribeStatusSummary {
         resyncWritesCoalesced: number;
         deltasSent: number;
     };
-    transcriptTransportSelection?: {
-        /** Times a dashboard peer's session used the seqscribe replica transport. */
-        replicaSelected: number;
-        /** Times a dashboard peer's session fell back to legacy chat-tail delivery. */
-        legacySelected: number;
+    transcriptLane?: {
         /** Times a dashboard peer's seqscribe connection was judged zombie and recovered (see above). */
         zombieRecovered: number;
     };
@@ -484,17 +460,6 @@ export interface SeqscribeStatusSummary {
 
 export interface SummarizeOptions {
     authorityEnabled: boolean;
-    /** Stage 3 parity counters. Omitted → reported as never-run. */
-    parity?: {
-        runs: number;
-        mismatches: number;
-        /** Mismatches that survived a repair attempt — the cutover's gate. */
-        persistentMismatches?: number;
-        /** Per-class breakdown. Omitted → each axis reported as 0. */
-        missingInShadow?: number;
-        extraInShadow?: number;
-        fieldMismatch?: number;
-    };
     /** Keyed chat write/compaction/read counters — local-only, see `transcriptChatDetail`. */
     transcriptChat?: TranscriptChatDetail;
     /**
@@ -581,9 +546,9 @@ export interface SummarizeOptions {
      */
     meshDelivery?: Record<string, number> | null;
     /**
-     * G2 transcript-transport selection + zombie-recovery counters — see
-     * `transcriptTransportSelection` on `SeqscribeStatusSummary` above for
-     * what these mean and why they are local-only. Only read when
+     * Transcript-lane zombie-recovery counter — see `transcriptLane` on
+     * `SeqscribeStatusSummary` above for what it means and why it is
+     * local-only. Only read when
      * `includeLocalDiagnostics` is set, for the same reason as `readRouting`
      * above. `zombieRecovered` is sourced from `packages/daemon-cloud/src/
      * daemon-p2p/data-channel-router.ts` `getZombiePeerRecoveryCount()`,
@@ -591,11 +556,45 @@ export interface SummarizeOptions {
      * daemon-cloud's), so a caller there passes it through rather than this
      * module reading it directly.
      */
-    transcriptTransportSelection?: {
-        replicaSelected: number;
-        legacySelected: number;
+    transcriptLane?: {
         zombieRecovered: number;
     } | null;
+}
+
+function fullSyncRetentionDetail(stats: NodeStats): FullSyncRetentionDetail {
+    const out: FullSyncRetentionDetail = {
+        topics: 0,
+        prunedRows: 0,
+        floorsAdopted: 0,
+        truncatedServed: 0,
+        truncatedUnservable: 0,
+        floorStreams: 0,
+        ackNodesMax: 0,
+        sweepTopicsInspected: 0,
+        sweepRowsPruned: 0,
+        sweepErrors: 0,
+        sweepStreamsPinned: 0,
+        sweepLaggingMembers: 0,
+    };
+    for (const topic of Object.values(stats.topics)) {
+        const r = topic.retention;
+        if (!r) continue;
+        out.topics++;
+        out.prunedRows += r.prunedRows;
+        out.floorsAdopted += r.floorsAdopted;
+        out.truncatedServed += r.truncatedServed;
+        out.truncatedUnservable += r.truncatedUnservable;
+        out.floorStreams += r.floorStreams;
+        if (r.ackNodes > out.ackNodesMax) out.ackNodesMax = r.ackNodes;
+    }
+    // (G1-style) process-global sweep counters, read directly — single reader.
+    const gc = transcriptWriterGcCounters();
+    out.sweepTopicsInspected = gc.meshTopicsInspected;
+    out.sweepRowsPruned = gc.meshRowsPruned;
+    out.sweepErrors = gc.meshPruneErrors;
+    out.sweepStreamsPinned = gc.meshStreamsPinned;
+    out.sweepLaggingMembers = gc.meshLaggingMembers;
+    return out;
 }
 
 export function summarizeSeqscribeStats(
@@ -669,6 +668,7 @@ export function summarizeSeqscribeStats(
             // meaningfully vary. Gated by `includeLocalDiagnostics` like every
             // raw counter here, which is what keeps it off the status frame.
             projectionCarry: projectionCarryCounters(),
+            fullSyncRetentionDetail: fullSyncRetentionDetail(stats),
             ...(tp
                 ? {
                       transcriptParityDetail: {
@@ -718,12 +718,10 @@ export function summarizeSeqscribeStats(
                 : {}),
             ...(opts.meshDelivery ? { meshDelivery: { ...opts.meshDelivery } } : {}),
             ...(stats.subs ? { subDelivery: { ...stats.subs } } : {}),
-            ...(opts.transcriptTransportSelection
+            ...(opts.transcriptLane
                 ? {
-                      transcriptTransportSelection: {
-                          replicaSelected: opts.transcriptTransportSelection.replicaSelected,
-                          legacySelected: opts.transcriptTransportSelection.legacySelected,
-                          zombieRecovered: opts.transcriptTransportSelection.zombieRecovered,
+                      transcriptLane: {
+                          zombieRecovered: opts.transcriptLane.zombieRecovered,
                       },
                   }
                 : {}),
@@ -754,15 +752,6 @@ export function summarizeSeqscribeStats(
         fgenAgeBucket: bucket(maxCertAgeMs / (60 * 60 * 1000), FGEN_AGE_BUCKETS_H),
         quarantined,
         authority: opts.authorityEnabled,
-        parityMismatchBucket: bucket(opts.parity?.mismatches ?? 0, BACKLOG_BUCKETS),
-        parityPersistentMismatchBucket: bucket(
-            opts.parity?.persistentMismatches ?? 0,
-            BACKLOG_BUCKETS,
-        ),
-        parityRan: (opts.parity?.runs ?? 0) > 0,
-        parityMissingInShadowBucket: bucket(opts.parity?.missingInShadow ?? 0, BACKLOG_BUCKETS),
-        parityExtraInShadowBucket: bucket(opts.parity?.extraInShadow ?? 0, BACKLOG_BUCKETS),
-        parityFieldMismatchBucket: bucket(opts.parity?.fieldMismatch ?? 0, BACKLOG_BUCKETS),
         transcriptPublish: opts.transcript?.active ?? false,
         transcriptPublishedBucket: bucket(opts.transcript?.published ?? 0, BACKLOG_BUCKETS),
         transcriptPublishFailedBucket: bucket(opts.transcript?.publishFailed ?? 0, BACKLOG_BUCKETS),

@@ -13,6 +13,7 @@ import { getQueue, updateTaskStatus, __writeTaskStatusForTests, readLocalRecords
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 import { validateMeshToolArgs } from '../src/tools/validate-tool-args.js';
 import { MESH_GRAPH_NODE_PATCH_TOOL } from '../src/tools/mesh-tool-schemas.js';
+import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 // GRAPH-ORCHESTRATION — M-GRAPH-INPUTS-LATE-REJECT, part (b): the RECOVERY path.
 //
 //   Design SoT: docs/design/2026-08-18-graph-orchestration-full.md
@@ -44,10 +45,10 @@ function nextMeshId(): string {
 }
 
 function recordingLocalTransport() {
-    return {
+    return fakeCoordinatorTransport({
         command: async (__ipcCmd: string, __ipcArgs?: Record<string, unknown>) => { if (isTurnIpcCommand(__ipcCmd)) return answerTurnIpc(__ipcCmd, __ipcArgs ?? {}); return ({ success: true }); },
         getStatus: async () => ({ sessions: [] }),
-    } as any;
+    } as any);
 }
 
 function makeCtx(meshId: string, coordinatorSessionId = 'sess-coord') {

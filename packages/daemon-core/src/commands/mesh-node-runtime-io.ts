@@ -3,10 +3,9 @@
  *   - member side: read THIS daemon's runtime summary in-process (no command
  *     dispatch, no command log line) for mesh-node-state-pusher.ts, and wake the
  *     pusher on session lifecycle facts;
- *   - coordinator side: the background runtime probe of a member that does not
- *     push it (older daemon), and the explicit-refresh nudge that makes a
- *     subscribed member push now — used by mesh-node-git-refresher.ts, never
- *     awaited by a request path.
+ *   - coordinator side: the nudge that makes a member push (and subscribe) now —
+ *     used by mesh-node-git-refresher.ts, never awaited by a request path. The
+ *     coordinator never reads a member's runtime itself.
  */
 import { getMachineId, getMachineNickname } from '../config/config.js';
 import { getCachedProviderVersions } from '../detection/cli-detector.js';
@@ -75,41 +74,14 @@ export function subscribeMeshNodeRuntimePush(bus: SessionLifecycleBus | null | u
     return bus.on(RUNTIME_LIFECYCLE_KINDS, () => pusher.noteRuntimeChanged(), { name: 'mesh-node-runtime-push' });
 }
 
-/**
- * Background runtime probe of a remote member (bounded wait). Resolves the
- * content-free summary, or null when the member could not answer.
- */
-export async function probeRemoteMeshNodeRuntime(
-    dispatchMeshCommand: CommandRouterDeps['dispatchMeshCommand'],
-    daemonId: string,
-    timeoutMs: number,
-): Promise<MeshNodeRuntimeSummary | null> {
-    if (!dispatchMeshCommand) return null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    try {
-        const raw = await Promise.race([
-            dispatchMeshCommand(daemonId, 'get_status_metadata', {}),
-            new Promise<never>((_, reject) => {
-                timer = setTimeout(() => reject(new Error('mesh_node_runtime_probe_timeout')), timeoutMs);
-                (timer as { unref?: () => void }).unref?.();
-            }),
-        ]);
-        const result = unwrapMeshRelayResult(raw, { command: 'get_status_metadata', peerDaemonId: daemonId }) as Record<string, unknown>;
-        if (result && result.success === false) return null;
-        return buildMeshNodeRuntimeSummary(result);
-    } finally {
-        if (timer) clearTimeout(timer);
-    }
-}
-
 /** Budget for a nudge round trip (it only registers intent; the push follows separately). */
 export const MESH_NODE_STATE_NUDGE_TIMEOUT_MS = 10_000;
 
 /**
- * Ask a member to push its node state now. Resolves true when the member holds a
- * push subscription for this node, false when it does not — or does not know
- * the command (a member too old to push): the refresher then falls back to its
- * handshake probe. Rejects when the member is unreachable.
+ * Ask a member to push its node state now. The nudge carries the node's
+ * workspace, so a member not yet pushing this node subscribes on the spot.
+ * Resolves true when the member took it, false when it refused (e.g. the
+ * workspace is not on that machine). Rejects when the member is unreachable.
  */
 export async function nudgeMeshNodeStatePush(
     dispatchMeshCommand: CommandRouterDeps['dispatchMeshCommand'],
@@ -120,7 +92,7 @@ export async function nudgeMeshNodeStatePush(
     let timer: ReturnType<typeof setTimeout> | null = null;
     try {
         const raw = await Promise.race([
-            dispatchMeshCommand(target.daemonId, MESH_NODE_STATE_NUDGE_COMMAND, { meshId: target.meshId, nodeId: target.nodeId }),
+            dispatchMeshCommand(target.daemonId, MESH_NODE_STATE_NUDGE_COMMAND, { meshId: target.meshId, nodeId: target.nodeId, workspace: target.workspace }),
             new Promise<never>((_, reject) => {
                 timer = setTimeout(() => reject(new Error('mesh_node_state_nudge_timeout')), timeoutMs);
                 (timer as { unref?: () => void }).unref?.();

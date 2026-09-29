@@ -62,6 +62,7 @@ export type {
     HeldNodeRuntimeObservation,
     NodeStatusProbe,
 } from './mesh-held-node-state.js';
+import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
 
 function nonEmptyString(value: unknown): string | undefined {
     return typeof value === 'string' && value ? value : undefined;
@@ -326,6 +327,7 @@ export async function readNodeRuntime(
     // fetching held state means a LOCAL node (the common single-machine/self
     // case) never issues the held-state `mesh_status` read at all — it goes
     // straight to the SAME live get_status_metadata call it always made.
+    await ensureMeshNodeRoutes(ctx);
     const canUseHeld = !opts.allowLive
         && ctx.transport instanceof IpcTransport
         && !!node.daemonId

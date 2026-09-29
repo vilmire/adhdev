@@ -54,8 +54,6 @@ function fakeTransport(over: Partial<DaemonHostTransport> = {}) {
     const calls = {
         output: [] as Array<[string, string]>,
         statusFacts: [] as string[],
-        flushActive: 0,
-        flushCompleted: [] as string[][],
         statusEvents: [] as any[],
         meshState: [] as string[],
         commands: [] as string[],
@@ -65,13 +63,6 @@ function fakeTransport(over: Partial<DaemonHostTransport> = {}) {
         instanceId: () => 'standalone_mach_t',
         version: 'test',
         topicSink: { send: () => true, isDeliverable: () => true, isAlive: () => true },
-        chatTail: {
-            flushDebounceMs: 700,
-            scheduleGate: () => false,
-            flushActive: () => { calls.flushActive += 1; },
-            flushCompleted: (ids) => { calls.flushCompleted.push([...ids]); },
-            readSource: 'standalone',
-        },
         broadcastSessionOutput: (sessionId, data) => { calls.output.push([sessionId, data]); },
         sendStatusEvent: (payload) => { calls.statusEvents.push(payload); },
         onStatusFacts: (e) => { calls.statusFacts.push(e.kind); },
@@ -87,7 +78,7 @@ const statusEdge = (sessionId: string, prev: any, next: any) => ({
 });
 
 describe('createDaemonHostRuntime', () => {
-    it('output fanout: only CLI sessions reach the transport, each marking chat-output activity; stop() detaches', () => {
+    it('output fanout: only CLI sessions reach the transport; stop() detaches', () => {
         const rt = fakeRuntime();
         const { transport, calls } = fakeTransport();
         const host = createDaemonHostRuntime(rt.runtime, transport);
@@ -97,27 +88,10 @@ describe('createDaemonHostRuntime', () => {
         rt.outputFanout.broadcastSessionOutput('ide-1', 'nope');
         rt.outputFanout.broadcastSessionOutput('unknown', 'nope');
         expect(calls.output).toEqual([['cli-1', 'hello'], ['cli-term', 'raw']]);
-        expect([...host.topics.getRecentlyOutputActiveChatSessionIds(Date.now())].sort()).toEqual(['cli-1', 'cli-term']);
 
         host.stop();
         rt.outputFanout.broadcastSessionOutput('cli-1', 'after stop');
         expect(calls.output).toHaveLength(2);
-    });
-
-    it('completion tail: working|blocked → ready forces a flush of that session; every edge hot-flushes', () => {
-        const rt = fakeRuntime();
-        const { transport, calls } = fakeTransport();
-        createDaemonHostRuntime(rt.runtime, transport);
-
-        rt.bus.emit(statusEdge('s1', 'idle', 'generating'));
-        expect(calls.flushCompleted).toEqual([]);
-        rt.bus.emit(statusEdge('s1', 'generating', 'idle'));
-        rt.bus.emit(statusEdge('s2', 'waiting_approval', 'idle'));
-        rt.bus.emit(statusEdge('s3', 'generating', 'error'));
-        expect(calls.flushCompleted).toEqual([['s1'], ['s2']]);
-        expect(calls.flushActive).toBe(4);
-        // The same edges are daemon facts for the host's status push.
-        expect(calls.statusFacts).toEqual(['status', 'status', 'status', 'status']);
     });
 
     it('status facts: registered / terminated / daemon_facts reach onStatusFacts', () => {
@@ -170,18 +144,21 @@ describe('createDaemonHostRuntime', () => {
         expect(calls.commands).toEqual(['stop_cli', 'launch_cli']);
     });
 
-    it('modal / prompt edges flush session.modal; mesh_state runs the host hook and flushes daemon.metadata', () => {
+    it('modal / prompt edges flush session.modal; mesh_state runs the host hook and flushes THAT mesh\'s mesh.status', () => {
         const rt = fakeRuntime();
         const { transport, calls } = fakeTransport();
         const host = createDaemonHostRuntime(rt.runtime, transport);
         vi.spyOn(host.topics, 'hasSubscriptions').mockReturnValue(true);
         const flushNow = vi.spyOn(host.topics, 'flushNow').mockResolvedValue(undefined);
+        const flushMeshStatus = vi.spyOn(host.topics, 'flushMeshStatus').mockResolvedValue(undefined);
 
         rt.bus.emit({ kind: 'modal', sessionId: 's1', at: 0, modal: null });
         rt.bus.emit({ kind: 'prompt', sessionId: 's1', at: 0, prompt: null, transport: null });
         rt.bus.emit({ kind: 'mesh_state', at: 0, meshId: 'mesh_a' });
-        expect(flushNow.mock.calls.map((c) => c[0])).toEqual(['session.modal', 'session.modal', 'daemon.metadata']);
-        expect(calls.meshState).toEqual(['mesh_a']);
+        rt.bus.emit({ kind: 'mesh_state', at: 0, meshId: '*' });
+        expect(flushNow.mock.calls.map((c) => c[0])).toEqual(['session.modal', 'session.modal']);
+        expect(flushMeshStatus.mock.calls).toEqual([['mesh_a'], [undefined]]);
+        expect(calls.meshState).toEqual(['mesh_a', '*']);
     });
 
     it('findSessionModalState uses the lightweight projection with the registry instanceKey, never collectAllStates', () => {
@@ -228,7 +205,7 @@ describe('createDaemonHostRuntime', () => {
         expect(rt.createSnapshot).toHaveBeenCalledWith({ workspace: '/repo', reason: 'after_agent_work', sessionId: 's1' });
     });
 
-    it('P-II item 1: topic flushes are edge-driven only — no background interval fires extra flushes', () => {
+    it('P-II item 1 + audit P0-3: edges flush their topic; the only background flushes are the 5s change-only sample', () => {
         vi.useFakeTimers();
         try {
             const rt = fakeRuntime();
@@ -237,22 +214,48 @@ describe('createDaemonHostRuntime', () => {
             vi.spyOn(host.topics, 'hasSubscriptions').mockReturnValue(true);
             const flushNow = vi.spyOn(host.topics, 'flushNow').mockResolvedValue(undefined);
             const invalidate = vi.spyOn(host.topics, 'invalidate').mockResolvedValue(undefined);
+            const flushMeshStatus = vi.spyOn(host.topics, 'flushMeshStatus').mockResolvedValue(undefined);
 
-            // N = 3 modal/prompt edges → exactly 3 session.modal flushNow calls.
+            // modal/prompt edges → session.modal; the mesh_state edge → that mesh's mesh.status only.
             rt.bus.emit({ kind: 'modal', sessionId: 's1', at: 0, modal: null });
             rt.bus.emit({ kind: 'prompt', sessionId: 's1', at: 0, prompt: null, transport: null });
             rt.bus.emit({ kind: 'mesh_state', at: 0, meshId: 'mesh_a' });
-            expect(flushNow.mock.calls.map((c) => c[0])).toEqual(['session.modal', 'session.modal', 'daemon.metadata']);
+            expect(flushNow.mock.calls.map((c) => c[0])).toEqual(['session.modal', 'session.modal']);
+            expect(flushMeshStatus.mock.calls).toEqual([['mesh_a']]);
             expect(invalidate).not.toHaveBeenCalled();
 
-            // Advancing well past several 2-2.5s legacy-timer periods AND the 60s
-            // reconciliation period must not add a single extra flush/invalidate
-            // call — the reconciliation tick only WARNs, it never flushes.
+            // Past several 2-2.5s legacy-timer periods AND the 60s reconciliation
+            // period: the reconciliation tick only WARNs; the one background
+            // flush is host.metadata-pump's 5s SAMPLE of the change-only topics
+            // (an unchanged state sends nothing — see topic-registry tests).
             vi.advanceTimersByTime(180_000);
-            expect(flushNow).toHaveBeenCalledTimes(3);
+            const background = flushNow.mock.calls.slice(2).map((c) => c[0]);
+            expect(new Set(background)).toEqual(new Set(['daemon.metadata', 'machine.runtime', 'session_host.diagnostics', 'workspace.git']));
+            expect(background).toHaveLength((180_000 / 5_000) * 4);
             expect(invalidate).not.toHaveBeenCalled();
+            // mesh.status is never sampled: nothing flushes it without an edge (an idle mesh sends 0 bytes).
+            expect(flushMeshStatus.mock.calls).toEqual([['mesh_a']]);
             expect(calls.commands).toEqual([]);
 
+            host.stop();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('status facts flush daemon.metadata through the 500ms throttle (leading + one trailing)', () => {
+        vi.useFakeTimers();
+        try {
+            const rt = fakeRuntime();
+            const host = createDaemonHostRuntime(rt.runtime, fakeTransport().transport);
+            vi.spyOn(host.topics, 'hasSubscriptions').mockReturnValue(true);
+            const flushNow = vi.spyOn(host.topics, 'flushNow').mockResolvedValue(undefined);
+            rt.bus.emit(statusEdge('s1', 'idle', 'generating'));
+            rt.bus.emit(statusEdge('s1', 'generating', 'idle'));
+            rt.bus.emit(statusEdge('s1', 'idle', 'generating'));
+            expect(flushNow.mock.calls.map((c) => c[0])).toEqual(['daemon.metadata']);
+            vi.advanceTimersByTime(500);
+            expect(flushNow.mock.calls.map((c) => c[0])).toEqual(['daemon.metadata', 'daemon.metadata']);
             host.stop();
         } finally {
             vi.useRealTimers();

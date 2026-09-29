@@ -34,7 +34,7 @@ describe('chat frontend debug bundle helpers', () => {
       controls: [{ id: 'model', label: 'Model', type: 'select' } as any],
       controlValues: { model: 'sonnet' },
       visibleBarControlCount: 1,
-      chatTailState: {
+      chatState: {
         liveMessages: [{ role: 'assistant', content: 'tail live' }],
         hasLiveSnapshot: true,
         hasMoreHistory: true,
@@ -59,7 +59,7 @@ describe('chat frontend debug bundle helpers', () => {
       status: 'generating',
     })
     expect(snapshot.messageCounts).toEqual({ live: 1, activeConversation: 8, visible: 8, history: 1, hiddenLive: 3 })
-    expect(snapshot.chatTail).toMatchObject({ hasLiveSnapshot: true, hasMoreHistory: true })
+    expect(snapshot.chat).toMatchObject({ hasLiveSnapshot: true, hasMoreHistory: true })
     expect(snapshot.liveMessagesTail).toEqual([{ role: 'assistant', content: 'tail live' }])
     expect(snapshot.activeConversationMessagesTail).toHaveLength(8)
     expect(snapshot.visibleMessagesTail).toHaveLength(5)

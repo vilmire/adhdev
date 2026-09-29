@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { SUPPORTED_LANGUAGES } from '../../src/i18n/languages'
-import { buildTranscriptReadSourceAttributes } from '../../src/components/dashboard/transcript-chat-pane-adapter'
+import { buildTranscriptPaneAttributes } from '../../src/components/dashboard/transcript-chat-pane-adapter'
 
 const LOCALES = [...SUPPORTED_LANGUAGES]
 
@@ -45,8 +45,8 @@ describe('the omitted-before banner stays retired', () => {
         const chatPane = readSource('../../src/components/dashboard/ChatPane.tsx')
         expect(chatPane).not.toContain('replicaOmittedBefore')
         // The flag must not regain a JSX render gate. Prose in comments is fine
-        // — an actual `{chatTailState.omittedBefore && (` render is not.
-        expect(chatPane).not.toMatch(/\{\s*chatTailState\.omittedBefore\s*&&/)
+        // — an actual `{chatState.omittedBefore && (` render is not.
+        expect(chatPane).not.toMatch(/\{\s*chatState\.omittedBefore\s*&&/)
     })
 
     // ── Axis 2 (the control group) ─────────────────────────────────────────
@@ -74,20 +74,26 @@ describe('the omitted-before banner stays retired', () => {
 
     // ── Axis 3: the signal survives on the developer surface ───────────────
     it('exposes the discontinuity as a data attribute instead', () => {
-        const armed = buildTranscriptReadSourceAttributes({
-            transcriptReadSource: 'replica',
-            omittedBefore: true,
-        })
-        expect(armed['data-transcript-omitted-before']).toBe('true')
+        expect(buildTranscriptPaneAttributes({ omittedBefore: true })['data-transcript-omitted-before']).toBe('true')
+        // Omitted rather than "false": absence is meaningful here.
+        expect(buildTranscriptPaneAttributes({ omittedBefore: false })).not.toHaveProperty('data-transcript-omitted-before')
+    })
+})
 
-        // Omitted rather than "false": absence is meaningful here, matching the
-        // sibling `stale`/`fallbackReason` attributes.
-        const clean = buildTranscriptReadSourceAttributes({
-            transcriptReadSource: 'replica',
-            omittedBefore: false,
+describe('the replica-degraded notice is gone with the second chat lane', () => {
+    // There is one chat lane (design 2026-09-28 §6.4): no legacy lane to
+    // "degrade" to, so no notice, no strings, no attribute.
+    for (const locale of LOCALES) {
+        it(`${locale}: ships no replicaDegraded strings`, async () => {
+            const common = await loadCommon(locale)
+            expect(common.chatPane.replicaDegraded).toBeUndefined()
+            expect(common.chatPane.replicaDegradedShort).toBeUndefined()
         })
-        expect(clean).not.toHaveProperty('data-transcript-omitted-before')
-        expect(buildTranscriptReadSourceAttributes({ transcriptReadSource: 'legacy' }))
-            .not.toHaveProperty('data-transcript-omitted-before')
+    }
+
+    it('ChatPane renders no degraded notice', () => {
+        const chatPane = readSource('../../src/components/dashboard/ChatPane.tsx')
+        expect(chatPane).not.toContain('transcript-replica-degraded-notice')
+        expect(chatPane).not.toContain('replicaDegraded')
     })
 })

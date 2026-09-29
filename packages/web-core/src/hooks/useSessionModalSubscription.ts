@@ -19,8 +19,8 @@ function getConversationDaemonId(conversation: ActiveConversation): string | nul
  * STATUS-LANE-SELFHEAL: the status lane is push-only, so a single dropped
  * `session.modal` update strands the pane until unmount.
  *
- * The transcript lane (session-chat-tail-controller) already self-heals via
- * mount / visibilitychange / reconnect; this lane had NONE of those, which is
+ * The transcript lane (the keyed chat lane, session-chat-controller) recovers
+ * within itself (worker resync, base-frame requests, re-SUB); this lane had NONE, which is
  * why a finished agent kept rendering "Agent generating…" indefinitely. That is
  * a defect on every platform — desktop merely hid it, because switching tabs
  * remounts often enough to paper over a lost push.
