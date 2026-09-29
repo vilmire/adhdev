@@ -12,29 +12,22 @@
 // queue/mission/transport. Shared helpers and dependency re-exports live in
 // ./mesh-tools-internal.ts; mesh-tools.ts is the barrel.
 
+import { refreshMeshFromDaemon, triggerMeshQueueAndReport, readQueueFromDaemon } from './mesh-tools-internal.js';
 import {
     getMagiKindPanel,
     listMagiKindPanels,
     setMagiKindPanel,
     normalizeMagiSlots,
     collectIgnoredMagiSlotFields,
-    randomUUID,
-    readString,
-    refreshMeshFromDaemon,
-    triggerMeshQueueAndReport,
-    readQueueFromDaemon,
-} from './mesh-tools-internal.js';
+} from '@adhdev/daemon-core';
+import { randomUUID } from 'node:crypto';
 // C-W9a: MAGI's records (fan-out, synthesis) and replica queue rows are the daemon's — over IPC.
 // C-W9c: MAGI's mission reads/writes (upsert-on-start, close-on-collect) are the daemon's too —
 // the same `mission_upsert`/`mission_query` mesh-tools-mission.ts's write path already uses.
 import { missionUpsert, queueEnqueue, recordLocal } from '../ipc/turn-commands.js';
 import type { MeshWorkQueueEntry } from '@adhdev/daemon-core';
-import type {
-    MagiMode,
-    MagiTaskKind,
-    MagiSlot,
-    MeshContext,
-} from './mesh-tools-internal.js';
+import type { MeshContext } from './mesh-tools-internal.js';
+import type { MagiMode, MagiTaskKind, MagiSlot } from '@adhdev/daemon-core';
 /**
  * Default wall-clock budget for wait=true replica collection.
  *
@@ -90,7 +83,7 @@ export function resolveMagiWaitTimeoutMs(raw: unknown): number {
 // re-export (mesh-tools-internal) — same indirection as the other Magi* types, so this
 // module takes no direct @adhdev/mesh-shared dependency. Re-exported for existing
 // callers that import MagiTaskKind from this module.
-export type { MagiTaskKind } from './mesh-tools-internal.js';
+export type { MagiTaskKind } from '@adhdev/daemon-core';
 
 // The MAGI pure core (task-kind normalization, response parsing/coercion, claim
 // clustering, diversity-weighted synthesis, git-skew) was split out to
@@ -110,6 +103,7 @@ import type { MagiFanoutPlan } from './mesh-magi-fanout.js';
 import type { RepoMeshMagiSessionCleanupMode } from '@adhdev/daemon-core';
 import { magiOutputContractFor } from './mesh-tools-magi-core.js';
 import { MAGI_POLL_INTERVAL_MS } from './mesh-magi-collect.js';
+import { readString } from '@adhdev/mesh-shared';
 export { magiOutputContractFor } from './mesh-tools-magi-core.js';
 export { findMagiReplicaTasks, computeMagiCleanupTargets, resolveMagiAutoCleanupMode, cleanupMagiAutoLaunchedSessions, sessionSharedWithAnotherReplica, classifyStaleReplicas } from './mesh-magi-lifecycle.js';
 export { MAGI_MAX_REPLICAS, buildMagiFanoutPlan } from './mesh-magi-fanout.js';
@@ -310,7 +304,6 @@ export async function meshMagiKindPanelList(
     }
     return JSON.stringify({ success: true, scope, kindPanels: all, configuredKinds: Object.keys(all) }, null, 2);
 }
-
 
 // MAGI-KIND-PANEL: the panel a mesh_magi_review fans out to is resolved SOLELY from the
 // user's explicitly configured kind-panel binding (magiKindPanels: task_kind → slots).

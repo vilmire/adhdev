@@ -3,14 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { meshCrudHandlers } from '../../src/commands/med-family/mesh-crud.js'
-import {
-    collectIgnoredMagiSlotFields,
-    createMesh,
-    addNode,
-    getMagiKindPanel,
-    normalizeMagiSlots,
-    setMagiKindPanel,
-} from '../../src/config/mesh-config.js'
+import { createMesh, addNode } from '../../src/config/mesh-config.js';
+import { collectIgnoredMagiSlotFields, getMagiKindPanel, normalizeMagiSlots, setMagiKindPanel } from '../../src/config/mesh-config-routing.js';
 import type { MedFamilyContext } from '../../src/commands/med-family/types.js'
 
 /**

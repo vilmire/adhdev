@@ -45,8 +45,7 @@ describe('FLOOR-TIMING-WEDGE: stall rescue for a session wedged in generating', 
       currentTurnStartedAt: 3_000,
       // The wedge signature: the adapter still believes a turn is in flight,
       // because the blocked finish never ran resetActiveTurnState().
-      isWaitingForResponse: opts.hasPending ?? true,
-      currentTurnScope: opts.hasPending ?? true ? {} : undefined,
+      isProcessing: () => opts.hasPending ?? true,
       getScriptParsedStatus() { return { messages: [] } },
     }
     instance.context = { emitProviderEvent: (e: any) => emitted.push(e) }

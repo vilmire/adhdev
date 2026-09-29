@@ -18,7 +18,8 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 import { meshEnqueueTask, meshSendTask } from '../src/tools/mesh-tools.js';
-import { MESH_ENQUEUE_TASK_TOOL, MESH_SEND_TASK_TOOL } from '../src/tools/mesh-tool-schemas.js';
+import { MESH_SEND_TASK_TOOL } from '../src/tools/mesh-tool-schemas-session.js';
+import { MESH_ENQUEUE_TASK_TOOL } from '../src/tools/mesh-tool-schemas-queue.js';
 import { getQueue } from '@adhdev/daemon-core';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';

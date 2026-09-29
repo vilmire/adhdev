@@ -1,5 +1,6 @@
 import type { ProviderLoader } from '../providers/provider-loader.js';
-import { evaluateProviderQuotaGate, quotaFactsContextForLiveRouting } from './mesh-quota-routing.js';
+import { evaluateProviderQuotaGate } from './mesh-quota-routing.js';
+import { quotaFactsContextForLiveRouting } from './mesh-quota-sources.js';
 import { clearQuotaClaimBlockState, logQuotaClaimBlockTransition, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
 import { getQueue } from './mesh-work-queue.js';
 import { isLocalAutoLaunchNode } from './mesh-candidacy-predicates.js';

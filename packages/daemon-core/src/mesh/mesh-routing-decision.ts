@@ -1,10 +1,12 @@
 import type { NodeCapabilitySlot } from '@adhdev/mesh-shared';
 import type { RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
-import { buildQuotaRankingRationale, quotaRiskSnapshotForCandidates, quotaSpreadBonusByProvider, quotaSpreadBonusDiagnosticsByProvider, rankProvidersByQuotaGate, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON, type ProviderQuotaBonusDiagnostic, type ProviderQuotaGateBlock, type ProviderQuotaRankingEvidence, type ProviderQuotaRiskSnapshot, type QuotaFactsContext, type QuotaRankingRationale } from './mesh-quota-routing.js';
+import { rankProvidersByQuotaGate, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON, type ProviderQuotaGateBlock, type ProviderQuotaRankingEvidence } from './mesh-quota-routing.js';
+import { buildQuotaRankingRationale, quotaRiskSnapshotForCandidates, quotaSpreadBonusByProvider, quotaSpreadBonusDiagnosticsByProvider, type ProviderQuotaBonusDiagnostic, type ProviderQuotaRiskSnapshot, type QuotaRankingRationale } from './mesh-quota-ranking-records.js';
+import { type QuotaFactsContext } from './mesh-quota-sources.js';
 import { scoreSlotForTask, scoreSlotForTaskBreakdown, slotCapacityRemaining, slotDifficultyTierForTask, slotHasCapacity, type FitnessTask } from './mesh-scheduling-fitness.js';
 
-export interface MeshIntraNodeLoser {
+interface MeshIntraNodeLoser {
     providerType: string;
     model?: string;
     fitnessScore?: number;
@@ -12,7 +14,7 @@ export interface MeshIntraNodeLoser {
     reason: string;
 }
 
-export interface MeshRoutingCandidate {
+interface MeshRoutingCandidate {
     providerType: string;
     model?: string;
     fitnessScore: number;
@@ -20,13 +22,13 @@ export interface MeshRoutingCandidate {
     difficultyEligible: boolean;
 }
 
-export interface MeshQuotaOrderEntry {
+interface MeshQuotaOrderEntry {
     providerType: string;
     quotaRisk?: number;
     gated?: boolean;
 }
 
-export interface MeshSelectionTrajectory {
+interface MeshSelectionTrajectory {
     /** Detected slots admitted by the hard floor, before capacity-tier/quota narrowing. */
     candidates: MeshRoutingCandidate[];
     candidatesOmitted?: number;
@@ -58,7 +60,7 @@ export interface ResolvedProviderSelection {
     selectionTrajectory?: MeshSelectionTrajectory;
 }
 
-export interface ProviderSlotCandidate {
+interface ProviderSlotCandidate {
     slot: NodeCapabilitySlot;
     providerType: string;
 }
@@ -120,7 +122,7 @@ interface ProviderQuotaRanking {
     rankingEvidence?: ProviderQuotaRankingEvidence[];
 }
 
-export interface ProviderSelectionDiagnostics {
+interface ProviderSelectionDiagnostics {
     riskSnapshot: ProviderQuotaRiskSnapshot[];
     quotaRiskSnapshot?: ProviderQuotaRiskSnapshot[];
     quotaRisksOmitted?: number;
@@ -328,7 +330,7 @@ export function buildProviderSelectionDiagnostics(args: {
     };
 }
 
-export interface ProviderSelectionCoreResult {
+interface ProviderSelectionCoreResult {
     reason?: string;
     candidateSlots: ProviderSlotCandidate[];
     candidates: ProviderSlotCandidate[];

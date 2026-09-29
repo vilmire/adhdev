@@ -39,7 +39,7 @@ import { LOG } from '../logging/logger.js';
 export const REMOTE_LAUNCH_READY_TIMEOUT_MS = 15_000;
 export const REMOTE_LAUNCH_READY_POLL_MS = 100;
 
-export interface RemoteReadyWaitOptions {
+interface RemoteReadyWaitOptions {
     /**
      * Returns true once the launched session's `agent:ready` has landed (canonically: it
      * appears in the remote-idle registry). Must not throw — a throwing probe is treated as

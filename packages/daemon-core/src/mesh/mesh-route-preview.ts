@@ -2,10 +2,8 @@ import type { NodeCapabilitySlot } from '@adhdev/mesh-shared';
 import { meshNodeIdMatches } from '@adhdev/mesh-shared';
 import type { RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
-import {
-    quotaSpreadBonusByProvider,
-    type QuotaFactsContext,
-} from './mesh-quota-routing.js';
+import { quotaSpreadBonusByProvider } from './mesh-quota-ranking-records.js';
+import { type QuotaFactsContext } from './mesh-quota-sources.js';
 import {
     selectProviderWithDiagnostics,
     type ProviderQuotaGateDiagnostic,

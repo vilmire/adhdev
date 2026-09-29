@@ -9,7 +9,7 @@
 
 import type { CommandHelpers, CommandResult } from './handler.js';
 import type { ChatMessage } from '../types.js';
-import { isNativeSourceCanonicalHistory, readProviderChatHistory } from '../config/chat-history.js';
+import { isNativeSourceCanonicalHistory, readProviderChatHistory } from '../config/provider-native-history.js';
 import { LOG } from '../logging/logger.js';
 import { getCurrentProviderType } from './chat-commands-shared.js';
 import { normalizeReadChatTailLimit } from './read-chat-message-filters.js';

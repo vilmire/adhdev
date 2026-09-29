@@ -7,12 +7,11 @@ import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evide
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { clearClaimDeferralForNode, noteClaimDeferredForNode, noteSessionClaimRefusal, type MeshClaimRefusal } from './mesh-claim-refusal.js';
 import { resolveProviderMaxParallel, resolveSlotMaxParallel, resolveCoordinatorIdlePushPolicy } from '../repo-mesh-types.js';
-import { meshNodeIdMatches, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, type MeshNodeIdentified, readText } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveDaemonSiblingNodeIds } from './mesh-daemon-slot-axis.js';
-import { recordLastQuotaRanking, recordLastQuotaRankingOutcome } from './mesh-quota-routing.js';
+import { recordLastQuotaRanking, recordLastQuotaRankingOutcome } from './mesh-quota-ranking-records.js';
 import { evaluateQuotaClaimGateForAssignment } from './mesh-queue-claim-gate.js';
-import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeFreshEnoughToLaunch, readNumberValue } from './mesh-node-identity.js';
 import { shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
 import { beginTaskDispatchInFlight } from './mesh-task-inflight.js';
@@ -151,7 +150,7 @@ function isClaimGatedByWorktreeBootstrap(components: DaemonComponents, meshId: s
             const inlineNode = Array.isArray(inlineMesh?.nodes)
                 ? inlineMesh.nodes.find((n: any) => meshNodeIdMatches(n, nodeId))
                 : undefined;
-            return readNonEmptyString(inlineNode?.worktreeBootstrap?.status) ? inlineNode : undefined;
+            return readText(inlineNode?.worktreeBootstrap?.status) ? inlineNode : undefined;
         } catch { return undefined; }
     })();
     const bootstrapGateNode = (() => {
@@ -205,13 +204,13 @@ function resolveClaimingSessionState(components: DaemonComponents, nodeId: strin
     let claimStampedNodeId = '', claimState: any;
     try {
         claimState = components.instanceManager?.getInstance?.(sessionId)?.getState?.();
-        claimInstanceWorkspace = readNonEmptyString(claimState?.workspace);
+        claimInstanceWorkspace = readText(claimState?.workspace);
         const claimSettings = (claimState?.settings as Record<string, unknown>) || {};
-        claimStampedNodeId = readNonEmptyString(claimSettings.meshNodeId);
+        claimStampedNodeId = readText(claimSettings.meshNodeId);
     } catch { /* best-effort — fall through to the conservative (no refuse) path */ }
 
-    const nodeWorkspaceRaw = readNonEmptyString(node?.workspace);
-    const sessionWorkspaceRaw = readNonEmptyString(localClaimAdapter?.workingDir) || claimInstanceWorkspace;
+    const nodeWorkspaceRaw = readText(node?.workspace);
+    const sessionWorkspaceRaw = readText(localClaimAdapter?.workingDir) || claimInstanceWorkspace;
 
     if (claimStampedNodeId && nodeId) {
         if (!meshNodeIdMatches({ id: claimStampedNodeId } as MeshNodeIdentified, nodeId)) {
@@ -441,7 +440,7 @@ function stampLocalClaimedSession(components: DaemonComponents, p: { meshId: str
         const inst = components.instanceManager.getInstance(p.sessionId);
         if (!inst || typeof inst.updateSettings !== 'function') return;
         const localDaemonId = localCoordinatorDaemonId();
-        const localSourceCoordinatorSessionId = readNonEmptyString(p.task.sourceCoordinatorSessionId);
+        const localSourceCoordinatorSessionId = readText(p.task.sourceCoordinatorSessionId);
         inst.updateSettings({
             meshNodeFor: p.meshId,
             meshNodeId: p.nodeId,
@@ -512,7 +511,7 @@ export function tryAssignQueueTask(
     // next drain tick. Keyed by canonical workspace. AUTOLAUNCH-DEFERRED-CLAIM
     // (mesh-claim-refusal.ts): mark the deferral so the auto-launch await-claim guard
     // re-drives instead of waiting out a window that assumes a claim is in flight.
-    if (isWorkspaceAutoFastForwardInFlight(readNonEmptyString(node?.workspace))) {
+    if (isWorkspaceAutoFastForwardInFlight(readText(node?.workspace))) {
         LOG.info('MeshQueue', `Deferring queue claim for node ${nodeId} (${sessionId}): an auto fast-forward is mutating its workspace — task left pending, claim re-fires next tick`);
         noteClaimDeferredForNode(meshId, nodeId);
         return false;
@@ -575,7 +574,7 @@ export function tryAssignQueueTask(
     // body only; `task.message` stays the authored text.
     const dispatchMessage = resolveDispatchMessage(task, meshId, node);
     const coordinatorDaemonId = localCoordinatorDaemonId();
-    const coordinatorSessionId = readNonEmptyString(task.sourceCoordinatorSessionId) || undefined;
+    const coordinatorSessionId = readText(task.sourceCoordinatorSessionId) || undefined;
     const meshContext = buildClaimDispatchMeshContext({
         meshId, nodeId, task, attemptRef: dispatchAttemptRef, coordinatorDaemonId, coordinatorSessionId,
         // COORDINATOR-SILENT-IDLE (opt-in): the worker stamps silentNextIdlePush on its own

@@ -168,7 +168,7 @@ export const RETIRED_TURN_ENV_NAMES = [
     'MESH_INFLIGHT_ACKED_TRANSCRIPT_FASTTRACK_GRACE_MS',
 ] as const;
 
-export type TurnEnv = Readonly<Record<string, string | undefined>>;
+type TurnEnv = Readonly<Record<string, string | undefined>>;
 
 function readClamped(env: TurnEnv, name: string, min: number, max: number): number | null {
     const raw = env[name];
@@ -180,7 +180,7 @@ function readClamped(env: TurnEnv, name: string, min: number, max: number): numb
     return parsed;
 }
 
-export interface ResolvedTurnPolicy {
+interface ResolvedTurnPolicy {
     policy: TurnPolicy;
     /** Which env name supplied each overridden field. */
     sources: Partial<Record<keyof TurnPolicy, string>>;

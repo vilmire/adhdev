@@ -57,7 +57,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 }));
 
 import { commitMeshGraphPlan, MeshGraphPlanError } from '../../src/mesh/mesh-graph-plan.js';
-import { __resetMeshGraphTransitionRunnerForTests } from '../../src/mesh/mesh-graph-transition-runner.js';
+import { __resetMeshGraphTransitionRunnerForTests } from '../../src/mesh/mesh-graph-outbox.js';
 import {
     __clearMeshQueueForTests,
     __resetMeshRuntimeStoreForTests,

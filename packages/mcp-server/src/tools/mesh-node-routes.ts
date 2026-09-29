@@ -18,10 +18,10 @@
  * replica hop, related-repo git, refine config reads …) ensure it again.
  */
 import type { LocalMeshNodeEntry } from '@adhdev/daemon-core';
-import { readString } from './mesh-tool-shared.js';
 import type { MeshContext } from './mesh-tools.js';
+import { readString } from '@adhdev/mesh-shared';
 
-export interface MeshNodeRoute {
+interface MeshNodeRoute {
     route: 'local' | 'remote' | 'unreachable';
     ownerDaemonId?: string;
     reason: string;

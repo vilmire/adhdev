@@ -131,6 +131,18 @@ export async function runGit(
   return execGitRaw(cwd, argv, options);
 }
 
+/**
+ * Run git directly in `cwd` and return its stdout — no repository resolution or
+ * containment check. For call sites that already hold a concrete checkout path (a
+ * submodule, a worktree) and only need the child every daemon git call must be:
+ * argv-validated, timeout- and buffer-bounded, window-hidden, and run with the
+ * locale-pinned, GIT_DIR-stripped env (an inherited GIT_DIR overrides `cwd` and
+ * reports another repository's state — see git-locale.ts).
+ */
+export async function execGitStdout(cwd: string, argv: readonly string[], options: GitExecutorOptions = {}): Promise<string> {
+  return (await execGitRaw(cwd, argv, options)).stdout;
+}
+
 export function normalizeGitOutput(value: unknown): string {
   if (typeof value === 'string') return value.replace(/\r\n/g, '\n');
   if (Buffer.isBuffer(value)) return value.toString('utf8').replace(/\r\n/g, '\n');

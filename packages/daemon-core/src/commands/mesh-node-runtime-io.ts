@@ -12,7 +12,7 @@ import { getCachedProviderVersions } from '../detection/cli-detector.js';
 import { getDaemonBuildInfo } from '../build-info.js';
 import { TRACK } from '../track-identity.js';
 import { buildSessionEntries } from '../status/builders.js';
-import { readUpgradeFailureNotice } from './upgrade-helper.js';
+import { readUpgradeFailureNotice } from './upgrade-failure-notice.js';
 import { buildLocalNodeFacts } from '../mesh/node-facts.js';
 import { buildMeshNodeRuntimeProviders, buildMeshNodeRuntimeSummary, type MeshNodeRuntimeSummary } from '../mesh/mesh-node-runtime-summary.js';
 import type { MeshNodeStatePusher } from '../mesh/mesh-node-state-pusher.js';

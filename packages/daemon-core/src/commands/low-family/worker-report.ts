@@ -39,15 +39,10 @@ import { readMeshNodeDaemonId } from '../../mesh/mesh-node-identity.js';
 import { currentMeshAttemptRef } from '../../providers/cli-provider-mesh-assignment.js';
 import { LOG } from '../../logging/logger.js';
 import { normalizeWorkerDeliveryId, recallWorkerDelivery, rememberWorkerDelivery } from '../../mesh/worker-report-idempotency.js';
-import type {
-    ForwardedReportSender,
-    ForwardedWorkerReportClaim,
-    RemoteWorkerIdentity,
-    WorkerAssignmentStamp,
-    WorkerCompletionReport,
-    WorkerProgressUpdateResult,
-    WorkerReportResult,
-} from '../../mesh/worker-report.js';
+import type { WorkerReportResult } from '../../mesh/worker-report.js';
+import type { WorkerProgressUpdateResult } from '../../mesh/worker-report-progress.js';
+import type { ForwardedReportSender, ForwardedWorkerReportClaim, RemoteWorkerIdentity, WorkerAssignmentStamp } from '../../mesh/worker-report-forwarded.js';
+import type { WorkerCompletionReport } from '../../mesh/worker-report-validation.js';
 
 /**
  * F7: the owner-side command a REMOTE worker daemon relays a report through
@@ -147,7 +142,7 @@ function selfDaemonPredicate(ctx: LowFamilyContext): ((daemonId: string) => bool
 export async function resolveRemoteWorker(ctx: LowFamilyContext, args: any): Promise<RemoteWorkerIdentity | null> {
     const selfDaemonId = readNonEmpty(ctx?.deps?.statusInstanceId);
     if (!selfDaemonId) return null;
-    const { resolveRemoteWorkerIdentity } = await import('../../mesh/worker-report.js');
+    const { resolveRemoteWorkerIdentity } = await import('../../mesh/worker-report-forwarded.js');
     return resolveRemoteWorkerIdentity({ bind: args?.bind }, {
         readAssignmentStamp: assignmentStampReader(ctx),
         isSelfDaemon: (daemonId) => daemonIdsEquivalent(daemonId, selfDaemonId),
@@ -414,8 +409,8 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
      */
     worker_report_completion: async (_ctx: LowFamilyContext, args: any) => {
         try {
-            const { validateWorkerCompletionReport, acceptWorkerCompletionReport, hasLocalWorkerIdentity } =
-                await import('../../mesh/worker-report.js');
+            const { acceptWorkerCompletionReport, hasLocalWorkerIdentity } = await import('../../mesh/worker-report.js');
+            const { validateWorkerCompletionReport } = await import('../../mesh/worker-report-validation.js');
             const { report, errors } = validateWorkerCompletionReport(args?.report);
             if (!report) {
                 return { success: false, error: 'invalid_report', validationErrors: errors };
@@ -467,8 +462,8 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
         const senderDaemonId = readMeshSender(args);
         const claimLabel = `session ${claim.sessionId} (claimed task ${claim.taskId ?? '?'} attempt ${claim.attemptId ?? '?'}) from ${senderDaemonId ? senderDaemonId.slice(0, 20) : 'an unidentified daemon'}`;
         try {
-            const { validateWorkerCompletionReport, acceptForwardedWorkerCompletionReport } =
-                await import('../../mesh/worker-report.js');
+            const { validateWorkerCompletionReport } = await import('../../mesh/worker-report-validation.js');
+            const { acceptForwardedWorkerCompletionReport } = await import('../../mesh/worker-report-forwarded.js');
             const { report, errors } = validateWorkerCompletionReport(decoded.report);
             if (!report) {
                 LOG.warn('WorkerReport', `Forwarded report for ${claimLabel} refused: invalid_report (${errors.length} validation error(s))`);
@@ -497,7 +492,8 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
         const note = typeof args?.note === 'string' ? args.note.trim() : '';
         if (!note) return { success: false, error: 'note required' };
         try {
-            const { acceptWorkerProgressUpdate, hasLocalWorkerIdentity } = await import('../../mesh/worker-report.js');
+            const { hasLocalWorkerIdentity } = await import('../../mesh/worker-report.js');
+            const { acceptWorkerProgressUpdate } = await import('../../mesh/worker-report-progress.js');
             const credential = { token: args?.token, bind: args?.bind };
             // Durable delivery: an already-accepted note re-sent after a transport timeout
             // is answered from the replay record — it must not page the coordinator twice.
@@ -538,7 +534,7 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
         const senderDaemonId = readMeshSender(args);
         const claimLabel = `session ${claim.sessionId} (claimed task ${claim.taskId ?? '?'} attempt ${claim.attemptId ?? '?'}) from ${senderDaemonId ? senderDaemonId.slice(0, 20) : 'an unidentified daemon'}`;
         try {
-            const { acceptForwardedWorkerProgressUpdate } = await import('../../mesh/worker-report.js');
+            const { acceptForwardedWorkerProgressUpdate } = await import('../../mesh/worker-report-progress.js');
             const sender: ForwardedReportSender = {
                 senderDaemonId,
                 nodeDaemonId: await ownerRosterNodeDaemonLookup(_ctx, claim.meshId),

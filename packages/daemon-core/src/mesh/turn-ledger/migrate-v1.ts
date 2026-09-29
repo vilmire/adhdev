@@ -212,7 +212,7 @@ export function exportLegacyTurnTables(db: DatabaseHandle, path: string): number
 
 const PENDING_EVENTS_JSONL_SUFFIX = '.pending-events.jsonl';
 
-export interface PendingEventsJsonlImportResult {
+interface PendingEventsJsonlImportResult {
     filesScanned: number;
     eventsImported: number;
     linesSkipped: number;

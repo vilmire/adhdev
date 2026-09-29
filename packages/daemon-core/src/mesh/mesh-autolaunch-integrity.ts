@@ -35,10 +35,9 @@
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { getMachineId } from '../config/config.js';
 import { LOG } from '../logging/logger.js';
-import { canonicalDaemonId, daemonIdsEquivalent, isIdleSessionState, sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { canonicalDaemonId, daemonIdsEquivalent, isIdleSessionState, sessionIdsEquivalent, readText } from '@adhdev/mesh-shared';
 import { getQueue, getQueueEntryById } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
-import { readNonEmptyString } from './mesh-events-utils.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, recordAutoLaunchEvent } from './mesh-queue-observability.js';
 import { sessionHasActiveAssignment } from './mesh-scheduling-fitness.js';
@@ -121,7 +120,7 @@ export function isAutoLaunchWithinAwaitClaimWindow(
 export const AUTO_LAUNCH_REMOTE_IDLE_TTL_MS = 5 * 60 * 1000;
 
 function localCoordinatorDaemonId(): string | undefined {
-    return canonicalDaemonId(readNonEmptyString(getMachineId()));
+    return canonicalDaemonId(readText(getMachineId()));
 }
 
 // AUTOLAUNCH-ORPHAN-SWEEP. Per-(mesh,session) de-dup so a still-unclaimed orphan is reported
@@ -218,10 +217,10 @@ export function sweepAutoLaunchOrphanSessions(
         let state: any;
         try { state = inst.getState(); } catch { continue; }
         const settings = (state?.settings as Record<string, unknown>) || {};
-        if (readNonEmptyString(settings.meshNodeFor) !== meshId) continue;
-        const originTaskId = readNonEmptyString(settings.autoLaunchedForQueueTaskId);
+        if (readText(settings.meshNodeFor) !== meshId) continue;
+        const originTaskId = readText(settings.autoLaunchedForQueueTaskId);
         if (!originTaskId) continue;
-        const sessionId = readNonEmptyString(state?.instanceId);
+        const sessionId = readText(state?.instanceId);
         if (!sessionId) continue;
         // Only an IDLE session can be an orphan: one that is generating/starting/awaiting
         // approval is doing something, and one that already holds an assigned task won.
@@ -230,8 +229,8 @@ export function sweepAutoLaunchOrphanSessions(
         const originTask = byId.get(originTaskId);
         const assignedElsewhere = !!originTask
             && originTask.status === 'assigned'
-            && !!readNonEmptyString(originTask.assignedSessionId)
-            && !sessionIdsEquivalent(readNonEmptyString(originTask.assignedSessionId), sessionId);
+            && !!readText(originTask.assignedSessionId)
+            && !sessionIdsEquivalent(readText(originTask.assignedSessionId), sessionId);
         const originGone = !originTask
             || (originTask.status !== 'pending' && originTask.status !== 'assigned');
         const dedupKey = `${meshId}::${sessionId}`;
@@ -264,9 +263,9 @@ export function sweepAutoLaunchOrphanSessions(
             const oldest = autoLaunchOrphanNotified.values().next().value;
             if (oldest !== undefined) autoLaunchOrphanNotified.delete(oldest);
         }
-        const nodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
+        const nodeId = readText(settings.meshNodeId) || readText(settings.nodeId);
         const detail = assignedElsewhere
-            ? `task ${originTaskId} is assigned to a different session (${readNonEmptyString(originTask!.assignedSessionId)})`
+            ? `task ${originTaskId} is assigned to a different session (${readText(originTask!.assignedSessionId)})`
             : `task ${originTaskId} is no longer active (${originTask ? originTask.status : 'absent from the queue'})`;
         recordAutoLaunchEvent(meshId, {
             phase: 'skipped',
@@ -291,8 +290,8 @@ export function sweepAutoLaunchOrphanSessions(
                 },
                 coordinatorMessage: `[System] Mesh session ${sessionId}${nodeId ? ` on node ${nodeId}` : ''} was auto-launched for task ${originTaskId}, but ${detail}. The session is idle with no work assigned; it can still claim other queued work through the normal idle drain. ${reclaim} Stop it sooner only if you do not want it held until then.`,
                 queuedAt: Date.now(),
-                ...(readNonEmptyString(originTask?.sourceCoordinatorSessionId)
-                    ? { targetCoordinatorSessionId: readNonEmptyString(originTask!.sourceCoordinatorSessionId) }
+                ...(readText(originTask?.sourceCoordinatorSessionId)
+                    ? { targetCoordinatorSessionId: readText(originTask!.sourceCoordinatorSessionId) }
                     : {}),
                 ...(localCoordinatorDaemonId() ? { targetCoordinatorDaemonId: localCoordinatorDaemonId() } : {}),
             });
@@ -323,14 +322,14 @@ export function autoLaunchWriteWouldClobberWinner(meshId: string, taskId: string
     nodeId?: string;
 }, awaitClaimWindowMs: number): boolean {
     // A completed record naming a session IS the winner claim — always let it land.
-    if (args.status === 'completed' && readNonEmptyString(args.sessionId)) return false;
+    if (args.status === 'completed' && readText(args.sessionId)) return false;
     let existing: MeshWorkQueueEntry['autoLaunch'] | undefined;
     try {
         existing = getQueueEntryById(meshId, taskId)?.autoLaunch;
     } catch {
         return false; // never let the guard itself break the write path
     }
-    const heldSessionId = existing ? readNonEmptyString(existing.sessionId) : '';
+    const heldSessionId = existing ? readText(existing.sessionId) : '';
     if (!existing || existing.status !== 'completed' || !heldSessionId) return false;
     // Only protect the record while its await-claim window is open. Past that the launch is no
     // longer authoritative (driveExpiredAwaitClaim owns it) and normal recording must resume,
@@ -340,7 +339,7 @@ export function autoLaunchWriteWouldClobberWinner(meshId: string, taskId: string
     const heldAtMs = Date.parse(existing.updatedAt);
     if (!isAutoLaunchWithinAwaitClaimWindow(heldAtMs, Date.now(), awaitClaimWindowMs)) return false;
     // A started/completed for the SAME session is that session's own progression — allow it.
-    if (sessionIdsEquivalent(readNonEmptyString(args.sessionId), heldSessionId)) return false;
+    if (sessionIdsEquivalent(readText(args.sessionId), heldSessionId)) return false;
     LOG.info('MeshQueue', `AUTOLAUNCH-WINNER-CLOBBER: suppressed a '${args.status}' autoLaunch write for task ${taskId} (mesh ${meshId}) that would have overwritten the in-window launch record for session ${heldSessionId}; the field keeps pointing at the actually-launched session.`);
     return true;
 }
@@ -349,7 +348,6 @@ export function autoLaunchWriteWouldClobberWinner(meshId: string, taskId: string
 // lived here until the floor-skip path itself needed the winner guard above: it moved to
 // mesh-difficulty-floor.ts — its actual domain — so THIS module no longer imports from that
 // one, keeping the floor→integrity import (for autoLaunchWriteWouldClobberWinner) acyclic.
-
 
 // ── await-claim window state ───────────────────────────────────────────────────────────
 // Moved out of mesh-queue-assignment (frozen file-size baseline) as a pure, self-contained
@@ -361,7 +359,7 @@ export function autoLaunchWriteWouldClobberWinner(meshId: string, taskId: string
 // cadence so the 4s reconcile tick does not hammer it. Cleared once the task claims, the direct
 // dispatch fires, or a respawn is authorized. In-memory (per process); a stale entry is harmless
 // (it only defers a respawn) and self-clears on the next resolution.
-export interface AwaitClaimBackoffState { cycles: number; nextAttemptAtMs: number; }
+interface AwaitClaimBackoffState { cycles: number; nextAttemptAtMs: number; }
 // Exported as the map itself rather than behind get/set/delete accessors: its sole mutator is
 // driveExpiredAwaitClaim, which must stay in mesh-queue-assignment (it calls tryAssignQueueTask
 // from there), and six one-line accessors would be more surface than the map.
@@ -400,7 +398,7 @@ export function inWindowAutoLaunchSessionIdsForNode(meshId: string, nodeId: stri
     const out: string[] = [];
     for (const task of getQueue(meshId, { status: ['pending'] as any })) {
         const al = task.autoLaunch;
-        const sid = al ? readNonEmptyString(al.sessionId) : '';
+        const sid = al ? readText(al.sessionId) : '';
         if (!al || (al.status !== 'started' && al.status !== 'completed') || !sid) continue;
         if (!daemonIdsEquivalent(al.nodeId, nodeId)) continue;
         const launchedAtMs = Date.parse(al.updatedAt);
@@ -503,7 +501,7 @@ export function driveExpiredAwaitClaim(
 //   3. Calls the injected assignQueueTask (tryAssignQueueTask). Bootstrap/quota/ff gates
 //      inside that funnel stay fail-closed; a refused claim leaves the registered idle row
 //      for the 4s drain / bootstrap-complete refire to retry.
-export type RemoteAutoLaunchClaimResult = 'claimed' | 'registered' | 'skipped_generating' | 'no_session';
+type RemoteAutoLaunchClaimResult = 'claimed' | 'registered' | 'skipped_generating' | 'no_session';
 
 const remoteGeneratingSessions = new Set<string>();
 function remoteGeneratingKey(meshId: string, sessionId: string): string {

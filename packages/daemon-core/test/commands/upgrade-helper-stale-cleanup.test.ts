@@ -31,11 +31,8 @@ vi.mock('fs', async (importOriginal) => {
   return { ...patched, default: patched }
 })
 
-import {
-  cleanupStaleGlobalInstallDirs,
-  safeRemoveStaleEntry,
-  type CurrentGlobalInstallSurface,
-} from '../../src/commands/upgrade-helper'
+import { cleanupStaleGlobalInstallDirs, safeRemoveStaleEntry } from '../../src/commands/upgrade-helper';
+import { type CurrentGlobalInstallSurface } from '../../src/commands/upgrade-install-surface.js';
 
 const tempRoots: string[] = []
 

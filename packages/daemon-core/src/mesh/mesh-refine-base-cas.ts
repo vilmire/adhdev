@@ -49,9 +49,9 @@ import type { RefineExecFileAsync } from './mesh-refine-gates.js';
  *                     to move, and nothing will be published. A local-only mesh
  *                     converges normally.
  */
-export type RefineBaseCasState = 'moved' | 'unmoved' | 'undeterminable' | 'no_origin';
+type RefineBaseCasState = 'moved' | 'unmoved' | 'undeterminable' | 'no_origin';
 
-export type RefineBaseCasVerdict = {
+type RefineBaseCasVerdict = {
     state: RefineBaseCasState;
     /** The live origin/<base> SHA. Only set for 'moved' / 'unmoved'. */
     liveBaseHead?: string;

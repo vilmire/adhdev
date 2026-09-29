@@ -62,9 +62,7 @@ type CliTargetState = CliProviderState | AcpProviderState;
 type CliDebugState = {
   status?: string;
   activeModal?: { message?: string; buttons?: string[] } | null;
-  startupParseGate?: boolean;
   ready?: boolean;
-  currentTurnScope?: unknown;
   providerResolution?: Record<string, any> | null;
   messages?: Array<{ role?: string; content?: string }>;
   partialResponse?: string;
@@ -78,8 +76,8 @@ type CliTraceState = {
   responseBuffer?: string;
   [key: string]: unknown;
 };
-type CliDebugAdapter = CliAdapter & {
-  getDebugState?: () => CliDebugState | null;
+type CliDebugAdapter = Omit<CliAdapter, 'getDebugSnapshot'> & {
+  getDebugSnapshot?: () => CliDebugState | null;
   getTraceState?: (limit?: number) => CliTraceState | null;
   getProviderResolutionMeta?: () => Record<string, any> | null;
 };
@@ -269,7 +267,7 @@ function getCliAdapterFromInstance(instance: ProviderInstance | undefined): CliD
 function getCliProviderResolutionMeta(ctx: DevServerContext, type: string, adapter?: CliDebugAdapter | null): Record<string, any> | null {
   const adapterMeta = typeof adapter?.getProviderResolutionMeta === 'function'
     ? adapter.getProviderResolutionMeta()
-    : (adapter?.getDebugState?.()?.providerResolution || null);
+    : (adapter?.getDebugSnapshot?.()?.providerResolution || null);
   const resolvedProvider = ctx.providerLoader.resolve(type);
   if (!adapterMeta && !resolvedProvider) return null;
   return {
@@ -324,13 +322,12 @@ async function waitForCliReady(
   while (Date.now() - startedAt < timeoutMs) {
     const bundle = getCliTargetBundle(ctx, type, instanceId);
     if (bundle) {
-      const debug = typeof bundle.adapter.getDebugState === 'function'
-        ? bundle.adapter.getDebugState()
+      const debug = typeof bundle.adapter.getDebugSnapshot === 'function'
+        ? bundle.adapter.getDebugSnapshot()
         : null;
-      const startupParseGate = !!debug?.startupParseGate;
       const adapterReady = !!debug?.ready;
       const visibleStatusReady = bundle.target.status === 'generating' || bundle.target.status === 'waiting_approval';
-      const idleReady = bundle.target.status === 'idle' && !startupParseGate;
+      const idleReady = bundle.target.status === 'idle';
       if (adapterReady || visibleStatusReady || idleReady) {
         return bundle;
       }
@@ -414,7 +411,7 @@ export async function runCliExerciseInternal(ctx: DevServerContext, body: CliExe
     throw new Error(`No running instance found for: ${resolvedInstanceId || type}`);
   }
 
-  const initialDebug = typeof bundle.adapter.getDebugState === 'function' ? bundle.adapter.getDebugState() : null;
+  const initialDebug = typeof bundle.adapter.getDebugSnapshot === 'function' ? bundle.adapter.getDebugSnapshot() : null;
   const initialTrace = typeof bundle.adapter.getTraceState === 'function' ? bundle.adapter.getTraceState(traceLimit) : null;
   const providerResolution = getCliProviderResolutionMeta(ctx, bundle.target.type, bundle.adapter);
   const preTraceCount = Number(initialTrace?.entryCount || 0);
@@ -465,7 +462,7 @@ export async function runCliExerciseInternal(ctx: DevServerContext, body: CliExe
       throw new Error('CLI instance disappeared before exercise send');
     }
 
-    const debug = typeof bundle.adapter.getDebugState === 'function' ? bundle.adapter.getDebugState() : null;
+    const debug = typeof bundle.adapter.getDebugSnapshot === 'function' ? bundle.adapter.getDebugSnapshot() : null;
     const trace = typeof bundle.adapter.getTraceState === 'function' ? bundle.adapter.getTraceState(traceLimit) : null;
     const status = String(debug?.status || bundle.target.status || 'unknown');
     const modal = debug?.activeModal || trace?.activeModal || null;
@@ -476,8 +473,7 @@ export async function runCliExerciseInternal(ctx: DevServerContext, body: CliExe
       continue;
     }
 
-    const startupParseGate = !!debug?.startupParseGate;
-    if (status === 'idle' && !startupParseGate) break;
+    if (status === 'idle') break;
     await sleep(150);
   }
 
@@ -490,13 +486,13 @@ export async function runCliExerciseInternal(ctx: DevServerContext, body: CliExe
       throw new Error('CLI instance disappeared during exercise');
     }
 
-    const debug = typeof bundle.adapter.getDebugState === 'function' ? bundle.adapter.getDebugState() : null;
+    const debug = typeof bundle.adapter.getDebugSnapshot === 'function' ? bundle.adapter.getDebugSnapshot() : null;
     const trace = typeof bundle.adapter.getTraceState === 'function' ? bundle.adapter.getTraceState(traceLimit) : null;
     const status = String(debug?.status || bundle.target.status || 'unknown');
     const traceEntries = Array.isArray(trace?.entries) ? trace.entries : [];
     const sawSendMessage = traceEntries.some((entry: any) => entry?.type === 'send_message');
     const sawSubmitWrite = traceEntries.some((entry: any) => entry?.type === 'submit_write');
-    const hasTurnStarted = sawSendMessage || sawSubmitWrite || !!debug?.currentTurnScope;
+    const hasTurnStarted = sawSendMessage || sawSubmitWrite;
 
     noteStatus(status);
 
@@ -576,7 +572,7 @@ export async function runCliExerciseInternal(ctx: DevServerContext, body: CliExe
   }
 
   const finalBundle = getCliTargetBundle(ctx, type, bundle.target.instanceId) || bundle;
-  const finalDebug = typeof finalBundle.adapter.getDebugState === 'function' ? finalBundle.adapter.getDebugState() : null;
+  const finalDebug = typeof finalBundle.adapter.getDebugSnapshot === 'function' ? finalBundle.adapter.getDebugSnapshot() : null;
   const finalTrace = typeof finalBundle.adapter.getTraceState === 'function' ? finalBundle.adapter.getTraceState(traceLimit) : null;
   if (stopWhenDone) {
     ctx.instanceManager.removeInstance(finalBundle.target.instanceId);
@@ -923,8 +919,8 @@ export async function handleCliDebug(ctx: DevServerContext, type: string, _req: 
 
   try {
     const adapter = getCliAdapterFromInstance(instance);
-    if (adapter && typeof adapter.getDebugState === 'function') {
-      const debugState = adapter.getDebugState();
+    if (adapter && typeof adapter.getDebugSnapshot === 'function') {
+      const debugState = adapter.getDebugSnapshot();
       ctx.json(res, 200, {
         instanceId: target.instanceId,
         providerState: {
@@ -943,7 +939,7 @@ export async function handleCliDebug(ctx: DevServerContext, type: string, _req: 
         providerState: target,
         providerResolution: getCliProviderResolutionMeta(ctx, target.type, adapter),
         debug: null,
-        message: 'No debug state available (adapter.getDebugState not found)',
+        message: 'No debug state available (adapter.getDebugSnapshot not found)',
       });
     }
   } catch (e: any) {
@@ -980,7 +976,7 @@ export async function handleCliTrace(ctx: DevServerContext, type: string, req: h
     const limit = parseInt(url.searchParams.get('limit') || '120', 10);
     if (adapter && typeof adapter.getTraceState === 'function') {
       const trace = adapter.getTraceState(limit);
-      const debug = typeof adapter.getDebugState === 'function' ? adapter.getDebugState() : null;
+      const debug = typeof adapter.getDebugSnapshot === 'function' ? adapter.getDebugSnapshot() : null;
       ctx.json(res, 200, {
         instanceId: target.instanceId,
         providerState: {
@@ -998,7 +994,7 @@ export async function handleCliTrace(ctx: DevServerContext, type: string, req: h
         instanceId: target.instanceId,
         providerState: target,
         providerResolution: getCliProviderResolutionMeta(ctx, target.type, adapter),
-        debug: typeof adapter?.getDebugState === 'function' ? adapter.getDebugState() : null,
+        debug: typeof adapter?.getDebugSnapshot === 'function' ? adapter.getDebugSnapshot() : null,
         trace: null,
         message: 'No trace state available (adapter.getTraceState not found)',
       });

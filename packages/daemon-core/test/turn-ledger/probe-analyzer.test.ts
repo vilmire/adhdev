@@ -5,7 +5,11 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('../../src/mesh/mesh-queue-assignment.js', () => ({ getMeshWithCache: () => undefined }));
 vi.mock('../../src/mesh/mesh-auto-fast-forward.js', () => ({ startContinuousAutoFastForwardScheduler: () => ({ stop() {} }) }));
 vi.mock('../../src/mesh/mesh-housekeeping-tick.js', () => ({ claimPendingQueues: async () => {}, startMeshHousekeeping: () => ({ stop() {} }) }));
-vi.mock('../../src/quota/refresh.js', () => ({ hydrateQuotaCacheFromDisk: () => {}, quotaProviderEnabledFromLoader: () => () => false, refreshQuotaCacheOnBoot: () => {} }));
+vi.mock('../../src/quota/refresh.js', () => ({ hydrateQuotaCacheFromDisk: () => {}, quotaProviderEnabledFromLoader: () => () => false,}));
+vi.mock('../../src/quota/refresh-triggers.js', async (importOriginal) => ({
+  ...(await importOriginal<any>()),
+  refreshQuotaCacheOnBoot: () => {},
+}))
 vi.mock('../../src/models/registry.js', () => ({ hydrateModelCache: () => {}, refreshDueModelDiscovery: async () => {} }));
 
 import { analyzeProbeTranscript } from '../../src/boot/stages/loops.js';

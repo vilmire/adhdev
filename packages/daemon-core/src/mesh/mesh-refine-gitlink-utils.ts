@@ -177,7 +177,7 @@ export function probeGitAncestry(cwd: string, ancestor: string, descendant: stri
     }
 }
 
-export type SubmoduleGitlinkReachability = {
+type SubmoduleGitlinkReachability = {
     path: string;
     baseCommit?: string;
     branchCommit?: string;
@@ -367,7 +367,7 @@ export function ensureSubmoduleCommitLocal(submoduleRepoPath: string, baseSubmod
  * evaluation. Lives here (rather than in mesh-refine-gates.ts) next to the
  * probes that populate it.
  */
-export type GitlinkFastForwardDetail = {
+type GitlinkFastForwardDetail = {
     path: string;
     baseCommit?: string;
     branchCommit?: string;
@@ -520,9 +520,7 @@ export function readChangedPathKinds(repoRoot: string, fromRef: string, toRef: s
  * Collapsing the two is the 2026-08-23 false-publish: see
  * {@link verifyRemoteBranchContainsCommit}.
  */
-export type RemoteContainmentState = 'contained' | 'absent' | 'undeterminable';
-
-export type RemoteContainmentVerdict =
+type RemoteContainmentVerdict =
     | { state: 'contained' }
     | { state: 'absent' | 'undeterminable'; error: any };
 
@@ -661,7 +659,7 @@ export type MeshRefineSubmoduleReachabilityEntry = {
     publishStderr?: string;
 };
 
-export type MeshRefineSubmoduleReachabilitySummary = {
+type MeshRefineSubmoduleReachabilitySummary = {
     status: MeshRefineStageStatus;
     checked: number;
     unreachable: MeshRefineSubmoduleReachabilityEntry[];

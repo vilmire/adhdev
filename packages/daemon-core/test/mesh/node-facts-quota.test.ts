@@ -22,15 +22,8 @@ vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
 vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
 
 const { buildLocalNodeFacts } = await import('../../src/mesh/node-facts.js')
-const {
-    clearQuotaCache,
-    hasRecentCliActivity,
-    refreshQuotaCacheOnce,
-    startQuotaRefreshLoop,
-    QUOTA_REFRESH_INTERVAL_MS,
-    QUOTA_AXIS,
-    QUOTA_AXIS_TTL_MS,
-} = await import('../../src/quota/refresh.js')
+const { clearQuotaCache, refreshQuotaCacheOnce, QUOTA_REFRESH_INTERVAL_MS, QUOTA_AXIS, QUOTA_AXIS_TTL_MS } = await import('../../src/quota/refresh.js')
+const { hasRecentCliActivity, startQuotaRefreshLoop } = await import('../../src/quota/refresh-loop.js')
 
 const okQuota = (provider: string) => ({
     provider,

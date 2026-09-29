@@ -1,20 +1,6 @@
-// Provider-effect dedup and message-formatting helpers extracted from
-// cli-provider-instance.ts. Pure move — no behavior change. None of these used
-// any instance state; they were private methods invoked only within the class.
-
-export function getEffectDedupKey(effect: { id?: string; type: string; message?: { content?: unknown }; toast?: { message?: string }; notification?: { title?: string; body?: string } }): string {
-    if (effect.id) return `provider_effect:${effect.id}`;
-    if (effect.type === 'message') {
-        const content = typeof effect.message?.content === 'string'
-            ? effect.message.content
-            : JSON.stringify(effect.message?.content || '');
-        return `provider_effect:message:${content}`;
-    }
-    if (effect.type === 'notification') {
-        return `provider_effect:notification:${effect.notification?.title || ''}:${effect.notification?.body || ''}`;
-    }
-    return `provider_effect:toast:${effect.toast?.message || ''}`;
-}
+// Message-formatting helpers extracted from cli-provider-instance.ts. None of
+// these use any instance state. (Effect dedup lives with the other provider
+// effect helpers in control-effects.ts.)
 
 export function formatApprovalRequestMessage(modalMessage?: string, buttons?: string[]): string {
     const lines = ['Approval requested'];

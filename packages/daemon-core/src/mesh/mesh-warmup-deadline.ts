@@ -97,7 +97,7 @@ export function readWarmupConnectionState(connection: Record<string, unknown> | 
     return typeof state === 'string' && state.length > 0 ? state : undefined;
 }
 
-export interface ResolvedWarmupDeadlineOpts {
+interface ResolvedWarmupDeadlineOpts {
     isConnected: () => boolean;
     connectTimeoutMs: number;
     responseTimeoutMs: number;

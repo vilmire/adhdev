@@ -30,7 +30,8 @@
  */
 
 import { executeNativeHistory } from './native-history-executor.js';
-import { compileRecordShapes, jsonPathGet, stringifyContent } from './native-history-projection.js';
+import { compileRecordShapes } from './native-history-projection.js';
+import { jsonPathGet, stringifyContent } from './native-history-jsonpath.js';
 import type { NativeHistoryInput } from './native-history-types.js';
 import {
     DEFAULT_TOOL_CALL_TYPES,

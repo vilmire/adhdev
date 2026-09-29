@@ -125,7 +125,7 @@ describe('splitFinalSummary — prose and edges', () => {
  * the list redesign; the overview modal is now the single final-summary
  * surface, and blueprint list rows route into it.) */
 describe('the final-summary panel is summary-first', () => {
-    const CARDS = path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshOverviewCards.tsx')
+    const CARDS = path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshOverviewDetails.tsx')
 
     it('overview modal folds the report behind a disclosure', () => {
         const text = fs.readFileSync(CARDS, 'utf8')

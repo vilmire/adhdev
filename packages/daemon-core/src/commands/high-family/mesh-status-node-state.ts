@@ -26,7 +26,7 @@
  * daemons, so step 1 keeps the legacy inline view.
  */
 import * as fs from 'fs';
-import { daemonIdsEquivalent, meshNodeIdMatches, normalizeMeshNodeId } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, meshNodeIdMatches, normalizeMeshNodeId, readText, readRecord } from '@adhdev/mesh-shared';
 import type { MeshNodeGitStateEntry, MeshNodeGitStateStore } from '../../mesh/mesh-node-git-state.js';
 import { isHeldRuntimeLive, MESH_NODE_STATE_STALE_MS, type MeshNodeGitRefresher, type MeshNodeHandshakeTarget } from '../../mesh/mesh-node-git-refresher.js';
 import type { MeshNodeRuntimeSession } from '../../mesh/mesh-node-runtime-summary.js';
@@ -42,14 +42,6 @@ export interface MeshNodeLocality {
     localDaemonId?: string;
 }
 
-function readString(value: unknown): string {
-    return typeof value === 'string' ? value.trim() : '';
-}
-
-function readRecord(value: unknown): Record<string, any> {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
-}
-
 function workspaceExistsLocally(workspace: string): boolean {
     if (!workspace) return false;
     try { return fs.existsSync(workspace); } catch { return false; }
@@ -60,11 +52,11 @@ function workspaceExistsLocally(workspace: string): boolean {
  * another daemon and its workspace is not on this machine.
  */
 export function isRemoteMeshNodeForState(node: any, locality: MeshNodeLocality): boolean {
-    const daemonId = readString(node?.daemonId);
+    const daemonId = readText(node?.daemonId);
     if (!daemonId) return false;
     if (locality.localMachineId && daemonIdsEquivalent(daemonId, locality.localMachineId)) return false;
     if (locality.localDaemonId && daemonIdsEquivalent(daemonId, locality.localDaemonId)) return false;
-    return !workspaceExistsLocally(readString(node?.workspace));
+    return !workspaceExistsLocally(readText(node?.workspace));
 }
 
 /**
@@ -74,7 +66,7 @@ export function isRemoteMeshNodeForState(node: any, locality: MeshNodeLocality):
  * preview) owns sessions this daemon cannot list either.
  */
 export function isForeignDaemonMeshNode(node: any, locality: MeshNodeLocality): boolean {
-    const daemonId = readString(node?.daemonId);
+    const daemonId = readText(node?.daemonId);
     if (!daemonId) return false;
     if (locality.localMachineId && daemonIdsEquivalent(daemonId, locality.localMachineId)) return false;
     if (locality.localDaemonId && daemonIdsEquivalent(daemonId, locality.localDaemonId)) return false;
@@ -186,8 +178,8 @@ export function kickMeshNodeGitRefreshes(args: {
         if (!node || typeof node !== 'object') continue;
         if (!isForeignDaemonMeshNode(node, args.locality)) continue;
         const nodeId = normalizeMeshNodeId(node) ?? '';
-        const daemonId = readString(node.daemonId);
-        const workspace = readString(node.workspace);
+        const daemonId = readText(node.daemonId);
+        const workspace = readText(node.workspace);
         if (!nodeId || !daemonId || !workspace) continue;
         const entry = args.store.get(args.meshId, nodeId);
         const target = { meshId: args.meshId, nodeId, daemonId, workspace };
@@ -218,17 +210,17 @@ export function collectHeldDaemonNodeTargets(args: {
     store: MeshNodeGitStateStore;
     locality: MeshNodeLocality;
 }): MeshNodeHandshakeTarget[] {
-    const wanted = readString(args.daemonId);
+    const wanted = readText(args.daemonId);
     const nodes = Array.isArray(args.mesh?.nodes) ? args.mesh.nodes : [];
     const out: MeshNodeHandshakeTarget[] = [];
     if (!args.meshId || !wanted) return out;
     for (const node of nodes) {
         if (!node || typeof node !== 'object') continue;
-        const daemonId = readString(node.daemonId);
+        const daemonId = readText(node.daemonId);
         if (!daemonId || !daemonIdsEquivalent(daemonId, wanted)) continue;
         if (!isForeignDaemonMeshNode(node, args.locality)) continue;
         const nodeId = normalizeMeshNodeId(node) ?? '';
-        const workspace = readString(node.workspace);
+        const workspace = readText(node.workspace);
         if (!nodeId || !workspace || !args.store.get(args.meshId, nodeId)) continue;
         out.push({
             meshId: args.meshId,
@@ -333,7 +325,7 @@ function overlayHeldRuntime(
     if (facts?.providerVersions && typeof facts.providerVersions === 'object' && Object.keys(facts.providerVersions).length > 0) {
         status.providerVersions = facts.providerVersions;
     }
-    const buildVersion = readString(facts?.daemonBuild?.version) || readString(runtime?.daemonBuild?.version);
+    const buildVersion = readText(facts?.daemonBuild?.version) || readText(runtime?.daemonBuild?.version);
     if (buildVersion) status.daemonBuildVersion = buildVersion;
     if (!opts.renderSessions) return;
     const sessions = runtime
@@ -341,7 +333,7 @@ function overlayHeldRuntime(
         : [];
     status.activeSessions = sessions.map((session) => session.id);
     status.activeSessionDetails = sessions.map((session) => heldSessionDetail(session, opts.meshId));
-    const providerTypes = sessions.map((session) => readString(session.providerType)).filter(Boolean);
+    const providerTypes = sessions.map((session) => readText(session.providerType)).filter(Boolean);
     if (providerTypes.length > 0) {
         status.providers = Array.from(new Set([...(Array.isArray(status.providers) ? status.providers : []), ...providerTypes]));
     }
@@ -373,8 +365,8 @@ export function overlayMeshNodeGitObservations(snapshot: any, args: {
     if (args.locality) snapshot.nodeRuntimeHeld = true;
     for (const status of snapshot.nodes) {
         if (!status || typeof status !== 'object') continue;
-        const nodeId = readString(status.nodeId);
-        const daemonId = readString(status.daemonId);
+        const nodeId = readText(status.nodeId);
+        const daemonId = readText(status.daemonId);
         if (args.locality && status.connection?.state !== 'self' && isForeignDaemonMeshNode(status, args.locality)) {
             overlayHeldRuntime(
                 status,
@@ -390,7 +382,7 @@ export function overlayMeshNodeGitObservations(snapshot: any, args: {
         }
         const connection = readRecord(status.connection);
         const git = readRecord(status.git);
-        const workspace = readString(status.workspace);
+        const workspace = readText(status.workspace);
         const isSelf = connection.state === 'self';
         const isLocal = !isSelf && workspaceExistsLocally(workspace);
         if (isSelf || isLocal) {
@@ -415,7 +407,7 @@ export function overlayMeshNodeGitObservations(snapshot: any, args: {
         status.gitObservation = observation;
         const liveThisCall = readRecord(status.dataFreshness).dataSource === 'live';
         if (!liveThisCall && entry?.git && connection.authority === 'live_peer'
-            && readString(connection.reason).startsWith(LIVE_PEER_REASON_PREFIX)) {
+            && readText(connection.reason).startsWith(LIVE_PEER_REASON_PREFIX)) {
             status.connection = {
                 ...connection,
                 state: 'unknown',

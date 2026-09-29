@@ -35,13 +35,8 @@ vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage: vi.
 const installClaudeStatusline = vi.fn();
 vi.mock('../../src/quota/statusline/install.js', () => ({ installClaudeStatusline }));
 
-const {
-    clearQuotaCache,
-    quotaProviderEnabledFromLoader,
-    refreshQuotaCacheOnce,
-    __resetQuotaBootRefreshForTests,
-    __resetQuotaHydrationForTests,
-} = await import('../../src/quota/refresh.js');
+const { clearQuotaCache, quotaProviderEnabledFromLoader, refreshQuotaCacheOnce, __resetQuotaHydrationForTests } = await import('../../src/quota/refresh.js');
+const { __resetQuotaBootRefreshForTests } = await import('../../src/quota/refresh-triggers.js');
 const { daemonLifecycleHandlers } = await import('../../src/commands/low-family/daemon-lifecycle.js');
 
 const okQuota = (provider: string) => ({

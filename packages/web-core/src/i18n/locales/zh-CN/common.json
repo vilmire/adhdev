@@ -3323,7 +3323,6 @@
                 "offline": "离线",
                 "failed": "连接失败",
                 "connecting": "正在连接…",
-                "attention": "在线 · 同步延迟",
                 "online": "在线"
             },
             "slowLink": "慢速连接",
@@ -3353,20 +3352,6 @@
             "reconnect": "重新连接",
             "transportRelay": "通过中继服务器连接——比直连慢。通常是防火墙或 NAT 阻止了直连。",
             "transportDirect": "直接连接",
-            "beacon": {
-                "lastSyncedBehindPart_other": "，还有 {{count}} 条记录待接收",
-                "lastSyncedBehindPart_one": "，还有 {{count}} 条记录待接收",
-                "soleCopyTooltip_other": "此机器上有 {{entries}} 条记录尚未备份到其他机器。请保持在线，直到其他机器完成同步。",
-                "soleCopyTooltip_one": "此机器上有 {{entries}} 条记录尚未备份到其他机器。请保持在线，直到其他机器完成同步。",
-                "soleCopyLabel_other": "{{count}} 条记录未备份",
-                "soleCopyLabel_one": "{{count}} 条记录未备份",
-                "behindTooltip_other": "此机器尚未收到来自其他机器的 {{count}} 条最新记录，通常会自动追上。",
-                "behindTooltip_one": "此机器尚未收到来自其他机器的 {{count}} 条最新记录，通常会自动追上。",
-                "behindLabel": "同步延迟",
-                "deferredLabel": "备份未确认",
-                "deferredTooltip": "无法确认此机器上的所有内容都已备份：只能与部分机器进行比较。这不是错误。",
-                "lastSyncedTooltip": "最近一次同步在 {{minutes}} 分钟前{{behindPart}}。"
-            },
             "noAgentsRunning": "尚无运行中的代理",
             "launchCta": "启动 →"
         },

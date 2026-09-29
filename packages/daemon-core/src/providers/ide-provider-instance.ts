@@ -10,7 +10,7 @@
  */
 
 import * as crypto from 'crypto';
-import { flattenContent, type ProviderModule } from './contracts.js';
+import { type ProviderModule } from './contracts.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { ExtensionProviderInstance, type ExtensionParentContext } from './extension-provider-instance.js';
 import { emitStatusEdge, forwardProviderEvent, type SessionEventPort } from './provider-event-port.js';
@@ -18,12 +18,13 @@ import { emitTurnStarted, emitTurnEnd, emitSuspension, type TurnEvidencePort } f
 import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
-import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
+import { applyProviderEffects } from './control-effects.js';
+import { mergeRuntimeMessagesByTime, prepareRuntimeMessage } from './cli-provider-transcript-merge.js';
 import { validateReadChatResultPayload } from './read-chat-contract.js';
 import type { ChatMessage } from '../types.js';
 import { formatAutoApprovalMessage, pickAutoApprovalButton } from './approval-utils.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
-import { buildChatMessage, buildRuntimeSystemChatMessage, normalizeChatMessages, extractFinalSummaryFromMessages } from './chat-message-normalization.js';
+import { buildRuntimeSystemChatMessage, normalizeChatMessages, extractFinalSummaryFromMessages } from './chat-message-normalization.js';
 import { getProviderSessionCapabilities, IDE_PROVIDER_SESSION_CAPABILITIES_BASE } from './open-panel-support.js';
 
 type ReadChatModal = {
@@ -171,7 +172,7 @@ export class IdeProviderInstance implements ProviderInstance {
                 status: autoApproveActive && this.cachedChat.status === 'waiting_approval'
                     ? 'generating'
                     : (this.cachedChat.status || visibleStatus),
-                messages: this.mergeConversationMessages(this.cachedChat.messages || []),
+                messages: mergeRuntimeMessagesByTime(this.runtimeMessages, this.cachedChat.messages || []),
                 activeModal: autoApproveActive ? null : (this.cachedChat.activeModal || null),
                 inputContent: this.cachedChat.inputContent || '',
             } : null,
@@ -563,54 +564,11 @@ export class IdeProviderInstance implements ProviderInstance {
             summaryMetadata: patchedState.summaryMetadata,
         };
 
-        const effects = normalizeProviderEffects(data);
-        for (const effect of effects) {
-            const effectWhen = effect.when || 'immediate';
-            if (effectWhen === 'turn_completed' && options.phase !== 'turn_completed') continue;
-            if (effectWhen === 'immediate' && options.phase === 'turn_completed') continue;
-
-            const effectKey = this.getEffectDedupKey(effect);
-            if (this.appliedEffectKeys.has(effectKey)) continue;
-            this.appliedEffectKeys.add(effectKey);
-
-            if (effect.persist !== false) {
-                const persistedMessage = buildPersistedProviderEffectMessage(effect);
-                if (persistedMessage) this.appendRuntimeMessage(persistedMessage, effectKey);
-            }
-
-            if (effect.type === 'message' && effect.message) {
-                this.pushEvent({
-                    event: 'provider:message',
-                    timestamp: Date.now(),
-                    content: typeof effect.message.content === 'string' ? effect.message.content : JSON.stringify(effect.message.content),
-                    role: effect.message.role || 'system',
-                    kind: effect.message.kind,
-                    senderName: effect.message.senderName,
-                });
-            } else if (effect.type === 'toast' && effect.toast) {
-                this.pushEvent({
-                    event: 'provider:toast',
-                    effectId: effect.id || effectKey,
-                    timestamp: Date.now(),
-                    message: effect.toast.message,
-                    level: effect.toast.level || 'info',
-                });
-            } else if (effect.type === 'notification' && effect.notification) {
-                this.pushEvent({
-                    event: 'provider:notification',
-                    effectId: effect.id || effectKey,
-                    timestamp: Date.now(),
-                    title: effect.notification.title,
-                    message: effect.notification.body,
-                    content: typeof effect.notification.bubbleContent === 'string'
-                        ? effect.notification.bubbleContent
-                        : effect.notification.body,
-                    level: effect.notification.level || 'info',
-                    channels: effect.notification.channels || ['toast'],
-                    preferenceKey: effect.notification.preferenceKey,
-                });
-            }
-        }
+        applyProviderEffects(data, options.phase, {
+            appliedEffectKeys: this.appliedEffectKeys,
+            appendRuntimeMessage: (message, dedupKey) => this.appendRuntimeMessage(message, dedupKey),
+            pushEvent: (event) => this.pushEvent(event),
+        });
     }
 
     private appendRuntimeSystemMessage(content: string, dedupKey: string, receivedAt = Date.now()): void {
@@ -622,16 +580,8 @@ export class IdeProviderInstance implements ProviderInstance {
     }
 
     private appendRuntimeMessage(message: ChatMessage, dedupKey: string): void {
-        const normalizedMessage = buildChatMessage({
-            ...message,
-            receivedAt: typeof message.receivedAt === 'number' ? message.receivedAt : (message.timestamp || Date.now()),
-            timestamp: typeof message.timestamp === 'number' ? message.timestamp : (message.receivedAt || Date.now()),
-        } as ChatMessage);
-        const normalizedContent = typeof normalizedMessage.content === 'string'
-            ? normalizedMessage.content.trim()
-            : flattenContent(normalizedMessage.content).trim();
-        if (!normalizedContent && (!Array.isArray(normalizedMessage.content) || normalizedMessage.content.length === 0)) return;
-        if (this.runtimeMessages.some((entry) => entry.key === dedupKey)) return;
+        const prepared = prepareRuntimeMessage(this.runtimeMessages, message, dedupKey);
+        if (!prepared) return;
         if (!this.cachedChat) {
             this.cachedChat = {
                 id: 'active_session',
@@ -645,49 +595,18 @@ export class IdeProviderInstance implements ProviderInstance {
 
         this.runtimeMessages.push({
             key: dedupKey,
-            message: normalizedMessage,
+            message: prepared.message,
         });
 
-        if (normalizedContent) {
+        if (prepared.historyRow) {
             this.historyWriter.appendNewMessages(
                 this.type,
-                [{
-                    role: normalizedMessage.role,
-                    senderName: normalizedMessage.senderName,
-                    kind: normalizedMessage.kind,
-                    content: normalizedContent,
-                    receivedAt: normalizedMessage.receivedAt || normalizedMessage.timestamp,
-                    historyDedupKey: dedupKey,
-                }],
+                [prepared.historyRow],
                 this.cachedChat?.title || this.provider.name,
                 this.instanceId,
                 this.cachedChat?.id || this.instanceId,
             );
         }
-    }
-
-    private mergeConversationMessages(messages: any[]): ChatMessage[] {
-        if (this.runtimeMessages.length === 0) return normalizeChatMessages(messages);
-        return normalizeChatMessages([...messages, ...this.runtimeMessages.map((entry) => entry.message)]
-            .map((message, index) => ({ message, index }))
-            .sort((a, b) => {
-                const aTime = a.message.receivedAt || a.message.timestamp || 0;
-                const bTime = b.message.receivedAt || b.message.timestamp || 0;
-                if (aTime !== bTime) return aTime - bTime;
-                return a.index - b.index;
-            })
-            .map((entry) => entry.message));
-    }
-
-    private getEffectDedupKey(effect: { id?: string; type: string; message?: { content?: unknown }; toast?: { message?: string }; notification?: { title?: string; body?: string } }): string {
-        if (effect.id) return `provider_effect:${effect.id}`;
-        if (effect.type === 'message') {
-            return `provider_effect:message:${typeof effect.message?.content === 'string' ? effect.message.content : JSON.stringify(effect.message?.content || '')}`;
-        }
-        if (effect.type === 'notification') {
-            return `provider_effect:notification:${effect.notification?.title || ''}:${effect.notification?.body || ''}`;
-        }
-        return `provider_effect:toast:${effect.toast?.message || ''}`;
     }
 
  // ─── external access ─────────────────────────────────

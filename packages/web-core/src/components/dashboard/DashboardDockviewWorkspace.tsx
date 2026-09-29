@@ -38,29 +38,26 @@ import { getPreferredConversationForIde } from './conversation-sort'
 import { getCliConversationViewMode, isAcpConv } from './types'
 import { useTransport } from '../../context/TransportContext'
 import { useTheme } from '../../hooks/useTheme'
-import { useTabShortcuts, readTabShortcuts } from '../../hooks/useTabShortcuts'
+import { useTabShortcuts } from '../../hooks/useTabShortcuts';
 import { isEditableTarget, normalizeKey, readActionShortcuts, type DashboardActionShortcutId } from '../../hooks/useActionShortcuts'
-import { getConversationTabMetaText, getConversationTitle, getRemotePanelTitle } from './conversation-presenters'
-import { IconExternalWindow, IconArrowBack, IconKeyboard, IconX, IconEyeOff, IconFloat, IconDock } from '../Icons'
+import { getConversationTitle } from './conversation-presenters';
 import { buildDashboardDockviewContextMenuItems } from './dockviewContextMenuItems'
 import { shouldAwaitStoredDockviewHydration, shouldDeferDockviewPanelPrune } from './dashboardDockviewHydration'
 import { getPassiveSessionSelectionCommand } from './dashboardSessionCommands'
 import type { DashboardScrollToBottomIntent } from './dashboard-scroll-to-bottom'
-import {
-    DOCKVIEW_IDLE_DRAG_FLOAT_DELAY_MS,
-    createDockviewIdleDragFloatController,
-    isDockviewIdleDragFloatEnabled,
-} from './dockviewIdleDragFloat'
+import { attachDockviewIdleDragFloat, isDockviewIdleDragFloatEnabled } from './dockviewIdleDragFloat'
 import {
     applyDockviewThemeClass,
-    escapeHtml,
     focusOwnerWindow,
     getDistinctPopoutWindows,
     isRemotePanelId,
-} from './dockviewWorkspaceHelpers'
+    findAdjacentDockviewGroup,
+    type DockviewPaneDirection,
+} from './dockviewWorkspaceHelpers';
 import {
     buildInitialDockviewLayout,
     syncDockviewPanels,
+    readHiddenTabLocationFromLayout,
     syncRemotePanels,
     type DashboardDockviewPanelParams,
     type DashboardDockviewRemotePanelParams,
@@ -73,6 +70,9 @@ import {
     useDashboardDockviewContext,
     type DashboardDockviewContextValue,
 } from './dockviewWorkspaceContext'
+import { attachPopoutShortcutKeys } from './dockviewPopoutShortcuts'
+import DockviewTabContextMenu from './DockviewTabContextMenu'
+import { injectDockviewThemeIntoPopout, renderDockviewPopoutChrome, syncDockviewThemeToPopouts } from './dockviewPopoutWindows'
 
 /**
  * Stable empty array for the no-active-conversation case. A fresh `[]` literal
@@ -128,7 +128,6 @@ interface DashboardDockviewWorkspaceProps {
 
 type DashboardDockviewPanelActivityApi = Pick<IDockviewPanelProps<DashboardDockviewPanelParams>['api'], 'isActive' | 'isVisible'>
 
-type DockviewPaneDirection = 'left' | 'right' | 'above' | 'below'
 
 export function getDockviewPanelInputActive(api: Pick<DashboardDockviewPanelActivityApi, 'isActive'>): boolean {
     return api.isActive
@@ -136,13 +135,6 @@ export function getDockviewPanelInputActive(api: Pick<DashboardDockviewPanelActi
 
 export function getDockviewPanelContentVisible(api: Pick<DashboardDockviewPanelActivityApi, 'isVisible'>): boolean {
     return api.isVisible
-}
-
-function preventContextMenuButtonFocus(event: React.MouseEvent<HTMLButtonElement>) {
-    // Context-menu actions are overlays on the active chat. Let click still fire,
-    // but do not move DOM focus into the portal/body: browser focus correction can
-    // scroll the underlying chat pane back to its first focusable content.
-    event.preventDefault()
 }
 
 export function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDockviewPanelParams>) {
@@ -297,77 +289,12 @@ export default function DashboardDockviewWorkspace({
     // ─── Popout Window (tear-off to separate browser window) ─────
 
     const injectThemeIntoPopoutWindow = useCallback((popoutWindow: Window) => {
-        const parentDoc = document
-        const popoutDoc = popoutWindow.document
-
-        for (const link of parentDoc.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')) {
-            const clone = popoutDoc.createElement('link')
-            clone.rel = 'stylesheet'
-            clone.href = link.href
-            if (link.crossOrigin) clone.crossOrigin = link.crossOrigin
-            popoutDoc.head.appendChild(clone)
-        }
-
-        for (const style of parentDoc.querySelectorAll<HTMLStyleElement>('style')) {
-            const clone = popoutDoc.createElement('style')
-            clone.textContent = style.textContent
-            popoutDoc.head.appendChild(clone)
-        }
-
-        const cssVars: string[] = []
-        for (const sheet of parentDoc.styleSheets) {
-            try {
-                for (const rule of sheet.cssRules) {
-                    if (rule instanceof CSSStyleRule && (rule.selectorText === ':root' || rule.selectorText === 'html')) {
-                        cssVars.push(rule.cssText)
-                    }
-                }
-            } catch { /* cross-origin sheet, skip */ }
-        }
-        if (cssVars.length > 0) {
-            const varStyle = popoutDoc.createElement('style')
-            varStyle.textContent = cssVars.join('\n')
-            popoutDoc.head.appendChild(varStyle)
-        }
-
-        const htmlTheme = parentDoc.documentElement.getAttribute('data-theme')
-        if (htmlTheme) popoutDoc.documentElement.setAttribute('data-theme', htmlTheme)
-        popoutDoc.documentElement.style.colorScheme = htmlTheme === 'light' ? 'light' : 'dark'
-        popoutDoc.body.className = parentDoc.body.className
-
-        const inlineRootStyle = parentDoc.documentElement.getAttribute('style')
-        if (inlineRootStyle) popoutDoc.documentElement.setAttribute('style', inlineRootStyle)
-
-        const mount = popoutDoc.getElementById('dv-popout-window')
-        if (mount instanceof HTMLElement) {
-            mount.classList.add('adhdev-dockview')
-            applyDockviewThemeClass(mount, theme)
-        }
+        injectDockviewThemeIntoPopout(popoutWindow, theme)
     }, [theme])
 
     const syncThemeToOpenPopouts = useCallback(() => {
         const api = apiRef.current
-        if (!api) return
-        for (const group of api.groups) {
-            try {
-                const ownerDoc = group.element?.ownerDocument
-                if (!ownerDoc || ownerDoc === document) continue
-                const mount = ownerDoc.getElementById('dv-popout-window')
-                if (mount instanceof HTMLElement) {
-                    mount.classList.add('adhdev-dockview')
-                    applyDockviewThemeClass(mount, theme)
-                }
-                const htmlTheme = document.documentElement.getAttribute('data-theme')
-                if (htmlTheme) ownerDoc.documentElement.setAttribute('data-theme', htmlTheme)
-                ownerDoc.documentElement.style.colorScheme = htmlTheme === 'light' ? 'light' : 'dark'
-                ownerDoc.body.className = document.body.className
-                const inlineRootStyle = document.documentElement.getAttribute('style')
-                if (inlineRootStyle) ownerDoc.documentElement.setAttribute('style', inlineRootStyle)
-                else ownerDoc.documentElement.removeAttribute('style')
-            } catch {
-                // ignore detached popout docs
-            }
-        }
+        if (api) syncDockviewThemeToPopouts(api, theme)
     }, [theme])
 
     const popoutTab = useCallback((tabKey: string) => {
@@ -506,93 +433,7 @@ export default function DashboardDockviewWorkspace({
 
     const syncPopoutChrome = useCallback(() => {
         const api = apiRef.current
-        if (!api) return
-
-        for (const group of api.groups) {
-            const ownerDoc = group.element?.ownerDocument
-            if (!ownerDoc || ownerDoc === document) continue
-
-            const mount = ownerDoc.getElementById('dv-popout-window')
-            if (!(mount instanceof HTMLElement)) continue
-
-            let activePanelId: string | null = null
-            let title = ownerDoc.title || 'ADHDev'
-            let meta = 'Popout workspace'
-
-            const activePanel = group.activePanel
-            if (activePanel) {
-                activePanelId = activePanel.id
-                if (isRemotePanelId(activePanel.id)) {
-                    const routeId = (activePanel.params as DashboardDockviewRemotePanelParams | undefined)?.routeId || activePanel.id.slice('remote:'.length)
-                    const conversation = getPreferredConversationForIde([...conversationsByTabKey.values()], routeId)
-                    title = getRemotePanelTitle(conversation)
-                    meta = conversation?.machineName ? `Remote view · ${conversation.machineName}` : 'Remote view'
-                } else {
-                    const conversation = conversationsByTabKey.get(activePanel.id)
-                    title = conversation ? getConversationTitle(conversation) : (activePanel.title || activePanel.id)
-                    meta = conversation ? getConversationTabMetaText(conversation) : 'Dockview panel'
-                }
-            }
-
-            ownerDoc.title = `${title} — ADHDev`
-
-            const existingHeaders = Array.from(ownerDoc.querySelectorAll<HTMLElement>('#adhdev-popout-header'))
-            for (const existingHeader of existingHeaders) existingHeader.remove()
-            const header = ownerDoc.createElement('div')
-            header.id = 'adhdev-popout-header'
-            ownerDoc.body.appendChild(header)
-
-            header.setAttribute('style', [
-                'position:absolute',
-                'top:0',
-                'left:0',
-                'right:0',
-                'height:52px',
-                'display:flex',
-                'align-items:center',
-                'justify-content:space-between',
-                'gap:12px',
-                'padding:0 14px',
-                'box-sizing:border-box',
-                'background:var(--surface-secondary)',
-                'border-bottom:1px solid var(--border-subtle)',
-                'z-index:5',
-                'backdrop-filter:blur(14px)',
-            ].join(';'))
-
-            header.innerHTML = `
-                <div style="min-width:0;display:flex;flex-direction:column;gap:2px;">
-                    <div style="font-size:10px;line-height:1;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;">ADHDev</div>
-                    <div style="min-width:0;font-size:13px;font-weight:700;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(title)}</div>
-                    <div style="min-width:0;font-size:10px;line-height:1.1;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(meta)}</div>
-                </div>
-                <div style="display:flex;align-items:center;gap:8px;flex:0 0 auto;">
-                    <button type="button" data-adhdev-popout-focus style="height:30px;padding:0 10px;border-radius:9px;background:var(--bg-glass);color:var(--text-secondary);font-size:11px;font-weight:600;">Dashboard</button>
-                    <button type="button" data-adhdev-popout-dock style="height:30px;padding:0 10px;border-radius:9px;background:var(--surface-primary);color:var(--text-primary);font-size:11px;font-weight:700;">Dock</button>
-                </div>
-            `
-
-            mount.style.top = '52px'
-            mount.style.height = 'calc(100% - 52px)'
-
-            const focusBtn = header.querySelector<HTMLButtonElement>('[data-adhdev-popout-focus]')
-            if (focusBtn) {
-                focusBtn.onclick = () => {
-                    window.focus()
-                }
-            }
-
-            const dockBtn = header.querySelector<HTMLButtonElement>('[data-adhdev-popout-dock]')
-            if (dockBtn) {
-                dockBtn.disabled = !activePanelId
-                dockBtn.style.opacity = activePanelId ? '1' : '0.5'
-                dockBtn.style.cursor = activePanelId ? 'pointer' : 'default'
-                dockBtn.onclick = () => {
-                    if (activePanelId) moveTabBackToMain(activePanelId)
-                    ownerDoc.defaultView?.focus()
-                }
-            }
-        }
+        if (api) renderDockviewPopoutChrome(api, conversationsByTabKey, moveTabBackToMain)
     }, [conversationsByTabKey, moveTabBackToMain])
     const selectTabByShortcut = useCallback((tabKey: string) => {
         const api = apiRef.current
@@ -630,67 +471,7 @@ export default function DashboardDockviewWorkspace({
     }, [requestConversationScrollToBottom])
     const getAdjacentGroup = useCallback((direction: DockviewPaneDirection) => {
         const api = apiRef.current
-        const activeGroup = api?.activeGroup || api?.activePanel?.group
-        if (!api || !activeGroup) return
-        const groups = api.groups || []
-        const activeEntry = groups.find(group => group.id === activeGroup.id)
-        if (!activeEntry) return
-
-        const activeRect = activeEntry.element.getBoundingClientRect()
-        const activeCenterX = activeRect.left + activeRect.width / 2
-        const activeCenterY = activeRect.top + activeRect.height / 2
-
-        const getOverlap = (aStart: number, aEnd: number, bStart: number, bEnd: number) => Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart))
-        const getDistanceScore = (candidate: typeof activeEntry) => {
-            const rect = candidate.element.getBoundingClientRect()
-            const centerX = rect.left + rect.width / 2
-            const centerY = rect.top + rect.height / 2
-
-            let primaryGap = 0
-            let crossAxisDistance = 0
-            let overlap = 0
-            let isValidDirection = false
-
-            if (direction === 'left') {
-                isValidDirection = centerX < activeCenterX
-                primaryGap = Math.max(0, activeRect.left - rect.right)
-                crossAxisDistance = Math.abs(centerY - activeCenterY)
-                overlap = getOverlap(activeRect.top, activeRect.bottom, rect.top, rect.bottom)
-            } else if (direction === 'right') {
-                isValidDirection = centerX > activeCenterX
-                primaryGap = Math.max(0, rect.left - activeRect.right)
-                crossAxisDistance = Math.abs(centerY - activeCenterY)
-                overlap = getOverlap(activeRect.top, activeRect.bottom, rect.top, rect.bottom)
-            } else if (direction === 'above') {
-                isValidDirection = centerY < activeCenterY
-                primaryGap = Math.max(0, activeRect.top - rect.bottom)
-                crossAxisDistance = Math.abs(centerX - activeCenterX)
-                overlap = getOverlap(activeRect.left, activeRect.right, rect.left, rect.right)
-            } else {
-                isValidDirection = centerY > activeCenterY
-                primaryGap = Math.max(0, rect.top - activeRect.bottom)
-                crossAxisDistance = Math.abs(centerX - activeCenterX)
-                overlap = getOverlap(activeRect.left, activeRect.right, rect.left, rect.right)
-            }
-
-            if (!isValidDirection) return Number.POSITIVE_INFINITY
-
-            const overlapPenalty = overlap > 0 ? 0 : 120
-            return (primaryGap * 3) + crossAxisDistance + overlapPenalty
-        }
-
-        let bestGroup: typeof activeEntry | null = null
-        let bestScore = Number.POSITIVE_INFINITY
-        for (const group of groups) {
-            if (group.id === activeEntry.id) continue
-            const score = getDistanceScore(group)
-            if (!Number.isFinite(score)) continue
-            if (score >= bestScore) continue
-            bestScore = score
-            bestGroup = group
-        }
-
-        return bestGroup || undefined
+        return api ? findAdjacentDockviewGroup(api, direction) : undefined
     }, [])
     const focusAdjacentGroup = useCallback((direction: DockviewPaneDirection) => {
         const nextGroup = getAdjacentGroup(direction)
@@ -975,44 +756,7 @@ export default function DashboardDockviewWorkspace({
 
     const readHiddenRestoreStateFromLayout = useCallback((tabKey: string): DashboardStoredHiddenTabLocation => {
         const api = apiRef.current
-        if (!api) return { kind: 'grid' }
-
-        const serialized = api.toJSON() as {
-            floatingGroups?: Array<{
-                data?: { views?: string[] }
-                position?: {
-                    left?: number
-                    right?: number
-                    top?: number
-                    bottom?: number
-                    width: number
-                    height: number
-                }
-            }>
-            popoutGroups?: Array<{
-                data?: { views?: string[] }
-                position?: { left: number, top: number, width: number, height: number }
-                url?: string
-            }>
-        }
-
-        for (const group of serialized.floatingGroups || []) {
-            if (group.data?.views?.includes(tabKey) && group.position) {
-                return { kind: 'floating', position: group.position }
-            }
-        }
-
-        for (const group of serialized.popoutGroups || []) {
-            if (group.data?.views?.includes(tabKey)) {
-                return {
-                    kind: 'popout',
-                    position: group.position,
-                    popoutUrl: group.url,
-                }
-            }
-        }
-
-        return { kind: 'grid' }
+        return api ? readHiddenTabLocationFromLayout(api, tabKey) : { kind: 'grid' }
     }, [])
 
     const restoreHiddenTabToSavedLocation = useCallback((tabKey: string) => {
@@ -1176,109 +920,15 @@ export default function DashboardDockviewWorkspace({
         })
 
         if (isDockviewIdleDragFloatEnabled()) {
-            const getDragPoint = (nativeEvent: DragEvent) => ({
-                clientX: nativeEvent.clientX,
-                clientY: nativeEvent.clientY,
-            })
-            const getPanelBounds = (element: HTMLElement | undefined | null) => {
-                const rect = element?.getBoundingClientRect()
-                if (!rect) return null
-                return {
-                    left: rect.left,
-                    right: rect.right,
-                    top: rect.top,
-                    bottom: rect.bottom,
-                }
-            }
-            const isOutsideDockviewContainer = (point: { clientX: number; clientY: number }) => {
-                const rect = dockviewContainerRef.current?.getBoundingClientRect()
-                if (!rect) return false
-                return point.clientX < rect.left
-                    || point.clientX > rect.right
-                    || point.clientY < rect.top
-                    || point.clientY > rect.bottom
-            }
-            const controller = createDockviewIdleDragFloatController({
-                detachDelayMs: DOCKVIEW_IDLE_DRAG_FLOAT_DELAY_MS,
-                onDetach: ({ panelId, clientX, clientY }) => {
-                    const panel = event.api.getPanel(panelId)
-                    if (!panel) return
-                    try {
-                        if (panel.group.model.location.type !== 'grid') return
-                    } catch {
-                        return
-                    }
-
-                    const rootRect = dockviewContainerRef.current?.getBoundingClientRect()
-                    const panelRect = panel.group.element?.getBoundingClientRect()
-                    const width = Math.round(Math.min(Math.max(panelRect?.width ?? 600, 360), 720))
-                    const height = Math.round(Math.min(Math.max(panelRect?.height ?? 500, 260), 640))
-                    event.api.addFloatingGroup(panel, {
-                        x: rootRect ? Math.max(0, clientX - rootRect.left - 32) : undefined,
-                        y: rootRect ? Math.max(0, clientY - rootRect.top - 18) : undefined,
-                        width,
-                        height,
-                    })
-                    panel.api.setActive()
+            idleDragFloatCleanupRef.current = attachDockviewIdleDragFloat(
+                event.api,
+                () => dockviewContainerRef.current,
+                () => {
                     persistDockviewLayout()
                     syncPopoutChrome()
                     setPopoutWindowRevision(value => value + 1)
                 },
-            })
-            const disposables = [
-                event.api.onWillDragPanel(dragEvent => {
-                    if (dragEvent.nativeEvent.defaultPrevented || dragEvent.nativeEvent.shiftKey) return
-                    try {
-                        if (dragEvent.panel.group.model.location.type !== 'grid') return
-                    } catch {
-                        return
-                    }
-                    controller.startDrag({
-                        panelId: dragEvent.panel.id,
-                        selfPanelBounds: getPanelBounds(dragEvent.panel.group.element),
-                        ...getDragPoint(dragEvent.nativeEvent),
-                    })
-                }),
-                event.api.onWillShowOverlay(overlayEvent => {
-                    if (controller.hasDetached()) {
-                        overlayEvent.preventDefault()
-                        return
-                    }
-                    controller.markDockTarget(getDragPoint(overlayEvent.nativeEvent))
-                }),
-                event.api.onWillDrop(dropEvent => {
-                    if (controller.hasDetached()) {
-                        dropEvent.preventDefault()
-                        controller.endDrag()
-                        return
-                    }
-                    controller.markDockTarget(getDragPoint(dropEvent.nativeEvent))
-                }),
-                event.api.onDidDrop(() => controller.endDrag()),
-                event.api.onUnhandledDragOverEvent(unhandledEvent => {
-                    if (!controller.isDragging()) return
-                    controller.markSelfPanel(getDragPoint(unhandledEvent.nativeEvent))
-                }),
-            ]
-            const handleDragOver = (nativeEvent: DragEvent) => {
-                if (!controller.isDragging()) return
-                const point = getDragPoint(nativeEvent)
-                if (isOutsideDockviewContainer(point)) {
-                    controller.markNonSelfPanel(point)
-                }
-            }
-            const handleDragEnd = () => controller.endDrag()
-
-            window.addEventListener('dragover', handleDragOver, true)
-            window.addEventListener('drop', handleDragEnd, true)
-            window.addEventListener('dragend', handleDragEnd, true)
-            idleDragFloatCleanupRef.current = () => {
-                controller.dispose()
-                for (const disposable of disposables) disposable.dispose()
-                window.removeEventListener('dragover', handleDragOver, true)
-                window.removeEventListener('drop', handleDragEnd, true)
-                window.removeEventListener('dragend', handleDragEnd, true)
-            }
+            )
         }
 
         // Inject theme attributes into popout windows created by drag-to-popout.
@@ -1521,120 +1171,14 @@ export default function DashboardDockviewWorkspace({
         const popoutWindows = getDistinctPopoutWindows(apiRef.current)
         if (popoutWindows.length === 0) return
 
-        const cleanups = popoutWindows.map(popup => {
-            let sequenceParts: string[] = []
-            let sequenceTimer: number | null = null
-
-            const resetSequence = () => {
-                if (sequenceTimer != null) popup.clearTimeout(sequenceTimer)
-                sequenceTimer = null
-                sequenceParts = []
-            }
-
-            const armSequenceTimeout = () => {
-                if (sequenceTimer != null) popup.clearTimeout(sequenceTimer)
-                sequenceTimer = popup.setTimeout(() => {
-                    sequenceTimer = null
-                    sequenceParts = []
-                }, 1200)
-            }
-
-            const handleTabShortcut = (event: KeyboardEvent) => {
-                if (!event.ctrlKey && !event.metaKey && !event.altKey) return
-                const combo = encodeShortcut(event)
-                if (!combo) return
-
-                const tabShortcuts = readTabShortcuts()
-                for (const [tabKey, shortcut] of Object.entries(tabShortcuts)) {
-                    if (!visibleConversations.some(conversation => conversation.tabKey === tabKey)) continue
-                    if (shortcut !== combo) continue
-                    event.preventDefault()
-                    selectTabByShortcut(tabKey)
-                    return
-                }
-            }
-
-            const handleActionShortcut = (event: KeyboardEvent) => {
-                if (event.defaultPrevented || shortcutListening) return
-
-                const combo = encodeShortcut(event)
-                if (!combo) return
-
-                const hasModifier = event.metaKey || event.ctrlKey || event.altKey
-                if (isEditableTarget(event.target)) return
-
-                const actionShortcuts = readActionShortcuts(isMac)
-                const supportedEntries = (Object.entries(actionShortcuts) as [DashboardActionShortcutId, string][])
-                    .filter(([actionId, shortcut]) => !!shortcut && (
-                        actionId === 'splitActiveTabRight'
-                        || actionId === 'splitActiveTabDown'
-                        || actionId === 'floatActiveTab'
-                        || actionId === 'popoutActiveTab'
-                        || actionId === 'dockActiveTab'
-                        || actionId === 'focusLeftPane'
-                        || actionId === 'focusRightPane'
-                        || actionId === 'focusUpPane'
-                        || actionId === 'focusDownPane'
-                        || actionId === 'moveActiveTabToLeftPane'
-                        || actionId === 'moveActiveTabToRightPane'
-                        || actionId === 'moveActiveTabToUpPane'
-                        || actionId === 'moveActiveTabToDownPane'
-                        || actionId === 'selectPreviousGroupTab'
-                        || actionId === 'selectNextGroupTab'
-                        || actionId === 'setActiveTabShortcut'
-                        || actionId === 'hideCurrentTab'
-                    ))
-
-                const nextParts = hasModifier
-                    ? [combo]
-                    : [...sequenceParts.slice(-1), combo].slice(-2)
-                const fullCandidate = nextParts.join(' ')
-                const singleCandidate = nextParts[nextParts.length - 1]
-
-                const exactFullMatch = supportedEntries.find(([, shortcut]) => shortcut === fullCandidate)
-                if (exactFullMatch) {
-                    event.preventDefault()
-                    resetSequence()
-                    triggerPopoutActionShortcut(exactFullMatch[0])
-                    return
-                }
-
-                const fullPrefixMatch = supportedEntries.some(([, shortcut]) => shortcut.startsWith(`${fullCandidate} `))
-                if (fullPrefixMatch) {
-                    event.preventDefault()
-                    sequenceParts = nextParts
-                    armSequenceTimeout()
-                    return
-                }
-
-                const exactSingleMatch = supportedEntries.find(([, shortcut]) => shortcut === singleCandidate)
-                if (exactSingleMatch) {
-                    event.preventDefault()
-                    resetSequence()
-                    triggerPopoutActionShortcut(exactSingleMatch[0])
-                    return
-                }
-
-                const singlePrefixMatch = supportedEntries.some(([, shortcut]) => shortcut.startsWith(`${singleCandidate} `))
-                if (singlePrefixMatch) {
-                    event.preventDefault()
-                    sequenceParts = [singleCandidate]
-                    armSequenceTimeout()
-                    return
-                }
-
-                resetSequence()
-            }
-
-            popup.addEventListener('keydown', handleTabShortcut)
-            popup.addEventListener('keydown', handleActionShortcut)
-
-            return () => {
-                resetSequence()
-                popup.removeEventListener('keydown', handleTabShortcut)
-                popup.removeEventListener('keydown', handleActionShortcut)
-            }
-        })
+        const cleanups = popoutWindows.map(popup => attachPopoutShortcutKeys(popup, {
+            encodeShortcut,
+            isMac,
+            isShortcutListening: () => !!shortcutListening,
+            isVisibleTab: (tabKey) => visibleConversations.some(conversation => conversation.tabKey === tabKey),
+            selectTabByShortcut,
+            triggerAction: triggerPopoutActionShortcut,
+        }))
 
         return () => {
             for (const cleanup of cleanups) cleanup()
@@ -1667,91 +1211,44 @@ export default function DashboardDockviewWorkspace({
                     popoutUrl="/popout.html"
                 />
             </div>
-            {ctxMenu && createPortal(
-                <div
-                    data-dockview-tab-context-menu
-                    className="fixed z-[var(--z-popover)] min-w-[220px] rounded-xl border border-border-subtle bg-bg-primary shadow-2xl py-1"
-                    style={{ left: ctxMenu.x, top: ctxMenu.y }}
-                >
-                    {ctxMenuItems.map(item => {
-                        if (item.type === 'separator') {
-                            return <div key={item.id} className="border-t border-border-subtle my-1" />
-                        }
-
-                        let icon = <IconKeyboard size={13} className="shrink-0 opacity-70" />
-                        let onClick = () => {}
-
-                        switch (item.id) {
+            {ctxMenu && (
+                <DockviewTabContextMenu
+                    x={ctxMenu.x}
+                    y={ctxMenu.y}
+                    sourceDocument={ctxMenu.sourceDocument}
+                    items={ctxMenuItems}
+                    onSelect={(itemId, event) => {
+                        switch (itemId) {
                             case 'dockInWindow':
                             case 'dockBackToGrid':
-                                icon = <IconDock size={13} className="shrink-0 opacity-70" />
-                                onClick = () => {
-                                    dockTabToWorkspaceGrid(ctxMenu.tabKey)
-                                    setCtxMenu(null)
-                                }
+                                dockTabToWorkspaceGrid(ctxMenu.tabKey)
                                 break
                             case 'moveBackToMain':
-                                icon = <IconArrowBack size={13} className="shrink-0 opacity-70" />
-                                onClick = () => {
-                                    moveTabBackToMain(ctxMenu.tabKey)
-                                    setCtxMenu(null)
-                                }
+                                moveTabBackToMain(ctxMenu.tabKey)
                                 break
                             case 'floatAsPanel':
-                                icon = <IconFloat size={13} className="shrink-0 opacity-70" />
-                                onClick = () => {
-                                    floatTab(ctxMenu.tabKey)
-                                    setCtxMenu(null)
-                                }
+                                floatTab(ctxMenu.tabKey)
                                 break
                             case 'openInNewWindow':
-                                icon = <IconExternalWindow size={13} className="shrink-0 opacity-70" />
-                                onClick = () => {
-                                    popoutTab(ctxMenu.tabKey)
-                                    setCtxMenu(null)
-                                }
+                                popoutTab(ctxMenu.tabKey)
                                 break
                             case 'setShortcut':
-                                onClick = ((event: any) => {
-                                    event.stopPropagation()
-                                    setShortcutListening(ctxMenu.tabKey)
-                                    setCtxMenu(null)
-                                }) as typeof onClick
+                                event.stopPropagation()
+                                setShortcutListening(ctxMenu.tabKey)
                                 break
-                            case 'removeShortcut':
-                                icon = <IconX size={13} className="shrink-0 opacity-70" />
-                                onClick = () => {
-                                    const next = { ...tabShortcuts }
-                                    delete next[ctxMenu.tabKey]
-                                    saveShortcuts(next)
-                                    setCtxMenu(null)
-                                }
+                            case 'removeShortcut': {
+                                const next = { ...tabShortcuts }
+                                delete next[ctxMenu.tabKey]
+                                saveShortcuts(next)
                                 break
+                            }
                             case 'hideTab':
-                                icon = <IconEyeOff size={13} className="shrink-0 opacity-70" />
-                                onClick = () => {
-                                    hideConversationTab(ctxMenu.tabKey)
-                                    setCtxMenu(null)
-                                }
+                                hideConversationTab(ctxMenu.tabKey)
                                 break
                         }
-
-                        return (
-                            <button
-                                key={item.id}
-                                type="button"
-                                className={`w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2 ${item.tone === 'muted' ? 'text-text-muted' : ''}`}
-                                onMouseDown={preventContextMenuButtonFocus}
-                                onClick={onClick}
-                            >
-                                {icon}
-                                <span className="flex-1 min-w-0">{item.label}</span>
-                                {item.shortcut ? <span className="dashboard-dockview-menu-shortcut">{item.shortcut}</span> : null}
-                            </button>
-                        )
-                    })}
-                </div>,
-                ctxMenu.sourceDocument.body,
+                        setCtxMenu(null)
+                    }}
+                />
             )}
             {shortcutListening && (
                 createPortal(

@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { MeshOverviewDetailModal } from '../../src/components/MeshGraph/MeshOverviewCards'
+import { MeshOverviewDetailModal } from '../../src/components/MeshGraph/MeshOverviewDetails';
 import { getMeshGraphTheme } from '../../src/components/MeshGraph/meshGraphTheme'
 
 let container: HTMLDivElement

@@ -10,6 +10,7 @@
 import type { MeshSendKeyItem, MeshSendKeyName } from '../cli-adapters/provider-cli-shared.js';
 import { isWorkerMcpEnabled } from '../runtime-defaults.js';
 import { meshTaskAttachments, resolveCompletingTaskId, resolvePendingInjectedAt } from './mesh-task-attachment.js';
+import { adapterTurnStartedAt, adapterTurnTaskId } from './adapter-turn-clock.js';
 import { runMeshStallTick, type MeshStallHost } from './completion/mesh-stall-watchdog.js';
 import type { CliProviderInstance } from './cli-provider-instance.js';
 
@@ -111,8 +112,8 @@ export function isAutonomousMeshSession(host: MeshSessionHost): boolean {
  */
 export function completingTurnTaskId(host: MeshSessionHost): string | undefined { // WORKER-MCP T2 precursor (mesh-task-attachment.ts): flag-on, a pending entry wins over the binding+scalar below.
     const fromHistory = isWorkerMcpEnabled() ? resolveCompletingTaskId(meshTaskAttachments(host.meshTaskAttachmentHistory)) : undefined; if (fromHistory) return fromHistory;
-    const turnTaskId = host.adapter?.currentTurnTaskId;
-    if (typeof turnTaskId === 'string' && turnTaskId.trim()) return turnTaskId;
+    const turnTaskId = adapterTurnTaskId(host.adapter);
+    if (turnTaskId) return turnTaskId;
     const scalar = host.settings.meshActiveTaskId;
     return typeof scalar === 'string' && scalar.trim() ? scalar : undefined;
 }
@@ -142,10 +143,8 @@ export function completingTurnTaskId(host: MeshSessionHost): string | undefined 
  * genuinely underway (preserving the rc.480/481 completion-fires win).
  */
 export function injectedTaskHasStartedGenerating(host: MeshSessionHost): boolean { // WORKER-MCP T2 precursor (mesh-task-attachment.ts): flag-on, a pending entry's own injectedAt wins over the bare scalar.
-    const turnStartedAt = typeof (host.adapter as any)?.currentTurnStartedAt === 'number'
-        ? (host.adapter as any).currentTurnStartedAt as number
-        : 0;
-    const turnStarted = Number.isFinite(turnStartedAt) && turnStartedAt > 0;
+    const turnStartedAt = adapterTurnStartedAt(host.adapter);
+    const turnStarted = turnStartedAt > 0;
     const injectedAt = (isWorkerMcpEnabled() ? resolvePendingInjectedAt(meshTaskAttachments(host.meshTaskAttachmentHistory)) : undefined) ?? host.meshTaskInjectedAt;
     if (injectedAt <= 0) {
         // No mesh task injected since boot — plain "a turn has started" suffices.
@@ -186,10 +185,7 @@ export function meshTraceCtx(host: MeshSessionHost, event = 'agent:generating_co
  * that turn's currentTurnTaskId differs, so its synth still fires.
  */
 export function markCurrentTurnStartupGraceCollapseSatisfied(host: MeshSessionHost): void {
-    const turnTaskId = typeof (host.adapter as any)?.currentTurnTaskId === 'string'
-        && (host.adapter as any).currentTurnTaskId.trim()
-        ? (host.adapter as any).currentTurnTaskId as string
-        : null;
+    const turnTaskId = adapterTurnTaskId(host.adapter);
     if (turnTaskId) host.fastCollapseSynthesizedTaskId = turnTaskId;
 }
 

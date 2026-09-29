@@ -9,7 +9,7 @@
 // and import this module. mesh-tools-magi.ts re-exports the public symbols so the
 // mesh-tools.ts barrel and existing importers/tests are unaffected.
 
-import { compactChatPayload } from './mesh-tools-internal.js';
+import { compactChatPayload } from './chat-compact.js';
 import type {
     MagiAgentResponse,
     MagiClaim,
@@ -19,7 +19,7 @@ import type {
     MagiSynthesis,
     MagiSynthesizedResponse,
     MagiTaskKind,
-} from './mesh-tools-internal.js';
+} from '@adhdev/daemon-core';
 
 /**
  * Lexical-cluster merge threshold (Jaccard over claim token sets).

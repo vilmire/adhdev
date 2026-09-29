@@ -8,13 +8,13 @@
  * + ctx.launchIde — no executeDaemonCommand recursion) or CLI/ACP restarts.
  * Extracted verbatim from executeDaemonCommand.
  */
-import { meshNodeIdMatches, daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, daemonIdsEquivalent, readText } from '@adhdev/mesh-shared';
 import { supportsExplicitSessionResume } from '../cli-session-binding.js';
 import { loadState } from '../../config/state-store.js';
 import { getRecentActivity } from '../../config/recent-activity.js';
 import { getSavedProviderSessions } from '../../config/saved-sessions.js';
-import { listProviderHistorySessions } from '../../config/chat-history.js';
-import { buildMeshWorkerRelayStamp, readNonEmptyString } from '../../mesh/mesh-events-utils.js';
+import { listProviderHistorySessions } from '../../config/provider-native-history.js';
+import { buildMeshWorkerRelayStamp } from '../../mesh/mesh-events-utils.js';
 import { isIdleSessionState } from '../../mesh/mesh-queue-assignment.js';
 import { LOG } from '../../logging/logger.js';
 import { readStringValue } from '../router.js';
@@ -75,11 +75,11 @@ async function forwardConversationPrefsToCoordinator(
         }
     } catch { /* best-effort — no session settings, nothing to forward */ }
 
-    const coordinatorDaemonId = readNonEmptyString(settings.meshCoordinatorDaemonId);
-    const meshId = readNonEmptyString(settings.meshNodeFor);
+    const coordinatorDaemonId = readText(settings.meshCoordinatorDaemonId);
+    const meshId = readText(settings.meshNodeFor);
     // A non-delegated (non-mesh) session has no coordinator anchor — nothing to mirror.
     if (!coordinatorDaemonId || !meshId) return 'skipped';
-    const nodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.meshLastNodeId);
+    const nodeId = readText(settings.meshNodeId) || readText(settings.meshLastNodeId);
 
     // sessionSettings mirrors the exact keys updateMeshOwnedSession merges onto the mirror's
     // settings (userHidden / userMuted). The coordinator's mirror resolver reads these to derive
@@ -98,7 +98,7 @@ async function forwardConversationPrefsToCoordinator(
     // machine-core-canonicalizing daemonIdsEquivalent — a raw === would miss a same-machine anchor
     // that arrives in a different id form (daemon_mach_X vs mach_X), the repeatedly-regressed
     // daemon-id form-mismatch class in this repo, and self-dial anyway.
-    const selfDaemonId = readNonEmptyString(ctx.deps.statusInstanceId);
+    const selfDaemonId = readText(ctx.deps.statusInstanceId);
     if (selfDaemonId && daemonIdsEquivalent(coordinatorDaemonId, selfDaemonId)) {
         const refreshLocal = ctx.deps.updateLocalMeshOwnedSession;
         if (refreshLocal) {

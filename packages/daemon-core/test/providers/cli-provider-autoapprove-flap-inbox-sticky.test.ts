@@ -19,7 +19,7 @@ import { collectPendingApprovals } from '../../src/mesh/mesh-active-work.js'
 // FIX: stabilizeFlappingApprovalStatus() — a sticky-approval overlay that re-presents the
 // last concrete approval modal + status='waiting_approval' across a busy blip within
 // APPROVAL_STICKY_FLAP_MS, unless the engine has genuinely RESOLVED the modal since
-// (lastApprovalResolvedAt advanced). The stabilized status feeds getState (→ inbox),
+// (getLastApprovalResolvedAt() advanced). The stabilized status feeds getState (→ inbox),
 // detectStatusTransition (→ emission), and maybeAutoApproveStatus (→ settle gate).
 
 const SETTLE_MS = 600
@@ -53,7 +53,7 @@ function makeInstance(opts: { autoApprove?: boolean; mesh?: boolean } = {}): any
   instance.resolvedAt = 0
   instance.adapter = {
     resolveModal: (_i: number) => { /* fire recorded via resolves */ },
-    get lastApprovalResolvedAt() { return instance.resolvedAt },
+    getLastApprovalResolvedAt: () => instance.resolvedAt,
     getStatus: () => ({ status: 'idle' }),
   }
   instance.appendRuntimeSystemMessage = () => { /* noop */ }
@@ -130,7 +130,7 @@ describe('AUTOAPPROVE-FLAP-INBOX-MISSING — sticky-approval overlay', () => {
     inst.stabilizeFlappingApprovalStatus(APPROVAL(1), 1000)
 
     // The modal is genuinely RESOLVED at t=1200 (auto-approve/mesh_approve fired resolveModal
-    // → adapter.lastApprovalResolvedAt advances). The subsequent busy/generating frame is a
+    // → adapter.getLastApprovalResolvedAt() advances). The subsequent busy/generating frame is a
     // real resume, NOT a flap — the overlay must NOT re-present waiting_approval.
     inst.resolvedAt = 1200
     const s = inst.stabilizeFlappingApprovalStatus(BUSY(), 1300)

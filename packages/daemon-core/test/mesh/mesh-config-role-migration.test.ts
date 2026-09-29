@@ -17,7 +17,8 @@ vi.mock('../../src/config/config.js', () => ({
     getMachineNickname: () => (({ machineId: 'test-machine' }) as any).machineNickname ?? null,
 }));
 
-import { listMeshes, getMesh, createMesh, addNode, migrateProviderRolesToSlots } from '../../src/config/mesh-config.js';
+import { listMeshes, getMesh, createMesh, addNode } from '../../src/config/mesh-config.js';
+import { migrateProviderRolesToSlots } from '../../src/config/mesh-config-store.js';
 
 function configPath(): string {
     return join(testConfigDir, 'meshes.json');

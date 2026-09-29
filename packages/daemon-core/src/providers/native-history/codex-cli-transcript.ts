@@ -55,7 +55,8 @@ const CODEX_DEFAULT_COMPLETION_SIGNAL: NativeCompletionSignalSpec = {
 
 export type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 import type { NativeHistoryRole, NativeHistoryKind } from './types.js';
-import { isSafeFilename, statMtimeMs } from './fs-utils.js';
+import { statMtimeMs } from './fs-utils.js';
+import { extractTimestampValue, isUuidLike, listJsonlTranscriptSessions } from './transcript-common.js';
 import {
   oneLine,
   TOOL_CALL_SUMMARY_MAX,
@@ -138,22 +139,7 @@ export interface NativeHistorySessionMeta {
 
 // ─── Internal helpers ───────────────────────────────────────────────────────
 
-function extractTimestampValue(value: unknown): number {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
-  if (typeof value === 'string') {
-    const numeric = Number(value);
-    if (Number.isFinite(numeric) && numeric > 0) return numeric;
-    const parsed = Date.parse(value);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
-  }
-  return 0;
-}
-
-function isUuidLikeSessionId(sessionId: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId);
-}
-
-function codexSessionsRoot(): string {
+export function codexSessionsRoot(): string {
   return path.join(os.homedir(), '.codex', 'sessions');
 }
 
@@ -241,24 +227,6 @@ function codexToolOutputText(payload: Record<string, unknown>): string {
     try { return JSON.stringify(output, null, 2).trim(); } catch { return ''; }
   }
   return '';
-}
-
-/**
- * Re-parse a codex rollout into the record array `parseSessionFile` indexes
- * against. See `readClaudeRecords` for why this is not routed through the spec
- * path's jsonl cache.
- */
-export function readCodexRecords(filePath: string): Record<string, unknown>[] {
-  let raw: string;
-  try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return []; }
-  const out: Record<string, unknown>[] = [];
-  for (const line of raw.split('\n').filter(Boolean)) {
-    let parsed: unknown = null;
-    try { parsed = JSON.parse(line); } catch { continue; }
-    if (!parsed || typeof parsed !== 'object') continue;
-    out.push(parsed as Record<string, unknown>);
-  }
-  return out;
 }
 
 /**
@@ -470,7 +438,7 @@ function parseSessionFile(
   let fallbackTs = Date.now();
   let detectedWorkspace = typeof workspaceFallback === 'string' ? workspaceFallback.trim() : '';
 
-  // Counts records that PARSE, matching `readCodexRecords` exactly — see the
+  // Counts records that PARSE, matching `readJsonlRecords` exactly — see the
   // note there on why the expand path re-parses instead of sharing a cache.
   let recordIndex = -1;
   for (const line of lines) {
@@ -672,7 +640,7 @@ export function readSession(
   if (metaId && filenameUuid && metaId !== filenameUuid) return null;
 
   const sessionId = metaId || filenameUuid;
-  if (!sessionId || !isUuidLikeSessionId(sessionId)) return null;
+  if (!sessionId || !isUuidLike(sessionId)) return null;
 
   const workspaceFallback = typeof meta?.cwd === 'string' ? meta.cwd : undefined;
   const sourceMtimeMs = statMtimeMs(sessionPath);
@@ -720,67 +688,20 @@ export function readSession(
  * Returns summary metadata for each session, sorted by most recently updated first.
  */
 export async function listSessions(watchPath: string): Promise<NativeHistorySessionMeta[]> {
-  const expandedBase = watchPath.startsWith('~/')
-    ? path.join(os.homedir(), watchPath.slice(2).split('/**')[0].split('/*')[0])
-    : watchPath.split('/**')[0].split('/*')[0];
-
-  const root = fs.existsSync(expandedBase) ? expandedBase : codexSessionsRoot();
-  if (!fs.existsSync(root)) return [];
-
-  const results: NativeHistorySessionMeta[] = [];
   const uuidPattern = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
-
-  const stack: string[] = [root];
-  while (stack.length > 0) {
-    const current = stack.pop()!;
-    let entries: fs.Dirent[] = [];
-    try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { continue; }
-
-    for (const entry of entries) {
-      const entryPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        stack.push(entryPath);
-        continue;
-      }
-      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
-      if (!isSafeFilename(entry.name.replace('.jsonl', ''))) continue;
-
-      // Derive session UUID from meta or filename
-      const meta = readSessionMeta(entryPath);
-      const metaId = String(meta?.id ?? '').trim();
-      const filenameMatch = entry.name.replace('.jsonl', '').match(uuidPattern);
-      const sessionId = metaId || (filenameMatch ? filenameMatch[1] : '');
-      if (!sessionId || !isUuidLikeSessionId(sessionId)) continue;
-
-      const workspaceFallback = typeof meta?.cwd === 'string' ? meta.cwd : undefined;
-      const sourceMtimeMs = statMtimeMs(entryPath);
-      const { messages } = parseSessionFile(entryPath, sessionId, workspaceFallback);
-      const visible = messages.filter((m) => m.kind !== 'session_start');
-      if (visible.length === 0) continue;
-
-      const firstSystem = messages.find((m) => m.kind === 'session_start');
-      const workspace = firstSystem?.workspace || firstSystem?.content || undefined;
-      const firstMsg = visible[0];
-      const lastMsg = visible[visible.length - 1];
-
-      results.push({
-        historySessionId: sessionId,
-        sessionId,
-        sourcePath: entryPath,
-        sourceMtimeMs,
-        messageCount: visible.length,
-        firstMessageAt: firstMsg.receivedAt || sourceMtimeMs,
-        lastMessageAt: lastMsg.receivedAt || sourceMtimeMs,
-        sessionTitle: lastMsg.content,
-        preview: lastMsg.content,
-        workspace,
-        agent: 'codex-cli',
-        source: 'provider-native',
-        nativeHistoryCoverage: 'full',
-      });
-    }
-  }
-
-  results.sort((a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0));
-  return results;
+  return listJsonlTranscriptSessions(watchPath, codexSessionsRoot(), (entryPath, fileName) => {
+    // Derive session UUID from meta or filename
+    const meta = readSessionMeta(entryPath);
+    const metaId = String(meta?.id ?? '').trim();
+    const filenameMatch = fileName.replace('.jsonl', '').match(uuidPattern);
+    const sessionId = metaId || (filenameMatch ? filenameMatch[1] : '');
+    if (!sessionId || !isUuidLike(sessionId)) return null;
+    const workspaceFallback = typeof meta?.cwd === 'string' ? meta.cwd : undefined;
+    return { sessionId, messages: parseSessionFile(entryPath, sessionId, workspaceFallback).messages };
+  }).map((session) => ({
+    ...session,
+    agent: 'codex-cli' as const,
+    source: 'provider-native' as const,
+    nativeHistoryCoverage: 'full' as const,
+  }));
 }

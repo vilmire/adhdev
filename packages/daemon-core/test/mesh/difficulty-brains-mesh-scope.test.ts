@@ -17,13 +17,8 @@ vi.mock('../../src/config/config.js', () => ({
     getMachineNickname: () => (({ machineId: 'test-machine' }) as any).machineNickname ?? null,
 }));
 
-import {
-    createMesh,
-    addNode,
-    getMesh,
-    getDifficultyBrains,
-    setDifficultyBrains,
-} from '../../src/config/mesh-config.js';
+import { createMesh, addNode, getMesh } from '../../src/config/mesh-config.js';
+import { getDifficultyBrains, setDifficultyBrains } from '../../src/config/mesh-config-routing.js';
 import { resolveNodeCapabilitySlots } from '../../src/mesh/mesh-node-slots.js';
 import { meshCrudHandlers } from '../../src/commands/med-family/mesh-crud.js';
 import { enqueueTask, getQueue, __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js';

@@ -2,7 +2,7 @@
  * S5 bootCommandPlane — command handler + router (wiring-unification B4).
  *
  * Everything the router reads is a VALUE by now: the poller (S3) for
- * `onIdeConnected`, the seqscribe runtime (S4) for stats / beacon / peer view /
+ * `onIdeConnected`, the seqscribe runtime (S4) for stats / peer view /
  * replica store, and the bus for `command_executed`. The old holders
  * (`poller` / `seqscribeNodeRef` / `seqscribeCollector` / `componentsRef`) are gone.
  */
@@ -16,7 +16,6 @@ import type { DaemonCdpManager } from '../../cdp/manager.js';
 import { createDefaultGitCommandServices } from '../../git/git-commands.js';
 import { getCachedProviderVersions } from '../../detection/cli-detector.js';
 import { buildLocalSeqscribeStats } from '../../seqscribe/local-stats.js';
-import { toBeaconDiagnosticsSummary } from '../../seqscribe/beacon-diagnostics.js';
 import { meshNoticeRuntime } from '../../mesh/turn-ledger/deliver.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 import { MeshNodeGitStateStore, createDbMeshNodeGitStatePersistence } from '../../mesh/mesh-node-git-state.js';
@@ -120,24 +119,6 @@ export function bootCommandPlane(s4: SeqscribeNodeStage): CommandPlaneStage {
             meshDelivery: readMeshDeliveryCounters,
             zombieRecovered: cfg.mesh?.zombieRecovered,
         }),
-        // Beacon staleness / sole-copy (§7.1). Unlike the stats this DOES carry
-        // topic names and peer writer ids — LOCAL/P2P only, never status_report.
-        // `diagnostics()` does no I/O, so an on-demand read cannot become a
-        // Beacon traffic source. The host arms the slot on its first
-        // authenticated epoch; standalone never does.
-        getBeaconDiagnostics: () => {
-            const beacon = seqscribe?.beacon.get();
-            if (!beacon) return null;
-            try {
-                return toBeaconDiagnosticsSummary(beacon.diagnostics());
-            } catch (error) {
-                LOG.info(
-                    'Seqscribe',
-                    `beacon diagnostics unavailable for get_status_metadata: ${error instanceof Error ? error.message : String(error)}`,
-                );
-                return null;
-            }
-        },
         getTranscriptReplicaStore: () => seqscribe?.transcriptReplica ?? null,
         // G3: cloud-only — see CommandRouterDeps.resolveTranscriptPeer's doc
         // comment and DaemonBootConfig.mesh.resolveTranscriptPeer. Absent

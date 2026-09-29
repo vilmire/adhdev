@@ -399,7 +399,9 @@ interface SurfaceMutation {
 const SURFACES: SurfaceMutation[] = [
     {
         name: 'queue claim (claimNextQueueTask)',
-        file: path.join(SRC_ROOT, 'mesh/mesh-runtime-store.ts'),
+        // claimNextQueueTask moved out of mesh-runtime-store.ts into mesh-runtime-store-claim.ts
+        // (self-delegate move). Only the path follows it.
+        file: path.join(SRC_ROOT, 'mesh/mesh-runtime-store-claim.ts'),
         gateCall: 'taskDependenciesSatisfied(candidate, depStatus)',
         entryVar: 'candidate', statusMap: 'depStatus', occurrences: 1,
     },

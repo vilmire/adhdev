@@ -6,7 +6,7 @@ import { meshMissionUpsert } from '../src/tools/mesh-tools.js';
 import { MeshRuntimeStore } from '../../daemon-core/src/mesh/mesh-runtime-store.js';
 import { makeFakeTurnIpcTransport } from './fake-turn-ipc-transport.js';
 import { validateMeshToolArgs } from '../src/tools/validate-tool-args.js';
-import { MESH_MISSION_UPSERT_TOOL } from '../src/tools/mesh-tool-schemas.js';
+import { MESH_MISSION_UPSERT_TOOL } from '../src/tools/mesh-tool-schemas-admin.js';
 
 /**
  * Parity audit gap: `coerceBriefArg` (mesh-tools-mission.ts) read only

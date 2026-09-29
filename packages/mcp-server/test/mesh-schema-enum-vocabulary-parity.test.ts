@@ -9,7 +9,8 @@ import {
     MESH_TASK_PRIORITIES,
     MESH_THINKING_LEVELS,
 } from '@adhdev/mesh-shared';
-import { ALL_MESH_TOOLS, MESH_NOTIFY_WORKER_TOOL } from '../src/tools/mesh-tool-schemas.js';
+import { ALL_MESH_TOOLS } from '../src/tools/mesh-tool-schemas.js';
+import { MESH_NOTIFY_WORKER_TOOL } from '../src/tools/mesh-tool-schemas-refine-config.js';
 
 /**
  * Schema enum VALUES ↔ mesh-shared vocabulary parity (wiring-unification A3).

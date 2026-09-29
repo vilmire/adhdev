@@ -1001,7 +1001,7 @@ export async function cleanupMeshSessions(self: DaemonCommandRouter, args: {
             const recordNodeId = readStringValue(record?.meta?.meshNodeId);
             const recordMeshNodeFor = readStringValue(record?.meta?.meshNodeFor);
             const delegateBoundToThisNode = !!recordNodeId
-                && recordNodeId === args.nodeId
+                && meshNodeIdMatches({ nodeId: recordNodeId }, args.nodeId)
                 && (!recordMeshNodeFor || recordMeshNodeFor === args.meshId);
             if (!hasExplicitSessionIds && coordinatorSession) {
                 skippedSessionIds.push(sessionId);
@@ -1062,7 +1062,7 @@ export async function cleanupMeshSessions(self: DaemonCommandRouter, args: {
             if (!hasExplicitSessionIds && liveRuntime && !delegateBoundToThisNode && !cleanWorkspaceOnlyForWorktree && !reclaimableOrphan) {
                 skippedSessionIds.push(sessionId);
                 skippedLiveSessionIds.push(sessionId);
-                const reason = recordNodeId && recordNodeId !== args.nodeId
+                const reason = recordNodeId && !meshNodeIdMatches({ nodeId: recordNodeId }, args.nodeId)
                     ? `live_delegate_bound_to_other_node:${recordNodeId}`
                     : matchedByWorkspaceOnly
                         ? 'live_session_matched_by_workspace_only_no_node_binding'

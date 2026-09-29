@@ -7,7 +7,7 @@
 
 import type { CommandResult, CommandHelpers } from './handler.js';
 import { type ProviderModule } from '../providers/contracts.js';
-import { isNativeSourceCanonicalHistory, readProviderChatHistory } from '../config/chat-history.js';
+import { isNativeSourceCanonicalHistory, readProviderChatHistory } from '../config/provider-native-history.js';
 import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
 import { isActivityChatMessage, normalizeChatMessages } from '../providers/chat-message-normalization.js';

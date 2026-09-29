@@ -46,8 +46,6 @@ function makeReader(overrides: ReaderOverrides = {}): CompletionSignalReader {
         visibleStatus: () => value('visibleStatus', 'idle'),
         busyEpoch: () => value('busyEpoch', 3),
         lastOutputAt: () => value('lastOutputAt', T0 - 100),
-        adapterWaitingForResponse: () => value('adapterWaitingForResponse', false),
-        adapterTurnScopeActive: () => value('adapterTurnScopeActive', false),
         adapterAnyPending: () => value('adapterAnyPending', false),
         partialResponsePending: () => value('partialResponsePending', false),
         parsedStatus: () => value('parsedStatus', { ok: true, status: 'idle', modalActive: false, messages: [] }),
@@ -61,7 +59,6 @@ function makeReader(overrides: ReaderOverrides = {}): CompletionSignalReader {
         transcriptAgeMs: () => value('transcriptAgeMs', undefined),
         inApprovalResumeGrace: () => value('inApprovalResumeGrace', false),
         hasApprovalResolutionEvidence: () => value('hasApprovalResolutionEvidence', true),
-        screenTailShowsApprovalPrompt: () => value('screenTailShowsApprovalPrompt', false),
         holdClassPtyStillActive: () => value('holdClassPtyStillActive', false),
         ownsExternalHistory: () => value('ownsExternalHistory', false),
         authorityTiming: () => value('authorityTiming', 'floor'),
@@ -129,15 +126,15 @@ describe('decideCompletionFlush — background task hold (FALSE-IDLE-BACKGROUND-
 
 describe('evaluateFinalizationBlock — adapter/parse blocks', () => {
     it('adapter pending blocks are terminal for a plain turn, non-terminal after approval-resolved idle (FALSEIDLE-a FixA)', () => {
-        const plain = evaluateFinalizationBlock(makeArm(), makeReader({ adapterWaitingForResponse: true }), POLICY);
-        expect(plain.block).toMatchObject({ reason: 'adapter_waiting_for_response', terminal: true });
+        const plain = evaluateFinalizationBlock(makeArm(), makeReader({ adapterAnyPending: true }), POLICY);
+        expect(plain.block).toMatchObject({ reason: 'adapter_pending_response', terminal: true });
 
         const approval = evaluateFinalizationBlock(
             makeArm({ previousStatus: 'waiting_approval' }),
-            makeReader({ adapterWaitingForResponse: true }),
+            makeReader({ adapterAnyPending: true }),
             POLICY,
         );
-        expect(approval.block).toMatchObject({ reason: 'adapter_waiting_for_response', terminal: false });
+        expect(approval.block).toMatchObject({ reason: 'adapter_pending_response', terminal: false });
     });
 
     it('holds inside the approval-resume grace window for a generating→idle valley (SETTLE-VALLEY Fix 1)', () => {
@@ -273,11 +270,6 @@ describe('evaluateFinalizationBlock — post-evidence gates', () => {
         expect(interactive.block).toBeNull();
     });
 
-    it('a still-visible approval prompt on screen blocks completion', () => {
-        const r = evaluateFinalizationBlock(makeArm(), makeReader({ screenTailShowsApprovalPrompt: true }), POLICY);
-        expect(r.block).toMatchObject({ reason: 'screen_shows_approval_prompt' });
-    });
-
     it('parsed-evidence quiet dwell holds a fresh mid-stream fragment (FALSE-IDLE-MIDTURN codex)', () => {
         const r = evaluateFinalizationBlock(
             makeArm(),
@@ -378,15 +370,15 @@ describe('decideCompletionFlush — hold pipeline ordering and release', () => {
         // waiting_approval→idle keeps adapter block non-terminal; before the cap → hold.
         const held = decideCompletionFlush(
             makeArm({ previousStatus: 'waiting_approval' }),
-            makeReader({ adapterWaitingForResponse: true }),
+            makeReader({ adapterAnyPending: true }),
             POLICY,
         );
         expect(held.kind).toBe('hold');
-        expect((held as any).reason).toBe('adapter_waiting_for_response');
+        expect((held as any).reason).toBe('adapter_pending_response');
 
         const forced = decideCompletionFlush(
             makeArm({ previousStatus: 'waiting_approval' }),
-            makeReader({ adapterWaitingForResponse: true, now: T0 + POLICY.finalizationMaxWaitMs + 1 }),
+            makeReader({ adapterAnyPending: true, now: T0 + POLICY.finalizationMaxWaitMs + 1 }),
             POLICY,
         );
         expect(forced.kind).toBe('emit-weak');
@@ -399,11 +391,11 @@ describe('decideCompletionFlush — hold pipeline ordering and release', () => {
         // a terminal block owns its own release while its reason plausibly still holds.
         const d = decideCompletionFlush(
             makeArm(),
-            makeReader({ adapterWaitingForResponse: true, now: T0 + POLICY.terminalBlockHardCapMs - 1_000 }),
+            makeReader({ adapterAnyPending: true, now: T0 + POLICY.terminalBlockHardCapMs - 1_000 }),
             POLICY,
         );
         expect(d.kind).toBe('hold');
-        expect((d as any).reason).toBe('adapter_waiting_for_response');
+        expect((d as any).reason).toBe('adapter_pending_response');
     });
 
     it('(INFINITE-GENERATING) but a terminal block whose reason never clears releases at the hard cap', () => {
@@ -411,12 +403,12 @@ describe('decideCompletionFlush — hold pipeline ordering and release', () => {
         // worker — permanently occupying its one-active-per-node write slot.
         const d = decideCompletionFlush(
             makeArm(),
-            makeReader({ adapterWaitingForResponse: true, now: T0 + POLICY.terminalBlockHardCapMs }),
+            makeReader({ adapterAnyPending: true, now: T0 + POLICY.terminalBlockHardCapMs }),
             POLICY,
         );
         expect(d.kind).toBe('emit-weak');
         expect((d as any).releasedByTerminalBlockHardCap).toBe(true);
-        expect((d as any).block.reason).toBe('adapter_waiting_for_response');
+        expect((d as any).block.reason).toBe('adapter_pending_response');
     });
 
     it('ANTIGRAVITY-30S-CAP-PREMATURE: hold-class holds past the cap while the PTY is active, releases at the hard cap', () => {

@@ -45,8 +45,6 @@ function makeAntigravityInstance(opts: {
     chatMessagesOwnedExternally: true, // native-source provider
     currentTurnStartedAt: opts.currentTurnStartedAt,
     currentTurnTaskId: opts.currentTurnTaskId ?? null,
-    isWaitingForResponse: false,
-    currentTurnScope: null,
     isProcessing: () => false,
     getPartialResponse: () => '',
   }

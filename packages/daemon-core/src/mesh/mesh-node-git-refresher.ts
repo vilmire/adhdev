@@ -85,7 +85,7 @@ export interface MeshNodeHandshakeTarget extends MeshNodeGitRefreshTarget {
     runtimeOnly?: boolean;
 }
 
-export interface MeshNodeGitRefresherOptions {
+interface MeshNodeGitRefresherOptions {
     store: MeshNodeGitStateStore;
     /**
      * Ask the member to push now (subscribing when it is not yet). Resolves

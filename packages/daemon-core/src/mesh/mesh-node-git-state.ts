@@ -25,7 +25,7 @@
  */
 import { createHash } from 'crypto';
 import type { Database as DatabaseHandle } from 'better-sqlite3';
-import { daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, sessionIdsEquivalent, readOptionalRecord } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import {
     computeMeshNodeFactsSignature,
@@ -34,7 +34,7 @@ import {
     type MeshNodeRuntimeSummary,
 } from './mesh-node-runtime-summary.js';
 
-export type MeshNodeGitObservationSource = 'member_push' | 'coordinator_probe';
+type MeshNodeGitObservationSource = 'member_push' | 'coordinator_probe';
 
 export interface MeshNodeGitStateEntry {
     meshId: string;
@@ -100,7 +100,7 @@ export function meshNodeRuntimeInstanceChanged(
 }
 
 /** One session found in a held runtime summary, with where/when it was observed. */
-export interface MeshNodeHeldSessionMatch {
+interface MeshNodeHeldSessionMatch {
     meshId: string;
     nodeId: string;
     /** Roster daemon id when known, else the member's own status id. */
@@ -110,7 +110,7 @@ export interface MeshNodeHeldSessionMatch {
     source: MeshNodeGitObservationSource | null;
 }
 
-export interface MeshNodeGitStatePersistence {
+interface MeshNodeGitStatePersistence {
     load(meshId: string): MeshNodeGitStateEntry[];
     save(entry: MeshNodeGitStateEntry): void;
 }
@@ -120,17 +120,13 @@ const SIGNATURE_GIT_KEYS = [
     'staged', 'modified', 'untracked', 'deleted', 'renamed', 'hasConflicts', 'stashCount', 'error',
 ] as const;
 
-function readRecord(value: unknown): Record<string, unknown> | null {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
 /**
  * Drop the member's reporter* envelope keys (platform / versions / facts ride the
  * probe envelope and are persisted separately by the probe path) so the stored
  * snapshot is the git status shape only.
  */
 export function sanitizeObservedGit(git: unknown): Record<string, unknown> | null {
-    const record = readRecord(git);
+    const record = readOptionalRecord(git);
     if (!record) return null;
     const next: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(record)) {
@@ -142,13 +138,13 @@ export function sanitizeObservedGit(git: unknown): Record<string, unknown> | nul
 
 /** Stable content signature of a git snapshot (ignores check timestamps). */
 export function computeMeshNodeGitSignature(git: Record<string, unknown> | null | undefined): string {
-    const record = readRecord(git);
+    const record = readOptionalRecord(git);
     if (!record) return 'none';
     const head: Record<string, unknown> = {};
     for (const key of SIGNATURE_GIT_KEYS) head[key] = record[key] ?? null;
     const submodules = Array.isArray(record.submodules)
         ? record.submodules.map((entry) => {
-            const sub = readRecord(entry) ?? {};
+            const sub = readOptionalRecord(entry) ?? {};
             return [sub.path ?? null, sub.commit ?? null, sub.dirty ?? null, sub.outOfSync ?? null, sub.error ?? null];
         })
         : [];
@@ -157,7 +153,7 @@ export function computeMeshNodeGitSignature(git: Record<string, unknown> | null 
     // worktree itself does not. Without it here, a restarted member never
     // re-pushed git and the coordinator kept the previous process's "build is
     // behind HEAD" verdict (seen live after the rc.65 fleet restart).
-    const buildBehind = readRecord(record.daemonBuildBehind);
+    const buildBehind = readOptionalRecord(record.daemonBuildBehind);
     const buildKey = buildBehind ? [buildBehind.buildCommit ?? null, buildBehind.head ?? null] : null;
     return JSON.stringify([head, submodules, buildKey]);
 }
@@ -578,7 +574,7 @@ export function createDbMeshNodeGitStatePersistence(getDb: () => DatabaseHandle)
             ).all(meshId) as Array<Record<string, unknown>>;
             return rows.map((row) => {
                 let git: Record<string, unknown> | null = null;
-                try { git = readRecord(JSON.parse(String(row.git_json ?? 'null'))); } catch { git = null; }
+                try { git = readOptionalRecord(JSON.parse(String(row.git_json ?? 'null'))) ?? null; } catch { git = null; }
                 const source = row.source === 'member_push' || row.source === 'coordinator_probe' ? row.source : null;
                 let runtime: MeshNodeRuntimeSummary | null = null;
                 try { runtime = sanitizeMeshNodeRuntimeSummary(JSON.parse(String(row.runtime_json ?? 'null'))); } catch { runtime = null; }

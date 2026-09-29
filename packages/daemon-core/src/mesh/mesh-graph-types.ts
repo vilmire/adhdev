@@ -43,7 +43,7 @@ export type MeshGraphEnqueueSurface = typeof MESH_GRAPH_ENQUEUE_SURFACES[number]
 
 /** design :127 — gates are graph control nodes, never ordinary queue tasks. */
 export const MESH_GRAPH_NODE_KINDS = ['worker_task', 'coordinator_gate'] as const;
-export type MeshGraphNodeKind = typeof MESH_GRAPH_NODE_KINDS[number];
+type MeshGraphNodeKind = typeof MESH_GRAPH_NODE_KINDS[number];
 
 /** design :129. */
 export const MESH_GRAPH_NODE_STATES = [
@@ -146,10 +146,10 @@ export type MeshGraphOutboxStatus = typeof MESH_GRAPH_OUTBOX_STATUSES[number];
 // ── Graph IDs ────────────────────────────────────────────────────────────────
 
 /** design :107 — stable UUID for one accepted graph. Plain strings, branded by name only. */
-export type MeshGraphId = string;
-export type MeshGraphNodeId = string;
-export type MeshGraphGateId = string;
-export type MeshGraphOutboxId = string;
+type MeshGraphId = string;
+type MeshGraphNodeId = string;
+type MeshGraphGateId = string;
+type MeshGraphOutboxId = string;
 
 export function newMeshGraphId(): MeshGraphId {
     return randomUUID();

@@ -42,9 +42,10 @@ import {
 } from './native-history-paths.js';
 import { executeSqlite } from './native-history-sqlite.js';
 import {
-    compileRecordShapes, compileUsageShapes, projectUsageRecord, jsonPathGet, projectMessages,
+    compileRecordShapes, compileUsageShapes, projectUsageRecord, projectMessages,
     parseTimestamp,
 } from './native-history-projection.js';
+import { jsonPathGet } from './native-history-jsonpath.js';
 
 export function executeNativeHistory(cfg: NativeHistoryConfig, input: NativeHistoryInput): NativeHistoryResult | null {
     if (!cfg?.source) return null;

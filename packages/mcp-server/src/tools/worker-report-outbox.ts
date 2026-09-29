@@ -75,7 +75,7 @@ const RETRYABLE_REFUSALS: Record<WorkerDeliveryKind, ReadonlySet<string>> = {
 /** A handler-level catch-all (`{ success:false, error: e.message }`) that names a transient condition. */
 const TRANSIENT_ERROR_TEXT = /SQLITE_BUSY|database is locked|timed out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE/i;
 
-export interface WorkerOutboxEntry {
+interface WorkerOutboxEntry {
   v: 1;
   /** The delivery id the daemon dedupes on — stable across every retry of this entry. */
   id: string;
@@ -194,7 +194,7 @@ export type WorkerSubmitOutcome =
 
 type SendAttempt = { kind: 'answered'; result: any } | { kind: 'retryable'; error: string };
 
-export interface WorkerReportDeliveryOptions {
+interface WorkerReportDeliveryOptions {
   transport: CommandTransport;
   credentials: { bind?: string; token?: string };
   /** Outbox directory; `null` = memory-only. Default: {@link resolveWorkerOutboxDir}. */

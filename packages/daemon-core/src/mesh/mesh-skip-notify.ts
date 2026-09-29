@@ -3,8 +3,7 @@ import { LOG } from '../logging/logger.js';
 import { getQueueEntryById } from './mesh-work-queue.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
-import { meshNodeIdMatches } from '@adhdev/mesh-shared';
-import { readNonEmptyString } from './mesh-events-utils.js';
+import { meshNodeIdMatches, readText } from '@adhdev/mesh-shared';
 import { notifyMeshCoordinator, retractDispatchBlockedNotices } from './turn-ledger/deliver.js';
 import { isWorktreeBootstrapStaleRunning } from './worktree-bootstrap-config.js';
 import { isWithinCloneBootstrapGraceDurable } from './mesh-clone-grace.js';
@@ -113,7 +112,7 @@ export function isActionableSkipReason(reason?: string): boolean {
  * genuinely dead node keeps its permanent, actionable 'target_node_id_unmatched'.
  */
 export function isTargetNodeTransientlyUnresolved(mesh: any, task: MeshWorkQueueEntry): boolean {
-    const targetNodeId = readNonEmptyString(task.targetNodeId);
+    const targetNodeId = readText(task.targetNodeId);
     if (!targetNodeId) return false;
     const node = Array.isArray(mesh?.nodes)
         ? mesh.nodes.find((n: any) => meshNodeIdMatches(n, targetNodeId))
@@ -201,7 +200,7 @@ export function targetPinAgeMs(task: MeshWorkQueueEntry, nowMs: number = Date.no
  * TTL across its idle stretches, so a pin whose addressee never actually claims
  * remains bounded.
  */
-export interface TargetPinTtlVerdict {
+interface TargetPinTtlVerdict {
     /** The pin has waited past the TTL in unproductive time → park it. */
     expired: boolean;
     /** Unproductive age used for the decision, in ms (null when unmeasurable). */
@@ -219,7 +218,6 @@ export interface TargetPinTtlVerdict {
  * parking is recoverable, an immortal pin is not.
  */
 const targetPinGeneratingCreditMs = new Map<string, { creditMs: number; lastSeenMs: number }>();
-
 
 export function resolveTargetPinTtlVerdict(
     components: DaemonComponents,
@@ -251,7 +249,7 @@ export function resolveTargetPinTtlVerdict(
     // Only an addressee with no positive evidence of work expires here.
     const clockUnreconcilable = wallAgeMs < -FOREIGN_TIMESTAMP_FUTURE_SKEW_TOLERANCE_MS;
 
-    const targetSessionId = readNonEmptyString(task.targetSessionId);
+    const targetSessionId = readText(task.targetSessionId);
     const key = `${task.meshId}::${task.id}`;
     const prior = targetPinGeneratingCreditMs.get(key);
 
@@ -337,8 +335,8 @@ interface DeadTargetVerdict {
  */
 export function resolveDeadTargetVerdict(components: DaemonComponents, meshId: string, mesh: any, task: MeshWorkQueueEntry): DeadTargetVerdict {
     const NOT_DEAD: DeadTargetVerdict = { dead: false, nodeDead: false, reason: '' };
-    const targetSessionId = readNonEmptyString(task.targetSessionId);
-    const targetNodeId = readNonEmptyString(task.targetNodeId);
+    const targetSessionId = readText(task.targetSessionId);
+    const targetNodeId = readText(task.targetNodeId);
     if (!targetSessionId && !targetNodeId) return NOT_DEAD;
 
     // Age gate: never reclaim a pin younger than the grace window (guards against a target
@@ -608,7 +606,7 @@ export function notifyCoordinatorOfActionableSkip(meshId: string, taskId: string
     // auto-clears, not a permanent routing miss — never page the coordinator for it (the
     // reason classifier upstream already routes the common case to the transient reason; this
     // is the single-funnel backstop for any path that still labels it as the permanent reason).
-    if (reason === 'target_node_id_unmatched' && isWithinCloneBootstrapGraceDurable(meshId, readNonEmptyString(nodeId))) return;
+    if (reason === 'target_node_id_unmatched' && isWithinCloneBootstrapGraceDurable(meshId, readText(nodeId))) return;
     const dedupKey = `${meshId}:${taskId}`;
     if (lastActionableSkipNotified.get(dedupKey) === reason) return;
     lastActionableSkipNotified.set(dedupKey, reason!);
@@ -651,9 +649,9 @@ export function notifyCoordinatorOfActionableSkip(meshId: string, taskId: string
     }
     // The queue is owned by this coordinator daemon, so scope the event to this daemon's id;
     // the originating coordinator SESSION (if known) further narrows delivery on this daemon.
-    const targetCoordinatorDaemonId = readNonEmptyString(getMachineId());
-    const targetCoordinatorSessionId = readNonEmptyString(task?.sourceCoordinatorSessionId);
-    const nodeLabel = readNonEmptyString(nodeId) || readNonEmptyString(task?.targetNodeId);
+    const targetCoordinatorDaemonId = readText(getMachineId());
+    const targetCoordinatorSessionId = readText(task?.sourceCoordinatorSessionId);
+    const nodeLabel = readText(nodeId) || readText(task?.targetNodeId);
     // DISPATCH-ACK-EVIDENCE: resolve what the delivery records actually witness for this task
     // so the pin-expiry guidance can distinguish "certainly not received" from "unknown".
     // Only read for the reason that branches on it — every other reason is unaffected.

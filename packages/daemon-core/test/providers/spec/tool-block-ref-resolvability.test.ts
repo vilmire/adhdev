@@ -29,11 +29,6 @@ import {
     TOOL_RESULT_SUMMARY_MAX,
 } from '../../../src/providers/spec/native-history-tool-blocks.js';
 
-const deps = {
-    jsonPathGet: (record: any, expr: string): unknown => record?.[expr.replace(/^\$\./, '')],
-    stringifyContent: (v: unknown): string => (typeof v === 'string' ? v : JSON.stringify(v ?? '')),
-};
-
 /** `tools: {}` — exactly what claude-cli's specs/4.0.json ships. */
 const TOOLS_DEFAULTS: any = {};
 
@@ -43,7 +38,7 @@ const callBlock = { type: 'tool_use', name: 'Bash', input: longCall };
 const resultBlock = { type: 'tool_result', content: longResult };
 
 const project = (block: any, ref?: any) =>
-    projectToolBlock(block, 'assistant', TOOLS_DEFAULTS, deps, ref) as any;
+    projectToolBlock(block, TOOLS_DEFAULTS, ref) as any;
 
 describe('(TOOL-EXPAND) spec parser stamps only resolvable refs', () => {
     it('stamps the ref when the source mtime seal is usable', () => {

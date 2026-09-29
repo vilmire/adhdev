@@ -30,16 +30,14 @@ export const TURN_STATES = [
 ] as const;
 export type TurnState = typeof TURN_STATES[number];
 
-export const NONTERMINAL_TURN_STATES = ['accepted', 'delivered', 'consumed', 'generating', 'suspended', 'finalizing'] as const;
-export type NonterminalTurnState = typeof NONTERMINAL_TURN_STATES[number];
 export const TERMINAL_TURN_STATES = ['completed', 'failed', 'cancelled'] as const satisfies readonly TurnOutcome[];
-export type TerminalTurnState = typeof TERMINAL_TURN_STATES[number];
+type TerminalTurnState = typeof TERMINAL_TURN_STATES[number];
 
 export function isTerminalTurnState(state: TurnState): state is TerminalTurnState {
     return (TERMINAL_TURN_STATES as readonly string[]).includes(state);
 }
 
-export interface TurnTerminal {
+interface TurnTerminal {
     outcome: TurnOutcome;
     reason: TurnReason;
     source: EvidenceSourceId;

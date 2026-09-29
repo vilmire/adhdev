@@ -9,9 +9,9 @@
  */
 import { daemonIdsEquivalent, meshNodeIdMatches, canonicalDaemonId } from '@adhdev/daemon-core';
 import type { LocalMeshNodeEntry } from '@adhdev/daemon-core';
-import { readString } from './mesh-tool-shared.js';
 import type { MeshContext } from './mesh-tools.js';
 import { meshNodeRouteOf } from './mesh-node-routes.js';
+import { readString } from '@adhdev/mesh-shared';
 
 export function resolveCoordinatorNode(ctx: MeshContext): LocalMeshNodeEntry | undefined {
     // Accept both spellings: mesh.coordinator is written by more than one path

@@ -1,4 +1,4 @@
-import type { ProviderControlDef } from './contracts.js'
+import type { ProviderControlDef } from './provider-control-contracts.js';
 import { extractProviderControlValues } from './control-effects.js'
 import { resolveProviderStateSummaryMetadata } from './summary-metadata.js'
 

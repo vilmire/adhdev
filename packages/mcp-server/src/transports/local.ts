@@ -25,7 +25,7 @@ const DEFAULT_PORT = DEFAULT_STANDALONE_PORT;
 // command-sized deadline.
 const STATUS_TIMEOUT_MS = 10_000;
 
-export interface LocalTransportOptions {
+interface LocalTransportOptions {
   port?: number;
   password?: string;
 }

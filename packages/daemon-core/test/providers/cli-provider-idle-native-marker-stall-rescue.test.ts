@@ -75,8 +75,6 @@ describe('IDLE-NATIVE-MARKER-STALL-RESCUE: an idle turn the provider recorded as
       currentTurnTaskId: 'task-1',
       currentTurnStartedAt: 3_000,
       // The idle signature: the adapter has already closed the turn.
-      isWaitingForResponse: false,
-      currentTurnScope: undefined,
       getScriptParsedStatus() { return { messages: [] } },
       getPartialResponse() { return '' },
     }

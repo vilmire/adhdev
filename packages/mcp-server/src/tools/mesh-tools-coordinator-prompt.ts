@@ -18,7 +18,8 @@
 // override parameter, stop — this is a deliberate safety boundary, not an oversight.
 
 import type { MeshContext } from './mesh-tools-internal.js';
-import { readString, unwrapCommandPayload } from './mesh-tools-internal.js';
+import { unwrapCommandPayload } from './mesh-session-helpers.js';
+import { readString } from '@adhdev/mesh-shared';
 
 const DEFAULT_CLI_TYPE_KEY = 'default';
 

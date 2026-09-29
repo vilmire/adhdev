@@ -9,12 +9,8 @@
  * reload); this half never touches the filesystem layout.
  */
 import { registerIDEDefinition } from '../detection/ide-detector.js';
-import type {
-    ProviderModule,
-    ProviderCategory,
-    ProviderSettingDef,
-    ProviderSettingSchema,
-} from './contracts.js';
+import type { ProviderModule, ProviderCategory } from './contracts.js';
+import type { ProviderSettingDef, ProviderSettingSchema } from './provider-control-contracts.js';
 import {
   parseArgsSetting,
   getPlatformVersionCommand,

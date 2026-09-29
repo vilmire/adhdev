@@ -16,9 +16,9 @@
  *
  * These bodies are chat content the OWNER TYPED. `CLAUDE.md`'s server content
  * boundary is explicit that the status path carries no user chat content, and
- * the two standing exceptions (approval-modal text for push actionability,
- * Beacon's topic-name keys) are both narrow and both were decided deliberately.
- * Persisting drafts server-side would open a third, far wider hole — the full
+ * the one standing exception (approval-modal text for push actionability) is
+ * narrow and was decided deliberately. Persisting drafts server-side would
+ * open a second, far wider hole — the full
  * body of arbitrary user prompts — for a purely local presentation concern.
  * localStorage keeps the text on the machine that typed it and travels through
  * no transport at all, so this change cannot touch that boundary.

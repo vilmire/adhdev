@@ -1,4 +1,5 @@
-import type { ProviderControlDef, ProviderControlType, ProviderModule } from './contracts.js'
+import type { ProviderModule } from './contracts.js';
+import type { ProviderControlDef, ProviderControlType } from './provider-control-contracts.js';
 import { deriveAutoApproveModeRisk } from './auto-approve-modes.js'
 import { providerHasOpenPanelSupport } from './open-panel-support.js'
 

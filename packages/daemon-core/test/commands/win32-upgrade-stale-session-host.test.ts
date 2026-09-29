@@ -10,9 +10,7 @@ const cp = vi.hoisted(() => ({
 }))
 vi.mock('child_process', () => cp)
 
-import {
-  stopSessionHostProcesses,
-} from '../../src/commands/upgrade-helper'
+import { stopSessionHostProcesses } from '../../src/commands/upgrade-process-stop.js';
 import {
   inspectOwnedNodeProcesses,
   stopOwnedProcessesForPrefixes,

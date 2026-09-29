@@ -49,7 +49,7 @@
 import * as fs from 'fs';
 import { hostname } from 'os';
 import { join as pathJoin, resolve as pathResolve, sep as pathSep } from 'path';
-import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, meshNodeIdMatches, readText } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import { getMachineId } from '../config/config.js';
 import { removeNode as removeNodeFromMeshConfig } from '../config/mesh-config.js';
@@ -61,7 +61,6 @@ import { getQueue, getActiveDirectDispatches, type DirectDispatchRecord, type Me
 import { buildMeshAsyncRefineJobs } from './mesh-refine-status.js';
 import { hasBlockedReviewRefineResult } from './mesh-review-inbox.js';
 import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
-import { readNonEmptyString } from './mesh-events-utils.js';
 import {
     resolveWorktreeNodeRetentionGraceMs,
     resolveWorktreeNodeRetentionLeaseMs,
@@ -78,7 +77,7 @@ const LOG_CATEGORY = 'WorktreeRetention';
 // passed every exclusion check; anything else is a skip. Precheck refusal
 // codes (mesh_worktree_cleanup_*) pass through unchanged so the manual
 // mesh_remove_node surface and this plan speak the same vocabulary.
-export type WorktreeRetentionReasonCode =
+type WorktreeRetentionReasonCode =
     | 'candidate'
     | 'retention_disabled'
     | 'not_local_worktree'
@@ -115,7 +114,7 @@ export type WorktreeRetentionReasonCode =
     | 'execution_membership_not_removed';
 
 /** Convergence verdict mirrored from getWorktreeForceCleanupConvergence. */
-export interface WorktreeRetentionConvergence {
+interface WorktreeRetentionConvergence {
     allow: boolean;
     status?: string;
     source?: string;
@@ -155,7 +154,7 @@ export interface WorktreeRetentionPlanEntry {
     };
 }
 
-export interface WorktreeRetentionTickSummary {
+interface WorktreeRetentionTickSummary {
     scanned: number;
     candidates: number;
     skipped: number;
@@ -166,7 +165,7 @@ export interface WorktreeRetentionTickSummary {
     byReason: Record<string, number>;
 }
 
-export interface WorktreeRetentionTickResult {
+interface WorktreeRetentionTickResult {
     meshId: string;
     tickId: string;
     dryRun: boolean;
@@ -569,7 +568,7 @@ async function buildPlan(
     const meshId = String(mesh?.id || mesh?.name || '');
     const graceMs = opts.graceMs ?? resolveWorktreeNodeRetentionGraceMs();
     const exists = opts.existsSync ?? fs.existsSync;
-    const localDaemonId = opts.localDaemonId ?? (() => { try { return readNonEmptyString(getMachineId()) || ''; } catch { return ''; } })();
+    const localDaemonId = opts.localDaemonId ?? (() => { try { return readText(getMachineId()) || ''; } catch { return ''; } })();
     const processCwd = opts.processCwd ?? process.cwd();
 
     let sessions: any[] | undefined = opts.sessions;

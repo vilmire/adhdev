@@ -21,7 +21,7 @@ import { tmpdir } from 'os';
 import { getConfigDir, getDaemonDataDir } from '../../src/config/config.js';
 import { getDaemonLogDir } from '../../src/logging/logger.js';
 import { ProviderChannelStore } from '../../src/providers/channel/store.js';
-import { resolveInstanceDir } from '../../src/commands/upgrade-helper.js';
+import { resolveInstanceDir } from '../../src/commands/upgrade-log.js';
 import { resolveInstanceContext } from '../../src/config/instance-context.js';
 import { DEFAULT_DAEMON_PORT } from '../../src/ipc-protocol.js';
 import {

@@ -2,7 +2,6 @@ import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { isManagedStatusWaiting, isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
-import { daemonIdsEquivalent } from '@adhdev/mesh-shared'
 import { useDaemons } from '../compat'
 import { useDaemonMachineRuntimeSubscription } from '../hooks/useDaemonMachineRuntimeSubscription'
 import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
@@ -14,18 +13,16 @@ import {
 } from '../utils/daemon-utils'
 import { getDashboardActiveTabHref } from '../utils/dashboard-route-paths'
 import ProgressBar from '../components/ProgressBar'
-import { buildBeaconAdvisory } from '../components/BeaconAdvisoryBadge'
 import { Tooltip } from '../components/ui/InfoTip'
 import InstallCommand from '../components/InstallCommand'
 import { IconServer, IconMonitor, IconEyeOff, IconZap, IconShuffle } from '../components/Icons'
 import { ProviderLogo } from '../components/ProviderLogo'
 
 // ─── Machine status dot ─────────────────────────
-export type MachineStatusTone = 'online' | 'attention' | 'connecting' | 'failed' | 'offline'
+export type MachineStatusTone = 'online' | 'connecting' | 'failed' | 'offline'
 
 const MACHINE_STATUS_COLOR: Record<MachineStatusTone, string> = {
     online: '#22c55e',
-    attention: 'var(--status-warning)',
     connecting: 'var(--accent-primary-light)',
     failed: '#ef4444',
     offline: '#64748b',
@@ -291,43 +288,20 @@ export default function MachinesPage() {
                         const isBlocked = isOnline && !!retryStatus?.blocked
                         const isConnecting = isOnline && !isBlocked && (connState === 'new' || connState === 'connecting')
                         const totalAgents = machine.ideSessions.length + machine.cliSessions.length + machine.acpSessions.length
-                        // `beacon` describes the daemon that PRODUCED the rich
-                        // payload. It is not a diagnosis of every machine
-                        // mentioned by that payload and must never be rebound
-                        // transitively.
-                        //
-                        // Cloud status ingestion keys an entry by the transport
-                        // target while retaining the producer's `instanceId`.
-                        // Require those identities to agree before putting the
-                        // producer-local advisory on this card. A missing or
-                        // mismatched identity means "no diagnostics for this
-                        // machine", so the honest rendering is no badge.
-                        const machineBeacon = daemonIdsEquivalent(
-                            machine.daemonIde.id,
-                            machine.daemonIde.instanceId,
-                        )
-                            ? machine.daemonIde.beacon
-                            : undefined
-
                         // One status dot for the card. Connection detail (P2P peers,
-                        // relay) and background sync advisories live in its tooltip
-                        // instead of four separate badges.
-                        const beaconAdvisory = buildBeaconAdvisory(machineBeacon, t)
+                        // relay) lives in its tooltip instead of separate badges.
                         const machineStatus: MachineStatusTone = !isOnline
                             ? 'offline'
                             : isBlocked
                                 ? 'failed'
                                 : isConnecting
                                     ? 'connecting'
-                                    : beaconAdvisory
-                                        ? 'attention'
-                                        : 'online'
+                                    : 'online'
                         const machineStatusTooltip = [
                             t(`machine.card.status.${machineStatus}`),
                             connState === 'connected' && transport && transport !== 'unknown'
                                 ? (transport === 'relay' ? t('machine.card.transportRelay') : t('machine.card.transportDirect'))
                                 : null,
-                            beaconAdvisory?.tooltip || null,
                         ].filter(Boolean).join('\n')
 
                         return (

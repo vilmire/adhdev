@@ -17,17 +17,8 @@ vi.mock('../../src/config/config.js', () => ({
     getMachineNickname: () => (({ machineId: 'test-machine' }) as any).machineNickname ?? null,
 }));
 
-import {
-    createMesh,
-    addNode,
-    removeNode,
-    getMagiKindPanel,
-    listMagiKindPanels,
-    listMagiKindPanelsReadOnly,
-    setMagiKindPanel,
-    removeMagiKindPanel,
-    resolveScopedMeshId,
-} from '../../src/config/mesh-config.js';
+import { createMesh, addNode, removeNode } from '../../src/config/mesh-config.js';
+import { getMagiKindPanel, listMagiKindPanels, listMagiKindPanelsReadOnly, setMagiKindPanel, removeMagiKindPanel, resolveScopedMeshId } from '../../src/config/mesh-config-routing.js';
 import { meshCrudHandlers } from '../../src/commands/med-family/mesh-crud.js';
 
 /** The med-family handlers under test take a ctx they never read for these three. */

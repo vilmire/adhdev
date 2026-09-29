@@ -184,8 +184,6 @@ export function CliTraceView({ trace, provider }: { trace: CliTraceController; p
                           status: trace.debug.status,
                           ready: trace.debug.ready,
                           messageCount: trace.debug.messageCount,
-                          currentTurnScope: trace.debug.currentTurnScope,
-                          responseBuffer: trace.debug.responseBuffer,
                           recentOutputBuffer: trace.debug.recentOutputBuffer,
                           screenText: trace.debug.screenText,
                         }, null, 2)}

@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshLaunchSession, meshListNodes } from '../src/tools/mesh-tools.js';
-import { getNodeLaunchReadiness, readProviderPriority } from '../src/tools/mesh-tools-internal.js';
+import { getNodeLaunchReadiness, readProviderPriority } from '../src/tools/mesh-tools-internal-core.js';
 import { buildMeshNodeCapabilityTags } from '@adhdev/daemon-core';
 
 // CURSOR-CLI-GENERATING-STUCK-SELFHOST precondition — mesh_launch_session must honor

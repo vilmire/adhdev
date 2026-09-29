@@ -1,15 +1,15 @@
 // Mesh tool implementations — refine domain.
-// Pure move out of mesh-tools.ts (no behavior change). Shared helpers, types, module
-// state and dependency re-exports live in ./mesh-tools-internal.ts; mesh-tools.ts is a barrel.
+// Pure move out of mesh-tools.ts (no behavior change). Helpers are imported from the
+// modules that define them; mesh-tools.ts is the tool barrel.
 
 import {
     commandForNode,
     findNodeWithRefresh,
     refreshMeshFromDaemon,
-    resolveCoordinatorDaemonId,
     resolveRefineConfigNode,
-    unwrapCommandPayload,
 } from './mesh-tools-internal.js';
+import { resolveCoordinatorDaemonId } from './mesh-node-identity.js';
+import { unwrapCommandPayload } from './mesh-session-helpers.js';
 import type {
     MeshContext,
 } from './mesh-tools-internal.js';

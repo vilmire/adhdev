@@ -31,12 +31,17 @@ const mocks = vi.hoisted(() => ({
   updateConfig: vi.fn(),
 }))
 
-vi.mock('../../src/commands/upgrade-helper.js', () => ({
+vi.mock('../../src/commands/upgrade-install-surface.js', () => ({
   execNpmCommandSync: mocks.execNpmCommandSync,
   resolveNpmPublishedVersion: (packageName: string, tagOrVersion: string, surface?: Record<string, unknown>) =>
     String(mocks.execNpmCommandSync(['view', `${packageName}@${tagOrVersion}`, 'version'], { encoding: 'utf-8', timeout: 10_000 }, surface)).trim(),
   resolveCurrentGlobalInstallSurface: mocks.resolveCurrentGlobalInstallSurface,
+}))
+vi.mock('../../src/commands/upgrade-helper.js', () => ({
   spawnDetachedDaemonUpgradeHelper: mocks.spawnDetachedDaemonUpgradeHelper,
+}))
+vi.mock('../../src/commands/upgrade-log.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/commands/upgrade-log.js')>()),
   getUpgradeLogPath: mocks.getUpgradeLogPath,
 }))
 

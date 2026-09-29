@@ -12,7 +12,7 @@ import { getQueue, updateTaskStatus, __writeTaskStatusForTests, readLocalRecords
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 import { validateMeshToolArgs } from '../src/tools/validate-tool-args.js';
-import { MESH_GRAPH_NODE_PATCH_TOOL } from '../src/tools/mesh-tool-schemas.js';
+import { MESH_GRAPH_NODE_PATCH_TOOL } from '../src/tools/mesh-tool-schemas-queue.js';
 import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 // GRAPH-ORCHESTRATION — M-GRAPH-INPUTS-LATE-REJECT, part (b): the RECOVERY path.
 //

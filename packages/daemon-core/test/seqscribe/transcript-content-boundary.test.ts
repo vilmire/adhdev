@@ -14,8 +14,7 @@ import {
  * storage §4.3, §8.1 item 11). `session.<id>.chat` IS a content-class topic
  * (unlike the status path `cloud-status-content-boundary.test.ts` guards):
  * bubble bodies legitimately carry chat text, because this topic never reaches
- * the server (CLAUDE.md's Beacon exception covers only the topic NAME, never a
- * payload) — subscribers are daemon replicas and browser/mesh peers holding the
+ * the server — subscribers are daemon replicas and browser/mesh peers holding the
  * same P2P-level trust as the live `read_chat` result.
  *
  * What this test guards is narrower and different in kind: `encodeChatMessage

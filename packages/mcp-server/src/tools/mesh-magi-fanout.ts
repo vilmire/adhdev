@@ -2,6 +2,7 @@
 // live mesh nodes into (node, provider) replica targets, excluding unavailable,
 // unhealthy and git-stale slots, and cap the total. Split out of mesh-tools-magi.ts.
 
+import { type MeshContext } from './mesh-tools-internal.js';
 import {
     type MagiSlot,
     type LocalMeshNodeEntry,
@@ -11,9 +12,8 @@ import {
     buildMeshNodeCapabilityTags,
     isMeshNodeHealthLaunchable,
     resolveEffectiveMeshNodeHealth,
-    type MeshContext,
-    resolveCoordinatorNode,
-} from './mesh-tools-internal.js';
+} from '@adhdev/daemon-core';
+import { resolveCoordinatorNode } from './mesh-node-identity.js';
 
 // ─── Guards / constants ─────────────────────────
 

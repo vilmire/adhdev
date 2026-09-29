@@ -12,9 +12,15 @@ const quota = vi.hoisted(() => ({ calls: [] as string[] }))
 vi.mock('../../src/quota/refresh.js', () => ({
   quotaProviderEnabledFromLoader: () => () => true,
   hydrateQuotaCacheFromDisk: () => { quota.calls.push('hydrate') },
+}))
+vi.mock('../../src/quota/refresh-triggers.js', async (importOriginal) => ({
+  ...(await importOriginal<any>()),
   refreshQuotaCacheOnBoot: () => { quota.calls.push('refresh') },
-  setupQuotaRefreshLoop: () => ({ stop() {} }),
   setupQuotaEventRefresh: () => ({ stop() {} }),
+}))
+vi.mock('../../src/quota/refresh-loop.js', async (importOriginal) => ({
+  ...(await importOriginal<any>()),
+  setupQuotaRefreshLoop: () => ({ stop() {} }),
 }))
 
 import { bootDaemonRuntime, type DaemonBootStages } from '../../src/boot/daemon-runtime.js'

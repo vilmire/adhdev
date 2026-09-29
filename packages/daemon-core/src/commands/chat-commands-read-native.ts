@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import type { ChatMessage } from '../types.js';
 import { flattenContent, type ProviderModule, type ProviderScripts } from '../providers/contracts.js';
-import { readProviderChatHistory } from '../config/chat-history.js';
+import { readProviderChatHistory } from '../config/provider-native-history.js';
 import type { CommandHelpers } from './handler.js';
 import { getTargetedCliAdapter } from './chat-commands-shared.js';
 

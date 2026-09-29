@@ -11,6 +11,7 @@
 
 import type { NativeHistoryMessage, NativeHistoryToolBlockRef } from './native-history-types.js';
 import type { NativeHistoryToolMap } from './types.js';
+import { jsonPathGet, stringifyContent } from './native-history-jsonpath.js';
 
 export const DEFAULT_TOOL_CALL_TYPES = ['tool_use', 'function_call', 'custom_tool_call'];
 export const DEFAULT_TOOL_RESULT_TYPES = ['tool_result', 'function_call_output', 'custom_tool_call_output'];
@@ -57,22 +58,15 @@ function isResolvableToolBlockRef(ref: NativeHistoryToolBlockRef | undefined): r
  * is the agent's action, and a tool result is part of the agent's work, not a
  * user turn (claude/codex persist results under the user / no role, which would
  * otherwise misattribute them). Calls render as `↗ {name}: {one-line args}`,
- * results as `↘ {one-line result}`. The `role` param is accepted for symmetry
- * but tool bubbles are always assistant.
+ * results as `↘ {one-line result}` — always on the assistant side, whatever
+ * role the enclosing record carries.
  */
 export function projectToolBlock(
     block: any,
-    role: 'user' | 'assistant' | 'system',
     tmap: NativeHistoryToolMap,
-    deps: {
-        jsonPathGet: (record: any, expr: string) => unknown;
-        stringifyContent: (v: unknown) => string;
-    },
     ref?: NativeHistoryToolBlockRef,
 ): NativeHistoryMessage | null {
-    void role;
     if (block == null || typeof block !== 'object') return null;
-    const { jsonPathGet, stringifyContent } = deps;
     const typeVal = String(jsonPathGet(block, tmap.block_type || '$.type') ?? '');
     if (!typeVal) return null;
     const callTypes = tmap.call_types ?? DEFAULT_TOOL_CALL_TYPES;

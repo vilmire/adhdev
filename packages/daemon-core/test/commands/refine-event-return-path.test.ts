@@ -50,7 +50,8 @@ vi.mock('../../src/config/mesh-config.js', () => ({
     listMeshes: vi.fn(() => [] as any[]),
 }));
 
-import { queueRefineJobEvent, queueRefineBatchJobEvent } from '../../src/commands/router-refine.js';
+import { queueRefineJobEvent } from '../../src/commands/router-refine-jobs.js';
+import { queueRefineBatchJobEvent } from '../../src/commands/router-refine-batch-jobs.js';
 import { handleMeshForwardEvent, buildRelayMetadataEvent } from '../../src/mesh/mesh-event-forwarding.js';
 import {
     getPendingMeshCoordinatorEvents,

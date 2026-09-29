@@ -80,8 +80,7 @@ function makeInstance(): Harness {
       status: 'idle',
       messages: [{ role: 'assistant', content: 'Done — standalone turn finished.' }],
     }),
-    getScreenText: () => '',
-    get isWaitingForResponse() { return adapterWaiting },
+    isProcessing: () => adapterWaiting,
     chatMessagesOwnedExternally: true,
     // Set by onTurnStarted on a real dispatch; PERSISTS past completion — the
     // field the rescue misread as "turn started, generating never armed".

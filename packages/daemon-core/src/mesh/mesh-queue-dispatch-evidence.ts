@@ -17,7 +17,7 @@ import type { TurnLedger } from './turn-ledger/ledger.js';
 import type { TurnAttempt } from './turn-ledger/types.js';
 
 /** The slice of a queue row this module reads. */
-export interface QueueDispatchTask {
+interface QueueDispatchTask {
     id: string;
     dispatchNonce?: number;
     sourceCoordinatorSessionId?: string;

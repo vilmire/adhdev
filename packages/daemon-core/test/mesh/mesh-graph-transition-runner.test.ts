@@ -56,14 +56,10 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 }));
 
 import * as graphRunner from '../../src/mesh/mesh-graph-transition-runner.js';
-import {
-    commitTaskTerminalAndAdvanceGraph,
-    drainMeshGraphOutbox,
-    graphMaterializationBlockReason,
-    patchPendingGraphNodeBaseSpec,
-    registerMeshGraphQueueWakeHandler,
-    __resetMeshGraphTransitionRunnerForTests,
-} from '../../src/mesh/mesh-graph-transition-runner.js';
+import { commitTaskTerminalAndAdvanceGraph } from '../../src/mesh/mesh-graph-transition-runner.js';
+import { graphMaterializationBlockReason } from '../../src/mesh/mesh-graph-block-reasons.js';
+import { patchPendingGraphNodeBaseSpec } from '../../src/mesh/mesh-graph-node-patch.js';
+import { drainMeshGraphOutbox, registerMeshGraphQueueWakeHandler, __resetMeshGraphTransitionRunnerForTests } from '../../src/mesh/mesh-graph-outbox.js';
 import { MESH_UPSTREAM_DATA_PREAMBLE } from '../../src/mesh/mesh-graph-input-binding.js';
 import { TurnStore } from '../../src/mesh/turn-ledger/store.js';
 import { seedMeshAttempt, advanceSeededAttempt } from '../helpers/turn-attempt-seed.js';

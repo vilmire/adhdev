@@ -16,7 +16,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { MESH_SEND_TASK_TOOL } from '../src/tools/mesh-tool-schemas.js';
+import { MESH_SEND_TASK_TOOL } from '../src/tools/mesh-tool-schemas-session.js';
 import { resolveDeliveryDecision, normalizeDeliveryMode, DEFAULT_DELIVERY_MODE } from '@adhdev/daemon-core';
 
 // ─── (1) The schema declares the option ──────────────────────────────────────

@@ -32,7 +32,7 @@ const IN_PROGRESS_SAGA_STATES = new Set(['declared', 'preparing', 'compensating'
 const DONE_NODE_STATES = new Set(['completed', 'failed', 'cancelled', 'skipped', 'released', 'expired']);
 const OPEN_GATE_STATES = new Set(['awaiting_coordinator', 'claimed']);
 
-export interface MeshGraphStallSweepResult {
+interface MeshGraphStallSweepResult {
     checkedGraphs: number;
     stalledGraphs: number;
     /** Queue-level depends_on chains stuck behind a failed/cancelled task (no graph rows). */

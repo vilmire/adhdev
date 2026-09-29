@@ -76,7 +76,7 @@ export interface ReapableSessionRecord {
 }
 
 /** Why a candidate was kept. Surfaced in the dry-run plan and the debug log. */
-export type IdleSessionReapSkipReason =
+type IdleSessionReapSkipReason =
     | 'not_live_runtime'
     | 'coordinator_session'
     | 'not_coordinator_launched'
@@ -85,7 +85,7 @@ export type IdleSessionReapSkipReason =
     | 'within_ttl'
     | 'holds_active_task';
 
-export interface IdleSessionReapPlan {
+interface IdleSessionReapPlan {
     /** Sessions whose CLI runtime should be stopped (record preserved). */
     reap: Array<{ sessionId: string; idleMs: number }>;
     /** Every non-reaped candidate with the reason it was kept. */
@@ -244,7 +244,7 @@ export interface IdleSessionReaperDeps {
     }): Promise<{ success: boolean; [key: string]: unknown }>;
 }
 
-export interface IdleSessionReapOutcome {
+interface IdleSessionReapOutcome {
     plan: IdleSessionReapPlan;
     stoppedSessionIds: string[];
     /** Cumulative count of runtimes this daemon has stopped, for observability. */

@@ -68,7 +68,8 @@ import {
     parseOnDependencyFailurePolicy,
     serializeGraphPolicy,
 } from './mesh-graph-derived-failure.js';
-import { graphMaterializationBlockReason, maybeOpenCoordinatorGate } from './mesh-graph-transition-runner.js';
+import { maybeOpenCoordinatorGate } from './mesh-graph-transition-runner.js';
+import { graphMaterializationBlockReason } from './mesh-graph-block-reasons.js';
 import { declareWorkspaceIntents, type GraphWorkspaceDeclaration } from './mesh-graph-workspace-saga.js';
 import { enqueueTaskGraph, type MeshQueueMutationOptions, type MeshTaskGraphEntrySpec, type MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { requireMeshHostQueueOwner } from './mesh-host-ownership.js';

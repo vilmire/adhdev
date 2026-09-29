@@ -48,9 +48,10 @@ import {
 import type { NativeHistoryToolBlockRef } from '../spec/native-history-types.js';
 import type { ToolBlockExpandResult } from '../spec/tool-block-expand.js';
 import { statMtimeMs } from './fs-utils.js';
-import { readClaudeRecords, readClaudeToolBlockAt } from './claude-cli-transcript.js';
-import { readCodexRecords, readCodexToolBlockAt } from './codex-cli-transcript.js';
-import { readGrokRecords, readGrokToolBlockAt } from './grok-cli-transcript.js';
+import { readClaudeToolBlockAt } from './claude-cli-transcript.js';
+import { readCodexToolBlockAt } from './codex-cli-transcript.js';
+import { readGrokToolBlockAt } from './grok-cli-transcript.js';
+import { readJsonlRecords } from './transcript-common.js';
 import { readAntigravityToolBlockAt } from './antigravity-conversation-db.js';
 
 /** One addressed block, already read at full length. */
@@ -139,10 +140,12 @@ export function expandBuiltinReaderToolBlock(
 
 function readRecords(reader: string, sourcePath: string): Record<string, unknown>[] {
     switch (reader) {
-        case 'claude-cli': return readClaudeRecords(sourcePath);
-        case 'codex-cli':  return readCodexRecords(sourcePath);
-        case 'grok-cli':   return readGrokRecords(sourcePath);
-        default:           return [];
+        case 'claude-cli':
+        case 'codex-cli':
+        case 'grok-cli':
+            return readJsonlRecords(sourcePath);
+        default:
+            return [];
     }
 }
 

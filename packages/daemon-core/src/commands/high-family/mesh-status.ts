@@ -38,7 +38,7 @@ function peekCoordinatorNotices(meshId: string): readonly PendingCoordinatorNoti
 
 /**
  * C7-5 freshness gate: another writer's `mesh.<id>.events` entries have not
- * replicated here yet (Beacon `staleness().behind` — a per-writer map, so any
+ * replicated here yet (seqscribe `staleness().behind` from direct peers — a per-writer map, so any
  * writer behind > 0). Computed on EVERY call and attached on the cached, stale
  * and live paths alike, so a cached snapshot never carries stale replication
  * state. Fleet-wide reads (node lifecycle, sibling activity) are advisory

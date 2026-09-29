@@ -46,7 +46,7 @@ import {
     releaseMeshGraphGate,
 } from '../../mesh/mesh-graph-gates.js';
 import { collectGateConvergenceEvidence } from '../../mesh/mesh-graph-gate-evidence.js';
-import { patchGraphNodeAndRetry, MESH_NODE_PATCH_KEYS } from '../../mesh/mesh-graph-transition-runner.js';
+import { patchGraphNodeAndRetry, MESH_NODE_PATCH_KEYS } from '../../mesh/mesh-graph-node-patch.js';
 import { buildMeshGraphViews } from '../../mesh/mesh-graph-view.js';
 import {
     recordGraphGateAbandoned,

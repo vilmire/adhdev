@@ -8,13 +8,7 @@ import { LOG } from '../logging/logger.js';
 import { type MeshWorkQueueEntry, applyDispatchFailureBackoff, requeueTask } from './mesh-work-queue.js';
 import type { MeshTaskRoutingDecision } from './mesh-routing-decision.js';
 import type { DaemonComponents } from '../boot/daemon-components.js';
-import {
-    type TurnAttemptRef,
-    type TurnEvidence,
-    sessionIdsEquivalent,
-    meshNodeIdMatches,
-    sanitizeRefusalCode,
-} from '@adhdev/mesh-shared';
+import { type TurnAttemptRef, type TurnEvidence, sessionIdsEquivalent, meshNodeIdMatches, sanitizeRefusalCode, readText } from '@adhdev/mesh-shared';
 import type { TurnLedger } from './turn-ledger/ledger.js';
 import { localCoordinatorDaemonId } from './mesh-queue-mesh-view.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -27,7 +21,6 @@ import { unwrapMeshRelayResult } from '../commands/mesh-relay-result.js';
 import { dispatchMessageId } from './mesh-queue-dispatch-evidence.js';
 import { classifyDuplicateMeshDispatch } from './mesh-duplicate-dispatch.js';
 import { endTaskDispatchInFlight } from './mesh-task-inflight.js';
-import { readNonEmptyString } from './mesh-events-utils.js';
 import { notifyCoordinatorOfPinnedDispatchFailure } from './mesh-dispatch-failed-notify.js';
 
 // ---------------------------------------------------------------------------
@@ -137,7 +130,6 @@ function dispatchEvidenceBase(ctx: Pick<DeliverTaskContext, 'sessionId' | 'task'
         observedBy: localCoordinatorDaemonId() || 'local',
     } as Omit<TurnEvidence, 'kind' | 'eventId'>;
 }
-
 
 // Readiness barrier for the LOCAL auto-launch path. A just-spawned CLI session is
 // not interactive until its PTY prints the input prompt (the adapter flips
@@ -523,7 +515,7 @@ function handleDispatchFailure(rawFailure: any, ctx: DeliverTaskContext, deliver
             } else {
                 try { applyDispatchFailureBackoff(ctx.meshId, ctx.task.id); } catch { /* backoff is advisory */ }
                 const requeued = MeshRuntimeStore.getInstance().findQueueEntryById(ctx.meshId, ctx.task.id);
-                if (requeued?.status === 'pending' && readNonEmptyString(requeued.targetSessionId)) {
+                if (requeued?.status === 'pending' && readText(requeued.targetSessionId)) {
                     notifyCoordinatorOfPinnedDispatchFailure(ctx.components, {
                         meshId: ctx.meshId,
                         taskId: ctx.task.id,
@@ -548,7 +540,7 @@ function handleDispatchFailure(rawFailure: any, ctx: DeliverTaskContext, deliver
             });
             if (requeued?.status === 'failed') {
                 LOG.error('MeshQueue', `Task ${ctx.task.id} (mesh ${ctx.meshId}) failed after repeated dispatch failures to node ${ctx.nodeId} — the worker never started it: ${requeued.cancelReason || 'dispatch_never_started'}. Dependents were unblocked.`);
-            } else if (requeued?.status === 'pending' && readNonEmptyString(requeued.targetSessionId)) {
+            } else if (requeued?.status === 'pending' && readText(requeued.targetSessionId)) {
                 // COORD-NOTIFY-STUCK: the row is back to 'pending' STILL PINNED — page the
                 // coordinator now rather than let it re-target the same dead session.
                 notifyCoordinatorOfPinnedDispatchFailure(ctx.components, {

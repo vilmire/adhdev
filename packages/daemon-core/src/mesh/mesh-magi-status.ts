@@ -12,6 +12,7 @@
 
 import type { MeshLedgerEntry } from './mesh-ledger.js';
 import type { MagiGitSkew } from '@adhdev/mesh-shared';
+import { readString, readOptionalRecord, readNumber } from '@adhdev/mesh-shared';
 
 export type MeshMagiActivityStatus = 'running' | 'synthesized';
 
@@ -42,20 +43,6 @@ export interface MeshMagiActivitySummary {
     lastUpdatedAt?: string;
 }
 
-function readString(value: unknown): string | undefined {
-    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-    return value && typeof value === 'object' && !Array.isArray(value)
-        ? value as Record<string, unknown>
-        : undefined;
-}
-
-function readNumber(value: unknown): number | undefined {
-    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
 /** Cap on inlined needs_verification preview items per group (keeps the payload bounded). */
 export const MAGI_NEEDS_VERIFICATION_PREVIEW_CAP = 8;
 
@@ -64,7 +51,7 @@ function summarizeNeedsVerification(synthesis: Record<string, unknown> | undefin
     if (!list) return undefined;
     const items: MeshMagiNeedsVerificationItem[] = [];
     for (const raw of list.slice(0, MAGI_NEEDS_VERIFICATION_PREVIEW_CAP)) {
-        const r = readRecord(raw);
+        const r = readOptionalRecord(raw);
         const claim = readString(r?.claim);
         if (!claim) continue;
         items.push({ claim, category: readString(r?.category) || 'needs_verification' });
@@ -102,13 +89,13 @@ export function buildMeshMagiActivity(args: {
     const groups = new Map<string, MeshMagiActivitySummary>();
 
     for (const entry of args.ledgerEntries || []) {
-        const payload = readRecord(entry.payload);
+        const payload = readOptionalRecord(entry.payload);
         if (payload?.source !== 'magi') continue;
         const consensusGroupId = readString(payload.consensusGroupId);
         if (!consensusGroupId) continue;
 
         if (entry.kind === 'magi_synthesis') {
-            const synthesis = readRecord(payload.synthesis);
+            const synthesis = readOptionalRecord(payload.synthesis);
             mergeGroup(groups, {
                 consensusGroupId,
                 status: 'synthesized',
@@ -122,7 +109,7 @@ export function buildMeshMagiActivity(args: {
                 needsVerificationCount: Array.isArray(synthesis?.needsVerification) ? synthesis!.needsVerification.length : undefined,
                 agreedCount: Array.isArray(synthesis?.agreed) ? synthesis!.agreed.length : undefined,
                 independenceBanner: synthesis && 'independenceBanner' in synthesis ? (synthesis.independenceBanner as string | null) : undefined,
-                gitSkew: readRecord(synthesis?.gitSkew) as unknown as MagiGitSkew | undefined,
+                gitSkew: readOptionalRecord(synthesis?.gitSkew) as unknown as MagiGitSkew | undefined,
                 needsVerification: summarizeNeedsVerification(synthesis),
                 openQuestions: Array.isArray(synthesis?.openQuestions) ? (synthesis!.openQuestions as string[]).slice(0, 10) : undefined,
                 lastLedgerKind: entry.kind,

@@ -11,16 +11,16 @@
  */
 
 // ─── Internal module ───────────────────────────
-// Shared helpers, types, module-level state, and dependency re-exports for the mesh tool
-// domain files (mesh-tools-{status,queue,mission,session,git,refine}.ts). Split out of
-// mesh-tools.ts as a pure move — no behavior change. mesh-tools.ts is now a re-export barrel.
+// The ctx-bound orchestration shared by the mesh tool domain files
+// (mesh-tools-{status,queue,mission,session,git,refine}.ts): MeshContext, the daemon
+// refresh / membership / pending-event plumbing and remote dispatch glue. It is NOT a
+// re-export hub — every consumer imports a helper from the module that defines it.
 
 import { IpcTransport } from '../transports/ipc.js';
 import type { CommandTransport } from '../transports/mode.js';
-import { withStatusProbeMarker, type ActiveWorkQueryResponse } from '@adhdev/mesh-shared';
+import { withStatusProbeMarker, type ActiveWorkQueryResponse, readString } from '@adhdev/mesh-shared';
 import type { LocalMeshEntry, LocalMeshNodeEntry, MeshActiveWorkSummary, MeshToolCallRateResult } from '@adhdev/daemon-core';
 import { daemonIdsEquivalent, meshNodeIdMatches, isP2pRelayTransportFailure } from '@adhdev/daemon-core';
-import { readString } from './mesh-tool-shared.js';
 import { unwrapCommandPayload } from './mesh-session-helpers.js';
 import { ledgerQuery, missionQuery, queueQuery, toolCallRecord } from '../ipc/turn-commands.js';
 import { activeWorkQueryWithRuntime, slimNodesForActiveWork } from './mesh-daemon-reads.js';
@@ -32,246 +32,10 @@ import { readNodeMachineId, readNodeDaemonId, isLocalControlPlaneNode } from './
 import type { MeshNodeRoutesCache } from './mesh-node-routes.js';
 import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
 
-// Re-exported so the public `./tools/mesh-tools.js` path still exposes it.
-export { resolveCoordinatorDaemonId } from './mesh-node-identity.js';
-
-
-// ─── Tool Definitions ───────────────────────────
-
-// Tool schema definitions live in ./mesh-tool-schemas.ts. Re-exported here so the
-// public `./tools/mesh-tools.js` import path (server.ts, help.ts) is unchanged.
-export {
-    MESH_STATUS_TOOL,
-    MESH_ROUTE_PREVIEW_TOOL,
-    MESH_LIST_NODES_TOOL,
-    MESH_ENQUEUE_TASK_TOOL,
-    MESH_VIEW_QUEUE_TOOL,
-    // GRAPH-ORCHESTRATION Phase E.
-    MESH_GRAPH_VIEW_TOOL,
-    MESH_GRAPH_GATE_TOOL,
-    MESH_GRAPH_NODE_PATCH_TOOL,
-    MESH_QUEUE_CANCEL_TOOL,
-    MESH_QUEUE_REQUEUE_TOOL,
-    MESH_SEND_TASK_TOOL,
-    MESH_READ_CHAT_TOOL,
-    MESH_READ_DEBUG_TOOL,
-    MESH_LAUNCH_SESSION_TOOL,
-    MESH_GIT_STATUS_TOOL,
-    MESH_READ_NODE_LOGS_TOOL,
-    MESH_FAST_FORWARD_NODE_TOOL,
-    MESH_RESTART_DAEMON_TOOL,
-    MESH_CHECKPOINT_TOOL,
-    MESH_MISSION_UPSERT_TOOL,
-    MESH_MISSION_LIST_TOOL,
-    MESH_APPROVE_TOOL,
-    MESH_ANSWER_QUESTION_TOOL,
-    MESH_LIST_PENDING_APPROVALS_TOOL,
-    MESH_CREATE_TOOL,
-    MESH_ADD_NODE_TOOL,
-    MESH_CLONE_NODE_TOOL,
-    MESH_REMOVE_NODE_TOOL,
-    MESH_CLEANUP_SESSIONS_TOOL,
-    MESH_CLEANUP_WORKTREE_NODES_TOOL,
-    MESH_TASK_HISTORY_TOOL,
-    MESH_NOTE_TOOL,
-    MESH_RECONCILE_LEDGER_TOOL,
-    MESH_REFINE_NODE_TOOL,
-    MESH_REFINE_BATCH_TOOL,
-    MESH_CONFIG_TOOL,
-    MESH_INIT_TOOL,
-    MESH_MAGI_KIND_PANEL_TOOL,
-    MESH_NODE_SLOTS_TOOL,
-    MESH_COORDINATOR_PROMPT_APPEND_TOOL,
-    MESH_REFINE_PLAN_TOOL,
-    MESH_REVIEW_INBOX_TOOL,
-    MESH_NOTIFY_WORKER_TOOL,
-    ALL_MESH_TOOLS,
-} from './mesh-tool-schemas.js';
-
-// Re-export imported dependencies so the domain tool files import everything from this module.
-export {
-    IpcTransport,
-} from '../transports/ipc.js';
-export type {
-    CommandTransport,
-} from '../transports/mode.js';
-export {
-    compactChatPayload,
-    isCoordinatorVisibleMessage,
-    messageContent,
-} from './chat-compact.js';
-export {
-    annotateQuotaSnapshotFreshness,
-    compactMagiActivityGroup,
-    compactMeshStatusNode,
-    compactNodeSeverity,
-    isNoteworthyCompactNode,
-    minimalCompactNode,
-    pinnedRepresentativeNodeIds,
-    summarizeNodeSessions,
-} from './mesh-compact.js';
-export {
-    buildNodeMachineIdentity,
-    isLocalControlPlaneNode,
-    readNodeDaemonId,
-    readNodeMachineId,
-    resolveCoordinatorNode,
-    resolvePreferredWorktreeNodeId,
-} from './mesh-node-identity.js';
-export {
-    ACTIVE_QUEUE_STATUSES,
-    COMPACT_MAX_ACTIVE_QUEUE_ROWS,
-    COMPACT_MAX_ACTIVE_WORK_ROWS,
-    HISTORICAL_QUEUE_STATUSES,
-    annotateQueueStaleness,
-    buildCompactQueueMaintenanceReport,
-    buildQueueMaintenanceReport,
-    buildQueueStatusSummary,
-    compactActiveWorkRecords,
-    compactQueueRow,
-    compactQueueRows,
-    filterQueueForView,
-    normalizeQueueViewMode,
-    prioritizeActiveQueueRows,
-    sanitizeQueueStatusFilter,
-} from './mesh-queue-helpers.js';
-export type {
-    QueueViewMode,
-} from './mesh-queue-helpers.js';
-export {
-    collectNodeSessionIds,
-    extractStatusMetadataSessions,
-    isIdleSessionRecord,
-    isMeshCoordinatorSessionRecord,
-    isTerminalSessionRecord,
-    isUnmanagedSessionRecord,
-    isWorkerTaskMode,
-    readSessionRecordId,
-    resolveSessionProviderType,
-    unwrapCommandPayload,
-} from './mesh-session-helpers.js';
-export {
-    LARGE_LEDGER_FIELD_KEYS,
-    elideLargeNestedValue,
-    readNumeric,
-    readString,
-    readTaskInput,
-    summarizeLargeLedgerField,
-} from './mesh-tool-shared.js';
-export type { MeshTaskInput } from './mesh-tool-shared.js';
-export {
-    annotateRapidReadChatAdvisory,
-} from './read-chat-polling-advisory.js';
-export {
-    MESH_MISSION_STATUSES,
-    buildCompactStaleDirectWorkSummary,
-    buildMeshActiveWork,
-    collectPendingApprovals,
-    buildMeshAsyncRefineJobs,
-    buildMeshMagiActivity,
-    summarizeMeshMagiActivity,
-    getMeshMagiActivityByGroup,
-    MAGI_RAW_ANSWER_CAP,
-    buildMeshNodeCapabilityTags,
-    buildMeshNodeProbeFreshness,
-    buildMeshSchedulingRuntime,
-    getLastQuotaRanking,
-    buildP2pRelayFailurePayload,
-    classifyP2pRelayFailure,
-    daemonIdsEquivalent,
-    describeTaskDependencyState,
-    parseOnDependencyFailurePolicy,
-    MeshGraphPolicyError,
-    // GRAPH-ORCHESTRATION Phase E — pure request-shape classifier only; the graph
-    // gate/plan/patch/view CORES moved to the daemon in C-W9c.
-    MESH_NODE_PATCH_KEYS,
-    requestUsesGraphV2,
-    normalizeOrchestrationDecision,
-    MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
-    // GRAPH-MEASUREMENT-DIRECT — consumed by mesh-tools-session.ts (meshSendTask).
-    MESH_UNSANCTIONED_DIRECT_HINT,
-    MESH_VALID_DIRECT_REASONS,
-    taskDependenciesSatisfied,
-    getActiveMeshMissionSummaries,
-    summarizeMeshUsage,
-    getMagiKindPanel,
-    listMagiKindPanels,
-    setMagiKindPanel,
-    removeMagiKindPanel,
-    normalizeMagiSlots,
-    collectIgnoredMagiSlotFields,
-    getMeshStatusMissionSummaries,
-    getMeshStatusMissionsCompact,
-    isP2pRelayTransportFailure,
-    isWeakCompletionEvidence,
-    listMeshMissionSummaries,
-    listMeshMissionsForTool,
-    meshNodeIdMatches,
-    nodeSatisfiesRequiredTags,
-    normalizeMeshCapabilityTags,
-    providerPinsFromRequiredTags,
-    filterProvidersByRequiredTags,
-    isMeshNodeHealthLaunchable,
-    resolveEffectiveMeshNodeHealth,
-    normalizeMeshTaskPriority,
-    resolveNotBefore,
-    meshTaskPriorityRank,
-    resolveDelegatedWorkerAutoApprove,
-    resolveDelegatedWorkerDangerousModeAllow,
-    loadRepoMeshJsonConfig,
-    resolveAllowSendKeysDestructive,
-    resolveMeshSurfacedSessionPreview,
-    summarizeMeshAsyncRefineJobs,
-    validateMeshTaskModeRequest,
-    buildMeshTaskModeViolationError,
-    // CANCEL-ORPHANS-PINNED-TASK: buildOrphanedPinNotice is a pure formatter, still
-    // consumed by mesh-tools-queue.ts (meshQueueCancel); the notify CORE (queue read +
-    // event write) moved to the daemon in C-W9c (`orphaned_pin_notify` IPC command).
-    buildOrphanedPinNotice,
-} from '@adhdev/daemon-core';
-export type { OrphanedPinnedTask } from '@adhdev/daemon-core';
-export type {
-    LocalMeshEntry,
-    LocalMeshNodeEntry,
-    MeshTaskGraphEntrySpec,
-    // GRAPH-ORCHESTRATION Phase E — batch v2 plan shapes.
-    MeshGraphGatePlanSpec,
-    MeshGraphTaskPlanSpec,
-    MeshGraphPlanResult,
-    MeshGraphView,
-    MagiAgentResponse,
-    MagiClaim,
-    MagiClaimCluster,
-    MagiClusterMember,
-    MagiGitSkew,
-    MagiMode,
-    MagiTaskKind,
-    MagiReplicaGitRef,
-    MagiResponseSource,
-    MagiSlot,
-    MagiKindPanelMap,
-    MagiSynthesis,
-    MagiSynthesizedResponse,
-    MeshActiveWorkSummary,
-    MeshPendingApproval,
-    MeshSchedulingRuntime,
-    MeshNodeSchedulingRuntime,
-    RepoMeshPolicy,
-    RepoMeshRelatedRepo,
-} from '@adhdev/daemon-core';
-export {
-    randomUUID,
-} from 'node:crypto';
-
-// The pure helper layer of this hub — payload/evidence extraction, git-status
-// readers, node policy/capability/readiness readers, delegate-session
-// relay-safety classification, launch/read_chat failure classification, and
-// branch convergence — was physically moved to ./mesh-tools-internal-core.ts
-// (pure move — this file is a frozen file-size baseline entry; same split as
-// mesh-tools-magi.ts → mesh-tools-magi-core.ts). Every public symbol is
-// re-exported here so the domain tool files, tests, and the mesh-tools.ts
-// barrel keep importing from this hub; the ctx-bound orchestration below
-// imports what it consumes.
+// The pure helper layer — payload/evidence extraction, git-status readers, node
+// policy/capability/readiness readers, delegate-session relay-safety classification,
+// launch/read_chat failure classification, and branch convergence — lives in
+// ./mesh-tools-internal-core.ts; the orchestration below imports what it consumes.
 import {
     buildMeshForwardPayloadFromPendingEvent,
     extractGitStatus,
@@ -281,63 +45,6 @@ import {
     summarizeRelatedRepoStatus,
 } from './mesh-tools-internal-core.js';
 import { rememberMeshSessionProviderMetadataFromEvent } from './mesh-session-metadata.js';
-export { buildMissingNodeReadChatRecovery, buildMeshReadChatCacheFallback } from './mesh-read-chat-fallback.js';
-export { SESSION_PROVIDER_METADATA_TTL_MS, meshSessionProviderMetadata, getSessionMetadata, meshSessionCacheKey, resolveMeshSessionProviderMetadata } from './mesh-session-metadata.js';
-export type { MeshSessionProviderMetadata, TimestampedSessionMetadata } from './mesh-session-metadata.js';
-export { recordRecoverableLaunchFailure, latestActiveLaunchFailureFromEntries } from './mesh-launch-failure.js';
-export { buildMissingCoordinatorDaemonIdFailure, buildCoordinatorP2pRelayFailure, checkDirectDispatchQuotaGate, buildQuotaExhaustedDispatchFailure, ipcDispatchToRemoteAgent } from './mesh-remote-dispatch.js';
-export type { RemoteAgentDispatchResult } from './mesh-remote-dispatch.js';
-export {
-    COMPACT_MAX_CONVERGENCE_FOLLOWUPS,
-    assignFullGitSnapshot,
-    buildBranchConvergence,
-    buildDirectTaskPayload,
-    buildMeshForwardPayloadFromPendingEvent,
-    buildNodeCapabilityExposure,
-    buildQueueTriggerGuidance,
-    buildWorktreeCleanupHint,
-    chooseDispatchableSession,
-    classifyMeshLaunchFailure,
-    classifyReadChatTransportCause,
-    classifyRemoteDelegateRelaySafety,
-    compactRoutingDecision,
-    countUncommittedChanges,
-    extractCloneNodePayload,
-    extractDaemonBuildInfo,
-    extractGitDiff,
-    extractGitStatus,
-    extractLaunchPayload,
-    extractReporterNodeFactsQuota,
-    extractSubmodules,
-    extractUpgradeFailureSummary,
-    findNestedPayload,
-    findNode,
-    findNodeByWorkspace,
-    findNodeSession,
-    getNodeLaunchReadiness,
-    getWorktreeBootstrapLaunchBlock,
-    hasRemoteRelayMetadata,
-    isDirectDispatchLedgerEntry,
-    isGitStatusDirty,
-    isMeshOwnedDelegateSession,
-    isRelaySafeRemoteDelegateSession,
-    missingProviderPriorityMessage,
-    normalizePendingMeshCoordinatorEvents,
-    readFinalAssistantTranscriptEvidence,
-    readMessageTimestampIso,
-    readNodeSupportedProviders,
-    readProviderPriority,
-    readRelatedRepos,
-    readSpawnedSessionVisibility,
-    slimLedgerPayload,
-    summarizeBranchConvergence,
-    summarizeRelatedRepoStatus,
-    summarizeTaskMessage,
-} from './mesh-tools-internal-core.js';
-export type {
-    MeshLaunchFailureClassification,
-    MeshUpgradeFailureSummary,
-} from './mesh-tools-internal-core.js';
 
 export interface MeshContext {
     mesh: LocalMeshEntry;
@@ -360,7 +67,7 @@ export interface MeshContext {
     /**
      * `'pending'` when the most recent inbox read (drainCoordinatorPendingEvents)
      * reported that another writer's `mesh.<id>.events` entries have not replicated
-     * to this daemon yet (Beacon staleness) — i.e. the inbox may be incomplete.
+     * to this daemon yet (seqscribe staleness from direct peers) — i.e. the inbox may be incomplete.
      * Surfaced by mesh_status as `replication: 'pending'`.
      */
     lastNoticeReplication?: 'pending';
@@ -419,7 +126,7 @@ export async function recordMeshCoordinatorToolCall(ctx: MeshContext, tool: stri
 
 const ACTIVE_WORK_POLLING_BACKOFF_MS = 60_000;
 
-export interface MeshPollingGuidance {
+interface MeshPollingGuidance {
     activeGeneratingWork: true;
     generatingCount: number;
     doNotPollBefore: string;
@@ -440,9 +147,7 @@ export function buildActiveWorkPollingGuidance(summary: MeshActiveWorkSummary, n
     };
 }
 
-
 // ─── Helpers ────────────────────────────────────
-
 
 export const DUPLICATE_DISPATCH_WINDOW_MS = 60_000;
 
@@ -758,20 +463,6 @@ export async function buildMissionInactiveWarning(
     };
 }
 
-
-// (queue helpers moved to ./mesh-queue-helpers.ts)
-
-// (moved to ./mesh-session-helpers.ts — session/payload record helpers)
-
-
-// §8 unit 8: direct-dispatch transcript reconciliation moved to its own module
-// (`check:file-sizes` decomposition — this file is a frozen baseline). Re-exported
-// here so `mesh-tools-status` / `-session` / `-queue` keep importing from this barrel.
-export {
-    buildDirectDispatchReconciliationCandidates,
-    reconcileDirectDispatchesFromTranscriptEvidence,
-} from './mesh-direct-dispatch-reconcile.js';
-
 export async function triggerMeshQueueAndReport(
     ctx: MeshContext,
 ): Promise<Record<string, unknown> | undefined> {
@@ -795,7 +486,6 @@ export async function triggerMeshQueueAndReport(
         };
     }
 }
-
 
 // (compact git-snapshot helpers moved to ./mesh-compact.ts)
 
@@ -860,7 +550,6 @@ export const COMPACT_DETAILED_NODES_BYTE_BUDGET = 11000;
 // budget with real margin, not by re-estimating from the node array alone.
 export const COMPACT_NODES_TOTAL_BYTE_BUDGET = 14500;
 
-
 // Byte budget for the whole compact `missions` array (live active/paused missions).
 // Completed/abandoned history is already folded to a counts+id summary upstream;
 // this bounds the LIVE-mission detail so the section can't grow unbounded with the
@@ -871,7 +560,6 @@ export const COMPACT_NODES_TOTAL_BYTE_BUDGET = 14500;
 // reasoning: this and the node budgets share one output-token cap, and the prior
 // value left no margin once every other fixed section is added in.
 export const COMPACT_MISSIONS_BYTE_BUDGET = 4000;
-
 
 export async function collectRelatedRepoStatuses(
     ctx: MeshContext,
@@ -918,9 +606,8 @@ export async function collectRelatedRepoStatuses(
     return results;
 }
 
-
 /** The coordinator daemon's routing decision for a direct dispatch (`mesh_dispatch_route`). */
-export type MeshDispatchRoute =
+type MeshDispatchRoute =
     | { route: 'local' | 'remote' | 'unreachable'; ownerDaemonId?: string; reason: string }
     | { route: 'error'; reason: string };
 
@@ -1002,7 +689,6 @@ export function resolveSemanticReplicaTransport(
     if (isLocalControlPlaneNode(ctx, node)) return null;
     return ctx.transport;
 }
-
 
 /**
  * The MCP coordinator's inbox read (wiring-unification C2 / C-W3).

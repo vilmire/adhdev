@@ -14,6 +14,11 @@ export function readRecord(value: unknown): JsonRecord {
     return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {}
 }
 
+/** A plain-object record, or undefined — for callers that must tell "absent" from "empty". */
+export function readOptionalRecord(value: unknown): JsonRecord | undefined {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : undefined
+}
+
 export function readString(...values: unknown[]): string | undefined {
     for (const value of values) {
         if (typeof value !== 'string') continue
@@ -21,6 +26,11 @@ export function readString(...values: unknown[]): string | undefined {
         if (trimmed) return trimmed
     }
     return undefined
+}
+
+/** The first non-blank trimmed string, or '' — readString for callers that want a plain string. */
+export function readText(...values: unknown[]): string {
+    return readString(...values) ?? ''
 }
 
 export function readNumber(...values: unknown[]): number | undefined {

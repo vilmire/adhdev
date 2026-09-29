@@ -17,22 +17,9 @@ vi.mock('../../src/config/config.js', () => ({
     getMachineNickname: () => (({ machineId: 'test-machine' }) as any).machineNickname ?? null,
 }));
 
-import {
-    evaluateProviderQuotaGate,
-    isQuotaSnapshotFresh,
-    quotaSnapshotAgeMs,
-    quotaSpreadBonusByProvider,
-    rankProvidersByQuotaGate,
-    quotaRiskSnapshotForCandidates,
-    buildQuotaRankingRationale,
-    describeRecoveryRelaunchDecision,
-    resolveRecoveryRelaunchProvider,
-    liveLocalProviderEnablementForRouting,
-    ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON,
-    PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON,
-    PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON,
-    PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON,
-} from '../../src/mesh/mesh-quota-routing.js';
+import { evaluateProviderQuotaGate, rankProvidersByQuotaGate, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON, PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON } from '../../src/mesh/mesh-quota-routing.js';
+import { quotaSpreadBonusByProvider, quotaRiskSnapshotForCandidates, buildQuotaRankingRationale, describeRecoveryRelaunchDecision, resolveRecoveryRelaunchProvider } from '../../src/mesh/mesh-quota-ranking-records.js';
+import { isQuotaSnapshotFresh, quotaSnapshotAgeMs, liveLocalProviderEnablementForRouting } from '../../src/mesh/mesh-quota-sources.js';
 import { LOG } from '../../src/logging/logger.js';
 import {
     DEFAULT_QUOTA_ROUTING_POLICY,

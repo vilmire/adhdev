@@ -13,6 +13,7 @@ import { TranscriptSignalSource } from './transcript-signal-source.js';
 import { resolveBusyLeaseGate } from './busy-lease-gate.js';
 import type { SignalSnapshot } from './spec/signal-envelope.js';
 import { MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS } from './cli-provider-instance-types.js';
+import { adapterTurnStartedAt } from './adapter-turn-clock.js';
 import type { CliProviderInstance } from './cli-provider-instance.js';
 
 /** The CliProviderInstance members these functions read or call (compiler-checked; no cast). */
@@ -55,8 +56,8 @@ export function publishTranscriptSignalObservation(host: TranscriptSignalHost, m
                 // resolver, never from raw predicates or provider names.
                 profile: resolveTranscriptAuthorityProfile(host.provider),
                 turnStartedAt: () => {
-                    const t = (host.adapter as any)?.currentTurnStartedAt;
-                    if (typeof t === 'number' && Number.isFinite(t)) return t;
+                    const t = adapterTurnStartedAt(host.adapter);
+                    if (t > 0) return t;
                     // Mesh fallback: for an emitsPtyTurnEvents=false worker
                     // (idle→idle collapse) currentTurnStartedAt may never
                     // bind; scope to the task injection instead — the SAME
@@ -141,7 +142,7 @@ export function nativeTurnTerminalMarker(host: TranscriptSignalHost, turnStarted
         // presence is itself the capability check — no provider-name branching needed.
         const markers = host.lastNativeTurnTerminalMarkers;
         if (!markers || markers.length === 0) return null;
-        return selectTurnTerminalMarker(markers, typeof turnStartedAt === 'number' ? { turnStartedAt } : {});
+        return selectTurnTerminalMarker(markers, turnStartedAt);
     } catch { return null; }
 }
 

@@ -169,7 +169,7 @@ export interface TurnProbeRead {
 
 // ─── the pure mapping: read → evidence ────────────────────────────────────
 
-export interface ProbeEvidenceContext {
+interface ProbeEvidenceContext {
     nowMs: number;
     observedBy: string;
     policy: TurnPolicy;
@@ -310,7 +310,7 @@ export interface TurnProbeReader {
  * member is still pushing; null otherwise (no entry, a coordinator-probe
  * snapshot, stale, or an older member that does not push its runtime).
  */
-export interface HeldRemoteSessions {
+interface HeldRemoteSessions {
     sessions: ReadonlyArray<{ id: string; instanceId?: string; sessionId?: string; status?: string }>;
     /** Epoch ms the member observed this list. */
     observedAt: number;
@@ -325,7 +325,7 @@ export interface HeldRemoteSessions {
  */
 export const HELD_ABSENCE_MARGIN_MS = 10_000;
 
-export interface ComponentsProbeReaderOptions {
+interface ComponentsProbeReaderOptions {
     analyzer: TranscriptAnalyzer;
     /**
      * Held remote session presence/status — the ONLY source for a remote

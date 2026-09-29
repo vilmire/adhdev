@@ -13,7 +13,7 @@ import {
 } from '@adhdev/session-host-core';
 import { getProcessCommandLine, parseNodeScriptPath } from '../commands/process-lifecycle.js';
 import { findPortableNode22, resolveConptyPrebuildCandidates } from '../commands/windows-atomic-upgrade.js';
-import { resolveInstanceDir } from '../commands/upgrade-helper.js';
+import { resolveInstanceDir } from '../commands/upgrade-log.js';
 import { getProcessInstanceContext } from '../config/instance-context.js';
 import { LOG } from '../logging/logger.js';
 import { preflightDiskSpace } from '../diagnostics/disk-space-preflight.js';

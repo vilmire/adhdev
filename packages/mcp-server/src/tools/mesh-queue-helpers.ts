@@ -9,8 +9,9 @@
  * there is no runtime import cycle.
  */
 import type { LocalMeshEntry } from '@adhdev/daemon-core';
-import { readString, elideLargeNestedValue } from './mesh-tool-shared.js';
+import { elideLargeNestedValue } from './mesh-tool-shared.js';
 import { collectNodeSessionIds } from './mesh-session-helpers.js';
+import { readString } from '@adhdev/mesh-shared';
 
 const STALE_ASSIGNED_QUEUE_MS = 30 * 60_000;
 const OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 60_000;

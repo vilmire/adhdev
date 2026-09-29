@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { runRefineMergeAndFinalizeLocked } from '../../src/commands/router-refine'
+import { runRefineMergeAndFinalizeLocked } from '../../src/commands/router-refine-merge.js';
 
 /**
  * ★The DS2 base-movement CAS is the ONLY time-of-check guard in front of the

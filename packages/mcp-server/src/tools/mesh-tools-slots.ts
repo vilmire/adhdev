@@ -25,9 +25,9 @@ import {
     commandForNode,
     findNodeWithRefresh,
     syncCoordinatorDaemonMeshCache,
-    unwrapCommandPayload,
     type MeshContext,
 } from './mesh-tools-internal.js';
+import { unwrapCommandPayload } from './mesh-session-helpers.js';
 
 /** Read the node's currently-persisted capability slots (normalized). */
 function readNodeSlots(node: any): ReturnType<typeof normalizeNodeCapabilitySlots> {

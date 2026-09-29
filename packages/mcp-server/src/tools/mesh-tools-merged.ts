@@ -14,7 +14,7 @@
 
 import type { CommandTransport } from '../transports/mode.js';
 import type { MeshContext } from './mesh-tools-internal.js';
-import { readString, recordMeshCoordinatorToolCall } from './mesh-tools-internal.js';
+import { recordMeshCoordinatorToolCall } from './mesh-tools-internal.js';
 import {
     meshGraphGateAbandon,
     meshGraphGateClaim,
@@ -29,6 +29,7 @@ import { meshForgetNote, meshRecordNote } from './mesh-tools-mission.js';
 import { meshChangeImpactConfig, meshInit, meshRefineConfig, meshReinit, meshWriteMeshJsonConfig } from './mesh-tools-refine.js';
 import { meshCreate, meshPlanOnboarding } from './mesh-tools-crud.js';
 import { meshCleanupSessions, meshPruneStaleDirect } from './mesh-tools-session.js';
+import { readString } from '@adhdev/mesh-shared';
 
 type Args = Record<string, any>;
 

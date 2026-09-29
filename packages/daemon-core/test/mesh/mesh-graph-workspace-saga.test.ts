@@ -46,12 +46,10 @@ vi.mock('../../src/config/mesh-config.js', () => ({
     updateNode: meshConfigMocks.updateNode,
 }));
 
-import {
-    commitTaskTerminalAndAdvanceGraph,
-    graphMaterializationBlockReason,
-    rematerializePendingGraphNodesForWorkspace,
-    __resetMeshGraphTransitionRunnerForTests,
-} from '../../src/mesh/mesh-graph-transition-runner.js';
+import { commitTaskTerminalAndAdvanceGraph } from '../../src/mesh/mesh-graph-transition-runner.js';
+import { graphMaterializationBlockReason } from '../../src/mesh/mesh-graph-block-reasons.js';
+import { rematerializePendingGraphNodesForWorkspace } from '../../src/mesh/mesh-graph-node-patch.js';
+import { __resetMeshGraphTransitionRunnerForTests } from '../../src/mesh/mesh-graph-outbox.js';
 import {
     declareWorkspaceIntents,
     runWorkspaceSagaTick,

@@ -6,11 +6,8 @@
 
 import { LOG } from '../../logging/logger.js';
 import { DEFAULT_CDP_DISCOVERY_INTERVAL_MS, DEFAULT_CDP_SCAN_INTERVAL_MS } from '../../runtime-defaults.js';
-import {
-    hydrateQuotaCacheFromDisk,
-    quotaProviderEnabledFromLoader,
-    refreshQuotaCacheOnBoot,
-} from '../../quota/refresh.js';
+import { hydrateQuotaCacheFromDisk, quotaProviderEnabledFromLoader } from '../../quota/refresh.js';
+import { refreshQuotaCacheOnBoot } from '../../quota/refresh-triggers.js';
 import { hydrateModelCache, refreshDueModelDiscovery } from '../../models/registry.js';
 import { isShellWrapperCommand, resolveWrappedCliBinary } from '../../providers/provider-loader-support.js';
 import { scheduleComposerResidueSweep } from '../composer-residue-sweep.js';
@@ -123,8 +120,7 @@ export const analyzeProbeTranscript: TranscriptAnalyzer = (payload, ctx) => {
     const markersPresent = 'turnTerminalMarkers' in payload && Array.isArray(payload.turnTerminalMarkers);
     const nativeRead = markersPresent && providerHasNativeTurnSignal({ type: ctx.providerType });
     const marker = nativeRead
-        ? selectTurnTerminalMarker(payload.turnTerminalMarkers as readonly NativeTurnTerminalMarker[],
-            typeof turnStartedAtMs === 'number' ? { turnStartedAt: turnStartedAtMs } : {})
+        ? selectTurnTerminalMarker(payload.turnTerminalMarkers as readonly NativeTurnTerminalMarker[], turnStartedAtMs)
         : null;
     const finalSummary = evidence.finalSummary || '';
     // Self-attributing = the summary parses as a worker-result JSON object (the

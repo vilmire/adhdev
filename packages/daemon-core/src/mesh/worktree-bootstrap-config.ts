@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import { parseConfigText } from '../config/config-text.js';
 import { resolveWin32Executable, buildWin32ExecFileSpawn } from '../cli-adapters/resolve-executable.js';
-import { pickBestTransitGitStatus } from '@adhdev/mesh-shared';
+import { pickBestTransitGitStatus, readOptionalRecord } from '@adhdev/mesh-shared';
 import {
     isMeshConfigRecord,
     normalizeMeshCommandConfig,
@@ -352,16 +352,12 @@ export function isRemoteWorktreeBootstrapStaleRunning(
     // recordInlineMeshDirectGitTruth (mesh-node-identity.ts) when the P2P probe actually ran.
     // A status-level `lastCheckedAt` may be absent on older transit records and is not the
     // envelope's provenance timestamp, so use the authoritative probe time here.
-    const rawGit = readRecord(node?.lastGit) ?? readRecord((node as any)?.last_git);
+    const rawGit = readOptionalRecord(node?.lastGit) ?? readOptionalRecord((node as any)?.last_git);
     const checkedAt = typeof rawGit?.checkedAt === 'number' ? rawGit.checkedAt : undefined;
     if (checkedAt === undefined || checkedAt <= startedMs) return false;
     const git = pickBestTransitGitStatus(node as Record<string, unknown>, {});
     if (!git) return false;
     return isTransitGitStatusCleanEnough(git as unknown as Record<string, unknown>);
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
 /**

@@ -21,18 +21,9 @@ import {
   workerReportHandlers,
   workerReportSpecs,
 } from '../../src/commands/low-family/worker-report'
-import {
-  __resetReportedSummariesForTest,
-  __setHandoffNoteSinkForTests,
-  __setWorkerLateReportNoticeSinkForTests,
-  acceptWorkerCompletionReport,
-  WORKER_LATE_REPORT_GRACE_MS,
-  WORKER_HANDOFF_EVENT_KIND,
-  WORKER_PROGRESS_EVENT_KIND,
-  WORKER_REPORT_EVENT_KIND,
-  __resetProgressSurfaceForTest,
-  __setWorkerProgressNoticeSinkForTests,
-} from '../../src/mesh/worker-report'
+import { __resetReportedSummariesForTest, __setHandoffNoteSinkForTests, acceptWorkerCompletionReport, WORKER_HANDOFF_EVENT_KIND, WORKER_PROGRESS_EVENT_KIND, WORKER_REPORT_EVENT_KIND } from '../../src/mesh/worker-report';
+import { __resetProgressSurfaceForTest, __setWorkerProgressNoticeSinkForTests } from '../../src/mesh/worker-report-progress.js';
+import { __setWorkerLateReportNoticeSinkForTests, WORKER_LATE_REPORT_GRACE_MS } from '../../src/mesh/worker-report-late.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
 import {
   __resetWorkerSessionBindsForTest,
@@ -578,7 +569,7 @@ describe('F7b — late report against a recently-terminal attempt', () => {
 describe('F7b — late-report notice routing', () => {
   it('is a unicast coordinator alert', async () => {
     const { defaultScopeForEvent } = await import('../../src/mesh/contracts')
-    const { WORKER_LATE_REPORT_EVENT_NAME } = await import('../../src/mesh/worker-report')
+    const { WORKER_LATE_REPORT_EVENT_NAME } = await import('../../src/mesh/worker-report-late')
     expect(defaultScopeForEvent(WORKER_LATE_REPORT_EVENT_NAME)).toBe('unicast')
   })
 })

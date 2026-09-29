@@ -10,7 +10,8 @@ import { loadBetterSqlite3 } from '../../system/load-better-sqlite3.js';
 import type { NativeHistorySqliteSource, NativeHistoryMessageMap } from './types.js';
 import type { NativeHistoryInput, NativeHistoryResult, NativeHistoryMessage } from './native-history-types.js';
 import { expandPath, safeMtimeMs } from './native-history-paths.js';
-import { projectMessages, parseTimestamp, jsonPathGet } from './native-history-projection.js';
+import { projectMessages, parseTimestamp } from './native-history-projection.js';
+import { jsonPathGet } from './native-history-jsonpath.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // SQLite

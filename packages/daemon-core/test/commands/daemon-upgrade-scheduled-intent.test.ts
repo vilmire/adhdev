@@ -34,7 +34,7 @@ const mocks = vi.hoisted(() => ({
   getDaemonBuildInfo: vi.fn(() => ({ sha: 'test' })),
 }))
 
-vi.mock('../../src/commands/upgrade-helper.js', () => ({
+vi.mock('../../src/commands/upgrade-install-surface.js', () => ({
   execNpmCommandSync: mocks.execNpmCommandSync,
   // Mirrors the real helper's argv/options assembly on top of the
   // execNpmCommandSync mock (see daemon-upgrade-runtime-version.test.ts).
@@ -53,8 +53,16 @@ vi.mock('../../src/commands/upgrade-helper.js', () => ({
     surface,
   )).trim(),
   resolveCurrentGlobalInstallSurface: mocks.resolveCurrentGlobalInstallSurface,
+}))
+vi.mock('../../src/commands/upgrade-helper.js', () => ({
   spawnDetachedDaemonUpgradeHelper: mocks.spawnDetachedDaemonUpgradeHelper,
+}))
+vi.mock('../../src/commands/upgrade-log.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/commands/upgrade-log.js')>()),
   getUpgradeLogPath: mocks.getUpgradeLogPath,
+}))
+vi.mock('../../src/commands/upgrade-failure-notice.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/commands/upgrade-failure-notice.js')>()),
   readUpgradeFailureNotice: mocks.readUpgradeFailureNotice,
 }))
 

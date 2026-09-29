@@ -17,7 +17,6 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { CliProviderModule } from '../../cli-adapters/provider-cli-shared.js';
 import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
-import type { CliAdapter } from '../../cli-adapter-types.js';
 import { SpecCliAdapter } from './cli-adapter.js';
 import { LOG } from '../../logging/logger.js';
 import { IDENTITY } from '../../track-identity.js';
@@ -67,7 +66,7 @@ export function createCliAdapter(
      *  overwrite the spec's own base args with a different provider's-eye-view of them. */
     removeArgs?: string[],
     resolvedTrustPlan?: ResolvedTrustPlan | null,
-): CliAdapter {
+): SpecCliAdapter {
     // Prefer the path provider-loader already resolved (it walks the
     // compatibility[i].spec → specs/default.json → spec.json chain).
     // Fall back to the legacy spec.json-in-provider-dir lookup if the

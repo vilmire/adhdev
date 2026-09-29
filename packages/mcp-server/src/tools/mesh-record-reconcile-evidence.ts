@@ -14,15 +14,15 @@
 // ---------------------------------------------------------------------------
 
 /** Minimal slice shape (`get_mesh_ledger_slice` → `adhdev.mesh.ledger.slice.v1`). */
-export interface AnyRecordSlice {
+interface AnyRecordSlice {
     entries: Array<{ id: string; meshId: string; timestamp: string; kind: string; nodeId?: string | null; sessionId?: string | null; providerType?: string | null; payload: unknown }>;
     cursor: { afterId: string | null; nextAfterId: string | null; limit: number; hasMore: boolean };
     summary?: Record<string, unknown>;
 }
 
-export type MeshRecordReplicaStatus = 'local' | 'queried' | 'failed';
+type MeshRecordReplicaStatus = 'local' | 'queried' | 'failed';
 
-export interface MeshRecordReplicaEvidence {
+interface MeshRecordReplicaEvidence {
     nodeId: string;
     daemonId?: string;
     status: MeshRecordReplicaStatus;
@@ -41,7 +41,7 @@ export interface MeshRecordReplicaEvidence {
     noFallbackReason?: string;
 }
 
-export interface MeshRecordReconciliationEvidence {
+interface MeshRecordReconciliationEvidence {
     protocol: 'adhdev.mesh.ledger.reconciliation.v1';
     meshId: string;
     generatedAt: string;

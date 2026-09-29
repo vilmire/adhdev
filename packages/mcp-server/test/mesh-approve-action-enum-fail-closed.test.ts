@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { enumValueError, validateMeshToolArgs } from '../src/tools/validate-tool-args.js';
 import { APPROVE_TOOL } from '../src/tools/approve.js';
-import { MESH_APPROVE_TOOL } from '../src/tools/mesh-tool-schemas.js';
+import { MESH_APPROVE_TOOL } from '../src/tools/mesh-tool-schemas-admin.js';
 
 /**
  * approve / mesh_approve `action` failed OPEN — any value other than exactly

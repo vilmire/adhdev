@@ -81,7 +81,6 @@ import {
     type MeshGraphNodeState,
     type MeshTaskGraphEdgeRow,
     type MeshTaskGraphNodeRow,
-    type MeshTaskGraphRow,
 } from './mesh-graph-types.js';
 import {
     assertDeliveryIntegrity,
@@ -112,14 +111,9 @@ import {
     MESH_GATE_AUTO_ABANDON_REASON,
     MESH_GATE_UPSTREAM_FAILED_REASON,
 } from './mesh-graph-gate-closure.js';
-import {
-    GRAPH_STOP_OUTBOX_KINDS,
-    parseGraphStopOutbox,
-    reasonCodeOf,
-    type MeshGraphStopNodeRef,
-    type MeshGraphStopNotice,
-    type MeshGraphStopRoot,
-} from './mesh-graph-stop-notice.js';
+import { reasonCodeOf, type MeshGraphStopNodeRef, type MeshGraphStopRoot } from './mesh-graph-stop-notice.js';
+import { drainMeshGraphOutbox } from './mesh-graph-outbox.js';
+import { graphMaterializationBlockReason, parseGraphMaterializationBlock, workspaceTerminalBlockReason, coordinatorGateBlockReason, parseCoordinatorGateBlock } from './mesh-graph-block-reasons.js';
 
 // ── Public contract ──────────────────────────────────────────────────────────
 
@@ -155,7 +149,7 @@ export type MeshTerminalCommitSource =
      */
     | 'queue_policy';
 
-export interface MeshTerminalCommitInput {
+interface MeshTerminalCommitInput {
     meshId: string;
     taskId: string;
     status: MeshTerminalCommitStatus;
@@ -168,7 +162,7 @@ export interface MeshTerminalCommitInput {
     envelope?: MeshTerminalCompletionEnvelope;
 }
 
-export interface MeshTerminalCommitResult {
+interface MeshTerminalCommitResult {
     /** The queue row after the transition (null when the task id is unknown). */
     entry: MeshWorkQueueEntry | null;
     /** False when the task is unknown or a worker report fails the causal fence. */
@@ -177,215 +171,6 @@ export interface MeshTerminalCommitResult {
     duplicate: boolean;
     /** Downstream graph nodes materialized by this transition (empty for unlinked tasks). */
     materializedNodeIds: string[];
-}
-
-// ── Graph-owned queue blocks (step 7) ─────────────────────────────────────────
-
-const GRAPH_BLOCK_PREFIX = 'graph_materialization_pending:';
-
-/** The ONLY blockedReason shape the graph engine may set or clear. */
-export function graphMaterializationBlockReason(nodeId: string, materializationVersion: number): string {
-    return `${GRAPH_BLOCK_PREFIX}${nodeId}:${materializationVersion}`;
-}
-
-function parseGraphMaterializationBlock(reason: string | undefined): { nodeId: string; version: number } | null {
-    if (!reason || !reason.startsWith(GRAPH_BLOCK_PREFIX)) return null;
-    const rest = reason.slice(GRAPH_BLOCK_PREFIX.length);
-    const sep = rest.lastIndexOf(':');
-    if (sep <= 0) return null;
-    const version = Number(rest.slice(sep + 1));
-    if (!Number.isInteger(version) || version < 0) return null;
-    return { nodeId: rest.slice(0, sep), version };
-}
-
-// ── Dead-workspace queue blocks (phase D) ────────────────────────────────────
-
-const WORKSPACE_DEAD_PREFIX = 'workspace_terminal:';
-
-/**
- * The blockedReason for a node whose workspace saga reached a terminal state.
- *
- * Deliberately NOT a `graph_materialization_pending:` block: that prefix means
- * "the graph will materialize this later", and the whole defect being fixed
- * here is that a permanently-dead workspace wore exactly that label. The
- * distinct prefix is what lets an operator — and mesh_graph_view — tell "still
- * preparing" from "will never prepare".
- */
-export function workspaceTerminalBlockReason(workspaceRef: string, sagaState: string): string {
-    return `${WORKSPACE_DEAD_PREFIX}${workspaceRef}:${sagaState}`;
-}
-
-// ── Coordinator-gate queue blocks (phase C2) ─────────────────────────────────
-
-const GATE_BLOCK_PREFIX = 'coordinator_gate:';
-
-/**
- * The blockedReason a coordinator gate puts on its downstream queue rows
- * (design :22, :402-405). Graph-owned: only the gate's own fenced release (or
- * the deadline sweep) may clear it — never a timeout and never the scheduler.
- */
-export function coordinatorGateBlockReason(gateId: string): string {
-    return `${GATE_BLOCK_PREFIX}${gateId}`;
-}
-
-export function parseCoordinatorGateBlock(reason: string | undefined): { gateId: string } | null {
-    if (!reason || !reason.startsWith(GATE_BLOCK_PREFIX)) return null;
-    const gateId = reason.slice(GATE_BLOCK_PREFIX.length);
-    return gateId.length > 0 ? { gateId } : null;
-}
-
-// ── Queue wake outbox drain (steps 8-9) ───────────────────────────────────────
-
-/**
- * The post-commit wake rides the ORDINARY queue trigger — the graph engine never
- * dispatches directly (design :92-96). Registered by setupMeshEventForwarding,
- * which owns DaemonComponents; the runner deliberately never imports dispatch code.
- */
-let queueWakeHandler: ((meshId: string) => void) | undefined;
-
-export function registerMeshGraphQueueWakeHandler(handler: (meshId: string) => void): void {
-    queueWakeHandler = handler;
-}
-
-/**
- * Coordinator-facing gate notification, drained from the graph outbox.
- * `graph_gate_awaiting` fires when upstream completion opens a gate;
- * `graph_gate_lease_expired` when a claimed gate's lease lapses without release.
- * Payload fields come straight from the outbox row's JSON payload.
- */
-export interface MeshGraphGateNotification {
-    kind: 'graph_gate_awaiting' | 'graph_gate_lease_expired' | 'graph_gate_deadline_expired';
-    meshId: string;
-    graphId: string;
-    gateId: string;
-    ref?: string;
-    action?: string;
-    instructions?: string;
-    deadlineAt?: string;
-    /** graph_gate_deadline_expired only: the gate's node id. */
-    nodeId?: string;
-    /** graph_gate_deadline_expired only: the on_timeout policy that fired. */
-    policy?: string;
-    /** graph_gate_deadline_expired only: ms the gate had been open when it expired. */
-    ageMs?: number;
-}
-
-// Same seam as the queue-wake handler: an opened/lapsed gate previously wrote a
-// durable outbox row that NOTHING consumed — the coordinator could only learn
-// about it by polling mesh_graph_view, which the Monitor rules forbid. Measured
-// live 2026-08-24: 7 gates sat awaiting_coordinator for 3 days, two of them for
-// work that had already landed on main. setupMeshEventForwarding registers a
-// handler that pages the coordinator through pendingCoordinatorEvents.
-let gateNotifyHandler: ((notification: MeshGraphGateNotification) => void) | undefined;
-
-export function registerMeshGraphGateNotifyHandler(handler: (notification: MeshGraphGateNotification) => void): void {
-    gateNotifyHandler = handler;
-}
-
-// Stopped-downstream notices (graph_dependency_blocked / graph_dependency_cancelled,
-// mesh-graph-stop-notice.ts). Same seam as the gate pages: the outbox row is
-// written in the terminal transaction and paged once on drain.
-let stopNotifyHandler: ((notice: MeshGraphStopNotice) => void) | undefined;
-
-export function registerMeshGraphStopNotifyHandler(handler: (notice: MeshGraphStopNotice) => void): void {
-    stopNotifyHandler = handler;
-}
-
-export function __resetMeshGraphTransitionRunnerForTests(): void {
-    queueWakeHandler = undefined;
-    gateNotifyHandler = undefined;
-    stopNotifyHandler = undefined;
-}
-
-/**
- * Outbox kind → coordinator notice kind. `graph_gate_expired` is written ONLY by
- * the deadline sweep (a lease lapse never writes it), so paging on it is exactly
- * the D3(b) "deadline expired" notice — once per expiry, because a drained row
- * is marked delivered and an expired gate is not re-swept until reclaimed.
- */
-const GATE_NOTIFY_OUTBOX_KINDS = new Map<string, MeshGraphGateNotification['kind']>([
-    ['graph_gate_awaiting', 'graph_gate_awaiting'],
-    ['graph_gate_lease_expired', 'graph_gate_lease_expired'],
-    ['graph_gate_expired', 'graph_gate_deadline_expired'],
-]);
-
-function toGateNotification(kind: string, meshId: string, rawPayload: string | null | undefined): MeshGraphGateNotification | null {
-    const noticeKind = GATE_NOTIFY_OUTBOX_KINDS.get(kind);
-    if (!noticeKind) return null;
-    let payload: Record<string, unknown> = {};
-    try {
-        const parsed = rawPayload ? JSON.parse(rawPayload) : {};
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) payload = parsed as Record<string, unknown>;
-    } catch { /* malformed payload → notify with ids we have */ }
-    const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim().length > 0 ? v : undefined);
-    const gateId = str(payload.gateId);
-    const graphId = str(payload.graphId);
-    if (!gateId || !graphId) return null;
-    const ageMs = typeof payload.ageMs === 'number' && Number.isFinite(payload.ageMs) ? payload.ageMs : undefined;
-    return {
-        kind: noticeKind,
-        meshId,
-        graphId,
-        gateId,
-        ref: str(payload.ref),
-        action: str(payload.action),
-        instructions: str(payload.instructions),
-        deadlineAt: str(payload.deadlineAt),
-        ...(noticeKind === 'graph_gate_deadline_expired' ? {
-            ...(str(payload.nodeId) ? { nodeId: str(payload.nodeId) } : {}),
-            ...(str(payload.policy) ? { policy: str(payload.policy) } : {}),
-            ...(ageMs !== undefined ? { ageMs } : {}),
-        } : {}),
-    };
-}
-
-/**
- * Step 9 — drain pending graph outbox rows AFTER the state-change transaction
- * committed. `queue_wake` events invoke the registered wake handler; gate
- * awaiting/lease-expired events page the coordinator through the registered
- * gate-notify handler (→ pendingCoordinatorEvents). Every other kind is a
- * durable notification record consumed by pull surfaces (mesh_graph_view,
- * ledger) — draining marks it delivered so it is never double-fired.
- * Best-effort per row: a failing wake leaves the row pending with a retry stamp.
- */
-export function drainMeshGraphOutbox(meshId: string): number {
-    const store = MeshRuntimeStore.getInstance();
-    const graphStore = store.graphStore();
-    const pending = graphStore.listPendingOutboxEvents(meshId);
-    let drained = 0;
-    for (const event of pending) {
-        const nowIso = new Date().toISOString();
-        try {
-            if (event.kind === 'queue_wake') {
-                if (queueWakeHandler) queueWakeHandler(event.meshId);
-                // No handler registered (e.g. a daemon without event forwarding): the
-                // reconcile loop's periodic triggerMeshQueue covers the wake — the row
-                // is still marked delivered so it cannot accumulate forever.
-            } else if (GATE_NOTIFY_OUTBOX_KINDS.has(event.kind)) {
-                const notification = toGateNotification(event.kind, event.meshId, event.payload);
-                if (notification && gateNotifyHandler) gateNotifyHandler(notification);
-                // No handler / unparsable payload: mark delivered anyway — the gate
-                // remains visible in mesh_graph_view (nextCoordinatorAction) and the
-                // reconcile deadline sweep still governs its timeout policy.
-            } else if ((GRAPH_STOP_OUTBOX_KINDS as readonly string[]).includes(event.kind)) {
-                const notice = parseGraphStopOutbox(event.kind, event.meshId, event.payload);
-                if (notice && stopNotifyHandler) stopNotifyHandler(notice);
-                // No handler / malformed: delivered anyway — the durable row stays
-                // readable, and the stall sweep still pages a graph that cannot move.
-            }
-            graphStore.markOutboxEventStatus(event.id, 'delivered', nowIso);
-            drained += 1;
-        } catch (e: any) {
-            try {
-                graphStore.markOutboxEventStatus(event.id, 'pending', nowIso, {
-                    incrementAttempt: true,
-                    nextAttemptAtMs: Date.now() + 5_000,
-                });
-            } catch { /* bookkeeping must never throw past the drain */ }
-            LOG.warn('MeshGraph', `Graph outbox drain failed for ${event.kind} ${event.id} (mesh ${meshId}): ${e?.message || e}`);
-        }
-    }
-    return drained;
 }
 
 // ── The choke point ───────────────────────────────────────────────────────────
@@ -487,7 +272,7 @@ function applyTaskTerminalSteps(
 // ── Turn-ledger entry points (wiring-unification C2, C-W2) ───────────────────
 
 /** A committed turn's queue/graph consequence, as the ledger's `graph_advance` effect names it. */
-export interface MeshLedgerTerminalInput {
+interface MeshLedgerTerminalInput {
     meshId: string;
     taskId: string;
     status: MeshTerminalCommitStatus;
@@ -500,7 +285,7 @@ export interface MeshLedgerTerminalInput {
     envelope?: MeshTerminalCompletionEnvelope;
 }
 
-export interface MeshLedgerTerminalResult {
+interface MeshLedgerTerminalResult {
     entry: MeshWorkQueueEntry | null;
     /** False when the row is unknown or was already in this exact terminal (replay fence). */
     transitioned: boolean;
@@ -1479,302 +1264,6 @@ function describeConditionSource(raw: unknown): string {
     return 'condition';
 }
 
-function safeParseJson(text: string): unknown {
+export function safeParseJson(text: string): unknown {
     try { return JSON.parse(text); } catch { return undefined; }
-}
-
-/**
- * Pre-assignment node patch guard (design :285, :332-334): a coordinator may patch a
- * STILL-PENDING node's spec (selector/size policy), but an assigned task is
- * immutable — a patch attempt after assignment fails with `task_already_claimed`.
- * The patch bumps materialization_version so digests computed from the pre-patch
- * spec can never win a later CAS.
- */
-export function patchPendingGraphNodeBaseSpec(graphId: string, nodeId: string, baseSpecJson: string): MeshTaskGraphNodeRow {
-    const store = MeshRuntimeStore.getInstance();
-    return store.transaction(() => {
-        const graphStore = store.graphStore();
-        const node = graphStore.getNode(graphId, nodeId);
-        if (!node) {
-            throw new Error(`graph_node_not_found: no node '${nodeId}' in graph '${graphId}'`);
-        }
-        if (node.queueTaskId) {
-            const entry = store.findQueueEntryById(node.meshId, node.queueTaskId);
-            if (entry && entry.status !== 'pending') {
-                throw new Error(
-                    `task_already_claimed: graph node '${nodeId}' backs queue task '${node.queueTaskId}' `
-                    + `which is '${entry.status}' — an assigned/completed task is immutable (design :334)`,
-                );
-            }
-        }
-        graphStore.updateNodeBaseSpec(graphId, nodeId, baseSpecJson, new Date().toISOString());
-        return graphStore.getNode(graphId, nodeId)!;
-    });
-}
-
-/**
- * Phase D activation: after a workspace intent becomes `ready`, retry identity
- * materialization for still-declared/blocked worker nodes that name that
- * workspace_ref. Uses the same CAS / graph-block rules as the terminal path.
- * Does not evaluate inputs_from / run_if (C1).
- */
-export function rematerializePendingGraphNodesForWorkspace(graphId: string, workspaceRef: string): string[] {
-    const store = MeshRuntimeStore.getInstance();
-    const nowIso = new Date().toISOString();
-    const result = store.transaction(() => {
-        const graphStore = store.graphStore();
-        const graph = graphStore.getGraph(graphId);
-        if (!graph) return { meshId: null as string | null, materialized: [] as string[] };
-        const nodes = graphStore.listNodes(graphId);
-        const edges = graphStore.listEdges(graphId);
-        const byId = new Map(nodes.map(n => [n.nodeId, n]));
-        const materialized: string[] = [];
-        for (const target of nodes) {
-            if (target.kind !== 'worker_task' || !target.queueTaskId) continue;
-            if (target.state !== 'declared' && target.state !== 'blocked') continue;
-            const spec = safeParseJson(target.baseSpecJson);
-            const bind = resolveWorkspaceRefForMaterialize(graphStore, graphId, spec);
-            if (bind.kind === 'none' || bind.workspaceRef !== workspaceRef) continue;
-            const outcome = settleDownstreamNode(store, target, edges, byId, nowIso);
-            if (outcome.kind === 'materialized') {
-                materialized.push(target.nodeId);
-                graphStore.insertOutboxEvent({
-                    id: newMeshGraphOutboxId(),
-                    meshId: graph.meshId,
-                    graphId,
-                    kind: 'graph_node_materialized',
-                    payload: JSON.stringify({
-                        graphId, nodeId: target.nodeId, ref: target.ref,
-                        taskId: target.queueTaskId, reason: 'workspace_ready',
-                    }),
-                    status: 'pending',
-                    attemptCount: 0,
-                    createdAt: nowIso,
-                    updatedAt: nowIso,
-                });
-            }
-        }
-        if (materialized.length > 0) {
-            graphStore.insertOutboxEvent({
-                id: newMeshGraphOutboxId(),
-                meshId: graph.meshId,
-                graphId,
-                kind: 'queue_wake',
-                payload: JSON.stringify({ meshId: graph.meshId, reason: 'workspace_ready', graphId }),
-                status: 'pending',
-                attemptCount: 0,
-                createdAt: nowIso,
-                updatedAt: nowIso,
-            });
-        }
-        return { meshId: graph.meshId, materialized };
-    });
-    if (result.meshId) {
-        try { drainMeshGraphOutbox(result.meshId); } catch { /* drain is best-effort */ }
-    }
-    return result.materialized;
-}
-
-// ── Coordinator node patch + retry (M-GRAPH-INPUTS-LATE-REJECT) ──────────────
-
-/**
- * The spec keys a coordinator patch may touch (design :294-299).
- *
- * Declared HERE rather than imported from `mesh-graph-gates`, which already
- * imports this module — `MESH_GATE_RELEASE_PATCH_KEYS` is re-exported from this
- * constant so the gate-release path and the node-patch path cannot drift apart
- * while the dependency direction stays one-way.
- */
-export const MESH_NODE_PATCH_KEYS = ['run_if', 'on_false', 'inputs_from', 'workspace_ref'] as const;
-
-export interface PatchGraphNodeAndRetryInput {
-    meshId: string;
-    graphId?: string;
-    /** Node id or `ref` of the node to patch. */
-    node: string;
-    /** Keys merged into the node's base spec; only {@link MESH_NODE_PATCH_KEYS} are permitted. */
-    baseSpecPatch: Record<string, unknown>;
-}
-
-export interface PatchGraphNodeAndRetryResult {
-    graphId: string;
-    nodeId: string;
-    ref?: string;
-    queueTaskId?: string;
-    materializationVersion: number;
-    /** State after the retry settle. */
-    state: MeshGraphNodeState;
-    /** The retry's outcome, so the caller learns IN THIS CALL whether the patch actually worked. */
-    outcome: SettleOutcome;
-    /** The queue row's block after the retry; absent means the task is claimable again. */
-    blockedReason?: string;
-}
-
-/**
- * Patch a still-pending graph node's spec and immediately RE-SETTLE it.
- *
- * ★ WHY THIS EXISTS: `blockWithMaterializationError` has always documented the
- * contract "the coordinator may then patch the node's selector/size policy
- * (bumping the generation) and retry", and `patchPendingGraphNodeBaseSpec`
- * implemented it — with a passing regression test. But that function had NO
- * production caller and no tool wrapping it, so the contract was reachable only
- * from a unit test that imported it directly. Live, a node blocked on
- * `materialization_error:*` was unrecoverable: the only patch surface was
- * the gate release (`mesh_graph_gate` action=release), which demands a CLAIMED GATE and a DIRECT gate
- * edge, so a plain `inputs_from` node with no gate could not be patched at all.
- * The graph re-settle loop does retry such a node on every later upstream
- * terminal, but it re-reads the SAME baked spec and so fails identically
- * forever. This is the missing write surface, not new recovery logic.
- *
- * Invariants preserved verbatim from the gate-release patch path:
- *   - only {@link MESH_NODE_PATCH_KEYS} may be patched — message, routing,
- *     permissions, task mode and model stay immutable by policy;
- *   - an ASSIGNED/terminal task is immutable (`task_already_claimed`);
- *   - the write bumps `materialization_version`, so any digest computed from the
- *     pre-patch spec can never win a later CAS.
- *
- * The retry runs in the SAME transaction as the patch: a patch that cannot be
- * settled leaves the node exactly as the caller found it, rather than silently
- * banking a spec change whose effect is unknown until some later trigger.
- */
-export function patchGraphNodeAndRetry(input: PatchGraphNodeAndRetryInput): PatchGraphNodeAndRetryResult {
-    const store = MeshRuntimeStore.getInstance();
-    const nowIso = new Date().toISOString();
-
-    for (const key of Object.keys(input.baseSpecPatch ?? {})) {
-        if (!(MESH_NODE_PATCH_KEYS as readonly string[]).includes(key)) {
-            throw new Error(
-                `node_patch_forbidden: key '${key}' is outside the permitted patch surface `
-                + `(${MESH_NODE_PATCH_KEYS.join(', ')}) — a node's message, routing, permissions, task mode and model are immutable`,
-            );
-        }
-    }
-    // Validate the REPLACEMENT bindings before writing them: patching one
-    // malformed spec in for another would just re-block the node, and the caller
-    // would have to discover that from the retry outcome instead of the error.
-    if (input.baseSpecPatch?.inputs_from !== undefined) {
-        parseInputBindings({ inputs_from: input.baseSpecPatch.inputs_from });
-    }
-
-    const result = store.transaction((): PatchGraphNodeAndRetryResult => {
-        const graphStore = store.graphStore();
-        const graphs = input.graphId
-            ? [graphStore.getGraph(input.graphId)].filter((g): g is MeshTaskGraphRow => !!g)
-            : graphStore.listGraphsByMesh(input.meshId);
-        if (input.graphId && graphs.length === 0) {
-            throw new Error(`graph_not_found: no graph '${input.graphId}' on this mesh`);
-        }
-
-        let target: MeshTaskGraphNodeRow | undefined;
-        let graph: MeshTaskGraphRow | undefined;
-        const ambiguous: string[] = [];
-        // ★ WHY RAW `===` AND NOT `meshNodeIdMatches()` (canon-identity rule,
-        // eslint.config.mjs). `MeshTaskGraphNodeRow.nodeId` is a GRAPH-ROW id
-        // minted by `newMeshGraphNodeId()` and living in one SQLite table — a
-        // different namespace from mesh NETWORK node ids. The row type carries no
-        // `id` / `node_id` field, and these ids never take the `mach_` /
-        // `daemon_mach_` / `standalone_mach_` forms the rule guards against; the
-        // rule matches on the property NAME `nodeId` alone, so it cannot tell the
-        // two namespaces apart. eslint-suppressions.README.md already classifies
-        // every `mesh-graph-*` site as this same "task-graph ids" class, and no
-        // mesh-graph module uses the helper.
-        //
-        // This is not a stylistic preference: `meshNodeIdMatches(node, id)` takes
-        // a `MeshNodeIdentified`, and `MeshTaskGraphNodeRow` is NOT assignable to
-        // it — passing one is a TS2345 compile error. The type system draws the
-        // same namespace boundary this comment does.
-        //
-        // `input.node` is compared as the caller typed it precisely BECAUSE it may
-        // be either a node id or a `ref`; telling those apart is this loop's job,
-        // and the id-only test below is what makes an id hit unambiguous while a
-        // ref hit stays subject to the cross-graph ambiguity check
-        // (`mesh-graph-node-patch.test.ts` pins both).
-        for (const g of graphs) {
-            if (g.meshId !== input.meshId) continue;
-            for (const n of graphStore.listNodes(g.graphId)) {
-                // eslint-disable-next-line no-restricted-syntax -- graph-row id (newMeshGraphNodeId), not a mesh node id: different namespace, no mach_/daemon_mach_ forms, and MeshTaskGraphNodeRow is not even assignable to MeshNodeIdentified
-                if (n.nodeId !== input.node && n.ref !== input.node) continue;
-                // An exact node-id match is unambiguous by construction; a REF is
-                // only unique within one graph, so a bare ref that matches several
-                // live graphs must be refused rather than silently picking one.
-                // eslint-disable-next-line no-restricted-syntax -- graph-row id, same namespace argument as above; must test `nodeId` ONLY (never `ref`) so an id hit short-circuits while a ref hit stays ambiguity-checked
-                if (n.nodeId === input.node) { target = n; graph = g; ambiguous.length = 0; break; }
-                if (target) { ambiguous.push(`${g.graphId}:${n.nodeId}`); continue; }
-                target = n; graph = g; ambiguous.push(`${g.graphId}:${n.nodeId}`);
-            }
-            // eslint-disable-next-line no-restricted-syntax -- graph-row id, same namespace argument; re-tests the id-only hit to stop scanning further graphs once an unambiguous id match is found
-            if (target && target.nodeId === input.node) break;
-        }
-        if (!target || !graph) {
-            throw new Error(
-                `graph_node_not_found: no node with id or ref '${input.node}'`
-                + (input.graphId ? ` in graph '${input.graphId}'` : ' in any graph on this mesh')
-                + ' — use mesh_graph_view to list node ids and refs',
-            );
-        }
-        if (ambiguous.length > 1) {
-            throw new Error(
-                `ambiguous_node_ref: ref '${input.node}' matches ${ambiguous.length} nodes (${ambiguous.join(', ')}) — `
-                + 'pass graph_id, or the exact node id',
-            );
-        }
-        if (target.kind !== 'worker_task') {
-            throw new Error(
-                `node_not_patchable: node '${target.nodeId}' is a '${target.kind}', not a worker task — `
-                + 'gate nodes are driven by mesh_graph_gate (claim / release / abandon)',
-            );
-        }
-        // Same immutability rule as the gate-release patch path.
-        if (target.queueTaskId) {
-            const entry = store.findQueueEntryById(target.meshId, target.queueTaskId);
-            if (entry && entry.status !== 'pending') {
-                throw new Error(
-                    `task_already_claimed: graph node '${target.nodeId}' backs queue task '${target.queueTaskId}' `
-                    + `which is '${entry.status}' — an assigned/completed task is immutable (design :334)`,
-                );
-            }
-        }
-
-        const rawSpec = safeParseJson(target.baseSpecJson);
-        const mergedSpec = {
-            ...(rawSpec && typeof rawSpec === 'object' ? rawSpec as Record<string, unknown> : {}),
-            ...input.baseSpecPatch,
-        };
-        graphStore.updateNodeBaseSpec(graph.graphId, target.nodeId, JSON.stringify(mergedSpec), nowIso);
-
-        // Re-read so the retry sees the bumped generation and the new spec — a
-        // settle run against the stale in-memory row would compute a digest the
-        // CAS then rejects.
-        const patched = graphStore.getNode(graph.graphId, target.nodeId)!;
-        // eslint-disable-next-line no-restricted-syntax -- both sides are graph-row ids read from the SAME graphStore inside the SAME transaction (listNodes + getNode on one graphId), so they are byte-identical by construction: no serialization boundary sits between them where a form could drift
-        const nodes = graphStore.listNodes(graph.graphId).map(n => (n.nodeId === patched.nodeId ? patched : n));
-        const byId = new Map(nodes.map(n => [n.nodeId, n]));
-        const edges = graphStore.listEdges(graph.graphId);
-
-        // ★ The retry. `settleDownstreamNode` never throws: an outcome of `error`
-        // means the patch did not fix it and the node stays blocked with the NEW
-        // reason, which is precisely what the caller needs to see.
-        const outcome = settleDownstreamNode(store, patched, edges, byId, nowIso);
-        const entryAfter = patched.queueTaskId
-            ? store.findQueueEntryById(patched.meshId, patched.queueTaskId)
-            : undefined;
-        const fresh = graphStore.getNode(graph.graphId, patched.nodeId)!;
-        return {
-            graphId: graph.graphId,
-            nodeId: fresh.nodeId,
-            ...(fresh.ref ? { ref: fresh.ref } : {}),
-            ...(fresh.queueTaskId ? { queueTaskId: fresh.queueTaskId } : {}),
-            materializationVersion: fresh.materializationVersion,
-            state: fresh.state,
-            outcome,
-            ...(entryAfter?.blockedReason ? { blockedReason: entryAfter.blockedReason } : {}),
-        };
-    });
-
-    // A successful retry can make the row claimable; wake the queue the same way
-    // every other materialization path does, outside the transaction.
-    if (result.outcome.kind === 'materialized') {
-        try { drainMeshGraphOutbox(input.meshId); } catch { /* drain is best-effort */ }
-    }
-    return result;
 }

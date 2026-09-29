@@ -32,7 +32,9 @@ import {
     type MeshGraphWorkspaceIntentRow,
     type MeshGraphWorkspaceSagaState,
 } from './mesh-graph-types.js';
-import { drainMeshGraphOutbox, graphMaterializationBlockReason, rematerializePendingGraphNodesForWorkspace } from './mesh-graph-transition-runner.js';
+import { graphMaterializationBlockReason } from './mesh-graph-block-reasons.js';
+import { rematerializePendingGraphNodesForWorkspace } from './mesh-graph-node-patch.js';
+import { drainMeshGraphOutbox } from './mesh-graph-outbox.js';
 import { mergeWorktreeAffinityTag } from './mesh-graph-workspace-bind.js';
 import {
     WORKSPACE_SAGA_LEASE_MS,
@@ -67,7 +69,7 @@ export interface GraphWorkspaceDeclaration {
     desired_path?: string;
 }
 
-export interface WorkspaceSagaFaultHooks {
+interface WorkspaceSagaFaultHooks {
     /** Throw to simulate process death after clone, before any identity persist. */
     afterCloneSuccess?: (created: WorkspaceCloneResult) => void;
     /** Throw after created_node_id/path are on the intent, before bind/ready. */

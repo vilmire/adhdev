@@ -14,7 +14,7 @@ import {
     normalizeNodeCapabilitySlots,
     type NodeCapabilitySlot,
 } from '@adhdev/mesh-shared';
-import { getDifficultyBrains } from '../config/mesh-config.js';
+import { getDifficultyBrains } from '../config/mesh-config-routing.js';
 
 /** Ordered, de-duplicated providerPriority from a node policy (defensive). */
 export function normalizeProviderPriority(policy: unknown): string[] {

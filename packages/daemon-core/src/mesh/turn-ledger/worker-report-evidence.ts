@@ -17,7 +17,7 @@
 import type { TurnEvidenceOf, WorkerBranchState, WorkerReportOutcome } from '@adhdev/mesh-shared';
 import type { ObserveResult, TurnLedger } from './ledger.js';
 
-export interface AcceptedWorkerReport {
+interface AcceptedWorkerReport {
     meshId: string;
     taskId: string;
     /** The attempt the report's credential named; else the task's latest attempt. */

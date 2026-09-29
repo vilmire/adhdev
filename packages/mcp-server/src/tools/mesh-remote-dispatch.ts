@@ -1,7 +1,7 @@
 // Remote direct dispatch (coordinator → a node served by another daemon): the
 // `agent_command` relay plus the typed refusals every direct-dispatch path shares
 // (provider-pin, quota gate, relay-unsafe session, missing coordinator anchor,
-// session busy). Split out of mesh-tools-internal.ts; re-exported there.
+// session busy). Split out of mesh-tools-internal.ts.
 
 import type { MeshContext } from './mesh-tools-internal.js';
 import {
@@ -15,14 +15,14 @@ import {
     SESSION_BUSY_WITH_TASK_CODE,
 } from '@adhdev/daemon-core';
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
-import { type MeshTaskInput, readString } from './mesh-tool-shared.js';
+import { type MeshTaskInput } from './mesh-tool-shared.js';
 import { IpcTransport } from '../transports/ipc.js';
 import { readProviderPriority, classifyRemoteDelegateRelaySafety, chooseDispatchableSession } from './mesh-tools-internal-core.js';
 import { resolveSessionProviderType, readSessionRecordId, unwrapCommandPayload } from './mesh-session-helpers.js';
 import { readNodeRuntime } from './mesh-held-node-state.js';
+import { readString } from '@adhdev/mesh-shared';
 
 // (moved to ./mesh-session-helpers.ts — session/payload record helpers)
-
 
 function buildRelayUnsafeRemoteSessionFailure(ctx: MeshContext, node: LocalMeshNodeEntry, sessionId: string, providerType?: string): ({ success: false; error: string } & Record<string, unknown>) {
     return {
@@ -83,7 +83,6 @@ export function buildCoordinatorP2pRelayFailure(
         retryHint: payload.retryRecommended ? payload.nextAction : 'Do not retry as a P2P transport recovery; inspect the command/provider error first.',
     };
 }
-
 
 /**
  * ★PROVIDER-PIN-BYPASS — refusal returned when a dispatch cannot honor the task's
@@ -208,7 +207,7 @@ export function buildQuotaExhaustedDispatchFailure(
 }
 
 /** Input of {@link ipcDispatchToRemoteAgent}. */
-export interface RemoteAgentDispatchArgs {
+interface RemoteAgentDispatchArgs {
     session_id?: string;
     message: string;
     /** MESH-IMAGE-DISPATCH: optional multipart envelope forwarded to the remote agent. */

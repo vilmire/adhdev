@@ -71,7 +71,7 @@ export interface TranscriptReplicaTransport {
     command(type: string, args?: Record<string, unknown>): Promise<any>;
 }
 
-export interface SemanticTranscriptReadOutcome {
+interface SemanticTranscriptReadOutcome {
     /** Null when the replica may not answer — the caller runs its legacy read. */
     readonly payload: TranscriptReadChatPayload | null;
     /** Closed-union reason for the decline; null on success. */

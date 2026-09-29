@@ -1,3 +1,4 @@
+import { readString } from '@adhdev/mesh-shared';
 export interface InteractivePrompt {
   promptId: string;
   origin: 'cli' | 'mcp' | 'agent';
@@ -29,10 +30,6 @@ export interface InteractivePromptResponse {
 export interface InteractiveAnswer {
   selectedLabels: string[];
   freeformText?: string;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function readStringArray(value: unknown): string[] {

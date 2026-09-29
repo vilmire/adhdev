@@ -182,7 +182,7 @@ export function findEquivalentPublishedSubmoduleCommit(
     return undefined;
 }
 
-export type SubmoduleGitlinkConvergeResult = {
+type SubmoduleGitlinkConvergeResult = {
     /** True when at least one diverged gitlink submodule was rebased onto its base-side commit. */
     converged: boolean;
     /**
@@ -287,7 +287,7 @@ export type SubmoduleGitlinkConvergeResult = {
 /**
  * Options for {@link convergeDivergedSubmoduleGitlinks}.
  */
-export type ConvergeDivergedSubmoduleGitlinksOptions = {
+type ConvergeDivergedSubmoduleGitlinksOptions = {
     /**
      * Mirrors the Refinery's `allowAutoPublishSubmoduleMainCommits` policy
      * (resolved by `resolveRefineryAutoPublishSubmoduleMainCommits`).
@@ -966,7 +966,7 @@ export function describeMintedUnpublishedCommits(
         + minted.map(g => `${g.path}→${(g.rebasedCommit || '?').slice(0, 12)} (remote=${g.remoteMainRef || 'unresolved'})`).join(', ');
 }
 
-export type RootRebaseGitlinkResolveResult = {
+type RootRebaseGitlinkResolveResult = {
     /** True when the root rebase completed (with gitlink conflicts resolved to the converged commits). */
     ok: boolean;
     /** New root HEAD after the rebase (only meaningful when ok). */

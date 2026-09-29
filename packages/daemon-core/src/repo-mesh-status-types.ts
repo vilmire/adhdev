@@ -142,7 +142,7 @@ export interface RepoMeshStatus {
     /**
      * C7-5 freshness gate (wiring-unification C-W3): present while another
      * writer's `mesh.<id>.events` entries have not replicated to this daemon
-     * (Beacon `staleness().behind`). Fleet-wide reads in this status are
+     * (seqscribe `staleness().behind` from direct peers). Fleet-wide reads in this status are
      * advisory until it clears. Computed per call, never cached.
      */
     replication?: 'pending';

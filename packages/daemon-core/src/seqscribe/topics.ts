@@ -224,8 +224,7 @@ export const CHAT_TOMBSTONE_KIND = 'chat.del.v2';
  *   removed `.transcript` topic, so no coordinated fleet upgrade is needed
  *   (host-guide §6). Both ends — daemon and the web worker's
  *   `topic-addressing.ts` — must still define it identically.
- * - `access:'content'`: never granted to a metadata-class peer, and outside
- *   Beacon's default metadata scope. No `hintKeys` — the keys are message ids.
+ * - `access:'content'`: never granted to a metadata-class peer.
  */
 export function sessionChatPolicy(): TopicPolicy {
     return {
@@ -265,9 +264,6 @@ export function configSettingsPolicy(): TopicPolicy {
         retention: { mode: 'full' },
         replication: 'full-sync',
         access: 'content',
-        // P27 derives pre-write hints directly from the register fold. Hash
-        // mode keeps authored setting keys off the Beacon board.
-        hintKeys: 'hash',
         finalityAuthority: ADHDEV_AUTHORITY_ID,
         conflict: {
             default: 'lww',

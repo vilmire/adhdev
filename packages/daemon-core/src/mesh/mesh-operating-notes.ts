@@ -37,7 +37,7 @@ export const OPERATING_NOTE_DEDUPE_WINDOW = 40;
 export const OPERATING_NOTE_KEEP_LATEST = 100;
 
 /** Content-free lifecycle fields kept beside the text (`mesh_operating_notes.meta_json`). */
-export interface OperatingNoteMeta {
+interface OperatingNoteMeta {
     pinned?: boolean;
     /** Explicit expiry (ISO); wins over the category TTL. */
     expiresAt?: string;
@@ -225,7 +225,7 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
  * Shape isNoteExpired reads. Structural so mesh-ledger stays free of a
  * coordinator-prompt import (CoordinatorOperatingNote satisfies this).
  */
-export interface OperatingNoteExpiryInput {
+interface OperatingNoteExpiryInput {
     category?: string;
     pinned?: boolean;
     createdAt?: string;
@@ -252,7 +252,7 @@ export function isNoteExpired(note: OperatingNoteExpiryInput, now: number): bool
 }
 
 /** What a caller needs to both display and enforce a note's lifetime. */
-export interface ResolvedNoteExpiry {
+interface ResolvedNoteExpiry {
     /** When this note stops being injected. Absent = durable (never expires). */
     effectiveExpiresAt?: string;
     expired: boolean;

@@ -54,14 +54,14 @@ import { LOG } from '../logging/logger.js';
  *  wedge its node indefinitely. */
 export const REFINE_INFLIGHT_FRESHNESS_MS = 30 * 60_000;
 
-export interface RefineInflightLedgerEntry {
+interface RefineInflightLedgerEntry {
     kind: string;
     nodeId?: string;
     timestamp: string;
     payload?: unknown;
 }
 
-export interface OpenRefineDispatchMatch {
+interface OpenRefineDispatchMatch {
     nodeId: string;
     jobId: string;
     timestamp: string;

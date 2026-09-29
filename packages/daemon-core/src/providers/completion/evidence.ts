@@ -33,7 +33,7 @@ import {
     selectFinalAssistantTurnEndMessage,
 } from '../chat-message-normalization.js';
 import { looksLikeActiveApprovalPromptText } from '../approval-utils.js';
-import { isNativeSourceCanonicalHistory, readProviderChatHistory } from '../../config/chat-history.js';
+import { isNativeSourceCanonicalHistory, readProviderChatHistory } from '../../config/provider-native-history.js';
 import { loadPersistedProviderSessionPins } from '../../config/state-store.js';
 import { buildExternalTranscriptProbe } from '../cli-provider-transcript-merge.js';
 import type { NativeTurnTerminalMarker } from '../../chat/native-turn-signal.js';
@@ -580,9 +580,8 @@ export function completionFinalAssistantEvidence(host: EvidenceHost, parsedMessa
     // Still gated on turnClosed: the marker proves the PROVIDER finished its turn, while
     // turnClosed proves OUR adapter agrees no tool/partial is in flight. Requiring both keeps
     // the FALSEIDLE FixB upper bound intact rather than trading one false-positive class for
-    // another. Scoping is turn-id-first (see selectTurnTerminalMarker), which is strictly
-    // stronger than the timestamp comparison the shape path falls back to, and it preserves
-    // the ANTIGRAVITY-PREMATURE-COMPLETION rule: a PRIOR turn's marker can never satisfy
+    // another. Scoping is the turn-start boundary (see selectTurnTerminalMarker), which
+    // preserves the ANTIGRAVITY-PREMATURE-COMPLETION rule: a PRIOR turn's marker can never satisfy
     // this turn's gate.
     const terminalMarker = host.nativeTurnTerminalMarker?.(turnStartedAt);
     if (terminalMarker) {

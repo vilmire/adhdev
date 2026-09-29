@@ -76,9 +76,7 @@ function makeInstance(opts: {
     getStatus: () => ({ status: 'idle', lastOutputAt }),
     getScriptParsedStatus: () => ({ messages: [] }),
     getPartialResponse: () => '',
-    isProcessing: () => false,
-    isWaitingForResponse: opts.adapterPending === true,
-    currentTurnScope: null,
+    isProcessing: () => opts.adapterPending === true,
   }
 
   instance.completedDebouncePending = {
@@ -273,9 +271,7 @@ describe('CliProviderInstance — antigravityHoldPtyStillActive discriminator', 
     instance.adapter = {
       getStatus: () => ({ status: 'idle', lastOutputAt }),
       getPartialResponse: () => '',
-      isProcessing: () => false,
-      isWaitingForResponse: opts.adapterPending === true,
-      currentTurnScope: null,
+      isProcessing: () => opts.adapterPending === true,
     }
     return instance
   }

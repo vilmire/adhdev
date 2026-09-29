@@ -24,7 +24,7 @@
  * the caller (router-refine.ts), which owns the router instance.
  */
 
-export type RefineDispatchDisposition =
+type RefineDispatchDisposition =
     /** Young enough that the original executor may still be alive — reconsider later. */
     | 'defer_grace'
     /**
@@ -40,7 +40,7 @@ export type RefineDispatchDisposition =
     /** The node no longer exists in the mesh — close out; re-running is impossible. */
     | 'close_removed_node';
 
-export interface RefineDispatchRecord {
+interface RefineDispatchRecord {
     nodeId: string;
     jobId: string;
     /** ISO-8601 dispatch timestamp from the ledger entry. */
@@ -54,7 +54,7 @@ export interface RefineDispatchRecord {
     executor?: unknown;
 }
 
-export interface RefineDispatchDecision {
+interface RefineDispatchDecision {
     nodeId: string;
     jobId: string;
     disposition: RefineDispatchDisposition;
@@ -62,7 +62,7 @@ export interface RefineDispatchDecision {
     ageMs?: number;
 }
 
-export interface ClassifyRefineDispatchOptions {
+interface ClassifyRefineDispatchOptions {
     nowMs: number;
     graceMs: number;
     zombieCutoffMs: number;

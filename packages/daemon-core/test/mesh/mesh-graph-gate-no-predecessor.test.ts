@@ -60,7 +60,7 @@ import {
     coordinatorGateBlockReason,
     releaseMeshGraphGate,
 } from '../../src/mesh/mesh-graph-gates.js';
-import { __resetMeshGraphTransitionRunnerForTests } from '../../src/mesh/mesh-graph-transition-runner.js';
+import { __resetMeshGraphTransitionRunnerForTests } from '../../src/mesh/mesh-graph-outbox.js';
 import {
     __clearMeshQueueForTests,
     __resetMeshRuntimeStoreForTests,

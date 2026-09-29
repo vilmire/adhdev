@@ -52,6 +52,7 @@ import {
 } from '../provider-event-port.js';
 import { emitTurnStarted, emitSessionError, emitSuspension, emitProcessExit, emitNoProgress, type TurnEvidencePort } from '../turn-evidence-port.js';
 import { SESSION_STATUSES, type TurnAttemptRef, type NoProgressObservedStatus } from '@adhdev/mesh-shared';
+import { adapterTurnStartedAt, adapterTurnTaskId } from '../adapter-turn-clock.js';
 
 /** Narrow a raw adapter status string to the closed no_progress vocabulary. */
 function toNoProgressObservedStatus(raw: string): NoProgressObservedStatus {
@@ -316,7 +317,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
     // the exemption live across the ENTIRE pre-first-turn sequence (however
     // many masked waiting_approval/generating frames a startup modal produces)
     // and turns off permanently, atomically, the instant a real turn starts.
-    const noTurnStartedThisBoot = !(host.adapter as any)?.currentTurnTaskId;
+    const noTurnStartedThisBoot = !adapterTurnTaskId(host.adapter);
     const startupMaskWithNoActiveTurn = noTurnStartedThisBoot && !host.hasAdapterPendingResponse();
     const newStatus = isQuestionPicker
         ? 'waiting_choice'
@@ -405,7 +406,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
             host.suppressIdleHistoryReplay = false;
             // Cancel any pending completed event (multi-step: idle→generating resume)
             if (host.completedDebouncePending) {
-                LOG.info('CLI', `[${host.type}] cancelled pending completed (resumed generating) generatingStartedAt=${host.generatingStartedAt} isWaitingForResponse=${!!(host.adapter as any)?.isWaitingForResponse}`);
+                LOG.info('CLI', `[${host.type}] cancelled pending completed (resumed generating) generatingStartedAt=${host.generatingStartedAt}`);
                 if (host.completedDebounceTimer) { clearTimeout(host.completedDebounceTimer); host.completedDebounceTimer = null; }
                 host.completedDebouncePending = null;
             }
@@ -589,7 +590,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                 // the fallback (and the debounce itself stays a pure UI-suppression signal,
                 // decoupled from the reported duration).
                 const { durationMs: shortDurationMs, anchor: durationAnchor } = computeTurnAnchoredDurationMs(
-                    (host.adapter as any)?.currentTurnStartedAt,
+                    adapterTurnStartedAt(host.adapter),
                     host.generatingStartedAt,
                     now,
                 );
@@ -615,11 +616,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                 // before `generatingStartedAt` is reset below — the settle-arm path (mesh sessions,
                 // see the mesh branch further down) needs the same turn anchor the normal
                 // completedDebounce branch captures, and generatingStartedAt is the fallback for it.
-                const shortEngineTurnStart = typeof (host.adapter as any)?.currentTurnStartedAt === 'number'
-                    && Number.isFinite((host.adapter as any).currentTurnStartedAt)
-                    ? (host.adapter as any).currentTurnStartedAt as number
-                    : 0;
-                const shortTurnStartedAt = shortEngineTurnStart || host.generatingStartedAt || 0;
+                const shortTurnStartedAt = adapterTurnStartedAt(host.adapter) || host.generatingStartedAt || 0;
                 const shortTaskId = host.completingTurnTaskId();
                 host.generatingDebouncePending = null;
                 host.generatingStartedAt = 0;
@@ -743,11 +740,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                     // Prefer the engine's per-turn start (set at onTurnStarted, earliest reliable
                     // anchor) and fall back to generatingStartedAt (when generating was observed).
                     ...((() => {
-                        const engineTurnStart = typeof (host.adapter as any)?.currentTurnStartedAt === 'number'
-                            && Number.isFinite((host.adapter as any).currentTurnStartedAt)
-                            ? (host.adapter as any).currentTurnStartedAt as number
-                            : 0;
-                        const turnStartedAt = engineTurnStart || host.generatingStartedAt || 0;
+                        const turnStartedAt = adapterTurnStartedAt(host.adapter) || host.generatingStartedAt || 0;
                         return turnStartedAt ? { turnStartedAt } : {};
                     })()),
                     // FALSE-IDLE continuity: snapshot the busy epoch + raw PTY output
@@ -1009,9 +1002,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
     // (dispatched+completed quickly within 12s of collapse) keeps firing too; both
     // close for a much-later turn, preserving the "don't mislabel a late fast turn"
     // honesty the window exists for.
-    const firstTurnStartedAt = typeof (host.adapter as any)?.currentTurnStartedAt === 'number'
-        ? (host.adapter as any).currentTurnStartedAt as number
-        : 0;
+    const firstTurnStartedAt = adapterTurnStartedAt(host.adapter);
     const collapsedAt = host.startupGraceCollapseAt;
     const turnStartedWithinCollapseWindow = collapsedAt !== null
         && firstTurnStartedAt > 0

@@ -63,9 +63,9 @@ export interface QuotaFallbackCandidate {
  * and on the slot-model guard, both of which the assignment loop owns. It must
  * be a pure read — this walk may call it once per candidate.
  */
-export type QuotaFallbackProbe = (candidate: QuotaFallbackCandidate) => boolean;
+type QuotaFallbackProbe = (candidate: QuotaFallbackCandidate) => boolean;
 
-export type QuotaFallbackResult =
+type QuotaFallbackResult =
     /**
      * A later quota-clear candidate on this node can run now. The caller should
      * re-run its normal launch path against `candidate` — the walk decides

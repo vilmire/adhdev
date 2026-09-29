@@ -30,8 +30,8 @@ interface AttemptRow {
     terminal_at: number | null; terminal_summary_json: string | null; data_json: string; created_at: number; updated_at: number;
 }
 
-export type TurnEventVerdict = 'applied' | 'recorded' | 'rejected' | 'forwarded';
-export type TurnPublishState = 'none' | 'pending' | 'published';
+type TurnEventVerdict = 'applied' | 'recorded' | 'rejected' | 'forwarded';
+type TurnPublishState = 'none' | 'pending' | 'published';
 
 export interface TurnEventRow {
     eventId: string;
@@ -185,7 +185,7 @@ function holdFromRow(row: HoldRowRaw): TurnHold {
 }
 
 /** Attempt-level extras migrate-v1 and the dispatch path set; not part of TurnAttempt. */
-export interface TurnAttemptExtras {
+interface TurnAttemptExtras {
     inputJson?: string | null;
     via?: string | null;
 }

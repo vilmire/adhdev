@@ -13,12 +13,8 @@ import {
   WORKER_BIND_CANARY_PREFIX,
   WORKER_TOKEN_CANARY_PREFIX,
 } from '../../src/mesh/worker-mcp-isolation'
-import {
-  acceptWorkerCompletionReport,
-  validateWorkerCompletionReport,
-  WORKER_SUMMARY_MAX_CHARS,
-  WORKER_BRANCH_STATES,
-} from '../../src/mesh/worker-report'
+import { acceptWorkerCompletionReport, WORKER_BRANCH_STATES } from '../../src/mesh/worker-report';
+import { validateWorkerCompletionReport, WORKER_SUMMARY_MAX_CHARS } from '../../src/mesh/worker-report-validation.js';
 import {
   FINAL_SUMMARY_PROVENANCE_RANK,
   isStrongerSummaryProvenance,

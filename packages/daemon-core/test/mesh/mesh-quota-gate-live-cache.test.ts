@@ -37,11 +37,8 @@ vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }))
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
 vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
 
-const {
-    evaluateProviderQuotaGate,
-    rankProvidersByQuotaGate,
-    liveLocalQuotaForRouting,
-} = await import('../../src/mesh/mesh-quota-routing.js')
+const { evaluateProviderQuotaGate, rankProvidersByQuotaGate } = await import('../../src/mesh/mesh-quota-routing.js')
+const { liveLocalQuotaForRouting } = await import('../../src/mesh/mesh-quota-sources.js')
 const { clearQuotaCache, refreshQuotaCacheOnce } = await import('../../src/quota/refresh.js')
 
 const MINUTE = 60_000

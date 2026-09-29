@@ -30,7 +30,7 @@
  *
  * P2P only (daemon↔daemon mesh channel) — nothing here reaches the server.
  */
-import { daemonIdsEquivalent, meshNodeIdMatches, normalizeMeshNodeId } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, meshNodeIdMatches, normalizeMeshNodeId, readOptionalRecord } from '@adhdev/mesh-shared';
 
 /** Upper bound on worktree nodes a member reports per push (meshes cap at 10 nodes). */
 export const MEMBER_WORKTREE_REPORT_MAX_NODES = 10;
@@ -54,10 +54,6 @@ export interface MemberWorktreeNodeRecord {
     worktreeBootstrap?: { status: string; required?: boolean; startedAt?: string; completedAt?: string };
 }
 
-function readRecord(value: unknown): Record<string, unknown> | null {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
 function readId(value: unknown): string | undefined {
     if (typeof value !== 'string') return undefined;
     const trimmed = value.trim();
@@ -73,7 +69,7 @@ function readPath(value: unknown): string | undefined {
 }
 
 function readPlainObject(value: unknown): Record<string, unknown> | undefined {
-    const record = readRecord(value);
+    const record = readOptionalRecord(value);
     if (!record) return undefined;
     try {
         return JSON.parse(JSON.stringify(record)) as Record<string, unknown>;
@@ -88,13 +84,13 @@ function readPlainObject(value: unknown): Record<string, unknown> | undefined {
  * worktree node with an id, a workspace and an owning daemon.
  */
 export function projectMemberWorktreeNode(raw: unknown): MemberWorktreeNodeRecord | null {
-    const node = readRecord(raw);
+    const node = readOptionalRecord(raw);
     if (!node || node.isLocalWorktree !== true) return null;
     const id = readId(normalizeMeshNodeId(node as any));
     const workspace = readPath(node.workspace);
     const daemonId = readId(node.daemonId);
     if (!id || !workspace || !daemonId) return null;
-    const bootstrap = readRecord(node.worktreeBootstrap);
+    const bootstrap = readOptionalRecord(node.worktreeBootstrap);
     const bootstrapStatus = readId(bootstrap?.status);
     const capabilities = Array.isArray(node.capabilities)
         ? node.capabilities.map(readId).filter((tag): tag is string => !!tag).slice(0, 64)
@@ -152,7 +148,7 @@ export function collectMemberWorktreeNodes(nodes: unknown[], selfDaemonId: strin
     const self = readId(selfDaemonId);
     if (!self) return [];
     return sanitizeMemberWorktreeNodes(nodes.filter((node) => {
-        const daemonId = readId(readRecord(node)?.daemonId);
+        const daemonId = readId(readOptionalRecord(node)?.daemonId);
         return !!daemonId && daemonIdsEquivalent(daemonId, self);
     }));
 }
@@ -161,7 +157,7 @@ function isTerminalBootstrapStatus(status: unknown): status is 'complete' | 'fai
     return status === 'complete' || status === 'failed';
 }
 
-export type MemberWorktreeRejectReason =
+type MemberWorktreeRejectReason =
     | 'not_sender_owned'
     | 'coordinator_owned'
     | 'tombstoned'
@@ -178,7 +174,7 @@ export interface MemberWorktreeAdoptionResult {
     rejected: Array<{ nodeId: string; reason: MemberWorktreeRejectReason }>;
 }
 
-export interface MemberWorktreeAdoptionPlan {
+interface MemberWorktreeAdoptionPlan {
     /** Nodes to register on the coordinator (inline view + config). */
     adopt: MemberWorktreeNodeRecord[];
     /** Known nodes whose held bootstrap is still 'running' while the member reports it terminal. */
@@ -205,7 +201,7 @@ export function planMemberWorktreeAdoption(args: {
     const sender = readId(args.senderDaemonId);
     const owner = readId(args.ownerDaemonId);
     const self = readId(args.selfDaemonId);
-    const meshNodes = args.meshNodes.map(readRecord).filter((node): node is Record<string, unknown> => !!node);
+    const meshNodes = args.meshNodes.map(readOptionalRecord).filter((node): node is Record<string, unknown> => !!node);
     for (const node of args.reported) {
         if (!sender || !owner
             || !daemonIdsEquivalent(node.daemonId, sender)
@@ -220,7 +216,7 @@ export function planMemberWorktreeAdoption(args: {
         }
         const existing = meshNodes.find(entry => meshNodeIdMatches(entry as any, node.id));
         if (existing) {
-            const heldStatus = readRecord(existing.worktreeBootstrap)?.status;
+            const heldStatus = readOptionalRecord(existing.worktreeBootstrap)?.status;
             const reportedStatus = node.worktreeBootstrap?.status;
             if (heldStatus === 'running' && isTerminalBootstrapStatus(reportedStatus)) {
                 plan.healBootstrap.push({

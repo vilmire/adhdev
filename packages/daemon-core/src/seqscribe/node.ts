@@ -130,12 +130,10 @@ export interface SeqscribeNodeHandle {
     /**
      * Register a teardown callback to run inside `close()`, BEFORE `node.close()`.
      *
-     * Exists for the Beacon transport (seqscribe/beacon.ts), which is armed
-     * later than node open — the cloud host has to hand it a WS transport that
-     * does not exist yet at this point — and must still be stopped when the node
-     * goes down, whoever initiates that. Without this the beacon would be torn
-     * down only on the paths that happen to hold its handle, and a `close()`
-     * from anywhere else would leave it armed against a closing node.
+     * A generic hook for anything armed later than node open that must still
+     * be stopped when the node goes down, whoever initiates that. Without it
+     * such a component would be torn down only on the paths that happen to
+     * hold its handle. (No production caller registers one today.)
      *
      * ★ Ordering matters: these run before `node.close()`, so a stop callback may
      * still touch the node. Callbacks are one-shot and a throwing one is
@@ -371,7 +369,7 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
         `node open writer=${writerId} topics=${defs.length} authority=${authorityHooks ? (localAuthority ? 'local' : 'on') : 'off'}${opts.isCoordinator ? ' role=coordinator' : ''}`,
     );
 
-    // Teardown callbacks registered after open (currently: the Beacon transport).
+    // Teardown callbacks registered after open via `onClose`.
     const closeCallbacks: (() => void)[] = [];
 
     let closed = false;
@@ -379,7 +377,7 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
         if (closed) return;
         closed = true;
         // Before finality/anomaly teardown and before node.close(), so a
-        // callback may still use the node (the beacon's stop() calls into it).
+        // callback may still use the node.
         while (closeCallbacks.length > 0) {
             const fn = closeCallbacks.shift()!;
             try {

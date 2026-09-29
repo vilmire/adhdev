@@ -1,5 +1,6 @@
 import type { CommandTransport } from '../transports/mode.js';
 import { FORMAT_PROP } from './list-sessions.js';
+import { projectFileDiffRow, type GitFileDiffRow } from '@adhdev/mesh-shared';
 
 export const GIT_DIFF_TOOL = {
   name: 'git_diff',
@@ -32,15 +33,7 @@ export const GIT_DIFF_TOOL = {
   },
 };
 
-interface FileDiffResult {
-  path: string;
-  old_path?: string | null;
-  status?: string;
-  diff: string;
-  truncated: boolean;
-  binary: boolean;
-  error?: string;
-}
+type FileDiffResult = GitFileDiffRow;
 
 export async function gitDiff(
   transport: CommandTransport,
@@ -118,18 +111,7 @@ async function localGitDiff(
   const fileDiffs: FileDiffResult[] = await Promise.all(
     topFiles.map(async (f: any): Promise<FileDiffResult> => {
       try {
-        const raw = await transport.command('git_diff_file', { workspace, path: f.path, staged });
-        const d = raw?.diff ?? raw;
-        const lines = (d?.diff ?? '').split('\n');
-        const trunc = lines.length > maxLines;
-        return {
-          path: f.path,
-          old_path: f.oldPath ?? null,
-          status: f.status ?? 'M',
-          diff: trunc ? lines.slice(0, maxLines).join('\n') + '\n... (truncated)' : (d?.diff ?? ''),
-          truncated: trunc,
-          binary: d?.binary ?? false,
-        };
+        return projectFileDiffRow(f, await transport.command('git_diff_file', { workspace, path: f.path, staged }), maxLines);
       } catch {
         return { path: f.path, diff: '', truncated: false, binary: false, error: 'fetch failed' };
       }

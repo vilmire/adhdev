@@ -10,18 +10,11 @@
 
 import * as fs from 'fs';
 import type { ProviderCanonicalHistoryConfig, ProviderHistoryBehavior } from '../providers/contracts.js';
-import {
-    type HistoryMessage,
-    type SavedHistorySessionSummary,
-    listSavedHistorySessions,
-    normalizeSavedHistorySessionId,
-    pageHistoryRecords,
-    readChatHistory,
-    readExistingSessionStartRecord,
-    rewriteCanonicalSavedHistory,
-    sanitizeHistoryMessage,
-    sortSavedHistorySessionSummaries,
-} from './chat-history.js';
+import { readChatHistory, readExistingSessionStartRecord, rewriteCanonicalSavedHistory } from './chat-history.js';
+import { type HistoryMessage, sanitizeHistoryMessage } from './chat-history-messages.js';
+import { pageHistoryRecords } from './chat-history-tail.js';
+import { type SavedHistorySessionSummary, listSavedHistorySessions, sortSavedHistorySessionSummaries } from './saved-history-index.js';
+import { normalizeSavedHistorySessionId } from './chat-history-files.js';
 import { readMessageSourceAddress } from '../chat/message-source-address.js';
 
 export type ProviderNativeHistoryScripts = Record<string, ((input: any) => any) | undefined>;
@@ -410,7 +403,7 @@ function buildNativeSessionSummary(
     };
 }
 
-function normalizeProviderNativeHistorySessionSummary(agentType: string, item: any): SavedHistorySessionSummary | null {
+function normalizeProviderNativeHistorySessionSummary(item: any): SavedHistorySessionSummary | null {
     const historySessionId = normalizeSavedHistorySessionId(item?.historySessionId || item?.sessionId || '');
     if (!historySessionId) return null;
     const sourcePath = typeof item?.sourcePath === 'string' ? item.sourcePath : '';
@@ -460,7 +453,7 @@ function collectProviderScriptNativeHistorySessionSummaries(
             }
             continue;
         }
-        const summary = normalizeProviderNativeHistorySessionSummary(agentType, item);
+        const summary = normalizeProviderNativeHistorySessionSummary(item);
         if (summary) summaries.push(summary);
     }
     return sortSavedHistorySessionSummaries(summaries);

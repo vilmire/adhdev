@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { compactMeshStatusNode, minimalCompactNode, summarizeNodeQuota, annotateQuotaSnapshotFreshness } from '../src/tools/mesh-compact.js';
-import { extractReporterNodeFactsQuota } from '../src/tools/mesh-tools-internal.js';
+import { extractReporterNodeFactsQuota } from '../src/tools/mesh-tools-internal-core.js';
 import { DEFAULT_QUOTA_ROUTING_POLICY } from '@adhdev/daemon-core';
 
 /**

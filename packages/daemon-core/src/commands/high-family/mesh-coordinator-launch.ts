@@ -83,7 +83,8 @@ async function backfillMeshHostPinAfterLaunch(opts: {
         if (existingPin) return;
         // An inline (cloud-supplied) mesh is not backed by this daemon's meshes.json —
         // there is no local record to pin, and getMesh below would miss it.
-        const { getMesh, setMeshHostPin } = await import('../../config/mesh-config.js');
+        const { getMesh } = await import('../../config/mesh-config.js');
+        const { setMeshHostPin } = await import('../../config/mesh-config-host-pairing.js');
         if (!getMesh(opts.meshId)) return;
         const nodeDaemonId = typeof opts.coordinatorNode?.daemonId === 'string' && opts.coordinatorNode.daemonId.trim()
             ? opts.coordinatorNode.daemonId.trim()
@@ -274,7 +275,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     // "## Configured MAGI panels" section.
                     const loadMagiKindPanelsBestEffort = async (forMeshId: string) => {
                         try {
-                            const { listMagiKindPanels } = await import('../../config/mesh-config.js');
+                            const { listMagiKindPanels } = await import('../../config/mesh-config-routing.js');
                             return listMagiKindPanels(forMeshId);
                         } catch { return undefined; }
                     };

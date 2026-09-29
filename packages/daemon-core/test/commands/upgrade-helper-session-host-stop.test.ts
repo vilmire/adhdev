@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('child_process', () => mocks)
 
-import { stopSessionHostProcesses } from '../../src/commands/upgrade-helper'
+import { stopSessionHostProcesses } from '../../src/commands/upgrade-process-stop.js';
 
 const createdAppNames: string[] = []
 let killSpy: ReturnType<typeof vi.spyOn>

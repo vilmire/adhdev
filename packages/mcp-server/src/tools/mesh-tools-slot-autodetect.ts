@@ -31,11 +31,8 @@ import {
     normalizeNodeCapabilitySlots,
     type DetectedCliProvider,
 } from '@adhdev/mesh-shared';
-import {
-    findNodeWithRefresh,
-    unwrapCommandPayload,
-    type MeshContext,
-} from './mesh-tools-internal.js';
+import { findNodeWithRefresh, type MeshContext } from './mesh-tools-internal.js';
+import { unwrapCommandPayload } from './mesh-session-helpers.js';
 import { readNodeRuntime } from './mesh-held-node-state.js';
 
 /**

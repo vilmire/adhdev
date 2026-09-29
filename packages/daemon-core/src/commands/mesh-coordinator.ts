@@ -6,11 +6,8 @@ import { LOG } from '../logging/logger.js'
 import { shortHash } from '../system/hash.js'
 import { IDENTITY } from '../track-identity.js'
 import { inspectEmbeddedPath, type EmbeddedPathHealth, type EmbeddedPathState } from '../config/embedded-path-health.js'
-import type {
-  MeshCoordinatorMcpConfigFormat,
-  MeshCoordinatorSystemPromptInjection,
-  ProviderModule,
-} from '../providers/contracts.js'
+import type { ProviderModule } from '../providers/contracts.js';
+import type { MeshCoordinatorMcpConfigFormat, MeshCoordinatorSystemPromptInjection } from '../providers/mesh-coordinator-contracts.js';
 
 export interface MeshCoordinatorMcpServerLaunch {
   command: string

@@ -26,7 +26,8 @@ import {
 
 export type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 import type { NativeHistoryRole, NativeHistoryKind } from './types.js';
-import { statMtimeMs } from './fs-utils.js';
+import { isSafeFilename, statMtimeMs } from './fs-utils.js';
+import { extractTimestampValue, listJsonlTranscriptSessions } from './transcript-common.js';
 import {
   oneLine,
   TOOL_CALL_SUMMARY_MAX,
@@ -92,17 +93,6 @@ export interface NativeHistorySessionMeta {
 
 // ─── Internal helpers ───────────────────────────────────────────────────────
 
-function extractTimestampValue(value: unknown): number {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
-  if (typeof value === 'string') {
-    const numeric = Number(value);
-    if (Number.isFinite(numeric) && numeric > 0) return numeric;
-    const parsed = Date.parse(value);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
-  }
-  return 0;
-}
-
 /** The first extractable `timestamp` in the file, or 0. Stops at the first hit. */
 function firstRecordTimestamp(lines: readonly string[]): number {
   for (const line of lines) {
@@ -113,10 +103,6 @@ function firstRecordTimestamp(lines: readonly string[]): number {
     if (ts) return ts;
   }
   return 0;
-}
-
-function isSafeSessionId(sessionId: string): boolean {
-  return /^[A-Za-z0-9._:-]+$/.test(sessionId) && !sessionId.includes('..');
 }
 
 /**
@@ -331,31 +317,6 @@ function stampToolBlockRef(
 }
 
 /**
- * Re-parse the transcript into the SAME record array `parseTranscriptFile`
- * indexes against, for the expand path to address by `recordIndex`.
- *
- * Deliberately re-implemented here rather than reusing the spec path's
- * `readJsonlLines`: that cache indexes the records IT chose to keep, and its
- * skip rule (trim-then-parse, malformed dropped) is maintained independently of
- * this reader's. Two parsers agreeing today is not the same as two parsers that
- * cannot disagree, and a one-record drift between them would silently return a
- * neighbouring tool's output — the exact mis-addressing the mtime seal exists
- * to prevent, but invisible to it because the seal would still match.
- */
-export function readClaudeRecords(filePath: string): Record<string, unknown>[] {
-  let raw: string;
-  try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return []; }
-  const out: Record<string, unknown>[] = [];
-  for (const line of raw.split('\n').filter(Boolean)) {
-    let parsed: unknown = null;
-    try { parsed = JSON.parse(line); } catch { continue; }
-    if (!parsed || typeof parsed !== 'object') continue;
-    out.push(parsed as Record<string, unknown>);
-  }
-  return out;
-}
-
-/**
  * Read one addressed claude tool block at full length.
  *
  * Returns null when the address does not name a tool block, so the caller can
@@ -442,7 +403,7 @@ function parseTranscriptFile(
 
   // recordIndex counts SURVIVING records — every line this loop successfully
   // parses, including ones it later skips for other reasons. It must not count
-  // raw lines, because `readClaudeRecords` (the expand path) rebuilds the same
+  // raw lines, because `readJsonlRecords` (the expand path) rebuilds the same
   // array from the same rule; addressing by raw line number would drift by one
   // for every malformed or blank line in the file.
   let recordIndex = -1;
@@ -508,7 +469,7 @@ function parseTranscriptFile(
     // image send and leaked local temp paths through every read path
     // (read_chat, mesh_read_chat). Mirror Claude Code's own UI and skip them.
     // The skip sits AFTER recordIndex++ so tool-block refs minted for later
-    // records stay aligned with readClaudeRecords, which keeps every record.
+    // records stay aligned with readJsonlRecords, which keeps every record.
     if (type === 'user' && record.isMeta === true) continue;
 
     if (type === 'user') {
@@ -571,7 +532,7 @@ export function readSession(sessionPath: string): NativeHistorySession | null {
   if (!sessionPath || !path.isAbsolute(sessionPath)) return null;
 
   const basename = path.basename(sessionPath, '.jsonl');
-  if (!isSafeSessionId(basename)) return null;
+  if (!isSafeFilename(basename)) return null;
   if (!fs.existsSync(sessionPath)) return null;
 
   const sourceMtimeMs = statMtimeMs(sessionPath);
@@ -612,65 +573,13 @@ export function readSession(sessionPath: string): NativeHistorySession | null {
  * each file is opened only for lightweight scanning).
  */
 export async function listSessions(watchPath: string): Promise<NativeHistorySessionMeta[]> {
-  // Resolve base dir from watchPath: strip leading `~/` then resolve globs.
-  // We always scan the canonical root regardless of glob pattern content.
-  const expandedBase = watchPath.startsWith('~/')
-    ? path.join(os.homedir(), watchPath.slice(2).split('/**')[0].split('/*')[0])
-    : watchPath.split('/**')[0].split('/*')[0];
-
-  // Fall back to the canonical ~/.claude/projects root
-  const root = fs.existsSync(expandedBase) ? expandedBase : claudeProjectsRoot();
-  if (!fs.existsSync(root)) return [];
-
-  const results: NativeHistorySessionMeta[] = [];
-
-  // Recursive directory scan
-  const stack: string[] = [root];
-  while (stack.length > 0) {
-    const current = stack.pop()!;
-    let entries: fs.Dirent[] = [];
-    try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { continue; }
-
-    for (const entry of entries) {
-      const entryPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        stack.push(entryPath);
-        continue;
-      }
-      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
-
-      const sessionId = path.basename(entryPath, '.jsonl');
-      if (!isSafeSessionId(sessionId)) continue;
-
-      const sourceMtimeMs = statMtimeMs(entryPath);
-      const { messages } = parseTranscriptFile(entryPath, sessionId);
-      const visible = messages.filter((m) => m.kind !== 'session_start');
-      if (visible.length === 0) continue;
-
-      const firstSystem = messages.find((m) => m.kind === 'session_start');
-      const workspace = firstSystem?.workspace || firstSystem?.content || undefined;
-      const firstMsg = visible[0];
-      const lastMsg = visible[visible.length - 1];
-
-      results.push({
-        historySessionId: sessionId,
-        sessionId,
-        sourcePath: entryPath,
-        sourceMtimeMs,
-        messageCount: visible.length,
-        firstMessageAt: firstMsg.receivedAt || sourceMtimeMs,
-        lastMessageAt: lastMsg.receivedAt || sourceMtimeMs,
-        sessionTitle: lastMsg.content,
-        preview: lastMsg.content,
-        workspace,
-        agent: 'claude-cli',
-        source: 'provider-native',
-        nativeHistoryCoverage: 'full',
-      });
-    }
-  }
-
-  // Sort by most recently updated first
-  results.sort((a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0));
-  return results;
+  return listJsonlTranscriptSessions(watchPath, claudeProjectsRoot(), (entryPath) => {
+    const sessionId = path.basename(entryPath, '.jsonl');
+    return { sessionId, messages: parseTranscriptFile(entryPath, sessionId).messages };
+  }).map((session) => ({
+    ...session,
+    agent: 'claude-cli' as const,
+    source: 'provider-native' as const,
+    nativeHistoryCoverage: 'full' as const,
+  }));
 }

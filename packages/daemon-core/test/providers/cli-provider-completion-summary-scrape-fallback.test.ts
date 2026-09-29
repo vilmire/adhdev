@@ -173,8 +173,6 @@ describe('evaluateFinalizationBlock — bounded native-summary write hold', () =
       visibleStatus: () => 'idle',
       busyEpoch: () => 1,
       lastOutputAt: () => undefined,
-      adapterWaitingForResponse: () => false,
-      adapterTurnScopeActive: () => false,
       adapterAnyPending: () => false,
       partialResponsePending: () => false,
       parsedStatus: () => ({ ok: true, status: 'idle', modalActive: false, messages: [] }),
@@ -189,7 +187,6 @@ describe('evaluateFinalizationBlock — bounded native-summary write hold', () =
       transcriptAgeMs: () => undefined,
       inApprovalResumeGrace: () => false,
       hasApprovalResolutionEvidence: () => true,
-      screenTailShowsApprovalPrompt: () => false,
       holdClassPtyStillActive: () => false,
       // Native-source provider.
       ownsExternalHistory: () => true,

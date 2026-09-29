@@ -68,7 +68,7 @@ describe('RC32 modal safe-area hardening (audited peers)', () => {
   })
 
   it('the mesh DetailModal uses the capture-phase single-level Escape handler', () => {
-    const overviewSource = readSource('components/MeshGraph/MeshOverviewCards.tsx')
+    const overviewSource = readSource('components/MeshGraph/MeshOverviewDetails.tsx')
     const parentSource = readSource('components/dashboard/DashboardMeshGraphDialog.tsx')
     const escapeSource = readSource('utils/modal-escape.ts')
 

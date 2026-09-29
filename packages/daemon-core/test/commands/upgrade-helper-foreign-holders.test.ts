@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('child_process', () => mocks)
 
-import { listForeignNativeAddonHolders, stopForeignNativeAddonHolders } from '../../src/commands/upgrade-helper'
+import { listForeignNativeAddonHolders, stopForeignNativeAddonHolders } from '../../src/commands/upgrade-process-stop.js';
 
 // These helpers branch on process.platform: the conpty.node / ghostty-vt.dll
 // exclusive lock only exists on Windows, so the whole feature is a no-op on

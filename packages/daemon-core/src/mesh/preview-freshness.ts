@@ -3,9 +3,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { gitChildEnv } from '../git/git-locale.js';
 import { resolve } from 'node:path';
 
-export type PreviewFreshnessStatus = 'fresh' | 'stale' | 'unknown' | 'not_configured';
+type PreviewFreshnessStatus = 'fresh' | 'stale' | 'unknown' | 'not_configured';
 
-export interface PreviewFreshness {
+interface PreviewFreshness {
     status: PreviewFreshnessStatus;
     lastPreviewCommit: string | null;
     currentMainCommit: string | null;

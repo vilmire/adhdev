@@ -49,7 +49,7 @@ describe('CliProviderInstance status-snapshot hydration is bounded (cold N-sessi
 
   it('native-source: getState hydration reads a bounded tail, never the full transcript', async () => {
     const chatHistory = await import('../../src/config/chat-history.js')
-    const readProviderSpy = vi.spyOn(chatHistory, 'readProviderChatHistory')
+    const readProviderSpy = vi.spyOn(await import('../../src/config/provider-native-history.js'), 'readProviderChatHistory')
 
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
     const historySessionId = '019dd4b3-bea7-74a0-a5ca-e894370e9c94'
@@ -95,7 +95,7 @@ describe('CliProviderInstance status-snapshot hydration is bounded (cold N-sessi
   it('materialized-mirror: getState hydration reads a bounded tail, never MAX_SAFE_INTEGER', async () => {
     const chatHistory = await import('../../src/config/chat-history.js')
     // materializeProviderNativeHistory must succeed so the mirror read runs.
-    vi.spyOn(chatHistory, 'materializeProviderNativeHistory').mockReturnValue(true)
+    vi.spyOn(await import('../../src/config/provider-native-history.js'), 'materializeProviderNativeHistory').mockReturnValue(true)
     const readChatSpy = vi.spyOn(chatHistory, 'readChatHistory')
 
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
@@ -132,7 +132,7 @@ describe('CliProviderInstance status-snapshot hydration is bounded (cold N-sessi
 
   it('N resume sessions: no getState triggers a single unbounded full transcript read', async () => {
     const chatHistory = await import('../../src/config/chat-history.js')
-    const readProviderSpy = vi.spyOn(chatHistory, 'readProviderChatHistory')
+    const readProviderSpy = vi.spyOn(await import('../../src/config/provider-native-history.js'), 'readProviderChatHistory')
     const readChatSpy = vi.spyOn(chatHistory, 'readChatHistory')
 
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
@@ -179,7 +179,7 @@ describe('CliProviderInstance status-snapshot hydration is bounded (cold N-sessi
 
   it('restore (once-per-resume) still hydrates the full transcript via full:true', async () => {
     const chatHistory = await import('../../src/config/chat-history.js')
-    const readProviderSpy = vi.spyOn(chatHistory, 'readProviderChatHistory')
+    const readProviderSpy = vi.spyOn(await import('../../src/config/provider-native-history.js'), 'readProviderChatHistory')
 
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
     const historySessionId = '20260422_002711_293d9a'

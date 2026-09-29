@@ -97,7 +97,7 @@ const STATUS_RENDER_ORDER: readonly MeshActiveWorkStatus[] = [
 const STATUS_ACTIONABILITY_RANK: Record<MeshActiveWorkStatus, number> =
     Object.fromEntries(STATUS_RENDER_ORDER.map((status, i) => [status, i])) as Record<MeshActiveWorkStatus, number>;
 
-export interface MeshStatusLineInputs {
+interface MeshStatusLineInputs {
     activeWork: MeshActiveWorkRecord[];
     statusCounts: Record<MeshActiveWorkStatus, number>;
     totalActiveCount: number;

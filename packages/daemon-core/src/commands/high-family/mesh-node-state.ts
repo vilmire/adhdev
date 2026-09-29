@@ -38,7 +38,7 @@
  *   mesh channel with a bounded wait.
  */
 import * as fs from 'fs';
-import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, meshNodeIdMatches, readText, readOptionalRecord } from '@adhdev/mesh-shared';
 import { readMeshNodeDaemonId } from '../../mesh/mesh-node-identity.js';
 import { defineCommandSpecs } from '../command-registry.js';
 import { withMeshDirectDispatch } from '../command-args.js';
@@ -49,14 +49,6 @@ import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 
 /** Remote git_log forward budget — well under the dashboard's 30s command deadline. */
 export const MESH_NODE_GIT_LOG_TIMEOUT_MS = 15_000;
-
-function readString(value: unknown): string {
-    return typeof value === 'string' ? value.trim() : '';
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
 
 async function resolveMeshNode(ctx: HighFamilyContext, meshId: string, nodeId: string): Promise<
     | { ok: true; mesh: any; node: any }
@@ -72,20 +64,20 @@ async function resolveMeshNode(ctx: HighFamilyContext, meshId: string, nodeId: s
 
 export const meshNodeStateHandlers: Record<string, HighFamilyHandler> = {
     mesh_node_git_report: async (ctx: HighFamilyContext, args: any) => {
-        const meshId = readString(args?.meshId);
-        const nodeId = readString(args?.nodeId);
+        const meshId = readText(args?.meshId);
+        const nodeId = readText(args?.nodeId);
         if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
-        const git = readRecord(args?.git);
-        const runtime = readRecord(args?.runtime);
+        const git = readOptionalRecord(args?.git);
+        const runtime = readOptionalRecord(args?.runtime);
         // Unchanged runtime / git travel as their signature only (mesh-node-state-pusher.ts).
-        const runtimeSignature = !runtime ? readString(args?.runtimeSignature) : '';
+        const runtimeSignature = !runtime ? readText(args?.runtimeSignature) : '';
         const hasGit = !!git && typeof git.isGitRepo === 'boolean';
-        const gitSignature = !hasGit ? readString(args?.gitSignature) : '';
+        const gitSignature = !hasGit ? readText(args?.gitSignature) : '';
         if (!hasGit && !runtime && !gitSignature) return { success: false, error: 'git status required' };
         const resolved = await resolveMeshNode(ctx, meshId, nodeId);
         if (!resolved.ok) return resolved.result;
-        const nodeWorkspace = readString(resolved.node.workspace);
-        const reportedWorkspace = readString(args?.workspace);
+        const nodeWorkspace = readText(resolved.node.workspace);
+        const reportedWorkspace = readText(args?.workspace);
         if (nodeWorkspace && reportedWorkspace && nodeWorkspace !== reportedWorkspace) {
             // The node was re-pointed at another checkout: this subscription is obsolete.
             return { success: false, code: 'mesh_node_unknown', error: 'workspace does not match the node on this roster', accepted: false };
@@ -132,10 +124,10 @@ export const meshNodeStateHandlers: Record<string, HighFamilyHandler> = {
             for (const sibling of Array.isArray(resolved.mesh.nodes) ? resolved.mesh.nodes : []) {
                 if (!sibling || sibling === resolved.node || meshNodeIdMatches(sibling, nodeId)) continue;
                 const siblingDaemonId = readMeshNodeDaemonId(sibling) ?? '';
-                const siblingId = readString(sibling.id);
+                const siblingId = readText(sibling.id);
                 if (!ownerDaemonId || !siblingId || !siblingDaemonId || !daemonIdsEquivalent(siblingDaemonId, ownerDaemonId)) continue;
                 const siblingRecorded = ctx.meshNodeGitState.recordRuntimeObservation({
-                    meshId, nodeId: siblingId, workspace: readString(sibling.workspace), runtime, source: 'member_push', observedAt: runtimeObservedAt, daemonId: siblingDaemonId,
+                    meshId, nodeId: siblingId, workspace: readText(sibling.workspace), runtime, source: 'member_push', observedAt: runtimeObservedAt, daemonId: siblingDaemonId,
                 });
                 factsChanged = factsChanged || siblingRecorded.factsChanged;
                 sessionsChanged = sessionsChanged || siblingRecorded.sessionsChanged;
@@ -156,7 +148,7 @@ export const meshNodeStateHandlers: Record<string, HighFamilyHandler> = {
                 for (const sibling of Array.isArray(resolved.mesh.nodes) ? resolved.mesh.nodes : []) {
                     if (!sibling || sibling === resolved.node || meshNodeIdMatches(sibling, nodeId)) continue;
                     const siblingDaemonId = readMeshNodeDaemonId(sibling) ?? '';
-                    const siblingId = readString(sibling.id);
+                    const siblingId = readText(sibling.id);
                     if (!siblingId || !siblingDaemonId || !daemonIdsEquivalent(siblingDaemonId, ownerDaemonId)) continue;
                     ctx.meshNodeGitState.confirmRuntime(meshId, siblingId, runtimeSignature, runtimeObservedAt);
                 }
@@ -201,26 +193,26 @@ export const meshNodeStateHandlers: Record<string, HighFamilyHandler> = {
     },
 
     mesh_node_state_nudge: async (ctx: HighFamilyContext, args: any) => {
-        const meshId = readString(args?.meshId);
-        const nodeId = readString(args?.nodeId);
+        const meshId = readText(args?.meshId);
+        const nodeId = readText(args?.nodeId);
         if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
         const coordinatorDaemonId = readMeshSender(args);
         // Keyed by the SENDER: a peer can only nudge (or subscribe) pushes to itself.
         const subscribed = !!coordinatorDaemonId
-            && ctx.meshNodeStatePusher?.nudge(coordinatorDaemonId, meshId, nodeId, readString(args?.workspace)) === true;
+            && ctx.meshNodeStatePusher?.nudge(coordinatorDaemonId, meshId, nodeId, readText(args?.workspace)) === true;
         return { success: true, subscribed };
     },
 
     mesh_node_git_log: async (ctx: HighFamilyContext, args: any) => {
-        const meshId = readString(args?.meshId);
-        const nodeId = readString(args?.nodeId);
+        const meshId = readText(args?.meshId);
+        const nodeId = readText(args?.nodeId);
         if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
         const limit = typeof args?.limit === 'number' && Number.isFinite(args.limit)
             ? Math.max(1, Math.min(50, Math.floor(args.limit)))
             : 5;
         const resolved = await resolveMeshNode(ctx, meshId, nodeId);
         if (!resolved.ok) return resolved.result;
-        const workspace = readString(resolved.node.workspace);
+        const workspace = readText(resolved.node.workspace);
         if (!workspace) return { success: false, error: `Node ${nodeId} has no workspace` };
         const nodeDaemonId = readMeshNodeDaemonId(resolved.node) ?? '';
         const selfDaemonId = ctx.deps.statusInstanceId ?? '';

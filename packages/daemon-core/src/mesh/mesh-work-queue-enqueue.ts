@@ -21,7 +21,7 @@ import { requireMeshHostQueueOwner } from './mesh-host-ownership.js';
 import { validateMeshTaskModeRequest, buildMeshTaskModeViolationError } from './mesh-task-mode-guardrail.js';
 import { randomUUID } from 'crypto';
 import { normalizeMeshTaskPriority, resolveNotBefore, MESH_TASK_GRAPH_MAX_TASKS } from './mesh-task-predicates.js';
-import { getDifficultyBrains } from '../config/mesh-config.js';
+import { getDifficultyBrains } from '../config/mesh-config-routing.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { normalizeMeshCapabilityTags, resolveConvergeRequiredTags } from './mesh-node-capability-tags.js';
 

@@ -23,7 +23,7 @@
  */
 
 /** The pre-reclaim assignment snapshot preserved on the queue row by the reclaim. */
-export interface MeshLastReclaimSnapshot {
+interface MeshLastReclaimSnapshot {
     providerType?: string;
     nodeId?: string;
     sessionId?: string;
@@ -33,7 +33,7 @@ export interface MeshLastReclaimSnapshot {
 }
 
 /** The `redriveProvenance` block folded into a `task_dispatched` ledger payload. */
-export interface MeshRedriveProvenance {
+interface MeshRedriveProvenance {
     /** Reclaim reason that produced this re-dispatch, e.g. 'delivered_not_consumed_redrive'. */
     reason: string;
     /** How many times the stranded watchdog has reclaimed this row (post-reclaim count). */

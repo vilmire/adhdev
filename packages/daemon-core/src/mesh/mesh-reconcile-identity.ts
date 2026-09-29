@@ -9,8 +9,7 @@
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import { getMachineId } from '../config/config.js';
-import { expandDaemonIdForms, daemonIdsEquivalent } from '@adhdev/mesh-shared';
-import { readNonEmptyString } from './mesh-events-utils.js';
+import { expandDaemonIdForms, daemonIdsEquivalent, readText } from '@adhdev/mesh-shared';
 
 // The set of coordinator-daemon ids THIS daemon answers to when draining the
 // pending-events queue. A unicast completion event is stamped with the worker's
@@ -28,8 +27,8 @@ import { readNonEmptyString } from './mesh-events-utils.js';
 // scope match (host gate, self-node detection, and the drain IN-filter downstream)
 // succeeds regardless of which path stamped the event.
 export function resolveCoordinatorDaemonIds(components: DaemonComponents): string[] {
-    const statusInstanceId = readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId);
-    const machineId = readNonEmptyString(getMachineId());
+    const statusInstanceId = readText((components as { statusInstanceId?: string }).statusInstanceId);
+    const machineId = readText(getMachineId());
     return expandDaemonIdForms([statusInstanceId, machineId]);
 }
 
@@ -58,7 +57,7 @@ export function daemonHostsMesh(mesh: LocalMeshEntry, daemonIds: string[]): bool
     // No metadata → default host (standalone compatibility, see createDefaultMeshHostMetadata).
     if (!host) return true;
     if (host.role && host.role !== 'host') return false;
-    const hostDaemonId = readNonEmptyString(host.hostDaemonId);
+    const hostDaemonId = readText(host.hostDaemonId);
     // Host role but no pinned hostDaemonId → treat as host (single-daemon / legacy).
     if (!hostDaemonId) return true;
     return daemonIdListIncludes(daemonIds, hostDaemonId);
@@ -83,8 +82,8 @@ export function resolveCoordinatorSelfIds(mesh: LocalMeshEntry, drainDaemonIds: 
     // daemonId/machineId matches a runtime id. Its config-form daemonId is exactly
     // what resolveCoordinatorNode()→resolveCoordinatorDaemonId() stamps onto a worker.
     for (const node of mesh.nodes) {
-        const nodeDaemonId = readNonEmptyString(node.daemonId);
-        const nodeMachineId = readNonEmptyString(node.machineId);
+        const nodeDaemonId = readText(node.daemonId);
+        const nodeMachineId = readText(node.machineId);
         const isSelf = (nodeDaemonId && daemonIdListIncludes(drainDaemonIds, nodeDaemonId))
             || (nodeMachineId && daemonIdListIncludes(drainDaemonIds, nodeMachineId));
         if (!isSelf) continue;
@@ -97,7 +96,7 @@ export function resolveCoordinatorSelfIds(mesh: LocalMeshEntry, drainDaemonIds: 
     // daemon believe it is the host and pull queues it does not own. Having a node on
     // this daemon does not make this daemon the host; daemonHostsMesh still honours a
     // foreign hostDaemonId and rejects ownership.
-    const hostDaemonId = readNonEmptyString(mesh.meshHost?.hostDaemonId);
+    const hostDaemonId = readText(mesh.meshHost?.hostDaemonId);
     if (hostDaemonId && daemonIdListIncludes([...ids], hostDaemonId)) ids.add(hostDaemonId);
     return [...ids];
 }

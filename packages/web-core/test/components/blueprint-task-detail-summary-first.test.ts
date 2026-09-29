@@ -63,7 +63,7 @@ describe('splitTaskMessage', () => {
 
 describe('the queue detail renders summary-first', () => {
     const source = fs.readFileSync(
-        path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshOverviewCards.tsx'),
+        path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshOverviewDetails.tsx'),
         'utf8',
     )
 

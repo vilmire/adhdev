@@ -43,7 +43,7 @@ import {
     transcriptClaimOwnerToken,
     __resetTranscriptClaimRegistry,
 } from '../../../src/providers/native-history/transcript-claim-registry.js';
-import { readProviderChatHistory } from '../../../src/config/chat-history.js';
+import { readProviderChatHistory } from '../../../src/config/provider-native-history.js';
 
 // The shipped kimi nativeHistory.source (kept in sync with
 // adhdev-providers/cli/kimi/provider.v1.json).

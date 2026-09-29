@@ -14,7 +14,8 @@ import { tmpdir } from 'os'
  *
  * C: the durable failure notice round-trips through the same config dir.
  */
-import { emitUpgradeFailureNotice, getUpgradeLogPath, readUpgradeFailureNotice } from '../../src/commands/upgrade-helper.js'
+import { getUpgradeLogPath } from '../../src/commands/upgrade-log.js';
+import { emitUpgradeFailureNotice, readUpgradeFailureNotice } from '../../src/commands/upgrade-failure-notice.js';
 
 describe('upgrade log path follows ADHDEV_CONFIG_DIR (preview track scenario)', () => {
   let prevConfigDir: string | undefined

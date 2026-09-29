@@ -1,51 +1,55 @@
 // Mesh tool implementations — session domain.
-// Pure move out of mesh-tools.ts (no behavior change). Shared helpers, types, module
-// state and dependency re-exports live in ./mesh-tools-internal.ts; mesh-tools.ts is a barrel.
+// Pure move out of mesh-tools.ts (no behavior change). Helpers are imported from the
+// modules that define them; mesh-tools.ts is the tool barrel.
 
 import {
-    IpcTransport,
-    SESSION_PROVIDER_METADATA_TTL_MS,
-    annotateRapidReadChatAdvisory,
-    collectPendingApprovals,
-    buildMeshReadChatCacheFallback,
-    buildMissingCoordinatorDaemonIdFailure,
-    buildMissingNodeReadChatRecovery,
-    buildQueueTriggerGuidance,
     commandForNode,
-    compactChatPayload,
     drainCoordinatorPendingEvents,
-    extractLaunchPayload,
     findNodeWithRefresh,
     findOptionalNodeWithRefresh,
-    getSessionMetadata,
-    getWorktreeBootstrapLaunchBlock,
     readActiveWorkFromDaemon,
     recordMeshCoordinatorToolCall,
-    isIdleSessionRecord,
-    isLocalControlPlaneNode,
-    isMeshOwnedDelegateSession,
-    isP2pRelayTransportFailure,
-    isTerminalSessionRecord,
+    refreshMeshFromDaemon,
+    triggerMeshQueueAndReport,
+} from './mesh-tools-internal.js';
+import { IpcTransport } from '../transports/ipc.js';
+import {
+    SESSION_PROVIDER_METADATA_TTL_MS,
+    getSessionMetadata,
     meshSessionCacheKey,
     meshSessionProviderMetadata,
-    missingProviderPriorityMessage,
-    readProviderPriority,
-    readSessionRecordId,
-    readSpawnedSessionVisibility,
-    readString,
-    recordRecoverableLaunchFailure,
-    refreshMeshFromDaemon,
-    resolveCoordinatorDaemonId,
-    resolveCoordinatorNode,
+    resolveMeshSessionProviderMetadata,
+} from './mesh-session-metadata.js';
+import { annotateRapidReadChatAdvisory } from './read-chat-polling-advisory.js';
+import {
+    collectPendingApprovals,
+    isP2pRelayTransportFailure,
     resolveAllowSendKeysDestructive,
     resolveDelegatedWorkerAutoApprove,
     resolveDelegatedWorkerDangerousModeAllow,
     loadRepoMeshJsonConfig,
-    resolveMeshSessionProviderMetadata,
+} from '@adhdev/daemon-core';
+import { buildMeshReadChatCacheFallback, buildMissingNodeReadChatRecovery } from './mesh-read-chat-fallback.js';
+import { buildMissingCoordinatorDaemonIdFailure } from './mesh-remote-dispatch.js';
+import {
+    buildQueueTriggerGuidance,
+    extractLaunchPayload,
+    getWorktreeBootstrapLaunchBlock,
+    isMeshOwnedDelegateSession,
+    missingProviderPriorityMessage,
+    readProviderPriority,
+    readSpawnedSessionVisibility,
+} from './mesh-tools-internal-core.js';
+import { compactChatPayload } from './chat-compact.js';
+import {
+    isIdleSessionRecord,
+    isTerminalSessionRecord,
+    readSessionRecordId,
     resolveSessionProviderType,
-    triggerMeshQueueAndReport,
     unwrapCommandPayload,
-} from './mesh-tools-internal.js';
+} from './mesh-session-helpers.js';
+import { isLocalControlPlaneNode, resolveCoordinatorDaemonId, resolveCoordinatorNode } from './mesh-node-identity.js';
+import { recordRecoverableLaunchFailure } from './mesh-launch-failure.js';
 import type {
     MeshContext,
 } from './mesh-tools-internal.js';
@@ -56,7 +60,7 @@ import { scheduleBackgroundDirectReconcile } from './mesh-status-background.js';
 // §8 unit 6 ("mesh_read_chat remote display cutover") — the FIRST hop of the
 // fixed `replica → live P2P read_chat → cached summary` order.
 import { readTranscriptReplicaForDisplay } from './mesh-transcript-replica-read.js';
-import { normalizeNodeCapabilitySlots } from '@adhdev/mesh-shared';
+import { normalizeNodeCapabilitySlots, readString } from '@adhdev/mesh-shared';
 // QUOTA GATE for the manual launch path. Same judgement module the auto-launch /
 // queue-drain path uses (daemon-core resolveUsableProvider) — deliberately shared
 // rather than reimplemented, so the two dispatch paths can never disagree about

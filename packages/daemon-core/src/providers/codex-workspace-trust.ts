@@ -56,6 +56,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { LOG } from '../logging/logger.js';
+import { escapeTomlKey, hasTomlTrustTable, isOverBroadTrustRoot, realWorkspacePath } from './workspace-trust-shared.js';
 
 /**
  * codex's config root. Honors the `CODEX_HOME` override the binary itself
@@ -76,58 +77,17 @@ function codexHome(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
- * Resolve the canonical, real (symlink-followed) absolute form of the workspace
- * path. codex canonicalizes before keying the store — the entry written on
- * macOS for `/tmp/x` reads `/private/tmp/x` — so matching has to use the same
- * normalization. Falls back to the resolved path if the directory can't be
- * stat'd.
- */
-function realWorkspacePath(workingDir: string): string {
-    try {
-        return fs.realpathSync(workingDir);
-    } catch {
-        return path.resolve(workingDir);
-    }
-}
-
-/**
  * Never record an over-broad root. Mirrors the guard grok's writer applies: a
  * grant on `/`, on the user's home, or on the codex config root itself would
  * trust far more than the one directory being launched into.
  */
 function isOverBroadRoot(real: string, env: NodeJS.ProcessEnv = process.env): boolean {
-    if (!path.isAbsolute(real)) return true;
-    const normalized = real.replace(/\/+$/, '') || '/';
-    if (normalized === '/' || path.dirname(normalized) === normalized) return true;
-    const home = (() => {
-        try {
-            return fs.realpathSync(os.homedir());
-        } catch {
-            return os.homedir();
-        }
-    })();
-    if (normalized === home.replace(/\/+$/, '')) return true;
-    if (normalized === codexHome(env).replace(/\/+$/, '')) return true;
-    return false;
+    return isOverBroadTrustRoot(real, codexHome(env));
 }
 
-/** TOML basic-string escaping for the path used as the `[projects."…"]` key. */
-function escapeTomlKey(value: string): string {
-    return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-}
-
-/**
- * Does the store already carry a `[projects."<real>"]` table? Matches the
- * header line only — enough to stay idempotent without pulling in a TOML
- * parser, and a false negative merely rewrites an equivalent entry.
- *
- * ★Matching the HEADER rather than the trust value is deliberate: it means an
- * existing entry is never rewritten, which is what preserves a user's explicit
- * non-trusted decision instead of silently flipping it to trusted.
- */
+/** Does the store already carry a `[projects."<real>"]` table? (header match — see hasTomlTrustTable) */
 function hasTrustEntry(contents: string, real: string): boolean {
-    const needle = `[projects."${escapeTomlKey(real)}"]`;
-    return contents.split(/\r?\n/).some((line) => line.trim() === needle);
+    return hasTomlTrustTable(contents, 'projects', real);
 }
 
 /** Native codex TOML projection bytes, separated from HOME/store resolution. */

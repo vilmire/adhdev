@@ -68,7 +68,6 @@ export const LEGACY_TURN_TABLES = [
     'mesh_pending_events',
     'mesh_event_ledger',
 ] as const;
-export type LegacyTurnTable = typeof LEGACY_TURN_TABLES[number];
 
 export const TURN_LEDGER_DDL = `
     CREATE TABLE IF NOT EXISTS turn_attempts (

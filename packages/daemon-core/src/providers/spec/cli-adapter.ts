@@ -27,7 +27,7 @@ import type { NativeHistoryInput } from './native-history-types.js';
 import { expandToolBlock, type ToolBlockExpandResult } from './tool-block-expand.js';
 import { detectBackgroundTaskActive } from './background-task-detector.js';
 import {
-    buildSpecDebugSnapshot, buildSpecDebugState, extractCodexSessionIdFromScreen,
+    buildSpecDebugSnapshot, extractCodexSessionIdFromScreen,
     scrapeScreenAssistantMessages, screenScrapeSupported, type SpecDebugView,
 } from './spec-adapter-readouts.js';
 import * as fs from 'node:fs';
@@ -781,7 +781,7 @@ export class SpecCliAdapter implements CliAdapter {
         return invokeSpecControl(this.driver, this.spec.control_bar ?? [], scriptName, args);
     }
 
-    getDebugSnapshot(): unknown {
+    getDebugSnapshot(): Record<string, any> {
         return buildSpecDebugSnapshot(this.debugView(), this.driver);
     }
 
@@ -1148,10 +1148,6 @@ export class SpecCliAdapter implements CliAdapter {
             if (result && Array.isArray(result.messages)) return result.messages;
         } catch { /* best-effort */ }
         return [];
-    }
-
-    getDebugState(): Record<string, any> {
-        return buildSpecDebugState(this.debugView(), this.driver);
     }
 
     getTraceState(limit = 120): Record<string, any> {

@@ -40,9 +40,10 @@
  * §4.8) on every such topic: a stream's rows go only when they are older than
  * `MESH_FULL_SYNC_RETENTION_MS` AND every mesh member this node has seen within
  * `MESH_FULL_SYNC_MAX_LAG_MS` has acknowledged them (its HAVE rounds on a
- * direct session, or — for a member this node only reaches through the
- * coordinator — its Beacon report, `beacon.ts` `noteBeaconAcks`) AND every
- * durable cursor (`mesh.index`, `turn.ingest`, `turn.deliver`) has read them.
+ * direct session — the only ack source; a writer member this node never talks
+ * to directly acknowledges nothing and so pins every stream at 0, which just
+ * pauses pruning here: git, not these topics, is the sync source of truth)
+ * AND every durable cursor (`mesh.index`, `turn.ingest`, `turn.deliver`) has read them.
  * A peer that is below the resulting floor anyway (new node, or offline past
  * max-lag) recovers with the library's TRUNCATED handshake instead of a gap.
  *

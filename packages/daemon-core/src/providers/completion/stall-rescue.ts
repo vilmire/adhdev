@@ -28,6 +28,7 @@ import type { ProviderModule } from '../contracts.js';
 import type { CompletionFinalAssistantEvidence } from '../cli-provider-instance-types.js';
 import type { NativeTurnTerminalMarker } from '../../chat/native-turn-signal.js';
 import type { SignalSnapshot } from '../spec/signal-envelope.js';
+import { adapterTurnStartedAt, adapterTurnTaskId } from '../adapter-turn-clock.js';
 
 /**
  * The narrow surface of CliProviderInstance the rescue paths read/write.
@@ -123,9 +124,7 @@ export function flushMeshCompletionBeforeCleanup(host: StallRescueHost): boolean
     // before this task ran) and the native transcript must hold an in-turn final
     // assistant summary. turnStartedAt anchors the turn-scoped read.
     if (!host.injectedTaskHasStartedGenerating()) return false;
-    const turnStartedAt = typeof (host.adapter as any)?.currentTurnStartedAt === 'number'
-        ? (host.adapter as any).currentTurnStartedAt as number
-        : host.meshTaskInjectedAt || undefined;
+    const turnStartedAt = resolveTurnStartedAt(host);
     let parsedMessages: unknown;
     try {
         parsedMessages = host.adapter?.getScriptParsedStatus?.()?.messages;
@@ -211,8 +210,7 @@ export function flushMeshCompletionBeforeCleanup(host: StallRescueHost): boolean
  *    and any provider declaring nativeHistory.completionSignal), surfaced by its
  *    native-history reader. It is declarative, never provider-name branching, so
  *    every floor-class provider that declares a signal is covered by construction.
- *  • It is TURN-SCOPED by selectTurnTerminalMarker (turn-id first, turn-start
- *    boundary otherwise), so a PRIOR turn's marker can never satisfy the current
+ *  • It is TURN-SCOPED by selectTurnTerminalMarker (turn-start boundary), so a PRIOR turn's marker can never satisfy the current
  *    turn — the ANTIGRAVITY-PREMATURE-COMPLETION rule is preserved.
  *  • A session with no marker (the provider declares no signal, or the transcript
  *    genuinely has no terminal record yet because the agent is STILL WORKING)
@@ -238,9 +236,7 @@ function isWedgedGeneratingWithNativeTurnEnd(host: StallRescueHost): boolean {
 
 /** Shared turn-start anchor for the rescue paths (adapter clock, mesh injection otherwise). */
 function resolveTurnStartedAt(host: StallRescueHost): number | undefined {
-    return typeof (host.adapter as any)?.currentTurnStartedAt === 'number'
-        ? (host.adapter as any).currentTurnStartedAt as number
-        : host.meshTaskInjectedAt || undefined;
+    return adapterTurnStartedAt(host.adapter) || host.meshTaskInjectedAt || undefined;
 }
 
 export function tryReconcileTranscriptCompletionForStall(
@@ -312,9 +308,7 @@ export function tryReconcileTranscriptCompletionForStall(
     // reused session's stale tail before this task ran).
     if (!host.injectedTaskHasStartedGenerating()) return false;
 
-    const turnStartedAt = typeof (host.adapter as any)?.currentTurnStartedAt === 'number'
-        ? (host.adapter as any).currentTurnStartedAt as number
-        : host.meshTaskInjectedAt || undefined;
+    const turnStartedAt = resolveTurnStartedAt(host);
     let parsedMessages: unknown;
     try {
         parsedMessages = host.adapter?.getScriptParsedStatus?.()?.messages;
@@ -502,10 +496,7 @@ export function maybeSynthesizeStartupGraceCollapse(
     now: number,
     reason: 'startup_grace_fast_collapse' | 'startup_grace_idle_turn_collapse',
 ): boolean {
-    const startedTurnTaskId = typeof (host.adapter as any)?.currentTurnTaskId === 'string'
-        && (host.adapter as any).currentTurnTaskId.trim()
-        ? (host.adapter as any).currentTurnTaskId as string
-        : undefined;
+    const startedTurnTaskId = adapterTurnTaskId(host.adapter);
     const fastCollapsed = !!startedTurnTaskId
         && !host.hasAdapterPendingResponse()
         && !host.generatingStartedAt

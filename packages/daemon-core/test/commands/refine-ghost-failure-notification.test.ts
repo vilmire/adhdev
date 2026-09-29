@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import {
-  extractRefineMergeLanding,
-  slimRefineEventResult,
-  classifyBatchNodeConvergence,
-} from '../../src/commands/router-refine'
+import { classifyBatchNodeConvergence } from '../../src/commands/router-refine';
+import { extractRefineMergeLanding } from '../../src/mesh/mesh-refine-landing.js';
+import { slimRefineEventResult } from '../../src/commands/router-refine-jobs.js';
 import {
   classifyRefineTerminal,
   refineTerminalNextStep,

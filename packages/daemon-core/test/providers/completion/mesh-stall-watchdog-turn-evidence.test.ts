@@ -38,7 +38,6 @@ function makeInstance(opts: { turnEvidencePort?: ReturnType<typeof createTurnEvi
         _lastOutputAt: 10_000,
         _status: 'idle',
         _alive: true,
-        currentTurnScope: undefined,
         isAlive() { return this._alive; },
         getStatus() { return { lastOutputAt: this._lastOutputAt, status: this._status }; },
     };

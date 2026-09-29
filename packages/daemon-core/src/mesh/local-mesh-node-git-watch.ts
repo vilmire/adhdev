@@ -17,7 +17,7 @@ import type { WorkspaceGitWatchHandle } from './workspace-git-watcher.js';
 
 export const LOCAL_MESH_NODE_GIT_SELF_READ_QUIET_MS = 1_500;
 
-export interface LocalMeshNodeGitWatchOptions {
+interface LocalMeshNodeGitWatchOptions {
     watch: (workspace: string, onChange: () => void, onError: () => void) => WorkspaceGitWatchHandle | null;
     /** A watched checkout of `meshId` moved. */
     onChange: (meshId: string) => void;

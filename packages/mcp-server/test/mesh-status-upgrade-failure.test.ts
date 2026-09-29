@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { extractUpgradeFailureSummary } from '../src/tools/mesh-tools-internal.js';
+import { extractUpgradeFailureSummary } from '../src/tools/mesh-tools-internal-core.js';
 import { heldNodeStatusProbe, localStatusProbe } from '../src/tools/mesh-held-node-state.js';
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshStatus } from '../src/tools/mesh-tools.js';

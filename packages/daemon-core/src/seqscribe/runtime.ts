@@ -14,36 +14,12 @@
  */
 
 import { LOG } from '../logging/logger.js';
-import type { BeaconDiagnostics } from './beacon-diagnostics.js';
 import { loadStoredFleetSecret } from './fleet-secret.js';
 import { openSeqscribeNode, type SeqscribeNodeHandle } from './node.js';
 import { startSeqscribeThroughputCollector, type SeqscribeThroughputCollector } from './throughput-collector.js';
 import type { TranscriptProjectionService } from './transcript-publisher.js';
 import { TranscriptReplicaStore } from './transcript-replica-store.js';
 import { TranscriptTopicClaimRegistry } from './transcript-topic-claim.js';
-
-/** A beacon as the daemon reads it — typed structurally so this module does not drag in beacon.ts. */
-export interface BeaconHandleLike {
-    diagnostics(): BeaconDiagnostics;
-}
-
-/**
- * Where the HOST puts its beacon once armed (cloud: first authenticated epoch,
- * long after boot). Replaces the `componentsRef` holder the router's
- * `getBeaconDiagnostics` closure used to read. Standalone never sets it.
- */
-export interface BeaconSlot {
-    set(handle: BeaconHandleLike | null): void;
-    get(): BeaconHandleLike | null;
-}
-
-export function createBeaconSlot(): BeaconSlot {
-    let handle: BeaconHandleLike | null = null;
-    return {
-        set(next) { handle = next; },
-        get() { return handle; },
-    };
-}
 
 /** What `armSeqscribeProjections` hands back to the runtime while armed. */
 export interface SeqscribeProjectionsView {
@@ -63,7 +39,6 @@ export interface SeqscribeRuntime {
     readonly transcriptClaims: TranscriptTopicClaimRegistry;
     /** §8 unit 3 subscriber-side transcript replica store. */
     readonly transcriptReplica: TranscriptReplicaStore;
-    readonly beacon: BeaconSlot;
     /** The armed projections, or null before arming / after disarm. */
     projections(): SeqscribeProjectionsView | null;
     attachProjections(view: SeqscribeProjectionsView | null): void;
@@ -143,7 +118,6 @@ export function openSeqscribeRuntime(options: OpenSeqscribeRuntimeOptions): Seqs
     // raw-id claim must see every claim attempt for this node.
     const transcriptClaims = new TranscriptTopicClaimRegistry();
     const transcriptReplica = new TranscriptReplicaStore(node, transcriptClaims);
-    const beacon = createBeaconSlot();
 
     let projections: SeqscribeProjectionsView | null = null;
     let quiesced = false;
@@ -154,7 +128,6 @@ export function openSeqscribeRuntime(options: OpenSeqscribeRuntimeOptions): Seqs
         collector,
         transcriptClaims,
         transcriptReplica,
-        beacon,
         projections: () => projections,
         attachProjections(view) {
             projections = view;

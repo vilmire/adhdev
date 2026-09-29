@@ -48,7 +48,7 @@ export interface MeshStallHost {
     adapter: {
         isAlive?: () => boolean;
         getStatus(opts: { allowParse: boolean }): unknown;
-        getLastApprovalResolvedAt?: () => number;
+        getLastApprovalResolvedAt(): number;
         /** REDRAW-NUDGE: false-busy resize wiggles the spec driver already tried (0/absent for non-spec adapters). */
         getRedrawNudgeCount?: () => number;
     };
@@ -153,7 +153,7 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
     // decision, so its lastOutputAt moves past resolvedAt and remains protected.
     let staleResolvedApprovalLatch = false;
     try {
-        const resolvedAt = host.adapter.getLastApprovalResolvedAt?.() ?? 0;
+        const resolvedAt = host.adapter.getLastApprovalResolvedAt();
         staleResolvedApprovalLatch = observedStatus === 'waiting_approval'
             && Number.isFinite(resolvedAt)
             && resolvedAt > 0

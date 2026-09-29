@@ -1122,14 +1122,13 @@ describe('CliProviderInstance lightweight hot chat state', () => {
         { role: 'assistant', content: 'Committed the change.', kind: 'standard' },
       ]
       const adapter: any = {
-        currentTurnScope: { responseEpoch: 1 },
-        isWaitingForResponse: true,
+        _processing: true,
+        isProcessing() { return this._processing },
         chatMessagesOwnedExternally: true,
         getStatus: () => ({ status, activeModal, messages: [] }),
         getScriptParsedStatus: () => ({ status: parsedStatus, activeModal, messages: parsedMessages }),
         getPartialResponse: () => '',
         getRuntimeMetadata: () => null,
-        getScreenText: () => '',
       }
       instance.adapter = adapter
 
@@ -1160,8 +1159,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       // isWaitingForResponse/currentTurnScope is held as a still-running turn. Model the
       // turn GENUINELY ending: the adapter closes its turn scope before the final idle.
       // (The first idle valley above keeps its markers set — still mid-turn by design.)
-      adapter.currentTurnScope = null
-      adapter.isWaitingForResponse = false
+      adapter._processing = false
       status = 'idle'
       parsedStatus = 'idle'
       activeModal = null
@@ -1201,14 +1199,13 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       let parsedStatus = 'generating'
       let activeModal: any = null
       const adapter: any = {
-        currentTurnScope: { responseEpoch: 1 },
-        isWaitingForResponse: true,
+        _processing: true,
+        isProcessing() { return this._processing },
         chatMessagesOwnedExternally: true,
         getStatus: () => ({ status, activeModal, messages: [] }),
         getScriptParsedStatus: () => ({ status: parsedStatus, activeModal, messages: [] }),
         getPartialResponse: () => '',
         getRuntimeMetadata: () => null,
-        getScreenText: () => '',
       }
       instance.adapter = adapter
 
@@ -1225,8 +1222,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       activeModal = null
       instance.detectStatusTransition()
 
-      adapter.currentTurnScope = null
-      adapter.isWaitingForResponse = false
+      adapter._processing = false
       status = 'idle'
       parsedStatus = 'idle'
       instance.detectStatusTransition()
@@ -1515,7 +1511,7 @@ describe('CliProviderInstance — startup-phase spurious completion suppression'
   })
 })
 
-describe('CliProviderInstance — stale parsed busy status suppression (Bug 2: false completion from non-empty responseBuffer)', () => {
+describe('CliProviderInstance — stale parsed busy status suppression', () => {
   function makeInstance() {
     return new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'claude-cli',
@@ -1525,35 +1521,10 @@ describe('CliProviderInstance — stale parsed busy status suppression (Bug 2: f
     } as any, '/tmp/project') as any
   }
 
-  it('does not suppress finalization block when adapter responseBuffer is non-empty (even with isWaitingForResponse=false)', () => {
+  it('suppresses the finalization block when the adapter is idle but the parser lags', () => {
     const instance = makeInstance()
-    // Simulate the Bug 2 scenario: adapter marked itself idle and cleared isWaitingForResponse,
-    // but responseBuffer still has content (native parser is still processing).
+    // Genuine stale parsed status: adapter truly finished, but the parser lags.
     instance.adapter = {
-      isWaitingForResponse: false,
-      responseBuffer: 'partial response content still being parsed',
-      currentTurnScope: null,
-      isProcessing: () => false,
-      getPartialResponse: () => '',  // gated on isWaitingForResponse, returns empty
-      getStatus: () => ({ status: 'idle' }),
-      getScriptParsedStatus: () => ({ status: 'generating', messages: [] }),
-    }
-
-    const parsedStatus = { status: 'generating', messages: [], activeModal: null, modal: null }
-    const adapterStatus = { status: 'idle' }
-    // Before fix: shouldSuppressStaleParsedBusyStatus returned true (suppressing the block),
-    // causing the completion event to emit prematurely.
-    // After fix: returns false because responseBuffer is non-empty.
-    expect(instance.shouldSuppressStaleParsedBusyStatus(parsedStatus, adapterStatus)).toBe(false)
-  })
-
-  it('suppresses finalization block when adapter responseBuffer is empty and isWaitingForResponse=false', () => {
-    const instance = makeInstance()
-    // Genuine stale parsed status: adapter truly finished, responseBuffer empty, but parser lags.
-    instance.adapter = {
-      isWaitingForResponse: false,
-      responseBuffer: '',
-      currentTurnScope: null,
       isProcessing: () => false,
       getPartialResponse: () => '',
       getStatus: () => ({ status: 'idle' }),
@@ -1562,16 +1533,13 @@ describe('CliProviderInstance — stale parsed busy status suppression (Bug 2: f
 
     const parsedStatus = { status: 'generating', messages: [], activeModal: null, modal: null }
     const adapterStatus = { status: 'idle' }
-    // Adapter truly done (empty buffer) — suppress the stale generating block so completion can proceed.
+    // Adapter truly done — suppress the stale generating block so completion can proceed.
     expect(instance.shouldSuppressStaleParsedBusyStatus(parsedStatus, adapterStatus)).toBe(true)
   })
 
   it('does not suppress when parsedStatus is idle (suppression only applies to generating-like parsed statuses)', () => {
     const instance = makeInstance()
     instance.adapter = {
-      isWaitingForResponse: false,
-      responseBuffer: '',
-      currentTurnScope: null,
       isProcessing: () => false,
       getPartialResponse: () => '',
     }

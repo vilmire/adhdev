@@ -19,7 +19,7 @@ type Stub = CliProviderInstance & {
 
 function makeStub(opts: {
   adapterStatus?: string
-  isWaitingForResponse?: boolean
+  turnInFlight?: boolean
   settings?: Record<string, any>
   attended?: boolean
   activeInteractivePrompt?: any
@@ -29,7 +29,7 @@ function makeStub(opts: {
   instance.activeInteractivePrompt = opts.activeInteractivePrompt ?? null
   instance.adapter = {
     getStatus: () => ({ status: opts.adapterStatus ?? 'waiting_approval' }),
-    isWaitingForResponse: opts.isWaitingForResponse === true,
+    isProcessing: () => opts.turnInFlight === true,
   }
   instance.settings = { autoApprove: false, ...(opts.settings ?? {}) }
   const tracker = new ManualAttendanceTracker()
@@ -42,7 +42,7 @@ describe('resolveModalParkStatus — mesh transient tool-consent classification'
   it('does NOT park a mesh coordinator on an in-flight tool-consent (transient, unattended)', () => {
     const inst = makeStub({
       adapterStatus: 'waiting_approval',
-      isWaitingForResponse: true,
+      turnInFlight: true,
       settings: { meshCoordinatorFor: 'mesh-1' },
     })
     expect(inst.resolveModalParkStatus()).toBeNull()
@@ -52,7 +52,7 @@ describe('resolveModalParkStatus — mesh transient tool-consent classification'
   it('does NOT park a mesh WORKER on an in-flight tool-consent (transient, unattended)', () => {
     const inst = makeStub({
       adapterStatus: 'waiting_approval',
-      isWaitingForResponse: true,
+      turnInFlight: true,
       settings: { meshActiveTaskId: 'task-1' },
     })
     expect(inst.resolveModalParkStatus()).toBeNull()
@@ -61,7 +61,7 @@ describe('resolveModalParkStatus — mesh transient tool-consent classification'
   it('STILL parks a mesh coordinator with NO turn in flight (genuine human-await)', () => {
     const inst = makeStub({
       adapterStatus: 'waiting_approval',
-      isWaitingForResponse: false, // no in-flight turn → not a transient consent
+      turnInFlight: false, // no in-flight turn → not a transient consent
       settings: { meshCoordinatorFor: 'mesh-1' },
     })
     expect(inst.resolveModalParkStatus()).toBe('waiting_approval')
@@ -71,7 +71,7 @@ describe('resolveModalParkStatus — mesh transient tool-consent classification'
   it('STILL parks a mesh coordinator that is manually attended (human is driving the modal)', () => {
     const inst = makeStub({
       adapterStatus: 'waiting_approval',
-      isWaitingForResponse: true,
+      turnInFlight: true,
       settings: { meshCoordinatorFor: 'mesh-1' },
       attended: true,
     })
@@ -81,7 +81,7 @@ describe('resolveModalParkStatus — mesh transient tool-consent classification'
   it('STILL parks a NON-mesh session on a tool-consent (regression: ordinary CLI is unchanged)', () => {
     const inst = makeStub({
       adapterStatus: 'waiting_approval',
-      isWaitingForResponse: true,
+      turnInFlight: true,
       settings: {}, // not a mesh session
     })
     expect(inst.resolveModalParkStatus()).toBe('waiting_approval')
@@ -90,7 +90,7 @@ describe('resolveModalParkStatus — mesh transient tool-consent classification'
   it('parks on an AskUserQuestion prompt regardless of mesh/turn state (waiting_choice)', () => {
     const inst = makeStub({
       adapterStatus: 'generating',
-      isWaitingForResponse: true,
+      turnInFlight: true,
       settings: { meshCoordinatorFor: 'mesh-1' },
       activeInteractivePrompt: { promptId: 'ask-1', questions: [{ question: 'pick', options: [] }] },
     })

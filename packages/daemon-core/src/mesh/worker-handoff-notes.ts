@@ -38,7 +38,8 @@
 
 import { LOG } from '../logging/logger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { WORKER_HANDOFF_EVENT_KIND, type WorkerHandoffNotes } from './worker-report.js';
+import { WORKER_HANDOFF_EVENT_KIND } from './worker-report.js';
+import { type WorkerHandoffNotes } from './worker-report-validation.js';
 
 /** Owner decision §12-4: notes live 30 days past their mission's close. */
 export const HANDOFF_RETENTION_DAYS = 30;
@@ -51,7 +52,7 @@ export const HANDOFF_ENCLOSE_MAX_BYTES = 8 * 1024;
 
 // ─── Note text store ────────────────────────────────────────────────────
 
-export interface StoredHandoffNote {
+interface StoredHandoffNote {
     meshId: string;
     taskId: string;
     attemptId?: string;
@@ -127,7 +128,7 @@ export interface HandoffNoteCandidate extends StoredHandoffNote {
     overlap?: string[];
 }
 
-export interface HandoffRelevanceInput {
+interface HandoffRelevanceInput {
     meshId: string;
     /** The task about to be dispatched. Its own note (if any) is never enclosed. */
     taskId: string;
@@ -224,7 +225,7 @@ function normalizeFilePath(value: string): string {
 
 // ─── Rendering ──────────────────────────────────────────────────────────
 
-export interface RenderedHandoffBlock {
+interface RenderedHandoffBlock {
     text: string;
     included: number;
     omitted: number;

@@ -60,8 +60,6 @@ function makeFlushInstance(opts: {
     getStatus: () => ({ status: adapterStatus }),
     getPartialResponse: () => '',
     getScriptParsedStatus: () => ({ status: 'idle', messages: [] }),
-    getScreenText: () => '',
-    isWaitingForResponse: false,
   }
 
   instance.shouldAutoApprove = () => false

@@ -315,7 +315,7 @@ export function autoAbandonGatesWithTerminalDownstreamInTxn(
 /** Reason an F2-abandoned gate records (`coordinator_gate_abandoned:<gateId>:upstream_failed`). */
 export const MESH_GATE_UPSTREAM_FAILED_REASON = 'upstream_failed';
 
-export interface MeshDeadUpstreamGateClosure {
+interface MeshDeadUpstreamGateClosure {
     /** Gates abandoned because an upstream node failed/was cancelled. */
     abandonedGates: Array<{ gateId: string; ref?: string }>;
     /** Nodes the abandons cancelled (the gates' downstream subtrees). */

@@ -51,7 +51,8 @@ vi.mock('../../src/config/mesh-config.js', () => ({
     updateNode: meshConfigMocks.updateNode,
 }));
 
-import { __resetMeshGraphTransitionRunnerForTests, graphMaterializationBlockReason } from '../../src/mesh/mesh-graph-transition-runner.js';
+import { graphMaterializationBlockReason } from '../../src/mesh/mesh-graph-block-reasons.js';
+import { __resetMeshGraphTransitionRunnerForTests } from '../../src/mesh/mesh-graph-outbox.js';
 import { declareWorkspaceIntents, runWorkspaceSagaTick } from '../../src/mesh/mesh-graph-workspace-saga.js';
 import { derivePreparedNodeId, type WorkspaceSagaPorts } from '../../src/mesh/mesh-graph-workspace-ports.js';
 import { deriveWorkspaceBranchIdentity } from '../../src/mesh/mesh-graph-workspace-identity.js';

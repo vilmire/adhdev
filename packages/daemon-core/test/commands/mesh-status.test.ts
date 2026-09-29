@@ -224,7 +224,8 @@ describe('mesh_status', () => {
 
     try {
       process.env.ADHDEV_CONFIG_DIR = configDir
-      const { createMesh, createMeshHostPairingToken, addNode, configureMeshHostPairing, getMesh } = await import('../../src/config/mesh-config.js')
+      const { createMesh, addNode, getMesh } = await import('../../src/config/mesh-config.js')
+      const { createMeshHostPairingToken, configureMeshHostPairing } = await import('../../src/config/mesh-config-host-pairing.js')
       const hostMesh = createMesh({ name: 'Host Mesh', repoIdentity: 'github.com/acme/repo' })
       const memberMesh = createMesh({ name: 'Member Mesh', repoIdentity: 'github.com/acme/repo-member' })
       const hostToken = createMeshHostPairingToken(hostMesh.id, { token: 'join-token-secret' })
@@ -288,7 +289,8 @@ describe('mesh_status', () => {
 
     try {
       process.env.ADHDEV_CONFIG_DIR = configDir
-      const { createMesh, createMeshHostPairingToken, addNode, configureMeshHostPairing, getMesh } = await import('../../src/config/mesh-config.js')
+      const { createMesh, addNode, getMesh } = await import('../../src/config/mesh-config.js')
+      const { createMeshHostPairingToken, configureMeshHostPairing } = await import('../../src/config/mesh-config-host-pairing.js')
       const hostMesh = createMesh({ name: 'Host Mesh', repoIdentity: 'github.com/acme/repo' })
       const memberMesh = createMesh({ name: 'Member Mesh', repoIdentity: 'github.com/acme/repo-member' })
       createMeshHostPairingToken(hostMesh.id, { token: 'good-token' })

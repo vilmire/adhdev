@@ -3,11 +3,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import {
-  buildUpgradeHelperChildEnv,
-  emitUpgradeFailureNotice,
-  stopSessionHostProcesses,
-} from '../../src/commands/upgrade-helper'
+import { buildUpgradeHelperChildEnv } from '../../src/commands/upgrade-helper';
+import { emitUpgradeFailureNotice } from '../../src/commands/upgrade-failure-notice.js';
+import { stopSessionHostProcesses } from '../../src/commands/upgrade-process-stop.js';
 
 // Stage 3 invariant 7: the detached upgrade/restart helper must preserve the
 // CALLER's instance identity across the process boundary — its env pins

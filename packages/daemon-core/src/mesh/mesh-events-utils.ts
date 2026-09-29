@@ -1,14 +1,5 @@
 import type { SessionRecoveryContext } from './mesh-ledger.js';
-
-export function readNonEmptyString(value: unknown): string {
-    return typeof value === 'string' && value.trim() ? value.trim() : '';
-}
-
-export function readRecord(value: unknown): Record<string, unknown> | undefined {
-    return value && typeof value === 'object' && !Array.isArray(value)
-        ? value as Record<string, unknown>
-        : undefined;
-}
+import { readText, readOptionalRecord } from '@adhdev/mesh-shared';
 
 /**
  * The relay-safety metadata a worker session must carry so that its completion /
@@ -18,7 +9,7 @@ export function readRecord(value: unknown): Record<string, unknown> | undefined 
  * target; meshNodeFor/meshNodeId identify the worker, and launchedByCoordinator is
  * the delegation proof. See resolveWorkerDelegateRouting().
  */
-export interface MeshWorkerRelayStamp {
+interface MeshWorkerRelayStamp {
     meshNodeFor?: string;
     meshNodeId?: string;
     meshCoordinatorDaemonId?: string;
@@ -56,22 +47,22 @@ export function buildMeshWorkerRelayStamp(
     const settings = currentSettings && typeof currentSettings === 'object' ? currentSettings : {};
     const stamp: MeshWorkerRelayStamp = {};
 
-    const meshId = readNonEmptyString(meshContext.meshId);
-    if (meshId && !readNonEmptyString(settings.meshNodeFor)) stamp.meshNodeFor = meshId;
+    const meshId = readText(meshContext.meshId);
+    if (meshId && !readText(settings.meshNodeFor)) stamp.meshNodeFor = meshId;
 
-    const nodeId = readNonEmptyString(meshContext.nodeId);
-    if (nodeId && !readNonEmptyString(settings.meshNodeId)) stamp.meshNodeId = nodeId;
+    const nodeId = readText(meshContext.nodeId);
+    if (nodeId && !readText(settings.meshNodeId)) stamp.meshNodeId = nodeId;
 
-    const coordinatorDaemonId = readNonEmptyString(meshContext.coordinatorDaemonId);
-    if (coordinatorDaemonId && !readNonEmptyString(settings.meshCoordinatorDaemonId)) {
+    const coordinatorDaemonId = readText(meshContext.coordinatorDaemonId);
+    if (coordinatorDaemonId && !readText(settings.meshCoordinatorDaemonId)) {
         stamp.meshCoordinatorDaemonId = coordinatorDaemonId;
     }
 
     // Session-level anchor (multi-coordinator routing): stamp the originating
     // coordinator session id so the completion event can target the exact session.
     // Carried over P2P to remote workers so a remote worker's echo returns it.
-    const coordinatorSessionId = readNonEmptyString(meshContext.coordinatorSessionId);
-    if (coordinatorSessionId && !readNonEmptyString(settings.meshCoordinatorSessionId)) {
+    const coordinatorSessionId = readText(meshContext.coordinatorSessionId);
+    if (coordinatorSessionId && !readText(settings.meshCoordinatorSessionId)) {
         stamp.meshCoordinatorSessionId = coordinatorSessionId;
     }
 
@@ -85,21 +76,21 @@ export function buildMeshWorkerRelayStamp(
 }
 
 export function resolveEventSessionId(event: Record<string, unknown>, fallback?: unknown): string {
-    return readNonEmptyString(event.targetSessionId)
-        || readNonEmptyString(event.sessionId)
-        || readNonEmptyString(event.instanceId)
-        || readNonEmptyString(fallback);
+    return readText(event.targetSessionId)
+        || readText(event.sessionId)
+        || readText(event.instanceId)
+        || readText(fallback);
 }
 
 export function readRefineJobId(event: { metadataEvent?: Record<string, unknown> } | Record<string, unknown>): string {
-    const metadata = readRecord((event as any).metadataEvent) || event as Record<string, unknown>;
-    const result = readRecord(metadata.result);
-    const refineJob = readRecord(result?.refineJob);
-    return readNonEmptyString(metadata.jobId) || readNonEmptyString(refineJob?.jobId);
+    const metadata = readOptionalRecord((event as any).metadataEvent) || event as Record<string, unknown>;
+    const result = readOptionalRecord(metadata.result);
+    const refineJob = readOptionalRecord(result?.refineJob);
+    return readText(metadata.jobId) || readText(refineJob?.jobId);
 }
 
 export function readWorkerResultMetadata(event: Record<string, unknown>): Record<string, unknown> | undefined {
-    return readRecord(event.workerResult) || readRecord(event.meshWorkerResult) || readRecord(event.structuredResult);
+    return readOptionalRecord(event.workerResult) || readOptionalRecord(event.meshWorkerResult) || readOptionalRecord(event.structuredResult);
 }
 
 const MESH_SURFACED_PREVIEW_MAX_CHARS = 512;
@@ -120,12 +111,12 @@ const MESH_COMPLETION_SURFACE_MAX_CHARS = 16000;
  */
 export function readMeshCompletionSummary(metadataEvent: Record<string, unknown>): string {
     const workerResult = readWorkerResultMetadata(metadataEvent);
-    const resultRecord = readRecord(metadataEvent.result);
-    return readNonEmptyString(metadataEvent.finalSummary)
-        || readNonEmptyString(workerResult?.summary)
-        || readNonEmptyString(workerResult?.finalSummary)
-        || readNonEmptyString(resultRecord?.summary)
-        || readNonEmptyString(resultRecord?.finalSummary);
+    const resultRecord = readOptionalRecord(metadataEvent.result);
+    return readText(metadataEvent.finalSummary)
+        || readText(workerResult?.summary)
+        || readText(workerResult?.finalSummary)
+        || readText(resultRecord?.summary)
+        || readText(resultRecord?.finalSummary);
 }
 
 /**
@@ -171,8 +162,8 @@ export function resolveMeshSurfacedSessionPreview(
     //    would both re-introduce the "inbox stuck on the user task" bug and clobber a
     //    previously surfaced assistant preview. The web inbox guard renders only an
     //    assistant-role preview anyway, so a user-role one would be inert there.
-    const lastPreview = readNonEmptyString(metadataEvent.lastMessagePreview);
-    const lastRole = readNonEmptyString(metadataEvent.lastMessageRole);
+    const lastPreview = readText(metadataEvent.lastMessagePreview);
+    const lastRole = readText(metadataEvent.lastMessageRole);
     if (lastPreview && lastRole === 'assistant') {
         return {
             preview: truncateSurfacedPreview(lastPreview),
@@ -206,7 +197,7 @@ function readEventTimestampValue(value: unknown): number {
 // tail as transcriptFinalAssistantPresent=false on its terminal ledger — read that legacy
 // field too, so a WEAK synth ledger is not misjudged as strong terminal evidence here.
 export function isMissingFinalAssistantDiagnostic(record: Record<string, unknown> | undefined): boolean {
-    const diag = readRecord(record?.completionDiagnostic);
+    const diag = readOptionalRecord(record?.completionDiagnostic);
     return diag?.finalAssistantPresent === false
         || diag?.transcriptFinalAssistantPresent === false
         || diag?.blockReason === 'missing_final_assistant';
@@ -244,7 +235,7 @@ export function isFalseIdleCompletion(record: Record<string, unknown>): boolean 
 // seals that latent divergence.
 export function isWeakCompletionEvidence(record: Record<string, unknown> | undefined): boolean {
     if (!record) return false;
-    const evidenceLevel = readNonEmptyString(record.evidenceLevel);
+    const evidenceLevel = readText(record.evidenceLevel);
     if (evidenceLevel === 'insufficient' || evidenceLevel === 'weak') return true;
     if (record.reviewRecommended === true) return true;
     return isMissingFinalAssistantDiagnostic(record);
@@ -262,12 +253,12 @@ function formatCompletionMetadata(event: Record<string, unknown>): string {
         ? event.completionDiagnostic as Record<string, unknown>
         : null;
     const diagnosticReason = completionDiagnostic
-        ? readNonEmptyString(completionDiagnostic.blockReason) || 'present'
+        ? readText(completionDiagnostic.blockReason) || 'present'
         : '';
     const finalAssistantPresent = typeof completionDiagnostic?.finalAssistantPresent === 'boolean'
         ? String(completionDiagnostic.finalAssistantPresent)
         : '';
-    const evidenceLevel = readNonEmptyString(event.evidenceLevel);
+    const evidenceLevel = readText(event.evidenceLevel);
     // (SUMMARY-SCRAPE-FALLBACK, part B) The worker resolved this turn's finalSummary from the
     // PTY screen scrape of a provider whose canonical history is its own transcript, because
     // that transcript had not been written yet. The terminal wraps and scrolls, so the summary
@@ -276,9 +267,9 @@ function formatCompletionMetadata(event: Record<string, unknown>): string {
     // acting on half of it. Only ever present when the worker asserted it.
     const summaryMayBeTruncated = completionDiagnostic?.finalSummaryMayBeTruncated === true;
     const parts = [
-        readNonEmptyString(event.targetSessionId) ? `session_id=${readNonEmptyString(event.targetSessionId)}` : '',
-        readNonEmptyString(event.providerType) ? `provider=${readNonEmptyString(event.providerType)}` : '',
-        readNonEmptyString(event.providerSessionId) ? `provider_session_id=${readNonEmptyString(event.providerSessionId)}` : '',
+        readText(event.targetSessionId) ? `session_id=${readText(event.targetSessionId)}` : '',
+        readText(event.providerType) ? `provider=${readText(event.providerType)}` : '',
+        readText(event.providerSessionId) ? `provider_session_id=${readText(event.providerSessionId)}` : '',
         diagnosticReason ? `completion_diagnostic=${diagnosticReason}` : '',
         finalAssistantPresent ? `final_assistant=${finalAssistantPresent}` : '',
         evidenceLevel && evidenceLevel !== 'sufficient' ? `evidence_level=${evidenceLevel}` : '',
@@ -310,8 +301,8 @@ export function buildMeshSystemMessage(args: {
             return `[System] ${args.nodeLabel} already has completion evidence${metadata}. The no-progress monitor reconciled the terminal handoff and marked the session complete; wait for the queued completion event/status refresh before doing any manual transcript check.`;
         }
         const reviewRecommended = args.metadataEvent.reviewRecommended === true;
-        const hollowCompletion = readRecord(args.metadataEvent.hollowCompletion)
-            || readRecord(readRecord(args.metadataEvent.completionDiagnostic)?.hollowCompletion);
+        const hollowCompletion = readOptionalRecord(args.metadataEvent.hollowCompletion)
+            || readOptionalRecord(readOptionalRecord(args.metadataEvent.completionDiagnostic)?.hollowCompletion);
         if (hollowCompletion?.detected === true) {
             const requeueCount = typeof hollowCompletion.requeueCount === 'number' ? hollowCompletion.requeueCount : 0;
             const maxRetries = typeof hollowCompletion.maxRetries === 'number' ? hollowCompletion.maxRetries : 1;
@@ -382,16 +373,16 @@ export function buildMeshSystemMessage(args: {
         const prompt = args.metadataEvent.interactivePrompt as
             | { promptId?: unknown; questions?: Array<Record<string, unknown>> }
             | undefined;
-        const promptId = readNonEmptyString(args.metadataEvent.promptId)
-            || (prompt && readNonEmptyString(prompt.promptId));
+        const promptId = readText(args.metadataEvent.promptId)
+            || (prompt && readText(prompt.promptId));
         const lines: string[] = [
             `[System] ${args.nodeLabel} is asking a question and is waiting for your answer${metadata}.`,
         ];
         const questions = Array.isArray(prompt?.questions) ? prompt!.questions! : [];
         if (questions.length > 0) {
             for (const q of questions) {
-                const header = readNonEmptyString(q.header);
-                const question = readNonEmptyString(q.question);
+                const header = readText(q.header);
+                const question = readText(q.question);
                 const multiSelect = q.multiSelect === true;
                 if (question) {
                     lines.push(`\n**${header ? `${header}: ` : ''}${question}**${multiSelect ? ' (select one or more)' : ''}`);
@@ -399,14 +390,14 @@ export function buildMeshSystemMessage(args: {
                 const options = Array.isArray(q.options) ? q.options : [];
                 options.forEach((opt, i) => {
                     const record = (opt && typeof opt === 'object') ? opt as Record<string, unknown> : {};
-                    const label = readNonEmptyString(record.label);
+                    const label = readText(record.label);
                     if (!label) return;
-                    const description = readNonEmptyString(record.description);
+                    const description = readText(record.description);
                     lines.push(`  ${i + 1}. ${label}${description ? ` — ${description}` : ''}`);
                 });
             }
         } else {
-            const modalMessage = readNonEmptyString(args.metadataEvent.modalMessage);
+            const modalMessage = readText(args.metadataEvent.modalMessage);
             if (modalMessage) lines.push(`\n${modalMessage}`);
         }
         lines.push(
@@ -417,13 +408,13 @@ export function buildMeshSystemMessage(args: {
         return lines.join('\n');
     }
     if (args.event === 'agent:stopped') {
-        const failureDiagnostic = readRecord(args.metadataEvent.completionDiagnostic);
-        const providerFailureReason = readNonEmptyString(failureDiagnostic?.reason)
-            || readNonEmptyString(args.metadataEvent.errorReason);
+        const failureDiagnostic = readOptionalRecord(args.metadataEvent.completionDiagnostic);
+        const providerFailureReason = readText(failureDiagnostic?.reason)
+            || readText(args.metadataEvent.errorReason);
         if (providerFailureReason === 'auth_failed' || providerFailureReason === 'billing_failed') {
             const kind = providerFailureReason === 'billing_failed' ? 'billing/subscription' : 'authentication';
-            const detail = readNonEmptyString(failureDiagnostic?.errorMessage)
-                || readNonEmptyString(args.metadataEvent.finalSummary);
+            const detail = readText(failureDiagnostic?.errorMessage)
+                || readText(args.metadataEvent.finalSummary);
             return `[System] ${args.nodeLabel} stopped because the provider reported a non-retryable ${kind} failure${metadata}. Automatic recovery was suppressed so the same rejected credential or entitlement does not waste retries.${detail ? ` ${detail}` : ''}`;
         }
         // Quota/usage-window exhaustion is DISTINCT from billing: the account is
@@ -433,8 +424,8 @@ export function buildMeshSystemMessage(args: {
         // the mesh naturally waits rather than hammering a known-exhausted
         // account.
         if (providerFailureReason === 'quota_exceeded') {
-            const detail = readNonEmptyString(failureDiagnostic?.errorMessage)
-                || readNonEmptyString(args.metadataEvent.finalSummary);
+            const detail = readText(failureDiagnostic?.errorMessage)
+                || readText(args.metadataEvent.finalSummary);
             return `[System] ${args.nodeLabel} stopped because the provider's usage quota is exhausted${metadata}. This is not a billing or auth problem — it resets automatically at the next window boundary, and ADHDev will resume work on it once quota is available.${detail ? ` ${detail}` : ''}`;
         }
         const rc = args.recoveryContext;
@@ -471,7 +462,7 @@ export function buildMeshSystemMessage(args: {
         // auto-restart. The generating-only StatusMonitor copy keeps its original
         // phrasing.
         if (args.metadataEvent.meshWorkerStall === true) {
-            const observedStatus = readNonEmptyString(args.metadataEvent.observedStatus);
+            const observedStatus = readText(args.metadataEvent.observedStatus);
             const stalledMs = typeof args.metadataEvent.stalledMs === 'number' ? args.metadataEvent.stalledMs : undefined;
             const stalledSuffix = stalledMs !== undefined ? ` for ${Math.round(stalledMs / 1000)}s` : '';
             const statusSuffix = observedStatus ? ` (observed status: ${observedStatus})` : '';
@@ -480,7 +471,7 @@ export function buildMeshSystemMessage(args: {
         return `[System] ${args.nodeLabel} is still reported as generating after a long interval${metadata}. Wait for a completion/status notice (typed into this session, or attached as pendingCoordinatorEvents to every mesh tool response for an MCP-only coordinator — drained by get_pending_mesh_events); if the user explicitly asks for status, make one bounded status check and then wait again.`;
     }
     if (args.event === 'worktree_bootstrap_complete') {
-        const worktreePath = readNonEmptyString(args.metadataEvent.worktreePath);
+        const worktreePath = readText(args.metadataEvent.worktreePath);
         const durationMs = typeof args.metadataEvent.durationMs === 'number' ? args.metadataEvent.durationMs : undefined;
         const prefix = `[System] ${args.nodeLabel} worktree bootstrap completed${worktreePath ? ` at ${worktreePath}` : ''}${durationMs !== undefined ? ` in ${Math.round(durationMs / 1000)}s` : ''}.`;
         // BOOTSTRAP-MSG: a task already targeting this node is auto-claimed by the
@@ -492,7 +483,7 @@ export function buildMeshSystemMessage(args: {
         return `${prefix} The worktree is ready. If a task is already queued for this worktree, auto-launch will claim it — no action needed. Launch a session manually only if you need one and none exists yet.`;
     }
     if (args.event === 'worktree_bootstrap_failed') {
-        const error = readNonEmptyString(args.metadataEvent.error);
+        const error = readText(args.metadataEvent.error);
         return `[System] ${args.nodeLabel} worktree bootstrap failed${error ? `: ${error}` : '.'}. Use \`mesh_retry_node_bootstrap\` to retry or inspect the node state.`;
     }
     if (args.event === 'refine:accepted') {
@@ -501,19 +492,19 @@ export function buildMeshSystemMessage(args: {
     }
     if (args.event === 'refine:completed') {
         const jobId = readRefineJobId({ metadataEvent: args.metadataEvent });
-        const result = readRecord(args.metadataEvent.result);
-        const validationSummary = readRecord(result?.validationSummary);
-        const patchEquivalence = readRecord(result?.patchEquivalence);
-        const finalConvergence = readRecord(result?.finalBranchConvergenceState);
-        const validationStatus = readNonEmptyString(validationSummary?.status);
-        const patchStatus = readNonEmptyString(patchEquivalence?.status)
+        const result = readOptionalRecord(args.metadataEvent.result);
+        const validationSummary = readOptionalRecord(result?.validationSummary);
+        const patchEquivalence = readOptionalRecord(result?.patchEquivalence);
+        const finalConvergence = readOptionalRecord(result?.finalBranchConvergenceState);
+        const validationStatus = readText(validationSummary?.status);
+        const patchStatus = readText(patchEquivalence?.status)
             || (patchEquivalence?.equivalent === true ? 'passed' : '');
-        const into = readNonEmptyString(result?.into);
-        const branch = readNonEmptyString(result?.branch);
-        const mergeStatus = result?.merged === true ? 'merged' : readNonEmptyString(finalConvergence?.status);
-        const convergenceStatus = readNonEmptyString(finalConvergence?.status);
-        const nextStep = readNonEmptyString(result?.nextStep)
-            || readNonEmptyString(finalConvergence?.nextStep)
+        const into = readText(result?.into);
+        const branch = readText(result?.branch);
+        const mergeStatus = result?.merged === true ? 'merged' : readText(finalConvergence?.status);
+        const convergenceStatus = readText(finalConvergence?.status);
+        const nextStep = readText(result?.nextStep)
+            || readText(finalConvergence?.nextStep)
             || 'Continue from the updated mesh state.';
         const details = [
             jobId ? `job_id=${jobId}` : '',
@@ -527,24 +518,24 @@ export function buildMeshSystemMessage(args: {
     }
     if (args.event === 'refine:failed') {
         const jobId = readRefineJobId({ metadataEvent: args.metadataEvent });
-        const result = readRecord(args.metadataEvent.result);
-        const validationSummary = readRecord(result?.validationSummary);
-        const patchEquivalence = readRecord(result?.patchEquivalence);
-        const finalConvergence = readRecord(result?.finalBranchConvergenceState);
-        const code = readNonEmptyString(result?.code);
-        const error = readNonEmptyString(result?.error);
-        const validationStatus = readNonEmptyString(validationSummary?.status);
-        const patchStatus = readNonEmptyString(patchEquivalence?.status)
+        const result = readOptionalRecord(args.metadataEvent.result);
+        const validationSummary = readOptionalRecord(result?.validationSummary);
+        const patchEquivalence = readOptionalRecord(result?.patchEquivalence);
+        const finalConvergence = readOptionalRecord(result?.finalBranchConvergenceState);
+        const code = readText(result?.code);
+        const error = readText(result?.error);
+        const validationStatus = readText(validationSummary?.status);
+        const patchStatus = readText(patchEquivalence?.status)
             || (patchEquivalence?.equivalent === true ? 'passed' : '');
         const mergeStatus = result?.merged === true
             ? 'merged'
             : finalConvergence?.merged === false
                 ? 'not_merged'
                 : '';
-        const convergenceStatus = readNonEmptyString(result?.convergenceStatus)
-            || readNonEmptyString(finalConvergence?.status);
-        const blockedReason = readNonEmptyString(result?.blockedReason);
-        const nextStep = readNonEmptyString(result?.nextStep) || readNonEmptyString(finalConvergence?.nextStep);
+        const convergenceStatus = readText(result?.convergenceStatus)
+            || readText(finalConvergence?.status);
+        const blockedReason = readText(result?.blockedReason);
+        const nextStep = readText(result?.nextStep) || readText(finalConvergence?.nextStep);
         const details = [
             jobId ? `job_id=${jobId}` : '',
             code ? `code=${code}` : '',
@@ -570,11 +561,11 @@ export function buildMeshSystemMessage(args: {
         if (failedNodes.length > 0) {
             parts.push('Per-node failures:');
             for (const entry of failedNodes) {
-                const nodeId = readNonEmptyString(entry.nodeId) || '(unknown node)';
-                const nodeConvergence = readNonEmptyString(entry.convergence);
-                const nodeCode = readNonEmptyString(entry.code);
-                const nodeStage = readNonEmptyString(entry.stage);
-                const nodeError = readNonEmptyString(entry.error);
+                const nodeId = readText(entry.nodeId) || '(unknown node)';
+                const nodeConvergence = readText(entry.convergence);
+                const nodeCode = readText(entry.code);
+                const nodeStage = readText(entry.stage);
+                const nodeError = readText(entry.error);
                 const codeStage = [nodeCode ? `code=${nodeCode}` : '', nodeStage ? `stage=${nodeStage}` : ''].filter(Boolean).join(', ');
                 parts.push(`- ${nodeId}${nodeConvergence ? `: ${nodeConvergence}` : ''}${codeStage ? ` (${codeStage})` : ''}${nodeError ? ` — ${nodeError.length > 200 ? `${nodeError.slice(0, 200)}…` : nodeError}` : ''}`);
             }

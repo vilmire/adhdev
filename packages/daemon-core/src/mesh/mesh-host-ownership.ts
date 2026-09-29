@@ -1,12 +1,8 @@
-import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, readString } from '@adhdev/mesh-shared';
 import type { RepoMeshDaemonRole, RepoMeshHostMetadata, RepoMeshHostStatus } from '../repo-mesh-types.js';
 
 function readObject(value: unknown): Record<string, unknown> | null {
     return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
-function readString(value: unknown): string | undefined {
-    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 export function normalizeMeshDaemonRole(value: unknown): RepoMeshDaemonRole | undefined {
@@ -44,7 +40,7 @@ export function normalizeMeshDaemonRole(value: unknown): RepoMeshDaemonRole | un
  * daemon-side), so it resolves the host even on a multi-peer mesh — and, being a real
  * declaration rather than a guess, it is not marked `hostSynthesized`.
  */
-export interface ResolveMeshHostOptions {
+interface ResolveMeshHostOptions {
     /** Id of the daemon evaluating this mesh (e.g. deps.statusInstanceId). */
     localDaemonId?: string;
 }
@@ -133,7 +129,6 @@ export function resolveMeshHostStatus(mesh: unknown, opts?: ResolveMeshHostOptio
     }
     return normalized;
 }
-
 
 export function buildMeshHostRequiredFailure(mesh: unknown, operation: string): Record<string, unknown> {
     const meshHost = resolveMeshHostStatus(mesh);

@@ -3,8 +3,7 @@ import { getActiveDirectDispatches } from './mesh-work-queue.js';
 import { readLocalRecords } from './mesh-local-records.js';
 import { meshRecord } from './mesh-record.js';
 import { LOG } from '../logging/logger.js';
-import { readNonEmptyString } from './mesh-events-utils.js';
-import { meshNodeIdMatches, sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, sessionIdsEquivalent, readText } from '@adhdev/mesh-shared';
 
 // ---------------------------------------------------------------------------
 // R1: single-source coordinator routing resolution
@@ -22,14 +21,14 @@ import { meshNodeIdMatches, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 // them to make a routing decision. The forwarder consumes the typed result only.
 // ---------------------------------------------------------------------------
 
-export type WorkerDelegateRejectionReason =
+type WorkerDelegateRejectionReason =
     | 'not_cli'
     | 'no_workspace'
     | 'no_worker_envelope'
     | 'coordinator_not_dispatch_target'
     | 'mesh_unresolved';
 
-export interface WorkerDelegateRouting {
+interface WorkerDelegateRouting {
     /** True when the source session is a mesh worker whose events must route to a coordinator. */
     isDelegate: boolean;
     /** Resolved mesh id (runtime stamp, direct-dispatch recovery, or workspace lookup). */
@@ -80,7 +79,7 @@ export function resolveWorkerDelegateRouting(
     instanceId: string,
     deps: ResolveDeps,
 ): WorkerDelegateRouting {
-    const sessionId = readNonEmptyString(instanceId);
+    const sessionId = readText(instanceId);
     let workspace = '';
     let coordinatorDaemonId = '';
     // Runtime node-id stamp, surfaced even on rejection so the unresolved-mesh fallback
@@ -101,17 +100,17 @@ export function resolveWorkerDelegateRouting(
     if (!sourceInstance || sourceInstance.category !== 'cli') return reject('not_cli');
 
     const state = sourceInstance.getState();
-    workspace = readNonEmptyString(state.workspace);
+    workspace = readText(state.workspace);
     if (!workspace) return reject('no_workspace');
 
     const settings = readSettings(state);
-    coordinatorDaemonId = readNonEmptyString(settings.meshCoordinatorDaemonId);
-    runtimeNodeId = readNonEmptyString(settings.meshNodeId);
+    coordinatorDaemonId = readText(settings.meshCoordinatorDaemonId);
+    runtimeNodeId = readText(settings.meshNodeId);
 
     // A coordinator session (meshCoordinatorFor set) is only treated as a worker delegate
     // when it is itself the target of an active direct dispatch — otherwise its own events
     // must not be routed back to a coordinator (it IS the coordinator).
-    const coordinatorMeshId = readNonEmptyString(settings.meshCoordinatorFor);
+    const coordinatorMeshId = readText(settings.meshCoordinatorFor);
     let meshIdFromDirectDispatch = '';
     if (coordinatorMeshId) {
         let hasActiveDispatch = false;
@@ -125,7 +124,7 @@ export function resolveWorkerDelegateRouting(
         meshIdFromDirectDispatch = coordinatorMeshId;
     }
 
-    const meshIdFromRuntime = readNonEmptyString(settings.meshNodeFor) || meshIdFromDirectDispatch;
+    const meshIdFromRuntime = readText(settings.meshNodeFor) || meshIdFromDirectDispatch;
 
     // Worker-envelope proof of delegation. A worker can arrive carrying only the routing
     // anchor (meshCoordinatorDaemonId) without meshNodeFor — e.g. when the node/mesh stamp
@@ -135,12 +134,12 @@ export function resolveWorkerDelegateRouting(
         meshIdFromRuntime
         || settings.launchedByCoordinator
         || coordinatorDaemonId
-        || readNonEmptyString(settings.meshCoordinatorNodeId),
+        || readText(settings.meshCoordinatorNodeId),
     );
     if (!hasWorkerEnvelope) return reject('no_worker_envelope');
 
     const mesh = meshIdFromRuntime ? deps.getMeshById(meshIdFromRuntime) : deps.getMeshByWorkspace(workspace);
-    const meshId = meshIdFromRuntime || readNonEmptyString(mesh?.id);
+    const meshId = meshIdFromRuntime || readText(mesh?.id);
     if (!meshId) return reject('mesh_unresolved');
 
     // Node resolution authority: the runtime stamp (meshNodeId) is the worker's
@@ -158,7 +157,7 @@ export function resolveWorkerDelegateRouting(
         ? mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, runtimeNodeId))
         : undefined;
     const targetNode = stampedNode || mesh?.nodes?.find((n: any) => n.workspace === workspace);
-    const nodeId = runtimeNodeId || readNonEmptyString(targetNode?.id);
+    const nodeId = runtimeNodeId || readText(targetNode?.id);
     // Label off the resolved nodeId (which now prefers the stamp) so a node matched
     // by its `nodeId`/`node_id` form — where `targetNode.id` may be absent — never
     // renders as `Node 'undefined'`.
@@ -248,7 +247,7 @@ export function recordUnroutableDelegateEvent(routing: WorkerDelegateRouting, ev
     }
 }
 
-export interface UnroutableDeliveryDiagnostic {
+interface UnroutableDeliveryDiagnostic {
     timestamp: string;
     event: string;
     sessionId?: string;
@@ -280,10 +279,10 @@ export function getRecentUnroutableDeliveries(opts?: { sinceMs?: number; limit?:
         const payload = entry.payload && typeof entry.payload === 'object' ? entry.payload as Record<string, unknown> : {};
         out.push({
             timestamp: entry.timestamp,
-            event: readNonEmptyString(payload.event),
-            sessionId: readNonEmptyString(entry.sessionId) || readNonEmptyString(payload.sessionId) || undefined,
-            workspace: readNonEmptyString(payload.workspace) || undefined,
-            coordinatorDaemonId: readNonEmptyString(payload.coordinatorDaemonId) || undefined,
+            event: readText(payload.event),
+            sessionId: readText(entry.sessionId) || readText(payload.sessionId) || undefined,
+            workspace: readText(payload.workspace) || undefined,
+            coordinatorDaemonId: readText(payload.coordinatorDaemonId) || undefined,
         });
         if (out.length >= limit) break;
     }

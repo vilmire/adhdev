@@ -4,8 +4,7 @@
  * Pure move out of router-refine.ts to keep that file under the file-size gate;
  * the same functions, taking the router instance as `self`, in the same order. No
  * event name, payload shape, log string, or ledger field was changed — only
- * physical location. router-refine.ts re-exports every symbol here, so existing
- * import sites (and their tests) are unaffected.
+ * physical location.
  *
  * The concern is one slice of the refine lifecycle: turning a refine request into
  * a `MeshRefineJobHandle`, slimming a terminal result down to what a coordinator

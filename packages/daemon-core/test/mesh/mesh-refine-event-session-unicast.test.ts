@@ -36,7 +36,7 @@ vi.mock('../../src/config/config.js', () => ({
 }));
 
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
-import { queueRefineJobEvent } from '../../src/commands/router-refine.js';
+import { queueRefineJobEvent } from '../../src/commands/router-refine-jobs.js';
 import type { MeshRefineJobHandle } from '../../src/mesh/mesh-refine-gates.js';
 import { routeNotice } from '../../src/mesh/turn-ledger/routing.js';
 import { drainPendingMeshCoordinatorEvents, __clearMeshPendingEventsForTests } from '../helpers/pending-notices.js';

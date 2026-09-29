@@ -48,18 +48,9 @@ vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }))
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
 vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
 
-const {
-    QUOTA_ROUTABLE_MAX_AGE_MS,
-    clearQuotaCache,
-    forceRefreshQuota,
-    readQuotaCache,
-    refreshQuotaCacheOnce,
-    setupQuotaEventRefresh,
-    startQuotaRefreshLoop,
-    __resetQuotaAmbientEnableGateForTests,
-    __resetQuotaBootRefreshForTests,
-    __resetQuotaHydrationForTests,
-} = await import('../../src/quota/refresh.js')
+const { QUOTA_ROUTABLE_MAX_AGE_MS, clearQuotaCache, readQuotaCache, refreshQuotaCacheOnce, __resetQuotaAmbientEnableGateForTests, __resetQuotaHydrationForTests } = await import('../../src/quota/refresh.js')
+const { forceRefreshQuota, setupQuotaEventRefresh, __resetQuotaBootRefreshForTests } = await import('../../src/quota/refresh-triggers.js')
+const { startQuotaRefreshLoop } = await import('../../src/quota/refresh-loop.js')
 
 const START = 1_800_000_000_000
 const INTERVAL_MS = 15 * 60 * 1000 // the pre-chain fixed cadence

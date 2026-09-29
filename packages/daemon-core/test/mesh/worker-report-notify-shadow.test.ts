@@ -12,21 +12,9 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import {
-  __resetProgressSurfaceForTest,
-  __resetReportedSummariesForTest,
-  acceptWorkerCompletionReport,
-  acceptWorkerProgressUpdate,
-  buildWorkerProgressNotice,
-  __setHandoffNoteSinkForTests,
-  __setWorkerProgressNoticeSinkForTests,
-  findPriorWorkerReport,
-  shouldSurfaceProgressToCoordinator,
-  validateWorkerCompletionReport,
-  WORKER_PROGRESS_SURFACE_MIN_CHARS,
-  WORKER_PROGRESS_SURFACE_MIN_GAP_MS,
-  WORKER_REPORT_EVENT_KIND,
-} from '../../src/mesh/worker-report'
+import { __resetReportedSummariesForTest, acceptWorkerCompletionReport, __setHandoffNoteSinkForTests, findPriorWorkerReport, WORKER_REPORT_EVENT_KIND } from '../../src/mesh/worker-report';
+import { __resetProgressSurfaceForTest, acceptWorkerProgressUpdate, buildWorkerProgressNotice, __setWorkerProgressNoticeSinkForTests, shouldSurfaceProgressToCoordinator, WORKER_PROGRESS_SURFACE_MIN_CHARS, WORKER_PROGRESS_SURFACE_MIN_GAP_MS } from '../../src/mesh/worker-report-progress.js';
+import { validateWorkerCompletionReport } from '../../src/mesh/worker-report-validation.js';
 import {
   getStoredHandoffNote,
   selectRelevantHandoffNotes,

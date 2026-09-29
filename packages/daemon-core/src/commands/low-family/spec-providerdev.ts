@@ -54,10 +54,7 @@ export const specProviderDevHandlers: Record<string, LowFamilyHandler> = {
         if (!target) return { success: false, error: 'Session not found', sessionId };
         const adapterObj = ctx.deps.cliManager.findAdapter(target.providerType, { instanceKey: sessionId })?.adapter;
         // Every CLI adapter is a SpecCliAdapter since the legacy engine was
-        // deleted (48e5ed1a), and SpecCliAdapter always exposes
-        // getDebugSnapshot(), so the old getDebugState() fallback branch here
-        // was unreachable. (SpecCliAdapter still has getDebugState() too — the
-        // dev-cli debug tooling reads it — it just never fed this handler.)
+        // deleted (48e5ed1a); getDebugSnapshot() is its one debug bundle.
         const snapshot = adapterObj && typeof (adapterObj as any).getDebugSnapshot === 'function'
             ? (adapterObj as any).getDebugSnapshot()
             : null;

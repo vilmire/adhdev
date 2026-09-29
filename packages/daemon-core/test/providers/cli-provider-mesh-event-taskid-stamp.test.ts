@@ -74,13 +74,14 @@ describe('CliProviderInstance.pushEvent mesh taskId stamping', () => {
     } as any), '/work/repo', [], 'sess-instance-1') as any
     instance.adapter = {
       updateRuntimeSettings() {},
-      setOnStatusChange() {},
+      setOnChange() {},
+      setOnExit() {},
+      setOnSignal() {},
       setOnApprovalResolved(callback: (event: { resolvedAt: number; buttonLabel?: string }) => void) { callbacks.push(callback) },
       setInApprovalResumeGraceProbe() {},
       setNativeFinalAssistantProbe() {},
       async spawn() {},
       getRuntimeMetadata: () => null,
-      currentTurnTaskId: 'task-resolution-1',
     }
 
     await instance.init({

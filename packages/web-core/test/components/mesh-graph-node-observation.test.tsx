@@ -13,7 +13,7 @@ vi.mock('@xyflow/react', async (importOriginal) => {
     return { ...actual, Handle: () => null }
 })
 
-import { MeshNodeCard } from '../../src/components/MeshGraph/MeshGraphView'
+import { MeshNodeCard } from '../../src/components/MeshGraph/MeshNodeCard';
 import { getMeshGraphAttentionBadge, getMeshGraphObservationHint } from '../../src/components/MeshGraph/meshGraphViewModel'
 import { buildMeshGraph } from '../../src/utils/mesh-visualization'
 import { canonicalizeRepoMeshStatus, extractRepoMeshStatus } from '../../src/utils/repo-mesh-status'

@@ -17,7 +17,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { meshHostPairingHandlers } from '../../src/commands/med-family/mesh-host-pairing.js';
-import { createMesh, createMeshHostPairingToken } from '../../src/config/mesh-config.js';
+import { createMesh } from '../../src/config/mesh-config.js';
+import { createMeshHostPairingToken } from '../../src/config/mesh-config-host-pairing.js';
 import { reconcileInlineMeshCache } from '../../src/mesh/mesh-node-identity.js';
 
 // Minimal MedFamilyContext double. getCachedInlineMesh mirrors the router's

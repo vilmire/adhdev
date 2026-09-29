@@ -107,13 +107,10 @@ function makeKimiFlush(opts: {
   instance.adapter = {
     chatMessagesOwnedExternally: true,
     currentTurnStartedAt: TURN_START,
-    currentTurnScope: null,
-    isWaitingForResponse: false,
     isProcessing: () => false,
     getPartialResponse: () => '',
     getStatus: () => ({ status: 'idle', lastOutputAt }),
     getScriptParsedStatus: () => ({ status: 'idle', messages: opts.parsedMessages }),
-    getScreenText: () => '',
   }
 
   instance.readExternalCompletionMessages = () => {
@@ -294,13 +291,10 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
     instance.adapter = {
       chatMessagesOwnedExternally: true,
       currentTurnStartedAt: TURN_START,
-      currentTurnScope: null,
-      isWaitingForResponse: false,
       isProcessing: () => false,
       getPartialResponse: () => '',
       getStatus: () => ({ status: 'idle', lastOutputAt: settleOutputAt }),
       getScriptParsedStatus: () => ({ status: 'idle', messages: [assistantMsg('interim narration', TURN_START + 6_000)] }),
-      getScreenText: () => '',
     }
     instance.readExternalCompletionMessages = () => [
       assistantMsg('interim narration', TURN_START + 6_000),

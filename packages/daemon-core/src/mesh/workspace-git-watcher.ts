@@ -36,7 +36,7 @@ const GIT_DIR_TRIGGER_NAMES: ReadonlySet<string> = new Set([
     'HEAD', 'index', 'ORIG_HEAD', 'MERGE_HEAD', 'REBASE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'packed-refs',
 ]);
 
-export interface WorkspaceGitDirs {
+interface WorkspaceGitDirs {
     /** The worktree's own git dir (HEAD, index). */
     gitDir: string;
     /** Where refs / packed-refs live (the same as gitDir for a plain checkout). */
@@ -83,7 +83,7 @@ export function isGitStateTrigger(kind: 'gitDir' | 'refs', filename: string | nu
 
 type WatchFn = (target: string, options: { recursive?: boolean; persistent?: boolean }, listener: (event: string, filename: string | Buffer | null) => void) => fs.FSWatcher;
 
-export interface WatchWorkspaceGitOptions {
+interface WatchWorkspaceGitOptions {
     debounceMs?: number;
     /** Injected for tests (defaults to fs.watch). */
     watch?: WatchFn;

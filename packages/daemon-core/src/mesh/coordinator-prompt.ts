@@ -31,7 +31,7 @@ import type {
     RepoMeshNodeStatus,
 } from '../repo-mesh-types.js';
 import { mergeAndNormalizePolicy, resolveProviderMaxParallel, resolveMaxReadonlyParallelTasks } from '../repo-mesh-types.js';
-import { getDifficultyBrains } from '../config/mesh-config.js';
+import { getDifficultyBrains } from '../config/mesh-config-routing.js';
 import { getConfigDir } from '../config/config.js';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveCoordinatorRules, splitRulesLayer, type CoordinatorRulesResolution } from './coordinator-rules.js';
@@ -49,7 +49,7 @@ import type { MagiKindPanelMap, MagiSlot, MagiTaskKind } from '@adhdev/mesh-shar
  * read the ledger) simply omit the section — the prompt output stays identical
  * to the pre-activity form in that case.
  */
-export interface CoordinatorRecentActivity {
+interface CoordinatorRecentActivity {
     /** task_failed entries from the recent window, newest last. */
     recentFailures?: Array<{
         timestamp?: string;

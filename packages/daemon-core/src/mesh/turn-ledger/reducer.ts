@@ -93,7 +93,7 @@ const SESSION_PRODUCED_KINDS: ReadonlySet<TurnEvidenceKind> = new Set<TurnEviden
 
 // ─── lane classification ─────────────────────────────────────────────────
 
-export type LaneResult =
+type LaneResult =
     | { lane: RuleLane; effectiveGeneration: number | null }
     | { rejection: Extract<ReduceRejection, 'attempt_mismatch' | 'session_mismatch'> };
 

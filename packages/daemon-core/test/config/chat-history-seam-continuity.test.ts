@@ -113,7 +113,7 @@ describe('chat history seam continuity (live window + paged history)', () => {
 
     for (const collapse of [true, false]) {
         it(`covers the transcript with no hole and no duplicate (collapse=${collapse})`, async () => {
-            const { readProviderChatHistory } = await import('../../src/config/chat-history.js')
+            const { readProviderChatHistory } = await import('../../src/config/provider-native-history.js')
             const records = buildNativeRecords(12)
             const scripts = makeScripts(records)
             const historyBehavior = { collapseConsecutiveAssistantTurns: collapse }
@@ -202,7 +202,7 @@ describe('chat history seam continuity (live window + paged history)', () => {
      * data. `sequence` breaks the tie deterministically.
      */
     it('orders same-timestamp records deterministically by sequence', async () => {
-        const { readProviderChatHistory } = await import('../../src/config/chat-history.js')
+        const { readProviderChatHistory } = await import('../../src/config/provider-native-history.js')
         const at = 1_800_000_000_000
         // All four share ONE receivedAt, and are supplied in REVERSE sequence
         // order — the shape a fan-out produces when files are read newest-first.
@@ -231,7 +231,7 @@ describe('chat history seam continuity (live window + paged history)', () => {
     })
 
     it('falls back to the count path when the cursor cannot be resolved', async () => {
-        const { readProviderChatHistory } = await import('../../src/config/chat-history.js')
+        const { readProviderChatHistory } = await import('../../src/config/provider-native-history.js')
         const records = buildNativeRecords(6)
         const scripts = makeScripts(records)
 
@@ -259,7 +259,7 @@ describe('chat history seam continuity (live window + paged history)', () => {
     })
 
     it('resolves the boundary by identity even when the count would overshoot', async () => {
-        const { readProviderChatHistory } = await import('../../src/config/chat-history.js')
+        const { readProviderChatHistory } = await import('../../src/config/provider-native-history.js')
         const records = buildNativeRecords(8)
         const scripts = makeScripts(records)
         const historyBehavior = { collapseConsecutiveAssistantTurns: true }

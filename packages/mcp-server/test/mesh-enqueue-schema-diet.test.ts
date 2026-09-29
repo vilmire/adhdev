@@ -1,12 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-    ALL_MESH_TOOLS,
-    MESH_ENQUEUE_BATCH_TOOL,
-    MESH_ENQUEUE_TASK_TOOL,
-    MESH_GRAPH_GATE_TOOL,
-} from '../src/tools/mesh-tool-schemas.js';
+import { ALL_MESH_TOOLS } from '../src/tools/mesh-tool-schemas.js';
+import { MESH_ENQUEUE_BATCH_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_GRAPH_GATE_TOOL } from '../src/tools/mesh-tool-schemas-queue.js';
 import {
     MESH_ACCEPTED_ARG_ALIASES,
     MESH_RETIRED_ARGS,

@@ -40,7 +40,7 @@ import {
     projectGraphPublicPolicy,
     type MeshDependencyFailure,
 } from './mesh-graph-derived-failure.js';
-import { parseCoordinatorGateBlock } from './mesh-graph-transition-runner.js';
+import { parseCoordinatorGateBlock } from './mesh-graph-block-reasons.js';
 import type { GateConvergenceEvidence } from './mesh-graph-gate-evidence.js';
 import type {
     MeshGraphGateState,

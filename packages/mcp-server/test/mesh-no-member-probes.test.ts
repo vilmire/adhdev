@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshListPendingApprovals, meshStatus, meshViewQueue } from '../src/tools/mesh-tools.js';
 import { meshNodeSlotsPropose } from '../src/tools/mesh-tools-slot-autodetect.js';
-import { ipcDispatchToRemoteAgent } from '../src/tools/mesh-tools-internal.js';
+import { ipcDispatchToRemoteAgent } from '../src/tools/mesh-remote-dispatch.js';
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 
 const TOOLS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'tools');

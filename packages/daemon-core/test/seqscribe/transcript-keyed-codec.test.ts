@@ -172,7 +172,7 @@ describe('keyed codec — digest and keys', () => {
         expect(sessionChatPolicy().keyed).toEqual({ tombstoneKind: CHAT_DEL_KIND });
     });
 
-    it('the chat policy is a subscribe-only content topic with no Beacon hint keys (I1)', () => {
+    it('the chat policy is a subscribe-only content topic with no hint keys (I1)', () => {
         const policy = sessionChatPolicy();
         expect(policy).toMatchObject({ kind: 'append', replication: 'subscribe-only', access: 'content', retention: { mode: 'full' } });
         expect(policy.hintKeys).toBeUndefined();

@@ -59,7 +59,7 @@
  *
  * P2P only — no server path, no seqscribe topic.
  */
-import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, readRecord, readText } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import { readMeshTimeoutEnvMs } from '../runtime-defaults.js';
 import * as fs from 'fs';
@@ -102,7 +102,7 @@ export interface MeshNodeStatePushPersistence {
     save(targets: MeshNodeStatePushTarget[]): void;
 }
 
-export interface MeshNodeStatePushSubscription {
+interface MeshNodeStatePushSubscription {
     coordinatorDaemonId: string;
     meshId: string;
     nodeId: string;
@@ -129,7 +129,7 @@ export interface MeshNodeStatePushSubscription {
     gitDirty?: boolean;
 }
 
-export interface MeshNodeStatePusherOptions {
+interface MeshNodeStatePusherOptions {
     dispatch?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
     readGit: (workspace: string, opts: { refreshUpstream: boolean }) => Promise<Record<string, unknown> | null>;
     /** This daemon's content-free runtime summary (absent = git-only pusher, e.g. older wiring/tests). */
@@ -159,14 +159,6 @@ export interface MeshNodeStatePusherOptions {
     selfReadQuietMs?: number;
 }
 
-function readRecord(value: unknown): Record<string, unknown> {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function readString(value: unknown): string {
-    return typeof value === 'string' ? value.trim() : '';
-}
-
 /** The coordinator's verdict on a signature-only runtime report (null = not answered). */
 function readRuntimeHeld(response: unknown): boolean | null {
     const root = readRecord(response);
@@ -183,7 +175,7 @@ function readGitHeld(response: unknown): boolean | null {
 
 function readBootId(response: unknown): string | null {
     const root = readRecord(response);
-    return readString(root.coordinatorBootId) || readString(readRecord(root.result).coordinatorBootId) || null;
+    return readText(root.coordinatorBootId) || readText(readRecord(root.result).coordinatorBootId) || null;
 }
 
 /** true = accepted, false = explicitly refused (drop), null = no usable answer. */
@@ -194,7 +186,7 @@ function readAck(response: unknown): boolean | null {
     if (accepted === true) return true;
     if (accepted === false) return false;
     if (root.success === false || inner.success === false) {
-        const code = readString(root.code) || readString(inner.code) || readString(root.error) || readString(inner.error);
+        const code = readText(root.code) || readText(inner.code) || readText(root.error) || readText(inner.error);
         // A sender-gate refusal or an unknown node is final for this subscription.
         if (code.startsWith('mesh_sender_') || code === 'mesh_node_unknown' || code === 'mesh_not_found') return false;
         // A coordinator too old to hold pushed state (a restored subscription can reach one).
@@ -328,10 +320,10 @@ export class MeshNodeStatePusher {
      */
     selfRegister(target: MeshNodeStatePushTarget): boolean {
         if (!this.options.dispatch) return false;
-        const coordinatorDaemonId = readString(target.coordinatorDaemonId);
-        const meshId = readString(target.meshId);
-        const nodeId = readString(target.nodeId);
-        const workspace = readString(target.workspace);
+        const coordinatorDaemonId = readText(target.coordinatorDaemonId);
+        const meshId = readText(target.meshId);
+        const nodeId = readText(target.nodeId);
+        const workspace = readText(target.workspace);
         if (!coordinatorDaemonId || !meshId || !nodeId || !workspace) return false;
         const key = this.key(coordinatorDaemonId, meshId, nodeId);
         if (this.subscriptions.has(key)) return false;
@@ -362,7 +354,7 @@ export class MeshNodeStatePusher {
      * Returns how many subscriptions were added.
      */
     restore(derived: MeshNodeStatePushTarget[] = [], opts?: { selfDaemonId?: string }): number {
-        const self = readString(opts?.selfDaemonId);
+        const self = readText(opts?.selfDaemonId);
         let persisted: MeshNodeStatePushTarget[] = [];
         try {
             persisted = this.options.persistence?.load() ?? [];
@@ -372,7 +364,7 @@ export class MeshNodeStatePusher {
         let added = 0;
         for (const target of [...persisted, ...derived]) {
             // Never push to ourselves (a config dir shared with another daemon's record).
-            if (self && daemonIdsEquivalent(readString(target?.coordinatorDaemonId), self)) continue;
+            if (self && daemonIdsEquivalent(readText(target?.coordinatorDaemonId), self)) continue;
             if (this.selfRegister(target)) added += 1;
         }
         if (added > 0) {
@@ -392,7 +384,7 @@ export class MeshNodeStatePusher {
      */
     pushNow(coordinatorDaemonId?: string): number {
         if (!this.options.dispatch) return 0;
-        const wanted = readString(coordinatorDaemonId);
+        const wanted = readText(coordinatorDaemonId);
         const now = this.now();
         let runtime: MeshNodeRuntimeSummary | null | undefined;
         const readRuntimeOnce = async () => {
@@ -441,10 +433,10 @@ export class MeshNodeStatePusher {
      */
     nudge(coordinatorDaemonId: string, meshId: string, nodeId: string, workspace?: string): boolean {
         if (!this.options.dispatch) return false;
-        const coordinator = readString(coordinatorDaemonId);
-        const key = this.key(coordinator, readString(meshId), readString(nodeId));
+        const coordinator = readText(coordinatorDaemonId);
+        const key = this.key(coordinator, readText(meshId), readText(nodeId));
         if (!this.subscriptions.has(key)) {
-            const path = readString(workspace);
+            const path = readText(workspace);
             if (!path || !fs.existsSync(path)) return false;
             if (!this.selfRegister({ coordinatorDaemonId: coordinator, meshId, nodeId, workspace: path })) return false;
             LOG.info('MeshNodeState', `pushing state of node ${nodeId} (mesh ${meshId}) to coordinator ${coordinator.slice(0, 12)}`);

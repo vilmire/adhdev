@@ -45,12 +45,12 @@ import {
 import type { TurnEventInsert } from './store.js';
 import type { TurnAttempt, TurnBusEvent, TurnEffect, TurnState } from './types.js';
 
-export type CommitEffect = Extract<TurnEffect, { kind: 'commit' }>;
-export type NotifyEffect = Extract<TurnEffect, { kind: 'notify_coordinator' }>;
-export type CancelDispatchEffect = Extract<TurnEffect, { kind: 'cancel_dispatch' }>;
-export type RedeliverEffect = Extract<TurnEffect, { kind: 'redeliver' }>;
-export type QueueStatusEffect = Extract<TurnEffect, { kind: 'queue_status' }>;
-export type GraphAdvanceEffect = Extract<TurnEffect, { kind: 'graph_advance' }>;
+type CommitEffect = Extract<TurnEffect, { kind: 'commit' }>;
+type NotifyEffect = Extract<TurnEffect, { kind: 'notify_coordinator' }>;
+type CancelDispatchEffect = Extract<TurnEffect, { kind: 'cancel_dispatch' }>;
+type RedeliverEffect = Extract<TurnEffect, { kind: 'redeliver' }>;
+type QueueStatusEffect = Extract<TurnEffect, { kind: 'queue_status' }>;
+type GraphAdvanceEffect = Extract<TurnEffect, { kind: 'graph_advance' }>;
 
 /** Local-only completion envelope a producer may attach (never published). */
 export interface TurnCompletionEnvelope {
@@ -77,7 +77,7 @@ export interface TurnTxnHost {
     graphAdvance(e: GraphAdvanceEffect, ctx: TxnEffectContext): { transitioned: boolean };
 }
 
-export interface TxnEffectContext {
+interface TxnEffectContext {
     attempt: TurnAttempt;
     evidence: TurnEvidence;
     nowMs: number;
@@ -171,7 +171,7 @@ function refOf(summary: SummaryRef | undefined): { ref: SummaryRef } | Record<st
     return summary ? { ref: summary } : {};
 }
 
-export interface EffectRowsInput {
+interface EffectRowsInput {
     evidence: TurnEvidence;
     /** Attempt AFTER the reduce step (null only for lane-none records). */
     attempt: TurnAttempt | null;
@@ -310,13 +310,13 @@ export function applyHostEffects(host: TurnTxnHost | null, effects: readonly Tur
 
 // ─── post-commit executors ───────────────────────────────────────────────
 
-export interface PostCommitCounters {
+interface PostCommitCounters {
     executed: number;
     missingPort: number;
     failed: number;
 }
 
-export interface PostCommitContext {
+interface PostCommitContext {
     attempt: TurnAttempt | null;
     nowMs: number;
     terminalTasks: TxnHostResult['terminalTasks'];

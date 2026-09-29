@@ -6,9 +6,15 @@ function readSource(relativePath: string): string {
     return fs.readFileSync(path.join(import.meta.dirname, '../../src', relativePath), 'utf8')
 }
 
+// The node card moved out of MeshGraphView.tsx into MeshNodeCard.tsx; the graph
+// surface pins read both files.
+function readGraphViewSource(): string {
+    return ['components/MeshGraph/MeshGraphView.tsx', 'components/MeshGraph/MeshNodeCard.tsx'].map(readSource).join('\n')
+}
+
 describe('mesh graph view interaction boundaries', () => {
     it('keeps node dragging disabled while allowing drag/scroll panning, pinch zoom, and explicit viewport focus control', () => {
-        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+        const source = readGraphViewSource()
 
         expect(source).toContain('nodesDraggable={false}')
         expect(source).toContain('panOnDrag')
@@ -28,7 +34,7 @@ describe('mesh graph view interaction boundaries', () => {
     })
 
     it('uses React Flow controls for zoom, fit, and the graph minimap without custom viewport guards', () => {
-        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+        const source = readGraphViewSource()
         const viewportSource = readSource('utils/mesh-graph-viewport.ts')
         const themeSource = readSource('components/MeshGraph/meshGraphTheme.ts')
 
@@ -45,7 +51,7 @@ describe('mesh graph view interaction boundaries', () => {
     })
 
     it('keeps an explicit responsive viewport height so React Flow cannot collapse to 0px on narrow screens', () => {
-        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+        const source = readGraphViewSource()
 
         expect(source).toContain('meshTheme.graphShellClass')
         // Dynamic min-height class based on node count — base case 460px min, grows for dense graphs
@@ -54,7 +60,7 @@ describe('mesh graph view interaction boundaries', () => {
     })
 
     it('renders submodule links as dedicated graph edges instead of leaving submodule status hidden in node data only', () => {
-        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+        const source = readGraphViewSource()
 
         expect(source).toContain('edgeTypes={edgeTypes}')
         expect(source).toContain('meshEdge: MeshGraphEdgeLine')
@@ -72,7 +78,7 @@ describe('mesh graph view interaction boundaries', () => {
     })
 
     it('surfaces non-converged drift inside node cards instead of falling back to a quiet +0 / -0 style summary', () => {
-        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+        const source = readGraphViewSource()
         const viewModelSource = readSource('components/MeshGraph/meshGraphViewModel.ts')
 
         expect(source).toContain('getMeshGraphAttentionBadge(node)')
@@ -81,7 +87,7 @@ describe('mesh graph view interaction boundaries', () => {
     })
 
     it('keeps graph node cards on the shared mesh-theme helper instead of hardcoding page-theme tokens', () => {
-        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+        const source = readGraphViewSource()
 
         expect(source).toContain('getMeshGraphTheme(theme)')
         expect(source).toContain('meshTheme.graphShellClass')
@@ -94,7 +100,7 @@ describe('mesh graph view interaction boundaries', () => {
     })
 
     it('activates compact mode when node count exceeds the dense-graph threshold', () => {
-        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+        const source = readGraphViewSource()
 
         expect(source).toContain('COMPACT_NODE_THRESHOLD')
         expect(source).toContain('data.nodes.length >= COMPACT_NODE_THRESHOLD')
@@ -103,7 +109,7 @@ describe('mesh graph view interaction boundaries', () => {
     })
 
     it('distinguishes active-session nodes and stale/offline nodes visually at the card level', () => {
-        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+        const source = readGraphViewSource()
 
         expect(source).toContain('isNodeActive(node)')
         expect(source).toContain('isNodeStale(node)')
@@ -112,7 +118,7 @@ describe('mesh graph view interaction boundaries', () => {
     })
 
     it('caps per-card session rows behind an overflow line that keeps every session reachable', () => {
-        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+        const source = readGraphViewSource()
 
         // UI/UX refactor contract (replaces the old render-all-rows rule): a busy
         // node no longer grows an unbounded scrollable list inside its card — rows
@@ -131,7 +137,7 @@ describe('mesh graph view interaction boundaries', () => {
     })
 
     it('scales viewport height for dense graphs with 10+ and 16+ nodes', () => {
-        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+        const source = readGraphViewSource()
 
         expect(source).toContain('getGraphMinHeightClass(data.nodes.length)')
         expect(source).toContain('min-h-[min(580px,58dvh)]')
@@ -139,7 +145,7 @@ describe('mesh graph view interaction boundaries', () => {
     })
 
     it('bounds long card and edge label text so rendered labels cannot escape the measured node geometry', () => {
-        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+        const source = readGraphViewSource()
 
         expect(source).toContain('MESH_GRAPH_EDGE_LABEL.maxWidth')
         expect(source).toContain('title={labelTitle}')

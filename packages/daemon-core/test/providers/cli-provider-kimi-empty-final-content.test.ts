@@ -236,13 +236,10 @@ describe('CliProviderInstance — kimi end-to-end clean completion (flushComplet
     instance.adapter = {
       chatMessagesOwnedExternally: true,
       currentTurnStartedAt: TURN_START,
-      currentTurnScope: null,
-      isWaitingForResponse: false,
       isProcessing: () => false,
       getPartialResponse: () => '',
       getStatus: () => ({ status: 'idle', lastOutputAt: TURN_START + 334_900 }),
       getScriptParsedStatus: () => ({ status: 'idle', messages: [] }),
-      getScreenText: () => '',
     }
 
     // Called first by completionFinalAssistantEvidence (proves present:true) inside

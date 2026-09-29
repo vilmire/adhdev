@@ -45,7 +45,7 @@ afterEach(() => {
 //
 // THE FIX widens the idle → generating arm to also fire on starting → generating. That edge is
 // only ever observed when a turn is genuinely active (CliStateEngine.applyGenerating bails when
-// !isWaitingForResponse && no turn scope), so it is never pure startup PTY noise — arming the
+// !isProcessing()), so it is never pure startup PTY noise — arming the
 // generating bookkeeping on it is safe and makes the fast first-turn completion fire normally.
 // The separate starting → idle arm (genuine startup with no input) is unaffected: that edge has
 // newStatus 'idle', not 'generating'.
@@ -68,7 +68,7 @@ function makeInstance(initialLastStatus: string): Harness {
   const instance = Object.create(CliProviderInstance.prototype) as any
 
   let adapterStatus = 'starting'
-  // Models the adapter's in-flight-turn flag (CliStateEngine.isWaitingForResponse, set by
+  // Models the adapter's in-flight-turn flag (isProcessing(), set by
   // onTurnStarted on a real inject, cleared on finishResponse). hasAdapterPendingResponse()
   // reads this — it is the discriminator the fix uses to tell a genuine first-turn
   // starting→generating apart from benign startup PTY-noise blips (which leave it false).
@@ -116,8 +116,7 @@ function makeInstance(initialLastStatus: string): Harness {
       status: 'idle',
       messages: [{ role: 'assistant', content: 'Done — read 3 files, no changes needed.' }],
     }),
-    getScreenText: () => '',
-    get isWaitingForResponse() { return adapterWaiting },
+    isProcessing: () => adapterWaiting,
     chatMessagesOwnedExternally: true,
   }
 
@@ -133,7 +132,7 @@ function makeInstance(initialLastStatus: string): Harness {
   })
   instance.completionHasFinalAssistantMessage = () => true
   // Use the real discriminator semantics: a turn is "pending" exactly while the adapter's
-  // isWaitingForResponse flag is set (driven via setAdapterWaiting in each test).
+  // in-flight flag is set (driven via setAdapterWaiting in each test).
   instance.hasAdapterPendingResponse = () => adapterWaiting
   instance.scheduleCompletedDebounceFlush = () => {
     // For native-source mesh sessions the real flushDelay is short
@@ -581,8 +580,7 @@ function makeHoldInstance(opts: { finalSummary?: string } = {}): Harness {
     getStatus: () => ({ status: adapterStatus }),
     getPartialResponse: () => '',
     getScriptParsedStatus: () => ({ status: 'idle', messages: parsedMessages }),
-    getScreenText: () => '',
-    get isWaitingForResponse() { return adapterWaiting },
+    isProcessing: () => adapterWaiting,
     chatMessagesOwnedExternally: true,
   }
 

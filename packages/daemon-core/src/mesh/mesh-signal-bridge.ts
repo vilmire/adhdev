@@ -48,7 +48,7 @@ import type { SignalRuleKind } from '../providers/spec/signal-rules.js';
  * `signal` event (wiring-unification B4 replaced the neutral
  * `shared/provider-signal-sink`).
  */
-export interface ProviderSignalObservation {
+interface ProviderSignalObservation {
     sessionId: string;
     providerType?: string;
     workspace?: string;

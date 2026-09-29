@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from 'fs';
 import { shortHash } from '../system/hash.js';
 import { expandWorkerIsolationPlaceholders, resolveWorkerMcpIsolation, resolveWorkerTrustHome, type WorkerMcpConfigOverrideDelivery, type WorkerMcpIsolation } from '../mesh/worker-mcp-isolation.js';
 import { resolveWorkerMcpServerLaunch } from './mesh-coordinator.js';
-import type { MeshCoordinatorDelegatedWorkerIsolation } from '../providers/contracts.js';
+import type { MeshCoordinatorDelegatedWorkerIsolation } from '../providers/mesh-coordinator-contracts.js';
 import type { PreLaunchTrust } from '../providers/spec/fsm-types.js';
 import { LOG } from '../logging/logger.js';
 import {
