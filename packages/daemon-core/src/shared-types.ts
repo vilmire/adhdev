@@ -209,7 +209,7 @@ export type SessionHostDiagnosticsSnapshot = Omit<
     recentTransitions: SessionHostRuntimeTransition[];
 };
 
-export type TransportTopic = 'session.runtime_output' | 'machine.runtime' | 'session_host.diagnostics' | 'session.modal' | 'daemon.metadata' | 'workspace.git' | 'mesh.status';
+export type TransportTopic = 'session.runtime_output' | 'machine.runtime' | 'session_host.diagnostics' | 'daemon.metadata' | 'workspace.git' | 'mesh.status';
 
 /** `mesh.status`: the coordinator's held mesh_status view of ONE mesh (the dashboard mesh view's only lane). */
 export interface MeshStatusSubscriptionParams {
@@ -222,10 +222,6 @@ export interface SessionRuntimeOutputSubscriptionParams {
 
 export interface MachineRuntimeSubscriptionParams {
     intervalMs?: number;
-}
-
-export interface SessionModalSubscriptionParams {
-    targetSessionId: string;
 }
 
 export interface DaemonMetadataSubscriptionParams {
@@ -258,19 +254,6 @@ export interface SessionHostDiagnosticsUpdate {
     topic: 'session_host.diagnostics';
     key: string;
     diagnostics: SessionHostDiagnosticsSnapshot;
-    seq: number;
-    timestamp: number;
-}
-
-export interface SessionModalUpdate {
-    topic: 'session.modal';
-    key: string;
-    sessionId: string;
-    status: string;
-    title?: string;
-    modalMessage?: string;
-    modalButtons?: string[];
-    interactionId?: string;
     seq: number;
     timestamp: number;
 }
@@ -359,7 +342,6 @@ export interface TopicUpdateEnvelopeMap {
     'session.runtime_output': SessionRuntimeOutputUpdate;
     'machine.runtime': MachineRuntimeUpdate;
     'session_host.diagnostics': SessionHostDiagnosticsUpdate;
-    'session.modal': SessionModalUpdate;
     'daemon.metadata': DaemonMetadataWireUpdate;
     'workspace.git': GitWorkspaceUpdate;
     'mesh.status': MeshStatusWireUpdate;
@@ -387,7 +369,6 @@ export interface SubscribeRequestMap {
     'session.runtime_output': SessionRuntimeOutputSubscriptionParams;
     'machine.runtime': MachineRuntimeSubscriptionParams;
     'session_host.diagnostics': SessionHostDiagnosticsSubscriptionParams;
-    'session.modal': SessionModalSubscriptionParams;
     'daemon.metadata': DaemonMetadataSubscriptionParams;
     'workspace.git': WorkspaceGitSubscriptionParams;
     'mesh.status': MeshStatusSubscriptionParams;

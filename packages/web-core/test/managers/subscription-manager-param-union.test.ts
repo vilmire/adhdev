@@ -115,7 +115,7 @@ describe('SubscriptionManager param union on shared keys (D1#1)', () => {
         const sendData = vi.fn().mockReturnValue(true)
         const request = (historySessionId: string): SubscribeRequest => ({
             type: 'subscribe',
-            topic: 'session.modal',
+            topic: 'session.runtime_output',
             key: 'daemon:daemon-1:session:runtime-session-1',
             params: { targetSessionId: 'runtime-session-1', historySessionId },
         } as SubscribeRequest)

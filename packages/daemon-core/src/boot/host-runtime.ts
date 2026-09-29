@@ -20,12 +20,11 @@
 import type { DevServer as DevServerType } from '../daemon/dev-server.js';
 import { DevServer } from '../daemon/dev-server.js';
 import { LOG } from '../logging/logger.js';
-import { createInteractionId, recordDebugTrace } from '../logging/debug-trace.js';
+import { createInteractionId } from '../logging/debug-trace.js';
 import { getDaemonCommandRegistry, type CommandRouterResult } from '../commands/router.js';
 import { normalizeCommandSource, type CommandSource, type CommandSpec } from '../commands/command-registry.js';
 import { createGitWorkspaceMonitor, type GitWorkspaceMonitor } from '../git/git-monitor.js';
 import type { DaemonStatusEventPayload, P2PStatusEventPayload, SessionHostDiagnosticsSnapshot } from '../shared-types.js';
-import type { SessionModalState } from '../providers/provider-instance.js';
 import type { EventOf } from '../sessions/lifecycle-events.js';
 import type { Unsubscribe } from '../sessions/lifecycle-bus.js';
 import { buildStatusSnapshot } from '../status/snapshot.js';
@@ -43,7 +42,6 @@ import { markTranscriptPtyOutputActivity } from '../seqscribe/transcript-publish
 import {
     subscribeHostCommandTopics,
     subscribeHostMeshState,
-    subscribeHostModal,
     subscribeHostStatusFacts,
     subscribeHostTopicPump,
     subscribeHostTopicReconciliation,
@@ -120,7 +118,6 @@ export interface DaemonHostRuntime {
     interactionId(sessionId: string | undefined): string | undefined;
     getCliPresentationMode(sessionId: string): 'terminal' | 'chat' | null;
     isCliSession(sessionId: string): boolean;
-    findSessionModalState(sessionId: string): SessionModalState | null;
     /** One snapshot builder; always carries the git summary. */
     buildSnapshot(profile: HostSnapshotProfile): HostStatusSnapshot;
     buildDaemonMetadataBody(params?: DaemonMetadataSubscriptionParams): DaemonMetadataUpdateBody;
@@ -148,12 +145,6 @@ export function createDaemonHostRuntime(runtime: DaemonRuntime, transport: Daemo
         return mode === 'chat' || mode === 'terminal' ? mode : null;
     };
     const isCliSession = (sessionId: string): boolean => getCliPresentationMode(sessionId) !== null;
-
-    const findSessionModalState = (sessionId: string): SessionModalState | null => {
-        if (!sessionId) return null;
-        const target = components.sessionRegistry.get(sessionId);
-        return components.instanceManager.getSessionModalState(sessionId, { instanceKey: target?.instanceKey });
-    };
 
     const buildSnapshot = (profile: HostSnapshotProfile): HostStatusSnapshot => buildStatusSnapshot({
         allStates: components.instanceManager.collectAllStates(),
@@ -197,11 +188,8 @@ export function createDaemonHostRuntime(runtime: DaemonRuntime, transport: Daemo
 
     const topics = new TopicSubscriptionRegistry(transport.topicSink, {
         gitMonitor,
-        interactionId: (sessionId) => components.router.interactionContext.get(sessionId),
-        recordTrace: (event) => { recordDebugTrace(event); },
         sources: {
             daemonMetadataBody: (params) => buildDaemonMetadataBody(params),
-            sessionModalState: (sessionId) => findSessionModalState(sessionId),
             sessionHostDiagnostics: (opts) => transport.sessionHostDiagnostics?.(opts) ?? null,
             // The mesh view's lane: the SAME body the `mesh_status` command returns
             // (coordinator-held state; never a remote read on this path).
@@ -230,7 +218,6 @@ export function createDaemonHostRuntime(runtime: DaemonRuntime, transport: Daemo
     const offs: Unsubscribe[] = [
         subscribeHostStatusFacts(bus, (e) => transport.onStatusFacts?.(e)),
         subscribeHostTopicPump(bus, topics),
-        subscribeHostModal(bus, topics),
         subscribeHostCommandTopics(bus, topics, transport.onCommandExecuted?.bind(transport)),
         subscribeHostMeshState(bus, topics, transport.onMeshState?.bind(transport)),
         subscribeHostTurnSnapshots(bus, {
@@ -284,7 +271,6 @@ export function createDaemonHostRuntime(runtime: DaemonRuntime, transport: Daemo
         interactionId: (sessionId) => components.router.interactionContext.get(sessionId),
         getCliPresentationMode,
         isCliSession,
-        findSessionModalState,
         buildSnapshot,
         buildDaemonMetadataBody,
         startDevSupport,

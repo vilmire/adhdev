@@ -134,10 +134,13 @@ const LEGACY_DAEMON_METADATA_COMMANDS: ReadonlySet<string> = new Set([
     'set_machine_nickname',
 ]);
 
-const LEGACY_SESSION_MODAL_COMMANDS: ReadonlySet<string> = new Set([
+// Formerly invalidated the retired `session.modal` topic; since its removal
+// (2026-09-29) the session row in daemon.metadata carries status + modal, so
+// the two commands that move them flush that lane instead (read_chat moves
+// neither and invalidates nothing).
+const SESSION_ROW_COMMANDS: ReadonlySet<string> = new Set([
     'resolve_action',
     'send_chat',
-    'read_chat',
 ]);
 
 function legacyCommandInvalidations(command: string): ReadonlySet<string> {
@@ -148,11 +151,11 @@ function legacyCommandInvalidations(command: string): ReadonlySet<string> {
         || command.startsWith('workspace_')
         || command.startsWith('session_host_')
         || legacyCommandMayAffectMeshGraphStatus(command)
+        || SESSION_ROW_COMMANDS.has(command)
     ) {
         topics.add('daemon.metadata');
     }
     if (command.startsWith('session_host_')) topics.add('session_host.diagnostics');
-    if (LEGACY_SESSION_MODAL_COMMANDS.has(command)) topics.add('session.modal');
     if (command.startsWith('git_')) topics.add('workspace.git');
     return topics;
 }

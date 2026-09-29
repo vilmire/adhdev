@@ -20,7 +20,7 @@ function sample(kind: BusEvent['kind']): BusEvent {
         case 'provider_event': return { kind, ...base, event: { event: 'agent:ready', summary: SENTINEL } as any }
         case 'daemon_facts': return { kind, at: 1, cause: 'provider_detection' }
         case 'mesh_state': return { kind, at: 1, meshId: 'mesh_0123456789' }
-        case 'command_executed': return { kind, at: 1, command: 'send_chat', source: 'ipc', sessionId: base.sessionId, success: true, invalidates: new Set(['session.modal']), fastFlush: false, postChat: true, interactionId: 'i1' }
+        case 'command_executed': return { kind, at: 1, command: 'send_chat', source: 'ipc', sessionId: base.sessionId, success: true, invalidates: new Set(['daemon.metadata']), fastFlush: false, postChat: true, interactionId: 'i1' }
     }
 }
 

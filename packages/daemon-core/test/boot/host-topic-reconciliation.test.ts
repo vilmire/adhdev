@@ -80,10 +80,10 @@ describe('subscribeHostTopicReconciliation', () => {
         const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
         const edgeAt = now;
         const { topics } = fakeTopics({
-            subscribed: new Set(['session.modal']),
-            // Flushed 1s after the edge (as if the event-driven host.modal
-            // subscriber ran normally) — comfortably inside the grace window.
-            lastSentAt: new Map([['session.modal', edgeAt + 1000]]),
+            subscribed: new Set(['daemon.metadata']),
+            // Flushed 1s after the edge (as if host.metadata-pump's modal
+            // listener ran normally) — comfortably inside the grace window.
+            lastSentAt: new Map([['daemon.metadata', edgeAt + 1000]]),
         });
 
         const off = subscribeHostTopicReconciliation(bus, topics as any, { now: nowFn, setIntervalFn: fakeSetInterval, clearIntervalFn: fakeClearInterval });
@@ -98,12 +98,12 @@ describe('subscribeHostTopicReconciliation', () => {
     it('fault injection: a silently-broken bus subscriber (topic never flushed since a bus edge) WARNs within one cycle, naming the topic and the age', () => {
         const bus = createSessionLifecycleBus();
         const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
-        // session.modal has a live subscriber, but nothing was ever sent to it
-        // (oldestLastFlushedAt === 0) — simulating host.modal's flush subscriber
-        // silently no-op'ing (doesn't throw, just doesn't act).
+        // daemon.metadata has a live subscriber, but nothing was ever sent to it
+        // (oldestLastFlushedAt === 0) — simulating host.metadata-pump's modal
+        // listener silently no-op'ing (doesn't throw, just doesn't act).
         const { topics } = fakeTopics({
-            subscribed: new Set(['session.modal']),
-            lastSentAt: new Map([['session.modal', 0]]),
+            subscribed: new Set(['daemon.metadata']),
+            lastSentAt: new Map([['daemon.metadata', 0]]),
         });
 
         const off = subscribeHostTopicReconciliation(bus, topics as any, { now: nowFn, setIntervalFn: fakeSetInterval, clearIntervalFn: fakeClearInterval });
@@ -114,7 +114,7 @@ describe('subscribeHostTopicReconciliation', () => {
         expect(warn).toHaveBeenCalledTimes(1);
         const [category, message] = warn.mock.calls[0]!;
         expect(category).toBe('HostRuntime');
-        expect(message).toContain('session.modal');
+        expect(message).toContain('daemon.metadata');
         expect(message).toMatch(/no flush since \d+ms ago/);
         off();
     });
@@ -148,8 +148,8 @@ describe('subscribeHostTopicReconciliation', () => {
 
     // ── Per-topic edge map (P-II-1 follow-up) ──────────────────────────────
     //
-    // The live false positive: daemon.metadata / session.modal WARNed every
-    // tick even though both were healthy, because the first cut tracked ONE
+    // The live false positive: daemon.metadata WARNed every
+    // tick even though it was healthy, because the first cut tracked ONE
     // global "newest edge of any watched kind" and judged every topic
     // against it — an edge that does not invalidate a topic (an unrelated
     // command, or a status/registered/terminated/daemon_facts edge that this
@@ -166,7 +166,7 @@ describe('subscribeHostTopicReconciliation', () => {
         fastFlush: false,
     };
 
-    it('(a) an unrelated command_executed (empty invalidates) after a subscribe does not warn for daemon.metadata or session.modal', () => {
+    it('(a) an unrelated command_executed (empty invalidates) after a subscribe does not warn for daemon.metadata or workspace.git', () => {
         const bus = createSessionLifecycleBus();
         const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
         const edgeAt = now;
@@ -175,8 +175,8 @@ describe('subscribeHostTopicReconciliation', () => {
         // unrelated edge counted for them (the old global-tracker bug), this
         // would warn once the grace window elapses.
         const { topics } = fakeTopics({
-            subscribed: new Set(['daemon.metadata', 'session.modal']),
-            lastSentAt: new Map([['daemon.metadata', 0], ['session.modal', 0]]),
+            subscribed: new Set(['daemon.metadata', 'workspace.git']),
+            lastSentAt: new Map([['daemon.metadata', 0], ['workspace.git', 0]]),
         });
 
         const off = subscribeHostTopicReconciliation(bus, topics as any, { now: nowFn, setIntervalFn: fakeSetInterval, clearIntervalFn: fakeClearInterval });
@@ -189,17 +189,17 @@ describe('subscribeHostTopicReconciliation', () => {
         off();
     });
 
-    it('(b) a modal edge with no session.modal flush after the grace WARNs for session.modal only', () => {
+    it('(b) a modal edge with no daemon.metadata flush after the grace WARNs for daemon.metadata only', () => {
         const bus = createSessionLifecycleBus();
         const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
         const edgeAt = now;
         const { topics } = fakeTopics({
-            subscribed: new Set(['session.modal', 'daemon.metadata']),
-            // session.modal never sent (0 = "has a subscriber, never sent" —
+            subscribed: new Set(['daemon.metadata', 'workspace.git']),
+            // daemon.metadata never sent (0 = "has a subscriber, never sent" —
             // distinct from "no subscriber at all", which fakeTopics models as
-            // an absent map key -> null); daemon.metadata not sent either, but
+            // an absent map key -> null); workspace.git not sent either, but
             // it has no qualifying edge in this scenario so it must stay silent.
-            lastSentAt: new Map([['session.modal', 0]]),
+            lastSentAt: new Map([['daemon.metadata', 0]]),
         });
 
         const off = subscribeHostTopicReconciliation(bus, topics as any, { now: nowFn, setIntervalFn: fakeSetInterval, clearIntervalFn: fakeClearInterval });
@@ -210,9 +210,9 @@ describe('subscribeHostTopicReconciliation', () => {
         expect(warn).toHaveBeenCalledTimes(1);
         const [category, message] = warn.mock.calls[0]!;
         expect(category).toBe('HostRuntime');
-        expect(message).toContain('session.modal');
-        expect(message).not.toContain('daemon.metadata has subscribers');
-        expect(message).toMatch(/newest session\.modal edge \(modal\)/);
+        expect(message).toContain('daemon.metadata');
+        expect(message).not.toContain('workspace.git has subscribers');
+        expect(message).toMatch(/newest daemon\.metadata edge \(modal\)/);
         off();
     });
 
@@ -237,7 +237,7 @@ describe('subscribeHostTopicReconciliation', () => {
         const bus = createSessionLifecycleBus();
         const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
         const { topics } = fakeTopics({
-            subscribed: new Set(['daemon.metadata', 'session.modal']),
+            subscribed: new Set(['daemon.metadata', 'workspace.git']),
             lastSentAt: new Map([['daemon.metadata', 0]]),
         });
 

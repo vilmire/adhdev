@@ -166,6 +166,7 @@ export interface HotChatSessionState {
     runtimeRecoveryState?: unknown;
 }
 
+/** The `modal` lifecycle-bus fact's payload (the approval modal a session shows, or null). */
 export interface SessionModalState {
     id: string;
     status?: unknown;
@@ -257,12 +258,6 @@ export interface ProviderInstance {
      * recent-CLI-activity check).
      */
     getHotChatSessionState?(): HotChatSessionState | HotChatSessionState[] | null;
-
-    /**
-     * Return the cheap modal metadata for a single session subscription. This is
-     * used on P2P topic flushes and must not invoke rich chat/transcript parsing.
-     */
-    getSessionModalState?(sessionId?: string): SessionModalState | null;
 
  /** Receive event (external → Instance) */
     onEvent(event: string, data?: any): void | Promise<ProviderSendMessageResult>;

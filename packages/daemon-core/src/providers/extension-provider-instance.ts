@@ -6,7 +6,7 @@
  */
 
 import { flattenContent, type ProviderModule } from './contracts.js';
-import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, SessionModalState } from './provider-instance.js';
+import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
@@ -119,16 +119,6 @@ export class ExtensionProviderInstance implements ProviderInstance {
             instanceId: this.instanceId,
             lastUpdated: Date.now(),
             settings: this.settings,
-        };
-    }
-
-    getSessionModalState(sessionId?: string): SessionModalState | null {
-        if (sessionId && sessionId !== this.instanceId) return null;
-        return {
-            id: this.instanceId,
-            status: this.currentStatus,
-            title: this.chatTitle || this.agentName || this.provider.name,
-            activeModal: this.activeModal,
         };
     }
 

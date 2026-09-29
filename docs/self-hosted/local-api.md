@@ -221,10 +221,11 @@ Supported shared subscription topics (`SubscribeRequestMap` in `daemon-core/src/
 - `daemon.metadata`
 - `machine.runtime`
 - `session.runtime_output`
-- `session.modal`
 - `session_host.diagnostics`
 - `workspace.git`
 - `mesh.status`
+
+A session's status, its approval modal (`activeChat.activeModal`: `message` + `buttons`) and its interactive prompt are fields of that session's row in `daemon.metadata`. The daemon pushes the row on every status change and immediately when a modal or prompt appears or clears. There is no separate modal topic (`session.modal` was removed).
 
 ## Capability-Driven Clients
 

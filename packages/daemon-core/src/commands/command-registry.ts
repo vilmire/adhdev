@@ -45,7 +45,7 @@ export function normalizeCommandSource(source: unknown): CommandSource | 'unknow
  */
 export type CommandInvalidationTopic = Extract<
     TransportTopic,
-    'daemon.metadata' | 'session_host.diagnostics' | 'session.modal' | 'workspace.git'
+    'daemon.metadata' | 'session_host.diagnostics' | 'workspace.git'
 >;
 
 /**

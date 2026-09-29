@@ -15,7 +15,6 @@
  * |--------------------------|-----------------------------------------------------------|-----------------------------------------------------------------|---------------------------------------|--------------------------------------------------|---------------------------------------|
  * | machine.runtime          | adhdev-daemon.ts:633                                       | index.ts:2143                                                   | intervalMs (min 5s, default 15s)      | per-subscription `seq += 1`                      | (2026-09-29) signature — send on change |
  * | session_host.diagnostics | adhdev-daemon.ts:663                                       | index.ts:2180                                                   | intervalMs (min 5s, default 10s)      | per-subscription `seq += 1`                      | (2026-09-29) signature — send on change |
- * | session.modal            | adhdev-daemon.ts:713 (interactionId + debug trace)         | index.ts:2230 (no interactionId)                                | none (event/status driven)            | per-subscription via prepareSessionModalUpdate    | lastDeliveredSignature (core helper)  |
  * | daemon.metadata          | adhdev-daemon.ts:783                                       | index.ts:2273                                                   | none (always builds)                  | per-subscription `seq += 1`                      | (2026-09-29) keyed snapshot/delta     |
  * | workspace.git            | adhdev-daemon.ts:838 (build, per-sub seq, NO concurrency   | index.ts:2330 (flush, concurrency 2 via runAsyncBatch,          | intervalMs (min 1s, default 5s via    | cloud: per-subscription `seq += 1`;              | (2026-09-29) signature — send on change |
  * |                          | cap — sequential per peer)                                 | monitor-global seq)                                             | GitWorkspaceMonitor normalize)        | standalone: GitWorkspaceMonitor global seq       |                                       |
@@ -29,10 +28,9 @@
  *    monotonic per key, which is the only property consumers rely on.
  * 3. workspace trimming: engine trims `params.workspace` (cloud did, standalone
  *    did not — standalone gains the trim).
- * 4. interactionId stamping (`opts.interactionId`) is declared here per the design
- *    but is NOT used by workspace.git — only session.modal stamps it.
+ * 4. (retired) interactionId stamping existed only for session.modal.
  *
- * ── Union decisions applied for the S3 cohorts (daemon.metadata → session.modal
+ * ── Union decisions applied for the S3 cohorts (daemon.metadata
  *    → machine.runtime → session_host.diagnostics) ──
  * 5. (retired) The legacy chat push topic that used to sit in this cohort was
  *    removed on 2026-09-29: dashboard chat is served only by the keyed
@@ -49,12 +47,12 @@
  * while watched (subscribe, invalidation, the host's sample tick) — the
  * monitor's own refreshes (turn end, send_chat) reach subscribers through its
  * listener without another git run.
- * 7. interactionId stamping + debug-trace recording on session.modal are hooks ({@link TopicEngineOptions.interactionId} /
- *    {@link TopicEngineOptions.recordTrace}): cloud passes its subsystems and
- *    stays byte-identical; standalone passes none in S3 and gains both in S4.
- * 8. session.modal subscribe validation = cloud semantics (trimmed non-empty
- *    targetSessionId); standalone only rejected falsy ids — whitespace-only ids
- *    are now rejected for both (no dashboard sends those).
+ * 7–8. (retired) The `session.modal` topic was removed on 2026-09-29: its
+ *    status, modal text / buttons and prompt are fields of the session row in
+ *    daemon.metadata, which is flushed on status facts and immediately on
+ *    modal / prompt edges — one lane per data flow. A second lane pushed only
+ *    on modal edges went stale on plain status transitions (a pane pinned to
+ *    `starting` after launch).
  *
  * ── Deviation from the design sketch ──
  * The sketch's `sink.isActive(topic)` ("does a subscriber exist") became
@@ -77,7 +75,6 @@ import type {
     MachineRuntimeSubscriptionParams,
     SessionHostDiagnosticsSnapshot,
     SessionHostDiagnosticsSubscriptionParams,
-    SessionModalSubscriptionParams,
     SubscribeRequest,
     TransportTopic,
     UnsubscribeRequest,
@@ -98,7 +95,6 @@ import {
 import { createGitWorkspaceMonitor } from '../git/git-monitor.js';
 import type { WorkspaceGitSubscriptionParams } from '../git/git-types.js';
 import { runAsyncBatch } from '../chat/async-batch.js';
-import { prepareSessionModalUpdate } from '../chat/subscription-updates.js';
 import { buildMachineInfo } from '../status/snapshot.js';
 import {
     DEFAULT_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
@@ -106,8 +102,6 @@ import {
     MIN_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
     MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS,
 } from '../runtime-defaults.js';
-import type { SessionModalState } from '../providers/provider-instance.js';
-import type { DebugTraceEvent } from '../logging/debug-trace.js';
 
 /**
  * Transport sink injected by each daemon. The registry never sees WS framing
@@ -153,8 +147,6 @@ export interface TopicEngineSources {
      */
     sessionHostDiagnostics?: (opts: { includeSessions: boolean; limit?: number }) =>
         Promise<SessionHostDiagnosticsSnapshot> | null;
-    /** session.modal state lookup (lightweight modal projection — see daemon-session-modal-hotpath). */
-    sessionModalState?: (sessionId: string) => SessionModalState | null;
     /**
      * daemon.metadata payload body — everything except the engine-owned
      * envelope fields (topic/key/seq/timestamp). Cloud returns
@@ -231,17 +223,6 @@ export function workspaceGitSignature(update: Pick<GitWorkspaceUpdate, 'status' 
 }
 
 export interface TopicEngineOptions {
-    /**
-     * Debug-trace correlation id provider (cloud's interactionId subsystem).
-     * Consumed by the session.modal engine; workspace.git
-     * does not stamp it. Standalone gains a provider in S4.
-     */
-    interactionId?: (sessionId?: string) => string | undefined;
-    /**
-     * Debug-trace sink for the modal publish stage (cloud passes
-     * recordDebugTrace; standalone gains it in S4).
-     */
-    recordTrace?: (event: DebugTraceEvent) => void;
     /** Daemon-injected payload sources for the push-style topic engines. */
     sources?: TopicEngineSources;
     /** daemon.metadata projection per connection (null / absent = the full body). */
@@ -283,9 +264,9 @@ interface WorkspaceGitSubscriptionEntry {
 }
 
 /** Registry-stored push-style topics (subscription storage owned here). */
-type PushTopic = 'machine.runtime' | 'session_host.diagnostics' | 'session.modal' | 'daemon.metadata' | 'mesh.status';
+type PushTopic = 'machine.runtime' | 'session_host.diagnostics' | 'daemon.metadata' | 'mesh.status';
 
-const PUSH_TOPICS: ReadonlyArray<PushTopic> = ['machine.runtime', 'session_host.diagnostics', 'session.modal', 'daemon.metadata', 'mesh.status'];
+const PUSH_TOPICS: ReadonlyArray<PushTopic> = ['machine.runtime', 'session_host.diagnostics', 'daemon.metadata', 'mesh.status'];
 
 interface PushTopicEntry {
     readonly connectionId: string;
@@ -317,7 +298,6 @@ const MIGRATED_TOPICS: ReadonlySet<TransportTopic> = new Set<TransportTopic>([
 const INVALIDATABLE_TOPICS: ReadonlyArray<TransportTopic> = [
     'daemon.metadata',
     'session_host.diagnostics',
-    'session.modal',
     'workspace.git',
 ];
 
@@ -416,11 +396,6 @@ export class TopicSubscriptionRegistry {
         }
         if (!this.isPushTopic(request.topic)) return false;
         const params = (request.params && typeof request.params === 'object' ? request.params : {}) as Record<string, unknown>;
-        if (request.topic === 'session.modal') {
-            // Cloud validation semantics (union decision #8): trimmed non-empty id.
-            const targetSessionId = typeof params.targetSessionId === 'string' ? params.targetSessionId.trim() : '';
-            if (!targetSessionId) return false;
-        }
         if (request.topic === 'mesh.status') {
             const meshId = typeof params.meshId === 'string' ? params.meshId.trim() : '';
             if (!meshId) return false;
@@ -590,7 +565,6 @@ export class TopicSubscriptionRegistry {
             case 'workspace.git': return this.flushWorkspaceGit(connectionId, key);
             case 'machine.runtime': return this.flushMachineRuntime(connectionId, key);
             case 'session_host.diagnostics': return this.flushSessionHostDiagnostics(connectionId, key);
-            case 'session.modal': return this.flushSessionModal(connectionId, key);
             case 'daemon.metadata': return this.flushDaemonMetadata(connectionId, key);
             case 'mesh.status': return this.flushMeshStatusEntries(this.collectPushEntries('mesh.status', connectionId, key));
             default: return;
@@ -694,57 +668,6 @@ export class TopicSubscriptionRegistry {
                 timestamp: now,
             });
             entry.lastDeliveredSignature = delivered === false ? '' : signature;
-        }
-    }
-
-    /**
-     * session.modal engine — event-driven (no interval throttle), deduped via
-     * prepareSessionModalUpdate's delivery signature. interactionId stamping +
-     * debug-trace recording ride the optional hooks (cloud-only until S4).
-     */
-    private async flushSessionModal(connectionId?: string, key?: string): Promise<void> {
-        const source = this.opts.sources?.sessionModalState;
-        if (!source) return;
-        for (const entry of this.collectPushEntries('session.modal', connectionId, key)) {
-            const params = entry.params as unknown as SessionModalSubscriptionParams;
-            const sessionId = params.targetSessionId;
-            const state = source(sessionId);
-            if (!state) continue;
-            const now = this.now();
-            const activeModal = state.activeModal;
-            const status = String(state.status || 'idle');
-            const title = typeof state.title === 'string' ? state.title : undefined;
-            const interactionId = this.opts.interactionId?.(sessionId);
-            const prepared = prepareSessionModalUpdate({
-                key: entry.key,
-                sessionId,
-                status,
-                title,
-                activeModal,
-                seq: entry.seq,
-                timestamp: now,
-                ...(interactionId ? { interactionId } : {}),
-                lastDeliveredSignature: entry.lastDeliveredSignature,
-            });
-            entry.seq = prepared.seq;
-            entry.lastDeliveredSignature = prepared.lastDeliveredSignature;
-            entry.lastFlushedAt = now;
-            if (!prepared.update) continue;
-            entry.lastSentAt = now;
-            this.opts.recordTrace?.({
-                interactionId,
-                category: 'topic',
-                stage: 'session.modal_published',
-                level: 'info',
-                sessionId,
-                payload: {
-                    status,
-                    hasTitle: !!prepared.update.title,
-                    modalMessage: prepared.update.modalMessage ? prepared.update.modalMessage.slice(0, 140) : undefined,
-                    modalButtonCount: prepared.update.modalButtons?.length || 0,
-                },
-            });
-            this.sink.send(entry.connectionId, 'session.modal', prepared.update);
         }
     }
 

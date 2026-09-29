@@ -121,7 +121,7 @@ describe('logs surface helpers', () => {
       { id: 'trace-2', ts: 20, category: 'session_host', stage: 'recover', level: 'warn', payload: { reason: 'slow reconnect' } },
     ]
     const webEvents: LogsSurfaceWebEntry[] = [
-      { id: 'web-1', ts: 30, kind: 'subscription.publish', topic: 'session.modal', payload: { key: 'session:1' } },
+      { id: 'web-1', ts: 30, kind: 'subscription.publish', topic: 'workspace.git', payload: { key: 'session:1' } },
     ]
 
     const rendered = buildVisibleLogsExport({

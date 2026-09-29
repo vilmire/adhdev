@@ -249,7 +249,7 @@ class StandaloneServer {
     broadcastToOpenClients(this.clients, message);
   }
 
-  private flushTopic(topic: 'machine.runtime' | 'session_host.diagnostics' | 'session.modal' | 'workspace.git' | 'daemon.metadata'): void {
+  private flushTopic(topic: 'machine.runtime' | 'session_host.diagnostics' | 'workspace.git' | 'daemon.metadata'): void {
     const topics = this.host?.topics;
     if (topics?.hasSubscriptions(topic)) void topics.flushNow(topic);
   }
@@ -288,7 +288,8 @@ class StandaloneServer {
       managedBy: 'adhdev-standalone',
       onHostEvent: () => {
         this.flushTopic('session_host.diagnostics');
-        this.flushTopic('session.modal');
+        // A hosted runtime changed state: its session row (status / modal) moved.
+        this.flushTopic('daemon.metadata');
       },
     });
 

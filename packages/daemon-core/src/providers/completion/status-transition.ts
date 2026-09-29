@@ -339,7 +339,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
 
     // Lifecycle port (B2): modal/prompt edges first — they are what CAUSES a
     // picker / approval status edge, so subscribers see them before it. The
-    // modal is the visible one (auto-approve masks it, as getSessionModalState does).
+    // modal is the visible one (auto-approve masks it, as the session row in getState does).
     emitModalAndPromptEdges(
         host,
         autoApproveActive || autoApproveHoldIdle ? null : activeModal,

@@ -7,14 +7,6 @@ export interface ChatMessageSignatureInput {
   content?: unknown
 }
 
-export interface SessionModalDeliverySignatureInput {
-  sessionId: string
-  status: string
-  title?: string
-  modalMessage?: string
-  modalButtons?: string[]
-}
-
 export function hashSignatureParts(parts: string[]): string {
   let hash = 0x811c9dc5
   for (const part of parts) {
@@ -45,15 +37,5 @@ export function buildChatMessageSignature(message: ChatMessageSignatureInput | n
     String(message.role || ''),
     String(message.receivedAt ?? message.timestamp ?? ''),
     stringifySignatureContent(message.content),
-  ])
-}
-
-export function buildSessionModalDeliverySignature(payload: SessionModalDeliverySignatureInput): string {
-  return hashSignatureParts([
-    payload.sessionId,
-    payload.status,
-    payload.title || '',
-    payload.modalMessage || '',
-    Array.isArray(payload.modalButtons) ? payload.modalButtons.join('\u001f') : '',
   ])
 }

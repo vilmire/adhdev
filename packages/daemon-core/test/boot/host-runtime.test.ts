@@ -23,7 +23,6 @@ function fakeRuntime() {
     ]);
     const instanceManager = {
         getInstance: (id: string) => instances.get(id),
-        getSessionModalState: vi.fn((sessionId: string) => ({ id: sessionId, status: 'waiting_approval' })),
         collectAllStates: vi.fn(() => []),
     };
     const router = {
@@ -144,7 +143,7 @@ describe('createDaemonHostRuntime', () => {
         expect(calls.commands).toEqual(['stop_cli', 'launch_cli']);
     });
 
-    it('modal / prompt edges flush session.modal; mesh_state runs the host hook and flushes THAT mesh\'s mesh.status', () => {
+    it('modal / prompt edges flush daemon.metadata at once (no throttle); mesh_state runs the host hook and flushes THAT mesh\'s mesh.status', () => {
         const rt = fakeRuntime();
         const { transport, calls } = fakeTransport();
         const host = createDaemonHostRuntime(rt.runtime, transport);
@@ -156,19 +155,10 @@ describe('createDaemonHostRuntime', () => {
         rt.bus.emit({ kind: 'prompt', sessionId: 's1', at: 0, prompt: null, transport: null });
         rt.bus.emit({ kind: 'mesh_state', at: 0, meshId: 'mesh_a' });
         rt.bus.emit({ kind: 'mesh_state', at: 0, meshId: '*' });
-        expect(flushNow.mock.calls.map((c) => c[0])).toEqual(['session.modal', 'session.modal']);
+        // Both edges flush immediately — the 500ms status-fact throttle does not apply.
+        expect(flushNow.mock.calls.map((c) => c[0])).toEqual(['daemon.metadata', 'daemon.metadata']);
         expect(flushMeshStatus.mock.calls).toEqual([['mesh_a'], [undefined]]);
         expect(calls.meshState).toEqual(['mesh_a', '*']);
-    });
-
-    it('findSessionModalState uses the lightweight projection with the registry instanceKey, never collectAllStates', () => {
-        const rt = fakeRuntime();
-        const host = createDaemonHostRuntime(rt.runtime, fakeTransport().transport);
-        rt.sessionRegistry.register({ sessionId: 'ext-1', parentSessionId: 'ide-1', providerType: 'cline', transport: 'cdp-webview', instanceKey: 'ide:cursor' } as any, 'attach');
-
-        expect(host.findSessionModalState('ext-1')).toEqual({ id: 'ext-1', status: 'waiting_approval' });
-        expect(rt.instanceManager.getSessionModalState).toHaveBeenCalledWith('ext-1', { instanceKey: 'ide:cursor' });
-        expect(rt.instanceManager.collectAllStates).not.toHaveBeenCalled();
     });
 
     it('provider_event → the allow-listed status_event on the transport', () => {
@@ -216,11 +206,11 @@ describe('createDaemonHostRuntime', () => {
             const invalidate = vi.spyOn(host.topics, 'invalidate').mockResolvedValue(undefined);
             const flushMeshStatus = vi.spyOn(host.topics, 'flushMeshStatus').mockResolvedValue(undefined);
 
-            // modal/prompt edges → session.modal; the mesh_state edge → that mesh's mesh.status only.
+            // modal/prompt edges → daemon.metadata (immediate); the mesh_state edge → that mesh's mesh.status only.
             rt.bus.emit({ kind: 'modal', sessionId: 's1', at: 0, modal: null });
             rt.bus.emit({ kind: 'prompt', sessionId: 's1', at: 0, prompt: null, transport: null });
             rt.bus.emit({ kind: 'mesh_state', at: 0, meshId: 'mesh_a' });
-            expect(flushNow.mock.calls.map((c) => c[0])).toEqual(['session.modal', 'session.modal']);
+            expect(flushNow.mock.calls.map((c) => c[0])).toEqual(['daemon.metadata', 'daemon.metadata']);
             expect(flushMeshStatus.mock.calls).toEqual([['mesh_a']]);
             expect(invalidate).not.toHaveBeenCalled();
 
@@ -255,6 +245,23 @@ describe('createDaemonHostRuntime', () => {
             rt.bus.emit(statusEdge('s1', 'idle', 'generating'));
             expect(flushNow.mock.calls.map((c) => c[0])).toEqual(['daemon.metadata']);
             vi.advanceTimersByTime(500);
+            expect(flushNow.mock.calls.map((c) => c[0])).toEqual(['daemon.metadata', 'daemon.metadata']);
+            host.stop();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('a modal edge inside the status throttle window still flushes daemon.metadata at once (the approval UI rides that lane)', () => {
+        vi.useFakeTimers();
+        try {
+            const rt = fakeRuntime();
+            const host = createDaemonHostRuntime(rt.runtime, fakeTransport().transport);
+            vi.spyOn(host.topics, 'hasSubscriptions').mockReturnValue(true);
+            const flushNow = vi.spyOn(host.topics, 'flushNow').mockResolvedValue(undefined);
+            rt.bus.emit(statusEdge('s1', 'generating', 'waiting_approval'));
+            vi.advanceTimersByTime(100);
+            rt.bus.emit({ kind: 'modal', sessionId: 's1', at: 100, modal: { id: 's1', activeModal: { message: 'Run?', buttons: ['Yes', 'No'] } } });
             expect(flushNow.mock.calls.map((c) => c[0])).toEqual(['daemon.metadata', 'daemon.metadata']);
             host.stop();
         } finally {

@@ -5,10 +5,10 @@
  *
  *   host.status-facts  status / daemon_facts / registered / terminated / launch_updated
  *                      → transport.onStatusFacts (cloud server status_report)
- *   host.metadata-pump the same facts → throttled daemon.metadata keyed flush, plus the
- *                      change-only sample tick (daemon.metadata / machine.runtime /
+ *   host.metadata-pump the same facts → throttled daemon.metadata keyed flush; modal /
+ *                      prompt → an immediate one (the pane's approval UI rides this lane);
+ *                      plus the change-only sample tick (daemon.metadata / machine.runtime /
  *                      session_host.diagnostics / workspace.git)
- *   host.modal         modal / prompt → session.modal flush (was standalone-only, per poke)
  *   host.topics        command_executed → topic invalidation (covers every router caller,
  *                      incl. the 6 that skipped it before — C11)
  *   host.mesh-state    mesh_state → transport hook + that mesh's mesh.status keyed flush
@@ -46,7 +46,7 @@ function swallow(label: string): (error: unknown) => void {
     return (error) => LOG.debug('HostRuntime', `${label} failed: ${(error as Error)?.message ?? error}`);
 }
 
-function flushTopic(topics: Topics, topic: 'session.modal' | 'daemon.metadata'): void {
+function flushTopic(topics: Topics, topic: 'daemon.metadata'): void {
     if (!topics.hasSubscriptions(topic)) return;
     void topics.flushNow(topic).catch(swallow(`${topic} flush`));
 }
@@ -81,8 +81,11 @@ export interface HostTopicPumpOptions {
 }
 
 /**
- * daemon.metadata is the dashboard's ONE state lane (audit P0-3). Status facts
- * schedule a throttled keyed flush; a sample tick covers edge-less state.
+ * daemon.metadata is the dashboard's ONE state lane (audit P0-3) — session
+ * status, the approval modal (`activeChat.activeModal`) and the interactive
+ * prompt all ride its session rows. Status facts schedule a throttled keyed
+ * flush; a modal / prompt edge flushes at once (an approval must not wait out
+ * the throttle); a sample tick covers edge-less state.
  */
 export function subscribeHostTopicPump(bus: Bus, topics: Topics & Partial<MeshTopics>, opts: HostTopicPumpOptions = {}): Unsubscribe {
     const now = opts.now ?? Date.now;
@@ -114,6 +117,13 @@ export function subscribeHostTopicPump(bus: Bus, topics: Topics & Partial<MeshTo
             flushMetadata();
         }, throttleMs - elapsed);
     }, { name: 'host.metadata-pump' });
+    // A modal / prompt edge is what the user acts on (the approval buttons, the
+    // picker): flush daemon.metadata now, bypassing the throttle — the same
+    // immediacy the retired session.modal topic had. A trailing flush already
+    // pending still runs (an unchanged body sends nothing).
+    const offModal = bus.on(['modal', 'prompt'], () => {
+        flushTopic(topics, 'daemon.metadata');
+    }, { name: 'host.metadata-pump-modal' });
     const timer = setIntervalFn(() => {
         for (const topic of ['daemon.metadata', 'machine.runtime', 'session_host.diagnostics', 'workspace.git'] as const) {
             if (!topics.hasSubscriptions(topic)) continue;
@@ -125,14 +135,11 @@ export function subscribeHostTopicPump(bus: Bus, topics: Topics & Partial<MeshTo
     }
     return () => {
         offFacts();
+        offModal();
         clearIntervalFn(timer);
         if (pending) clearTimeoutFn(pending);
         pending = null;
     };
-}
-
-export function subscribeHostModal(bus: Bus, topics: Topics): Unsubscribe {
-    return bus.on(['modal', 'prompt'], () => flushTopic(topics, 'session.modal'), { name: 'host.modal' });
 }
 
 export function subscribeHostCommandTopics(
@@ -200,7 +207,7 @@ export function subscribeHostTurnSnapshots(bus: Bus, deps: TurnSnapshotDeps): Un
 // Both hosts used to re-flush every push topic on a 2-2.5s `setInterval`,
 // self-labelled "safety net" in both code comments, even though every edge
 // that can invalidate a topic already flushes it through the bus subscribers
-// above (host.modal / host.topics / host.mesh-state) or
+// above (host.metadata-pump / host.topics / host.mesh-state) or
 // `command_executed.invalidates`. That timer is gone; this is what replaces
 // it — a single slow (default 60s) tick that does NOT flush anything itself.
 // It only checks whether a topic that has live subscribers has gone stale
@@ -215,20 +222,17 @@ export function subscribeHostTurnSnapshots(bus: Bus, deps: TurnSnapshotDeps): Un
 // The first cut tracked ONE global "newest edge of any watched kind" and
 // judged every topic against it. That over-counts: an edge of a kind that
 // does not invalidate a given topic (e.g. a `command_executed` for
-// `read_chat` with an empty `invalidates` set, or one that only invalidates
-// `session.modal`) still moved the global clock forward and made every OTHER
-// topic look stale by comparison. Live symptom: `daemon.metadata` and
-// `session.modal` WARNing every ~60s tick even though both were flushed
+// `read_chat` with an empty `invalidates` set) still moved the global clock
+// forward and made every OTHER topic look stale by comparison. Live symptom:
+// `daemon.metadata` WARNing every ~60s tick even though it was flushed
 // normally — the "newest edge" was an unrelated `command_executed` a few ms
 // after a dashboard subscribe.
 //
 // Below, each watched topic gets its own subscriber-proven edge-kind set:
 //
-//   session.modal        ← modal, prompt                     (subscribeHostModal: bus.on(['modal','prompt'], () => flushTopic(topics,'session.modal')))
-//                         ← command_executed when invalidates has 'session.modal'
-//                                                              (subscribeHostCommandTopics: topics.invalidate(e.invalidates, …))
-//   daemon.metadata       ← command_executed when invalidates has 'daemon.metadata'
-//                                                              (subscribeHostCommandTopics, same call — fastFlush just means the flush
+//   daemon.metadata       ← modal, prompt                     (host.metadata-pump: bus.on(['modal','prompt'], flushMetadata) — immediate)
+//                         ← command_executed when invalidates has 'daemon.metadata'
+//                                                              (subscribeHostCommandTopics: topics.invalidate(e.invalidates, …) — fastFlush just means the flush
 //                                                               already happened through a different immediate path, so the edge is
 //                                                               still real evidence a flush was due; it is not excluded here)
 //   session_host.diagnostics ← command_executed when invalidates has 'session_host.diagnostics'
@@ -254,7 +258,6 @@ export function subscribeHostTurnSnapshots(bus: Bus, deps: TurnSnapshotDeps): Un
 const RECONCILE_TOPICS: ReadonlyArray<TransportTopic> = [
     'machine.runtime',
     'session_host.diagnostics',
-    'session.modal',
     'workspace.git',
     'daemon.metadata',
 ];
@@ -269,8 +272,8 @@ type ReconcileEdgeEvent = EventOf<typeof RECONCILE_EDGE_KINDS[number]>;
 
 /** Non-command edge kinds that unconditionally invalidate one fixed topic (see map above). */
 const FIXED_EDGE_TOPIC: Partial<Record<ReconcileEdgeEvent['kind'], TransportTopic>> = {
-    modal: 'session.modal',
-    prompt: 'session.modal',
+    modal: 'daemon.metadata',
+    prompt: 'daemon.metadata',
 };
 
 /** Human-readable "what proved this edge counts" label for the WARN message. */
@@ -279,7 +282,7 @@ function edgeLabel(e: ReconcileEdgeEvent): string {
 }
 
 function isCommandInvalidationTopic(topic: TransportTopic): topic is CommandInvalidationTopic {
-    return topic === 'daemon.metadata' || topic === 'session_host.diagnostics' || topic === 'session.modal' || topic === 'workspace.git';
+    return topic === 'daemon.metadata' || topic === 'session_host.diagnostics' || topic === 'workspace.git';
 }
 
 /** Does this edge invalidate `topic`, per the map documented above? */
