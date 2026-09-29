@@ -27,10 +27,6 @@ export interface ScaffoldResult {
   files?: Record<string, string>;
 }
 
-export function generateTemplate(type: string, name: string, category: string, opts: ScaffoldOptions = {}): string {
-  const result = generateFiles(type, name, category, opts);
-  return result['provider.json'];
-}
 
 /**
  * Generate provider.json + per-function script files.

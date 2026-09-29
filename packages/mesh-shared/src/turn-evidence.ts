@@ -388,11 +388,9 @@ function makeGuard<T extends readonly string[]>(values: T): (value: unknown) => 
     return (value: unknown): value is T[number] => typeof value === 'string' && set.has(value)
 }
 
-export const isEvidenceSourceId = makeGuard(EVIDENCE_SOURCE_IDS)
 export const isTurnEvidenceKind = makeGuard(TURN_EVIDENCE_KINDS as readonly TurnEvidenceKind[])
 export const isTurnReason = makeGuard(TURN_REASONS)
 export const isNotifyKind = makeGuard(NOTIFY_KINDS)
-export const isHoldReason = makeGuard(HOLD_REASONS)
 export const isTurnOutcome = makeGuard(TURN_OUTCOMES)
 export const isCommitStrength = makeGuard(COMMIT_STRENGTHS)
 
@@ -491,9 +489,6 @@ export function isTurnEvidence(value: unknown): value is TurnEvidence {
     return true
 }
 
-export function isTerminalClassEvidenceKind(kind: TurnEvidenceKind): kind is typeof TERMINAL_CLASS_EVIDENCE_KINDS[number] {
-    return (TERMINAL_CLASS_EVIDENCE_KINDS as readonly string[]).includes(kind)
-}
 
 // ─── mesh.<id>.events topic entries (C2) ─────────────────────────────────
 
@@ -516,7 +511,6 @@ export type MeshTopicEntry = { v: typeof MESH_TOPIC_PROTOCOL_VERSION; eventId: s
     | { k: 'mesh.record'; ledgerKind: string; nodeId?: string; sessionId?: string; taskId?: string; payload: ProjectedScalars }
 )
 
-export const isMeshTopicEntryKind = makeGuard(MESH_TOPIC_ENTRY_KINDS)
 
 function isOptionalId(value: unknown): boolean {
     return value === undefined || isEvidenceIdentifier(value)

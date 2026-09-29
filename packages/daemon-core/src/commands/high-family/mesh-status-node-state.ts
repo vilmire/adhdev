@@ -81,12 +81,6 @@ export function isForeignDaemonMeshNode(node: any, locality: MeshNodeLocality): 
     return true;
 }
 
-function heldCheckedAt(node: any): number | null {
-    const lastGit = readRecord(node?.lastGit ?? node?.last_git);
-    const checkedAt = lastGit.checkedAt ?? lastGit.checked_at;
-    return typeof checkedAt === 'number' && Number.isFinite(checkedAt) ? checkedAt : null;
-}
-
 /** Transient per-node fields a client echoes back in its inlineMesh — never truth for a foreign-daemon node. */
 const ECHOED_TRANSIENT_NODE_KEYS = [
     'cachedStatus', 'lastGit', 'last_git', 'lastProbe', 'last_probe', 'error', 'health', 'machineStatus',
@@ -326,7 +320,6 @@ function overlayHeldRuntime(
         ...(runtime?.upgradeFailure ? { upgradeFailure: runtime.upgradeFailure } : {}),
         ...(runtime?.sessionsTruncated ? { sessionsTruncated: true } : {}),
         ...(runtime?.providers ? { providers: runtime.providers } : {}),
-        ...(runtime?.sessionStampVersion ? { sessionStampVersion: runtime.sessionStampVersion } : {}),
     };
     status.heldRuntime = held;
     // Quota / build facts: the pushed bundle wins when it is newer than the one

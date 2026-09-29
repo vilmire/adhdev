@@ -8,6 +8,7 @@
  * been sent to (maximally stale, distinct from "no subscribers").
  */
 import { describe, expect, it } from 'vitest';
+import { DASHBOARD_WIRE_VERSION } from '@adhdev/mesh-shared';
 import {
     TopicSubscriptionRegistry,
     type TopicSink,
@@ -38,14 +39,14 @@ describe('TopicSubscriptionRegistry.oldestLastSentAt', () => {
 
     it('returns 0 for a fresh subscriber that has never been flushed', () => {
         const registry = makeRegistry(() => 1_000);
-        registry.subscribe('conn-1', { type: 'subscribe', topic: 'daemon.metadata', key: 'k1', params: {} } as any);
+        registry.subscribe('conn-1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'daemon.metadata', key: 'k1', params: {} } as any);
         expect(registry.oldestLastSentAt('daemon.metadata')).toBe(0);
     });
 
     it('advances to the flush timestamp once flushNow sends, and stays the OLDEST across multiple subscribers', async () => {
         let clock = 1_000;
         const registry = makeRegistry(() => clock);
-        registry.subscribe('conn-1', { type: 'subscribe', topic: 'daemon.metadata', key: 'k1', params: {} } as any);
+        registry.subscribe('conn-1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'daemon.metadata', key: 'k1', params: {} } as any);
         await registry.flushNow('daemon.metadata');
         expect(registry.oldestLastSentAt('daemon.metadata')).toBe(1_000);
 
@@ -53,7 +54,7 @@ describe('TopicSubscriptionRegistry.oldestLastSentAt', () => {
         // oldest back down to 0 — the reconciliation pass must see the WORST
         // subscriber, not the best one.
         clock = 5_000;
-        registry.subscribe('conn-2', { type: 'subscribe', topic: 'daemon.metadata', key: 'k2', params: {} } as any);
+        registry.subscribe('conn-2', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'daemon.metadata', key: 'k2', params: {} } as any);
         expect(registry.oldestLastSentAt('daemon.metadata')).toBe(0);
 
         // daemon.metadata is throttle-free but keyed: this pass SENDS conn-2
@@ -69,9 +70,9 @@ describe('TopicSubscriptionRegistry.oldestLastSentAt', () => {
         let alive = true;
         let clock = 1_000;
         const registry = makeRegistry(() => clock, { isAlive: () => alive });
-        registry.subscribe('conn-1', { type: 'subscribe', topic: 'session_host.diagnostics', key: 'k1', params: {} } as any);
+        registry.subscribe('conn-1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'session_host.diagnostics', key: 'k1', params: {} } as any);
         // session_host.diagnostics needs a source; skip flush and just prune via hasSubscriptions/dropConnection path exercised by machine.runtime instead.
-        registry.subscribe('conn-1', { type: 'subscribe', topic: 'machine.runtime', key: 'k2', params: {} } as any);
+        registry.subscribe('conn-1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'machine.runtime', key: 'k2', params: {} } as any);
         await registry.flushNow('machine.runtime');
         expect(registry.oldestLastSentAt('machine.runtime')).toBe(1_000);
 
@@ -85,7 +86,7 @@ describe('TopicSubscriptionRegistry.oldestLastSentAt', () => {
         const registry = makeRegistry(() => clock);
         expect(registry.oldestLastSentAt('workspace.git')).toBeNull();
         const subscribed = registry.subscribe('conn-1', {
-            type: 'subscribe',
+            type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION,
             topic: 'workspace.git',
             key: 'k1',
             params: { workspace: '/repo', intervalMs: 1 },
@@ -96,7 +97,7 @@ describe('TopicSubscriptionRegistry.oldestLastSentAt', () => {
 
     it('is read-only: calling it does not change hasSubscriptions or any entry state', () => {
         const registry = makeRegistry(() => 1_000);
-        registry.subscribe('conn-1', { type: 'subscribe', topic: 'session.modal', key: 'k1', params: { targetSessionId: 's1' } } as any);
+        registry.subscribe('conn-1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'session.modal', key: 'k1', params: { targetSessionId: 's1' } } as any);
         const before = registry.hasSubscriptions('session.modal');
         registry.oldestLastSentAt('session.modal');
         registry.oldestLastSentAt('session.modal');
@@ -122,7 +123,7 @@ describe('TopicSubscriptionRegistry.oldestLastFlushedAt (reconciliation reads th
                 sessionModalState: () => modalState as never,
             },
         });
-        registry.subscribe('conn-1', { type: 'subscribe', topic: 'session.modal', key: 'modal:1', params: { targetSessionId: 'session-1' } } as any);
+        registry.subscribe('conn-1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'session.modal', key: 'modal:1', params: { targetSessionId: 'session-1' } } as any);
         expect(registry.oldestLastFlushedAt('session.modal')).toBe(0);
 
         await registry.flushNow('session.modal');
@@ -139,7 +140,7 @@ describe('TopicSubscriptionRegistry.oldestLastFlushedAt (reconciliation reads th
     it('returns null with no subscribers and 0 before the first flush pass', () => {
         const registry = makeRegistry(() => 1_000);
         expect(registry.oldestLastFlushedAt('daemon.metadata')).toBeNull();
-        registry.subscribe('conn-1', { type: 'subscribe', topic: 'daemon.metadata', key: 'k1', params: {} } as any);
+        registry.subscribe('conn-1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'daemon.metadata', key: 'k1', params: {} } as any);
         expect(registry.oldestLastFlushedAt('daemon.metadata')).toBe(0);
     });
 });

@@ -62,10 +62,6 @@ import type { Control, DelegateTrigger } from './types.js';
 import { LOG } from '../../logging/logger.js';
 import { recordDebugTrace } from '../../logging/debug-trace.js';
 import { shouldCollectTraceCategory } from '../../logging/debug-config.js';
-import {
-    WIN32_PTY_WRITE_CHUNK_CHARS,
-    WIN32_PTY_WRITE_CHUNK_GAP_MS,
-} from '../../cli-adapters/pty-write-chunking.js';
 
 // ── Shared driver types (formerly in driver.ts) ───────────────────────────
 
@@ -485,7 +481,6 @@ export class FsmDriver implements ISpecDriver {
     private stateEnteredAt = 0;
 
     // ── Clock bookkeeping for time conditions.
-    private startedAtMs = 0;
     private prevScreenLines: string[] = [];
     /** Per stable region → last time that region's content changed. Drives
      *  stable_ms conditions. Key = stableRegionKey(cond): numeric cursor_above
@@ -657,7 +652,6 @@ export class FsmDriver implements ISpecDriver {
 
     start(): void {
         const now = Date.now();
-        this.startedAtMs = now;
         const init = initialState(this.spec);
         this.currentStateId = init.id;
         this.stateEnteredAt = now;

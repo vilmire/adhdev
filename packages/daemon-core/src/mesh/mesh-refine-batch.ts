@@ -90,36 +90,6 @@ function topLevel(path: string): string {
 }
 
 /**
- * Resolve the set of submodule gitlink paths declared in a repo's .gitmodules,
- * relative to the repo root. Used to classify which changed paths are submodule
- * pointer bumps vs. ordinary file edits.
- */
-async function resolveSubmodulePaths(repoRoot: string): Promise<Set<string>> {
-    try {
-        const { stdout } = await execChangeAreaGit(
-            'resolveSubmodulePaths',
-            ['config', '--file', '.gitmodules', '--get-regexp', 'path'],
-            repoRoot,
-            { repoRoot },
-        );
-        const paths = new Set<string>();
-        for (const line of stdout.split('\n')) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-            // Format: "submodule.<name>.path <path>"
-            const spaceIdx = trimmed.indexOf(' ');
-            if (spaceIdx === -1) continue;
-            const value = trimmed.slice(spaceIdx + 1).trim();
-            if (value) paths.add(value);
-        }
-        return paths;
-    } catch {
-        // No .gitmodules (or git error) → repo has no submodules to classify.
-        return new Set();
-    }
-}
-
-/**
  * Analyze one worktree node's change area against its merge base.
  *
  * @param baseRef  ref that the node will merge into (e.g. 'origin/main' or a SHA)

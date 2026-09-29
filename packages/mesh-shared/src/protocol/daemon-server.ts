@@ -52,8 +52,6 @@ export const DAEMON_STATUS_EVENT_NAMES = [
     'agent:generating_completed',
     'agent:stopped',
     'monitor:no_progress',
-    /** Legacy alias for `monitor:no_progress`, still emitted by older daemons. */
-    'monitor:long_generating',
 ] as const
 export type DaemonStatusEventName = typeof DAEMON_STATUS_EVENT_NAMES[number]
 export const isDaemonStatusEventName = makeTypeGuard(DAEMON_STATUS_EVENT_NAMES)
@@ -130,8 +128,6 @@ export type SeqscribeStatusWireSummary = {
     transcriptDedupedBucket?: number
     transcriptOversizedBucket?: number
     transcriptDroppedBucket?: number
-    transcriptParityRan?: boolean
-    transcriptParityMismatchBucket?: number
 }
 
 export type CloudStatusReportWirePayload = {

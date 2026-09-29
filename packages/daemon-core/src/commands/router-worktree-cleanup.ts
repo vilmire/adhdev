@@ -10,18 +10,17 @@
  * condition, or result shape changed — only physical location + `this.` → `self.`.
  */
 import * as fs from 'fs';
-import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { resolve as pathResolve, dirname as pathDirname, join as pathJoin, sep as pathSep } from 'path';
 import type { DaemonCommandRouter } from './router.js';
 import { LOG } from '../logging/logger.js';
 import { gitChildEnv } from '../git/git-locale.js';
 import { meshNodeIdMatches, daemonIdsEquivalent } from '@adhdev/mesh-shared';
-import { readStringValue, readObjectRecord, readBooleanValue } from '../mesh/mesh-node-identity.js';
+import { readStringValue } from '../mesh/mesh-node-identity.js';
 import { checkWorktreeChangesPatchEquivalentInRef, MeshWorktreePatchContainmentSummary } from '../mesh/mesh-refine-gates.js';
 import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
 import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
-import { DEFAULT_MESH_POLICY, magiAutoLaunchedSessionCleanupDecision } from '../repo-mesh-types.js';
+import { magiAutoLaunchedSessionCleanupDecision } from '../repo-mesh-types.js';
 
 /**
  * Legacy pre-home-dir worktree layout: `<repoParent>/.adhdev-worktrees/<meshName>/<branch>`.

@@ -1,33 +1,41 @@
 /**
- * Keyed document delta — the diff/fold pair behind the `mesh.status` lane
- * (the dashboard's mesh view; data-path audit 2026-09-29 P1-5).
+ * Keyed document delta — THE diff/fold engine behind every keyed dashboard
+ * lane: `daemon.metadata` (the daemon's state, sessions keyed by id) and
+ * `mesh.status` (the coordinator's mesh view, nodes / queue tasks / missions
+ * keyed) — data-path audit 2026-09-29 P1-4 (one engine, one spec per lane).
  *
- * A document is plain top-level fields plus named keyed COLLECTIONS (arrays of
- * rows identified by an id field, possibly nested one object deep, e.g.
- * `queue.tasks`). The daemon digests every body it would have sent, diffs it
- * against the digest of the last body DELIVERED to a subscription, and sends
- * only the difference: changed top-level fields, and per collection the rows
- * whose content changed (changed fields only), the fields a row lost, and the
- * rows that disappeared. An unchanged document diffs to `null` — zero bytes on
- * the wire. The dashboard folds each delta into its held snapshot; the fold of
- * every delta since a snapshot equals the latest snapshot (pinned by
- * keyed-doc-delta.test.ts).
+ * A document is plain top-level fields, optional SPLIT objects (an object whose
+ * fields are diffed one by one, e.g. daemon.metadata's `status`), and named
+ * keyed COLLECTIONS (arrays of rows identified by an id field, possibly nested
+ * one object deep, e.g. `queue.tasks` / `status.sessions`). The daemon digests
+ * every body it would have sent, diffs it against the digest of the last body
+ * DELIVERED to a subscription, and sends only the difference: changed fields,
+ * and per collection the rows whose content changed (changed fields only), the
+ * fields a row lost, and the rows that disappeared. An unchanged document
+ * diffs to `null` — zero bytes on the wire. The dashboard folds each delta
+ * into its held snapshot; the fold of every delta since a snapshot equals the
+ * latest snapshot apart from `ignore`d fields (pinned by keyed-doc-delta.test.ts).
  *
- * `volatileTopLevel` fields (a build stamp, live process counters) are not a
- * change by themselves; when something else changed they ride along.
+ * Volatile fields (a build stamp, live process counters, a row's per-build
+ * stamps via `stableRow`) are not a change by themselves; when something else
+ * changed they ride along.
  *
  * Pure leaf: plain objects in, plain objects out; no transport, no clock.
  */
 
 export interface KeyedDocSpec {
-    /** Collection path (`nodes`, `queue.tasks`) → the id field of its rows. */
+    /** Collection path (`nodes`, `queue.tasks`, `status.sessions`) → the id field of its rows. */
     collections: Readonly<Record<string, string>>
-    /** Top-level fields that change on every build without meaning anything. */
+    /** Top-level objects whose own fields are diffed one by one (the rest of the object is not re-sent). */
+    splitObjects?: readonly string[]
+    /** Field paths (`daemonId`, `status.timestamp`) that are never diffed — envelope identity / clock. */
+    ignore?: readonly string[]
+    /** Field paths (top-level or inside a split object) that change on every build without meaning anything. */
     volatileTopLevel?: readonly string[]
     /**
      * The part of a collection row that decides whether it CHANGED (drop the
      * per-build stamps inside it). A row whose stable view is unchanged sends
-     * nothing; a changed field is sent with its full current value, stamps
+     * nothing; a changed row sends every field whose value differs, stamps
      * included. Must not mutate `row`.
      */
     stableRow?: (collection: string, row: Record<string, unknown>) => Record<string, unknown>
@@ -49,6 +57,7 @@ interface CollectionDigest {
 }
 
 export interface KeyedDocDigest {
+    /** Field signatures by path (`field`, or `object.field` for a split object). */
     readonly top: ReadonlyMap<string, string>
     readonly topValues: Readonly<Record<string, unknown>>
     readonly collections: ReadonlyMap<string, CollectionDigest>
@@ -69,6 +78,8 @@ export interface KeyedCollectionDelta {
 export interface KeyedDocDelta {
     set?: Record<string, unknown>
     unset?: string[]
+    /** Per split object: its changed / lost fields. */
+    objects?: Record<string, { set?: Record<string, unknown>; unset?: string[] }>
     collections?: Record<string, KeyedCollectionDelta>
 }
 
@@ -135,11 +146,21 @@ function fieldSigsOf(digest: RowDigest): Map<string, string> {
 export function digestKeyedDoc(doc: Record<string, unknown>, spec: KeyedDocSpec): KeyedDocDigest {
     const top = new Map<string, string>()
     const topValues: Record<string, unknown> = {}
-    for (const [key, value] of Object.entries(stripCollections(doc, spec))) {
+    const ignore = new Set(spec.ignore ?? [])
+    const split = new Set(spec.splitObjects ?? [])
+    const add = (path: string, value: unknown) => {
+        if (ignore.has(path)) return
         const s = sig(value)
-        if (s === undefined) continue
-        top.set(key, s)
-        topValues[key] = value
+        if (s === undefined) return
+        top.set(path, s)
+        topValues[path] = value
+    }
+    for (const [key, value] of Object.entries(stripCollections(doc, spec))) {
+        if (split.has(key) && isRecord(value)) {
+            for (const [field, fieldValue] of Object.entries(value)) add(`${key}.${field}`, fieldValue)
+            continue
+        }
+        add(key, value)
     }
     const collections = new Map<string, CollectionDigest>()
     for (const [path, idField] of Object.entries(spec.collections)) {
@@ -187,6 +208,13 @@ function diffCollection(prev: CollectionDigest | undefined, next: CollectionDige
             change[key] = nextRow.value[key]
             changed = true
         }
+        // A real change carries the row's volatile fields (dropped by stableRow) along.
+        if (changed) {
+            for (const [key, value] of Object.entries(nextRow.value)) {
+                if (key in nextRow.stable || key in change) continue
+                if (sig(prevRow.value[key]) !== sig(value)) change[key] = value
+            }
+        }
         const gone: string[] = []
         for (const key of prevSigs.keys()) if (!nextSigs.has(key) && !(key in nextRow.value)) gone.push(key)
         if (changed) (delta.upsert ??= []).push(change)
@@ -208,15 +236,27 @@ export function diffKeyedDoc(prev: KeyedDocDigest, next: KeyedDocDigest, spec: K
     let meaningful = false
     let set: Record<string, unknown> | undefined
     let unset: string[] | undefined
-    for (const [key, s] of next.top) {
-        if (prev.top.get(key) === s) continue
-        ;(set ??= {})[key] = next.topValues[key]
-        if (!next.volatile.has(key)) meaningful = true
+    const split = spec.splitObjects ?? []
+    const objectOf = (path: string): [string, string] | null => {
+        for (const object of split) {
+            if (path.startsWith(`${object}.`)) return [object, path.slice(object.length + 1)]
+        }
+        return null
     }
-    for (const key of prev.top.keys()) {
-        if (next.top.has(key)) continue
-        ;(unset ??= []).push(key)
-        if (!next.volatile.has(key)) meaningful = true
+    const objects: NonNullable<KeyedDocDelta['objects']> = {}
+    for (const [path, s] of next.top) {
+        if (prev.top.get(path) === s) continue
+        const inObject = objectOf(path)
+        if (inObject) ((objects[inObject[0]] ??= {}).set ??= {})[inObject[1]] = next.topValues[path]
+        else (set ??= {})[path] = next.topValues[path]
+        if (!next.volatile.has(path)) meaningful = true
+    }
+    for (const path of prev.top.keys()) {
+        if (next.top.has(path)) continue
+        const inObject = objectOf(path)
+        if (inObject) ((objects[inObject[0]] ??= {}).unset ??= []).push(inObject[1])
+        else (unset ??= []).push(path)
+        if (!next.volatile.has(path)) meaningful = true
     }
     for (const [path, idField] of Object.entries(spec.collections)) {
         const change = diffCollection(prev.collections.get(path), next.collections.get(path), idField)
@@ -227,6 +267,7 @@ export function diffKeyedDoc(prev: KeyedDocDigest, next: KeyedDocDigest, spec: K
     if (!meaningful) return null
     if (set) delta.set = set
     if (unset) delta.unset = unset
+    if (Object.keys(objects).length > 0) delta.objects = objects
     return delta
 }
 
@@ -274,6 +315,12 @@ export function foldKeyedDoc<T extends Record<string, unknown>>(held: T, delta: 
     const next: Record<string, unknown> = stripCollections(held, spec)
     for (const key of delta.unset ?? []) delete next[key]
     Object.assign(next, delta.set ?? {})
+    for (const [object, change] of Object.entries(delta.objects ?? {})) {
+        const folded: Record<string, unknown> = isRecord(next[object]) ? { ...(next[object] as Record<string, unknown>) } : {}
+        for (const key of change.unset ?? []) delete folded[key]
+        Object.assign(folded, change.set ?? {})
+        next[object] = folded
+    }
     for (const [path, idField] of Object.entries(spec.collections)) {
         const change = delta.collections?.[path]
         const heldList = heldCollections.get(path)
@@ -294,6 +341,24 @@ export function foldKeyedDoc<T extends Record<string, unknown>>(held: T, delta: 
         next[head] = parent
     }
     return next as T
+}
+
+/**
+ * The `daemon.metadata` document (the snapshot body minus its envelope):
+ * `status` is split field by field, its sessions keyed by `id`. `daemonId` is
+ * envelope identity and `status.timestamp` the build clock — never diffed (the
+ * fold re-stamps them from the frame); a session's `lastUpdated` build stamp is
+ * not a change by itself.
+ */
+export const DAEMON_METADATA_DOC_SPEC: KeyedDocSpec = {
+    collections: { 'status.sessions': 'id' },
+    splitObjects: ['status'],
+    ignore: ['daemonId', 'status.timestamp'],
+    stableRow: (_collection, row) => {
+        if (!('lastUpdated' in row)) return row
+        const { lastUpdated: _stamp, ...stable } = row
+        return stable
+    },
 }
 
 /**

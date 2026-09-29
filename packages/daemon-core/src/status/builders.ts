@@ -248,20 +248,6 @@ export function findCdpManager(
     return null;
 }
 
-/**
- * Check if any CDP manager matches the given key (exact or prefix).
- */
-export function hasCdpManager(
-    cdpManagers: Map<string, DaemonCdpManager>,
-    key: string,
-): boolean {
-    if (cdpManagers.has(key)) return true;
-    const prefix = key + '_';
-    for (const k of cdpManagers.keys()) {
-        if (k.startsWith(prefix)) return true;
-    }
-    return false;
-}
 
 /**
  * Check if any CDP manager matching the key is connected.

@@ -33,9 +33,9 @@ import { upsertHandoffNoteText, selectHandoffNoteText, deleteHandoffNoteTextOlde
 // are `mesh_local_records`, mesh-local-record-store.ts). The class keeps thin
 // delegating wrappers below — same `self`-passing pattern as the turn-attempt extraction.
 import {
-    migrate as migrateSchema, tableColumns as schemaTableColumns,
-    migrateMeshIsolationColumns as schemaMigrateMeshIsolationColumns,
-    hasLoggedMigrationFailure, markLoggedMigrationFailure,
+    migrate as migrateSchema,
+    hasLoggedMigrationFailure,
+    markLoggedMigrationFailure,
 } from './mesh-runtime-store-schema.js';
 
 let DatabaseCtor: typeof BetterSqlite3 | undefined;
@@ -281,16 +281,7 @@ export class MeshRuntimeStore {
         migrateSchema(this);
     }
 
-    private tableColumns(table: string): Set<string> {
-        return schemaTableColumns(this, table);
-    }
 
-    // Only called by migrate() in production, but kept as a class member because a
-    // regression test re-invokes it through `(db as any)` to assert the migration is
-    // idempotent across boots (mesh-runtime-store.test.ts, Part 8-1).
-    private migrateMeshIsolationColumns(): void {
-        schemaMigrateMeshIsolationColumns(this);
-    }
 
     /**
      * Public (not private) so the extracted ./mesh-runtime-store-*.ts delegates can reach it

@@ -4,10 +4,11 @@ import * as path from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import DashboardHeader, { getDashboardHeaderConnectionState } from '../../../src/components/dashboard/DashboardHeader'
-import { DASHBOARD_NEW_SESSION_LABEL } from '../../../src/components/dashboard/dashboard-session-cta'
 import { BaseDaemonProvider } from '../../../src/context/BaseDaemonContext'
 import type { ActiveConversation } from '../../../src/components/dashboard/types'
 import type { DashboardNotificationRecord } from '../../../src/utils/dashboard-notifications'
+
+const DASHBOARD_NEW_SESSION_LABEL = 'New session'
 
 function createConversation(overrides: Partial<ActiveConversation> = {}): ActiveConversation {
   return {

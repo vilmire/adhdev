@@ -104,11 +104,13 @@ describe('signature-only git heartbeat', () => {
   it('store.confirmObservation: matches only the held member-pushed signature; a pending restart is not confirmed by git', () => {
     let now = 1_000
     const store = new MeshNodeGitStateStore(null, () => now)
-    const sig = computeMeshNodeGitSignature(git())
+    const sig = digestMeshNodeStateSignature(computeMeshNodeGitSignature(git()))
     expect(store.confirmObservation({ meshId: MESH, nodeId: NODE, signature: sig })).toEqual({ held: false, changed: false })
     store.recordObservation({ meshId: MESH, nodeId: NODE, workspace: WS, git: git(), source: 'member_push', observedAt: 900 })
     now = 2_000
     expect(store.confirmObservation({ meshId: MESH, nodeId: NODE, signature: 'other' }).held).toBe(false)
+    // Only the digest names the held git (the raw signature form is not accepted).
+    expect(store.confirmObservation({ meshId: MESH, nodeId: NODE, signature: computeMeshNodeGitSignature(git()) }).held).toBe(false)
     expect(store.confirmObservation({ meshId: MESH, nodeId: NODE, signature: sig, observedAt: 1_900 })).toEqual({ held: true, changed: false })
     expect(store.get(MESH, NODE)!.observedAt).toBe(1_900)
     // Recovery from unreachable is a visible change.

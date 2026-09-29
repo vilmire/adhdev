@@ -32,23 +32,11 @@ interface ProviderRoute {
 }
 
 /**
- * Legacy suffix heuristic kept ONLY as a fallback for older daemons that do not
- * answer `list_provider_availability` (e.g. a pre-catalog cloud daemon in ipc
- * mode). New routing decisions must come from the daemon's provider catalog —
- * canonical CLI types like `kimi` carry no `-cli` suffix and cannot be guessed.
- */
-function legacyHeuristicRoute(type: string): ProviderRoute {
-  const isCliOrAcp = type.includes('-cli') || type.includes('-acp') || type === 'codex';
-  return { route: isCliOrAcp ? 'cli' : 'ide', canonicalType: type };
-}
-
-/**
  * Resolve the launch route (launch_cli vs launch_ide) and canonical provider
  * type from the daemon's authoritative provider catalog. An exact `type` match
  * or a manifest alias both resolve; anything else is rejected as an unknown
  * provider (fail closed — never silently route an unrecognized type to a
- * launch verb). When the catalog is unavailable the legacy heuristic applies,
- * preserving pre-fix behavior against older daemons.
+ * launch verb, and never guess one when the catalog cannot be read).
  */
 async function resolveProviderRoute(
   transport: CommandTransport,
@@ -59,12 +47,12 @@ async function resolveProviderRoute(
   let catalog: any;
   try {
     catalog = await transport.command('list_provider_availability', {});
-  } catch {
-    catalog = null;
+  } catch (error: any) {
+    return { error: `Could not read the daemon's provider catalog: ${error?.message || error}` };
   }
   const providers = Array.isArray(catalog?.providers) ? catalog.providers : null;
   if (!catalog || catalog.success === false || !providers) {
-    return legacyHeuristicRoute(type);
+    return { error: `The daemon's provider catalog is unavailable${typeof catalog?.error === 'string' ? `: ${catalog.error}` : ''}` };
   }
   const query = type.toLowerCase();
   const hit = providers.find((p: any) => {

@@ -62,149 +62,18 @@ import {
   evaluateTerminalAdmission,
   TERMINAL_FALLBACK_TRANSCRIPT_QUIET_MS,
 } from '../../src/mesh/mesh-terminal-admission.js'
-import { evaluateProviderEventAdmission } from '../../src/mesh/mesh-provider-event-admission.js'
 import { getTerminalAdmissionObservations } from '../../src/providers/completion/evidence.js'
 // The (1) poll-path and (3) acked-hold-synth describes retired 2026-09-23 with
 // mesh-completion-synthesis.ts (wiring-unification C4): the coordinator probe now
 // only produces transcript_final evidence (turn-ledger/probe.ts) and the reducer's
 // admission rules (turn-ledger/admission.ts) decide — pinned in
 // test/turn-ledger/probe.test.ts and the C-W1 admission/reducer tables.
-import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
-import { __clearMeshQueueForTests, insertDirectDispatch, getActiveDirectDispatches } from '../../src/mesh/mesh-work-queue.js'
-import { readLocalRecords } from '../../src/mesh/mesh-local-records.js'
-import { getRecentLogs } from '../../src/logging/logger.js'
 
 afterEach(() => {
   vi.restoreAllMocks()
 })
 
 const NOW = 1_760_000_000_000
-
-// ── The 10:49 wire ─────────────────────────────────────────────────────────
-// A final-LOOKING assistant bubble, and the transcript still moving underneath
-// it. No trailing tool bubble has landed in the tail yet — that is precisely why
-// the live-state gate's trailing-tool discriminator does not fire, and why
-// FRESHNESS is the only signal that separates this from a real turn end.
-function growingTailObservations(nowMs = NOW) {
-  return {
-    activeModalPresent: false,
-    trailingActivityCount: 0,
-    newestActivityAtMs: nowMs - 1_000, // 1s old — the 10:49 gap, well inside the 8s window
-    finalAssistantPresent: true,
-    nativeMarkersFieldPresent: false,
-  }
-}
-
-function settledTailObservations(nowMs = NOW) {
-  return {
-    ...growingTailObservations(nowMs),
-    newestActivityAtMs: nowMs - 60_000, // long quiet — a genuine turn end
-  }
-}
-
-function makeInstance(observations: unknown, drain: string = 'idle') {
-  return {
-    getTerminalAdmissionObservations: () => observations,
-    getDrainStatus: () => drain,
-  }
-}
-
-// ── (2) provider_event — THE path that produced the incident ───────────────
-
-describe('(2) provider_event admission — the 10:49 false completion', () => {
-  it('★CORE CONTRACT: a completion arriving while the transcript is still growing is DECLINED', () => {
-    const decision = evaluateProviderEventAdmission({
-      instance: makeInstance(growingTailObservations()),
-      providerType: 'kimi',
-      nowMs: NOW,
-    })
-    expect(decision.kind).toBe('decline')
-    expect(decision.kind === 'decline' && decision.reason).toBe('transcript_growing')
-  })
-
-  it('★LIVENESS: a genuine completion (settled tail) still ADMITS — breaking this wedges every task', () => {
-    const decision = evaluateProviderEventAdmission({
-      instance: makeInstance(settledTailObservations()),
-      providerType: 'kimi',
-      nowMs: NOW,
-    })
-    expect(decision.kind).toBe('admit')
-  })
-
-  it('★LIVENESS: a native turn-terminal marker admits STRONG even on a fresh tail', () => {
-    // A provider that PROVES this turn ended outranks the freshness heuristic:
-    // rule 3 runs before rule 6. Without this, a fast codex/kimi turn whose
-    // marker lands inside the quiet window would be held every time.
-    const decision = evaluateProviderEventAdmission({
-      instance: makeInstance({
-        ...growingTailObservations(),
-        nativeMarkersFieldPresent: true,
-        nativeMarkers: [{ receivedAt: NOW - 500, outcome: 'completed', summary: '', turnId: 't1' }],
-      }),
-      providerType: 'kimi',
-      turnStartedAtMs: NOW - 60_000,
-      nowMs: NOW,
-    })
-    expect(decision.kind).toBe('admit')
-    expect(decision.kind === 'admit' && decision.evidenceLevel).toBe('strong')
-  })
-
-  it('★LIVENESS: a remote / unobservable session is UNOBSERVED, never declined', () => {
-    // The single most dangerous regression this gate could introduce: declining
-    // completions for workers we cannot see. Absence of evidence is never a veto.
-    for (const instance of [undefined, null, {}, { getTerminalAdmissionObservations: 'nope' }]) {
-      const decision = evaluateProviderEventAdmission({ instance, providerType: 'kimi', nowMs: NOW })
-      expect(decision.kind).toBe('unobserved')
-    }
-  })
-
-  it('★LIVENESS: a throwing / empty observation probe fails OPEN', () => {
-    const thrower = { getTerminalAdmissionObservations: () => { throw new Error('probe blew up') } }
-    expect(evaluateProviderEventAdmission({ instance: thrower, nowMs: NOW }).kind).toBe('unobserved')
-
-    const empty = { getTerminalAdmissionObservations: () => null }
-    expect(evaluateProviderEventAdmission({ instance: empty, nowMs: NOW }).kind).toBe('unobserved')
-  })
-
-  it('shapes OTHER than transcript_growing are not enforced here (they have their own handling)', () => {
-    // Deliberate narrowing — see the module header. A tool-only/empty-reply turn
-    // is a REAL turn end (codex: 19.5% of turns), and vetoing it here would
-    // re-break the very completions the native-marker rule exists to release.
-    const decision = evaluateProviderEventAdmission({
-      instance: makeInstance({ ...settledTailObservations(), finalAssistantPresent: false }),
-      providerType: 'kimi',
-      nowMs: NOW,
-    })
-    expect(decision.kind).toBe('unobserved')
-    expect(decision.kind === 'unobserved' && decision.reason).toContain('no_final_assistant_summary')
-  })
-
-  it('an unreadable drain status is OMITTED, not read as a non-idle veto', () => {
-    // getDrainStatus absent/throwing/'other' must not decline: the event itself is
-    // the provider asserting a turn end. Only the transcript rules apply.
-    for (const drain of ['other', 'THROW', undefined]) {
-      const instance: Record<string, unknown> = {
-        getTerminalAdmissionObservations: () => settledTailObservations(),
-      }
-      if (drain === 'THROW') instance.getDrainStatus = () => { throw new Error('x') }
-      else if (drain !== undefined) instance.getDrainStatus = () => drain
-      const decision = evaluateProviderEventAdmission({ instance, providerType: 'kimi', nowMs: NOW })
-      expect(decision.kind).toBe('admit')
-    }
-  })
-
-  it('a genuinely generating session is declined by rule 2 (not enforced here, but observed)', () => {
-    const decision = evaluateProviderEventAdmission({
-      instance: makeInstance(settledTailObservations(), 'generating'),
-      providerType: 'kimi',
-      nowMs: NOW,
-    })
-    // Rule 2 fires; this gate leaves the veto to the live-state gate that runs
-    // before it, so the decision is 'unobserved' carrying the observed reason.
-    expect(decision.kind).toBe('unobserved')
-    expect(decision.kind === 'unobserved' && decision.reason).toContain('session_not_idle')
-  })
-})
 
 // ── The provider-side observation bundle (what feeds the gate) ─────────────
 

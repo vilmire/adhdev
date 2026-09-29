@@ -115,9 +115,9 @@ export interface MeshNodeStatePushSubscription {
     lastUpstreamGit: Record<string, unknown> | null;
     /** Signature of the runtime summary the coordinator last acked (null = never sent). */
     lastRuntimeSignature: string | null;
-    /** Boot id the coordinator returned on its last ack (null = none seen / older coordinator). */
+    /** Boot id the coordinator returned on its last ack (null = none seen yet). */
     coordinatorBootId: string | null;
-    /** Boot id the worktree list was last delivered to ('' = a coordinator without boot ids; null = not yet). */
+    /** Boot id the worktree list was last delivered to ('' = an ack without a boot id; null = not yet). */
     worktreeNodesDeliveredFor: string | null;
     /** Boot id a follow-up push was already triggered for (one follow-up per boot id). */
     worktreeFollowUpFor?: string | null;
@@ -174,7 +174,7 @@ function readRuntimeHeld(response: unknown): boolean | null {
     return typeof held === 'boolean' ? held : null;
 }
 
-/** The coordinator's verdict on a signature-only git report (null = not answered — e.g. an older coordinator). */
+/** The coordinator's verdict on a signature-only git report (null = not answered). */
 function readGitHeld(response: unknown): boolean | null {
     const root = readRecord(response);
     const held = root.gitHeld ?? readRecord(root.result).gitHeld;
@@ -661,8 +661,7 @@ export class MeshNodeStatePusher {
         try {
             response = await this.options.dispatch!(sub.coordinatorDaemonId, MESH_NODE_STATE_REPORT_COMMAND, report(!signatureOnly));
             // The coordinator does not hold this git state (it restarted without the
-            // row, a restart handshake is pending, or it predates signature-only
-            // reports): send the body now — the same read, no second git spawn.
+            // row, or a restart handshake is pending): send the body now — the same read, no second git spawn.
             if (signatureOnly && readAck(response) !== false && readGitHeld(response) !== true) {
                 response = await this.options.dispatch!(sub.coordinatorDaemonId, MESH_NODE_STATE_REPORT_COMMAND, report(true));
             }

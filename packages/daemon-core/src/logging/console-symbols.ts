@@ -155,10 +155,6 @@ export function consoleSymbols(): ConsoleSymbols {
     return cached;
 }
 
-/** Test seam — drop the memoized value so a test can vary the environment. */
-export function resetConsoleSymbolsCache(): void {
-    cached = null;
-}
 
 /** Shorthand accessors for the common call sites. */
 export const SYM = {

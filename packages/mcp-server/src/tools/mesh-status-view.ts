@@ -10,12 +10,16 @@
 // module only RENDERS: it never reads a member, and there is no live-probe
 // fallback — a remote node with nothing held is reported as such.
 //
-// The renderer's helpers (shared with other tools) read through a transport;
-// `createMeshStatusViewTransport` answers each of their reads from the one
-// composed view. A read the view does not carry, and any remote (meshCommand)
-// read, throws — so the tool cannot silently regrow a second round trip.
+// The node runtime, held state and routes are read straight from the view
+// (mesh-held-node-state.ts parses them). The typed IPC answers the view carries
+// (membership, recovery, active work, missions, pending events, tool-call
+// record, related-repo git) keep their one decoder each: the renderer's shared
+// helpers read them through `createMeshStatusViewTransport`, which answers from
+// the view and throws for anything else — any remote (meshCommand) read, or a
+// read the view does not carry — so the tool cannot regrow a second round trip.
 
 import type { MeshContext } from './mesh-tools-internal.js';
+import { nodeSetKey, type MeshNodeRoute } from './mesh-node-routes.js';
 
 export interface MeshStatusViewRequest {
     refresh?: boolean;
@@ -66,9 +70,7 @@ export function createMeshStatusViewTransport<T extends object>(base: T, view: M
     const missions = readRecord(view.missions) ?? {};
     const command = async (command: string, args: Record<string, unknown> = {}) => {
         switch (command) {
-            case 'mesh_status': return view.status;
             case 'get_mesh': return view.membership;
-            case 'get_status_metadata': return view.localStatus;
             case 'recovery_context_query': return view.recovery ?? { success: true, contexts: {} };
             case 'active_work_query': return view.activeWork;
             case 'mission_list_query': return missions.list;
@@ -98,4 +100,19 @@ export function createMeshStatusViewTransport<T extends object>(base: T, view: M
     Object.defineProperty(replay, 'command', { value: command });
     Object.defineProperty(replay, 'meshCommand', { value: meshCommand });
     return replay;
+}
+
+/** Hold the coordinator's per-node routes (carried in the view) on the context. */
+export function applyMeshStatusViewRoutes(ctx: MeshContext, view: MeshStatusView): void {
+    const routes = new Map<string, MeshNodeRoute>();
+    for (const [id, value] of Object.entries(readRecord(view.routes) ?? {})) {
+        const route = value?.route;
+        if (route !== 'local' && route !== 'remote' && route !== 'unreachable') continue;
+        routes.set(id, {
+            route,
+            ...(typeof value.ownerDaemonId === 'string' && value.ownerDaemonId ? { ownerDaemonId: value.ownerDaemonId } : {}),
+            reason: typeof value.reason === 'string' ? value.reason : '',
+        });
+    }
+    ctx.nodeRoutes = { at: Date.now(), key: nodeSetKey(ctx), routes };
 }

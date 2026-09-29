@@ -371,11 +371,12 @@ class EventManager {
             if (!conversationMuted) {
                 try {
                     new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQQAAAB/f39/').play().catch(() => {})
-                } catch {}
+                } catch { /* Audio unavailable (no media support) — sound is best-effort */ }
             }
 
         // ── agent:generating_started ──
         } else if (payload.event === 'agent:generating_started') {
+            // Deliberately silent: no toast for a turn start.
         } else if (payload.event === 'agent:waiting_approval') {
             msg = `⚡ ${i18next.t('event.approvalNeeded', { label: ideLabel })}`
             type = 'warning'
@@ -443,8 +444,8 @@ class EventManager {
             })
             msg = '' // skip default toast (already emitted, mute override)
 
-        // ── monitor:no_progress (legacy event name: monitor:long_generating) ──
-        } else if (payload.event === 'monitor:no_progress' || payload.event === 'monitor:long_generating') {
+        // ── monitor:no_progress ──
+        } else if (payload.event === 'monitor:no_progress') {
             const minutes = payload.elapsedSec ? Math.round(payload.elapsedSec / 60) : 0
             msg = minutes
                 ? `⚠️ ${i18next.t('event.noProgressWithDuration', { label: ideLabel, minutes })}`

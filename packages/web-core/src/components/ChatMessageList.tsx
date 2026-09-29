@@ -138,9 +138,6 @@ export interface ChatMessageListRef {
     scrollToBottom: (behavior?: ScrollBehavior) => void;
 }
 
-export function shouldRenderChatMessageInVisibleTranscript(message: ChatMessage): boolean {
-    return classifyChatMessageForDisplay(message).isUserFacing;
-}
 
 // ─── Component ────────────────────────────────
 
@@ -657,7 +654,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                         onCollapseToolBlock={onCollapseToolBlock ? () => onCollapseToolBlock(toolExpandKey) : undefined}
                         onToggleTextExpanded={() => setExpandedTexts(prev => {
                             const next = new Set(prev);
-                            isTextExpanded ? next.delete(expandKey) : next.add(expandKey);
+                            if (isTextExpanded) next.delete(expandKey); else next.add(expandKey);
                             return next;
                         })}
                     />

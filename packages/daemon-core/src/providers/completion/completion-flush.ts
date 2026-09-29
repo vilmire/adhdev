@@ -26,7 +26,6 @@ import { extractJsonObjectFromSummary } from '../../shared/worker-result-parse.j
 import { resolveTranscriptAuthorityProfile } from '../transcript-evidence.js';
 import { isWeakCompletionEvidence } from '../../mesh/mesh-events-utils.js';
 import type { ProviderModule } from '../contracts.js';
-import { COMPLETED_FINALIZATION_RETRY_MS } from '../cli-provider-instance-types.js';
 import { emitTurnEnd, type TurnEvidencePort } from '../turn-evidence-port.js';
 import type { TurnAttemptRef, TurnEndBlockReason, NativeTurnOutcome } from '@adhdev/mesh-shared';
 

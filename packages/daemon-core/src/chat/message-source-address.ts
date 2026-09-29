@@ -35,8 +35,6 @@ export type MessageSourceAddress =
     | { readonly cls: 'rt'; readonly key: string }
     | { readonly cls: 'acp'; readonly id: string };
 
-/** `messageId` charset (§3.2): `[a-z0-9.:_-]`, at most 64 bytes. */
-export const MESSAGE_ID_MAX_BYTES = 64;
 /** Script/sqlite-supplied native ids are normalized and capped to this length (§3.2). */
 export const NATIVE_ID_TOKEN_MAX_BYTES = 40;
 /** Address of the synthesized `session_start` record a reader emits once. */

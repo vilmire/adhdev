@@ -143,16 +143,6 @@ export function transcriptClaimOwner(key: string, now: number = Date.now()): str
   return existing.owner;
 }
 
-/** Release a single key, only if held by `owner` (or `owner` empty). */
-export function releaseTranscript(key: string, owner?: string): void {
-  const k = normalizeKey(key);
-  if (!k) return;
-  const existing = claimsByKey.get(k);
-  if (existing && (!owner || existing.owner === owner)) {
-    LOG.info('TranscriptClaim', `decision=released key=${k} owner=${existing.owner}`);
-    claimsByKey.delete(k);
-  }
-}
 
 /** Release every key held by `owner` (called on session shutdown). */
 export function releaseTranscriptOwner(owner: string): void {

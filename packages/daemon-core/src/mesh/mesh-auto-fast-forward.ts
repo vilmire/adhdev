@@ -8,7 +8,7 @@ import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, readObjectRecord } from './mesh-node-identity.js';
 import { meshNoticeRuntime } from './turn-ledger/deliver.js';
 import { isWorktreeBootstrapStaleRunning } from './worktree-bootstrap-config.js';
-import { getMeshWithCache, isIdleSessionState, nodeHasActiveMeshWork, isLocalAutoLaunchNode } from './mesh-queue-assignment.js';
+import { getMeshWithCache, nodeHasActiveMeshWork, isLocalAutoLaunchNode } from './mesh-queue-assignment.js';
 import { resolveTunedReconcileMs } from './mesh-tuned-env.js';
 
 // ── cadence tunables (moved from mesh-reconcile-config.ts, deleted in C4) ──

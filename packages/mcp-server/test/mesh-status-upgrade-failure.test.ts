@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { collectLiveStatusProbe, extractUpgradeFailureSummary } from '../src/tools/mesh-tools-internal.js';
+import { extractUpgradeFailureSummary } from '../src/tools/mesh-tools-internal.js';
+import { heldNodeStatusProbe, localStatusProbe } from '../src/tools/mesh-held-node-state.js';
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshStatus } from '../src/tools/mesh-tools.js';
 
@@ -110,47 +111,20 @@ test('returns undefined when the daemon reports no failed upgrade', () => {
 });
 
 // The extractor alone is not the fix — the ORIGINAL defect was that the
-// mesh_status probe never carried upgradeFailure at all. These pin the wiring:
-// one get_status_metadata probe must yield sessions, daemonBuild AND
-// upgradeFailure together.
-function makeProbeCtx(statusPayload: Record<string, unknown>) {
-  const transport = new IpcTransport() as IpcTransport & {
-    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
-    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
-  };
-  transport.meshCommand = async () => statusPayload;
-  transport.command = async () => statusPayload;
-  return {
-    mesh: { id: 'mesh-upgrade-failure', nodes: [] },
-    transport,
-    localDaemonId: 'daemon-coordinator',
-    localMachineId: 'machine-coordinator',
-  };
-}
-
-const probeNode = {
-  id: 'node-remote',
-  workspace: '/remote/repo',
-  repoRoot: '/remote/repo',
-  daemonId: 'daemon_mach_remote',
-  machineId: 'machine-remote',
-  userOverrides: {},
-  policy: {},
-  sessions: [],
-};
-
-test('collectLiveStatusProbe carries upgradeFailure out of the status probe', async () => {
-  const ctx = makeProbeCtx(probeResult);
-  const probe = await collectLiveStatusProbe(ctx as any, probeNode as any);
-  assert.ok(probe.upgradeFailure, 'mesh_status probe must surface the failed upgrade');
+// mesh_status node runtime never carried upgradeFailure at all. These pin the
+// wiring: the coordinator's own status yields sessions, daemonBuild AND
+// upgradeFailure together (a member's comes from its pushed runtime).
+test('the coordinator\'s own status carries upgradeFailure into the node runtime', () => {
+  const probe = localStatusProbe(probeResult)!;
+  assert.ok(probe.upgradeFailure, 'mesh_status must surface the failed upgrade');
   assert.equal(probe.upgradeFailure.targetVersion, '1.0.38-rc.2');
   assert.equal(probe.upgradeFailure.ageLabel, '3h ago');
 });
 
-test('collectLiveStatusProbe omits upgradeFailure when no upgrade failed', async () => {
-  const ctx = makeProbeCtx({ success: true, status: {}, upgradeFailure: null });
-  const probe = await collectLiveStatusProbe(ctx as any, probeNode as any);
-  assert.equal(probe.upgradeFailure, undefined);
+test('the node runtime omits upgradeFailure when no upgrade failed', () => {
+  assert.equal(localStatusProbe({ success: true, status: {}, upgradeFailure: null })!.upgradeFailure, undefined);
+  // A member's pushed runtime without the marker stays without one too.
+  assert.equal(heldNodeStatusProbe({ heldRuntime: { source: 'member_push', observedAt: 1, sessions: [] } }).probe.upgradeFailure, undefined);
 });
 
 test('reads through a wrapped command payload, like extractDaemonBuildInfo does', () => {

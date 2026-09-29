@@ -11,7 +11,7 @@
  * a `MeshRefineJobHandle`, slimming a terminal result down to what a coordinator
  * event can carry, and persisting the full record to the mesh ledger.
  */
-import type { DaemonCommandRouter, CommandRouterResult } from './router.js';
+import type { DaemonCommandRouter } from './router.js';
 import { LOG } from '../logging/logger.js';
 import { createInteractionId } from '../logging/debug-trace.js';
 import { handleMeshForwardEvent, notifyMeshCoordinator } from '../mesh/mesh-events.js';

@@ -86,7 +86,6 @@ function reasonForCode(code: P2pRelayFailureCode): string {
 
 export function classifyP2pRelayFailure(error: unknown, _context: P2pRelayFailureContext = {}): P2pRelayFailureClassification {
   const message = messageFromError(error);
-  const lower = message.toLowerCase();
   const structured = readStructuredFailure(error);
 
   // Structured transport metadata is authoritative. This path prevents a local IPC

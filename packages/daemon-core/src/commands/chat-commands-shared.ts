@@ -12,7 +12,7 @@ import type { CommandHelpers } from './handler.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
 import { type InputEnvelope, type ProviderModule } from '../providers/contracts.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
-import { buildChatMessageSignature, hashSignatureParts } from '../chat/chat-signatures.js';
+import { hashSignatureParts } from '../chat/chat-signatures.js';
 import type { ChatMessage } from '../types.js';
 import type { SessionTransport } from '../shared-types.js';
 

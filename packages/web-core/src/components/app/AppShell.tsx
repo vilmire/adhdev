@@ -171,7 +171,7 @@ export default function AppShell({
     const toggleCollapsed = useCallback(() => {
         setCollapsed(prev => {
             const next = !prev
-            try { localStorage.setItem(collapsedStorageKey, next ? '1' : '0') } catch {}
+            try { localStorage.setItem(collapsedStorageKey, next ? '1' : '0') } catch { /* storage unavailable (private mode) — preference is best-effort */ }
             return next
         })
     }, [collapsedStorageKey])

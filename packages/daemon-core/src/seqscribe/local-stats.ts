@@ -13,7 +13,6 @@ import { LOG } from '../logging/logger.js';
 import type { SeqscribeStatusSummary } from '../shared-types.js';
 import type { SeqscribeRuntime } from './runtime.js';
 import { summarizeSeqscribeStats } from './stats.js';
-import { transcriptParityCounters } from './transcript-parity.js';
 import { transcriptChatRuntimeCounters } from './transcript-keyed-publish-runtime.js';
 
 export interface LocalSeqscribeStatsInputs {
@@ -45,14 +44,8 @@ export function buildLocalSeqscribeStats(
 ): SeqscribeStatusSummary | null {
     if (!rt) return null;
     try {
-        // §8 unit 2: the publisher runs a parity self-check on every append, and
-        // the allow-listed `transcript*` fields already exist through reporter.ts
-        // and the server sanitizer — so passing them fills existing fields
-        // rather than widening either allow-list. Omitting them made
-        // `transcriptParityRan` a permanent false NEGATIVE.
         const transcriptService = rt.projections()?.transcript ?? null;
         const transcriptCounters = transcriptService?.getCounters() ?? null;
-        const transcriptParity = transcriptParityCounters();
         // ★ Read the collector's PUBLISHED snapshot — never `node.stats()`, and
         // never `collect()` either (the type does not even expose it). This is
         // called by the status reporter (~30s) AND on demand; forcing a collect
@@ -120,13 +113,6 @@ export function buildLocalSeqscribeStats(
                       },
                   }
                 : {}),
-            // ★ The WHOLE parity counter object, never a narrowed slice: §5.6's
-            // `persistent mismatch 0` condition is undecidable from
-            // {runs, mismatches, persistentMismatches} alone (a missing revision
-            // is promoted to persistent only on a session key's SECOND
-            // comparison). Only three bucketed fields survive into the cloud
-            // frame; the rest land on the local-only transcriptParityDetail.
-            transcriptParity,
             // Zombie recovery — local-only, see `stats.ts`'s doc comment on
             // `transcriptLane` for why. Injected from daemon-cloud, see above.
             transcriptLane: {

@@ -207,8 +207,8 @@ describe('P2P decoders', () => {
         expect(decodeDashboardToDaemonP2P({ type: 'status_report', payload: {} })).toBeNull()
     })
 
-    it('dashboard side: promotes a legacy typeless file reply to response and checks minimal shapes', () => {
-        expect(decodeDaemonToDashboardP2P({ id: 'r1', success: true, content: 'hi' })).toEqual({ type: 'response', id: 'r1', success: true, content: 'hi' })
+    it('dashboard side: refuses a typeless frame and checks minimal shapes', () => {
+        expect(decodeDaemonToDashboardP2P({ id: 'r1', success: true, content: 'hi' })).toBeNull()
         expect(decodeDaemonToDashboardP2P({ type: 'response', id: 'r1', success: false, error: 'nope' })?.type).toBe('response')
         expect(decodeDaemonToDashboardP2P({ type: 'command_result', success: true })).toBeNull()
         expect(decodeDaemonToDashboardP2P({ type: 'session_output', sessionId: 's', data: 'x' })?.type).toBe('session_output')

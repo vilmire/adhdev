@@ -86,14 +86,14 @@ import type { TopicUpdateEnvelope } from '../shared-types.js';
 import type { GitWorkspaceSubscription, GitWorkspaceMonitor, NormalizedWorkspaceGitSubscriptionParams } from '../git/git-monitor.js';
 import type { GitWorkspaceUpdate } from '../git/git-types.js';
 import {
+    DASHBOARD_WIRE_VERSION,
+    DAEMON_METADATA_DOC_SPEC,
     diffKeyedDoc,
-    diffKeyedStatus,
     digestKeyedDoc,
-    digestKeyedStatus,
     MESH_STATUS_DOC_SPEC,
+    type KeyedDocDelta,
     type KeyedDocDigest,
-    type KeyedStatusBody,
-    type KeyedStatusDigest,
+    type KeyedDocSpec,
 } from '@adhdev/mesh-shared';
 import { createGitWorkspaceMonitor } from '../git/git-monitor.js';
 import type { WorkspaceGitSubscriptionParams } from '../git/git-types.js';
@@ -186,12 +186,6 @@ export type DaemonMetadataUpdateBody = Omit<DaemonMetadataUpdate, 'topic' | 'key
  * `timestamp` changes every pass, and a session's `lastUpdated` is stamped at
  * build time (providers return `Date.now()`), so none of them is a change.
  */
-const METADATA_DIGEST_OPTIONS = {
-    ignoreTopLevel: ['daemonId'],
-    ignoreStatus: ['timestamp'],
-    volatileSessionFields: ['lastUpdated'],
-} as const;
-
 function signatureOf(value: unknown): string {
     try {
         return JSON.stringify(value) ?? '';
@@ -302,10 +296,8 @@ interface PushTopicEntry {
     /** Last flush PASS that reached this entry (throttle cleared), whether or not it sent — a dedup no-op still counts. Reconciliation reads this, not `lastSentAt`. */
     lastFlushedAt: number;
     lastDeliveredSignature: string;
-    /** daemon.metadata: digest of the last DELIVERED body; null = next frame is a snapshot. */
-    metadataBaseline: KeyedStatusDigest | null;
-    /** mesh.status: digest of the last DELIVERED document; null = next frame is a snapshot. */
-    meshBaseline: KeyedDocDigest | null;
+    /** Keyed lanes (daemon.metadata / mesh.status): digest of the last DELIVERED document; null = next frame is a snapshot. */
+    keyedBaseline: KeyedDocDigest | null;
 }
 
 /**
@@ -382,6 +374,21 @@ export class TopicSubscriptionRegistry {
      */
     subscribe(connectionId: string, request: SubscribeRequest): boolean {
         if (!request.key) return false;
+        // One wire format per release: a page that speaks another version gets
+        // an explicit mismatch instead of state it would misread (no dual-format
+        // serving) — it reloads, or asks for a daemon update.
+        if (request.wireVersion !== DASHBOARD_WIRE_VERSION) {
+            this.sink.send(connectionId, request.topic, {
+                topic: request.topic,
+                key: request.key,
+                mode: 'protocol_mismatch',
+                daemonWireVersion: DASHBOARD_WIRE_VERSION,
+                pageWireVersion: typeof request.wireVersion === 'number' ? request.wireVersion : null,
+                seq: 0,
+                timestamp: this.now(),
+            });
+            return false;
+        }
         if (request.topic === 'workspace.git') {
             const rawParams = request.params as WorkspaceGitSubscriptionParams | undefined;
             const workspace = typeof rawParams?.workspace === 'string' ? rawParams.workspace.trim() : '';
@@ -431,8 +438,7 @@ export class TopicSubscriptionRegistry {
             lastSentAt: 0,
             lastFlushedAt: 0,
             lastDeliveredSignature: '',
-            metadataBaseline: null,
-            meshBaseline: null,
+            keyedBaseline: null,
         });
         return true;
     }
@@ -762,7 +768,7 @@ export class TopicSubscriptionRegistry {
         const entries = this.collectPushEntries('daemon.metadata', connectionId, key);
         if (entries.length === 0) return;
         const bodies = new Map<boolean, DaemonMetadataUpdateBody>();
-        const cohorts = new Map<string, { body: DaemonMetadataUpdateBody; digest: KeyedStatusDigest }>();
+        const cohorts = new Map<string, { body: DaemonMetadataUpdateBody; digest: KeyedDocDigest }>();
         const cohortFor = (includeSessions: boolean, scope: DaemonMetadataScope | null) => {
             const cohortKey = `${includeSessions ? 1 : 0}|${scope?.key ?? ''}`;
             const cached = cohorts.get(cohortKey);
@@ -775,39 +781,52 @@ export class TopicSubscriptionRegistry {
                 bodies.set(includeSessions, full);
             }
             const body = scope ? scope.project(full) : full;
-            const built = {
-                body,
-                digest: digestKeyedStatus(body as unknown as KeyedStatusBody, METADATA_DIGEST_OPTIONS),
-            };
+            const built = { body, digest: digestKeyedDoc(body as unknown as Record<string, unknown>, DAEMON_METADATA_DOC_SPEC) };
             cohorts.set(cohortKey, built);
             return built;
         };
         for (const entry of entries) {
-            const now = this.now();
-            entry.lastFlushedAt = now;
             const scope = this.opts.metadataScope?.(entry.connectionId) ?? null;
             const { body, digest } = cohortFor((entry.params as DaemonMetadataSubscriptionParams | undefined)?.includeSessions === true, scope);
-            let update: DaemonMetadataUpdate | DaemonMetadataDelta;
-            if (!entry.metadataBaseline) {
-                update = { topic: 'daemon.metadata', key: entry.key, mode: 'snapshot', ...body, seq: entry.seq + 1, timestamp: now };
-            } else {
-                const delta = diffKeyedStatus(entry.metadataBaseline, digest);
-                if (!delta) continue;
-                update = {
-                    topic: 'daemon.metadata',
-                    key: entry.key,
-                    mode: 'delta',
-                    daemonId: body.daemonId,
-                    ...(delta as Omit<DaemonMetadataDelta, 'topic' | 'key' | 'mode' | 'daemonId' | 'seq' | 'timestamp'>),
-                    seq: entry.seq + 1,
-                    timestamp: now,
-                };
-            }
-            entry.seq += 1;
-            entry.lastSentAt = now;
-            const delivered = this.sink.send(entry.connectionId, 'daemon.metadata', update);
-            entry.metadataBaseline = delivered === false ? null : digest;
+            this.deliverKeyed(entry, 'daemon.metadata', digest, DAEMON_METADATA_DOC_SPEC, {
+                snapshot: (seq, timestamp): DaemonMetadataUpdate => ({ topic: 'daemon.metadata', key: entry.key, mode: 'snapshot', wireVersion: DASHBOARD_WIRE_VERSION, ...body, seq, timestamp }),
+                delta: (delta, seq, timestamp): DaemonMetadataDelta => ({ topic: 'daemon.metadata', key: entry.key, mode: 'delta', daemonId: body.daemonId, delta, seq, timestamp }),
+            });
         }
+    }
+
+    /**
+     * THE keyed delivery step for both keyed lanes (daemon.metadata /
+     * mesh.status — one engine, mesh-shared keyed-doc-delta.ts): a subscription
+     * with no delivered baseline gets a snapshot, a baselined one the delta
+     * against it — or nothing when nothing it can observe changed (no seq bump).
+     * A failed send clears the baseline, so a gap is never papered over by a
+     * later delta.
+     */
+    private deliverKeyed<T extends 'daemon.metadata' | 'mesh.status'>(
+        entry: PushTopicEntry,
+        topic: T,
+        digest: KeyedDocDigest,
+        spec: KeyedDocSpec,
+        frame: {
+            snapshot: (seq: number, timestamp: number) => TopicUpdateEnvelope;
+            delta: (delta: KeyedDocDelta, seq: number, timestamp: number) => TopicUpdateEnvelope;
+        },
+    ): void {
+        const now = this.now();
+        entry.lastFlushedAt = now;
+        let update: TopicUpdateEnvelope;
+        if (!entry.keyedBaseline) {
+            update = frame.snapshot(entry.seq + 1, now);
+        } else {
+            const delta = diffKeyedDoc(entry.keyedBaseline, digest, spec);
+            if (!delta) return;
+            update = frame.delta(delta, entry.seq + 1, now);
+        }
+        entry.seq += 1;
+        entry.lastSentAt = now;
+        const delivered = this.sink.send(entry.connectionId, topic, update);
+        entry.keyedBaseline = delivered === false ? null : digest;
     }
 
     /**
@@ -873,20 +892,10 @@ export class TopicSubscriptionRegistry {
     }
 
     private deliverMeshStatus(entry: PushTopicEntry, meshId: string, status: Record<string, unknown>, digest: KeyedDocDigest): void {
-        const now = this.now();
-        entry.lastFlushedAt = now;
-        let update: MeshStatusSnapshotUpdate | MeshStatusDeltaUpdate;
-        if (!entry.meshBaseline) {
-            update = { topic: 'mesh.status', key: entry.key, mode: 'snapshot', meshId, status, seq: entry.seq + 1, timestamp: now };
-        } else {
-            const delta = diffKeyedDoc(entry.meshBaseline, digest, MESH_STATUS_DOC_SPEC);
-            if (!delta) return;
-            update = { topic: 'mesh.status', key: entry.key, mode: 'delta', meshId, delta, seq: entry.seq + 1, timestamp: now };
-        }
-        entry.seq += 1;
-        entry.lastSentAt = now;
-        const delivered = this.sink.send(entry.connectionId, 'mesh.status', update);
-        entry.meshBaseline = delivered === false ? null : digest;
+        this.deliverKeyed(entry, 'mesh.status', digest, MESH_STATUS_DOC_SPEC, {
+            snapshot: (seq, timestamp): MeshStatusSnapshotUpdate => ({ topic: 'mesh.status', key: entry.key, mode: 'snapshot', wireVersion: DASHBOARD_WIRE_VERSION, meshId, status, seq, timestamp }),
+            delta: (delta, seq, timestamp): MeshStatusDeltaUpdate => ({ topic: 'mesh.status', key: entry.key, mode: 'delta', meshId, delta, seq, timestamp }),
+        });
     }
 
     /**

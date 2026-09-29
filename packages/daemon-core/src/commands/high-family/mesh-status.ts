@@ -133,7 +133,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     // `sections: ['nodes']` (the MCP's held-node-state read): answer only
                     // the node section — the full payload is ~97% queue rows the reader
                     // never looks at (5.05 of 5.18 MB on the preview daemon). A cache hit
-                    // then clones just the nodes. An older daemon ignores the key.
+                    // then clones just the nodes.
                     const nodesOnly = Array.isArray(args?.sections) && args.sections.length > 0
                         && args.sections.every((section: unknown) => section === 'nodes');
                     const projectSections = (result: any) => (nodesOnly ? projectMeshStatusNodesSection(result) : result);
@@ -703,7 +703,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         // last-known/unknown entry for THAT node so a single failure
                         // can't drop the whole aggregate. Best-effort recovery of the
                         // node's cached inline truth, else an unknown-health stub.
-                        const [nodeIndex, node] = meshNodeEntries[i];
+                        const [, node] = meshNodeEntries[i];
                         const nodeId = normalizeMeshNodeId(node) ?? '';
                         const daemonId = readStringValue(node.daemonId);
                         const fallback: Record<string, unknown> = {

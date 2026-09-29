@@ -95,12 +95,6 @@ export const getCliConversationViewMode = (
     return override || conv.mode || 'chat';
 };
 
-/** CLI chat mode detection: PTY transport rendered as chat */
-export const isCliChatConv = (
-    conv: { transport?: string; mode?: 'terminal' | 'chat' },
-    override?: CliConversationViewMode,
-) =>
-    isCliConv(conv) && getCliConversationViewMode(conv, override) === 'chat';
 
 /** CLI terminal detection: PTY transport rendered as terminal */
 export const isCliTerminalConv = (

@@ -14,7 +14,7 @@ import { seedLocalRecord } from './helpers/local-records.js';
 // mesh_read_chat used to hard-fail at the 30s P2P timeout against a saturated/unreachable
 // remote worker — even though the coordinator already holds the worker's latest assistant
 // text from the completion/status events it surfaced (the same data the mobile dashboard
-// renders). mesh_status degraded its P2P probe gracefully (collectLiveStatusProbe);
+// renders).
 // read_chat had no catch. These tests pin the cache fallback: a remote P2P transport
 // failure now surfaces the cached coordinator-side summary + a clear advisory, while local
 // reads and genuine (non-transport) errors keep their existing behavior.

@@ -361,20 +361,6 @@ export function IconTerminal({ size = defaults.size, className }: IconProps) {
   );
 }
 
-export function IconFit({ size = defaults.size, className }: IconProps) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <polyline points="9 3 3 3 3 9" />
-      <polyline points="15 3 21 3 21 9" />
-      <polyline points="9 21 3 21 3 15" />
-      <polyline points="15 21 21 21 21 15" />
-      <line x1="8" y1="8" x2="3" y2="3" />
-      <line x1="16" y1="8" x2="21" y2="3" />
-      <line x1="8" y1="16" x2="3" y2="21" />
-      <line x1="16" y1="16" x2="21" y2="21" />
-    </svg>
-  );
-}
 
 export function IconSplitView({ size = defaults.size, className }: IconProps) {
   return (
@@ -576,24 +562,6 @@ export function IconSystem({ size = defaults.size, className }: IconProps) {
   );
 }
 
-// Building / organization
-export function IconBuilding({ size = defaults.size, className }: IconProps) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <rect x="4" y="2" width="16" height="20" rx="2" />
-      <path d="M9 22v-4h6v4" />
-      <line x1="8" y1="6" x2="8.01" y2="6" />
-      <line x1="12" y1="6" x2="12.01" y2="6" />
-      <line x1="16" y1="6" x2="16.01" y2="6" />
-      <line x1="8" y1="10" x2="8.01" y2="10" />
-      <line x1="12" y1="10" x2="12.01" y2="10" />
-      <line x1="16" y1="10" x2="16.01" y2="10" />
-      <line x1="8" y1="14" x2="8.01" y2="14" />
-      <line x1="12" y1="14" x2="12.01" y2="14" />
-      <line x1="16" y1="14" x2="16.01" y2="14" />
-    </svg>
-  );
-}
 
 export function IconCheckCircle({ size = defaults.size, className }: IconProps) {
   return (
@@ -715,21 +683,7 @@ export function IconSpinner({ size = defaults.size, className }: IconProps) {
   );
 }
 
-export function IconLightbulb({ size = defaults.size, className }: IconProps) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M9 18h6" /><path d="M10 22h4" /><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.4 1 2.3h6c0-.9.4-1.8 1-2.3A7 7 0 0 0 12 2z" />
-    </svg>
-  );
-}
 
-export function IconLink({ size = defaults.size, className }: IconProps) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-    </svg>
-  );
-}
 
 export function IconShuffle({ size = defaults.size, className }: IconProps) {
   return (
@@ -771,13 +725,6 @@ export function IconSmartphone({ size = defaults.size, className }: IconProps) {
   );
 }
 
-export function IconFlag({ size = defaults.size, className }: IconProps) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><line x1="4" y1="22" x2="4" y2="15" />
-    </svg>
-  );
-}
 
 export function IconGitBranch({ size = defaults.size, className }: IconProps) {
   return (

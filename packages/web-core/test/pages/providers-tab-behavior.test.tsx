@@ -242,11 +242,9 @@ describe('ProvidersTab — inline per-provider Update', () => {
         expect(activations[0].args).toEqual({})
     })
 
-    it('B9: reports channel staleness up so the tab dot needs no extra command', async () => {
+    it('B9: the tab never pulls the whole status (the dot rides the daemon.metadata lane)', async () => {
         const send = makeSend(h)
-        const onChannelStaleness = vi.fn()
-        await render({ machineId: 'm1', sendDaemonCommand: send, providers: makeProviders(), onChannelStaleness })
-        expect(onChannelStaleness).toHaveBeenCalledWith({ staleTypes: ['codex-cli'], newTypes: [] })
+        await render({ machineId: 'm1', sendDaemonCommand: send, providers: makeProviders() })
         expect(count('get_status_metadata')).toBe(0)
     })
 })

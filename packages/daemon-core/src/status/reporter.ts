@@ -111,15 +111,13 @@ function buildCloudSeqscribeSummary(
         fgenAgeBucket: count(seqscribe.fgenAgeBucket),
         quarantined: seqscribe.quarantined === true,
         authority: seqscribe.authority === true,
-        // §8 unit 2. transcriptParityPersistentMismatchBucket stays LOCAL-ONLY.
+        // §8 unit 2.
         transcriptPublish: seqscribe.transcriptPublish === true,
         transcriptPublishedBucket: count(seqscribe.transcriptPublishedBucket),
         transcriptPublishFailedBucket: count(seqscribe.transcriptPublishFailedBucket),
         transcriptDedupedBucket: count(seqscribe.transcriptDedupedBucket),
         transcriptOversizedBucket: count(seqscribe.transcriptOversizedBucket),
         transcriptDroppedBucket: count(seqscribe.transcriptDroppedBucket),
-        transcriptParityRan: seqscribe.transcriptParityRan === true,
-        transcriptParityMismatchBucket: count(seqscribe.transcriptParityMismatchBucket),
     };
 }
 
@@ -244,7 +242,6 @@ export const SERVER_DEDUP_KEEPALIVE_REPORTS = 10;
 
 export class DaemonStatusReporter {
     private deps: StatusReporterDeps;
-    private log: (msg: string) => void;
 
     private lastStatusSentAt = 0;
     private statusPendingThrottle = false;
@@ -260,7 +257,7 @@ export class DaemonStatusReporter {
 
     constructor(deps: StatusReporterDeps, opts?: { logFn?: (msg: string) => void }) {
         this.deps = deps;
-        this.log = opts?.logFn || LOG.forComponent('Status').asLogFn();
+        opts?.logFn || LOG.forComponent('Status').asLogFn();
     }
 
  // ─── Lifecycle ───────────────────────────────────

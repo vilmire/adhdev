@@ -99,8 +99,6 @@ describe('idle status_report dedup', () => {
             transcriptDedupedBucket: 0,
             transcriptOversizedBucket: 0,
             transcriptDroppedBucket: 0,
-            transcriptParityRan: false,
-            transcriptParityMismatchBucket: 0,
         });
         expect(JSON.stringify(statusReports()[0].data)).not.toContain(canary);
         for (const value of Object.values(statusReports()[0].data.seqscribe)) {

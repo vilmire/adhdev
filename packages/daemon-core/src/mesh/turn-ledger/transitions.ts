@@ -470,6 +470,3 @@ export function ruleAdmitsState(from: RuleFrom, state: TurnState | null): boolea
     return from.includes(state);
 }
 
-export function findRule(id: string): TransitionRule | undefined {
-    return TRANSITIONS.find((rule) => rule.id === id);
-}

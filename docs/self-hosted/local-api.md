@@ -204,22 +204,27 @@ ws.onmessage = (event) => {
 
 The standalone WebSocket currently carries:
 
-- initial status payloads
-- command results
-- shared transport topic subscriptions
+- a `standalone_hello` identity frame on connect (daemon id and dashboard wire version — no state)
+- command results (`command_result` / `error`)
+- shared transport topic subscriptions (`topic_update`); status arrives through the `daemon.metadata` topic, not as an initial payload
+- raw PTY output for subscribed sessions (`session_output`)
+
+Chat transcripts do not travel on `/ws`. They are served as raw seqscribe frames on a second socket, `ws://localhost:3847/ws/seqscribe`, which runs the same auth gate.
 
 Like the HTTP API, the WebSocket requires either:
 
 - a valid local dashboard session cookie, or
 - token auth on the upgrade request (for example `?token=...`, or an authorization bearer header when your client supports custom headers)
 
-Supported shared subscription topics:
+Supported shared subscription topics (`SubscribeRequestMap` in `daemon-core/src/shared-types.ts`):
 
-- `session.chat_tail`
-- `machine.runtime`
-- `session_host.diagnostics`
-- `session.modal`
 - `daemon.metadata`
+- `machine.runtime`
+- `session.runtime_output`
+- `session.modal`
+- `session_host.diagnostics`
+- `workspace.git`
+- `mesh.status`
 
 ## Capability-Driven Clients
 

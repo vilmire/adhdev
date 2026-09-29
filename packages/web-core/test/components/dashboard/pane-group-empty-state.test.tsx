@@ -2,7 +2,8 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import PaneGroupEmptyState from '../../../src/components/dashboard/PaneGroupEmptyState'
-import { DASHBOARD_NEW_SESSION_DESCRIPTION, DASHBOARD_NEW_SESSION_LABEL } from '../../../src/components/dashboard/dashboard-session-cta'
+const DASHBOARD_NEW_SESSION_LABEL = 'New session'
+const DASHBOARD_NEW_SESSION_DESCRIPTION = 'Start a session with any installed agent.'
 
 function renderEmptyState(props: Partial<React.ComponentProps<typeof PaneGroupEmptyState>> = {}) {
   return renderToStaticMarkup(

@@ -138,3 +138,27 @@ export function isBusyStatus(raw: unknown): boolean {
 export function statusesOfClass(cls: Exclude<SessionStatusClass, 'unknown'>): SessionStatus[] {
     return SESSION_STATUSES.filter((status) => SESSION_STATUS_CLASS[status] === cls)
 }
+
+/**
+ * Mesh-record terminal spellings: a session RECORD in one of these is gone
+ * (the vocabulary's `dead` class covers the canonical members; records also
+ * carry `failed` / `terminated` / `exited` / `closed`).
+ */
+export const TERMINAL_SESSION_RECORD_STATUSES = ['stopped', 'failed', 'terminated', 'exited', 'closed'] as const
+
+export function isTerminalSessionRecordStatus(raw: unknown): boolean {
+    return typeof raw === 'string' && (TERMINAL_SESSION_RECORD_STATUSES as readonly string[]).includes(raw.trim().toLowerCase())
+}
+
+/**
+ * THE "idle — can take a task now" predicate over a session state/record (its
+ * top-level `status` and chat lane). Every idle-candidate check (queue drain,
+ * auto-launch orphan sweep, dispatch pick) uses this one, so they cannot
+ * disagree about which sessions are candidates.
+ */
+export function isIdleSessionState(state: unknown): boolean {
+    const record = state && typeof state === 'object' ? state as { status?: unknown; activeChat?: { status?: unknown } } : {}
+    const status = typeof record.status === 'string' ? record.status.trim().toLowerCase() : ''
+    if (isTerminalSessionRecordStatus(status) || isDeadStatus(status)) return false
+    return isReadyStatus(status) || record.activeChat?.status === 'waiting_input'
+}

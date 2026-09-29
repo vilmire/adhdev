@@ -207,7 +207,7 @@ export function readChatActivityVisiblePreference(storage: Pick<Storage, 'getIte
 export function writeChatActivityVisiblePreference(value: boolean, storage: Pick<Storage, 'setItem'> | undefined = typeof localStorage !== 'undefined' ? localStorage : undefined): void {
     try {
         storage?.setItem(CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY, value ? '1' : '0')
-    } catch {}
+    } catch { /* storage unavailable — preference is best-effort */ }
 }
 
 export const CHAT_ACTIVITY_VISIBILITY_EVENT = 'adhdev:chat-activity-visibility-change'

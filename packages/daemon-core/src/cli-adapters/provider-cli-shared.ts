@@ -4,7 +4,6 @@ import { execSync } from 'child_process';
 import type { ProviderResumeCapability } from '../providers/contracts.js';
 import type { ChatMessageKind } from '../providers/chat-message-normalization.js';
 import type { ChatBubbleState } from '../types.js';
-import type { InteractivePrompt } from '../providers/types/interactive-prompt.js';
 import { sanitizeSpawnEnv } from './spawn-env.js';
 import type { CliAdapterStatus } from '../cli-adapter-types.js';
 
@@ -693,12 +692,6 @@ export function truncateToByteTailByLine(text: string, maxBytes: number): ByteTa
     };
 }
 
-export function listCliScriptNames(scripts: CliScripts | undefined): string[] {
-    if (!scripts) return [];
-    return Object.entries(scripts)
-        .filter(([, fn]) => typeof fn === 'function')
-        .map(([name]) => name);
-}
 
 function splitCliScreenLines(text: string): string[] {
     return String(text || '')

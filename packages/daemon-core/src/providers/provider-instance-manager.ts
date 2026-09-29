@@ -498,7 +498,7 @@ export class ProviderInstanceManager {
  */
     disposeAll(): void {
         this.stopTicking();
-        for (const [id, instance] of this.instances) {
+        for (const instance of this.instances.values()) {
             try { instance.dispose(); } catch { }
         }
         this.instances.clear();

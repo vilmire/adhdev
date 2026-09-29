@@ -15,9 +15,8 @@ import type { DaemonCommandRouter, CommandRouterResult } from './router.js';
 import { LOG } from '../logging/logger.js';
 import { createInteractionId } from '../logging/debug-trace.js';
 import { meshNodeIdMatches } from '@adhdev/mesh-shared';
-import { handleMeshForwardEvent, notifyMeshCoordinator } from '../mesh/mesh-events.js';
+import { notifyMeshCoordinator } from '../mesh/mesh-events.js';
 import { resolveCoordinatorSelfIds, daemonIdListIncludes } from '../mesh/mesh-reconcile-identity.js';
-import { resolveTunedReconcileMs } from '../mesh/mesh-tuned-env.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
 import { assessRefineBaseDivergence } from '../mesh/mesh-refine-base-divergence.js';
 // ★B1: slow-gate progress notification (threshold + throttle live in the module).
@@ -59,8 +58,6 @@ import type { ChangedPackageClassification } from '../git/git-status.js';
 import { readStringValue } from '../mesh/mesh-node-identity.js';
 import {
     alignRefinerySubmodulesAfterMerge,
-    buildSubmodulePublishRequiredNextStep,
-    MeshRefineAsyncJobStatus,
     MeshRefineJobHandle,
     MeshRefineTerminalJob,
     RefineContext,
@@ -76,9 +73,7 @@ import {
     recordMeshRefineStage,
     resolveRefineryAutoPublishSubmoduleMainCommits,
     rootRebaseResolvingGitlinks,
-    runMeshRefineEffectiveDiffGate,
     runMeshRefinePatchEquivalenceGate,
-    runMeshRefineSubmoduleReachabilityGate,
     runMeshRefineValidationGate,
     truncateValidationOutput,
 } from '../mesh/mesh-refine-gates.js';
@@ -103,7 +98,6 @@ import {
     buildRefineJobKey,
     buildRefineJobHandle,
     extractValidationFailureDiagnostics,
-    slimRefineEventResult,
     queueRefineJobEvent,
     appendRefineJobLedger,
 } from './router-refine-jobs.js';
@@ -1000,7 +994,7 @@ export async function requestCoordinatorLocalCatchup(
      * base branch. Always terminal — produces the final CommandRouterResult.
      */
 export async function refineMergeAndFinalizeStage(self: DaemonCommandRouter, ctx: RefineContext): Promise<RefineStageOutcome> {
-            const { meshId, nodeId, args, repoRoot, baseHead, node, branch, baseBranch, sourceNode, validationSummary, patchEquivalence, submoduleReachability, mesh, refineStages, execFileAsync } = ctx;
+            const { meshId, nodeId, repoRoot, branch, baseBranch, validationSummary, patchEquivalence, submoduleReachability, refineStages } = ctx;
 
             // DS2: acquire the repoRoot+baseBranch refinement lease for the base-mutating
             // window (CAS → merge → push → cleanup). Serializes overlapping single-node

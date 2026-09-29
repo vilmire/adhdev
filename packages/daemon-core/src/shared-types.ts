@@ -58,13 +58,6 @@ import type { WorkspaceEntry } from './config/workspaces.js';
 import type { AutoApproveModesConfig, LaunchableProviderCategory, ProviderCategory, ProviderMeshCoordinatorConfig, ProviderResumeCapability } from './providers/contracts.js';
 import type {
     GitCompactSummary,
-    GitDiffSummary,
-    GitFailureReason,
-    GitRepoIdentity,
-    GitRepoStatus,
-    GitSnapshot,
-    GitSnapshotCompareSummary,
-    GitSnapshotReason,
     GitWorkspaceUpdate,
     WorkspaceGitSubscriptionParams,
 } from './git/git-types.js';
@@ -301,6 +294,8 @@ export interface DaemonMetadataUpdate {
     topic: 'daemon.metadata';
     key: string;
     mode: 'snapshot';
+    /** The daemon's dashboard wire version (stamped on every keyed snapshot frame). */
+    wireVersion?: number;
     daemonId: string;
     status: StatusReportPayload;
     userName?: string;
@@ -308,9 +303,12 @@ export interface DaemonMetadataUpdate {
     timestamp: number;
 }
 
-/** One changed session inside a {@link DaemonMetadataDelta}: `id` + only the changed fields (a new session carries all of them). */
-export type DaemonMetadataSessionChange = { id: string } & Partial<SessionEntry>;
-
+/**
+ * `daemon.metadata` later frames: only what changed since the last frame
+ * delivered to this subscription — the daemon-level `status` field by field and
+ * sessions keyed by id (mesh-shared keyed-doc-delta.ts, DAEMON_METADATA_DOC_SPEC,
+ * the same engine as `mesh.status`). An unchanged daemon sends nothing.
+ */
 export interface DaemonMetadataDelta {
     topic: 'daemon.metadata';
     key: string;
@@ -318,22 +316,7 @@ export interface DaemonMetadataDelta {
     daemonId: string;
     seq: number;
     timestamp: number;
-    /** Changed top-level fields of the snapshot envelope (userName, …). */
-    set?: Record<string, unknown>;
-    /** Top-level envelope fields that disappeared. */
-    unset?: string[];
-    /** Changed daemon-level `status` fields (never `sessions` / `timestamp`). */
-    statusSet?: Partial<Omit<StatusReportPayload, 'sessions' | 'timestamp'>>;
-    /** Daemon-level `status` fields that disappeared. */
-    statusUnset?: string[];
-    /** Added or changed sessions, keyed by id, changed fields only. */
-    sessions?: DaemonMetadataSessionChange[];
-    /** Per-session fields that disappeared (sessionId → field names). */
-    sessionUnset?: Record<string, string[]>;
-    /** Sessions that no longer exist. */
-    removedSessionIds?: string[];
-    /** The full session id order — present only when it changed (add / remove / reorder). */
-    sessionOrder?: string[];
+    delta: KeyedDocDelta;
 }
 
 export type DaemonMetadataWireUpdate = DaemonMetadataUpdate | DaemonMetadataDelta;
@@ -346,6 +329,8 @@ export interface MeshStatusSnapshotUpdate {
     topic: 'mesh.status';
     key: string;
     mode: 'snapshot';
+    /** The daemon's dashboard wire version (stamped on every keyed snapshot frame). */
+    wireVersion?: number;
     meshId: string;
     status: Record<string, unknown>;
     seq: number;
@@ -380,7 +365,23 @@ export interface TopicUpdateEnvelopeMap {
     'mesh.status': MeshStatusWireUpdate;
 }
 
-export type TopicUpdateEnvelope = TopicUpdateEnvelopeMap[TransportTopic];
+/**
+ * The daemon's answer to a subscribe whose `wireVersion` differs from its own
+ * (mesh-shared protocol/dashboard-wire-version.ts): no state is served — the
+ * page reloads (daemon newer) or asks for a daemon update (daemon older).
+ */
+export interface TopicProtocolMismatchUpdate {
+    topic: TransportTopic;
+    key: string;
+    mode: 'protocol_mismatch';
+    daemonWireVersion: number;
+    /** The version the page stated (null = it stated none — a pre-versioning page). */
+    pageWireVersion: number | null;
+    seq: 0;
+    timestamp: number;
+}
+
+export type TopicUpdateEnvelope = TopicUpdateEnvelopeMap[TransportTopic] | TopicProtocolMismatchUpdate;
 
 export interface SubscribeRequestMap {
     'session.runtime_output': SessionRuntimeOutputSubscriptionParams;
@@ -392,8 +393,9 @@ export interface SubscribeRequestMap {
     'mesh.status': MeshStatusSubscriptionParams;
 }
 
+/** `wireVersion`: the dashboard wire version the page speaks (mesh-shared DASHBOARD_WIRE_VERSION). */
 export type SubscribeRequest =
-    { [K in TransportTopic]: { type: 'subscribe'; topic: K; key: string; params: SubscribeRequestMap[K] } }[TransportTopic];
+    { [K in TransportTopic]: { type: 'subscribe'; topic: K; key: string; params: SubscribeRequestMap[K]; wireVersion?: number } }[TransportTopic];
 
 export type UnsubscribeRequest =
     { [K in TransportTopic]: { type: 'unsubscribe'; topic: K; key: string } }[TransportTopic];
@@ -882,10 +884,7 @@ export type DaemonStatusEventName =
     | 'agent:waiting_choice'
     | 'agent:generating_completed'
     | 'agent:stopped'
-    | 'monitor:no_progress'
-    // Legacy alias for 'monitor:no_progress' — kept so older daemons that still
-    // emit it remain type-compatible with consumers during rollout.
-    | 'monitor:long_generating';
+    | 'monitor:no_progress';
 
 /** Minimal daemon-originated event payload relayed through the server. */
 export interface DaemonStatusEventPayload {
@@ -1147,11 +1146,9 @@ export interface SeqscribeStatusSummary {
     /** Whether a fleet secret is configured and certificates can be verified. */
     authority: boolean;
 
-    // ── §8 unit 2: transcript single-observation publisher + parity ────────
+    // ── §8 unit 2: transcript single-observation publisher ─────────────────
     // Same bucket/boolean discipline as the fields above. See
     // seqscribe/stats.ts SeqscribeStatusSummary for the full field docs.
-    // transcriptParityPersistentMismatchBucket is deliberately absent here —
-    // LOCAL-ONLY.
     /** Whether the transcript publisher is configured (mode != off). */
     transcriptPublish?: boolean;
     /** Bucketed count of complete revisions handed to the publish sink (0 = none). */
@@ -1164,10 +1161,6 @@ export interface SeqscribeStatusSummary {
     transcriptOversizedBucket?: number;
     /** Bucketed count of sessions dropped at MAX_TRACKED_SESSIONS (0 = none). */
     transcriptDroppedBucket?: number;
-    /** Whether at least one transcript parity comparison has run. */
-    transcriptParityRan?: boolean;
-    /** Bucketed count of transcript parity mismatches observed since boot (0 = none). */
-    transcriptParityMismatchBucket?: number;
 }
 
 /**
@@ -1324,4 +1317,11 @@ export interface StatusReportPayload {
      * only (`daemon.metadata`); never on the server frame.
      */
     screenshotUsage?: { dailyUsedMinutes: number; dailyBudgetMinutes: number; budgetExhausted: boolean } | null;
+    /**
+     * Provider channel staleness (the machine-detail badge): provider types whose
+     * pinned version is behind the channel, and types the channel has that this
+     * daemon has not installed. Dashboard lane only (`daemon.metadata`); never on
+     * the server frame. Absent until the daemon's first staleness probe answers.
+     */
+    providerChannelStaleness?: { staleTypes: string[]; newTypes: string[] };
 }

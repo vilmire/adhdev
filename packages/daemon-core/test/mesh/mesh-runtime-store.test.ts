@@ -20,6 +20,7 @@ vi.mock('../../src/config/config.js', () => ({
 }));
 
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
+import { migrateMeshIsolationColumns } from '../../src/mesh/mesh-runtime-store-schema.js';
 import { seedMeshAttempt, advanceSeededAttempt } from '../helpers/turn-attempt-seed.js';
 import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js';
 import { setActiveTurnLedger } from '../../src/mesh/turn-ledger/active-ledger.js';
@@ -1101,9 +1102,9 @@ describe('mesh-runtime-store', () => {
 
         it('is idempotent: re-running the migration does not throw and keeps the table absent', () => {
             const db = MeshRuntimeStore.getInstance();
-            // migrateMeshIsolationColumns is private but re-runnable; invoke via the same
-            // path a second boot would (safe because every step is IF-EXISTS guarded).
-            expect(() => (db as any).migrateMeshIsolationColumns()).not.toThrow();
+            // migrateMeshIsolationColumns is re-runnable; invoke it the way a second
+            // boot would (safe because every step is IF-EXISTS guarded).
+            expect(() => migrateMeshIsolationColumns(db)).not.toThrow();
             expect(tableExists(db)).toBe(false);
         });
     });

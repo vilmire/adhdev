@@ -33,7 +33,7 @@ import {
     type MeshGraphWorkspaceSagaState,
 } from './mesh-graph-types.js';
 import { drainMeshGraphOutbox, graphMaterializationBlockReason, rematerializePendingGraphNodesForWorkspace } from './mesh-graph-transition-runner.js';
-import { mergeWorktreeAffinityTag, resolveWorkspaceRefForMaterialize } from './mesh-graph-workspace-bind.js';
+import { mergeWorktreeAffinityTag } from './mesh-graph-workspace-bind.js';
 import {
     WORKSPACE_SAGA_LEASE_MS,
     deriveWorkspaceBranchIdentity,
@@ -870,7 +870,3 @@ function parseRefusals(lastError?: string): string[] | undefined {
     }
 }
 
-/** Test helper: expose binding lookup without running the saga. */
-export function peekWorkspaceBinding(graphId: string, baseSpec: unknown) {
-    return resolveWorkspaceRefForMaterialize(MeshRuntimeStore.getInstance().graphStore(), graphId, baseSpec);
-}

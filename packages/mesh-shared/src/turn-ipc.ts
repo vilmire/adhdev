@@ -55,13 +55,12 @@ import {
     isTurnEvidence,
     isTurnReason,
     type ProjectedScalars,
-    type SummaryRef,
     type TurnAttemptRef,
     type TurnEvidence,
     type TurnEvidenceKind,
     type TurnOutcome,
     type TurnReason,
-} from './turn-evidence'
+} from './turn-evidence';
 import { isRecord } from './protocol/envelope'
 
 // ─── shared primitives ─────────────────────────────────────────────────────

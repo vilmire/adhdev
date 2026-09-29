@@ -422,6 +422,13 @@ export function useMeshList({
     const loadMeshes = useCallback(async (refresh = false) => {
         const generation = ++loadGenerationRef.current
         const isCurrent = () => loadGenerationRef.current === generation
+        // No daemon to ask yet: nothing has LOADED, so stay on the loading state —
+        // an empty answer from nobody is not "this user has no meshes" (the empty
+        // state renders only after a real answer, and nothing is cached for it).
+        if (features.createDaemonPicker ? !daemonIdsKey : !primaryDaemonId) {
+            setLoading(true)
+            return
+        }
         const hasDisplayable = refresh || meshListCache.has(daemonIdsKey)
         setLoading(prev => (hasDisplayable ? prev : true))
         try {
@@ -460,7 +467,6 @@ export function useMeshList({
                 meshListCache.set(daemonIdsKey, next)
                 setError(null)
             } else {
-                if (!primaryDaemonId) return
                 const res: any = await sendCommand(primaryDaemonId, 'list_meshes')
                 if (!isCurrent()) return
                 if (res?.success) {

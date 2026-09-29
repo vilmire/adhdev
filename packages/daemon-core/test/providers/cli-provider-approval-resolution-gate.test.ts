@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { approvalResolutionFinalizationBlock, hasApprovalResolutionEvidence } from '../../src/providers/completion/completion-diagnostics.js'
 
 // FALSEIDLE-a — structural approval-resolution gate for the waiting_approval→idle
 // completion path.
@@ -38,60 +39,60 @@ const LOCAL = { autoApprove: true }
 describe('FALSEIDLE-a hasApprovalResolutionEvidence', () => {
   it('false when the latest approval entry is unresolved (resolvedSeq < entrySeq)', () => {
     const inst = makeInstance(MESH, { approvalEntrySeq: 2, lastResolvedEntrySeq: 1 })
-    expect(inst.hasApprovalResolutionEvidence()).toBe(false)
+    expect(hasApprovalResolutionEvidence(inst)).toBe(false)
   })
 
   it('true when the latest approval entry was resolved (resolvedSeq >= entrySeq)', () => {
     const inst = makeInstance(MESH, { approvalEntrySeq: 2, lastResolvedEntrySeq: 2 })
-    expect(inst.hasApprovalResolutionEvidence()).toBe(true)
+    expect(hasApprovalResolutionEvidence(inst)).toBe(true)
   })
 
   it('true (defensive) when no approval was ever entered (entrySeq <= 0)', () => {
     const inst = makeInstance(MESH, { approvalEntrySeq: 0, lastResolvedEntrySeq: -1 })
-    expect(inst.hasApprovalResolutionEvidence()).toBe(true)
+    expect(hasApprovalResolutionEvidence(inst)).toBe(true)
   })
 
   it('fails OPEN (true) when the adapter does not surface lastResolvedEntrySeq', () => {
     const inst = makeInstance(MESH, { approvalEntrySeq: 3 })
-    expect(inst.hasApprovalResolutionEvidence()).toBe(true)
+    expect(hasApprovalResolutionEvidence(inst)).toBe(true)
   })
 
   it('fails OPEN (true) when getStatus throws', () => {
     const inst = makeInstance(MESH, { approvalEntrySeq: 2, lastResolvedEntrySeq: 1 })
     inst.adapter.getStatus = () => { throw new Error('adapter gone') }
-    expect(inst.hasApprovalResolutionEvidence()).toBe(true)
+    expect(hasApprovalResolutionEvidence(inst)).toBe(true)
   })
 })
 
 describe('FALSEIDLE-a approvalResolutionFinalizationBlock', () => {
   it('HOLDS a mesh waiting_approval→idle with no resolution evidence (non-terminal, bounded)', () => {
     const inst = makeInstance(MESH, { approvalEntrySeq: 1, lastResolvedEntrySeq: -1 })
-    const block = inst.approvalResolutionFinalizationBlock({ previousStatus: 'waiting_approval' })
+    const block = approvalResolutionFinalizationBlock(inst, { previousStatus: 'waiting_approval' })
     expect(block).toEqual({ reason: 'approval_resolution_unconfirmed', terminal: false })
   })
 
   it('passes (null) a mesh waiting_approval→idle that has resolution evidence', () => {
     const inst = makeInstance(MESH, { approvalEntrySeq: 1, lastResolvedEntrySeq: 1 })
-    expect(inst.approvalResolutionFinalizationBlock({ previousStatus: 'waiting_approval' })).toBeNull()
+    expect(approvalResolutionFinalizationBlock(inst, { previousStatus: 'waiting_approval' })).toBeNull()
   })
 
   it('passes (null) when previousStatus is generating — the normal resolution path', () => {
     // resolveModal sets status→generating, so a genuinely resolved approval completes with
     // previousStatus==='generating'. The gate must never fire for it even without seq evidence.
     const inst = makeInstance(MESH, { approvalEntrySeq: 1, lastResolvedEntrySeq: -1 })
-    expect(inst.approvalResolutionFinalizationBlock({ previousStatus: 'generating' })).toBeNull()
+    expect(approvalResolutionFinalizationBlock(inst, { previousStatus: 'generating' })).toBeNull()
   })
 
   it('passes (null) for a non-mesh (interactive local) session even with no evidence', () => {
     // A human may answer the PTY prompt directly — no resolveModal record — so the gate is
     // scoped to delegated sessions and must not wedge a local interactive completion.
     const inst = makeInstance(LOCAL, { approvalEntrySeq: 1, lastResolvedEntrySeq: -1 })
-    expect(inst.approvalResolutionFinalizationBlock({ previousStatus: 'waiting_approval' })).toBeNull()
+    expect(approvalResolutionFinalizationBlock(inst, { previousStatus: 'waiting_approval' })).toBeNull()
   })
 
   it('applies to coordinator-launched sessions too', () => {
     const inst = makeInstance({ launchedByCoordinator: true, autoApprove: true }, { approvalEntrySeq: 1, lastResolvedEntrySeq: -1 })
-    expect(inst.approvalResolutionFinalizationBlock({ previousStatus: 'waiting_approval' })?.reason)
+    expect(approvalResolutionFinalizationBlock(inst, { previousStatus: 'waiting_approval' })?.reason)
       .toBe('approval_resolution_unconfirmed')
   })
 })

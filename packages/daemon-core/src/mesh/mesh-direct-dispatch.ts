@@ -20,7 +20,6 @@ import type { DirectDispatchView } from './mesh-runtime-store-queue-reads.js';
 import { getActiveTurnLedger } from './turn-ledger/active-ledger.js';
 import { LOG } from '../logging/logger.js';
 import { meshRecord } from './mesh-record.js';
-import { cancelTask, recordDirectDispatchTask, requeueTask } from './mesh-work-queue.js';
 
 // ── Direct Dispatch Tracking ─────────────────────────────────────────────────
 

@@ -307,36 +307,6 @@ function claudeProjectsRoot(): string {
 }
 
 /**
- * Locate the JSONL transcript for `sessionId`.
- * Tries `~/.claude/projects/<workspaceDir>/<sessionId>.jsonl` first, then
- * scans all project subdirectories as fallback.
- */
-function resolveTranscriptPath(sessionId: string, workspace?: string): string | null {
-  const root = claudeProjectsRoot();
-  if (!fs.existsSync(root)) return null;
-
-  const normalizedWorkspace = typeof workspace === 'string' ? workspace.trim() : '';
-  if (normalizedWorkspace) {
-    const workspaceDir = normalizedWorkspace.replace(/[\\/]/g, '-');
-    const directPath = path.resolve(root, workspaceDir, `${sessionId}.jsonl`);
-    // Safety: must remain inside root
-    if (directPath.startsWith(root + path.sep) || directPath === root) {
-      if (fs.existsSync(directPath)) return directPath;
-    }
-  }
-
-  // Scan all project subdirectories for a matching file
-  let entries: fs.Dirent[] = [];
-  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return null; }
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const candidate = path.join(root, entry.name, `${sessionId}.jsonl`);
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return null;
-}
-
-/**
  * Attach an expand ref to a bubble, but ONLY when expanding would actually show
  * something new.
  *

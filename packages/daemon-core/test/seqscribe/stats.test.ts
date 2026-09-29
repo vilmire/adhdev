@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { summarizeSeqscribeStats } from '../../src/seqscribe/stats.js';
 import type { NodeStats } from 'seqscribe';
 
@@ -50,7 +50,7 @@ describe('summarizeSeqscribeStats', () => {
             fgenAgeBucket: 0,
             quarantined: false,
             authority: false,
-            // §8 unit 2: transcript single-observation publisher + parity —
+            // §8 unit 2: transcript single-observation publisher —
             // report inactive/zero, never omit. (The mesh `dualWrite*` /
             // `parity*` fields are gone — see the dedicated test below.)
             transcriptPublish: false,
@@ -59,9 +59,6 @@ describe('summarizeSeqscribeStats', () => {
             transcriptDedupedBucket: 0,
             transcriptOversizedBucket: 0,
             transcriptDroppedBucket: 0,
-            transcriptParityRan: false,
-            transcriptParityMismatchBucket: 0,
-            transcriptParityPersistentMismatchBucket: 0,
         });
     });
 
@@ -70,6 +67,7 @@ describe('summarizeSeqscribeStats', () => {
         for (const key of Object.keys(summary)) {
             expect(key.startsWith('dualWrite')).toBe(false);
             expect(key.startsWith('parity')).toBe(false);
+            expect(key.startsWith('transcriptParity')).toBe(false);
         }
         expect(summary).not.toHaveProperty('readRouting');
         expect(summary).not.toHaveProperty('terminalRedrive');
@@ -92,7 +90,7 @@ describe('summarizeSeqscribeStats', () => {
         const serialized = JSON.stringify(summary);
         // Full topic names, not the bare word "transcript" — §8 unit 2 adds
         // legitimate `transcript*`-prefixed FIELD NAMES (transcriptPublish,
-        // transcriptParityRan, ...) to this same summary object, so a bare
+        // transcriptPublishedBucket, ...) to this same summary object, so a bare
         // substring check on the word itself would flag its own field names as
         // a false-positive leak. What must never appear is the session/mesh id
         // EMBEDDED IN a topic name.
@@ -241,126 +239,6 @@ describe('summarizeSeqscribeStats', () => {
             live.zombieRecovered = 99;
 
             expect(summary.transcriptLane?.zombieRecovered).toBe(0);
-        });
-    });
-
-    /**
-     * ★ §8 unit 2 transcript parity, RAW — the numbers §5.6's last open gate
-     * condition (`persistent mismatch 0`) needs in order to be DECIDABLE at all.
-     *
-     * The bucketed `transcriptParity*Bucket` fields cannot decide it. Promotion
-     * to persistent for `missing_complete_revision` requires a session key's
-     * SECOND comparison, and the only non-test caller is a per-append self-check
-     * — so a daemon can report `transcriptParityRan: true` with
-     * `transcriptParityPersistentMismatchBucket: 0` having never once evaluated
-     * the recurrence rule. `sessionsRepeated`/`pendingMissingRevisits` are what
-     * make "clean" separable from "undecided", and `since`/`uptimeMs` keep a
-     * restart-reset 0 from being read as clean.
-     */
-    describe('★transcript parity raw detail (§5.6 gate decidability)', () => {
-        const counters = {
-            runs: 9,
-            compared: 9,
-            mismatches: 3,
-            persistentMismatches: 1,
-            missingCompleteRevision: 2,
-            fieldMismatch: 1,
-            extraMessage: 0,
-            wrongSession: 0,
-            wrongOwner: 0,
-            digestMismatch: 0,
-            sessionsObserved: 4,
-            sessionsRepeated: 3,
-            pendingMissingRevisits: 2,
-            pendingMissingOpen: 1,
-            since: 1_700_000_000_000,
-        };
-
-        it('surfaces the raw counters, the six-class split and the recurrence axes', () => {
-            const summary = summarizeSeqscribeStats(
-                { topics: { t: topic() }, peers: [] },
-                { authorityEnabled: true, includeLocalDiagnostics: true, transcriptParity: counters },
-            );
-
-            const detail = summary.transcriptParityDetail;
-            expect(detail).toBeDefined();
-            expect(detail?.compared).toBe(9);
-            expect(detail?.missingCompleteRevision).toBe(2);
-            expect(detail?.fieldMismatch).toBe(1);
-            expect(detail?.digestMismatch).toBe(0);
-            // The decidability pair — without these, persistentMismatches: 1 (or
-            // 0) is a number with no interpretation.
-            expect(detail?.sessionsRepeated).toBe(3);
-            expect(detail?.pendingMissingRevisits).toBe(2);
-            expect(detail?.pendingMissingOpen).toBe(1);
-        });
-
-        it('★dates the counters so a restart-reset zero is distinguishable', () => {
-            const summary = summarizeSeqscribeStats(
-                { topics: { t: topic() }, peers: [] },
-                { authorityEnabled: true, includeLocalDiagnostics: true, transcriptParity: counters },
-            );
-            expect(summary.transcriptParityDetail?.since).toBe(1_700_000_000_000);
-            expect(summary.transcriptParityDetail?.uptimeMs).toBeGreaterThan(0);
-        });
-
-        it('defaults `since` to now rather than 0 when a caller passes only the bucket fields', () => {
-            // A 0 stamp renders as 1970 and would read as "counting for 56
-            // years" — the opposite of the honesty this field exists for.
-            const before = Date.now();
-            const summary = summarizeSeqscribeStats(
-                { topics: { t: topic() }, peers: [] },
-                {
-                    authorityEnabled: true,
-                    includeLocalDiagnostics: true,
-                    transcriptParity: { runs: 1, mismatches: 0 },
-                },
-            );
-            expect(summary.transcriptParityDetail?.since).toBeGreaterThanOrEqual(before);
-            expect(summary.transcriptParityDetail?.uptimeMs).toBe(0);
-        });
-
-        it('reads the clock exactly once, so `since` and `uptimeMs` cannot straddle a millisecond boundary', () => {
-            // The previous implementation called `Date.now()` twice — once for
-            // the `since` default, once for `uptimeMs` — so on the rare tick
-            // where the wall clock advances between the two reads, the
-            // default-`since` path could compute a nonzero `uptimeMs` from a
-            // gap that never actually elapsed. Asserting the call count
-            // directly (rather than relying on `uptimeMs === 0`, which a
-            // same-millisecond re-run can pass by luck) pins the fix at its
-            // source instead of at a statistical proxy.
-            const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
-            try {
-                const summary = summarizeSeqscribeStats(
-                    { topics: { t: topic() }, peers: [] },
-                    {
-                        authorityEnabled: true,
-                        includeLocalDiagnostics: true,
-                        transcriptParity: { runs: 1, mismatches: 0 },
-                    },
-                );
-                expect(nowSpy).toHaveBeenCalledTimes(1);
-                expect(summary.transcriptParityDetail?.since).toBe(1_700_000_000_000);
-                expect(summary.transcriptParityDetail?.uptimeMs).toBe(0);
-            } finally {
-                nowSpy.mockRestore();
-            }
-        });
-
-        it('omits the detail unless local diagnostics are requested', () => {
-            // The status reporter shares this projection. These are RAW
-            // monotonic counters — on the deduped status frame they would make
-            // every heartbeat unique and turn an idle daemon into a constant
-            // transmitter, the same reason readRouting is gated above.
-            const summary = summarizeSeqscribeStats(
-                { topics: { t: topic() }, peers: [] },
-                { authorityEnabled: true, transcriptParity: counters },
-            );
-            expect(summary).not.toHaveProperty('transcriptParityDetail');
-            // The bucketed fields still come through — the gate withholds the
-            // raw detail only, not the existing cloud-facing evidence.
-            expect(summary.transcriptParityRan).toBe(true);
-            expect(summary.transcriptParityPersistentMismatchBucket).toBeGreaterThan(0);
         });
     });
 });

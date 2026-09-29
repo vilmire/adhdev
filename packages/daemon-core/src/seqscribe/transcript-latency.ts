@@ -3,9 +3,8 @@
  *
  * ── Why this exists ────────────────────────────────────────────────────────
  * `TranscriptProjectionCounters` (transcript-publisher.ts) counts THROUGHPUT —
- * `published`/`deduped`/`sourcePending` — and `transcriptParityDetail`
- * (stats.ts) counts parity runs. Neither answers the two questions a live
- * daemon actually gets asked when the replica lane feels slow:
+ * `published`/`deduped`/`sourcePending`. It does not answer the two questions
+ * a live daemon actually gets asked when the replica lane feels slow:
  *
  *   1. WHICH trigger is driving refreshes right now? Six sources can mark a
  *      session dirty and their cadences differ by two orders of magnitude
@@ -39,7 +38,7 @@
  *
  * ── Content boundary (CLAUDE.md "Server content boundary") ─────────────────
  * Everything here is LOCAL-ONLY and rides `includeLocalDiagnostics`, for the
- * same two independent reasons as `readRouting` / `transcriptParityDetail` in
+ * same two independent reasons as `readRouting` in
  * stats.ts: these are raw monotonic counters that would defeat the status-frame
  * dedup and turn an idle daemon into a permanent transmitter, and the server
  * has no routing use for them. The keys are a FIXED trigger-source enum — never

@@ -23,7 +23,7 @@
  *     seed (`d.*` ids, ords, revs, adopted `srcId`s) so ids survive a restart.
  */
 
-import type { JsonValue } from 'seqscribe';
+import type { JsonValue, LogEntry } from 'seqscribe';
 import { LOG } from '../logging/logger.js';
 import {
     setMessageIdentitySeedProvider,
@@ -40,11 +40,10 @@ import {
     readChatMeta,
     readChatMsg,
     readChatPart,
+    redactSessionId,
 } from './transcript-keyed-codec.js';
 import type { KeyedChatFrame, PersistedChatRow, PersistedChatState } from './transcript-keyed-frame.js';
 import type { TranscriptObservation } from './transcript-observation.js';
-import { scanAllLatestPerKey } from './transcript-parity-actual.js';
-import { redactSessionId } from './transcript-parity.js';
 import { MAX_TRACKED_SESSIONS } from './transcript-publisher.js';
 import type { TranscriptTopicClaimRegistry } from './transcript-topic-claim.js';
 
@@ -90,6 +89,34 @@ function yieldToEventLoop(): Promise<void> {
 }
 
 // ─── Restart reads ──────────────────────────────────────────────────────────
+
+/** Page size for the newest-per-key scans (the vendor caps a page at 10,000). */
+const CHAT_SCAN_PAGE_ROWS = 2_000;
+
+/**
+ * Every newest-per-key row of `topic` in rowid order, paging until complete.
+ * `uptoRowid` is the watermark (rows above it neither returned nor
+ * superseding); `afterRowid` keeps only rows ABOVE it (the torn tail).
+ */
+function scanAllLatestPerKey(
+    node: Pick<SeqscribeNodeHandle, 'node'>,
+    topic: string,
+    options: { uptoRowid?: number; afterRowid?: number } = {},
+): { entry: LogEntry; rowid: number }[] {
+    const out: { entry: LogEntry; rowid: number }[] = [];
+    let after = options.afterRowid ?? 0;
+    for (;;) {
+        const page = node.node.scanLatestPerKey(topic, {
+            ...(options.uptoRowid !== undefined ? { uptoRowid: options.uptoRowid } : {}),
+            afterRowid: after,
+            limit: CHAT_SCAN_PAGE_ROWS,
+        });
+        out.push(...page.entries);
+        if (page.complete || page.nextAfterRowid === undefined || page.nextAfterRowid <= after) break;
+        after = page.nextAfterRowid;
+    }
+    return out;
+}
 
 function persistedRow(entry: { key?: string; kind: string; writer: string; payload: unknown }): PersistedChatRow | null {
     return typeof entry.key === 'string' ? { key: entry.key, kind: entry.kind, writer: entry.writer, payload: entry.payload } : null;

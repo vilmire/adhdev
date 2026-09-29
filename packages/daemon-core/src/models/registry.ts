@@ -204,9 +204,3 @@ export async function refreshDueModelDiscovery(
     return { refreshed, skipped };
 }
 
-/** Test seam: drop all state so suites cannot leak cached snapshots into one another. */
-export function __resetModelCacheForTest(): void {
-    cache.clear();
-    inFlight.clear();
-    hydrated = false;
-}

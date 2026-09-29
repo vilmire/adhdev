@@ -9,7 +9,7 @@
 import * as os from 'os';
 import { loadConfig } from '../config/config.js';
 import { loadState } from '../config/state-store.js';
-import { getRecentActivity, getSessionSeenAt, getSessionSeenMarker, getSessionNotificationDismissal, getSessionNotificationUnreadOverride, applySessionNotificationOverlay, getSessionCurrentNotificationId } from '../config/recent-activity.js';
+import { getRecentActivity, getSessionSeenAt, getSessionSeenMarker, getSessionNotificationDismissal, getSessionNotificationUnreadOverride, applySessionNotificationOverlay } from '../config/recent-activity.js';
 import { getWorkspaceState } from '../config/workspaces.js';
 import { getHostMemorySnapshot } from '../system/host-memory.js';
 import { getTerminalBackendRuntimeStatus } from '../cli-adapters/terminal-screen.js';
@@ -382,14 +382,6 @@ function getSessionLastUsedAt(session: {
     lastUpdated?: number
 }) {
     return getSessionMessageUpdatedAt(session) || session.lastUpdated || Date.now();
-}
-
-function getSessionKind(session: SessionEntry): RecentLaunchEntry['kind'] {
-    return session.transport === 'cdp-page' || session.transport === 'cdp-webview'
-        ? 'ide'
-        : session.transport === 'acp'
-            ? 'acp'
-            : 'cli';
 }
 
 function getLastMessageRole(session: { activeChat?: { messages?: Array<{ role?: string }> | null } | null }): string {

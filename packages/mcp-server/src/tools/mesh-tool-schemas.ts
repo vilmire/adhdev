@@ -460,7 +460,7 @@ export const MESH_VIEW_QUEUE_TOOL = {
     inputSchema: {
         type: 'object' as const,
         properties: {
-            refresh: { type: 'boolean', description: 'Bypass the shared get_status_metadata probe cache (one probe per daemon, 5 s TTL — mesh-tools-internal.ts probeStatusMetadataForNode) and force a fresh probe. Default false.' },
+            refresh: { type: 'boolean', description: 'Ask the coordinator to nudge members whose held runtime is old to push now (never a read of a member; the answer is still the held state). Default false.' },
             status: {
                 type: 'array',
                 items: { type: 'string' },
@@ -1327,7 +1327,7 @@ export const MESH_NODE_SLOTS_TOOL = {
     description: 'Read, draft, or change a mesh node\'s capability slots (policy.slots) — the provider/model/thinking + difficulty + capability-tag profile that task→node fitness routing and MAGI fan-out match against. '
         + 'Use it when routing keeps landing work on a poor-fit node, when a node has no slots, or after CLI agents were installed on a node. Select with `action` (REQUIRED):\n'
         + '• list — read-only: the node\'s current slots.\n'
-        + '• propose — read-only AUTO-DETECT: probes the node\'s installed CLI agents (get_status_metadata → availableProviders, category=cli + installed=true), maps each through a seeded provider→(model/thinkingLevel/difficulty/maxParallel) table, and returns `proposedSlots` with per-slot rationale plus `droppedSlots` / `droppedProviders` / `destructive` '
+        + '• propose — read-only AUTO-DETECT: reads the node\'s installed CLI agents from the coordinator (its own provider catalog, or the one the node pushed — category=cli + installed=true), maps each through a seeded provider→(model/thinkingLevel/difficulty/maxParallel) table, and returns `proposedSlots` with per-slot rationale plus `droppedSlots` / `droppedProviders` / `destructive` '
         + '(hand-tuned slots, tuned maxParallel, providers not on PATH are NOT preserved by the draft — present those before approving). Detects nothing → proposes nothing. Never writes.\n'
         + '• set — PROPOSE (dry-run, default) or APPLY (write=true) a slot list. WHOLESALE REPLACEMENT: the `slots` you pass become the COMPLETE new list; any prior slot not in it is dropped. The dry-run returns `currentSlots` vs `proposedSlots` — present the diff and get EXPLICIT user approval before write=true. Apply goes through update_mesh_node (machine-local node policy).',
     inputSchema: {

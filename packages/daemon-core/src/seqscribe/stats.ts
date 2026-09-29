@@ -134,10 +134,8 @@ export interface SeqscribeStatusSummary {
     /** True when a fleet secret is configured and certificates can be verified. */
     authority: boolean;
 
-    // ── §8 unit 2: transcript single-observation publisher + parity ────────
-    // Bucketed like the fields above. `transcriptParityPersistentMismatchBucket`
-    // is omitted from `buildCloudSeqscribeSummary` (status/reporter.ts) — it
-    // stays local-only.
+    // ── §8 unit 2: transcript single-observation publisher ─────────────────
+    // Bucketed like the fields above.
     /** True when the transcript publisher is configured (mode != off). */
     transcriptPublish: boolean;
     /** Bucketed count of complete revisions handed to the publish sink. */
@@ -150,13 +148,6 @@ export interface SeqscribeStatusSummary {
     transcriptOversizedBucket: number;
     /** Bucketed count of sessions dropped at `MAX_TRACKED_SESSIONS`. */
     transcriptDroppedBucket: number;
-    /** True once at least one transcript parity comparison has run. */
-    transcriptParityRan: boolean;
-    /** Bucketed count of transcript parity mismatches observed since boot. */
-    transcriptParityMismatchBucket: number;
-    /** LOCAL-ONLY — see the header note above. Mismatches that survived a repair attempt. */
-    transcriptParityPersistentMismatchBucket: number;
-
     // ── LOCAL-ONLY replication diagnostics (library P22/P24) ────────────────
     // ★ Everything below is deliberately ABSENT from the cloud projection.
     // `buildCloudSeqscribeSummary` (status/reporter.ts) is a fixed-key
@@ -203,84 +194,8 @@ export interface SeqscribeStatusSummary {
      */
     syncHotspots?: { topic: string; peerId: string; bytes: number }[];
     /**
-     * §8 unit 2 transcript parity, RAW and undecimated — the numbers §5.6's
-     * remaining gate condition (`persistent mismatch 0`) actually needs.
-     *
-     * ★ Why the bucketed `transcriptParity*Bucket` fields above are not enough.
-     * They answer "did anything run" and "roughly how bad", which cannot
-     * distinguish a clean run from an UNDECIDED one. `missing_complete_revision`
-     * is promoted to persistent only when the SAME session key is compared
-     * twice, and the only non-test caller is a per-append self-check — so
-     * `transcriptParityRan === true` with two appends on two different sessions
-     * means the promotion path never fired and `persistent === 0` is evidence of
-     * nothing. `sessionsRepeated` / `pendingMissingRevisits` are what make the
-     * condition decidable, and the six-class split says which axis is dirty.
-     *
-     * ★ `since` is the process-start stamp. Every value here is process-local
-     * and returns to 0 on daemon restart; without a date on the zero an observer
-     * reads a fresh restart as "no mismatches". Never drop it.
-     *
-     * ★★ LOCAL-ONLY, for the same two independent reasons as `readRouting`:
-     * these are raw monotonic counters that would defeat the status-frame dedup,
-     * and the server has no use for them. `buildCloudSeqscribeSummary`
-     * (status/reporter.ts) is a fixed-key allow-list that does not list this key;
-     * `test/status/cloud-status-content-boundary.test.ts` asserts it stays out.
-     * The shape carries integers only — no session key, redacted or otherwise.
-     *
-     * ★ WHICH CALL SITES EMIT IT. Two production callers pass the parity
-     * counters, and only one can produce this field:
-     *   - daemon-core's `getSeqscribeStats` closure (boot/daemon-lifecycle.ts),
-     *     serving `get_status_metadata` — opts into the local diagnostics, so
-     *     the detail appears. This is the surface the §5.6 gate is read from.
-     *   - daemon-cloud's status-report supplier (adhdev-daemon.ts), building the
-     *     SERVER frame — does not opt in, so the detail is absent BY
-     *     CONSTRUCTION rather than by omission at the call site.
-     * Do not "fix" the cloud caller to pass it. These are raw monotonic
-     * counters: on the deduped status frame every heartbeat would hash
-     * differently and an idle daemon would transmit forever. That call site is
-     * additionally pinned by `tests/seqscribe-convergence.test.mjs` (G2), which
-     * greps its source text to keep the local-diagnostics opt-in out of the
-     * server-frame assembly one layer earlier than the allow-list would.
-     */
-    transcriptParityDetail?: {
-        runs: number;
-        compared: number;
-        mismatches: number;
-        persistentMismatches: number;
-        missingCompleteRevision: number;
-        fieldMismatch: number;
-        missingMessage: number;
-        extraMessage: number;
-        revRegression: number;
-        wrongSession: number;
-        wrongOwner: number;
-        digestMismatch: number;
-        /** Distinct session keys compared at least once. */
-        sessionsObserved: number;
-        /** Distinct session keys compared at least twice — recurrence reachable. */
-        sessionsRepeated: number;
-        /** Comparisons that revisited a session already in the grace set. */
-        pendingMissingRevisits: number;
-        /** Session keys still sitting in the grace set. */
-        pendingMissingOpen: number;
-        /** `Date.now()` when this process began counting. */
-        since: number;
-        /** Milliseconds counted so far — `since` expressed as an age. */
-        uptimeMs: number;
-    };
-    /**
      * Which trigger drove each transcript refresh, and how long the daemon-side
      * leg took (count/p50/p95/max per source).
-     *
-     * ★ Why this is separate from `transcriptParityDetail` above. That field
-     * counts THROUGHPUT — runs, comparisons, mismatch classes. It cannot answer
-     * "is the replica lane fast", because it has no timing axis at all and no
-     * notion of which of the six dirty-trigger sources fired. Six triggers with
-     * cadences two orders of magnitude apart (a leading-edge PTY byte vs. the 3s
-     * safety-net stat poll) feed the same publisher, so without attribution a
-     * slow lane and a lane being driven only by its slowest trigger look
-     * identical from here. That ambiguity has already produced one wrong tuning
-     * call.
      *
      * ★ `notMeasurable` is part of the payload on purpose. The daemon→browser
      * legs are absent because the two clocks are unsynchronized, NOT because
@@ -288,8 +203,7 @@ export interface SeqscribeStatusSummary {
      * distinction stated where they are looking. See seqscribe/transcript-
      * latency.ts.
      *
-     * ★★ LOCAL-ONLY, for the same two independent reasons as `readRouting` and
-     * `transcriptParityDetail`: raw monotonic counters and raw millisecond
+     * ★★ LOCAL-ONLY, for the same two independent reasons as `readRouting`: raw monotonic counters and raw millisecond
      * distributions would make every status frame hash differently and turn an
      * idle daemon into a permanent transmitter, and the server has no routing
      * use for them. The keys are a FIXED trigger-source enum and a fixed stage
@@ -360,7 +274,7 @@ export interface SeqscribeStatusSummary {
     /**
      * Keyed chat transcript write/compaction/read health (design 2026-09-28
      * §5.8, §8.3): frames, rows and bytes written, base frames by reason,
-     * compaction, parity read-backs and the replica store's digest mismatches.
+     * compaction and the replica store's digest mismatches.
      *
      * ★ LOCAL-ONLY (`adhdev status` diagnostics): raw monotonic counters would
      * defeat the deduped status-frame hash, and none of it has a server use.
@@ -481,35 +395,6 @@ export interface SummarizeOptions {
         collectorUnavailable?: number;
         sourcePending?: number;
         collectFailed?: number;
-    };
-    /**
-     * §8 unit 2 transcript parity counters. Omitted → reported as never-run.
-     *
-     * The three fields above the line feed the BUCKETS (which the cloud summary
-     * may forward). Everything below feeds `transcriptParityDetail` and is read
-     * ONLY when `includeLocalDiagnostics` is set — pass
-     * `transcriptParityCounters()` whole from a local surface, or just the three
-     * required fields from the status reporter.
-     */
-    transcriptParity?: {
-        runs: number;
-        mismatches: number;
-        persistentMismatches?: number;
-        // ── raw detail, local-only ─────────────────────────────────────────
-        compared?: number;
-        missingCompleteRevision?: number;
-        fieldMismatch?: number;
-        missingMessage?: number;
-        extraMessage?: number;
-        revRegression?: number;
-        wrongSession?: number;
-        wrongOwner?: number;
-        digestMismatch?: number;
-        sessionsObserved?: number;
-        sessionsRepeated?: number;
-        pendingMissingRevisits?: number;
-        pendingMissingOpen?: number;
-        since?: number;
     };
     /**
      * Include the LOCAL-ONLY P22/P24 diagnostics (applyRejects, stalledStreams,
@@ -647,17 +532,6 @@ export function summarizeSeqscribeStats(
             }
         }
         const snap = opts.throughput;
-        // Copy the counters rather than aliasing the module's live maps, so a
-        // later read cannot mutate a snapshot a caller is still holding.
-        const tp = opts.transcriptParity;
-        // `since` defaults to now rather than 0 when a caller passes only the
-        // three bucket fields: a 0 stamp would render as a 1970 date and read as
-        // "counting for 56 years", the opposite of the honesty this field is for.
-        // Single read: `since` and `uptimeMs` must come from the same instant,
-        // or the default-`since` path (since := now) can compute a nonzero
-        // uptimeMs from two clock reads straddling a millisecond boundary.
-        const now = Date.now();
-        const tpSince = tp?.since ?? now;
         localDiagnostics = {
             applyRejects,
             stalledStreams,
@@ -669,30 +543,6 @@ export function summarizeSeqscribeStats(
             // raw counter here, which is what keeps it off the status frame.
             projectionCarry: projectionCarryCounters(),
             fullSyncRetentionDetail: fullSyncRetentionDetail(stats),
-            ...(tp
-                ? {
-                      transcriptParityDetail: {
-                          runs: tp.runs,
-                          compared: tp.compared ?? 0,
-                          mismatches: tp.mismatches,
-                          persistentMismatches: tp.persistentMismatches ?? 0,
-                          missingCompleteRevision: tp.missingCompleteRevision ?? 0,
-                          fieldMismatch: tp.fieldMismatch ?? 0,
-                          missingMessage: tp.missingMessage ?? 0,
-                          extraMessage: tp.extraMessage ?? 0,
-                          revRegression: tp.revRegression ?? 0,
-                          wrongSession: tp.wrongSession ?? 0,
-                          wrongOwner: tp.wrongOwner ?? 0,
-                          digestMismatch: tp.digestMismatch ?? 0,
-                          sessionsObserved: tp.sessionsObserved ?? 0,
-                          sessionsRepeated: tp.sessionsRepeated ?? 0,
-                          pendingMissingRevisits: tp.pendingMissingRevisits ?? 0,
-                          pendingMissingOpen: tp.pendingMissingOpen ?? 0,
-                          since: tpSince,
-                          uptimeMs: Math.max(0, now - tpSince),
-                      },
-                  }
-                : {}),
             // Deep-copied by the recorder's own `detail()`, so a caller holding
             // this cannot see it mutate on the next trigger.
             ...(opts.transcriptLatency ? { transcriptLatencyDetail: opts.transcriptLatency } : {}),
@@ -758,12 +608,6 @@ export function summarizeSeqscribeStats(
         transcriptDedupedBucket: bucket(opts.transcript?.deduped ?? 0, BACKLOG_BUCKETS),
         transcriptOversizedBucket: bucket(opts.transcript?.oversized ?? 0, BACKLOG_BUCKETS),
         transcriptDroppedBucket: bucket(opts.transcript?.dropped ?? 0, BACKLOG_BUCKETS),
-        transcriptParityRan: (opts.transcriptParity?.runs ?? 0) > 0,
-        transcriptParityMismatchBucket: bucket(opts.transcriptParity?.mismatches ?? 0, BACKLOG_BUCKETS),
-        transcriptParityPersistentMismatchBucket: bucket(
-            opts.transcriptParity?.persistentMismatches ?? 0,
-            BACKLOG_BUCKETS,
-        ),
         ...localDiagnostics,
     };
 }

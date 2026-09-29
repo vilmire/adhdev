@@ -3,9 +3,8 @@ import { LOG } from '../logging/logger.js';
 import { getQueueEntryById } from './mesh-work-queue.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
-import { meshNodeIdMatches, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { readNonEmptyString } from './mesh-events-utils.js';
-import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
 import { notifyMeshCoordinator, retractDispatchBlockedNotices } from './turn-ledger/deliver.js';
 import { isWorktreeBootstrapStaleRunning } from './worktree-bootstrap-config.js';
 import { isWithinCloneBootstrapGraceDurable } from './mesh-clone-grace.js';
@@ -221,10 +220,6 @@ export interface TargetPinTtlVerdict {
  */
 const targetPinGeneratingCreditMs = new Map<string, { creditMs: number; lastSeenMs: number }>();
 
-/** Drop credit bookkeeping for tasks that are no longer pinned/pending. */
-export function forgetTargetPinGeneratingCredit(meshId: string, taskId: string): void {
-    targetPinGeneratingCreditMs.delete(`${meshId}::${taskId}`);
-}
 
 export function resolveTargetPinTtlVerdict(
     components: DaemonComponents,

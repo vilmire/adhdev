@@ -109,16 +109,6 @@ function classifySubmoduleDivergence(
 }
 
 /**
- * Whether both commits exist locally in the submodule repo AND neither is an
- * ancestor of the other — i.e. a genuine sibling divergence off a shared merge
- * base. Thin wrapper over {@link classifySubmoduleDivergence} for callers that do
- * not need to distinguish "not divergent" from "could not tell".
- */
-function isSubmoduleDivergedSibling(submoduleRepoPath: string, baseCommit: string, branchCommit: string): boolean {
-    return classifySubmoduleDivergence(submoduleRepoPath, baseCommit, branchCommit) === 'diverged';
-}
-
-/**
  * Resolve the submodule's remote-tracking ref for its default branch
  * (`refs/remotes/origin/<branch>`). Sync, best-effort: the origin/HEAD symref
  * first, then the conventional main/master names. Undefined when none exists

@@ -40,7 +40,6 @@ export class CdpDomHandlers {
         const depth = args?.depth || 10;
         const maxLength = args?.maxLength || 200000;
         const format = args?.format || 'html';
-        const attrs = args?.attrs !== false;
         const sessionId = args?.sessionId;
 
         try {

@@ -211,7 +211,7 @@ export class DaemonCdpInitializer {
         if (this.scanTimer) return;
 
         this.scanTimer = setInterval(async () => {
-            const { providerLoader, cdpManagers } = this.config;
+            const { providerLoader } = this.config;
             const portMap = providerLoader.getCdpPortMap();
 
             for (const [ide, ports] of Object.entries(portMap)) {

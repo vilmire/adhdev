@@ -121,28 +121,6 @@ export async function setupIdeInstance(
   return ideInstance;
 }
 
-/**
- * Create and connect a DaemonCdpManager for a given port.
- *
- * @returns Connected manager or null if connection failed
- */
-export async function connectCdpManager(
-  port: number,
-  ideType: string,
-  logFn: (msg: string) => void,
-  providerLoader: ProviderLoader,
-  targetId?: string,
-): Promise<DaemonCdpManager | null> {
-  const provider = providerLoader.getMeta(ideType);
-  const manager = new DaemonCdpManager(
-    port,
-    logFn,
-    targetId,
-    provider?.targetFilter,
-  );
-  const connected = await manager.connect();
-  return connected ? manager : null;
-}
 
 /**
  * Probe a CDP port to check if it's listening.

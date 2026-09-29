@@ -224,9 +224,6 @@ export function classifyGraphRollup(nodes: readonly MeshTaskGraphNodeRow[]): Mes
     return 'completed';
 }
 
-export function isSuccessTerminalNode(state: MeshGraphNodeState): boolean {
-    return SUCCESS_TERMINAL.has(state);
-}
 
 // ── Cancel cascade (design :535-538) ─────────────────────────────────────────
 
@@ -269,7 +266,6 @@ export function applyGraphCancelCascade(
     const seen = new Set<string>(frontier);
     const cancelledNodeIds: string[] = [];
     const cancelledTaskIds: string[] = [];
-    const sourceTaskId = origin.queueTaskId ?? origin.nodeId;
     const sourceRef = origin.ref ?? origin.nodeId;
 
     while (frontier.length > 0) {

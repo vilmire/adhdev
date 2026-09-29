@@ -463,9 +463,7 @@ export class ProviderChannelRuntime {
     // mirrors the repo root (<category>/<dirname>/…), so the tree digest is
     // computed over repo-root-relative paths exactly as specified.
     const objStaging = this.store.createStagingDir(`obj-${entry.providerType}`);
-    let relDir: string;
     try {
-      relDir = path.relative(repoRoot, artifactDir).split(path.sep).join('/');
       fs.mkdirSync(path.join(objStaging, entry.category), { recursive: true });
       fs.renameSync(artifactDir, path.join(objStaging, entry.category, path.basename(artifactDir)));
     } catch (e: any) {

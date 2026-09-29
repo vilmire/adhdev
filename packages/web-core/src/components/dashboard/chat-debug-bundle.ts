@@ -17,7 +17,7 @@ const SECRET_KEY_PATTERN = /(?:token|secret|password|passwd|authorization|cookie
 function redactDebugString(value: string): string {
     return value
         .replace(/(Authorization\s*:\s*Bearer\s+)[^\s'"`]+/gi, '$1[REDACTED:bearer]')
-        .replace(/(Bearer\s+)[A-Za-z0-9._~+\/-]{12,}=*/gi, '$1[REDACTED:bearer]')
+        .replace(/(Bearer\s+)[A-Za-z0-9._~+/-]{12,}=*/gi, '$1[REDACTED:bearer]')
         .replace(/\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}\b/g, '[REDACTED:github-token]')
         .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, '[REDACTED:api-key]')
         .replace(/\b(?:adk|adm)_[A-Za-z0-9_-]{12,}\b/g, '[REDACTED:adhdev-token]')

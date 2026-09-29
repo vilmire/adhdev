@@ -189,7 +189,3 @@ type MissingBusEventKind = Exclude<BusEventKind, typeof BUS_EVENT_KINDS[number]>
 const busEventKindsComplete: [MissingBusEventKind] extends [never] ? true : never = true;
 void busEventKindsComplete;
 
-/** Compile-time exhaustiveness guard for `switch (event.kind)` in subscribers. */
-export function assertNeverBusEvent(event: never): never {
-    throw new Error(`Unhandled bus event: ${JSON.stringify(event)}`);
-}

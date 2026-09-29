@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SubscribeRequest, UnsubscribeRequest } from '@adhdev/daemon-core'
 import { useDaemonMetadataLoader } from '../../src/hooks/useDaemonMetadataLoader'
 import { subscriptionManager } from '../../src/managers/SubscriptionManager'
+import { DASHBOARD_WIRE_VERSION } from '@adhdev/mesh-shared'
 
 const sendData = vi.fn<(daemonId: string, data: SubscribeRequest | UnsubscribeRequest) => boolean>()
 const sendCommand = vi.fn<(daemonId: string, command: string) => Promise<unknown>>()
@@ -118,6 +119,7 @@ describe('useDaemonMetadataLoader subscription cleanup (D1#2)', () => {
         await act(async () => {
             subscriptionManager.publish({
                 topic: 'daemon.metadata',
+                wireVersion: DASHBOARD_WIRE_VERSION,
                 key: METADATA_KEY,
                 daemonId: DAEMON_ID,
                 seq: 1,
@@ -134,6 +136,7 @@ describe('useDaemonMetadataLoader subscription cleanup (D1#2)', () => {
         await act(async () => {
             subscriptionManager.publish({
                 topic: 'daemon.metadata',
+                wireVersion: DASHBOARD_WIRE_VERSION,
                 key: METADATA_KEY,
                 daemonId: DAEMON_ID,
                 seq: 2,

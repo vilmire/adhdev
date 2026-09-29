@@ -14,7 +14,6 @@
 
 import { getGitRepoStatus } from '../git/git-status.js';
 import type { ChangedPackageClassification } from '../git/git-status.js';
-import * as yaml from 'js-yaml';
 import { loadMeshRefineConfig, resolveMeshRefineValidationPlan } from '../mesh/refine-config.js';
 import type { MeshRefineValidationCommandPlan, MeshRefineValidationScope } from '../mesh/refine-config.js';
 import { evaluateWorktreeBootstrapState, loadMeshWorktreeBootstrapConfig, runMeshWorktreeBootstrap, resolveSubmoduleDefaultBranch } from '../mesh/worktree-bootstrap-config.js';
@@ -27,9 +26,8 @@ import { refineGateChildEnv } from './mesh-refine-worker-cap.js';
 import { sanitizeRefineGateChildEnv } from './mesh-refine-env-sanitize.js';
 // ★B1: type-only — the gate never emits, it only carries the caller's channel.
 import type { RefineProgressContext } from './mesh-refine-progress.js';
-import { LOG } from '../logging/logger.js';
-import type { GitAncestryProbe, GitlinkTrivialFastForwardEvaluation, MeshRefineStageStatus, MeshRefineSubmoduleReachabilityEntry, MeshRefineSubmoduleReachabilitySummary } from './mesh-refine-gitlink-utils.js';
-import { GIT, REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES, ensureSubmoduleCommitLocal, isSubmoduleFastForward, probeGitAncestry, probeSubmoduleFastForward, probeSubmoduleGitlinkReachability, readChangedGitlinkPaths, readChangedPathKinds, readTreeObject, runMeshRefineSubmoduleReachabilityGate, truncateValidationOutput, verifyRemoteBranchContainsCommit, warnGitlinkFastForwardUndeterminable, warnRefineSubmoduleUndeterminable } from './mesh-refine-gitlink-utils.js';
+import type { GitAncestryProbe, GitlinkTrivialFastForwardEvaluation, MeshRefineStageStatus } from './mesh-refine-gitlink-utils.js';
+import { GIT, REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES, ensureSubmoduleCommitLocal, isSubmoduleFastForward, probeGitAncestry, probeSubmoduleFastForward, probeSubmoduleGitlinkReachability, readChangedGitlinkPaths, readChangedPathKinds, readTreeObject, runMeshRefineSubmoduleReachabilityGate, truncateValidationOutput, warnGitlinkFastForwardUndeterminable, warnRefineSubmoduleUndeterminable } from './mesh-refine-gitlink-utils.js';
 // Submodule-gitlink convergence lives in its own module (pure move, file-size gate);
 // re-exported here so existing importers of this module are unaffected.
 export * from './mesh-refine-submodule-converge.js';
@@ -287,10 +285,8 @@ export type MeshRefineBatchJobHandle = {
 
 export type MeshRefineBatchTerminalJob = MeshRefineBatchJobHandle & { result?: Record<string, unknown> };
 
-const REFINE_VALIDATION_CATEGORIES = ['typecheck', 'test', 'lint', 'build'] as const;
 const REFINE_VALIDATION_TIMEOUT_MS = 120_000;
 const REFINE_VALIDATION_OUTPUT_LIMIT_BYTES = 128 * 1024;
-const REFINE_VALIDATION_MAX_COMMANDS = 4;
 
 /**
  * Classify a failed validation command. Exported (rather than inlined in the

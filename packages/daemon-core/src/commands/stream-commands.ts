@@ -16,18 +16,6 @@ import {
 } from '../providers/control-effects.js';
 import { LOG } from '../logging/logger.js';
 
-interface CliPresentationInstance extends ProviderInstance {
-    getPresentationMode?(): 'terminal' | 'chat';
-}
-
-function getCliPresentationMode(h: CommandHelpers, targetSessionId?: string): 'terminal' | 'chat' | null {
-    if (!targetSessionId) return null;
-    const instance = h.ctx.instanceManager?.getInstance(targetSessionId) as CliPresentationInstance | undefined;
-    if (instance?.category !== 'cli') return null;
-    const mode = instance.getPresentationMode?.();
-    return mode === 'chat' || mode === 'terminal' ? mode : null;
-}
-
 function normalizeOpenPanelCommandResult(result: CommandResult): { opened: boolean; visible: boolean; focused: boolean } {
     const payload = Object.prototype.hasOwnProperty.call(result, 'result') ? result.result : result;
     if (payload === true) return { opened: true, visible: true, focused: false };

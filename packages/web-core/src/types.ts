@@ -174,6 +174,8 @@ export interface BaseDaemonData {
     childSessions?: SessionEntry[];
     agentStreams?: AgentSessionStream[];
     availableProviders?: AvailableProviderInfo[];
+    /** Provider channel staleness (daemon.metadata lane) — the machine-detail badge. */
+    providerChannelStaleness?: { staleTypes: string[]; newTypes: string[] };
 
     machine?: MachineInfo;
     system?: Partial<MachineInfo>;

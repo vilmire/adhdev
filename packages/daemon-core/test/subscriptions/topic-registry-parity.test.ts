@@ -34,6 +34,7 @@ import { createGitWorkspaceMonitor } from '../../src/git/git-monitor.js';
 import type { GitRepoStatus } from '../../src/git/git-types.js';
 import type { TopicEngineOptions, TopicSink } from '../../src/subscriptions/topic-registry.js';
 import { DEFAULT_GIT_REFRESH_CONCURRENCY, TopicSubscriptionRegistry } from '../../src/subscriptions/topic-registry.js';
+import { DASHBOARD_WIRE_VERSION } from '@adhdev/mesh-shared';
 
 function fakeStatus(workspace: string): GitRepoStatus {
     return {
@@ -127,7 +128,7 @@ describe('TopicSubscriptionRegistry — workspace.git parity golden', () => {
 
         // 1. subscribe (dashboard sends { type:'subscribe', topic, key, params }).
         const accepted = registry.subscribe('c1', {
-            type: 'subscribe',
+            type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION,
             topic: 'workspace.git',
             key: 'git:/repo',
             params: { workspace: ' /repo ', includeDiffSummary: false, intervalMs: 5000 },
@@ -200,13 +201,13 @@ describe('TopicSubscriptionRegistry — workspace.git parity golden', () => {
         });
 
         registry.subscribe('c1', {
-            type: 'subscribe',
+            type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION,
             topic: 'workspace.git',
             key: 'git:/a',
             params: { workspace: '/a', intervalMs: 1000 },
         });
         registry.subscribe('c1', {
-            type: 'subscribe',
+            type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION,
             topic: 'workspace.git',
             key: 'git:/b',
             params: { workspace: '/b', intervalMs: 1000 },
@@ -219,7 +220,7 @@ describe('TopicSubscriptionRegistry — workspace.git parity golden', () => {
         // Re-subscribe on the same key resets the engine state → seq restarts
         // at 1 and the fresh subscription gets its first frame.
         registry.subscribe('c1', {
-            type: 'subscribe',
+            type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION,
             topic: 'workspace.git',
             key: 'git:/a',
             params: { workspace: '/a', intervalMs: 1000 },
@@ -256,7 +257,7 @@ describe('TopicSubscriptionRegistry — workspace.git parity golden', () => {
 
         for (const ws of ['/r1', '/r2', '/r3', '/r4']) {
             registry.subscribe('c1', {
-                type: 'subscribe',
+                type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION,
                 topic: 'workspace.git',
                 key: `git:${ws}`,
                 params: { workspace: ws, intervalMs: 1000 },
@@ -286,7 +287,7 @@ describe('TopicSubscriptionRegistry — workspace.git parity golden', () => {
             alive: () => alive,
         });
         registry.subscribe('c1', {
-            type: 'subscribe',
+            type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION,
             topic: 'workspace.git',
             key: 'git:/repo',
             params: { workspace: '/repo', intervalMs: 1000 },
@@ -317,7 +318,7 @@ describe('TopicSubscriptionRegistry — workspace.git parity golden', () => {
         let now = 10_000;
         const { registry } = createHarness({ now: () => now });
         const accepted = registry.subscribe('c1', {
-            type: 'subscribe',
+            type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION,
             topic: 'session.runtime_output',
             key: 'out:1',
             params: { targetSessionId: 'session-1' },
@@ -391,7 +392,7 @@ describe('TopicSubscriptionRegistry — daemon.metadata parity golden', () => {
         // flushed immediately on subscribe (cloud subscriptionChangeHandler /
         // standalone `await flushWsDaemonMetadataSubscriptions(ws)`).
         expect(registry.subscribe('c1', {
-            type: 'subscribe',
+            type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION,
             topic: 'daemon.metadata',
             key: 'meta:1',
             params: { includeSessions: true },
@@ -421,10 +422,10 @@ describe('TopicSubscriptionRegistry — daemon.metadata parity golden', () => {
 
         expect(bodyBuilds).toBe(4);
         expect(calls).toEqual([
-            { connectionId: 'c1', topic: 'daemon.metadata', update: { topic: 'daemon.metadata', key: 'meta:1', mode: 'snapshot', daemonId: 'daemon_test', status: { includeSessions: true, build: 1 }, seq: 1, timestamp: 10_000 } },
-            { connectionId: 'c1', topic: 'daemon.metadata', update: { topic: 'daemon.metadata', key: 'meta:1', mode: 'delta', daemonId: 'daemon_test', statusSet: { build: 2 }, seq: 2, timestamp: 10_000 } },
-            { connectionId: 'c1', topic: 'daemon.metadata', update: { topic: 'daemon.metadata', key: 'meta:1', mode: 'delta', daemonId: 'daemon_test', statusSet: { build: 3 }, seq: 3, timestamp: 10_001 } },
-            { connectionId: 'c1', topic: 'daemon.metadata', update: { topic: 'daemon.metadata', key: 'meta:1', mode: 'delta', daemonId: 'daemon_test', statusSet: { build: 4 }, seq: 4, timestamp: 10_001 } },
+            { connectionId: 'c1', topic: 'daemon.metadata', update: { topic: 'daemon.metadata', key: 'meta:1', mode: 'snapshot', wireVersion: DASHBOARD_WIRE_VERSION, daemonId: 'daemon_test', status: { includeSessions: true, build: 1 }, seq: 1, timestamp: 10_000 } },
+            { connectionId: 'c1', topic: 'daemon.metadata', update: { topic: 'daemon.metadata', key: 'meta:1', mode: 'delta', daemonId: 'daemon_test', delta: { objects: { status: { set: { build: 2 } } } }, seq: 2, timestamp: 10_000 } },
+            { connectionId: 'c1', topic: 'daemon.metadata', update: { topic: 'daemon.metadata', key: 'meta:1', mode: 'delta', daemonId: 'daemon_test', delta: { objects: { status: { set: { build: 3 } } } }, seq: 3, timestamp: 10_001 } },
+            { connectionId: 'c1', topic: 'daemon.metadata', update: { topic: 'daemon.metadata', key: 'meta:1', mode: 'delta', daemonId: 'daemon_test', delta: { objects: { status: { set: { build: 4 } } } }, seq: 4, timestamp: 10_001 } },
         ]);
     });
 
@@ -437,7 +438,7 @@ describe('TopicSubscriptionRegistry — daemon.metadata parity golden', () => {
             alive: () => alive,
             engine: { sources: { daemonMetadataBody: () => ({ daemonId: 'd', status: {} as never }) } },
         });
-        registry.subscribe('c1', { type: 'subscribe', topic: 'daemon.metadata', key: 'meta:1', params: {} });
+        registry.subscribe('c1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'daemon.metadata', key: 'meta:1', params: {} });
 
         deliverable = false;
         await registry.flushNow('daemon.metadata');
@@ -477,10 +478,10 @@ describe('TopicSubscriptionRegistry — session.modal parity golden', () => {
         // Cloud subscribe validation semantics (union decision #8): a
         // whitespace-only targetSessionId is rejected.
         expect(registry.subscribe('c1', {
-            type: 'subscribe', topic: 'session.modal', key: 'modal:bad', params: { targetSessionId: '   ' },
+            type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'session.modal', key: 'modal:bad', params: { targetSessionId: '   ' },
         })).toBe(false);
         expect(registry.subscribe('c1', {
-            type: 'subscribe', topic: 'session.modal', key: 'modal:1', params: { targetSessionId: 'session-1' },
+            type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'session.modal', key: 'modal:1', params: { targetSessionId: 'session-1' },
         })).toBe(true);
 
         // No modal state resolvable → nothing published, no state mutation
@@ -567,7 +568,7 @@ describe('TopicSubscriptionRegistry — session.modal parity golden', () => {
                 },
             },
         });
-        registry.subscribe('c1', { type: 'subscribe', topic: 'session.modal', key: 'modal:1', params: { targetSessionId: 'session-1' } });
+        registry.subscribe('c1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'session.modal', key: 'modal:1', params: { targetSessionId: 'session-1' } });
         await registry.flushNow('session.modal');
         expect(calls).toHaveLength(1);
         expect(calls[0]!.update.interactionId).toBeUndefined();
@@ -589,7 +590,7 @@ describe('TopicSubscriptionRegistry — machine.runtime parity golden', () => {
         // intervalMs 1000 is clamped to MIN 5000 — identical expression in
         // cloud (adhdev-daemon.ts:633) and standalone (index.ts:2143):
         // Math.max(MIN, Number(params.intervalMs || DEFAULT)).
-        registry.subscribe('c1', { type: 'subscribe', topic: 'machine.runtime', key: 'mr:1', params: { intervalMs: 1000 } });
+        registry.subscribe('c1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'machine.runtime', key: 'mr:1', params: { intervalMs: 1000 } });
         await registry.flushNow('machine.runtime', 'c1');   // first flush: lastSentAt===0 → sends
         now = 104_999;
         await registry.flushNow('machine.runtime');          // inside clamped window → nothing
@@ -603,7 +604,7 @@ describe('TopicSubscriptionRegistry — machine.runtime parity golden', () => {
         expect(builds).toBe(2);
 
         // Unset intervalMs → DEFAULT 15s (both daemons).
-        registry.subscribe('c2', { type: 'subscribe', topic: 'machine.runtime', key: 'mr:2', params: {} });
+        registry.subscribe('c2', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'machine.runtime', key: 'mr:2', params: {} });
         await registry.flushNow('machine.runtime', 'c2');
         now = 115_000;
         await registry.flushNow('machine.runtime', 'c2');    // 10s later — inside default window
@@ -640,7 +641,7 @@ describe('TopicSubscriptionRegistry — session_host.diagnostics parity golden',
         });
 
         registry.subscribe('c1', {
-            type: 'subscribe',
+            type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION,
             topic: 'session_host.diagnostics',
             key: 'diag:1',
             params: { includeSessions: false, limit: 25, intervalMs: 1000 },
@@ -673,7 +674,7 @@ describe('TopicSubscriptionRegistry — session_host.diagnostics parity golden',
             { seq: 2, timestamp: 210_000 },
         ]);
         // includeSessions defaults to true (`!== false`), limit Number()||undefined — both daemons.
-        registry.subscribe('c1', { type: 'subscribe', topic: 'session_host.diagnostics', key: 'diag:2', params: {} });
+        registry.subscribe('c1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'session_host.diagnostics', key: 'diag:2', params: {} });
         await registry.flushNow('session_host.diagnostics');
         expect(requests.at(-1)).toEqual({ includeSessions: true, limit: undefined });
     });

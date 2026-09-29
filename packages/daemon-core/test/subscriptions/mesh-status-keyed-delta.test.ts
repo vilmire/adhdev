@@ -14,6 +14,7 @@ import { foldKeyedDoc, MESH_STATUS_DOC_SPEC } from '@adhdev/mesh-shared';
 
 import type { TopicSink } from '../../src/subscriptions/topic-registry.js';
 import { TopicSubscriptionRegistry } from '../../src/subscriptions/topic-registry.js';
+import { DASHBOARD_WIRE_VERSION } from '@adhdev/mesh-shared';
 
 function node(nodeId: string, headCommit: string, observedAt: number) {
     return {
@@ -63,7 +64,7 @@ function harness() {
             },
         },
     });
-    registry.subscribe('c1', { type: 'subscribe', topic: 'mesh.status', key: 'mesh:status:m1', params: { meshId: 'm1' } });
+    registry.subscribe('c1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'mesh.status', key: 'mesh:status:m1', params: { meshId: 'm1' } });
     return {
         registry,
         frames,
@@ -110,8 +111,8 @@ describe('mesh.status keyed delta — bytes per change', () => {
 
     it('scopes a flush to the named mesh and serves every subscriber of it from ONE build', async () => {
         const h = harness();
-        h.registry.subscribe('c2', { type: 'subscribe', topic: 'mesh.status', key: 'mesh:status:m1', params: { meshId: 'm1' } });
-        h.registry.subscribe('c3', { type: 'subscribe', topic: 'mesh.status', key: 'mesh:status:m2', params: { meshId: 'm2' } });
+        h.registry.subscribe('c2', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'mesh.status', key: 'mesh:status:m1', params: { meshId: 'm1' } });
+        h.registry.subscribe('c3', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'mesh.status', key: 'mesh:status:m2', params: { meshId: 'm2' } });
         await h.flush('m1');
         expect(h.frames.map((f) => f.connectionId).sort()).toEqual(['c1', 'c2']);
         expect(h.builds()).toBe(1);
@@ -120,7 +121,7 @@ describe('mesh.status keyed delta — bytes per change', () => {
 
     it('a failed send falls back to a snapshot; an empty meshId never subscribes', async () => {
         const h = harness();
-        expect(h.registry.subscribe('c9', { type: 'subscribe', topic: 'mesh.status', key: 'k', params: { meshId: '  ' } })).toBe(false);
+        expect(h.registry.subscribe('c9', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'mesh.status', key: 'k', params: { meshId: '  ' } })).toBe(false);
         await h.flush('m1');
         h.setDeliver(false);
         h.heads.n1 = 'zzz';

@@ -53,7 +53,7 @@ import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { LOG } from '../logging/logger.js';
 import { dropMessageIdentityLedger, peekMessageIdentityLedger } from '../chat/message-identity-ledger.js';
-import type { ChatBaseReason } from './transcript-keyed-codec.js';
+import { redactSessionId, type ChatBaseReason } from './transcript-keyed-codec.js';
 import {
     KeyedChatSessionState,
     type KeyedChatFrame,
@@ -65,7 +65,6 @@ import {
     type TranscriptLatencyDetail,
     type TranscriptTriggerSource,
 } from './transcript-latency.js';
-import { redactSessionId } from './transcript-parity.js';
 
 /** Hard bound on distinct sessions tracked at once — mirrors MAX_INFLIGHT's
  * role in mesh-dual-write.ts: a publisher that OOMs a daemon is worse than one
@@ -837,13 +836,7 @@ export function markTranscriptPtyOutputActivity(sessionId: string): void {
     activeService?.markPtyOutputActivity(sessionId);
 }
 
-export function startTranscriptStatPolling(sessionId: string): void {
-    activeService?.startPolling(sessionId);
-}
 
-export function stopTranscriptStatPolling(sessionId: string): void {
-    activeService?.stopPolling(sessionId);
-}
 
 /** TESTS ONLY. */
 export function __resetTranscriptProjectionForTests(): void {

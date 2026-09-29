@@ -14,6 +14,7 @@ import {
     statusPayloadToEntries,
     eventManager,
     noteTerminalStatusEventForControllers,
+    noteDaemonWireVersion,
 } from '@adhdev/web-core'
 import type { ConnectionStatus } from '@adhdev/web-core'
 import type { DaemonMetadataUpdate, SubscribeRequest, TopicUpdateEnvelope, UnsubscribeRequest } from '@adhdev/daemon-core'
@@ -343,6 +344,9 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                     if (msg.type === STANDALONE_HELLO_TYPE && typeof msg.daemonId === 'string' && msg.daemonId) {
                         const daemonId = msg.daemonId as string
                         _lastStatusDaemonId = daemonId
+                        // The hello states the daemon's dashboard wire version: a
+                        // mismatch is shown (reload / daemon update), never rendered.
+                        noteDaemonWireVersion(daemonId, typeof msg.wireVersion === 'number' ? msg.wireVersion : null)
                         const adapter = getOrCreateWsAdapter(daemonId)
                         standaloneConnectionManager.register(daemonId, adapter)
                         standaloneConnectionManager.setState(daemonId, 'connected')

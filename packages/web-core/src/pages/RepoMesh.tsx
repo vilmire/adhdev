@@ -502,7 +502,9 @@ export default function RepoMesh() {
     const didInitialMeshLoad = useRef(false)
     useEffect(() => {
         void loadMeshes(didInitialMeshLoad.current)
-        didInitialMeshLoad.current = true
+        // The first load that can actually ask a daemon is the initial one: an
+        // empty daemon set keeps the list on its loading state (never "no meshes").
+        if (meshDaemonIdsKey) didInitialMeshLoad.current = true
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [meshDaemonIdsKey])
 

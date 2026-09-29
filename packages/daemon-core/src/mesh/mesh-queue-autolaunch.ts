@@ -34,8 +34,8 @@ import { decideSlotForModel, finalizeSlotSelection } from './slot-model-enforcem
 import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy, isDirtyNode } from './mesh-auto-fast-forward.js';
 import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, retractActionableSkipIfPreviouslyNotified, notifyCoordinatorOfActionableSkip, resolveTargetPinTtlVerdict, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
 import { PARKED_SKIP_REASON, noteTargetPinCleared, parkExpiredTargetPin, settleParkedQueueTask, taskIsParked } from './mesh-task-parking.js';
-import { activeWriteAssignedCount, activeReadonlyAssignedCount, nodeHasActiveAssignment, resolveSchedulingStrategy, orderEligibleNodes, orderSlotsForProviderSelection, scoreSlotForTask, activeProviderAssignedCount, slotCoversTaskDifficulty, taskRequiresDifficultyFloor, slotHasCapacity, resolveLaunchAxis, type RankableNode, type FitnessTask } from './mesh-scheduling-fitness.js';
-import { logAutoLaunchQuotaFallbackSuccess, recordAutoLaunchEvent, recordClaimRefusal } from './mesh-queue-observability.js';
+import { activeWriteAssignedCount, activeReadonlyAssignedCount, nodeHasActiveAssignment, resolveSchedulingStrategy, orderEligibleNodes, orderSlotsForProviderSelection, activeProviderAssignedCount, slotCoversTaskDifficulty, taskRequiresDifficultyFloor, slotHasCapacity, resolveLaunchAxis, type RankableNode, type FitnessTask } from './mesh-scheduling-fitness.js';
+import { logAutoLaunchQuotaFallbackSuccess, recordAutoLaunchEvent } from './mesh-queue-observability.js';
 import { buildAutoLaunchRoutingDecision, selectProviderWithDiagnostics, selectionRationaleFrom, type ResolvedProviderSelection } from './mesh-routing-decision.js';
 import { selectQuotaBusyFallback, type QuotaFallbackCandidate } from './mesh-quota-fallback.js';
 import { autoLaunchWriteWouldClobberWinner, driveExpiredAwaitClaim, autoLaunchAwaitClaimBackoff, claimAfterRemoteAutoLaunch, AUTO_LAUNCH_AWAIT_CLAIM_MS, isAutoLaunchWithinAwaitClaimWindow, __clearAwaitClaimBackoffForTests, __resetAutoLaunchOrphanNotifiedForTests } from './mesh-autolaunch-integrity.js';
@@ -65,18 +65,6 @@ const autoLaunchCooldownUntil = new Map<string, number>();
 const AUTO_LAUNCH_COOLDOWN_MS = 5_000;
 
 
-// AUTOLAUNCH-CLAIM-CHURN. For a REMOTE node the launch→claim handshake is purely
-// event-sourced: the worker's agent:ready must be pulled (reconcile PHASE 1) to run
-// setRemoteIdleSession before the drain can claim. If that pull is lost, nothing recovers,
-// and after AUTO_LAUNCH_AWAIT_CLAIM_MS the loop used to blindly RESPAWN a new session — whose
-// respawn guards (nodeHasLiveSessionPendingClaim / liveSessionCountForNode) scan only the LOCAL
-// instanceManager, so the remote pending-claim session is invisible and a fresh ghost accumulates
-// every ~90s (observed live 2026-07-04: task 8b188c64, and 7 ghost sessions on this worktree's
-// own task at 11:23-11:34). Instead of respawning on window expiry, we re-drive the claim for the
-// EXISTING session; when its liveness cannot be positively determined we EXTEND the window with
-// exponential backoff (90 → 180 → 360s) and, only after the cap, deliver the task directly into
-// the launched session (the mesh_send_task-equivalent) rather than spawning another worker.
-const AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES = 2;
 
 
 // Test hooks: reset / seed the await-claim backoff state between cases.

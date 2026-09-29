@@ -14,7 +14,7 @@ import {
     initStandaloneFontPreferences,
     normalizeStandaloneFontPreferences,
 } from './standalone-font-preferences'
-import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, NotificationsPage, useBaseDaemons, initTheme, initChatTheme, initI18n, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt, AlertBanner, Button, Input, getMachineNickname, getMachineHostnameLabel } from '@adhdev/web-core'
+import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, NotificationsPage, useBaseDaemons, initTheme, initChatTheme, initI18n, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt, AlertBanner, DashboardWireCompatOverlay, Button, Input, getMachineNickname, getMachineHostnameLabel } from '@adhdev/web-core'
 import { useTranslation } from 'react-i18next'
 import StandaloneLayout from './StandaloneLayout'
 import SetupWizardPage from './SetupWizardPage'
@@ -314,6 +314,9 @@ export default function App() {
                         <TransportProvider value={transportValue}>
                             <LaunchCliProvider sendDaemonCommand={sendCommandViaWs}>
                             <InteractivePromptGate />
+                            {/* A daemon speaking another dashboard wire version is never
+                                rendered: reload (daemon newer) or update it (daemon older). */}
+                            <DashboardWireCompatOverlay />
                             <StandaloneLayout>
                                 <OnboardingGate />
                                 <Routes>

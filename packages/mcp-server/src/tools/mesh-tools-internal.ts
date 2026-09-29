@@ -139,7 +139,7 @@ import {
     resolvePreferredWorktreeNodeId,
     isLocalControlPlaneNode,
 } from './mesh-node-identity.js';
-import { isHeldDispatchPickDecisive, readHeldDispatchSessions } from './mesh-held-node-state.js';
+import { readNodeRuntime } from './mesh-held-node-state.js';
 import type { MeshNodeRoutesCache } from './mesh-node-routes.js';
 import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
 
@@ -636,8 +636,7 @@ export async function refreshMeshFromDaemon(ctx: MeshContext): Promise<{ settled
         // membershipOnly: this refresh reads membership (ids / workspaces / identity /
         // policy / facts) — git truth comes from the coordinator-held state. The
         // daemon then skips its per-call local git hydration (~300 ms cold) and the
-        // duplicated lastGit/last_git blobs. An older daemon ignores the flag and
-        // answers the full snapshot, which this merge reads the same way.
+        // duplicated lastGit/last_git blobs.
         const result = await ctx.transport.command('get_mesh', { meshId: ctx.mesh.id, membershipOnly: true }) as any;
         if (!result?.success || !Array.isArray(result.mesh?.nodes)) return { settledNodeIds, ok: false };
         const refreshedNodes = result.mesh.nodes
@@ -1526,20 +1525,13 @@ export async function ipcDispatchToRemoteAgent(
                     if (!sessionProviderType) return true;
                     return !checkDirectDispatchQuotaGate(node, sessionProviderType, ctx.mesh.policy?.quotaRouting ?? null);
                 }), sessionProviderFilter, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
-            // HELD-FIRST (owner principle 2026-09-26): pick from the coordinator-held
-            // runtime the member pushed; only a non-decisive held answer costs ONE
-            // live get_status_metadata read (mesh-held-node-state.ts explains which).
-            const held = await readHeldDispatchSessions(ctx, node);
-            let picked = held ? pickSession(held.sessions) : undefined;
-            if (!held || !isHeldDispatchPickDecisive(picked, {
-                explicit: !!sessionId,
-                meshId: ctx.mesh.id,
-                nodeId: node.id,
-                coordinatorDaemonId: dispatchCoordinatorDaemonId,
-                stampsComplete: held.stampsComplete,
-            })) {
-                picked = pickSession(extractStatusMetadataSessions(await transport.meshCommand(daemonId, 'get_status_metadata', {})));
-            }
+            // The member's pushed runtime, held by the coordinator (owner principle ④):
+            // the pick is made from it alone — the member is never read. A node with
+            // nothing held yet auto-picks nothing (the dispatch goes sessionless and the
+            // worker picks / creates the session); a named session not in the held list
+            // is refused as not found (retryable once the member's next push lands).
+            const runtime = await readNodeRuntime(ctx, node);
+            const picked = pickSession(runtime.probe.sessions);
 
             if (sessionId) {
                 const explicitSession = picked;
@@ -1557,7 +1549,7 @@ export async function ipcDispatchToRemoteAgent(
                         workspace: node.workspace,
                         sessionId,
                         ...(resolvedProviderType ? { resolvedProviderType } : {}),
-                        error: `Remote session '${sessionId}' is not present in the live status for node '${node.id}'.`,
+                        error: `Remote session '${sessionId}' is not in the coordinator's held runtime for node '${node.id}'${runtime.known ? '' : ' (nothing held for this node yet)'}.`,
                         nextAction: `Launch a fresh session with mesh_launch_session(node_id: '${node.id}'${resolvedProviderType ? `, type: '${resolvedProviderType}'` : ''}) or retry without session_id so Repo Mesh can target a live delegate session.`,
                     };
                 }
@@ -1596,7 +1588,7 @@ export async function ipcDispatchToRemoteAgent(
             if (sessionId) {
                 return {
                     ...buildCoordinatorP2pRelayFailure(e, {
-                        command: 'get_status_metadata',
+                        command: 'mesh_status',
                         targetDaemonId: daemonId,
                         nodeId: node.id,
                         sessionId,
@@ -1859,242 +1851,6 @@ export async function collectRelatedRepoStatuses(
 
 
 
-// ─── get_status_metadata probe dedupe + short-TTL cache (audit #7 / P7) ────────
-//
-// mesh_status / mesh_view_queue / mesh_list_pending_approvals each iterate every
-// MESH NODE and probe `get_status_metadata` per node — but the probe is a
-// DAEMON-WIDE snapshot (every session on that daemon, not just the node's own),
-// so N worktree nodes sharing one daemon produced N identical probes. Measured
-// (2026-09-23 IPC load audit): 4.4 get_status_metadata calls per mesh_status,
-// ~137ms daemon handler time, with 733 of 1,064 coordinator re-polls landing
-// 5-30s apart — well inside a "the mesh hasn't changed" window.
-//
-// Two layers, both keyed by the CANONICAL daemon core (canonicalDaemonId /
-// machineCoreFromDaemonId — the same identity collapse used by
-// daemonIdsEquivalent elsewhere in this file), never by node id or raw daemonId
-// string, since a node's daemonId may arrive in any of the mach_/daemon_mach_/
-// standalone_mach_ forms for the SAME physical daemon:
-//   1. In-flight de-dup: two nodes resolving to the same daemon within one
-//      mesh_status/mesh_view_queue/mesh_list_pending_approvals call share the
-//      SAME in-flight promise instead of issuing two IPC round-trips.
-//   2. Short TTL cache (PROBE_CACHE_TTL_MS): a settled probe is reused by a
-//      later call (even a different tool, even a different node) within the
-//      window, so a coordinator polling every 5-30s does not re-probe every
-//      node every time.
-// `refresh: true` bypasses both layers — callers that just changed state (e.g.
-// right after a launch/dispatch) or that pass mesh_status({refresh:true})
-// explicitly always get a live probe.
-//
-// 5s was picked to sit comfortably under the observed re-poll floor (5-30s)
-// while staying far below the coordinator's own advisory rate-limit window
-// (recordMeshCoordinatorToolCall: 5 calls / 10s) — a cache hit must never be
-// the reason a caller thinks it got fresh data when the mesh changed 6s ago
-// and the caller is on a slow (30-60s) cadence anyway (cache miss there).
-const PROBE_CACHE_TTL_MS = 5_000;
-
-interface StatusMetadataProbeEntry {
-    expiresAt: number;
-    result: Promise<any>;
-    /** Set when this entry was (re)issued by a refresh:true caller — lets a later
-     *  node in the SAME refresh:true call share it instead of forcing its own probe. */
-    refreshedAt?: number;
-}
-
-// Scoped by MeshContext OBJECT IDENTITY (WeakMap), not by mesh id / daemonId
-// strings alone: server.ts (the real MCP entrypoint) constructs exactly ONE
-// MeshContext per process lifetime and reuses it for every tool call, so this
-// gives the intended cross-call/cross-tool sharing within one coordinator
-// process while guaranteeing two independent MeshContexts (a fresh MCP server
-// process after a restart, or two isolated test fixtures that happen to reuse
-// the same literal daemonId/mesh id) can never leak a cache entry into each
-// other — a raw string key on daemonId alone cannot make that distinction.
-const statusMetadataProbeCacheByCtx = new WeakMap<MeshContext, Map<string, StatusMetadataProbeEntry>>();
-
-/** Test-only: clear the module-level probe cache between isolated test cases. */
-export function __resetStatusMetadataProbeCacheForTests(): void {
-    // WeakMap has no clear(); dropping the reference is equivalent for tests
-    // that always build a fresh ctx object (the old entries become unreachable
-    // and are GC'd). Kept as a no-op-safe function so existing test call sites
-    // don't need to change if this ever needs real per-key clearing later.
-}
-
-function statusMetadataProbeCacheForCtx(ctx: MeshContext): Map<string, StatusMetadataProbeEntry> {
-    let cache = statusMetadataProbeCacheByCtx.get(ctx);
-    if (!cache) {
-        cache = new Map();
-        statusMetadataProbeCacheByCtx.set(ctx, cache);
-    }
-    return cache;
-}
-
-function statusMetadataProbeCacheKey(ctx: MeshContext, node: LocalMeshNodeEntry): string {
-    const canonical = canonicalDaemonId(readNodeDaemonId(node)) || canonicalDaemonId(ctx.localDaemonId);
-    // A node/ctx pair with no resolvable daemon identity at all (malformed test
-    // fixture, brand-new node before its first probe) falls back to the node id
-    // alone so it never collides with an unrelated node under the same "unknown"
-    // bucket — correctness over cache-hit-rate for that edge case.
-    return canonical || `node:${node.id}`;
-}
-
-/**
- * Shared `get_status_metadata` probe for mesh_status / mesh_view_queue /
- * mesh_list_pending_approvals. Dedupes concurrent callers for the same daemon
- * onto one in-flight IPC round-trip and caches the settled result for
- * PROBE_CACHE_TTL_MS so a fast coordinator poll cadence does not re-probe
- * every node on every call. `opts.refresh` bypasses a PRE-EXISTING cache
- * entry (forcing at least one fresh probe per distinct daemon in this call —
- * used by mesh_status({refresh:true})), but a fresh probe issued under
- * `refresh` is itself cached/shared normally for the rest of THIS call, so N
- * nodes on the same daemon in one refresh:true call still make one IPC
- * round-trip, not N.
- *
- * A REJECTED probe is never cached: a transient failure must not poison the
- * next call for the full TTL window, and a caller might otherwise wait out a
- * stale rejection when the underlying daemon has since recovered.
- */
-export function probeStatusMetadataForNode(
-    ctx: MeshContext,
-    node: LocalMeshNodeEntry,
-    opts?: { refresh?: boolean },
-): Promise<any> {
-    const cache = statusMetadataProbeCacheForCtx(ctx);
-    const key = statusMetadataProbeCacheKey(ctx, node);
-    const now = Date.now();
-    const cached = cache.get(key);
-    if (cached && cached.expiresAt > now) {
-        // A fresh in-flight/settled entry from EARLIER IN THIS SAME refresh:true
-        // call (stamped with refreshedAt >= this call's start) is still shared —
-        // only a pre-existing entry from before this call started is bypassed.
-        if (!opts?.refresh || cached.refreshedAt) return cached.result;
-    }
-
-    // OFFLINE-NODE-STATUS-REFRESH: part of the mesh_status per-node assembly — mark it
-    // status-origin so the relay to an offline peer uses the SHORT connect-wait budget.
-    const resultPromise = commandForNode(ctx, node, 'get_status_metadata', {}, { statusProbe: true });
-    // Evict on rejection so a transient failure doesn't poison the cache for the
-    // rest of the TTL window; the rejection itself still propagates to this call's
-    // awaiter (and to any concurrent awaiter sharing this same in-flight promise).
-    resultPromise.catch(() => {
-        const entry = cache.get(key);
-        if (entry && entry.result === resultPromise) cache.delete(key);
-    });
-    cache.set(key, {
-        expiresAt: now + PROBE_CACHE_TTL_MS,
-        result: resultPromise,
-        // Marks this entry as having been (re)issued under refresh:true, so a
-        // second node hitting the SAME key later in this call shares it instead
-        // of issuing its own "fresh" probe — refresh forces at least one live
-        // probe per daemon per call, not one per node.
-        ...(opts?.refresh ? { refreshedAt: now } : {}),
-    });
-    return resultPromise;
-}
-
-export async function collectLiveStatusSessions(
-    ctx: MeshContext,
-    node: LocalMeshNodeEntry,
-    opts?: { refresh?: boolean },
-): Promise<any[]> {
-    try {
-        const statusResult = await probeStatusMetadataForNode(ctx, node, opts);
-        return extractStatusMetadataSessions(statusResult);
-    } catch {
-        return [];
-    }
-}
-
-// Same probe as collectLiveStatusSessions, but distinguishes "probe succeeded and
-// found zero sessions" from "probe failed/timed out" — collectLiveStatusSessions
-// collapses both to `[]`, which is fine for its callers (fall back to the persisted
-// snapshot either way) but is NOT safe as staleness evidence: a failed probe must
-// never be treated as proof a session is gone.
-export async function collectLiveStatusSessionsVerified(
-    ctx: MeshContext,
-    node: LocalMeshNodeEntry,
-    opts?: { refresh?: boolean },
-): Promise<{ sessions: any[]; verified: boolean }> {
-    try {
-        const statusResult = await probeStatusMetadataForNode(ctx, node, opts);
-        return { sessions: extractStatusMetadataSessions(statusResult), verified: true };
-    } catch {
-        return { sessions: [], verified: false };
-    }
-}
-
-
-/**
- * One get_status_metadata probe → the live session list, the daemon's build
- * stamp (including its explicitly reported release track), and any
- * failed-upgrade notice. Used by mesh_status so a single
- * daemon-wide probe yields the sessions, the `daemonBuild` field
- * (commit/version of the running daemon) AND `upgradeFailure`.
- *
- * Routed through the shared probe cache (probeStatusMetadataForNode): every
- * node sharing this node's daemon reuses the SAME probe within the TTL window,
- * so `results.map` in mesh_status issues at most one get_status_metadata per
- * daemon per call, not one per node.
- */
-export async function collectLiveStatusProbe(
-    ctx: MeshContext,
-    node: LocalMeshNodeEntry,
-    opts?: { refresh?: boolean },
-): Promise<{
-    sessions: any[];
-    daemonId?: string;
-    daemonBuild?: { commit: string; commitShort: string; version: string; builtAt?: string; track: 'stable' | 'preview' | 'unknown' };
-    upgradeFailure?: MeshUpgradeFailureSummary;
-}> {
-    try {
-        const statusResult = await probeStatusMetadataForNode(ctx, node, opts);
-        const payload = unwrapCommandPayload(statusResult);
-        return {
-            sessions: extractStatusMetadataSessions(statusResult),
-            ...(readString(payload?.status?.instanceId) ? { daemonId: readString(payload.status.instanceId) } : {}),
-            daemonBuild: extractDaemonBuildInfo(statusResult),
-            upgradeFailure: extractUpgradeFailureSummary(statusResult),
-        };
-    } catch {
-        return { sessions: [] };
-    }
-}
-
-
-export async function collectMeshViewQueueNodesWithLiveSessions(
-    ctx: MeshContext,
-    opts?: { refresh?: boolean },
-): Promise<any[]> {
-    const nodes = await Promise.all(ctx.mesh.nodes.map(async (node) => {
-        const liveSessions = await collectLiveStatusSessions(ctx, node, opts);
-        return liveSessions.length > 0
-            ? { ...node, sessions: liveSessions }
-            : node;
-    }));
-    return nodes;
-}
-
-// Variant of collectMeshViewQueueNodesWithLiveSessions that additionally stamps each
-// node with `__liveProbeVerified` so a caller (annotateQueueStaleness's optional
-// liveVerifiedNodes param) can tell a confirmed-empty probe apart from a failed one.
-// Purely additive: node.sessions merge behavior is identical to the unverified
-// variant, so existing shape/consumers of the node object are unaffected.
-export async function collectMeshViewQueueNodesWithLiveSessionsVerified(
-    ctx: MeshContext,
-    opts?: { refresh?: boolean },
-): Promise<any[]> {
-    const nodes = await Promise.all(ctx.mesh.nodes.map(async (node) => {
-        const { sessions: liveSessions, verified } = await collectLiveStatusSessionsVerified(ctx, node, opts);
-        if (verified) {
-            // A verified probe (even a confirmed-empty one) is authoritative — replace
-            // the node's session field rather than leaving a stale persisted array
-            // behind for a caller that keys off __liveProbeVerified to trust it.
-            return { ...node, sessions: liveSessions, __liveProbeVerified: true };
-        }
-        return { ...node, __liveProbeVerified: false };
-    }));
-    return nodes;
-}
-
-
 /** The coordinator daemon's routing decision for a direct dispatch (`mesh_dispatch_route`). */
 export type MeshDispatchRoute =
     | { route: 'local' | 'remote' | 'unreachable'; ownerDaemonId?: string; reason: string }
@@ -2310,8 +2066,7 @@ export async function resolveCachedMeshSessionPreviewFromLedger(
 /**
  * mesh_read_chat fallback for a REMOTE P2P read that failed at the transport layer.
  *
- * Mirrors mesh_status's collectLiveStatusProbe graceful-degrade pattern: rather than
- * hard-failing on a 30s P2P timeout to a saturated/unreachable worker, surface the
+ * Rather than hard-failing on a 30s P2P timeout to a saturated/unreachable worker, surface the
  * cached coordinator-side summary (the same finalSummary/lastMessagePreview the mobile
  * dashboard renders). This is a READ/meta-plane degrade — status & preview already flow
  * over the WS/event plane — NOT a data-plane command WS fallback (which stays P2P-only

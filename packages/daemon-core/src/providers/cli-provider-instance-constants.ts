@@ -8,12 +8,7 @@
 // `private static readonly` block they came from; only the declaration form
 // changed (class static -> module constant).
 //
-// ★ The class still declares each of these as a `private static readonly`
-// aliasing the constant below, because tests read them off the class
-// (`(CliProviderInstance as any).AUTO_APPROVE_SETTLE_MS` — see
-// cli-provider-auto-approve-{settle,mask-stall,flap-recur}.test.ts). Moving the
-// documentation out without keeping the statics would break those reads, so the
-// aliases are load-bearing, not vestigial.
+// Tests import these directly from this module.
 // ---------------------------------------------------------------------------
 import * as approvalGate from './completion/approval-gate.js';
 

@@ -46,13 +46,12 @@ import {
     triggerMeshQueueAndReport,
     unwrapCommandPayload,
 } from './mesh-tools-internal.js';
-// COORDINATOR-HELD NODE STATE (audit fix): mesh_view_queue's node/session
-// decoration now answers from the coordinator daemon's held runtime first (no
-// per-daemon get_status_metadata round trip for a node another daemon owns);
-// the direct-dispatch transcript reconcile — a WRITE-side nudge, not something
+// mesh_view_queue's node/session decoration is the coordinator daemon's answer
+// (its own status + members' pushed runtime — mesh-held-node-state.ts); the
+// direct-dispatch transcript reconcile — a WRITE-side nudge, not something
 // the response needs (see mesh-status-background.ts) — moved off the request
 // path the same way mesh_status already runs it.
-import { collectMeshViewQueueNodesHeldOrLive } from './mesh-status-held-git.js';
+import { collectMeshNodesWithRuntime } from './mesh-held-node-state.js';
 import { readQueueActiveView } from './mesh-daemon-reads.js';
 import { buildQueueMaintenanceCountsReport, buildQueueStatusSummaryFromCounts, queueViewStatusSet } from './mesh-queue-helpers.js';
 import { scheduleBackgroundDirectReconcile } from './mesh-status-background.js';
@@ -949,9 +948,7 @@ export async function meshViewQueue(
     const rateResult = await recordMeshCoordinatorToolCall(ctx, 'mesh_view_queue');
     // Default to the slim payload for LLM callers; verbose forces the full payload.
     const compact = args.verbose === true ? false : (args.compact ?? true);
-    // Audit #7 (P7): bypass the shared get_status_metadata probe cache/dedupe when
-    // the caller explicitly asks for a fresh read (see mesh_status's identical
-    // probeOpts — mesh-tools-internal.ts probeStatusMetadataForNode).
+    // An explicit refresh asks the coordinator to nudge members to push (never a read).
     const probeOpts = args.refresh === true ? { refresh: true } : undefined;
     try {
         await refreshMeshFromDaemon(ctx);
@@ -960,8 +957,7 @@ export async function meshViewQueue(
         // Compact never emits historical rows, so it reads only the ACTIVE rows plus
         // the daemon's whole-queue counts and the dependency heads those rows point
         // at (read-latency pass 2026-09-27: was the whole queue — 5 MB, 1,567 of
-        // 1,568 rows historical on the preview daemon). Verbose, or an older daemon
-        // (null), reads the full queue as before.
+        // 1,568 rows historical on the preview daemon). Verbose reads the full queue.
         const activeView = compact ? await readQueueActiveView(ctx) : null;
         const rawQueue = activeView
             ? activeView.activeRows as unknown as MeshWorkQueueEntry[]
@@ -977,18 +973,13 @@ export async function meshViewQueue(
             const depState = describeTaskDependencyState(task, statusById, depMetaById);
             return { ...task, ...depState };
         });
-        // COORDINATOR-HELD NODE STATE (owner principle 2026-09-26): node/session
-        // decoration answers from the coordinator daemon's held runtime first — no
-        // per-daemon get_status_metadata round trip for a node another daemon
-        // owns (falls back to a live probe only when the daemon predates the held
-        // marker or nothing is held for that node yet). See
-        // annotateQueueStaleness's liveVerifiedNodes param for why a failed probe
-        // must never count as evidence of absence: __liveProbeVerified stays false
-        // whenever neither held state nor a live probe could confirm anything.
-        // The node shape is a superset of the plain one (adds __liveProbeVerified;
+        // Node/session decoration is the coordinator daemon's answer only. See
+        // annotateQueueStaleness's liveVerifiedNodes param for why "nothing held
+        // yet" must never count as evidence of absence: __liveProbeVerified stays
+        // false for such a node. The node shape is a superset of the plain one (adds __liveProbeVerified;
         // sessions merge identically), so it's reused below for the active-work
         // evidence instead of probing twice.
-        const liveNodes = await collectMeshViewQueueNodesHeldOrLive(ctx, probeOpts);
+        const liveNodes = await collectMeshNodesWithRuntime(ctx, probeOpts);
         const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(withDependencies, ctx.mesh, liveNodes));
         const queue = filterQueueForView(fullQueue, view, statusFilter);
         const viewStatuses = queueViewStatusSet(view, statusFilter);

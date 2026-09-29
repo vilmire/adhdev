@@ -19,6 +19,7 @@
 
 import { WebSocket } from 'ws';
 import {
+  DASHBOARD_WIRE_VERSION,
   LOG,
   loadConfig,
   readCachedInlineMeshActiveSessionDetails,
@@ -38,10 +39,13 @@ export function broadcastToOpenClients(clients: Iterable<WebSocket>, message: un
   }
 }
 
-/** Identity frame sent on connect: which daemon this socket talks to (no state). */
+/**
+ * Identity frame sent on connect: which daemon this socket talks to and the
+ * dashboard wire version it speaks (mesh-shared DASHBOARD_WIRE_VERSION) — no state.
+ */
 export const STANDALONE_HELLO_TYPE = 'standalone_hello';
-export function standaloneHelloFrame(daemonId: string): { type: typeof STANDALONE_HELLO_TYPE; daemonId: string } {
-  return { type: STANDALONE_HELLO_TYPE, daemonId };
+export function standaloneHelloFrame(daemonId: string): { type: typeof STANDALONE_HELLO_TYPE; daemonId: string; wireVersion: number } {
+  return { type: STANDALONE_HELLO_TYPE, daemonId, wireVersion: DASHBOARD_WIRE_VERSION };
 }
 
 export interface StandaloneHostTransportDeps {

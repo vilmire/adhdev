@@ -18,6 +18,7 @@ import { MeshNodeGitStateStore } from '../../src/mesh/mesh-node-git-state'
 import { MESH_SENDER_DAEMON_ID_ARG } from '../../src/commands/mesh-sender'
 import { createDefaultGitCommandServices } from '../../src/git/git-commands'
 import { TopicSubscriptionRegistry, type TopicSink } from '../../src/subscriptions/topic-registry'
+import { DASHBOARD_WIRE_VERSION } from '@adhdev/mesh-shared'
 
 const execFileAsync = promisify(execFile)
 const MESH_ID = 'mesh_lane_idle'
@@ -111,7 +112,7 @@ describe('mesh.status lane over the real mesh_status (coordinator-held)', () => 
           },
         },
       })
-      topics.subscribe('dash', { type: 'subscribe', topic: 'mesh.status', key: `mesh:status:${MESH_ID}`, params: { meshId: MESH_ID } })
+      topics.subscribe('dash', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'mesh.status', key: `mesh:status:${MESH_ID}`, params: { meshId: MESH_ID } })
       await topics.flushNow('mesh.status', 'dash', `mesh:status:${MESH_ID}`)
       expect(frames).toHaveLength(1)
       expect(frames[0]!.update.mode).toBe('snapshot')

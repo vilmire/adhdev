@@ -687,3 +687,20 @@ describe('statusPayloadToEntries', () => {
         expect(cliEntry?.settings).toMatchObject({ meshNodeFor: 'mesh-x', meshNodeId: 'node-win' })
     })
 });
+
+// P1-2 (data-path audit 2026-09-29): the machine-detail provider-staleness dot
+// rides the daemon.metadata lane — the daemon entry carries it, so MachineDetail
+// never pulls the whole get_status_metadata for it.
+describe('statusPayloadToEntries — provider channel staleness', () => {
+    it('carries providerChannelStaleness onto the daemon entry', () => {
+        const entries = statusPayloadToEntries({
+            instanceId: 'daemon-1',
+            machine: { hostname: 'h', platform: 'darwin' } as any,
+            timestamp: 1,
+            sessions: [],
+            providerChannelStaleness: { staleTypes: ['codex-cli'], newTypes: ['kimi'] },
+        } as StatusReportPayload, { daemonId: 'daemon-1' })
+        const daemon = entries.find((entry) => entry.type === 'adhdev-daemon')
+        expect(daemon?.providerChannelStaleness).toEqual({ staleTypes: ['codex-cli'], newTypes: ['kimi'] })
+    })
+});

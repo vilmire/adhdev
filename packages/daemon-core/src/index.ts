@@ -53,12 +53,12 @@ export type {
   DaemonMetadataUpdate,
   DaemonMetadataDelta,
   DaemonMetadataWireUpdate,
-  DaemonMetadataSessionChange,
   MeshStatusSubscriptionParams,
   MeshStatusSnapshotUpdate,
   MeshStatusDeltaUpdate,
   MeshStatusWireUpdate,
   TopicUpdateEnvelope,
+  TopicProtocolMismatchUpdate,
   SubscribeRequest,
   UnsubscribeRequest,
   AvailableProviderInfo,
@@ -186,7 +186,6 @@ export {
   serializeMeshJsonConfigScaffold,
   MESH_JSON_CONFIG_LOCATIONS,
   MESH_JSON_CONFIG_SCHEMA,
-  MESH_JSON_PROVIDER_DEFAULTS_EXAMPLE,
 } from './config/mesh-json-config.js';
 export type {
   RepoMeshDeclarativeConfig,
@@ -276,6 +275,7 @@ export { MAGI_RAW_ANSWER_CAP } from '@adhdev/mesh-shared';
 //    @adhdev/mesh-shared dependency). ──
 export { expandDaemonIdForms, daemonIdsEquivalent, machineCoreFromDaemonId, canonicalDaemonId } from '@adhdev/mesh-shared';
 export { normalizeMeshNodeId, meshNodeIdMatches } from '@adhdev/mesh-shared';
+export { DASHBOARD_WIRE_VERSION } from '@adhdev/mesh-shared';
 // Canonical mesh tool-name registry (SSOT for the schema ↔ prompt ↔ barrel-comment
 // consistency the 6-6 test enforces). Re-exported so mcp-server (which depends on
 // daemon-core, not on mesh-shared directly) and the daemon-core prompt test both
@@ -384,7 +384,7 @@ export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshTaskPriority
 // nobody) instead of silently re-homing a context-bound delta onto another session.
 // The coordinator-facing exits are mesh_view_queue (parkedTasks), mesh_queue_requeue
 // (re-target / rewrite / unpark) and mesh_queue_cancel. See mesh-task-parking.ts.
-export { taskIsParked, parkedAgeMs, parkedTaskRetentionExpired, buildParkedTaskNotice, notifyCoordinatorOfParkedTaskDropped, PARKED_TASK_RETENTION_MS, PARKED_SKIP_REASON, PARK_REASON_PIN_EXPIRED, PARK_RETENTION_EXPIRED_REASON } from './mesh/mesh-task-parking.js';
+export { taskIsParked, parkedAgeMs, parkedTaskRetentionExpired, notifyCoordinatorOfParkedTaskDropped, PARKED_TASK_RETENTION_MS, PARKED_SKIP_REASON, PARK_REASON_PIN_EXPIRED, PARK_RETENTION_EXPIRED_REASON } from './mesh/mesh-task-parking.js';
 export {
     MESH_ON_DEPENDENCY_FAILURE_PUBLIC_TEXT,
     parseOnDependencyFailurePolicy,
@@ -423,7 +423,6 @@ export {
     coordinatorGateBlockReason,
     coordinatorGateAbandonedReason,
     MESH_GATE_DEFAULT_LEASE_SECONDS,
-    MESH_GATE_NAMED_OUTCOMES,
     MESH_GATE_RELEASE_PATCH_KEYS,
 } from './mesh/mesh-graph-gates.js';
 // The coordinator node-patch + retry surface: the recovery path
@@ -509,6 +508,7 @@ export type { WorkspaceSagaPorts } from './mesh/mesh-graph-workspace-ports.js';
 // Shared node-health resolver + launch gate (single source of truth for the auto-launch
 // gate AND the MAGI fan-out planner — they must agree on what "launchable health" means).
 export { deriveMeshNodeHealthFromGit, resolveEffectiveMeshNodeHealth, isMeshNodeHealthLaunchable, isMeshNodeFreshEnoughToLaunch } from './mesh/mesh-node-identity.js';
+export { applyInlineMeshBranchConvergence } from './mesh/mesh-branch-convergence.js';
 // GIT-GATE (owner-requested follow-up to H1, wiring-unification): the SAME dirty/stale
 // predicates the auto-launch spawn gate applies (mesh-queue-autolaunch.ts), re-exported so
 // mcp-server's mesh_send_task direct-dispatch tool can apply the identical checks before a
@@ -547,7 +547,7 @@ export { buildMeshRoutePreview, buildNodeRoutePreview } from './mesh/mesh-route-
 export type { MeshRoutePreviewQuery, NodeRoutePreview } from './mesh/mesh-route-preview.js';
 
 // ── Mesh Host Ownership ──
-export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, isMeshHostOwner, normalizeMeshDaemonRole, requireMeshHostQueueOwner, resolveMeshHostStatus } from './mesh/mesh-host-ownership.js';
+export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, normalizeMeshDaemonRole, requireMeshHostQueueOwner, resolveMeshHostStatus } from './mesh/mesh-host-ownership.js';
 
 // ── Mesh Visualization ──
 // buildMeshGraph and MeshGraph types moved to @adhdev/web-core to avoid
@@ -676,7 +676,7 @@ export type { HostMemorySnapshot } from './system/host-memory.js';
 // ── CDP ──
 export { DaemonCdpManager } from './cdp/manager.js';
 export { CdpDomHandlers } from './cdp/devtools.js';
-export { setupIdeInstance, registerExtensionProviders, connectCdpManager, probeCdpPort } from './cdp/setup.js';
+export { setupIdeInstance, registerExtensionProviders, probeCdpPort } from './cdp/setup.js';
 export type { CdpSetupContext, SetupIdeInstanceOptions } from './cdp/setup.js';
 export { DaemonCdpInitializer } from './cdp/initializer.js';
 export type { CdpInitializerConfig } from './cdp/initializer.js';
@@ -721,7 +721,7 @@ export type {
 
 // ── Status ──
 export { DaemonStatusReporter, buildCloudStatusReportPayload, observeP2PStatusSummary } from './status/reporter.js';
-export { buildSessionEntries, findCdpManager, hasCdpManager, isCdpConnected, isCoordinatorSpawnedHiddenWorker, resolveSurfaceHidden, resolveMuted, resolveSpawnedSessionHideMute } from './status/builders.js';
+export { buildSessionEntries, findCdpManager, isCdpConnected, isCoordinatorSpawnedHiddenWorker, resolveSurfaceHidden, resolveMuted, resolveSpawnedSessionHideMute } from './status/builders.js';
 export { buildStatusSnapshot, buildMachineInfo, buildAvailableProviders, getLastDisplayMessage } from './status/snapshot.js';
 export { getDaemonBuildInfo } from './build-info.js';
 export type { DaemonBuildInfo } from './build-info.js';
@@ -781,7 +781,6 @@ export {
     consoleSymbols,
     resolveConsoleSymbols,
     supportsUnicodeSymbols,
-    resetConsoleSymbolsCache,
 } from './logging/console-symbols.js';
 export type { ConsoleSymbols, UnicodeSupportProbe } from './logging/console-symbols.js';
 export {
@@ -884,7 +883,7 @@ export { ProviderInstanceManager } from './providers/provider-instance-manager.j
 // Session lifecycle bus (wiring-unification B1)
 export { createSessionLifecycleBus } from './sessions/lifecycle-bus.js';
 export type { SessionLifecycleBus, Unsubscribe, SubscribeOptions, AsyncSubscribeOptions, BusStats, CreateSessionLifecycleBusOptions } from './sessions/lifecycle-bus.js';
-export { BUS_EVENT_KINDS, assertNeverBusEvent } from './sessions/lifecycle-events.js';
+export { BUS_EVENT_KINDS } from './sessions/lifecycle-events.js';
 export type { SessionLifecycleEvent, DaemonEvent as DaemonBusEvent, BusEvent, BusEventKind, EventOf, RegisterOrigin, StatusCause, TerminationCause, DaemonFactsCause, PromptTransport, EnrichedProviderEvent } from './sessions/lifecycle-events.js';
 export { createSessionEventPort } from './sessions/session-port.js';
 export type { SessionEventPort, SessionSignalDetail, CreateSessionEventPortOptions } from './sessions/session-port.js';
@@ -971,7 +970,7 @@ export type { SessionHostSurfaceKind, SessionHostSurfaceRecordLike } from './ses
 export { shouldAutoRestoreHostedSessionsOnStartup } from './session-host/startup-restore-policy.js';
 
 // ── Installer ──
-export { getAIExtensions, installExtensions, launchIDE, isExtensionInstalled } from './installer.js';
+export { installExtensions, launchIDE, isExtensionInstalled } from './installer.js';
 export type { ExtensionInfo as InstallerExtensionInfo } from './installer.js';
 
 // ── Boot / Lifecycle ── (staged boot: bootDaemonRuntime below; host surface: createDaemonHostRuntime)
@@ -1050,9 +1049,7 @@ export {
   formatManifestValidationIssues,
   type ManifestValidationIssue,
   type ManifestValidationResult,
-  V1_CONTRACT_VERSION,
   V1_PRIMITIVE_CATALOG,
-  V1_ALL_PRIMITIVES,
 } from './providers/sdk/v1/index.js';
 
 // ── Provider quota ──
@@ -1224,7 +1221,6 @@ export { meshRecord, meshRecordAppended, type MeshRecordScalars, type MeshRecord
 // C1–C3 turn ledger (C-W2): store, one-way migration, observe() write path, wire projection.
 export {
   createTurnLedger,
-  isAttemptTerminal,
   type TurnLedger,
   type TurnLedgerDeps,
   type TurnPublisherPort,
@@ -1306,13 +1302,8 @@ export {
   maxEntryBytes,
   type ProjectedMeshEvent,
 } from './seqscribe/mesh-event-projection.js';
-// §8 unit 2: transcript publisher + parity counters. Exported so the cloud
-// daemon's status projection can pass them to `summarizeSeqscribeStats`.
-export {
-  transcriptParityCounters,
-  __resetTranscriptParityForTests,
-  type TranscriptParityCounters,
-} from './seqscribe/transcript-parity.js';
+// §8 unit 2: transcript publisher counters. Exported so the cloud daemon's
+// status projection can pass them to `summarizeSeqscribeStats`.
 export {
   activeTranscriptProjectionService,
   type TranscriptProjectionCounters,
@@ -1442,7 +1433,6 @@ export type {
   HostStatusSnapshot,
 } from './boot/host-runtime.js';
 export {
-  isTurnCompletionEdge,
   subscribeHostCommandTopics,
   subscribeHostMeshState,
   subscribeHostModal,

@@ -23,7 +23,6 @@ import * as path from 'node:path';
 import { LOG } from '../logging/logger.js';
 import { parseModels } from './parse.js';
 import type {
-    DiscoveredModel,
     ModelDiscoveryFailureKind,
     ModelDiscoverySnapshot,
     ModelDiscoverySpec,
@@ -268,7 +267,3 @@ export async function discoverProviderModels(
     }
 }
 
-/** Convenience for tests and callers that only need the list. */
-export function snapshotModels(snapshot: ModelDiscoverySnapshot | undefined): DiscoveredModel[] {
-    return snapshot?.status === 'ok' ? snapshot.models : [];
-}

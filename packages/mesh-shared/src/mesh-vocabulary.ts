@@ -76,11 +76,8 @@ export const isMeshTaskStatus = makeGuard(MESH_TASK_STATUSES)
 export const isMeshTerminalTaskStatus = makeGuard(MESH_TERMINAL_TASK_STATUSES)
 export const isMeshTaskMode = makeGuard(MESH_TASK_MODES)
 export const isMeshTaskPriority = makeGuard(MESH_TASK_PRIORITIES)
-export const isMeshThinkingLevel = makeGuard(MESH_THINKING_LEVELS)
 export const isMeshDeliveryMode = makeGuard(MESH_DELIVERY_MODES)
-export const isMeshSessionCleanupMode = makeGuard(MESH_SESSION_CLEANUP_MODES)
 export const isWorkerReportOutcome = makeGuard(WORKER_REPORT_OUTCOMES)
-export const isWorkerBranchState = makeGuard(WORKER_BRANCH_STATES)
 
 /**
  * JSON-schema fragment for a string enum, derived from the tuple. Use this in

@@ -104,20 +104,24 @@ test('a legacy daemon with no track is reported as unknown, never assumed stable
 
 test('incident regression: stable mesh daemon vs preview upgrade target is loud and fail-open', async () => {
   const calls: Array<{ daemonId: string; command: string }> = [];
+  const mesh = buildMesh();
   const ctx = makeIpcCtx((daemonId, command) => {
     calls.push({ daemonId, command });
-    if (command === 'get_mesh') return { success: true, mesh: buildMesh() };
-    if (command === 'get_status_metadata') {
-      return {
-        success: true,
-        status: { instanceId: 'daemon_mainpc_stable', sessions: [] },
-        daemonBuild: {
-          commit: 'stable123',
-          commitShort: 'stable1',
-          version: '1.0.49-rc.2',
-          track: 'stable',
-        },
-      };
+    if (command === 'get_mesh') return { success: true, mesh };
+    // The member's build is what it pushed to the coordinator (held runtime) —
+    // observed without reading the member.
+    if (command === 'mesh_status') {
+      return heldMeshStatusResponse(mesh, () => cleanGit, {
+        localDaemonId: 'daemon-coordinator-preview',
+        runtimeFor: () => ({
+          source: 'member_push',
+          observedAt: Date.now(),
+          refreshing: false,
+          daemonId: 'daemon_mainpc_stable',
+          daemonBuild: { commit: 'stable123', commitShort: 'stable1', version: '1.0.49-rc.2', track: 'stable' },
+          sessions: [],
+        }),
+      });
     }
     if (command === 'restart_daemon_node') {
       // Reproduce the observed split: mesh status came from the stable daemon,
@@ -160,6 +164,7 @@ test('incident regression: stable mesh daemon vs preview upgrade target is loud 
   assert.match(result.trackWarning, /DAEMON\/TRACK MISMATCH/);
   assert.match(result.trackWarning, /stable/);
   assert.match(result.trackWarning, /preview/);
-  assert.ok(calls.some(call => call.command === 'get_status_metadata'), 'restart must observe the mesh-attached daemon before acting');
+  assert.ok(calls.some(call => call.command === 'mesh_status'), 'restart observes the mesh-attached daemon (held) before acting');
+  assert.equal(calls.some(call => call.command === 'get_status_metadata' && call.daemonId !== 'daemon-coordinator-preview'), false, 'never by reading the member');
   assert.ok(calls.some(call => call.command === 'restart_daemon_node'), 'upgrade remains fail-open and is still issued');
 });

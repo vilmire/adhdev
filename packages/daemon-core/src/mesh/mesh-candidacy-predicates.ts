@@ -31,9 +31,9 @@ import { isHeldRuntimeLive } from './mesh-node-git-refresher.js';
 import { loadConfig } from '../config/config.js';
 import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, getQueue } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
-import { daemonIdsEquivalent, sessionIdsEquivalent, isBusyStatus, isDeadStatus, isReadyStatus } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, sessionIdsEquivalent, isBusyStatus, isIdleSessionState, isTerminalSessionRecordStatus as isTerminalSessionStatus } from '@adhdev/mesh-shared';
 import { readNonEmptyString } from './mesh-events-utils.js';
-import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable } from './mesh-node-identity.js';
+import { isMeshNodeHealthLaunchable } from './mesh-node-identity.js';
 import { shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
 import { inWindowAutoLaunchSessionIdsForNode } from './mesh-autolaunch-integrity.js';
 import { sessionClaimRefusalReleasesSpawnGate } from './mesh-claim-refusal.js';
@@ -57,26 +57,10 @@ export function normalizeProviderPriority(policy: unknown): string[] {
         });
 }
 
-export function isTerminalSessionStatus(status: string): boolean {
-    return ['stopped', 'failed', 'terminated', 'exited', 'closed'].includes(status);
-}
-
-// Exported (Fix B, rc.15 orchestration RCA) so the explicit mesh_send_task dispatch path
-// (med-family/cli-agent.ts) can reuse the SAME status/liveness probe to independently confirm a
-// pinned target session is genuinely ready before overriding the coarse worktreeBootstrap
-// 'running' defer for that one session. Never returns true for 'starting' / 'waiting_approval' /
-// 'waiting_choice' / 'generating' / any other non-idle status — those still refuse the override.
-// Both predicates read the auto-approve-masked top-level status (and the chat lane),
-// exactly as before; only the vocabulary they compare against is now derived from
-// mesh-shared's session-status classes instead of being listed here.
-export function isIdleSessionState(state: any): boolean {
-    const status = readNonEmptyString(state?.status).toLowerCase();
-    // Mesh-record terminal spellings (failed/terminated/…) and vocabulary `dead`
-    // statuses are both "gone": never a candidate, whatever the chat lane says.
-    if (isTerminalSessionStatus(status) || isDeadStatus(status)) return false;
-    return isReadyStatus(status) || state?.activeChat?.status === 'waiting_input';
-}
-
+// The terminal-record and idle predicates are mesh-shared's (session-status.ts) —
+// one definition for every idle-candidate check. Re-exported under the names this
+// module's callers use.
+export { isTerminalSessionStatus, isIdleSessionState };
 
 export function sessionStateLooksActive(state: any): boolean {
     const status = readNonEmptyString(state?.status).toLowerCase();

@@ -15,24 +15,18 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import * as chokidar from 'chokidar';
 import { registerIDEDefinition } from '../detection/ide-detector.js';
-import { sha256Hex } from '../system/hash.js';
 import { LOG } from '../logging/logger.js';
 import { VersionArchive } from './version-archive.js';
-import { extractTarballGz } from './extract-tarball.js';
 import type {
-  ProviderCompatibilityEntry,
-  ProviderControlDef,
-  ProviderModule,
-  ProviderCategory,
-  ProviderScripts,
-  ProviderSettingDef,
-  ProviderSettingSchema,
-  ResolvedProvider,
+    ProviderModule,
+    ProviderCategory,
+    ProviderScripts,
+    ProviderSettingDef,
+    ProviderSettingSchema,
+    ResolvedProvider,
 } from './contracts.js';
-import { validateProviderDefinition } from './provider-schema.js';
 import {
   loadProvidersActive,
   resolveActiveSource,
@@ -44,13 +38,6 @@ import {
   resolveProviderTarballUrl,
 } from '../config/registry-resolver.js';
 import type { ProviderSourceConfigSnapshot, ProviderUserDirSource } from '../config/provider-source-config.js';
-import { executeNativeHistory, executeNativeHistoryList } from './spec/native-history-executor.js';
-import { trimInProgressTurnToolTail } from './chat-message-normalization.js';
-import {
-  createNativeHistoryDispatcher,
-  createNativeHistoryListDispatcher,
-  type ReaderId,
-} from './native-history/dispatcher.js';
 import {
   resolveProviderChannel,
   isPreviewReleaseChannel,
@@ -2147,24 +2134,6 @@ export class ProviderLoader {
       }
     }
     this.loadAll();
-  }
-
-  /** Count provider files (provider.v1.json or provider.json — at most one per dir). */
-  private countProviders(dir: string): number {
-    if (!fs.existsSync(dir)) return 0;
-    let count = 0;
-    const scan = (d: string) => {
-      try {
-        const entries = fs.readdirSync(d, { withFileTypes: true });
-        const hasManifest = entries.some(e => e.name === 'provider.v1.json' || e.name === 'provider.json');
-        if (hasManifest) count++;
-        for (const entry of entries) {
-          if (entry.isDirectory()) scan(path.join(d, entry.name));
-        }
-      } catch { }
-    };
-    scan(dir);
-    return count;
   }
 
  // ─── Provider Settings API ─────────────────────────

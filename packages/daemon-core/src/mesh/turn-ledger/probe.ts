@@ -70,36 +70,7 @@ export function readChatPayloadStatus(payload: Record<string, unknown> | null): 
     return str(payload?.status).toLowerCase();
 }
 
-/**
- * PROJECTION-SELF-REFERENCE: the PROVIDER's own status verdict, independent of
- * any projected `status` a mesh-owned session's read_chat carries. Absent on an
- * older remote daemon → the projected status (the pre-fix behaviour, never a
- * fabricated idle).
- */
-export function readChatPayloadProviderObservedStatus(payload: Record<string, unknown> | null): string {
-    const observed = str(payload?.providerObservedStatus).toLowerCase();
-    return observed || readChatPayloadStatus(payload);
-}
 
-/**
- * This daemon's live sessions (`id` + `status`) from the session registry —
- * never by re-entering get_status_metadata (B4). `status` comes from the owning
- * CLI/ACP instance's state and is omitted for IDE/extension sessions.
- */
-export function listLocalLiveSessions(components: Pick<DaemonComponents, 'sessionRegistry' | 'instanceManager'>): Array<Record<string, unknown>> {
-    const out: Array<Record<string, unknown>> = [];
-    for (const target of components.sessionRegistry.list()) {
-        const status = localInstanceStatus(components, target.instanceKey || target.sessionId, target.transport);
-        out.push({
-            id: target.sessionId,
-            sessionId: target.sessionId,
-            providerType: target.providerType,
-            transport: target.transport,
-            ...(status ? { status } : {}),
-        });
-    }
-    return out;
-}
 
 function localInstanceStatus(
     components: Pick<DaemonComponents, 'instanceManager'>,

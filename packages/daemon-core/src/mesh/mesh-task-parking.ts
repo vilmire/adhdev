@@ -159,25 +159,6 @@ export function parkedTaskRetentionExpired(
     return age !== null && age >= retentionMs;
 }
 
-/**
- * The coordinator-facing "why + how to act" text for a parked task.
- *
- * Spelled with the exact tool calls, for the same reason the orphaned-pin notice
- * is: this message exists for the moment the coordinator has NOT realised
- * anything needs its attention, and a hint it must decode is a hint it will not
- * act on. The four verbs are the four exits from parking — inspect, re-target,
- * edit, cancel — because a park with no exit is indistinguishable from a loss.
- */
-export function buildParkedTaskNotice(taskId: string, targetSessionId?: string, reason?: string): string {
-    const addressee = readNonEmptyString(targetSessionId);
-    return `The delta was addressed to session '${addressee || '(unknown)'}' and that pin went stale (${reason || PARK_REASON_PIN_EXPIRED}), so the task is now PARKED — held for you, deliberately NOT re-homed onto another session. `
-        + `A message written for one session's context becomes a context-free instruction anywhere else, so the daemon will not choose a new addressee for you. `
-        + `The task is claimable by nobody until you act on it, and it is dropped (as a terminal failure, with another notification) if left parked for ${Math.round(PARKED_TASK_RETENTION_MS / 3_600_000)}h. `
-        + `Four ways out — inspect it with mesh_view_queue (parked rows are listed under parkedTasks with their original addressee), then either `
-        + `re-target it with mesh_queue_requeue(task_id='${taskId}', target_session_id='<live session>') — or clear_target_session to let any compatible session take it; `
-        + `REWRITE it first with mesh_queue_requeue(task_id='${taskId}', message='<updated instruction>') if the situation moved on while it waited (the common case: the worker already did the part your delta was about); `
-        + `or cancel it with mesh_queue_cancel(task_id='${taskId}') if it is no longer wanted. Any requeue unparks the task.`;
-}
 
 /**
  * Tell the coordinator that a parked task was dropped by the retention sweep.

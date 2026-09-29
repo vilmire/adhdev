@@ -7,6 +7,7 @@ import {
     CHAT_MSG_KIND,
     CHAT_PART_KIND,
     CHAT_PART_MAX_JCS_BYTES,
+    chatMessageKey,
     computeChatCommitDigest,
     type ChatCommitV2,
     type ChatMsgV2,
@@ -119,7 +120,7 @@ describe('KeyedChatSessionState — live cap (§11 Q1)', () => {
         const frame = driver.step(observation(specs))!;
         expect(frame.capped).toBe(true);
         expect(frame.commit.liveCount).toBe(3);
-        expect(frame.live.has('d.c.1')).toBe(false);
+        expect(frame.rows.some((r) => r.kind === CHAT_MSG_KIND && r.key === chatMessageKey('d.c.1'))).toBe(false);
         const meta = frame.rows.find((r) => r.kind === CHAT_META_KIND)!.payload as { coverage: { omittedBefore: boolean } };
         expect(meta.coverage.omittedBefore).toBe(true);
         expect(driver.state.liveBytes()).toBeLessThanOrEqual(CHAT_LIVE_BYTES_MAX);

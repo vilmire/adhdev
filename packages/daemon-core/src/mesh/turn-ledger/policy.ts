@@ -118,7 +118,6 @@ export function authoritativeTranscriptAgeMs(p: TurnPolicy): number { return Mat
 export function consumeGraceFor(p: TurnPolicy, profile: ConsumeProfile): number {
     return profile === 'native_source' ? 2 * p.consumeGraceMs : p.consumeGraceMs;
 }
-export function stallTurnActiveThresholdMs(p: TurnPolicy): number { return 2 * p.stallNoticeMs; }
 
 // ─── env resolution ──────────────────────────────────────────────────────
 

@@ -41,7 +41,7 @@
  * report even if a future reader wants them: `sendUnifiedStatusReport` dedups
  * server frames by hashing the payload, and a live counter would change every
  * tick and turn an idle daemon into a constant transmitter — the same reason
- * `readRouting` and `transcriptParityDetail` are local-only in seqscribe/
+ * `readRouting` is local-only in seqscribe/
  * stats.ts. They are exposed through `get_status_metadata` and the daemon log,
  * which are local surfaces.
  *
