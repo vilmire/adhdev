@@ -1,37 +1,10 @@
 /**
  * blueprintViewModel — pure derivations shared by the blueprint list and its
- * on-demand mini DAG (MeshMiniDag). Kept out of the components so the
- * edge-state vocabulary — the "what unlocks what" reading of a graph — and
- * the summary splitters are unit-tested without rendering React Flow (same
- * convention as taskDagViewModel).
+ * scheduling panel: route-preview requests/labels and the summary splitters,
+ * unit-tested without rendering React Flow (same convention as
+ * taskDagViewModel).
  */
-import type { MeshGraphView, MeshGraphEdgeView, MeshGraphGateView, RepoMeshQueueTask } from '@adhdev/daemon-core'
-
-/** The daemon defaults to 20 and clamps mesh_graph_overview requests at 100. */
-export const BLUEPRINT_GRAPH_INITIAL_LIMIT = 20
-export const BLUEPRINT_GRAPH_LOAD_MORE_STEP = 20
-export const BLUEPRINT_GRAPH_MAX_LIMIT = 100
-
-export function buildBlueprintGraphOverviewArgs(meshId: string, includeTerminal: boolean, limit: number): Record<string, unknown> {
-    return includeTerminal ? { meshId, includeTerminal, limit } : { meshId, includeTerminal }
-}
-
-export function nextBlueprintGraphLimit(limit: number): number {
-    return Math.min(BLUEPRINT_GRAPH_MAX_LIMIT, limit + BLUEPRINT_GRAPH_LOAD_MORE_STEP)
-}
-
-export function getBlueprintGraphPagination(graphCount: number, totalGraphCount: number, requestedLimit: number): {
-    hiddenCount: number
-    canLoadMore: boolean
-    atServerLimit: boolean
-} {
-    const hiddenCount = Math.max(0, totalGraphCount - graphCount)
-    return {
-        hiddenCount,
-        canLoadMore: hiddenCount > 0 && requestedLimit < BLUEPRINT_GRAPH_MAX_LIMIT,
-        atServerLimit: hiddenCount > 0 && requestedLimit >= BLUEPRINT_GRAPH_MAX_LIMIT,
-    }
-}
+import type { RepoMeshQueueTask } from '@adhdev/daemon-core'
 
 /* ── Route-preview requests: the forecast must respect the pin ─────────────
  * The scheduling forecast used to ask mesh_route_preview only the four bare
@@ -149,70 +122,6 @@ export function resolveCompactRoutePreviewLabel(
     predictedSlots: Readonly<Record<string, string>> | undefined,
 ): string | undefined {
     return predictedSlots?.[ROUTE_PREVIEW_COMPACT_DIFFICULTY]
-}
-
-/** Source states that mean "this dependency is satisfied — the edge is green". */
-const TERMINAL_OK_STATES = new Set(['completed', 'released'])
-/** All terminal states (success or not) — a terminal target no longer waits. */
-const TERMINAL_STATES = new Set(['completed', 'failed', 'skipped', 'cancelled', 'released'])
-
-export type BlueprintEdgeState = 'inactive' | 'satisfied' | 'failed' | 'waiting' | 'idle'
-
-/** Gate lookups keyed by the gate's graph nodeId. */
-export function buildGateByNodeId(graph: Pick<MeshGraphView, 'gates'>): Map<string, MeshGraphGateView> {
-    const map = new Map<string, MeshGraphGateView>()
-    for (const gate of graph.gates ?? []) map.set(gate.nodeId, gate)
-    return map
-}
-
-/**
- * Effective display state per node: a coordinator_gate node shows its GATE
- * state (awaiting/claimed/released…), a worker node its graph node state.
- */
-export function buildStateByNodeId(graph: Pick<MeshGraphView, 'nodes' | 'gates'>): Map<string, string> {
-    const gates = buildGateByNodeId(graph)
-    const map = new Map<string, string>()
-    for (const node of graph.nodes) {
-        map.set(node.nodeId, node.kind === 'coordinator_gate' ? (gates.get(node.nodeId)?.state ?? node.state) : node.state)
-    }
-    return map
-}
-
-/**
- * Edge endpoints in MeshGraphEdgeView are `ref ?? nodeId` (the view projects
- * the human-readable ref when the node has one). React Flow and ELK are keyed
- * by nodeId, so every edge endpoint must be resolved back through this map.
- */
-export function buildNodeIdByEndpoint(graph: Pick<MeshGraphView, 'nodes'>): Map<string, string> {
-    const map = new Map<string, string>()
-    for (const node of graph.nodes) {
-        map.set(node.nodeId, node.nodeId)
-        if (node.ref) map.set(node.ref, node.nodeId)
-    }
-    return map
-}
-
-/**
- * Edge display state:
- *  - inactive: the projection deactivated the edge (source skipped)
- *  - satisfied: source reached a successful terminal state — dependency met
- *  - failed: source terminal but NOT successful — the dependency can never be met
- *  - waiting: source still in flight and the target still waits on it (animated)
- *  - idle: source in flight but the target itself is already terminal
- */
-export function deriveBlueprintEdgeState(
-    edge: Pick<MeshGraphEdgeView, 'active' | 'from' | 'to'>,
-    stateByNodeId: Map<string, string>,
-    nodeIdByEndpoint?: Map<string, string>,
-): BlueprintEdgeState {
-    if (edge.active === false) return 'inactive'
-    const sourceId = nodeIdByEndpoint?.get(edge.from) ?? edge.from
-    const targetId = nodeIdByEndpoint?.get(edge.to) ?? edge.to
-    const sourceState = stateByNodeId.get(sourceId) ?? 'declared'
-    const targetState = stateByNodeId.get(targetId) ?? 'declared'
-    if (TERMINAL_OK_STATES.has(sourceState)) return 'satisfied'
-    if (TERMINAL_STATES.has(sourceState)) return 'failed'
-    return TERMINAL_STATES.has(targetState) ? 'idle' : 'waiting'
 }
 
 /**
@@ -361,45 +270,6 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
     }
 }
 
-/* ── D5: Blueprint gate actions ────────────────────────────────────────────
- * The 2026-09-25 graph orchestration simplification, decision D5, lifts
- * the 2026-08-24 "gate verbs stay coordinator-only" call: the dashboard now
- * exposes Release/Abandon/Extend as first-class buttons on a blocking gate
- * row, wired to the daemon commands D3(c) adds
- * (mesh_graph_gate_release/abandon/extend). Payload builders live here, pure
- * and unit-testable, so the exact wire shape sent to sendDaemonCommand is
- * pinned independent of the React click plumbing. */
-
-/** `mesh_graph_gate_extend`'s fixed "Extend 24h" duration, in seconds. */
-export const BLUEPRINT_GATE_EXTEND_SECONDS = 24 * 60 * 60
-
-export function buildGateReleaseArgs(
-    meshId: string,
-    gateId: string,
-    outcome: 'passed' | 'failed',
-    evidence?: string,
-): Record<string, unknown> {
-    const trimmedEvidence = evidence?.trim()
-    return {
-        mesh_id: meshId,
-        gate_id: gateId,
-        outcome,
-        ...(trimmedEvidence ? { evidence: trimmedEvidence } : {}),
-    }
-}
-
-export function buildGateAbandonArgs(meshId: string, gateId: string, reason: string): Record<string, unknown> {
-    return { mesh_id: meshId, gate_id: gateId, reason: reason.trim() }
-}
-
-export function buildGateExtendArgs(
-    meshId: string,
-    gateId: string,
-    extendSeconds: number = BLUEPRINT_GATE_EXTEND_SECONDS,
-): Record<string, unknown> {
-    return { mesh_id: meshId, gate_id: gateId, extend_seconds: extendSeconds }
-}
-
 /**
  * Milliseconds elapsed since an ISO timestamp, clamped to >= 0 so a clock
  * skew between daemon and browser never renders a negative age.
@@ -412,7 +282,7 @@ export function elapsedMsSince(isoTimestamp: string | undefined, nowMs: number):
 }
 
 /**
- * Compact "age" label for a gate badge/one-liner — "3m", "2h", "5d". Mirrors
+ * Compact "age" label for a badge/one-liner — "3m", "2h", "5d". Mirrors
  * the coarse-bucket convention `formatTaskCardTime` uses elsewhere in the
  * blueprint (taskDagViewModel.ts) rather than inventing a new one.
  */

@@ -134,7 +134,7 @@ export {
 export { isMappableTranscriptView, mapTranscriptViewToChatView, TranscriptBubbleCache } from './components/dashboard/transcript-chat-pane-adapter'
 export { materializeDaemonMetadataUpdate } from './utils/keyed-topic-fold'
 export type { ActiveConversation } from './components/dashboard/types'
-export { isCliConv, isAcpConv } from './components/dashboard/types'
+export { isCliConv } from './components/dashboard/types'
 
 // ── Utils ──
 export {
@@ -143,7 +143,7 @@ export {
     buildProviderMaps, PLATFORM_ICONS, groupByMachine,
     getMachineNickname, getMachineHostnameLabel, getMachineDisplayName,
 } from './utils/daemon-utils'
-export type { IdeSessionSummary, CliSessionSummary, AcpSessionSummary } from './utils/daemon-utils'
+export type { IdeSessionSummary, CliSessionSummary } from './utils/daemon-utils'
 export { statusPayloadToEntries } from './utils/status-transform'
 export type { StatusTransformOptions } from './utils/status-transform'
 export { getInstallBase, getInstallBaseForHost, getInstallCommands, PROD_INSTALL_BASE, PREVIEW_INSTALL_BASE } from './utils/install-base'
@@ -180,7 +180,6 @@ export {
     BUILTIN_IDES,
     BUILTIN_CLI_AGENTS,
     BUILTIN_EXTENSIONS,
-    BUILTIN_ACP_COUNT,
     DEFAULT_PROVIDER_VERIFICATION,
     PROVIDER_VERIFICATION,
     PROVIDER_VERIFICATION_STATUS,
@@ -201,7 +200,7 @@ export type { SubscriptionTransport } from './managers/SubscriptionManager'
 export { webDebugStore, createWebDebugStore } from './debug/webDebugStore'
 export type { WebDebugEvent, WebDebugEntry, WebDebugQuery, WebDebugStore } from './debug/webDebugStore'
 // Re-export daemon-core shared types for downstream consumers
-export type { AcpConfigOption, AcpMode, StatusReportPayload } from './types'
+export type { StatusReportPayload } from './types'
 export { cn } from './lib/utils'
 
 // ── UI Components ──
@@ -347,8 +346,6 @@ export type { MeshGraphData, MeshGraphNode, MeshGraphEdge } from './components/M
 export { buildMeshGraph, isMeshGraphStructurallyComplete } from './utils/mesh-visualization'
 export type { MeshGraph, MeshGraphNode as MeshGraphNodeType, MeshGraphEdge as MeshGraphEdgeType } from './utils/mesh-visualization'
 export { canonicalizeRepoMeshStatus, extractRepoMeshStatus, repoMeshNodeHasLiveGitEvidence, summarizeRepoMeshCanonicalNodeDebug } from './utils/repo-mesh-status'
-export { extractMagiActivity, MAGI_SYNTHESIS_WIRING_GAP } from './utils/magi-activity'
-export type { MagiActivitySummary, MagiGroupActivity, MagiReplicaActivity, MagiReplicaCounts, MagiLedgerEvent } from './utils/magi-activity'
 export { useMeshGraphMetadataSubscription } from './hooks/useMeshGraphMetadataSubscription'
 export { RepoMeshContext, useRepoMeshContext, STANDALONE_FEATURES, CLOUD_FEATURES } from './context/RepoMeshContext'
 export type { RepoMeshContextValue, RepoMeshDaemonEntry, RepoMeshFeatures, LoadMeshStatusOptions, LaunchCoordinatorParams, LaunchCoordinatorResult } from './context/RepoMeshContext'

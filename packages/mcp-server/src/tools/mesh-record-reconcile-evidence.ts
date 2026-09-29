@@ -6,7 +6,7 @@
 // C-W9a retired the P2P record IMPORT half of reconciliation: every daemon's
 // records stay on that daemon (`mesh_local_records`), the content-free fleet
 // view is the replicated `mesh.<id>.events` topic (`mesh_topic_index`), and a
-// peer's nested payload (a refine result, a MAGI synthesis) is read from the
+// peer's nested payload (a refine result, a dispatch record) is read from the
 // peer over P2P (`get_mesh_ledger_slice`) when it is needed — never copied into
 // another daemon's store. So the tool now QUERIES each node's bounded slice
 // and reports what it saw; `entriesImported` is always 0 and the status is

@@ -13,7 +13,7 @@ export const READ_CHAT_DEBUG_TOOL = {
       },
       agent_type: {
         type: 'string',
-        description: 'Optional provider/agent type hint, e.g. hermes-cli, claude-cli, codex-cli.',
+        description: 'Optional provider/agent type hint, e.g. claude-cli, codex-cli.',
       },
       limit: {
         type: 'number',

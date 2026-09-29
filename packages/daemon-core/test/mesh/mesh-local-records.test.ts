@@ -299,8 +299,8 @@ describe('mesh-local-records (C-W9a: meshRecord local leg + readers)', () => {
             meshRecord(testMeshId, 'direct_fast_forward', { payload: { outcome: 'noop' } });
             expect(readLocalRecords(testMeshId)).toEqual([]);
 
-            const res = meshRecord(testMeshId, 'magi_synthesis', { payload: { consensusGroupId: 'g1' } },
-                { local: { payload: { consensusGroupId: 'g1', synthesis: { verdict: 'agree', notes: ['free text is fine locally'] } } } });
+            const res = meshRecord(testMeshId, 'checkpoint_created', { payload: { checkpointId: 'c1' } },
+                { local: { payload: { checkpointId: 'c1', synthesis: { verdict: 'agree', notes: ['free text is fine locally'] } } } });
             expect(res.storedLocally).toBe(true);
             const [row] = readLocalRecords(testMeshId);
             expect(row.id).toBe(res.eventId);
@@ -310,10 +310,10 @@ describe('mesh-local-records (C-W9a: meshRecord local leg + readers)', () => {
 
         it('derives taskId from payload.taskId for lifecycle kinds only', () => {
             meshRecord(testMeshId, 'dispatch_failed', { payload: { taskId: 't-life' } }, { local: true });
-            meshRecord(testMeshId, 'magi_dispatched', { payload: { taskId: 't-not-lifecycle' } }, { local: true });
+            meshRecord(testMeshId, 'node_cloned', { payload: { taskId: 't-not-lifecycle' } }, { local: true });
             const rows = readLocalRecords(testMeshId);
             expect(rows.find((r) => r.kind === 'dispatch_failed')?.taskId).toBe('t-life');
-            expect(rows.find((r) => r.kind === 'magi_dispatched')?.taskId).toBeUndefined();
+            expect(rows.find((r) => r.kind === 'node_cloned')?.taskId).toBeUndefined();
             expect(MeshRuntimeStore.getInstance().localRecordStore().query(testMeshId, { taskId: 't-life' })).toHaveLength(1);
         });
 

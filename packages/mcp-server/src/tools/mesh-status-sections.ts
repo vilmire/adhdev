@@ -11,7 +11,6 @@ import {
 } from './mesh-tools-internal.js';
 import {
     annotateQuotaSnapshotFreshness,
-    compactMagiActivityGroup,
     compactMeshStatusNode,
     compactNodeSeverity,
     isNoteworthyCompactNode,
@@ -21,8 +20,6 @@ import {
 } from './mesh-compact.js';
 import {
     buildMeshAsyncRefineJobs,
-    buildMeshMagiActivity,
-    summarizeMeshMagiActivity,
     summarizeMeshAsyncRefineJobs,
 } from '@adhdev/daemon-core';
 import { buildNodeCapabilityExposure, getNodeLaunchReadiness } from './mesh-tools-internal-core.js';
@@ -652,7 +649,7 @@ try {
 } catch { /* mission read is best-effort */ }
 }
 
-/** Sections derived from this call's pending-event drain: refine jobs, MAGI activity, events, protocol metrics. */
+/** Sections derived from this call's pending-event drain: refine jobs, events, protocol metrics. */
 export function applyStatusDrainSections(
     response: Record<string, unknown>,
     ctx: MeshContext,
@@ -688,26 +685,6 @@ try {
             };
         } else {
             response.asyncRefineJobs = asyncRefineJobs;
-        }
-    }
-
-    // deltaE: fold persisted MAGI cross-verification activity into mesh_status so a
-    // coordinator (and the dashboard's extractMagiActivity) can read the synthesis
-    // fields — needs_verification counts, independence banner, and git skew —
-    // without re-running collection. Bounded like asyncRefineJobs: running groups
-    // always shown, synthesized groups only when recent (stale ones folded to a count).
-    const magiActivity = buildMeshMagiActivity({ meshId: mesh.id, ledgerEntries });
-    if (magiActivity.length > 0) {
-        const fold = summarizeMeshMagiActivity(magiActivity);
-        if (compact) {
-            if (fold.groups.length > 0) response.magiActivity = fold.groups.map(compactMagiActivityGroup);
-            response.magiActivitySummary = {
-                total: fold.total,
-                byStatus: fold.byStatus,
-                ...(fold.staleSynthesized > 0 ? { staleSynthesized: fold.staleSynthesized } : {}),
-            };
-        } else {
-            response.magiActivity = magiActivity;
         }
     }
 

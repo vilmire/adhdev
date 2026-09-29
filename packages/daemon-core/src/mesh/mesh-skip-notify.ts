@@ -511,7 +511,7 @@ function actionableSkipGuidance(
     };
     if (reason.startsWith('provider') || reason === 'missing_provider_priority') return {
         summary: `the current provider scan found no usable provider for this task (provider priority missing/unusable, or the provider loader is unavailable; ${reason})`,
-        nextAction: "Check the node's providerPriority policy and that the required CLI/ACP provider is installed and enabled on that machine. Quota-gated candidates use a separate, self-resolving reason and are not proof of this configuration blocker.",
+        nextAction: "Check the node's providerPriority policy and that the required CLI provider is installed and enabled on that machine. Quota-gated candidates use a separate, self-resolving reason and are not proof of this configuration blocker.",
     };
     if (reason === 'dirty_workspace') return {
         summary: "the node's workspace is dirty, so auto-launch is blocked to avoid clobbering uncommitted changes",

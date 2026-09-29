@@ -108,14 +108,7 @@ export interface MeshWorkQueueEntry {
     /** M1/M3: mission this task belongs to (joins mesh_missions). */
     missionId?: string;
     /**
-     * MAGI: consensus group id shared by every replica of one mesh_magi_review
-     * fan-out. Marks the task as part of an INTENTIONAL same-prompt quorum so the
-     * completion-event dedup (mesh-events-pending) never collapses grouped
-     * replicas. Absent on ordinary tasks. Rides in the payload JSON (no column).
-     */
-    consensusGroupId?: string;
-    /**
-     * MAGI-KIND-PANEL (model axis): model override for the session that executes this
+     * Model axis: model override for the session that executes this
      * task. When the task auto-launches a session, this is passed to launch_cli as
      * `initialModel` (ACP → setConfigOption; CLI → modelLaunchArgs template). Absent on
      * ordinary tasks. Rides in the payload JSON (no column). Best-effort — a provider
@@ -158,12 +151,6 @@ export interface MeshWorkQueueEntry {
      */
     difficulty?: string;
     /**
-     * Independent system hold (materialization, gate, workspace, policy,
-     * quarantine). C3 derived failure does NOT write `dependency_failed:*` here
-     * (design :522-533); views derive `dependencyFailures` from predecessor
-     * statuses instead. A C1 skip placeholder may carry `graph_skipped:*`.
-     */
-    blockedReason?: string;
     /** The node that actually claimed and is executing the task */
     assignedNodeId?: string;
     /** The session currently executing the task */
@@ -341,7 +328,7 @@ export interface MeshQueueMutationOptions {
 
 /**
  * Options accepted by {@link enqueueTask}. Named (rather than inline) so
- * {@link enqueueTaskGraph} can reuse the exact same per-task option surface —
+ * {@link enqueueTaskBatch} can reuse the exact same per-task option surface —
  * the batch path generates `id` itself and resolves batch refs in `dependsOn`
  * before delegating each entry to enqueueTask, so the two can never drift.
  */
@@ -371,9 +358,7 @@ export interface MeshEnqueueTaskOptions {
     maxRetries?: number;
     /** M1/M3: mission this task belongs to. */
     missionId?: string;
-    /** MAGI: consensus group id shared by every replica of a mesh_magi_review fan-out. */
-    consensusGroupId?: string;
-    /** MAGI-KIND-PANEL: model override forwarded to the executing session's launch (initialModel). */
+    /** Model override forwarded to the executing session's launch (initialModel). */
     model?: string;
     /** BRAIN-ROUTING: standard thinking level forwarded to launch (initialThinkingLevel). */
     thinkingLevel?: string;
@@ -396,7 +381,7 @@ export interface MeshEnqueueTaskOptions {
     sourceCoordinatorSessionId?: string;
 }
 
-// ─── G5: Atomic Task-Graph Enqueue ─────────
+// ─── G5: Atomic Multi-Task Enqueue ─────────
 
 /**
  * G5: one task in an atomic multi-task enqueue. `ref` is a batch-local label that
@@ -408,7 +393,7 @@ export interface MeshEnqueueTaskOptions {
  * forward references; with an atomic batch the only unknown-id case left is a typo,
  * and a typo'd dep would otherwise hang the task as unclaimable forever.
  */
-export interface MeshTaskGraphEntrySpec extends Omit<MeshEnqueueTaskOptions, 'id'> {
+export interface MeshTaskBatchEntrySpec extends Omit<MeshEnqueueTaskOptions, 'id'> {
     ref?: string;
     message: string;
 }

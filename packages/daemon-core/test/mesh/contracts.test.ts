@@ -234,7 +234,7 @@ describe('defaultScopeForEvent (B2a)', () => {
   });
 });
 
-describe('isTerminalTaskEvent (MAGI-REPLICA-COMPLETION-EVENT-LEAK)', () => {
+describe('isTerminalTaskEvent (completion event leak to non-owner coordinators)', () => {
   it('is true for the terminal task events', () => {
     for (const e of ['agent:generating_completed', 'agent:stopped', 'refine:completed', 'refine:failed', 'refine:accepted']) {
       expect(isTerminalTaskEvent(e)).toBe(true);
@@ -276,7 +276,7 @@ describe('buildPendingEventEmitStamp (B2a)', () => {
     expect(stamp).toEqual({ protocolVersion: MESH_PROTOCOL_VERSION_V2, eventId: 'e1', scope: 'unicast', dispatchedBy: COORD, intendedFor: COORD });
   });
 
-  it('narrows a TERMINAL event with no intendedFor to unicast addressed to dispatchedBy (MAGI-REPLICA-COMPLETION-EVENT-LEAK: never broadcast a completion to non-owner coordinators)', () => {
+  it('narrows a TERMINAL event with no intendedFor to unicast addressed to dispatchedBy (never broadcast a completion to non-owner coordinators)', () => {
     const stamp = buildPendingEventEmitStamp({ eventName: 'agent:generating_completed', eventId: 'e1', dispatchedBy: COORD });
     expect(stamp?.scope).toBe('unicast');
     expect(stamp?.intendedFor).toEqual(COORD);

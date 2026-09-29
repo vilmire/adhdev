@@ -19,7 +19,6 @@ const DEFAULT_COORDINATOR_DELEGATED_ENV_UNSETS = [
     'ADHDEV_INLINE_MESH',
     'ADHDEV_MCP_TRANSPORT',
     'ADHDEV_MESH_ID',
-    'HERMES_EPHEMERAL_SYSTEM_PROMPT',
 ] as const;
 
 export interface CoordinatorDelegatedCliLaunchOptionsInput {
@@ -140,7 +139,7 @@ function hasCliArg(args: string[], flag: string): boolean {
  * - Fresh launch (attachExisting=false): now (nowMs). A real live spawn floor
  *   isolates a fresh session's own store and holds prior-session leak protection.
  * - Attach WITH a recoverable record startedAt (a PAST timestamp): that startedAt.
- *   Restoring a hosted runtime (coordinator / MAGI replica / hermes / claude /
+ *   Restoring a hosted runtime (coordinator / worker / hermes / claude /
  *   codex) after a daemon restart, the real spawn time is in the past. Using it
  *   restores each session's per-session birth-floor so co-located antigravity
  *   runtimes resolve their OWN conversation (ownerConfirmed) instead of the

@@ -1,7 +1,7 @@
 /**
  * StatusMonitor — Status monitoring notification system
  *
- * Common across all Provider categories (IDE/Extension/CLI/ACP).
+ * Common across all Provider categories (IDE/Extension/CLI).
  * - Approval waiting (waiting_approval) notification
  * - No-progress watchdog: alert when an active turn makes no progress for a while
  * - All config toggleable via Provider Settings
@@ -74,7 +74,7 @@ export class StatusMonitor {
             }
         }
 
- // 2. No-progress watchdog (identical for IDE/Extension/CLI/ACP)
+ // 2. No-progress watchdog (identical for IDE/Extension/CLI)
         if (status === 'generating' || status === 'streaming') {
             // While an approval modal is pending we must NOT count the wait as
             // no-progress. The assistant emits no tokens and the screen is frozen

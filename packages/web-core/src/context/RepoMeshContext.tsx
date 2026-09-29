@@ -64,8 +64,6 @@ export interface RepoMeshFeatures {
     coordinatorPrompt: boolean
     /** Show per-node "Node instruction" textarea (both) */
     nodeInstruction: boolean
-    /** Show "Hermes MCP config" section (both) */
-    hermesMcpConfig: boolean
     /** Show "Review Inbox" section — merge candidates + Refinery-blocked nodes (M4.0, standalone) */
     reviewInbox?: boolean
 }
@@ -164,7 +162,6 @@ export const STANDALONE_FEATURES: RepoMeshFeatures = {
     // Functional features — both platforms
     coordinatorPrompt: true,
     nodeInstruction: true,
-    hermesMcpConfig: true,
     reviewInbox: true,
 }
 
@@ -176,7 +173,6 @@ export const CLOUD_FEATURES: RepoMeshFeatures = {
     // Functional features — both platforms
     coordinatorPrompt: true,
     nodeInstruction: true,
-    hermesMcpConfig: true,
     reviewInbox: true,
 }
 

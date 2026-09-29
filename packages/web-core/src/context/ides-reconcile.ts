@@ -364,7 +364,7 @@ function shouldDropMissingAuthoritativeTransportEntry(
     if (!daemonIdsWithSessionEntries.has(daemonId)) return false
     if (incomingIds.has(entry.id)) return false
 
-    if (entry.transport === 'pty' || entry.transport === 'acp') {
+    if (entry.transport === 'pty') {
         return age > 10_000
     }
     if (entry.transport === 'cdp-page') {

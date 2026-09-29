@@ -129,7 +129,7 @@ test('annotations never contradict themselves', () => {
 test('read-only mesh inspection tools are marked read-only and non-destructive', () => {
   const readOnly = [
     'mesh_status', 'mesh_list_nodes', 'mesh_route_preview', 'mesh_view_queue',
-    'mesh_graph_view', 'mesh_read_chat', 'mesh_read_terminal', 'mesh_read_node_logs',
+    'mesh_read_chat', 'mesh_read_terminal', 'mesh_read_node_logs',
     'mesh_git_status', 'mesh_task_history', 'mesh_ledger_query', 'mesh_mission_list',
     'mesh_review_inbox', 'mesh_list_pending_approvals', 'mesh_refine_plan',
   ];
@@ -158,7 +158,7 @@ test('state-removing tools are marked destructive', () => {
   const destructive = [
     'mesh_queue_cancel', 'mesh_remove_node', 'mesh_cleanup_worktree_nodes',
     'mesh_cleanup_sessions', 'mesh_restart_daemon', 'mesh_note',
-    'mesh_graph_gate', 'mesh_init', 'mesh_config',
+    'mesh_init', 'mesh_config',
     'stop_session', 'git_push',
   ];
   for (const name of destructive) {
@@ -172,7 +172,7 @@ test('state-removing tools are marked destructive', () => {
 test('agent-spawning tools are open-world and not idempotent', () => {
   // Calling one of these twice runs the work twice — the single most important
   // thing for a client not to retry blindly after a timeout.
-  const dispatch = ['mesh_enqueue_task', 'mesh_enqueue_batch', 'mesh_send_task', 'mesh_launch_session', 'mesh_magi_review', 'launch_session'];
+  const dispatch = ['mesh_enqueue_task', 'mesh_enqueue_batch', 'mesh_send_task', 'mesh_launch_session', 'launch_session'];
   for (const name of dispatch) {
     const annotations = TOOL_ANNOTATIONS[name];
     assert.ok(annotations, `${name} missing from TOOL_ANNOTATIONS`);
@@ -195,7 +195,7 @@ test('purely local reads are not marked open-world', () => {
 test('additive writes explicitly opt out of the destructive default', () => {
   // MCP defaults destructiveHint to true for a non-read-only tool, so these
   // must state false rather than omit it.
-  for (const name of ['mesh_mission_upsert', 'mesh_reconcile_ledger', 'mesh_node_slots', 'mesh_magi_kind_panel', 'mesh_coordinator_prompt_append', 'mesh_create', 'git_checkpoint']) {
+  for (const name of ['mesh_mission_upsert', 'mesh_reconcile_ledger', 'mesh_node_slots', 'mesh_coordinator_prompt_append', 'mesh_create', 'git_checkpoint']) {
     const annotations = TOOL_ANNOTATIONS[name];
     assert.ok(annotations, `${name} missing from TOOL_ANNOTATIONS`);
     assert.equal(annotations.readOnlyHint, false, `${name} writes`);
@@ -227,7 +227,7 @@ test('no classification exists for a tool that is not published anywhere', () =>
 test('a merged tool is classified by its most capable action (2026-09-26 consolidation)', () => {
   // One tool carries one annotation block, so a read-only action beside a
   // writing one must not make the tool look read-only (rule 1: capability, not default).
-  for (const name of ['mesh_graph_gate', 'mesh_node_slots', 'mesh_magi_kind_panel', 'mesh_coordinator_prompt_append', 'mesh_note', 'mesh_config', 'mesh_init', 'mesh_create', 'mesh_cleanup_sessions']) {
+  for (const name of ['mesh_node_slots', 'mesh_coordinator_prompt_append', 'mesh_note', 'mesh_config', 'mesh_init', 'mesh_create', 'mesh_cleanup_sessions']) {
     const annotations = TOOL_ANNOTATIONS[name];
     assert.ok(annotations, `${name} missing from TOOL_ANNOTATIONS`);
     assert.equal(annotations.readOnlyHint, false, `${name} has a writing action, so it is not read-only`);

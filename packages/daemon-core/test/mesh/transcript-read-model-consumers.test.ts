@@ -34,12 +34,10 @@ const EXPECTED_ROSTER_ORDER: readonly TranscriptConsumerId[] = [
     'daemon_worker_status_probe',
     'daemon_terminal_evidence',
     'mcp_mesh_status_reconciliation',
-    'magi_approval_probe',
-    'magi_result_collect',
 ];
 
 describe('transcript-read-model-consumers roster', () => {
-    it('enumerates exactly the 8 design §4 roster ids', () => {
+    it('enumerates exactly the 6 design §4 roster ids', () => {
         expect(TRANSCRIPT_CONSUMER_IDS).toEqual(EXPECTED_ROSTER_ORDER);
         expect(Object.keys(TRANSCRIPT_CONSUMER_ROSTER).sort()).toEqual(
             [...EXPECTED_ROSTER_ORDER].sort(),
@@ -48,7 +46,7 @@ describe('transcript-read-model-consumers roster', () => {
 
     // ★ The authoritative enabled set. Enablement grew one unit at a time — 5
     // (web pane), 6 (mesh_read_chat display), 7 (the two daemon-side semantic
-    // consumers), 8 (the three mcp-server semantic consumers) — and with 7 and
+    // consumers), 8 (the mcp-server semantic consumer) — and with 7 and
     // 8 both landed the roster is fully enabled. A future id added to the table
     // fails here until it is added to this set by its own unit, which is the
     // point: the decision is recorded in one place.
@@ -59,8 +57,6 @@ describe('transcript-read-model-consumers roster', () => {
         'daemon_worker_status_probe',
         'daemon_terminal_evidence',
         'mcp_mesh_status_reconciliation',
-        'magi_approval_probe',
-        'magi_result_collect',
     ]);
 
     it('pins the complete enabled set — every roster consumer is enabled after units 5-8', () => {
@@ -88,8 +84,6 @@ describe('transcript-read-model-consumers roster', () => {
             daemon_worker_status_probe: 7,
             daemon_terminal_evidence: 7,
             mcp_mesh_status_reconciliation: 8,
-            magi_approval_probe: 8,
-            magi_result_collect: 8,
         });
     });
 
@@ -102,10 +96,10 @@ describe('transcript-read-model-consumers roster', () => {
     });
 
     it('withRosterEntryDisabled flips one id without mutating the real roster', () => {
-        const patched = withRosterEntryDisabled('magi_result_collect');
-        expect(patched.magi_result_collect.enabled).toBe(false);
-        expect(patched.magi_approval_probe.enabled).toBe(true);
-        expect(TRANSCRIPT_CONSUMER_ROSTER.magi_result_collect.enabled).toBe(true);
+        const patched = withRosterEntryDisabled('mcp_mesh_status_reconciliation');
+        expect(patched.mcp_mesh_status_reconciliation.enabled).toBe(false);
+        expect(patched.daemon_terminal_evidence.enabled).toBe(true);
+        expect(TRANSCRIPT_CONSUMER_ROSTER.mcp_mesh_status_reconciliation.enabled).toBe(true);
     });
 
     it('every roster entry names a current call site and a losslessness note', () => {
@@ -164,12 +158,12 @@ describe('transcript-read-model-consumers roster', () => {
         // Injection check for the guard itself: the regex must match the shape
         // a real offender takes. Unit 7's suite asserting a unit-8 id is the
         // literal text of the bug that shipped.
-        const offender = 'expect(TRANSCRIPT_CONSUMER_ROSTER.magi_result_collect.enabled).toBe(false);';
+        const offender = 'expect(TRANSCRIPT_CONSUMER_ROSTER.mcp_mesh_status_reconciliation.enabled).toBe(false);';
         const owned = new Set(rosterIdsForUnit(7));
         const claims = [...offender.matchAll(/TRANSCRIPT_CONSUMER_ROSTER(?:\.(\w+)|\['(\w+)'\])\.enabled/g)]
             .map((m) => m[1] ?? m[2])
             .filter((id) => !owned.has(id as TranscriptConsumerId));
-        expect(claims).toEqual(['magi_result_collect']);
+        expect(claims).toEqual(['mcp_mesh_status_reconciliation']);
     });
 
     it('exposes a TranscriptConsumerFallbackReason that matches the design §4 closed union', () => {

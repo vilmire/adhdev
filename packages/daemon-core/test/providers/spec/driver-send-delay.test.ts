@@ -34,7 +34,7 @@ function loadManifestFor(provider: string): { sendDelayMs?: number; submitStrate
 /** Every shipped CLI provider that declares a manifest sendDelayMs. */
 const SHIPPED_CLI_PROVIDERS = [
     'antigravity-cli', 'claude-cli', 'codex-cli', 'cursor-cli',
-    'grok-cli', 'hermes-cli', 'kimi', 'opencode',
+    'grok-cli', 'kimi', 'opencode',
 ];
 
 describe('SpecDriver send_message — submit delay', () => {

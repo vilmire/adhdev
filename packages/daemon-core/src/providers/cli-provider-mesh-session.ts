@@ -9,13 +9,12 @@
  */
 import type { MeshSendKeyItem, MeshSendKeyName } from '../cli-adapters/provider-cli-shared.js';
 import { isWorkerMcpEnabled } from '../runtime-defaults.js';
-import { meshTaskAttachments, resolveCompletingTaskId, resolvePendingInjectedAt } from './mesh-task-attachment.js';
-import { adapterTurnStartedAt, adapterTurnTaskId } from './adapter-turn-clock.js';
+import { meshTaskAttachments, resolveCompletingTaskId } from './mesh-task-attachment.js';
 import { runMeshStallTick, type MeshStallHost } from './completion/mesh-stall-watchdog.js';
 import type { CliProviderInstance } from './cli-provider-instance.js';
 
 /** The CliProviderInstance members these functions read or call (compiler-checked; no cast). */
-export type MeshSessionHost = Pick<CliProviderInstance, 'adapter' | 'completingTurnTaskId' | 'fastCollapseSynthesizedTaskId' | 'instanceId' | 'isMeshWorkerSession' | 'meshTaskAttachmentHistory' | 'meshTaskInjectedAt' | 'settings'>;
+export type MeshSessionHost = Pick<CliProviderInstance, 'adapter' | 'completingTurnTaskId' | 'instanceId' | 'isMeshWorkerSession' | 'meshTaskAttachmentHistory' | 'meshTaskInjectedAt' | 'settings'>;
 
 // EVTTRACE (observation-only): is this a mesh worker session whose completion
 // events must route to a coordinator? Used purely to gate trace logging so a
@@ -102,56 +101,14 @@ export function isAutonomousMeshSession(host: MeshSessionHost): boolean {
 }
 
 /**
- * ARCH-REFACTOR R1: the taskId to attribute the CURRENTLY-completing turn to.
- * Prefers the per-turn binding (engine.currentTurnTaskId, set when the turn was
- * submitted and surviving until the next turn starts) over the last-write-wins
- * session scalar (settings.meshActiveTaskId). The scalar is retained only as a
- * backward-compat alias for the "current/last assignment" and is the source of the
- * NOTIF-MISDELIVER / TASK-MSG-MISROUTE race: a second task attaching before this
- * turn completes overwrites it. Returns undefined for a non-task ad-hoc turn.
+ * The taskId to attribute the CURRENTLY-completing turn to: the attachment
+ * history's pending entry when the worker-MCP flag is on, else the session scalar
+ * (settings.meshActiveTaskId). Returns undefined for a non-task ad-hoc turn.
  */
 export function completingTurnTaskId(host: MeshSessionHost): string | undefined { // WORKER-MCP T2 precursor (mesh-task-attachment.ts): flag-on, a pending entry wins over the binding+scalar below.
     const fromHistory = isWorkerMcpEnabled() ? resolveCompletingTaskId(meshTaskAttachments(host.meshTaskAttachmentHistory)) : undefined; if (fromHistory) return fromHistory;
-    const turnTaskId = adapterTurnTaskId(host.adapter);
-    if (turnTaskId) return turnTaskId;
     const scalar = host.settings.meshActiveTaskId;
     return typeof scalar === 'string' && scalar.trim() ? scalar : undefined;
-}
-
-/**
- * ANTIGRAVITY-PREMATURE-COMPLETION gate: has the CURRENTLY-injected task actually
- * entered generating (a real onTurnStarted for it)? Used to reject stale external-
- * native completion evidence that predates the injected task's turn.
- *
- * The injected task's id is the session scalar `meshActiveTaskId`, stamped by
- * attachMeshAssignment BEFORE the PTY turn starts. That stamp also records
- * `meshTaskInjectedAt`. The turn that has genuinely started is marked by
- * `adapter.currentTurnStartedAt` (set ONLY by onTurnStarted). Two naive signals both
- * FAIL for a reused-idle session:
- *  - `currentTurnStartedAt > 0` alone: it persists from the PRIOR turn, so it is
- *    already > 0 the instant a new task is injected (pre-onTurnStarted).
- *  - `currentTurnTaskId === meshActiveTaskId` alone: the mesh inject path
- *    pre-binds currentTurnTaskId to the new taskId at inject time,
- *    BEFORE the turn starts, so this matches prematurely too.
- * The robust discriminator is TEMPORAL: the producing turn must have STARTED AFTER
- * the injection — `currentTurnStartedAt > meshTaskInjectedAt`. Only then has the
- * injected task's own onTurnStarted fired.
- *  - No injected task since boot (meshTaskInjectedAt === 0, e.g. an ad-hoc/dashboard
- *    turn or a non-mesh session): fall back to the plain "a turn has started" check
- *    so non-mesh completion is unaffected.
- * Fails CLOSED for the injected-but-not-started window; open once the injected turn is
- * genuinely underway (preserving the rc.480/481 completion-fires win).
- */
-export function injectedTaskHasStartedGenerating(host: MeshSessionHost): boolean { // WORKER-MCP T2 precursor (mesh-task-attachment.ts): flag-on, a pending entry's own injectedAt wins over the bare scalar.
-    const turnStartedAt = adapterTurnStartedAt(host.adapter);
-    const turnStarted = turnStartedAt > 0;
-    const injectedAt = (isWorkerMcpEnabled() ? resolvePendingInjectedAt(meshTaskAttachments(host.meshTaskAttachmentHistory)) : undefined) ?? host.meshTaskInjectedAt;
-    if (injectedAt <= 0) {
-        // No mesh task injected since boot — plain "a turn has started" suffices.
-        return turnStarted;
-    }
-    // A task was injected: the producing turn must have STARTED after that injection.
-    return turnStarted && turnStartedAt > injectedAt;
 }
 
 // EVTTRACE correlation context for this session's completion lifecycle. taskId is
@@ -166,27 +123,6 @@ export function meshTraceCtx(host: MeshSessionHost, event = 'agent:generating_co
         meshId: host.settings.meshNodeFor,
         event,
     };
-}
-
-/**
- * COMPLETED-TURN GUARD for the startup-grace collapse synth (the standalone
- * status generating-reflash). A genuine completion was just emitted for the
- * current turn on the normal flush path, which also resets
- * generatingStartedAt to 0. adapter.currentTurnTaskId PERSISTS past
- * completion, so without this stamp the NEXT idle-stayed poll inside the
- * 12s startup-grace window satisfies every fastCollapsed predicate in
- * maybeSynthesizeStartupGraceCollapse (turn bound, nothing pending,
- * generating "never armed" — the arm was consumed by the genuine
- * completion) and re-synthesizes a back-to-back WEAK
- * agent:generating_started + agent:generating_completed pair for an
- * ALREADY-COMPLETED turn: one ~120-130ms surface generating blip. Stamping
- * the turn closes the once-per-turn guard for it, while leaving the rescue
- * intact for a turn that truly completed WITHOUT ever arming generating —
- * that turn's currentTurnTaskId differs, so its synth still fires.
- */
-export function markCurrentTurnStartupGraceCollapseSatisfied(host: MeshSessionHost): void {
-    const turnTaskId = adapterTurnTaskId(host.adapter);
-    if (turnTaskId) host.fastCollapseSynthesizedTaskId = turnTaskId;
 }
 
 /**

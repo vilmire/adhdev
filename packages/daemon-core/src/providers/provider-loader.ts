@@ -460,7 +460,7 @@ export class ProviderLoader extends ProviderRegistry {
         try { return fs.readdirSync(externalDir, { withFileTypes: true }); }
         catch { return [] as fs.Dirent[]; }
       })();
-      const KNOWN_CATEGORIES = new Set(['cli', 'ide', 'extension', 'acp']);
+      const KNOWN_CATEGORIES = new Set(['cli', 'ide', 'extension']);
       const looksLegacy = rootEntries.some(e => e.isDirectory() && KNOWN_CATEGORIES.has(e.name));
       if (looksLegacy) {
         // Tree shape predates per-source dirs — treat the whole thing as a
@@ -646,7 +646,7 @@ export class ProviderLoader extends ProviderRegistry {
  // 3. Composite override (OS + version)
     this.applyScriptOverrides(resolved, base, currentOs, currentVersion);
 
-    if ((resolved.category === 'cli' || resolved.category === 'acp') && resolved.spawn?.command) {
+    if ((resolved.category === 'cli') && resolved.spawn?.command) {
       resolved.spawn = {
         ...resolved.spawn,
         command: this.getSpawnCommand(type, resolved.spawn.command),

@@ -51,10 +51,8 @@ function mountList(props: Partial<React.ComponentProps<typeof MeshBlueprintList>
             <MeshBlueprintList
                 tasks={[]}
                 status={{ meshId: 'mesh-1', meshName: 'Mesh', repoIdentity: 'repo', refreshedAt: '2026-09-25T10:00:00Z', nodes: [] } as any}
-                graphs={[]}
                 meshTheme={meshTheme}
                 onTaskOpen={() => { }}
-                onGateOpen={() => { }}
                 {...props}
             />,
         )
@@ -67,7 +65,7 @@ const chainTasks = () => [
     task({ id: B, status: 'pending', dependsOn: [A], message: 'Wire the parser into the CLI' }),
 ]
 
-describe('Blueprint — queue depends_on chain (no graph rows)', () => {
+describe('Blueprint — queue depends_on chain', () => {
     it('R1: a waiting task names its dependency by short id and title; tooltip carries the full id', () => {
         const { container, unmount } = mountList({ tasks: chainTasks() })
         const lines = container.querySelectorAll('[data-testid="blueprint-waiting-on"]')

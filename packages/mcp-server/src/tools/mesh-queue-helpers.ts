@@ -30,7 +30,7 @@ type QueueLivenessIndex = {
 
 // liveVerifiedNodes is OPT-IN evidence from collectMeshNodesWithRuntime (each node stamped
 // with `__liveProbeVerified` when the coordinator KNOWS its runtime). Callers that don't pass
-// it (e.g. MAGI, which only has the persisted mesh snapshot in hand) get byte-identical
+// it (callers holding only the persisted mesh snapshot) get byte-identical
 // behavior to before — staleness is judged purely from `mesh.nodes`. "Nothing held yet" says
 // nothing about the session; only a *known* absence may override/strengthen the
 // snapshot-based read, and only for a caller that explicitly asked for that stronger check.

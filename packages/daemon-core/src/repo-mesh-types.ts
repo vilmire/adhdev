@@ -13,7 +13,7 @@
  */
 
 import type { GitCompactSummary } from './git/git-types.js';
-import type { MagiKindPanelMap, DifficultyBrainMap } from '@adhdev/mesh-shared';
+import type { DifficultyBrainMap } from '@adhdev/mesh-shared';
 import type { RepoMeshPolicy, RepoMeshRelatedRepo, MeshReportedMemberState, RepoMeshNodePolicy } from './repo-mesh-policy.js';
 
 // Policy types/defaults, their normalization and the runtime status types live in
@@ -127,7 +127,7 @@ export interface RepoMeshNodeCapabilities {
     readOnly?: boolean;
     userLabels?: string[];
     /**
-     * Detected provider CLI/ACP versions on this node, keyed by provider id
+     * Detected provider CLI versions on this node, keyed by provider id
      * (e.g. `{ 'claude-cli': '1.2.3', 'codex-cli': '0.9.0' }`). Populated from the
      * same CLI detection pass that feeds providerPriority (see buildProviderVersions
      * over detectCLIs' CLIInfo[]). Absent/undefined when detection has not run or a
@@ -249,24 +249,8 @@ export interface LocalMeshEntry {
     meshHost?: RepoMeshHostMetadata;
     nodes: LocalMeshNodeEntry[];
     /**
-     * MAGI-KIND-PANEL: per-task_kind panel bindings for THIS mesh, the SOLE MAGI
-     * panel-resolution surface (the former named-panel `magiPanels` map was removed).
-     * Keyed by task_kind (rca / design / claim_audit / freeform); each maps to ≥1
-     * `(node × provider × model?)` slot, whose optional `nodeId` must name a node of
-     * this mesh. A `mesh_magi_review` resolves its panel from here — an unconfigured
-     * kind is a hard error, never a synthesized fallback.
-     *
-     * Scope: PER MESH, stored machine-locally (~/.adhdev/meshes.json), NOT in the
-     * repo-committed .adhdev/mesh.json — node identity and provider availability are
-     * machine facts. It previously lived at config root keyed by task_kind alone,
-     * which let a write in one mesh overwrite another's binding for the same kind;
-     * a legacy root map is folded in on load (see foldLegacyTopLevelMagiKindPanels).
-     * Optional; absent when this mesh has bound no kinds.
-     */
-    magiKindPanels?: MagiKindPanelMap;
-    /**
      * BRAIN-ROUTING: per-task-difficulty brain presets for THIS mesh, stored
-     * machine-locally alongside magiKindPanels. Keyed by difficulty (easy / medium /
+     * machine-locally. Keyed by difficulty (easy / medium /
      * difficult / freeform); each maps to a BrainSlot (provider? / model? /
      * thinkingLevel?). The coordinator classifies a task's difficulty at enqueue; the
      * matching preset fills in the task's model / thinking level (an explicit task
@@ -307,7 +291,7 @@ export interface LocalMeshNodeEntry {
     reportedPlatform?: string;
     reportedArch?: string;
     /**
-     * Live, self-healed provider CLI/ACP versions reported by the daemon that owns
+     * Live, self-healed provider CLI versions reported by the daemon that owns
      * this node's workspace, carried on the git_status envelope (reporterProviderVersions)
      * and persisted by the coordinator on each direct git probe — mirrors the
      * reportedPlatform/reportedArch self-heal pattern. Auto-detected truth, overwritten

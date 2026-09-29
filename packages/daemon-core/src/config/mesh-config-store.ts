@@ -180,9 +180,20 @@ function migrateLoadedMeshConfig(config: LocalMeshConfig): boolean {
     // Fold the legacy config-root scoped settings FIRST, so the per-node slot
     // derivation below already sees each mesh's own difficultyBrains rather than a
     // root map that is about to be moved or dropped.
-    if (foldLegacyTopLevelMeshSetting(config, 'magiKindPanels', 'mesh_magi_kind_panel({ action: "set", task_kind, slots })')) changed = true;
     if (foldLegacyTopLevelMeshSetting(config, 'difficultyBrains', 'difficulty_brains_set({ meshId, difficultyBrains })')) changed = true;
+    // The retired MAGI review panels (`magiKindPanels`, config root or per mesh) have
+    // no reader any more — strip them so the next save persists them gone.
+    const rootRecord = config as unknown as Record<string, unknown>;
+    if ('magiKindPanels' in rootRecord) {
+        delete rootRecord.magiKindPanels;
+        changed = true;
+    }
     for (const mesh of config.meshes) {
+        const meshRecord = mesh as unknown as Record<string, unknown> | undefined;
+        if (meshRecord && 'magiKindPanels' in meshRecord) {
+            delete meshRecord.magiKindPanels;
+            changed = true;
+        }
         if (!mesh || !Array.isArray(mesh.nodes)) continue;
         // Each node's legacy slot derivation uses ITS OWN mesh's presets. Reading a
         // global map here is what let one mesh's model choice leak into another's
@@ -200,17 +211,11 @@ function migrateLoadedMeshConfig(config: LocalMeshConfig): boolean {
  * PER-MESH SCOPE migration: fold a legacy config-root setting map into its owning
  * mesh entry, in place, then delete the root key.
  *
- * Two settings shared the identical defect and are migrated by this one helper:
- *
- *   - `magiKindPanels`  — keyed by task_kind alone, so on a two-mesh machine a write
- *     in one mesh silently overwrote the other's binding and the survivor pointed at
- *     foreign node IDs.
- *   - `difficultyBrains` — keyed by difficulty alone, with the same overwrite. Worse
- *     in effect, because this map decides which MODEL a task runs on: the shipped
- *     DEFAULT_DIFFICULTY_BRAINS (difficult → opus) applied to every mesh on the
- *     machine, so a model nobody selected got stamped onto tasks.
- *
- * Both are now stored per mesh, which is what the docs already described.
+ * `difficultyBrains` was keyed by difficulty alone, so on a two-mesh machine a
+ * write in one mesh silently overwrote the other's — and this map decides which
+ * MODEL a task runs on: the shipped DEFAULT_DIFFICULTY_BRAINS (difficult → opus)
+ * applied to every mesh on the machine, so a model nobody selected got stamped
+ * onto tasks. It is now stored per mesh, which is what the docs already described.
  *
  * Fold rules:
  *   - exactly one mesh → adopt the map (a mesh-scoped value already present wins;
@@ -229,10 +234,10 @@ function migrateLoadedMeshConfig(config: LocalMeshConfig): boolean {
  */
 function foldLegacyTopLevelMeshSetting(
     config: LocalMeshConfig,
-    key: 'magiKindPanels' | 'difficultyBrains',
+    key: 'difficultyBrains',
     rebindHint: string,
 ): boolean {
-    // Both keys are gone from LocalMeshConfig's type now that they live on the mesh
+    // The key is gone from LocalMeshConfig's type now that it lives on the mesh
     // entry, but a config loaded from disk may still carry them — hence the cast.
     const root = config as unknown as Record<string, unknown>;
     const legacy = root[key];

@@ -174,8 +174,8 @@ function runLedgerSeed(seed: number): Violation[] {
         if (!a?.terminal) { fail(`(4) ${s.attemptId} still open after quiescence (${a?.state})`); continue; }
         const committed = db.prepare(`SELECT COUNT(*) AS n FROM turn_events WHERE attempt_id = ? AND kind = 'committed'`).get(s.attemptId) as { n: number };
         if (committed.n !== 1) fail(`(1) ${s.attemptId} terminal with ${committed.n} committed rows`);
-        const graph = host.calls.filter((c) => c.startsWith(`graph:${s.taskId}:`));
-        if (graph.length !== 1 || graph[0] !== `graph:${s.taskId}:${a.terminal.outcome}`) fail(`(1) queue/graph effect ${JSON.stringify(graph)} vs ${a.terminal.outcome}`);
+        const graph = host.calls.filter((c) => c.startsWith(`terminal:${s.taskId}:`));
+        if (graph.length !== 1 || graph[0] !== `terminal:${s.taskId}:${a.terminal.outcome}`) fail(`(1) queue/graph effect ${JSON.stringify(graph)} vs ${a.terminal.outcome}`);
         const terminalNotices = db.prepare(`SELECT COUNT(*) AS n FROM turn_events WHERE attempt_id = ? AND kind = 'notify' AND json_extract(payload_json, '$.notify') IN ('completed','failed','cancelled','stopped')`).get(s.attemptId) as { n: number };
         if (terminalNotices.n !== 1) fail(`(2) ${s.attemptId} has ${terminalNotices.n} terminal notices`);
     }

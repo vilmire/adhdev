@@ -49,7 +49,7 @@ export type { MeshRefinePatchEquivalenceDetailedReasonCode, MeshRefinePatchEquiv
 // the validation/bootstrap spawn path already uses. No-op on non-win32 (returns 'git' verbatim), and
 // no shell:true is used anywhere here so there is no quoting risk.
 
-export type MeshCoordinatorConfigFormat = 'claude_mcp_json' | 'hermes_config_yaml' | 'opencode_json';
+export type MeshCoordinatorConfigFormat = 'claude_mcp_json' | 'opencode_json';
 type MeshRefineValidationStatus = 'passed' | 'failed' | 'skipped';
 type MeshRefineValidationCommand = MeshRefineValidationCommandPlan;
 

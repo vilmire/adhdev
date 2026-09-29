@@ -427,7 +427,7 @@ export class DaemonCommandHandler implements CommandHelpers {
      * (foreground select_session / open_panel, controlbar invoke_provider_script
      * / set_mode / change_model / set_thought_level, manual resolve_action,
      * pty_input), never any CLI-specific modal text — so it works identically for
-     * every CLI/ACP provider. send_chat is deliberately excluded because a
+     * every CLI provider. send_chat is deliberately excluded because a
      * coordinator delegating a task to a worker also uses send_chat; counting it
      * would wrongly suppress the worker's delegated auto-approve. For a remote
      * mesh worker session the controlbar commands are forwarded to the owning
@@ -615,7 +615,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(type)) {
             return { success: false, error: 'invalid type' };
         }
-        if (!['cli', 'ide', 'extension', 'acp'].includes(category)) {
+        if (!['cli', 'ide', 'extension'].includes(category)) {
             return { success: false, error: `unknown category: ${category}` };
         }
 

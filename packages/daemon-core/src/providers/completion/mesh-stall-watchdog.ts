@@ -60,10 +60,6 @@ export interface MeshStallHost {
     isMeshWorkerSession(): boolean;
     hasAdapterPendingResponse(): boolean;
     probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null } | null;
-    tryReconcileTranscriptCompletionForStall(
-        observedStatus: string,
-        transcriptSignals: { snapshot: SignalSnapshot | null; messages: unknown[] | null } | null,
-    ): boolean;
     meshTraceCtx(event?: string): Record<string, unknown>;
     completingTurnTaskId(): string | undefined;
     pushEvent(event: Record<string, unknown>): void;
@@ -314,13 +310,6 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
         }
     }
 
-    // (TRANSCRIPT-COMPLETION-STALL-RESCUE) Finished-but-quiet: emit the missing
-    // completion and suppress the stall; a genuinely wedged worker falls through.
-    if (host.tryReconcileTranscriptCompletionForStall(observedStatus, transcriptSignals)) {
-        host.meshStallEmittedForAnchor = true;
-        return;
-    }
-
     // (fix E) Per-session refire cooldown: mark emitted regardless so a static
     // anchor stops re-checking every tick; suppress the notification when the
     // previous emission was too recent.
@@ -360,9 +349,7 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
     });
     // Turn-evidence (C5/C-W5): a pure observation, mirroring the provider event
     // above — this watchdog does not decide "stalled" is terminal, the ledger's
-    // admission/reducer does. `finalAssistantPresent` is false here: had a final
-    // assistant already been observed, tryReconcileTranscriptCompletionForStall
-    // above would have reconciled to a completion and returned before this point.
+    // admission/reducer does. `finalAssistantPresent` is false here.
     if (host.turnEvidencePort) {
         emitNoProgress(host.turnEvidencePort, {
             sessionId: host.instanceId,

@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
 import type { MachineRecentLaunch } from '../../pages/machine/types'
-import { getCliConversationViewMode, isAcpConv, isCliConv } from './types'
+import { getCliConversationViewMode, isCliConv } from './types'
 import { switchCliConversationViewModeOptimistically } from './cliViewModeOverrides'
 import { useDashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
 import DashboardMobileChatRoom from './DashboardMobileChatRoom'
@@ -120,7 +120,7 @@ export default function DashboardMobileChatMode({
         [ides, selectedConversation],
     )
     const selectedCliViewMode = useMemo(() => {
-        if (!selectedConversation || isAcpConv(selectedConversation) || !isCliConv(selectedConversation)) return null
+        if (!selectedConversation || !isCliConv(selectedConversation)) return null
         return getCliConversationViewMode(selectedConversation)
     }, [selectedConversation])
     const machineEntries = useMemo(
@@ -257,16 +257,6 @@ export default function DashboardMobileChatMode({
             })),
         [selectedMachineProviders],
     )
-    const selectedMachineAcpProviders = useMemo(
-        () => selectedMachineProviders
-            .filter(provider => isLaunchableMachineProvider(provider, 'acp'))
-            .map(provider => ({
-                type: provider.type,
-                displayName: provider.displayName || provider.type,
-                icon: provider.icon,
-            })),
-        [selectedMachineProviders],
-    )
 
     const machineCards = useMemo<MobileMachineCard[]>(
         () => buildMobileMachineCards(machineEntries, items, hiddenConversations),
@@ -290,7 +280,6 @@ export default function DashboardMobileChatMode({
             {screen === 'chat' && selectedConversation ? (
                 <DashboardMobileChatRoom
                     selectedConversation={selectedConversation}
-                    isAcp={isAcpConv(selectedConversation)}
                     isStandalone={isStandalone}
                     selectedIdeEntry={selectedIdeEntry}
                     actionLogs={actionLogs}
@@ -320,7 +309,6 @@ export default function DashboardMobileChatMode({
                     selectedMachineConversations={selectedMachineConversations}
                     selectedMachineRecentLaunches={selectedMachineRecentLaunches}
                     cliProviders={selectedMachineCliProviders}
-                    acpProviders={selectedMachineAcpProviders}
                     selectedMachineNeedsUpgrade={selectedMachineNeedsUpgrade}
                     appVersion={appVersion}
                     machineAction={machineActions.machineAction}

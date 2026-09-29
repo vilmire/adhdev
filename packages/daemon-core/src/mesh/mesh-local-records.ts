@@ -8,7 +8,7 @@
 //   · `mesh_local_records` (mesh-local-record-store.ts) — the full nested
 //     payload of every non-turn record THIS machine wrote through
 //     `meshRecord(..., { local })` (the daemon and its mcp-server share the
-//     `mesh-runtime.db` file). Refine jobs, MAGI, dispatch failure errors,
+//     `mesh-runtime.db` file). Refine jobs, dispatch failure errors,
 //     worktree / quota / routing diagnostics read here.
 //   · `turn_attempts` — the terminal truth of every queue / direct task turn
 //     since C: a reader that asks for `task_completed` / `task_failed` gets

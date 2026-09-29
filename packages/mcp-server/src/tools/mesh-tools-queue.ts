@@ -9,10 +9,6 @@ import {
     triggerMeshQueueAndReport,
 } from './mesh-tools-internal.js';
 import {
-    parseOnDependencyFailurePolicy,
-    MeshGraphPolicyError,
-    normalizeOrchestrationDecision,
-    MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
     normalizeMeshTaskPriority,
     resolveNotBefore,
     meshNodeIdMatches,
@@ -30,18 +26,16 @@ import { resolvePreferredWorktreeNodeId } from './mesh-node-identity.js';
 // MESH-IMAGE-DISPATCH: view-surface projection — not (yet) re-exported through mesh-tools-internal.ts,
 // imported directly from the package like the other daemon-core symbols
 // mesh-tools-internal.ts itself imports.
-import { buildGraphPlanShape } from './mesh-tools-graph.js';
 import { canonicalizeEnqueueTaskEntry, canonicalizeMeshTopLevelArgs } from './validate-tool-args.js';
 // C-W9a: the queue and the records are the daemon's — every read and mutation
 // below goes over its IPC commands (the mcp-server never opens mesh-runtime.db).
 // C-W9c: + mission_query (mission_id existence check) and orphaned_pin_notify
 // (CANCEL-ORPHANS-PINNED-TASK) — the last in-process daemon-core calls this file made.
-import { missionQuery, queueEnqueue, queueEnqueueGraph } from '../ipc/turn-commands.js';
-import { MESH_TASK_GRAPH_MAX_TASKS } from '@adhdev/daemon-core';
-import type { MeshGraphPlanResult, MeshWorkQueueEntry } from '@adhdev/daemon-core';
-import type { GraphTaskFieldsShape, GraphWorkspaceDeclarationShape } from './mesh-tools-graph.js';
+import { missionQuery, queueEnqueue, queueEnqueueBatch } from '../ipc/turn-commands.js';
+import { MESH_TASK_BATCH_MAX_TASKS } from '@adhdev/daemon-core';
+import type { MeshWorkQueueEntry } from '@adhdev/daemon-core';
 import type { MeshContext } from './mesh-tools-internal.js';
-import type { MeshGraphGatePlanSpec, MeshTaskGraphEntrySpec } from '@adhdev/daemon-core';
+import type { MeshTaskBatchEntrySpec } from '@adhdev/daemon-core';
 import type { MeshTaskInput } from './mesh-tool-shared.js';
 import { readString } from '@adhdev/mesh-shared';
 
@@ -174,7 +168,7 @@ interface NormalizedEnqueueTaskArgs {
     /**
      * H1: raw declaration, normalized/validated by the daemon's enqueueTask.
      * Typed as `string[]` to match `MeshEnqueueTaskOptions.ownedPaths` (what both
-     * `queueEnqueue`'s options and `MeshTaskGraphEntrySpec` declare) — this layer
+     * `queueEnqueue`'s options and `MeshTaskBatchEntrySpec` declare) — this layer
      * does not itself validate element types, it only forwards the raw array
      * unchanged for the daemon to normalize/reject.
      */
@@ -364,11 +358,10 @@ export async function meshEnqueueTask(
     args: EnqueueTaskArgsShape & {
         allowDuplicate?: boolean; allow_duplicate?: boolean;
         blockDuplicate?: boolean; block_duplicate?: boolean;
-        orchestration_decision?: unknown; orchestrationDecision?: unknown;
     },
 ): Promise<string> {
     // ★CANONICAL-FIRST (2026-09-25): mesh_enqueue_task's own top-level scope
-    // (allow_duplicate/block_duplicate/orchestration_decision — the fields
+    // (allow_duplicate/block_duplicate — the fields
     // normalizeEnqueueTaskArgs does NOT own) — same rationale as
     // canonicalizeEnqueueTaskEntry above. Idempotent with server.ts's own
     // canonicalization pass.
@@ -399,34 +392,6 @@ export async function meshEnqueueTask(
     const allowDuplicate = args.allowDuplicate === true || args.allow_duplicate === true;
     const blockDuplicate = args.blockDuplicate === true || args.block_duplicate === true;
 
-    // ── design :692-731 — the single surface's enqueue-decision record ────────
-    //
-    // The design asked the single tool to REQUIRE an orchestration_decision; it is
-    // optional here because phase F is warn-only (mesh-tool-schemas.ts :58-59) and a
-    // required field would reject legacy/external clients. An omitted record is not
-    // an error, it is the `decision_missing` datapoint: without it a coordinator that
-    // never declares is indistinguishable from one with no eligible singles.
-    // Nothing below can fail or alter the enqueue — this is provenance only.
-    //
-    // ★ Both advisory strings are COMPOSED IN daemon-core and only forwarded here.
-    // This file is a pinned scheduling surface (design :984-986) and may not contain
-    // graph-layer vocabulary even inside a user-facing message — see the note on
-    // MESH_DECLARED_ELIGIBLE_SINGLE_HINT for why the enforcing scan has no
-    // prose exemption.
-    const rawDecision = args.orchestration_decision ?? args.orchestrationDecision;
-    const decisionMissing = rawDecision === undefined || rawDecision === null;
-    const orchestration = normalizeOrchestrationDecision(rawDecision, 'single');
-    const orchestrationWarning = {
-        ...(orchestration.batchCapabilityAvailable ? { batchCapabilityAvailable: orchestration.batchCapabilityAvailable } : {}),
-        ...(orchestration.declaredEligibleSingle
-            ? {
-                declaredEligibleSingle: true,
-                declaredEligibleSingleHint: MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
-            }
-            : {}),
-        ...(decisionMissing ? { orchestrationDecisionMissing: true } : {}),
-    };
-
     // ── G4: enqueue duplicate detection ──────────────────────────────────────
     // TASKBUBBLE-DUP is the recurring class where the SAME task is enqueued twice
     // (e.g. a coordinator re-sends after a slow turn) and both dispatch, doubling the
@@ -447,10 +412,8 @@ export async function meshEnqueueTask(
     }
 
     try {
-        // C-W9a: the insert and its single-surface decision record run in the daemon
-        // (`queue_enqueue`) — the decision is written AFTER the insert there, so a
-        // failed enqueue still leaves no decision row (design :697-731), and a daemon
-        // guard refusal comes back as the same error message.
+        // C-W9a: the insert runs in the daemon (`queue_enqueue`); a daemon guard
+        // refusal comes back as the same error message.
         const task = (await queueEnqueue(ctx.transport, {
             meshId: ctx.mesh.id,
             message,
@@ -465,16 +428,6 @@ export async function meshEnqueueTask(
                 ...(ownedPaths ? { ownedPaths } : {}),
                 ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
             },
-            decision: {
-                ...(missionId ? { missionId } : {}),
-                ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
-                decision: orchestration.decision,
-                ...(decisionMissing ? { decisionMissing: true } : {}),
-                ...(orchestration.declaredEligibleSingle ? { declaredEligibleSingle: true } : {}),
-                ...(orchestration.batchCapabilityAvailable
-                    ? { batchCapabilityAvailable: orchestration.batchCapabilityAvailable.reportedReason }
-                    : {}),
-            } as Record<string, unknown>,
         })).entry as unknown as MeshWorkQueueEntry;
         const duplicateWarning = duplicateSuspect
             ? { duplicateSuspect: { taskId: duplicateSuspect.id, status: duplicateSuspect.status, assignedNodeId: duplicateSuspect.assignedNodeId, targetNodeId: duplicateSuspect.targetNodeId }, duplicateSuspectHint: 'An in-flight task with the same message+target already exists. This new task was enqueued anyway (warn-only). Cancel one via mesh_queue_cancel if it is an accidental re-enqueue, or pass allow_duplicate=true to silence this, or block_duplicate=true to refuse next time.' }
@@ -519,7 +472,6 @@ export async function meshEnqueueTask(
             ...duplicateWarning,
             ...missionWarning,
             ...worktreeAdvisory,
-            ...orchestrationWarning,
             queueTrigger,
             ...buildQueueTriggerGuidance(queueTrigger),
         });
@@ -536,75 +488,46 @@ export async function meshEnqueueTask(
 }
 
 /**
- * G5: error codes enqueueTaskGraph (and the per-entry enqueueTask calls inside it)
- * can throw, surfaced as a structured `code` so an LLM caller can correct without
- * parsing prose. Scanned by substring — the daemon errors are prefixed with these.
- */
-const BATCH_ENQUEUE_ERROR_CODES = [
-    'live_debug_readonly_guardrail_violation',
-    'dependency_cycle_detected',
-    'unknown_dependency',
-    'duplicate_task_ref',
-    'duplicate_task_id',
-    'task_graph_too_large',
-    'empty_task_graph',
-    'missing_task_difficulty',
-    'invalid_task_difficulty',
-    'invalid_on_dependency_failure',
-] as const;
-// Batch-v2 plan rejections are NOT listed here: MeshGraphPlanError carries its own
-// machine-readable `code`, so it is read straight off the error rather than
-// recovered by substring — which also keeps this pinned scheduling surface free of
-// graph vocabulary (design :984-986).
-
-/**
- * G5: atomic multi-task enqueue — the graph-submission companion to
- * mesh_enqueue_task. Validates and normalizes every entry through the SAME
- * normalizer as the single-task tool, then inserts all tasks in ONE daemon-core
- * transaction (enqueueTaskGraph): any per-entry failure (cycle, bad difficulty,
- * guardrail violation, unknown dependency) rolls back the whole batch, closing the
- * half-registered-chain failure mode of wiring a graph via N sequential calls.
- * Batch-local `ref` labels let `depends_on` name sibling entries (forward
- * references allowed); non-ref depends_on values must be existing task ids.
+ * G5: atomic multi-task enqueue — a thin multi-call of mesh_enqueue_task. Every
+ * entry is validated and normalized through the SAME normalizer as the
+ * single-task tool, then all tasks insert in ONE daemon transaction
+ * (`queue_enqueue_batch` → enqueueTaskBatch): any per-entry failure (cycle, bad
+ * difficulty, guardrail violation, unknown dependency) rolls back the whole
+ * batch, closing the half-registered-chain failure mode of wiring a dependency
+ * chain via N sequential calls. Batch-local `ref` labels let `depends_on` name
+ * sibling entries (forward references allowed); non-ref depends_on values must
+ * be existing task ids.
  */
 export async function meshEnqueueBatch(
     ctx: MeshContext,
     args: {
-        tasks?: Array<EnqueueTaskArgsShape & GraphTaskFieldsShape & { ref?: string }>;
+        tasks?: Array<EnqueueTaskArgsShape & { ref?: string }>;
         missionId?: string; mission_id?: string;
         allowDuplicate?: boolean; allow_duplicate?: boolean;
         blockDuplicate?: boolean; block_duplicate?: boolean;
-        on_dependency_failure?: string;
-        onDependencyFailure?: string;
-        // ── batch v2 (design :566-592) ──
-        batch_id?: string; batchId?: string;
-        gates?: MeshGraphGatePlanSpec[];
-        workspaces?: GraphWorkspaceDeclarationShape[];
-        orchestration_decision?: unknown; orchestrationDecision?: unknown;
     },
 ): Promise<string> {
     // ★CANONICAL-FIRST (2026-09-25): mesh_enqueue_batch's own top-level scope
-    // (mission_id/allow_duplicate/block_duplicate/batch_id/
-    // orchestration_decision/on_dependency_failure). `tasks[]` entries are
-    // NOT touched here — each entry gets canonicalized against the `tasks`
-    // scope inside normalizeEnqueueTaskArgs below, which is a different alias
-    // table than this top-level one (see canonicalizeEnqueueTaskEntry's doc
-    // comment for why the two must not be conflated). Idempotent with
-    // server.ts's own canonicalization pass.
+    // (mission_id/allow_duplicate/block_duplicate). `tasks[]` entries are NOT
+    // touched here — each entry gets canonicalized against the `tasks` scope
+    // inside normalizeEnqueueTaskArgs below, which is a different alias table
+    // than this top-level one (see canonicalizeEnqueueTaskEntry's doc comment for
+    // why the two must not be conflated). Idempotent with server.ts's own
+    // canonicalization pass.
     args = canonicalizeMeshTopLevelArgs('mesh_enqueue_batch', args) as typeof args;
     const rawTasks = Array.isArray(args.tasks) ? args.tasks : undefined;
     if (!rawTasks || rawTasks.length === 0) {
         return JSON.stringify({
             success: false,
-            code: 'empty_task_graph',
+            code: 'empty_task_batch',
             error: 'mesh_enqueue_batch requires a non-empty `tasks` array.',
         });
     }
-    if (rawTasks.length > MESH_TASK_GRAPH_MAX_TASKS) {
+    if (rawTasks.length > MESH_TASK_BATCH_MAX_TASKS) {
         return JSON.stringify({
             success: false,
-            code: 'task_graph_too_large',
-            error: `mesh_enqueue_batch accepts at most ${MESH_TASK_GRAPH_MAX_TASKS} tasks per call (got ${rawTasks.length}). Split the graph, or reconsider whether one batch really needs this many tasks.`,
+            code: 'task_batch_too_large',
+            error: `mesh_enqueue_batch accepts at most ${MESH_TASK_BATCH_MAX_TASKS} tasks per call (got ${rawTasks.length}). Split the batch, or reconsider whether one batch really needs this many tasks.`,
         });
     }
     // Top-level mission applies to every entry that doesn't carry its own.
@@ -614,24 +537,6 @@ export async function meshEnqueueBatch(
     // below), so its own per-entry existence check inside the normalizer never sees this
     // value. Validate it here up front — same reject-loudly convention, applied once for
     // the whole batch rather than once per entry.
-    const rawFailurePolicy = (args as { on_dependency_failure?: unknown; onDependencyFailure?: unknown }).on_dependency_failure
-        ?? (args as { onDependencyFailure?: unknown }).onDependencyFailure;
-    let onDependencyFailure: 'block' | 'cancel' | undefined;
-    if (rawFailurePolicy !== undefined) {
-        try {
-            onDependencyFailure = parseOnDependencyFailurePolicy(rawFailurePolicy);
-        } catch (e) {
-            const message = e instanceof MeshGraphPolicyError || e instanceof Error
-                ? e.message
-                : 'invalid_on_dependency_failure';
-            return JSON.stringify({
-                success: false,
-                code: 'invalid_on_dependency_failure',
-                error: message,
-            });
-        }
-    }
-
     if (batchMissionId && !(await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id: batchMissionId })).missions[0]) {
         return JSON.stringify({
             success: false,
@@ -641,7 +546,7 @@ export async function meshEnqueueBatch(
         });
     }
     // G4 flags are batch-level: block refuses the WHOLE batch (it is atomic — refusing
-    // one entry and inserting the rest would be exactly the partial-graph state this
+    // one entry and inserting the rest would be exactly the partial-chain state this
     // tool exists to prevent); allow silences detection for every entry.
     const allowDuplicate = args.allowDuplicate === true || args.allow_duplicate === true;
     const blockDuplicate = args.blockDuplicate === true || args.block_duplicate === true;
@@ -655,10 +560,7 @@ export async function meshEnqueueBatch(
 
     // ── Normalize every entry BEFORE inserting anything (atomic by construction:
     //    a normalization failure returns without touching the queue). ──
-    const specs: MeshTaskGraphEntrySpec[] = [];
-    // Raw entries kept parallel to `specs` so the graph module (not this pinned
-    // scheduling surface) can read the v2 fields off them.
-    const rawGraphEntries: Array<GraphTaskFieldsShape> = [];
+    const specs: MeshTaskBatchEntrySpec[] = [];
     const normalizedEntries: Array<NormalizedEnqueueTaskArgs & { ref?: string }> = [];
     const duplicateSuspects: Array<{ taskIndex: number; ref?: string; duplicateOf: { taskId: string; status: string; assignedNodeId?: string; targetNodeId?: string } }> = [];
     for (let i = 0; i < rawTasks.length; i++) {
@@ -693,7 +595,6 @@ export async function meshEnqueueBatch(
             }
         }
         normalizedEntries.push({ ...v, ...(ref ? { ref } : {}) });
-        rawGraphEntries.push(entry);
         specs.push({
             ...(ref ? { ref } : {}),
             message: v.message,
@@ -710,12 +611,8 @@ export async function meshEnqueueBatch(
             ...(v.difficulty ? { difficulty: v.difficulty } : {}),
             ...(v.notBefore ? { notBefore: v.notBefore } : {}),
             ...(v.maxRetries !== undefined ? { maxRetries: v.maxRetries } : {}),
-            // H1 (path ownership) — mesh_enqueue_batch parity fix: this normalized value was
-            // computed by the SAME normalizeEnqueueTaskArgs the single-task tool uses (which
-            // already reads owned_paths/ownedPaths), but this specs.push was never updated to
-            // copy it onto either the compat-path spec object OR the graph-path plan (both
-            // read off this one `specs` array — see buildGraphPlanShape below), so a batch
-            // entry's declaration silently never reached the daemon on either path.
+            // H1 (path ownership): the same normalized declaration the single-task
+            // tool forwards.
             ...(v.ownedPaths ? { ownedPaths: v.ownedPaths } : {}),
             ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
         });
@@ -731,75 +628,11 @@ export async function meshEnqueueBatch(
         });
     }
 
-    // ── Atomic insert: all or nothing. ──
-    //
-    // ★ GRAPH-ORCHESTRATION Phase E (design :576-592). TWO paths, and the choice
-    // is made by what the CALLER asked for, never by a heuristic:
-    //
-    //   compatibility path — no gates, no workspaces, no per-task graph field.
-    //     `enqueueTaskGraph(specs)` exactly as before: same rows, same static
-    //     message/target/dependsOn, and ** no graph-owned block merely because a
-    //     task has dependencies ** (design :580). The prior batches would execute
-    //     identically (design :583).
-    //
-    //   graph path — any v2 surface is present. The plan and every worker queue
-    //     placeholder commit in ONE transaction (design :585); `enqueueTaskGraph`
-    //     nests inside it, so per-entry validation is still the same code and a
-    //     plan failure rolls the queue rows back with it.
-    //
-    // `atomic: true` means DB PLAN atomicity only. Git worktree preparation is a
-    // compensated saga reported separately as `workspacePreparation` (design :587-588).
-    //
-    // ★ The v2 request vocabulary is parsed in mesh-tools-graph.ts, NOT here: this
-    // file is a pinned scheduling surface and must not grow graph-layer tokens of
-    // its own (design :984-986). See the note on buildGraphPlanShape.
-    const batchIdArg = readString(args.batch_id) || readString(args.batchId) || undefined;
-    const plan = buildGraphPlanShape(specs, rawGraphEntries, args.gates, args.workspaces, !!batchIdArg);
-    // The static (compat) path has no place to carry a batch failure policy, so a
-    // plain depends_on batch with on_dependency_failure=cancel used to drop the
-    // policy while the response still echoed it (found 2026-09-25). `cancel` needs
-    // the graph runner's cascade, so it selects the graph path; `block` is the
-    // queue default and stays on the static path.
-    const useGraphPath = plan.useGraphPath || onDependencyFailure === 'cancel';
-    // design :697-731 — the enqueue-decision record. Recorded for BOTH paths so
-    // batch adoption is countable without transcript scraping.
-    const decision = normalizeOrchestrationDecision(
-        args.orchestration_decision ?? args.orchestrationDecision,
-        'batch',
-    );
-
-    // C-W9a: the atomic insert — either path — and its audit trail run in the
-    // daemon (`queue_enqueue_graph`): the commit record on success, and on failure
-    // the rolled-back / validation-failed record written AFTER the failed
-    // transaction (design :741-743, :752-753). A refusal comes back as a result
-    // carrying the same code / message / extra this tool always returned.
-    const committed = await queueEnqueueGraph(ctx.transport, {
+    // ── Atomic insert: all or nothing (daemon `queue_enqueue_batch`). A refusal
+    //    comes back as a result carrying the same code this tool always returned. ──
+    const committed = await queueEnqueueBatch(ctx.transport, {
         meshId: ctx.mesh.id,
-        ...(useGraphPath
-            ? {
-                mode: 'graph' as const,
-                plan: {
-                    tasks: plan.tasks,
-                    gates: plan.gates,
-                    workspaces: plan.workspaces,
-                    ...(batchIdArg ? { batchId: batchIdArg } : {}),
-                    ...(batchMissionId ? { missionId: batchMissionId } : {}),
-                    ...(onDependencyFailure ? { onDependencyFailure } : {}),
-                    ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
-                    enqueueSurface: 'batch',
-                    orchestrationDecision: decision.decision as unknown as Record<string, unknown>,
-                } as unknown as Record<string, unknown>,
-            }
-            : { mode: 'compat' as const, specs: specs as unknown as Record<string, unknown>[] }),
-        audit: {
-            ...(batchIdArg ? { batchId: batchIdArg } : {}),
-            ...(batchMissionId ? { missionId: batchMissionId } : {}),
-            ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
-            onDependencyFailure: onDependencyFailure ?? 'block',
-            orchestrationDecision: decision.decision as unknown as Record<string, unknown>,
-            taskCount: specs.length,
-            errorCodes: [...BATCH_ENQUEUE_ERROR_CODES],
-        },
+        specs: specs as unknown as Record<string, unknown>[],
     });
     if (!committed.ok) {
         return JSON.stringify({
@@ -812,7 +645,6 @@ export async function meshEnqueueBatch(
         });
     }
     const tasks = committed.tasks as unknown as MeshWorkQueueEntry[];
-    const graphPlan = committed.graph as unknown as Omit<MeshGraphPlanResult, 'tasks'> | undefined;
 
     // ── Post-insert (best-effort, never undoes the committed batch): mission
     //    warnings, routing advisories, queue drain. ──
@@ -846,50 +678,11 @@ export async function meshEnqueueBatch(
         source: 'queue',
         atomic: true,
         enqueued: tasks.length,
-        ...(onDependencyFailure ? { on_dependency_failure: onDependencyFailure } : {}),
-        // ── batch v2 additive response fields (design :582) ──
-        // Present only on the graph path: an old-path batch creates no graph, so
-        // reporting a graphId for it would be a lie.
-        ...(graphPlan
-            ? {
-                graphId: graphPlan.graphId,
-                batchId: graphPlan.batchId,
-                planDigest: graphPlan.planDigest,
-                // design :585-588 — DB atomicity NEVER implies the git worktree exists.
-                workspacePreparation: graphPlan.workspacePreparation,
-                ...(graphPlan.replayed
-                    ? {
-                        replayed: true,
-                        replayedHint: 'A graph with this batch_id and an identical plan digest already existed; nothing was re-inserted. '
-                            + 'Re-sending the same batch_id with a DIFFERENT plan is rejected as batch_id_conflict.',
-                    }
-                    : {}),
-                ...(graphPlan.gates.length > 0
-                    ? {
-                        gates: graphPlan.gates,
-                        gateHint: 'Gates are declared shut. When their predecessors complete they open (awaiting_coordinator) and BLOCK their '
-                            + 'downstream tasks. Pass one with mesh_graph_gate action=claim → do the action yourself → mesh_graph_gate action=release. '
-                            + 'The daemon never performs a gate action and a deadline can only expire a gate, never pass it.',
-                    }
-                    : {}),
-                ...(graphPlan.workspaces.length > 0 ? { workspaces: graphPlan.workspaces } : {}),
-                ...(graphPlan.heldNodeIds.length > 0
-                    ? {
-                        graphHeldTasks: graphPlan.heldNodeIds.length,
-                        graphHeldHint: 'Tasks declaring graph features (bound upstream outputs, a condition, a delayed worktree, or a gate) '
-                            + 'are held until the graph settles them — that is what makes their final instruction knowable. Tasks with only '
-                            + 'plain dependencies are NOT held; they use the unchanged queue dependency predicate.',
-                    }
-                    : {}),
-            }
-            : {}),
-        ...(decision.batchCapabilityAvailable ? { batchCapabilityAvailable: decision.batchCapabilityAvailable } : {}),
         tasks: tasks.map((task, i) => ({
             ...(normalizedEntries[i].ref ? { ref: normalizedEntries[i].ref } : {}),
             taskId: task.id,
             status: task.status,
             taskMode: task.taskMode,
-            ...(graphPlan?.nodeIdByIndex[i] ? { nodeId: graphPlan.nodeIdByIndex[i] } : {}),
             ...(Array.isArray(task.dependsOn) && task.dependsOn.length > 0 ? { dependsOn: task.dependsOn } : {}),
             ...(task.targetNodeId ? { targetNodeId: task.targetNodeId } : {}),
             ...(task.priority ? { priority: task.priority } : {}),

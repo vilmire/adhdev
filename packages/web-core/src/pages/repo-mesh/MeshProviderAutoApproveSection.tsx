@@ -78,7 +78,7 @@ function readProvidersWithModes(meshProviders: any[]): ProviderWithModes[] {
 }
 
 /**
- * MAGI three-section surface for per-provider default auto-approve modes:
+ * Three-section surface for per-provider default auto-approve modes:
  *   1. Repository default — committed to .adhdev/mesh.json (team-shared REQUEST).
  *   2. This machine authorization — local meshes.json ENABLE + dangerous opt-in.
  *   3. Effective result — repo default ⊕ machine authorization, WITH downgrade

@@ -741,7 +741,7 @@ export class SendSubmitEngine {
         // appear in the composer (and the screen settle) while the HEAD / middle is still
         // arriving. Releasing the first CR on the tail alone then submits a PARTIAL body:
         // the early CR commits whatever has accumulated and the remainder is lost, so only
-        // the trailing segment survives (the cross-machine MAGI replica receiving only the
+        // the trailing segment survives (a cross-machine worker receiving only the
         // prompt's boilerplate suffix). We now require BOTH the head probe AND the tail
         // probe to be present in the echo before releasing the CR.
         //

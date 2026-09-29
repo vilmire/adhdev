@@ -51,7 +51,7 @@ describe('statusPayloadToEntries', () => {
         expect(entries[0].screenshotUsage).toEqual(screenshotUsage)
     })
 
-    it('scopes CLI and ACP entry ids and instance ids by daemon while keeping raw session ids for compatibility', () => {
+    it('scopes CLI entry ids and instance ids by daemon while keeping raw session ids for compatibility', () => {
         const cliSession = createSession({
             id: 'shared-session',
             providerSessionId: 'provider-shared',
@@ -59,18 +59,10 @@ describe('statusPayloadToEntries', () => {
             providerType: 'hermes-cli',
             providerName: 'Hermes Agent',
         })
-        const acpSession = createSession({
-            id: 'shared-session',
-            providerSessionId: 'provider-shared',
-            transport: 'acp',
-            providerType: 'claude-code',
-            providerName: 'Claude Code',
-        })
-
-        const firstEntries = statusPayloadToEntries(createPayload({ sessions: [cliSession, acpSession] }), {
+        const firstEntries = statusPayloadToEntries(createPayload({ sessions: [cliSession] }), {
             daemonId: 'machine-1',
         })
-        const secondEntries = statusPayloadToEntries(createPayload({ sessions: [cliSession, acpSession] }), {
+        const secondEntries = statusPayloadToEntries(createPayload({ sessions: [cliSession] }), {
             daemonId: 'machine-2',
         })
 
@@ -88,16 +80,9 @@ describe('statusPayloadToEntries', () => {
             providerSessionId: 'provider-shared',
             daemonId: 'machine-2',
         })
-        expect(firstEntries.find(entry => entry.transport === 'acp')).toMatchObject({
-            id: 'machine-1:acp:shared-session',
-            sessionId: 'shared-session',
-            instanceId: 'machine-1:shared-session',
-            providerSessionId: 'provider-shared',
-            daemonId: 'machine-1',
-        })
     })
 
-    it('builds daemon, IDE, CLI, and ACP entries from top-level sessions', () => {
+    it('builds daemon, IDE, and CLI entries from top-level sessions', () => {
         const ideChild = createSession({
             id: 'agent-child',
             parentId: 'ide-1',
@@ -136,33 +121,18 @@ describe('statusPayloadToEntries', () => {
             runtimeWorkspaceLabel: 'repo',
             runtimeAttachedClients: [{ clientId: 'web', label: 'Browser' }],
         });
-        const acpSession = createSession({
-            id: 'acp-1',
-            transport: 'acp',
-            providerType: 'claude-code',
-            providerName: 'Claude Code',
-            acpModes: [{ id: 'plan', name: 'Plan' }],
-            acpConfigOptions: [{ category: 'model', configId: 'model', options: [{ value: 'sonnet', name: 'Sonnet' }] }],
-            summaryMetadata: {
-                items: [
-                    { id: 'model', label: 'Model', value: 'sonnet', order: 20 },
-                    { id: 'profile', label: 'Profile', value: 'reasoning', order: 10 },
-                ],
-            },
-        });
-
         const entries = statusPayloadToEntries(createPayload({
             machineNickname: 'Studio',
             p2p: { available: true, state: 'connected', peers: 2, screenshotActive: true },
             availableProviders: [{ type: 'codex', name: 'Codex', category: 'cli', displayName: 'Codex', icon: 'codex' }],
-            sessions: [ideSession, ideChild, cliSession, acpSession],
+            sessions: [ideSession, ideChild, cliSession],
         }), {
             daemonId: 'machine-1',
             timestamp: 999,
             existingDaemon: { id: 'stale', type: 'adhdev-daemon', status: 'offline', nickname: 'keep-me' },
         });
 
-        expect(entries).toHaveLength(4);
+        expect(entries).toHaveLength(3);
 
         const daemonEntry = entries[0];
         expect(daemonEntry).toMatchObject({
@@ -222,24 +192,6 @@ describe('statusPayloadToEntries', () => {
         expect(cliEntry).not.toHaveProperty('currentPlan')
         expect(cliEntry.runtimeAttachedClients).toEqual([{ clientId: 'web', label: 'Browser' }]);
 
-        const acpEntry = entries[3];
-        expect(acpEntry).toMatchObject({
-            id: 'machine-1:acp:acp-1',
-            type: 'claude-code',
-            agentType: 'claude-code',
-            mode: 'chat',
-            _isAcp: true,
-        });
-        expect(acpEntry).not.toHaveProperty('currentModel')
-        expect(acpEntry).not.toHaveProperty('currentPlan')
-        expect(acpEntry).not.toHaveProperty('acpModes')
-        expect(acpEntry).not.toHaveProperty('acpConfigOptions')
-        expect(acpEntry.summaryMetadata).toEqual({
-            items: [
-                { id: 'model', label: 'Model', value: 'sonnet', order: 20 },
-                { id: 'profile', label: 'Profile', value: 'reasoning', order: 10 },
-            ],
-        })
     });
 
     it('normalizes pre-unification status aliases from an old-fleet daemon at ingestion (wiring-unification A1)', () => {
@@ -255,9 +207,8 @@ describe('statusPayloadToEntries', () => {
             providerName: 'Codex',
             status: 'streaming' as SessionEntry['status'],
         });
-        const initializingAcp = createSession({
-            id: 'acp-initializing',
-            transport: 'acp',
+        const initializingCli = createSession({
+            id: 'cli-initializing',
             providerType: 'claude-code',
             providerName: 'Claude Code',
             status: 'initializing' as SessionEntry['status'],
@@ -270,17 +221,17 @@ describe('statusPayloadToEntries', () => {
         });
 
         const entries = statusPayloadToEntries(createPayload({
-            sessions: [streamingCli, initializingAcp, unknownCli],
+            sessions: [streamingCli, initializingCli, unknownCli],
         }), {
             daemonId: 'fleet-old',
         });
 
         const cliEntry = entries.find(e => e.id === 'fleet-old:cli:cli-streaming');
-        const acpEntry = entries.find(e => e.id === 'fleet-old:acp:acp-initializing');
+        const initializingEntry = entries.find(e => e.id === 'fleet-old:cli:cli-initializing');
         const unknownEntry = entries.find(e => e.id === 'fleet-old:cli:cli-unknown-alias');
 
         expect(cliEntry?.status).toBe('generating');
-        expect(acpEntry?.status).toBe('starting');
+        expect(initializingEntry?.status).toBe('starting');
         // An unrecognized spelling passes through unchanged (fail-open, not
         // coerced to a guessed status).
         expect(unknownEntry?.status).toBe('some_future_status');
@@ -350,18 +301,9 @@ describe('statusPayloadToEntries', () => {
             runtimeWriteOwner: undefined,
             runtimeAttachedClients: undefined,
         });
-        const acpSession = createSession({
-            id: 'acp-2',
-            transport: 'acp',
-            status: '',
-            workspace: null,
-            runtimeWriteOwner: undefined,
-            runtimeAttachedClients: undefined,
-        });
-
         const entries = statusPayloadToEntries(createPayload({
             timestamp: 222,
-            sessions: [ideSession, cliSession, acpSession],
+            sessions: [ideSession, cliSession],
         }), { daemonId: 'machine-2' });
 
         expect(entries[0]).toMatchObject({ id: 'machine-2', timestamp: 222, cdpConnected: false });
@@ -377,13 +319,6 @@ describe('statusPayloadToEntries', () => {
         });
         expect(entries[2].runtimeWriteOwner ?? null).toBe(null);
         expect(entries[2].runtimeAttachedClients ?? []).toEqual([]);
-        expect(entries[3]).toMatchObject({
-            id: 'machine-2:acp:acp-2',
-            status: 'generating',
-            workspace: '',
-        });
-        expect(entries[3].runtimeWriteOwner ?? null).toBe(null);
-        expect(entries[3].runtimeAttachedClients ?? []).toEqual([]);
     });
 
     it('preserves existing active chat messages but treats live activeModal as authoritative', () => {

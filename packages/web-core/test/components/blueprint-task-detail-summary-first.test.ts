@@ -10,8 +10,8 @@
  * reason) were pushed below the fold.
  *
  * `splitTaskMessage` is the fix's decidable half: what stays visible and what
- * folds. The render half — that the fold is a <details> and that
- * blockedReason is lifted above it — is pinned by the source assertions at the
+ * folds. The render half — that the fold is a <details> and that the stop
+ * reason and dependency failures stay visible — is pinned by the source assertions at the
  * bottom, because @xyflow/react and the modal's fetch seam make a full render
  * assertion here more fragile than the thing it would check.
  *
@@ -77,7 +77,8 @@ describe('the queue detail renders summary-first', () => {
     })
 
     it('surfaces why a task stopped, and how long it took', () => {
-        expect(source).toContain('task.blockedReason')
+        expect(source).toContain('task.cancelReason')
+        expect(source).toContain('task.dependencyFailures')
         expect(source).toContain('detailLabelElapsed')
     })
 })

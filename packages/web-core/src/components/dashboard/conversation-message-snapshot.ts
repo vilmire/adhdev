@@ -142,7 +142,7 @@ function hasSourceMessageId(message: DashboardMessage): boolean {
  * fallback for id-capable echoes is gone (D3 cut-compat), which is what stops a
  * "continue" ack for one bubble from retiring a second "continue" bubble.
  * Content matching remains ONLY for echoes that structurally cannot carry the
- * id: provider-authored transcript turns (ACP, IDE/extension, a CLI's own
+ * id: provider-authored transcript turns (IDE/extension, a CLI's own
  * parsed user message) and acks from a daemon older than Phase D.
  *
  * Suppression is one-directional and conservative: ANY matching user bubble in
@@ -470,7 +470,7 @@ function conversationAnchorRole(message: DashboardMessage): 'user' | 'assistant'
  *
  * The visible window is `liveMessages.slice(-visibleLiveCount)` — a RAW count that
  * spends its budget on EVERY bubble, including non-substantive tool/thought/system
- * activity rows that `ChatMessageList` later hides. A MAGI coordinator emits dozens
+ * activity rows that `ChatMessageList` later hides. A coordinator emits dozens
  * of such activity bubbles per turn, so the last-N window can be almost entirely
  * activity + a trailing `user` dispatch echo, with the actual `assistant` answer
  * pushed just above the window into `hiddenLiveMessages`.
@@ -553,7 +553,7 @@ function getConversationAnchorMessages(
  *
  * The history + live window are assembled by POSITIONAL concatenation
  * (`[...historyMessages, ...liveWindow]`), which renders as "all history, then
- * all live". For native-history sessions (antigravity/MAGI) the assistant answer
+ * all live". For native-history sessions (antigravity) the assistant answer
  * for the current turn lives in `historyMessages` while the user's dispatch echo
  * lives in `liveMessages`; positional order then buries that assistant turn above
  * the initial window, so the pane opens showing only the user prompt in scrambled

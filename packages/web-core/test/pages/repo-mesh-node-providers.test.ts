@@ -124,7 +124,7 @@ describe('deriveNodeCapabilityTags', () => {
         expect(deriveNodeCapabilityTags(plain).map(t => t.tag)).not.toContain('worktree=feat/x')
     })
 
-    it('omits absent fields and never emits the internal converge= tag', () => {
+    it('omits absent fields and never emits a converge= tag', () => {
         const node = { id: 'n5', workspace: '/w', reportedPlatform: 'linux' } as any
         const tags = deriveNodeCapabilityTags(node).map(t => t.tag)
         expect(tags).toEqual(['os=linux'])

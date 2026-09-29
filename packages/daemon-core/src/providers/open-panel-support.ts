@@ -10,7 +10,6 @@ export const IDE_PROVIDER_SESSION_CAPABILITIES_BASE: SessionCapability[] = [
   'resolve_action',
   'change_model',
   'set_mode',
-  'set_thought_level',
 ]
 
 export const EXTENSION_PROVIDER_SESSION_CAPABILITIES_BASE: SessionCapability[] = [

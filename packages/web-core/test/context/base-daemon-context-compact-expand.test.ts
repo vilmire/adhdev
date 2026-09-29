@@ -15,7 +15,7 @@ describe('expandCompactDaemons', () => {
             providerType: 'claude-code',
             providerName: 'Claude Code',
             kind: 'agent',
-            transport: 'acp',
+            transport: 'pty',
             status: 'idle',
             title: 'Claude Code',
             workspace: '/repo',
@@ -30,7 +30,7 @@ describe('expandCompactDaemons', () => {
     expect(result.entries).toEqual([
       expect.objectContaining({ id: 'machine-1', type: 'adhdev-daemon' }),
       expect.objectContaining({
-        id: 'machine-1:acp:acp-1',
+        id: 'machine-1:cli:acp-1',
         sessionId: 'acp-1',
         summaryMetadata: {
           items: [{ id: 'model', label: 'Model', value: 'Sonnet', order: 10 }],
@@ -234,7 +234,7 @@ describe('expandCompactDaemons', () => {
     })
     expect(reconciled.find(entry => entry.id === 'machine-preview:cli:cli-1')).toBeTruthy()
   })
-  it('preserves top-level cli and acp control metadata for standalone conversations', () => {
+  it('preserves top-level cli control metadata for standalone conversations', () => {
     const providerControls = [{ id: 'provider', type: 'select', label: 'Provider', placement: 'bar' }]
     const controlValues = { provider: 'auto' }
     const result = expandCompactDaemons([
@@ -284,19 +284,6 @@ describe('expandCompactDaemons', () => {
             controlValues,
             providerSessionId: 'sess-1',
           },
-          {
-            id: 'acp-1',
-            parentId: null,
-            providerType: 'claude-code',
-            providerName: 'Claude Code',
-            kind: 'agent',
-            transport: 'acp',
-            status: 'idle',
-            title: 'Claude Code',
-            workspace: '/repo',
-            providerControls,
-            controlValues,
-          },
         ],
       },
     ] as CompactDaemonCompat[])
@@ -317,15 +304,6 @@ describe('expandCompactDaemons', () => {
         providerControls,
         controlValues,
         _isCli: true,
-      }),
-      expect.objectContaining({
-        id: 'machine-2:acp:acp-1',
-        transport: 'acp',
-        mode: 'chat',
-        agentType: 'claude-code',
-        providerControls,
-        controlValues,
-        _isAcp: true,
       }),
     ]))
   })
@@ -1251,7 +1229,7 @@ describe('expandCompactDaemons', () => {
             providerType: 'claude-code',
             providerName: 'Claude Code',
             kind: 'agent',
-            transport: 'acp',
+            transport: 'pty',
             status: 'waiting',
             title: 'Claude Code',
             workspace: '/repo',
@@ -1283,7 +1261,7 @@ describe('expandCompactDaemons', () => {
     ] as CompactDaemonCompat[])
 
     const cliEntry = result.entries.find((entry) => entry.id === 'machine-old-fleet:cli:cli-1')
-    const acpEntry = result.entries.find((entry) => entry.id === 'machine-old-fleet:acp:acp-1')
+    const acpEntry = result.entries.find((entry) => entry.id === 'machine-old-fleet:cli:acp-1')
     const ideEntry = result.entries.find((entry) => entry.id === 'machine-old-fleet:ide:ide-1')
 
     expect(cliEntry?.status).toBe('generating')

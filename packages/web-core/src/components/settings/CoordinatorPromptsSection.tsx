@@ -46,7 +46,6 @@ const DEFAULT_KNOWN_CLI_TYPES = [
     'claude-cli',
     'codex-cli',
     'antigravity-cli',
-    'hermes-cli',
 ]
 
 export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DEFAULT_KNOWN_CLI_TYPES, embedded = false }: Props) {

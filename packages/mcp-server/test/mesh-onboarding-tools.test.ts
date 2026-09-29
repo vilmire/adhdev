@@ -6,7 +6,6 @@ import {
   MESH_INIT_TOOL,
   MESH_CONFIG_TOOL,
   MESH_CREATE_TOOL,
-  MESH_MAGI_KIND_PANEL_TOOL,
   meshCreateOrPlan,
 } from '../src/tools/mesh-tools.js';
 import {
@@ -47,28 +46,12 @@ test('mesh_config kind=mesh_json (was mesh_write_mesh_json_config) is the gated 
   assert.deepEqual([...MESH_TOOL_ACTIONS.mesh_config.actions.mesh_json.args].sort(), ['node_id', 'overwrite', 'workspace', 'write']);
 });
 
-test('mesh_magi_kind_panel action=set exposes the kind-slot write with wholesale-replacement labeling', () => {
-  assert.equal(MESH_MAGI_KIND_PANEL_TOOL.name, 'mesh_magi_kind_panel');
-  assert.equal(ALL_MESH_TOOLS.some(t => t.name === 'mesh_magi_kind_panel'), true);
-  assert.deepEqual(MESH_MAGI_KIND_PANEL_TOOL.inputSchema.required, ['action']);
-  assert.deepEqual(MESH_TOOL_ACTIONS.mesh_magi_kind_panel.actions.set.required, ['task_kind', 'slots']);
-  // The write is a full slot-list replacement requiring explicit approval.
-  assert.match(MESH_MAGI_KIND_PANEL_TOOL.description, /WHOLESALE REPLACEMENT|replacement/i);
-  assert.match(MESH_MAGI_KIND_PANEL_TOOL.description, /approval/i);
-  assert.match(MESH_MAGI_KIND_PANEL_TOOL.description, /machine-local/i);
-  // slots carry the provider (required) + model axis.
-  const slotProps = (MESH_MAGI_KIND_PANEL_TOOL.inputSchema.properties.slots as any).items.properties;
-  assert.equal(slotProps.provider.type, 'string');
-  assert.equal(slotProps.model.type, 'string');
-  assert.deepEqual((MESH_MAGI_KIND_PANEL_TOOL.inputSchema.properties.slots as any).items.required, ['provider']);
-  assert.equal(MESH_MAGI_KIND_PANEL_TOOL.inputSchema.properties.write.type, 'boolean');
-});
-
-test('mesh_magi_kind_panel action=list is the read-only half', () => {
-  assert.deepEqual((MESH_MAGI_KIND_PANEL_TOOL.inputSchema.properties as any).action.enum, ['list', 'set']);
-  assert.equal(MESH_MAGI_KIND_PANEL_TOOL.inputSchema.properties.task_kind.type, 'string');
-  assert.equal(validateMeshToolArgs('mesh_magi_kind_panel', { action: 'list', task_kind: 'rca' }), null);
-  assert.match(validateMeshToolArgs('mesh_magi_kind_panel', { action: 'list', slots: [] }) ?? '', /"slots" \(belongs to action=set\)/);
+test('the retired MAGI tools are gone from the registry and redirect with guidance', () => {
+  for (const name of ['mesh_magi_review', 'mesh_magi_collect', 'mesh_magi_kind_panel']) {
+    assert.equal(ALL_MESH_TOOLS.some(t => t.name === name), false, `${name} still registered`);
+    assert.match(validateMeshToolArgs(name, {}) ?? '', /was removed/);
+  }
+  assert.match(validateMeshToolArgs('mesh_magi_review', {}) ?? '', /mesh_send_task/);
 });
 
 test('onboarding planner core forwards only a read-only planning command', async () => {

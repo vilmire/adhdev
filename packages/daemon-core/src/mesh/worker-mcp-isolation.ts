@@ -219,7 +219,7 @@ export function revokeWorkerTaskToken(token: string): boolean {
 
 /**
  * Expire every token for a task. Called from the single terminal-acceptance
- * chokepoint (`commitTaskTerminalAndAdvanceGraph`).
+ * chokepoint (`afterTaskTerminalCommitted` in mesh-task-terminal.ts).
  *
  * ★Idempotent by construction — a second call for an already-expired task
  * removes nothing and returns 0. That matters because the chokepoint has a
@@ -562,8 +562,7 @@ export function resolveWorkerMcpIsolation(
         return result;
     }
     if (declaredPath.startsWith('~') && !result.workerHome) {
-        // hermes-cli lands here in Phase A (owner decision §12-3: hermes
-        // deferred). Writing would clobber the coordinator's own config.
+        // Writing would clobber the coordinator's own config.
         notes.push(`${declaredPath} is home-rooted but ${input.providerType} has no private HOME — refusing to overwrite the coordinator config`);
         return result;
     }

@@ -1,10 +1,10 @@
 /**
  * The mesh Overview detail modal: one pinned detail view per overview row kind —
- * mission, ledger entry, queue task (with its routing decision), session and
- * coordinator gate — opened from any card and navigable as a stack.
+ * mission, ledger entry, queue task (with its routing decision) and session —
+ * opened from any card and navigable as a stack.
  */
 import type { DetailSelection, MeshCommandSeam } from './MeshOverviewCards';
-import { ledgerKindLabel, queueTaskSortRank, useRecentList, StatusBadge, missionStatusLabel, missionStatusTone, StatTile, formatDuration, ListRow, queueTaskStatusLabel, queueTaskTone, difficultyLabel, difficultyTone, relativeTime, MoreToggle, ModalRow, payloadSummary, ledgerKindTone, sessionStatusTone, type MeshMissionDisplay, type Tone } from './meshOverviewPrimitives';
+import { ledgerKindLabel, queueTaskSortRank, useRecentList, StatusBadge, missionStatusLabel, missionStatusTone, StatTile, formatDuration, ListRow, queueTaskStatusLabel, queueTaskTone, difficultyLabel, difficultyTone, relativeTime, MoreToggle, ModalRow, payloadSummary, ledgerKindTone, sessionStatusTone, type MeshMissionDisplay } from './meshOverviewPrimitives';
 import { splitTaskMessage, splitFinalSummary } from './blueprintViewModel';
 import { queueTaskDisplayText, stripMarkdownSyntax } from '../../utils/queue-task-label';
 import { nodeDisplayName, sessionStatusLabel, sessionStatusText, sessionRoleText } from './MeshObservabilitySurface/meshSurfaceHelpers';
@@ -17,7 +17,6 @@ import ModalPortal from '../ui/ModalPortal';
 import { TechnicalDetails } from '../ui/TechnicalDetails';
 import { requestOpenSessionChat } from '../../utils/session-nav';
 import type { MeshGraphSessionDetail } from '../../utils/mesh-visualization';
-import { Tooltip } from '../ui/InfoTip';
 
 function detailTitle(detail: DetailSelection, t: (key: string) => string): { kicker: string; title: string } {
     switch (detail.kind) {
@@ -25,10 +24,6 @@ function detailTitle(detail: DetailSelection, t: (key: string) => string): { kic
         case 'ledger': return { kicker: t('mesh.overview.detailKickerLedger'), title: ledgerKindLabel(detail.entry.kind, t) }
         case 'queue': return { kicker: t('mesh.overview.detailKickerQueue'), title: splitTaskMessage(queueTaskDisplayText(detail.task.message))?.lead.slice(0, 120) || t('mesh.overview.detailKickerQueue') }
         case 'session': return { kicker: t('mesh.overview.detailKickerSession'), title: [detail.session.providerType, nodeDisplayName(detail.node)].filter(Boolean).join(' · ') }
-        case 'gate': {
-            const gateNode = detail.graph.nodes.find(n => n.nodeId === detail.nodeId)
-            return { kicker: t('mesh.overview.detailKickerGate'), title: `⛩ ${gateNode?.ref || detail.nodeId.slice(0, 8)}` }
-        }
     }
 }
 
@@ -144,7 +139,6 @@ export function MeshOverviewDetailModal({ meshTheme, detail, onClose, onBack, da
                         />
                     )}
                     {detail.kind === 'session' && <SessionDetail meshTheme={meshTheme} node={detail.node} session={detail.session} queueTasks={queueTasks} onOpenTask={onOpenTask} />}
-                    {detail.kind === 'gate' && <GateDetail meshTheme={meshTheme} graph={detail.graph} nodeId={detail.nodeId} gate={detail.gate} queueTasks={queueTasks} onOpenTask={onOpenTask} />}
                 </div>
             </div>
         </div>
@@ -567,13 +561,6 @@ function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenM
                     )}
                 </div>
             )}
-            {/* Why it stopped — the one thing a failed task is opened for. It
-                used to sit far below the full instruction dump. */}
-            {task.blockedReason && (
-                <div className={`rounded-lg border px-2.5 py-2 text-xs leading-5 border-status-error/35 text-status-error`}>
-                    {task.blockedReason}
-                </div>
-            )}
             {isTerminal && (
                 <div>
                     <div className={`mb-1 text-3xs font-medium ${meshTheme.textMuted}`}>{t('mesh.overview.detailLabelFinalSummary')}</div>
@@ -732,79 +719,6 @@ function SessionDetail({ meshTheme, node, session, queueTasks, onOpenTask }: {
                 </button>
             </div>
             <TechnicalDetails summaryClassName={meshTheme.textMuted} rows={[{ label: t('mesh.overview.detailLabelSessionId'), value: session.sessionId }]} />
-        </div>
-    )
-}
-
-function GateDetail({ meshTheme, graph, nodeId, gate, queueTasks, onOpenTask }: {
-    meshTheme: MeshGraphTheme
-    graph: import('@adhdev/daemon-core').MeshGraphView
-    nodeId: string
-    gate: import('@adhdev/daemon-core').MeshGraphGateView | null
-    /** Reverse wiring (owner audit 2026-08-25): the steps around the gate,
-     *  clickable through to their queue-task details. */
-    queueTasks?: RepoMeshQueueTask[]
-    onOpenTask?: (task: RepoMeshQueueTask) => void
-}) {
-    const { t } = useTranslation('common')
-    const gateNode = graph.nodes.find(n => n.nodeId === nodeId)
-    const state = gate?.state ?? gateNode?.state ?? 'declared'
-    const tone: Tone = state === 'released' ? 'emerald' : state === 'awaiting_coordinator' || state === 'claimed' ? 'amber' : state === 'expired' ? 'rose' : 'muted'
-    // Edge endpoints may be refs OR nodeIds (same duality the canvas resolves
-    // via buildNodeIdByEndpoint) — match both here or the lists come up empty.
-    const findNode = (endpoint: string) => graph.nodes.find(n => n.nodeId === endpoint || (!!n.ref && n.ref === endpoint))
-    const isGateEndpoint = (endpoint: string) => endpoint === nodeId || (!!gateNode?.ref && endpoint === gateNode.ref)
-    const neighborRows = (endpoints: string[]) => endpoints
-        .map(findNode)
-        .filter((n): n is NonNullable<ReturnType<typeof findNode>> => !!n && n.kind === 'worker_task')
-        .filter((n, index, nodes) => nodes.findIndex(candidate => candidate.nodeId === n.nodeId) === index)
-        .map(n => {
-            const task = n.taskId ? (queueTasks ?? []).find(candidate => candidate.id === n.taskId) ?? null : null
-            const label = `${n.ref || n.nodeId.slice(0, 8)} · ${n.taskStatus || n.state}`
-            return task && onOpenTask
-                ? (
-                    <button key={n.nodeId} type="button" className={`text-left font-mono text-3xs underline-offset-2 hover:underline ${meshTheme.textSecondary}`} onClick={() => onOpenTask(task)}>
-                        {label}
-                    </button>
-                )
-                : <span key={n.nodeId} className={`font-mono text-3xs ${meshTheme.textMuted}`}>{label}</span>
-        })
-    const upstream = neighborRows(graph.edges.filter(edge => isGateEndpoint(edge.to)).map(edge => edge.from))
-    const unlocks = neighborRows([
-        ...graph.edges.filter(edge => isGateEndpoint(edge.from)).map(edge => edge.to),
-        ...(gate?.blocking ?? []),
-    ])
-    return (
-        <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-1.5">
-                <StatusBadge meshTheme={meshTheme} label={state} tone={tone} />
-                {gate?.action && <StatusBadge meshTheme={meshTheme} label={gate.action} tone="muted" />}
-                {gate?.leaseExpired && <StatusBadge meshTheme={meshTheme} label={t('mesh.overview.leaseExpired')} tone="rose" />}
-            </div>
-            <div className="grid gap-1.5 text-xs">
-                <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelGraph')} value={[(graph as { batchId?: string }).batchId, graph.status].filter(Boolean).join(' · ')} />
-                {gateNode?.ref && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelRef')} value={gateNode.ref} />}
-                {gate?.releaseOutcome && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelOutcome')} value={gate.releaseOutcome} />}
-                {upstream.length > 0 && (
-                    <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelGateAfter')} value={<div className="flex flex-col items-end gap-0.5">{upstream}</div>} />
-                )}
-                {unlocks.length > 0 && (
-                    <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelGateUnlocks')} value={<div className="flex flex-col items-end gap-0.5">{unlocks}</div>} />
-                )}
-            </div>
-            {gate?.instructions && (
-                <div className={`whitespace-pre-wrap rounded-lg border px-2.5 py-2 text-xs leading-5 border-border-subtle bg-bg-glass text-text-secondary`}>
-                    {gate.instructions}
-                </div>
-            )}
-            {(state === 'awaiting_coordinator' || state === 'claimed') && (
-                <div>
-                    <Tooltip content={t('mesh.blueprint.gateActsViaCoordinatorHint')}>
-                        <StatusBadge meshTheme={meshTheme} label={t('mesh.blueprint.gateActsViaCoordinator')} tone="muted" />
-                    </Tooltip>
-                </div>
-            )}
-            <TechnicalDetails summaryClassName={meshTheme.textMuted} rows={[{ label: t('mesh.overview.detailLabelGraph'), value: graph.graphId }]} />
         </div>
     )
 }

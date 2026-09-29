@@ -10,12 +10,12 @@
 import { annotateAll } from './tool-annotations.js';
 // Wiring-unification A3: every vocabulary enum is derived from the ONE tuple in
 // mesh-shared via enumOf(), so the published schema cannot drift from the code.
-// Tool-local enums (gate outcomes, mission status, key names, …) stay inline.
+// Tool-local enums (mission status, key names, …) stay inline.
 import { enumOf, MESH_TASK_DIFFICULTIES } from '@adhdev/mesh-shared';
-import { MESH_ENQUEUE_TASK_TOOL, MESH_ENQUEUE_BATCH_TOOL, MESH_GRAPH_GATE_TOOL, MESH_GRAPH_NODE_PATCH_TOOL, MESH_GRAPH_VIEW_TOOL, MESH_VIEW_QUEUE_TOOL, MESH_QUEUE_CANCEL_TOOL, MESH_QUEUE_REQUEUE_TOOL } from './mesh-tool-schemas-queue.js';
+import { MESH_ENQUEUE_TASK_TOOL, MESH_ENQUEUE_BATCH_TOOL, MESH_VIEW_QUEUE_TOOL, MESH_QUEUE_CANCEL_TOOL, MESH_QUEUE_REQUEUE_TOOL } from './mesh-tool-schemas-queue.js';
 import { MESH_SEND_TASK_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_READ_TERMINAL_TOOL, MESH_SEND_KEYS_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_GIT_STATUS_TOOL, MESH_READ_NODE_LOGS_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_RESTART_DAEMON_TOOL, MESH_CHECKPOINT_TOOL } from './mesh-tool-schemas-session.js';
 import { MESH_MISSION_UPSERT_TOOL, MESH_MISSION_LIST_TOOL, MESH_APPROVE_TOOL, MESH_ANSWER_QUESTION_TOOL, MESH_LIST_PENDING_APPROVALS_TOOL, MESH_CREATE_TOOL, MESH_ADD_NODE_TOOL, MESH_CLONE_NODE_TOOL, MESH_REMOVE_NODE_TOOL, MESH_CLEANUP_WORKTREE_NODES_TOOL, MESH_CLEANUP_SESSIONS_TOOL, MESH_TASK_HISTORY_TOOL, MESH_LEDGER_QUERY_TOOL, MESH_NOTE_TOOL, MESH_RECONCILE_LEDGER_TOOL } from './mesh-tool-schemas-admin.js';
-import { MESH_REFINE_NODE_TOOL, MESH_REFINE_BATCH_TOOL, MESH_CONFIG_TOOL, MESH_INIT_TOOL, MESH_REFINE_PLAN_TOOL, MESH_REVIEW_INBOX_TOOL, MESH_MAGI_REVIEW_TOOL, MESH_MAGI_COLLECT_TOOL, MESH_MAGI_KIND_PANEL_TOOL, MESH_NODE_SLOTS_TOOL, MESH_COORDINATOR_PROMPT_APPEND_TOOL } from './mesh-tool-schemas-refine-config.js';
+import { MESH_REFINE_NODE_TOOL, MESH_REFINE_BATCH_TOOL, MESH_CONFIG_TOOL, MESH_INIT_TOOL, MESH_REFINE_PLAN_TOOL, MESH_REVIEW_INBOX_TOOL, MESH_NODE_SLOTS_TOOL, MESH_COORDINATOR_PROMPT_APPEND_TOOL } from './mesh-tool-schemas-refine-config.js';
 
 export const MESH_STATUS_TOOL = {
     name: 'mesh_status',
@@ -93,18 +93,12 @@ export const ALL_MESH_TOOLS = [
     MESH_STATUS_TOOL,
     MESH_ROUTE_PREVIEW_TOOL,
     MESH_LIST_NODES_TOOL,
-    // graph-orchestration-simplification D1 — task BEFORE batch. Registry order
-    // is what a client that lists tools without ranking sees first, so the
-    // incremental default (`mesh_enqueue_task` + `depends_on`) leads and the
-    // settled-plan batch follows it (reversal of Phase F's batch-first order).
+    // Task BEFORE batch. Registry order is what a client that lists tools
+    // without ranking sees first, so the incremental default
+    // (`mesh_enqueue_task` + `depends_on`) leads and the batch follows it.
     MESH_ENQUEUE_TASK_TOOL,
     MESH_ENQUEUE_BATCH_TOOL,
     MESH_VIEW_QUEUE_TOOL,
-    // GRAPH-ORCHESTRATION Phase E — placed next to the queue/enqueue tools so a
-    // coordinator that loaded the batch schema also discovers how to pass a gate.
-    MESH_GRAPH_VIEW_TOOL,
-    MESH_GRAPH_GATE_TOOL,
-    MESH_GRAPH_NODE_PATCH_TOOL,
     MESH_QUEUE_CANCEL_TOOL,
     MESH_QUEUE_REQUEUE_TOOL,
     MESH_SEND_TASK_TOOL,
@@ -139,9 +133,6 @@ export const ALL_MESH_TOOLS = [
     MESH_MISSION_UPSERT_TOOL,
     MESH_MISSION_LIST_TOOL,
     MESH_REVIEW_INBOX_TOOL,
-    MESH_MAGI_REVIEW_TOOL,
-    MESH_MAGI_COLLECT_TOOL,
-    MESH_MAGI_KIND_PANEL_TOOL,
     MESH_NODE_SLOTS_TOOL,
     MESH_COORDINATOR_PROMPT_APPEND_TOOL,
 ];

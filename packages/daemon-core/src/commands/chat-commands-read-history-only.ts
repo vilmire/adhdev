@@ -266,7 +266,7 @@ function buildHistoryOnlyResult(h: CommandHelpers, args: any, req: CliReadChatRe
                 coverage: 'tail',
             }, args, h);
         }
-        // Dead-end: we are in the history-only path (no live PTY/ACP
+        // Dead-end: we are in the history-only path (no live PTY
         // adapter was found for this target session) AND provider-native
         // history is not safely mappable to the requested session
         // (no historySessionId stamp / workspace mismatch). Previously

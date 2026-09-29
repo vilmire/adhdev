@@ -37,7 +37,7 @@ function captureObservedEvidence(): { evidence: TurnEvidence[]; dispose(): void 
  *
  * Fix (mesh-tools-session.ts observeDirectDispatchOutcome + its call site):
  *   1. the worker's `{success:false, code, error}` answer (already spread onto
- *      RemoteAgentDispatchResult by ipcDispatchToRemoteAgent, mesh-tools-internal.ts)
+ *      DirectAgentTaskResult by sendDirectAgentTask, mesh-remote-dispatch.ts)
  *      is read at the call site and threaded into observeDirectDispatchOutcome.
  *   2. `dispatch_failed` evidence gets an optional `refusalCode` — sanitized to
  *      `[a-z_]{1,64}` (sanitizeRefusalCode, @adhdev/mesh-shared) — NEVER a free-text

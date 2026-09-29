@@ -4,7 +4,7 @@ import test from 'node:test';
 import { launchSession } from '../src/tools/launch-session.js';
 
 // STAGE6-CANARY follow-up: MCP launch_session used to route by a type-string
-// suffix heuristic (`-cli` / `-acp` / 'codex'), so the canonical CLI provider
+// suffix heuristic (`-cli` / 'codex'), so the canonical CLI provider
 // type `kimi` was misrouted to launch_ide and rejected with "IDE 'kimi' not
 // found". Routing now comes from the daemon's authoritative provider catalog
 // (list_provider_availability: type + aliases + category), resolving canonical
@@ -17,9 +17,8 @@ const CATALOG = {
   providers: [
     { type: 'kimi', category: 'cli', aliases: ['kimi-code', 'kimi-cli'] },
     { type: 'codex-cli', category: 'cli', aliases: ['codex'] },
-    { type: 'hermes-cli', category: 'cli', aliases: ['hermes', 'hermes-agent'] },
+    { type: 'opencode', category: 'cli', aliases: ['opencode-cli'] },
     { type: 'claude-cli', category: 'cli', aliases: ['claude', 'claude-code'] },
-    { type: 'claude-acp', category: 'acp', aliases: [] },
     { type: 'cursor', category: 'ide', aliases: [] },
   ],
 };
@@ -68,21 +67,21 @@ test('existing alias codex still resolves to codex-cli (aliases unchanged)', asy
   assert.equal(launch!.args.cliType, 'codex-cli');
 });
 
-test('canonical types hermes-cli / claude-cli keep their CLI route', async () => {
+test('canonical types opencode / claude-cli keep their CLI route', async () => {
   const { transport, calls } = makeTransport();
-  await launchSession(transport, { type: 'hermes-cli' });
+  await launchSession(transport, { type: 'opencode' });
   await launchSession(transport, { type: 'claude-cli' });
   const types = calls.filter((c) => c.command === 'launch_cli').map((c) => c.args.cliType);
-  assert.deepEqual(types, ['hermes-cli', 'claude-cli']);
+  assert.deepEqual(types, ['opencode', 'claude-cli']);
 });
 
-test('ACP provider claude-acp routes to launch_cli', async () => {
+test('CLI provider launch forwards the model override as initialModel', async () => {
   const { transport, calls } = makeTransport();
-  await launchSession(transport, { type: 'claude-acp', model: 'claude-opus-4-7' });
+  await launchSession(transport, { type: 'claude-cli', model: 'claude-opus-4-7' });
   const launch = calls.find((c) => c.command === 'launch_cli');
   assert.ok(launch, 'launch_cli was issued');
-  assert.equal(launch!.args.cliType, 'claude-acp');
-  // The daemon's CLI/ACP launch reads `initialModel`, not `model` — this is the
+  assert.equal(launch!.args.cliType, 'claude-cli');
+  // The daemon's CLI launch reads `initialModel`, not `model` — this is the
   // key that actually reaches cli-manager.ts startSession(). `model` is also
   // still sent for now (harmless), but asserting only that one lets the real
   // bug (model silently ignored) slip back in undetected.

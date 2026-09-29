@@ -33,8 +33,6 @@ const EXCLUDED_FILES = new Set([
 const ALLOWED: Record<string, string[]> = {
     // Platform / shell names and literal commands.
     'components/InstallCommand.tsx': ['macOS / Linux', 'Windows', 'PowerShell', '&gt;_ CMD', 'npm i -g @adhdev/daemon-standalone && adhdev-standalone', 'npm i -g adhdev && adhdev login'],
-    // Compact DAG glyph suffix next to an FSM state id.
-    'components/MeshGraph/MeshMiniDag.tsx': ['· if'],
     // Brand logo alt text.
     'components/dashboard/ChatPane.tsx': ['ADHDev'],
     'components/dashboard/DashboardMobileChatInbox.tsx': ['ADHDev'],
@@ -60,7 +58,7 @@ const ALLOWED: Record<string, string[]> = {
     // Log filter field names (query syntax).
     'pages/machine/LogsTabSections.tsx': ['topic=', 'ix='],
     // Session-kind acronyms.
-    'pages/machine/OverviewTab.tsx': ['IDEs', 'CLIs', 'ACPs'],
+    'pages/machine/OverviewTab.tsx': ['IDEs', 'CLIs'],
     // Provider source-mode enum values (Advanced panel; the value IS the setting).
     'pages/machine/ProvidersTab.tsx': ['normal'],
 }

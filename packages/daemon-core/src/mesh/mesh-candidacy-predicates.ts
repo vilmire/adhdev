@@ -111,7 +111,7 @@ export function isLaunchableNode(node: any): boolean {
         return false;
     }
     // Delegate the health gate to the shared resolver so the auto-launch gate and the
-    // MAGI fan-out planner agree on exactly what "launchable health" means (online /
+    // other launch-readiness readers agree on exactly what "launchable health" means (online /
     // unknown / absent pass; degraded / offline / dirty / wrong_branch are blocked).
     return isMeshNodeHealthLaunchable(node);
 }

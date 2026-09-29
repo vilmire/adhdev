@@ -53,8 +53,6 @@ export function getTargetTransport(h: CommandHelpers, provider?: ProviderModule)
     switch (provider?.category) {
         case 'cli':
             return 'pty';
-        case 'acp':
-            return 'acp';
         case 'extension':
             return 'cdp-webview';
         case 'ide':
@@ -65,7 +63,7 @@ export function getTargetTransport(h: CommandHelpers, provider?: ProviderModule)
 }
 
 export function isCliLikeTransport(transport: SessionTransport | null): boolean {
-    return transport === 'pty' || transport === 'acp';
+    return transport === 'pty';
 }
 
 export function isExtensionTransport(transport: SessionTransport | null): boolean {

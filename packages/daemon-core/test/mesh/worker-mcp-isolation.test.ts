@@ -225,7 +225,7 @@ describe('worker task token expiry', () => {
   })
 
   it('is idempotent — the terminal chokepoint replays it', () => {
-    // commitTaskTerminalAndAdvanceGraph re-enters with duplicate:true for an
+    // commitTaskTerminal re-enters with duplicate:true for an
     // already-terminal row, so this hook MUST tolerate repeat calls.
     mintWorkerTaskToken({ meshId: 'm', taskId: 't', attemptId: 'a' })
     expect(expireWorkerTaskTokensForTask('m', 't')).toBe(1)
@@ -589,7 +589,7 @@ describe('antigravity worker-private HOME', () => {
     // was observed running the owner's `node_repl` MCP server as a child
     // process, because the isolation rule disabled `adhdev-mesh` BY NAME and
     // left every other entry in `~/.codex/config.toml` intact.
-    for (const joined of ['codex-cli', 'kimi', 'opencode', 'hermes-cli']) {
+    for (const joined of ['codex-cli', 'kimi', 'opencode']) {
       expect(findWorkerPrivateHomeSpec(joined)).not.toBeNull()
     }
 
@@ -607,7 +607,6 @@ describe('antigravity worker-private HOME', () => {
     expect(findWorkerPrivateHomeSpec('codex-cli')!.homeEnvVar).toBe('CODEX_HOME')
     expect(findWorkerPrivateHomeSpec('kimi')!.homeEnvVar).toBe('KIMI_CODE_HOME')
     expect(findWorkerPrivateHomeSpec('opencode')!.homeEnvVar).toBe('XDG_CONFIG_HOME')
-    expect(findWorkerPrivateHomeSpec('hermes-cli')!.homeEnvVar).toBe('HERMES_HOME')
 
     // The three HOME-rooted providers must NOT acquire one — they have no such
     // variable, which is exactly why they pay the full HOME-redirect cost.
@@ -1289,16 +1288,14 @@ describe('resolveWorkerMcpIsolation (gate ON)', () => {
   })
 
   it('★still refuses a home-rooted write when the provider has NO private root', () => {
-    // hermes acquired a private root on 2026-09-19, so it no longer exercises
-    // this branch — but the branch itself is load-bearing and must keep failing
-    // closed: without a private root, resolving `~` would target the
+    // The branch is load-bearing and must keep failing closed: without a private root, resolving `~` would target the
     // COORDINATOR's own config and clobber it. Asserted through a synthetic
     // provider so the guarantee survives every provider gaining a root.
     const result = resolveWorkerMcpIsolation({
       providerType: 'no-such-provider-cli',
       workspace: tmp('adhdev-ws-on-homerooted-'),
       sessionKey: 'task_1',
-      mcpConfig: { mode: 'auto_import', format: 'hermes_config_yaml', path: '~/.hermes/config.yaml' },
+      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '~/.somecli/mcp.json' },
     }, ON)
 
     expect(result!.workerHome).toBeUndefined()
@@ -1459,7 +1456,7 @@ describe('{{workerHome}} placeholder expansion', () => {
 })
 
 /**
- * ★Config-root-variable providers (codex, kimi, opencode, hermes) — 2026-09-19.
+ * ★Config-root-variable providers (codex, kimi, opencode) — 2026-09-19.
  *
  * Every assertion here is a PROPERTY of the prepared root ("the owner's servers
  * are not reachable from it"), never "a spec entry exists". A spec entry that
@@ -1700,64 +1697,6 @@ describe('opencode worker config root', () => {
   })
 })
 
-describe('hermes worker config root', () => {
-  function fakeHermesHome(): string {
-    const home = tmp('adhdev-worker-hermeshome-')
-    mkdirSync(join(home, '.hermes'), { recursive: true })
-    writeFileSync(
-      join(home, '.hermes', 'config.yaml'),
-      'mcp_servers:\n  adhdev:\n    command: adhdev\n  adhdev-mesh:\n    command: adhdev\n',
-    )
-    writeFileSync(join(home, '.hermes', '.env'), 'PROVIDER_KEY=secret\n', { mode: 0o600 })
-    return home
-  }
-
-  it('★the owner\'s config.yaml is unreachable, and .env still reaches the worker', () => {
-    const realHome = fakeHermesHome()
-    const spec = findWorkerPrivateHomeSpec('hermes-cli')!
-    const prepared = prepareWorkerPrivateHome(spec, {
-      workspace: tmp('adhdev-ws-hermes-'), sessionKey: 'task_1',
-      realHome, baseDir: tmp('adhdev-whbase-hermes-'),
-    })
-
-    expect(existsSync(join(realHome, '.hermes', 'config.yaml'))).toBe(true)
-    expect(existsSync(join(prepared.home, 'config.yaml'))).toBe(false)
-    // Credentials survive — `get_env_path()` returns `<HERMES_HOME>/.env`.
-    expect(readFileSync(join(prepared.home, '.env'), 'utf-8')).toContain('PROVIDER_KEY')
-  })
-
-  it('★DELIVERY: the worker config lands where hermes reads it, not in the owner\'s file', () => {
-    // hermes was the one provider receiving NO worker server at all: its
-    // declared `~/.hermes/config.yaml` is the owner's real file, and the writer
-    // rightly refuses to clobber it without a private root. With one, the write
-    // lands in the worker's own file — isolation and delivery are the same fix.
-    //
-    // ★`HERMES_HOME` names the `.hermes` directory ITSELF, so the declared
-    // `~/.hermes/config.yaml` must collapse to `<root>/config.yaml`. Measured:
-    // `HERMES_HOME=<dir> hermes config path` → `<dir>/config.yaml`. Writing to
-    // `<root>/.hermes/config.yaml` instead would be silently inert.
-    const realHome = fakeHermesHome()
-    const workspace = tmp('adhdev-ws-hermes-deliver-')
-    const result = resolveWorkerMcpIsolation({
-      providerType: 'hermes-cli',
-      workspace,
-      sessionKey: 'task_1',
-      realHome,
-      baseDir: tmp('adhdev-whbase-hermes-deliver-'),
-      mcpConfig: { mode: 'auto_import', format: 'hermes_config_yaml', path: '~/.hermes/config.yaml' },
-      server: { command: 'adhdev', args: ['mcp', '--mode', 'worker'] },
-    }, ON)
-
-    expect(result!.configPath).toBe(join(result!.workerHome!, 'config.yaml'))
-    expect(result!.configHasServer).toBe(true)
-    // The owner's file is untouched — still exactly its two servers.
-    const ownerConfig = readFileSync(join(realHome, '.hermes', 'config.yaml'), 'utf-8')
-    expect(ownerConfig).toContain('adhdev-mesh')
-    // ...and the worker's carries the worker server instead.
-    expect(readFileSync(result!.configPath!, 'utf-8')).toContain('--mode')
-  })
-})
-
 describe('config-root providers keep the real HOME', () => {
   it('★surfaces the variable name so the launch seam does not redirect HOME', () => {
     // The pairing that makes these four safe. `workerHomeEnvVar` is what tells
@@ -1807,7 +1746,7 @@ describe('config-root providers keep the real HOME', () => {
  * same path: the root stands in for `~/<prefix>`, so `auth.json` sits at the root
  * of the private dir but at `~/.codex/auth.json` in the real home. Joining both
  * ends off `realHome` sent codex looking for `~/auth.json`, kimi for
- * `~/config.toml`, hermes for `~/.env` — none of which exist.
+ * `~/config.toml` — none of which exist.
  *
  * Those imports are deliberately optional (fail-OPEN: a required import that
  * throws would drop the worker back onto the owner's config, re-opening the leak
@@ -1864,15 +1803,6 @@ describe('★config-root imports resolve from the real home (rc.16 regression)',
         mkdirSync(join(h, '.kimi-code', 'credentials'), { recursive: true, mode: 0o700 })
         chmodSync(join(h, '.kimi-code', 'credentials'), 0o700)
         writeFileSync(join(h, '.kimi-code', 'config.toml'), 'default_model = "k3"\n', { mode: 0o600 })
-      },
-    },
-    {
-      providerType: 'hermes-cli',
-      prefix: '.hermes',
-      expect: ['.env'],
-      seed: (h) => {
-        mkdirSync(join(h, '.hermes'), { recursive: true })
-        writeFileSync(join(h, '.hermes', '.env'), 'PROVIDER_KEY=secret\n', { mode: 0o600 })
       },
     },
   ]

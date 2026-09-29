@@ -1,7 +1,9 @@
-// Remote direct dispatch (coordinator → a node served by another daemon): the
-// `agent_command` relay plus the typed refusals every direct-dispatch path shares
-// (provider-pin, quota gate, relay-unsafe session, missing coordinator anchor,
-// session busy). Split out of mesh-tools-internal.ts.
+// Direct dispatch (mesh_send_task → a named node): the target resolution for a node
+// another daemon serves, THE single `agent_command` send (on the route the
+// coordinator daemon chose — local command surface or mesh relay), and the typed
+// refusals every direct-dispatch path shares (provider-pin, quota gate, relay-unsafe
+// session, missing coordinator anchor, session busy). Split out of
+// mesh-tools-internal.ts.
 
 import type { MeshContext } from './mesh-tools-internal.js';
 import {
@@ -63,10 +65,6 @@ export function buildMissingCoordinatorDaemonIdFailure(ctx: MeshContext, node: L
         noFallbackReason: 'Launching without meshCoordinatorDaemonId would create a worker session that can finish work but cannot emit task_completed / generating_completed back to the coordinator.',
     };
 }
-
-export type RemoteAgentDispatchResult =
-    | { success: true; dispatched: true; sessionId: string; providerType?: string }
-    | ({ success: false; error: string } & Record<string, unknown>);
 
 export function buildCoordinatorP2pRelayFailure(
     error: unknown,
@@ -206,12 +204,17 @@ export function buildQuotaExhaustedDispatchFailure(
     };
 }
 
-/** Input of {@link ipcDispatchToRemoteAgent}. */
-interface RemoteAgentDispatchArgs {
+/** The meshContext stamped on a direct dispatch (see buildDispatchMeshContext in mesh-tools-send-task.ts). */
+interface RemoteDispatchMeshContext {
+    meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string;
+    coordinatorSessionId?: string;
+    /** C-W6c: the turn-ledger attempt this dispatch opened — stamped onto the worker session. */
+    attemptId?: string; attemptGeneration?: number;
+}
+
+/** Input of {@link resolveRemoteDispatchTarget}. */
+interface RemoteDispatchTargetArgs {
     session_id?: string;
-    message: string;
-    /** MESH-IMAGE-DISPATCH: optional multipart envelope forwarded to the remote agent. */
-    input?: MeshTaskInput;
     providerType?: string;
     verifiedSession?: any;
     /**
@@ -222,20 +225,8 @@ interface RemoteAgentDispatchArgs {
      * i.e. exactly the previous behavior for every unpinned dispatch.
      */
     requiredTags?: string[];
-    meshContext?: {
-        meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string;
-        coordinatorSessionId?: string;
-        /** C-W6c: the turn-ledger attempt this dispatch opened — stamped onto the worker session. */
-        attemptId?: string; attemptGeneration?: number;
-    };
-    /**
-     * D2 (applied in C-W8): the message identity + admission policy the worker's
-     * one send funnel (SessionInputService) dedupes on. Absent → the worker mints
-     * a legacy id (never deduplicated), exactly the pre-D2 behaviour.
-     */
-    messageId?: string;
-    policy?: { mode: 'queue' | 'send_now' | 'interrupt' };
-    origin?: 'mcp' | 'mesh';
+    /** The coordinator daemon anchor stamped on the dispatch (relay-safety check). */
+    coordinatorDaemonId?: string;
     /** QUOTA GATE opt-out — see checkDirectDispatchQuotaGate's doc comment. */
     allowQuotaExhausted?: boolean;
 }
@@ -272,7 +263,7 @@ interface RemoteDispatchProvider {
  * Whichever provider names reach `resolvedProviderType`, they are now intersected
  * with the pin first, so an unpinnable candidate can never be selected.
  */
-function resolveRemoteDispatchProvider(node: LocalMeshNodeEntry, args: RemoteAgentDispatchArgs): RemoteDispatchProvider | DispatchFailure {
+function resolveRemoteDispatchProvider(node: LocalMeshNodeEntry, args: RemoteDispatchTargetArgs): RemoteDispatchProvider | DispatchFailure {
     const providerPins = providerPinsFromRequiredTags(args.requiredTags);
     const providerPriorityList: string[] = filterProvidersByRequiredTags(
         readProviderPriority(node.policy),
@@ -335,7 +326,7 @@ function checkExplicitRemoteSession(
 async function resolveRemoteDispatchSession(
     ctx: MeshContext,
     node: LocalMeshNodeEntry,
-    args: RemoteAgentDispatchArgs,
+    args: RemoteDispatchTargetArgs,
     provider: RemoteDispatchProvider,
     coordinatorDaemonId: string,
 ): Promise<{ sessionId: string } | DispatchFailure> {
@@ -418,16 +409,32 @@ async function resolveRemoteDispatchSession(
     }
 }
 
-/** A worker-side refusal of the relayed agent_command (typed busy refusal first). */
-function remoteDispatchFailure(
+/**
+ * A refusal of the sent agent_command, shaped for the route it travelled. A
+ * session-busy refusal is the same typed answer on both routes; any other refusal
+ * of a relayed command is classified as a relay/worker failure, while a local
+ * refusal is passed through as the daemon answered it.
+ */
+function directDispatchFailure(
     node: LocalMeshNodeEntry,
+    route: DirectDispatchRoute,
     sessionId: string,
     error: unknown,
     errorMessage: string,
     source?: Record<string, unknown>,
-): RemoteAgentDispatchResult {
-    const daemonId = node.daemonId!;
+): DirectAgentTaskFailure {
     const busyRefusal = sessionBusyRefusalFields(source ? errorMessage : error, sessionId);
+    if (route === 'local') {
+        return {
+            ...(source && typeof source === 'object' ? source : {}),
+            ...(busyRefusal ?? {}),
+            success: false,
+            nodeId: node.id,
+            ...(sessionId ? { sessionId } : {}),
+            error: errorMessage,
+        };
+    }
+    const daemonId = node.daemonId!;
     if (busyRefusal) return { success: false, error: `P2P dispatch refused: ${errorMessage}`, nodeId: node.id, targetDaemonId: daemonId, ...busyRefusal };
     return {
         ...buildCoordinatorP2pRelayFailure(error, {
@@ -442,28 +449,33 @@ function remoteDispatchFailure(
     };
 }
 
+/** The route the coordinator daemon chose for a direct dispatch (`mesh_dispatch_route`). */
+export type DirectDispatchRoute = 'local' | 'remote';
+
+type DirectAgentTaskFailure = { success: false; error: string } & Record<string, unknown>;
+
+/** The target of a direct dispatch: the session to send into ('' = the worker picks) and its provider. */
+export interface DirectDispatchTarget {
+    sessionId: string;
+    providerType: string;
+}
+
 /**
- * For IpcTransport + remote node: resolve an active session on the node and
- * dispatch an agent_command directly via P2P relay (mesh_relay_command).
- *
- * This bypasses the local queue (which remote daemons cannot read) and sends
- * the message directly to the session running on the remote daemon.
- *
- * Returns { success, sessionId } or throws.
+ * Resolve the target of a dispatch to a node another daemon serves: the provider
+ * (caller hint > node priority, intersected with any provider pin), the session
+ * (verified when named, auto-picked from the coordinator's held runtime when not),
+ * then the pin assert and the quota gate on the provider actually about to be sent.
  */
-export async function ipcDispatchToRemoteAgent(
+export async function resolveRemoteDispatchTarget(
     ctx: MeshContext,
     node: LocalMeshNodeEntry,
-    args: RemoteAgentDispatchArgs,
-): Promise<RemoteAgentDispatchResult> {
-    const transport = ctx.transport as IpcTransport;
-    const daemonId = node.daemonId!;
-
+    args: RemoteDispatchTargetArgs,
+): Promise<DirectDispatchTarget | DispatchFailure> {
     // The coordinator anchor the remote router will stamp onto the worker session
     // at dispatch time (router.ts buildMeshWorkerRelayStamp). When present, a
     // mesh-owned session that was never launch-stamped can still self-heal to
     // relay-safe — exactly like the local direct-dispatch path.
-    const dispatchCoordinatorDaemonId = readString(args.meshContext?.coordinatorDaemonId) || '';
+    const dispatchCoordinatorDaemonId = readString(args.coordinatorDaemonId) || '';
 
     const provider = resolveRemoteDispatchProvider(node, args);
     if ('success' in provider) return provider;
@@ -495,50 +507,90 @@ export async function ipcDispatchToRemoteAgent(
     if (!args.allowQuotaExhausted) {
         const quotaGate = checkDirectDispatchQuotaGate(node, resolvedProviderType, ctx.mesh.policy?.quotaRouting ?? null);
         if (quotaGate) {
-            return buildQuotaExhaustedDispatchFailure(node, resolvedProviderType, sessionId || undefined, quotaGate) as RemoteAgentDispatchResult;
+            return buildQuotaExhaustedDispatchFailure(node, resolvedProviderType, sessionId || undefined, quotaGate) as DispatchFailure;
         }
     }
+    return { sessionId, providerType: resolvedProviderType };
+}
 
+/** Input of {@link sendDirectAgentTask}: the task body and its delivery envelope. */
+export interface DirectAgentTaskSend {
+    message: string;
+    /** MESH-IMAGE-DISPATCH: optional multipart envelope forwarded with `message`. */
+    input?: MeshTaskInput;
+    meshContext?: RemoteDispatchMeshContext;
+    /**
+     * D2 (applied in C-W8): the message identity + admission policy the worker's
+     * one send funnel (SessionInputService) dedupes on. Absent → the worker mints
+     * a legacy id (never deduplicated), exactly the pre-D2 behaviour.
+     */
+    messageId?: string;
+    policy?: { mode: 'queue' | 'send_now' | 'interrupt' };
+    origin?: 'mcp' | 'mesh';
+}
+
+export type DirectAgentTaskResult =
+    | { success: true; dispatched: true; sessionId: string; providerType: string }
+    | DirectAgentTaskFailure;
+
+/**
+ * THE exit of a direct dispatch: one `agent_command send_chat` to `target`, sent on
+ * the route the coordinator daemon chose — its own command surface for a node it
+ * serves, the mesh relay to the owning daemon otherwise. The body is identical on
+ * both routes; only the transport differs.
+ */
+export async function sendDirectAgentTask(
+    ctx: MeshContext,
+    node: LocalMeshNodeEntry,
+    route: DirectDispatchRoute,
+    target: DirectDispatchTarget,
+    send: DirectAgentTaskSend,
+): Promise<DirectAgentTaskResult> {
+    const { sessionId, providerType } = target;
+    const body = {
+        ...(sessionId ? { targetSessionId: sessionId } : {}),
+        agentType: providerType,
+        cliType: providerType,
+        providerType,
+        action: 'send_chat',
+        message: send.message,
+        // MESH-IMAGE-DISPATCH: forward the attachment. Over the relay, oversized payloads
+        // are split by the mesh transport's frame chunking (daemon-mesh-manager
+        // writeEnvelope) and reassembled on the worker before the command is handled.
+        ...(send.input ? { input: send.input } : {}),
+        ...(send.messageId ? { messageId: send.messageId } : {}),
+        ...(send.policy ? { policy: send.policy } : {}),
+        ...(send.origin ? { origin: send.origin } : {}),
+        // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
+        dispatchSource: 'mesh_send_task:direct',
+        // WTCLAIM (B): carry the node workspace so a sessionless dispatch can be
+        // scoped to THIS node's session on the worker (findAdapter dir match /
+        // findMeshNodeAdapter). Without it, a worker hosting both a base node and a
+        // cloned worktree node (same daemonId) would fall through to a provider-only
+        // fuzzy match and could land worktree work on the base session. A named
+        // session never falls back to the dir match (cli-manager findAdapter).
+        ...(node.workspace ? { dir: node.workspace } : {}),
+        ...(send.meshContext ? { meshContext: send.meshContext } : {}),
+    };
     try {
-        const dispatchResult = await transport.meshCommand(daemonId, 'agent_command', {
-            ...(sessionId ? { targetSessionId: sessionId } : {}),
-            agentType: resolvedProviderType,
-            cliType: resolvedProviderType,
-            action: 'send_chat',
-            message: args.message,
-            // MESH-IMAGE-DISPATCH: forward the attachment over P2P. Oversized payloads are
-            // split by the mesh transport's frame chunking (daemon-mesh-manager
-            // writeEnvelope) and reassembled on the worker before the command is handled.
-            ...(args.input ? { input: args.input } : {}),
-            ...(args.messageId ? { messageId: args.messageId } : {}),
-            ...(args.policy ? { policy: args.policy } : {}),
-            ...(args.origin ? { origin: args.origin } : {}),
-            // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
-            dispatchSource: 'mesh-tools-internal:ipcDispatchToRemoteAgent',
-            // WTCLAIM (B): carry the node workspace so a sessionless dispatch can be
-            // scoped to THIS node's session on the worker (findAdapter dir match /
-            // findMeshNodeAdapter). Without it, a worker hosting both a base node and a
-            // cloned worktree node (same daemonId) would fall through to a provider-only
-            // fuzzy match and could land worktree work on the base session.
-            ...(node.workspace ? { dir: node.workspace } : {}),
-            ...(args.meshContext ? { meshContext: args.meshContext } : {}),
-        });
+        const dispatchResult = route === 'remote'
+            ? await (ctx.transport as IpcTransport).meshCommand(node.daemonId!, 'agent_command', body)
+            : await ctx.transport.command('agent_command', body);
         const dispatchPayload = unwrapCommandPayload(dispatchResult);
         if (dispatchPayload?.success === false || dispatchResult?.success === false) {
             const source = dispatchPayload?.success === false ? dispatchPayload : dispatchResult;
             const errorMessage = dispatchPayload?.error || dispatchResult?.error || 'agent_command rejected the task';
-            return remoteDispatchFailure(node, sessionId, source?.error || errorMessage, errorMessage, source ?? {});
+            return directDispatchFailure(node, route, sessionId, source?.error || errorMessage, errorMessage, source ?? {});
         }
-        // Do NOT fall back to resolvedProviderType for sessionId: a sessionless
-        // dispatch (no targetSessionId above) lets the worker pick/create the real
-        // session, so the provider type ('claude-cli', …) is NOT a session id.
-        // Returning it here used to poison assigned_session_id downstream, breaking
-        // findAssignedBySession (provider type vs real session id) and orphaning the
-        // task_completed match. Leave it empty so completion matching falls back to
-        // taskId via the meshContext.taskId carried in the dispatch.
-        return { success: true, dispatched: true, sessionId: sessionId || '', providerType: resolvedProviderType };
+        // Do NOT fall back to the provider type for sessionId: a sessionless dispatch
+        // (no targetSessionId above) lets the worker pick/create the real session, so
+        // the provider type ('claude-cli', …) is NOT a session id. Returning it used to
+        // poison assigned_session_id downstream, breaking findAssignedBySession and
+        // orphaning the task_completed match. Leave it empty so completion matching
+        // falls back to taskId via the meshContext.taskId carried in the dispatch.
+        return { success: true, dispatched: true, sessionId, providerType };
     } catch (e: any) {
-        return remoteDispatchFailure(node, sessionId, e, e?.message || String(e));
+        return directDispatchFailure(node, route, sessionId, e, e?.message || String(e));
     }
 }
 

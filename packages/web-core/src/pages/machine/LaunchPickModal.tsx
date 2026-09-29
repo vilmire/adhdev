@@ -1,5 +1,5 @@
 /**
- * LaunchPickModal — Workspace selection dialog for CLI/ACP launch.
+ * LaunchPickModal — Workspace selection dialog for CLI launch.
  */
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'

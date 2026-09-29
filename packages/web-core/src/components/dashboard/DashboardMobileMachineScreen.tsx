@@ -40,7 +40,6 @@ interface DashboardMobileMachineScreenProps {
     selectedMachineConversations: MobileConversationListItem[]
     selectedMachineRecentLaunches: MachineRecentLaunch[]
     cliProviders: LaunchProviderInfo[]
-    acpProviders: LaunchProviderInfo[]
     selectedMachineNeedsUpgrade: boolean
     appVersion: string | null
     machineAction: MobileMachineActionState
@@ -62,7 +61,6 @@ export default function DashboardMobileMachineScreen({
     selectedMachineConversations,
     selectedMachineRecentLaunches,
     cliProviders,
-    acpProviders,
     selectedMachineNeedsUpgrade,
     appVersion,
     machineAction,
@@ -81,8 +79,7 @@ export default function DashboardMobileMachineScreen({
     const { t } = useTranslation('common')
     const formatKindLabel = (kind: MachineRecentLaunch['kind']) => {
         if (kind === 'ide') return 'IDE'
-        if (kind === 'cli') return 'CLI'
-        return 'ACP'
+        return 'CLI'
     }
 
     const topRecentLaunches = selectedMachineRecentLaunches.slice(0, 4)
@@ -90,8 +87,7 @@ export default function DashboardMobileMachineScreen({
     const launcher = useDashboardMobileMachineLauncher({
         selectedMachineEntry,
         cliProviders,
-        acpProviders,
-        machineAction,
+            machineAction,
         onBrowseDirectory,
         onListSavedSessions,
     })

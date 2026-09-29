@@ -1,5 +1,5 @@
 /**
- * CLI auto-detect → capability-slot / MAGI-panel PROPOSAL generator.
+ * CLI auto-detect → capability-slot PROPOSAL generator.
  *
  * Detection of installed CLI providers already exists per node (the status
  * snapshot's `availableProviders`), and applying a slot profile already exists
@@ -31,7 +31,6 @@ import {
     type MeshTaskDifficulty,
     type NodeCapabilitySlot,
 } from './brain-routing'
-import type { MagiSlot } from './magi'
 
 /**
  * One provider's seeded slot recipe. A provider may map to MORE THAN ONE slot
@@ -279,49 +278,4 @@ export function buildSlotProposal(
         droppedProviders,
         destructive: droppedSlots.length > 0,
     }
-}
-
-/**
- * Build a MAGI panel proposal from the same detections.
- *
- * ─── Deliberately narrow ──────────────────────────────────────────────────────
- *
- * MAGI's value is provider INDEPENDENCE: replicas from different providers
- * (ideally different machines) answering the same question, so agreement means
- * something. Detection tells us which providers exist — that is exactly enough
- * to propose one panel of distinct providers, and no more.
- *
- * What detection does NOT tell us is which provider suits which review KIND
- * (rca vs design vs claim_audit). Nothing in any manifest grades a provider for
- * root-cause analysis over design review, and inventing a per-kind assignment
- * would fabricate a rationale that does not exist. So this proposes ONE panel of
- * the detected providers and leaves the kind binding to the operator; the caller
- * decides which `task_kind` to bind it to via the existing dry-run tool.
- *
- * Ordering follows {@link CLI_SLOT_RECIPES} insertion order (recipe-known
- * providers first, in table order), so the panel leads with the providers whose
- * suitability is actually attested.
- */
-export function buildMagiPanelProposal(
-    detected: readonly DetectedCliProvider[],
-    opts: { nodeId?: string; maxSlots?: number } = {},
-): MagiSlot[] {
-    const providers = dedupeDetected(detected ?? [])
-    const tableOrder = Object.keys(CLI_SLOT_RECIPES)
-    const rank = (type: string): number => {
-        const i = tableOrder.indexOf(type)
-        return i === -1 ? Number.MAX_SAFE_INTEGER : i
-    }
-    const ordered = [...providers].sort((a, b) => rank(a.type) - rank(b.type))
-    const limit = Number.isFinite(opts.maxSlots) && (opts.maxSlots as number) > 0
-        ? Math.floor(opts.maxSlots as number)
-        : ordered.length
-
-    return ordered.slice(0, limit).map((p): MagiSlot => ({
-        ...(opts.nodeId ? { nodeId: opts.nodeId } : {}),
-        provider: p.type,
-        // A model is intentionally NOT pinned: the panel's job is cross-provider
-        // independence, and pinning models here would silently couple the panel
-        // to this table's cost assumptions rather than to review quality.
-    }))
 }

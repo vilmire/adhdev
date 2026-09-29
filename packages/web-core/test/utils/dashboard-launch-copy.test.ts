@@ -39,8 +39,6 @@ describe('dashboard launch copy helpers', () => {
     expect(getLaunchPrimaryBusyLabel('cli', true)).toBe('Resuming saved history…')
     expect(getLaunchPrimaryActionLabel('ide')).toBe('Start IDE')
     expect(getLaunchPrimaryBusyLabel('ide')).toBe('Starting IDE…')
-    expect(getLaunchPrimaryActionLabel('acp')).toBe('Start ACP session')
-    expect(getLaunchPrimaryBusyLabel('acp')).toBe('Starting ACP session…')
   })
 
   it('uses a short start-fresh placeholder in resume selectors', () => {

@@ -35,10 +35,10 @@ describe('provider input support', () => {
       },
     })
     expect(() => assertProviderSupportsDeclaredInput({
-      name: 'ACP Test',
-      type: 'acp-test',
+      name: 'CLI Test',
+      type: 'cli-test',
       capabilities: { input: { multipart: false, mediaTypes: ['text'] } },
-    } as any, imageInput)).toThrow('ACP Test does not support input type: image')
+    } as any, imageInput)).toThrow('CLI Test does not support input type: image')
 
     const multipartInput = normalizeInputEnvelope({
       input: {
@@ -50,10 +50,10 @@ describe('provider input support', () => {
       },
     })
     expect(() => assertProviderSupportsDeclaredInput({
-      name: 'ACP Test',
-      type: 'acp-test',
+      name: 'CLI Test',
+      type: 'cli-test',
       capabilities: { input: { multipart: false, mediaTypes: ['text', 'image'] } },
-    } as any, multipartInput)).toThrow('ACP Test does not support multipart input')
+    } as any, multipartInput)).toThrow('CLI Test does not support multipart input')
   })
 
   it('accepts declared multipart media input when the provider advertises support', () => {
@@ -68,8 +68,8 @@ describe('provider input support', () => {
     })
 
     expect(() => assertProviderSupportsDeclaredInput({
-      name: 'ACP Test',
-      type: 'acp-test',
+      name: 'CLI Test',
+      type: 'cli-test',
       capabilities: { input: { multipart: true, mediaTypes: ['text', 'image'] } },
     } as any, input)).not.toThrow()
   })
@@ -85,22 +85,17 @@ describe('provider input support', () => {
           multipart: true,
           mediaTypes: ['text', 'image'],
           strategies: [
-            { mediaType: 'image', strategies: ['native_acp'], native: true, degradation: ['resource_link', 'text_fallback'] },
+            { mediaType: 'image', strategies: ['native'], native: true, degradation: ['resource_link', 'text_fallback'] },
           ],
         },
       },
     } as any)
     expect(support.strategies).toEqual([
-      { mediaType: 'image', strategies: ['native_acp'], native: true, degradation: ['resource_link', 'text_fallback'] },
+      { mediaType: 'image', strategies: ['native'], native: true, degradation: ['resource_link', 'text_fallback'] },
     ])
   })
 
-  it('keeps ACP effective support text-only when input media is not declared', () => {
-    const support = getEffectiveMessageInputSupport({ category: 'acp' } as any, { promptCapabilities: { image: true, audio: true, embeddedContext: true } })
-    expect(support).toEqual({ text: true, multipart: false, mediaTypes: ['text'], strategies: [] })
-  })
-
-  it('exposes declared non-ACP provider input support without enabling undeclared providers', () => {
+  it('exposes declared provider input support without enabling undeclared providers', () => {
     expect(getEffectiveMessageInputSupport({ category: 'cli' } as any)).toEqual({ text: true, multipart: false, mediaTypes: ['text'], strategies: [] })
 
     const support = getEffectiveMessageInputSupport({
@@ -124,22 +119,5 @@ describe('provider input support', () => {
         { mediaType: 'image', strategies: ['resource_link', 'text_fallback'], native: false, degradation: ['text_fallback'] },
       ],
     })
-  })
-
-  it('computes ACP effective native media only from declared input and runtime prompt capabilities and never native video', () => {
-    const provider = {
-      category: 'acp',
-      capabilities: { input: { multipart: true, mediaTypes: ['text', 'image', 'audio', 'video'] } },
-    } as any
-
-    const withoutRuntimeCaps = getEffectiveMessageInputSupport(provider, { promptCapabilities: { image: false, audio: false } })
-    expect(withoutRuntimeCaps.strategies.find((entry) => entry.mediaType === 'image')?.native).toBe(false)
-    expect(withoutRuntimeCaps.strategies.find((entry) => entry.mediaType === 'audio')?.native).toBe(false)
-
-    const withRuntimeCaps = getEffectiveMessageInputSupport(provider, { promptCapabilities: { image: true, audio: true } })
-    expect(withRuntimeCaps.strategies.find((entry) => entry.mediaType === 'image')?.strategies).toContain('native_acp')
-    expect(withRuntimeCaps.strategies.find((entry) => entry.mediaType === 'audio')?.strategies).toContain('native_acp')
-    expect(withRuntimeCaps.strategies.find((entry) => entry.mediaType === 'video')?.strategies).not.toContain('native_acp')
-    expect(withRuntimeCaps.strategies.find((entry) => entry.mediaType === 'video')?.degradation).toEqual(['resource_link', 'text_fallback'])
   })
 })

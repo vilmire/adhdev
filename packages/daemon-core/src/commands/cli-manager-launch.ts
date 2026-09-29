@@ -1,5 +1,5 @@
 /**
- * DaemonCliManager — session launch: `startSession` (ACP and CLI/PTY) and the
+ * DaemonCliManager — session launch: `startSession` (CLI/PTY) and the
  * `launch_cli` command (delegated-worker launch preparation + launch ledger).
  *
  * Split out of cli-manager.ts (file-size gate). Functions take the manager
@@ -16,8 +16,7 @@ import { meshRecord } from '../mesh/mesh-record.js';
 import {
     resolveDelegatedWorkerAutoApproveModeForLaunch, logDelegatedWorkerModeDelivery,
 } from '../mesh/delegated-worker-mode-delivery.js';
-import { AcpProviderInstance } from '../providers/acp-provider-instance.js';
-import { normalizeInputEnvelope, type ProviderModule } from '../providers/contracts.js';
+import { type ProviderModule } from '../providers/contracts.js';
 import { LOG } from '../logging/logger.js';
 import { readModelCache } from '../models/registry.js';
 import {
@@ -31,7 +30,6 @@ import { deriveWorkerMcpDeliveryStatus, type WorkerMcpDeliveryStatus } from '../
 import { buildLegacyModelModeSummaryMetadata } from '../providers/summary-metadata.js';
 import { expandModelLaunchArgs, resolveModelLaunchValue } from './model-launch-args.js';
 import { buildCoordinatorDelegatedCliLaunchOptions } from './cli-delegated-launch.js';
-import { commandExists } from './cli-manager-agent-status.js';
 import {
     applyAutoApproveModeLaunchArgs, expandThinkingLaunchArgs, resolveCliSessionBinding,
 } from './cli-session-binding.js';
@@ -43,9 +41,6 @@ export type CliLaunchHost = Pick<DaemonCliManager, 'adapters' | 'createAdapter' 
  // ─── Session start/management ──────────────────────────────
 export async function startSession(host: CliLaunchHost, cliType: string, workingDir: string, cliArgs?: string[], initialModel?: string, options?: CliStartOptions): Promise<{ runtimeSessionId: string; providerSessionId?: string }> {
     const plan = planSessionStart(host, cliType, workingDir, options);
-    if (plan.provider && plan.provider.category === 'acp') {
-        return startAcpSession(host, plan, plan.provider, cliArgs, initialModel);
-    }
     return startCliPtySession(host, plan, cliType, cliArgs, initialModel);
 }
 
@@ -75,7 +70,7 @@ function planSessionStart(host: CliLaunchHost, cliType: string, workingDir: stri
     const normalizedType = host.providerLoader.resolveAlias(cliType);
     const rawProvider = host.providerLoader.getByAlias(cliType);
     const provider = rawProvider ? (host.providerLoader.resolve(normalizedType) || rawProvider) : undefined;
-    if (provider && (provider.category === 'cli' || provider.category === 'acp') && !host.providerLoader.isMachineProviderEnabled(normalizedType)) {
+    if (provider && (provider.category === 'cli') && !host.providerLoader.isMachineProviderEnabled(normalizedType)) {
         const displayName = provider.displayName || provider.name || normalizedType;
         throw new Error(
             `${displayName} is disabled on this machine.\n` +
@@ -131,156 +126,6 @@ function planSessionStart(host: CliLaunchHost, cliType: string, workingDir: stri
     return { resolvedDir, normalizedType, provider, key, options };
 }
 
-/** ACP category: spawn the agent instance and register its adapter shim. */
-async function startAcpSession(
-    host: CliLaunchHost,
-    plan: SessionStartPlan,
-    provider: ProviderModule,
-    cliArgs: string[] | undefined,
-    initialModel: string | undefined,
-): Promise<{ runtimeSessionId: string }> {
-    const { resolvedDir, normalizedType, key, options } = plan;
-    const sessionRegistry = host.deps.getSessionRegistry?.() || null;
-    const instanceManager = host.deps.getInstanceManager();
-    if (!instanceManager) throw new Error('InstanceManager not available');
-    const resolvedProvider = host.providerLoader.resolve(normalizedType) || provider;
-
- // Check if command is installed
-    const spawnCmd = resolvedProvider.spawn?.command;
-    if (spawnCmd && !commandExists(spawnCmd)) {
-        const installInfo = provider.install || `Install: check ${provider.displayName || provider.name} documentation`;
-        throw new Error(
-            `${provider.displayName || provider.name} is not installed.\n` +
-            `Command '${spawnCmd}' not found.\n\n` +
-            `${installInfo}`
-        );
-    }
-
-    console.log(colorize('cyan', `  🔌 Starting ACP agent: ${provider.name} (${provider.type}) in ${resolvedDir}`));
-
-    const acpInstance = new AcpProviderInstance(resolvedProvider, resolvedDir, cliArgs);
-    await instanceManager.addInstance(key, acpInstance, {
-        settings: host.providerLoader.getSettings(normalizedType),
-    });
-    const sessionId = acpInstance.getInstanceId();
-    sessionRegistry?.register({
-        sessionId,
-        parentSessionId: null,
-        providerType: normalizedType,
-        transport: 'acp',
-        adapterKey: key,
-        instanceKey: key,
-        workspace: resolvedDir,
-    }, 'launch');
-
- // Register ACP entry in adapter map (getStatus queries from acpInstance in real-time)
-    host.adapters.set(key, {
-        cliType: normalizedType,
-        cliName: provider.name,
-        workingDir: resolvedDir,
-        _acpInstance: acpInstance,
-        spawn: async () => {},
-        shutdown: () => { instanceManager.removeInstance(key); },
-        sendMessage: async (text: string) => {
-            const input = normalizeInputEnvelope(text);
-            // SEND-RECORD-SYMMETRY: this shim is how the mesh funnel reaches an
-            // ACP provider (it is awaited as an adapter). Swallowing the
-            // acknowledgement here would reintroduce the false success the
-            // instance-level contract now reports — a refused send (no live
-            // session, or a prompt already in flight) must reach the caller.
-            const outcome = await acpInstance.onEvent('send_message', { input });
-            if (outcome && !outcome.success) {
-                throw new Error(outcome.error || 'ACP send was not acknowledged');
-            }
-        },
-        getStatus: () => {
-            const state = acpInstance.getState();
-            return {
-                status: state.status,
-                messages: state.activeChat?.messages || [],
-                activeModal: state.activeChat?.activeModal || null,
-            };
-        },
-        cancel: () => { instanceManager.removeInstance(key); },
-        isProcessing: () => false,
-        isReady: () => true,
-        setOnStatusChange: () => {},
-        setOnPtyData: () => {},
-    });
-
-    console.log(colorize('green', `  ✓ ACP agent started: ${provider.name} in ${resolvedDir}`));
-
- // If initialModel exists, change model after session start
-    let acpModelApplied = false;
-    if (initialModel) {
-        try {
-            await acpInstance.setConfigOption('model', initialModel);
-            acpModelApplied = true;
-            console.log(colorize('green', `  🤖 Initial model set: ${initialModel}`));
-        } catch (e: any) {
-            LOG.warn('CLI', `[ACP] Initial model set failed: ${e?.message}`);
-        }
-    }
-
- // Brain routing thinking axis for ACP: route the standard level through the
- // agent's thought_level config option. Best-effort — throws if the agent declares
- // no thought_level category (see setConfigOption), so we swallow and warn.
-    let acpThinkingApplied = false;
-    if (options?.initialThinkingLevel) {
-        const lvl = options.initialThinkingLevel;
-        try {
-            await acpInstance.setConfigOption('thought_level', lvl);
-            acpThinkingApplied = true;
-            console.log(colorize('green', `  🧠 Initial thinking level set: ${lvl}`));
-        } catch (e: any) {
-            LOG.warn('CLI', `[ACP] Initial thinking level set failed (provider may not support thought_level): ${e?.message}`);
-        }
-    }
-
-    // Phase E: the launch record. ACP applies values through
-    // setConfigOption, so `launchValue` is the requested value when the
-    // call succeeded and absent when it failed.
-    const acpLaunchRecord = buildSessionLaunchRecord({
-        sessionId,
-        providerType: normalizedType,
-        providerVersion: (resolvedProvider as { providerVersion?: string }).providerVersion,
-        providerChannel: host.readProviderChannel(),
-        launchedBy: options?.launchProvenance?.launchedBy ?? 'api',
-        launchedAt: Date.now(),
-        workspace: resolvedDir,
-        model: {
-            requested: initialModel,
-            declaredSource: options?.launchProvenance?.modelSource,
-            launchValue: acpModelApplied ? initialModel : undefined,
-            providerDefault: resolveProviderDefaultModel(
-                readModelCache(normalizedType),
-                resolvedProvider.modelOptions,
-                resolvedProvider.modelLaunchValueMap,
-            ),
-        },
-        thinkingLevel: {
-            requested: options?.initialThinkingLevel,
-            declaredSource: options?.launchProvenance?.thinkingLevelSource,
-            launchValue: acpThinkingApplied ? options?.initialThinkingLevel : undefined,
-        },
-    });
-    sessionRegistry?.setLaunchRecord?.(sessionId, acpLaunchRecord, 'launch');
-    acpInstance.setModelObserver((model, observedAt) => {
-        sessionRegistry?.observeLaunchAxis?.(sessionId, 'model', model, observedAt);
-    });
-
-    host.persistRecentActivity({
-        kind: 'acp',
-        providerType: normalizedType,
-        providerName: provider.displayName || provider.name || normalizedType,
-        workspace: resolvedDir,
-        summaryMetadata: launchSummaryMetadata(acpLaunchRecord),
-        sessionId,
-        title: provider.displayName || provider.name || normalizedType,
-    });
-    return { runtimeSessionId: sessionId };
-}
-
 /** CLI category: detect the binary, expand launch args, then register (or directly spawn) the PTY session. */
 async function startCliPtySession(
     host: CliLaunchHost,
@@ -319,7 +164,7 @@ async function startCliPtySession(
     const launchProvider = autoApproveLaunch.provider || provider;
     const cliArgsWithAutoApprove = autoApproveLaunch.cliArgs;
 
- // ─── Model axis (MAGI kind-panel): expand initialModel → launch args ───
+ // ─── Model axis: expand initialModel → launch args ───
  // For a plain CLI provider the model is selected at spawn time via the manifest's
  // modelLaunchArgs template ('{{model}}' → the requested model). ACP providers took
  // the setConfigOption path above and never reach here. A provider with no template,
@@ -486,7 +331,7 @@ async function startCliPtySession(
 
  // ─── CLI command handling ────────────────────────────
 
-/** `launch_cli`: resolve the launch directory and start (or reuse) a CLI/ACP session. */
+/** `launch_cli`: resolve the launch directory and start (or reuse) a CLI session. */
 export async function launchCli(host: CliLaunchHost, args: any): Promise<CommandResult> {
     const cliType = args?.cliType;
     const config = loadConfig();

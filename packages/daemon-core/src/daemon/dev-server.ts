@@ -24,20 +24,18 @@ import type { ProviderSettingDef } from '../providers/provider-control-contracts
 import { validateProviderDefinition } from '../providers/provider-schema.js';
 import { loadConfig, saveConfig } from '../config/config.js';
 import { parseProviderSourceConfigUpdate } from '../config/provider-source-config.js';
-import type { ChildProcess } from 'child_process';
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import type { DaemonCliManager } from '../commands/cli-manager.js';
 import type { SessionLifecycleBus } from '../sessions/lifecycle-bus.js';
 import { generateFiles as genScaffoldFiles } from './scaffold-template.js';
-import { buildCliProviderV1Scaffold, buildAcpProviderV1Scaffold } from '../providers/scaffold-v1.js';
+import { buildCliProviderV1Scaffold } from '../providers/scaffold-v1.js';
 import { VersionArchive, detectAllVersions } from '../providers/version-archive.js';
 import { LOG } from '../logging/logger.js';
 import { findCdpManager } from '../status/builders.js';
 import { handleCdpEvaluate, handleCdpClick, handleCdpDomQuery, handleScreenshot, handleScriptsRun, handleTypeAndSend, handleTypeAndSendAt, handleScriptHints, handleCdpTargets, handleDomInspect, handleDomChildren, handleDomAnalyze, handleFindCommon, handleFindByText, handleDomContext } from './dev-cdp-handlers.js';
 import { resolveLegacyProviderScript, type LegacyStringScript } from '../commands/provider-script-resolver.js';
 import { handleCliStatus, handleCliLaunch, handleCliSend, handleCliStop, handleCliDebug, handleCliTrace, handleCliExercise, handleCliFixtureCapture, handleCliFixtureList, handleCliFixtureReplay, handleCliResolve, handleCliRaw, handleCliSSE, releaseCliSSEBusListener } from './dev-cli-debug.js';
-import { handleAutoImplement, handleAutoImplCancel, handleAutoImplSSE } from './dev-auto-implement.js';
 
 export const DEV_SERVER_PORT = 19280;
 
@@ -53,10 +51,7 @@ interface ProviderListEntry {
   extensionId?: string | null;
   cdpPorts?: [number, number] | [];
   spawn?: ProviderModule['spawn'] | null;
-  auth?: ProviderModule['auth'] | null;
   install?: string | null;
-  hasSettings?: boolean;
-  settingsCount?: number;
 }
 
 function getScriptNames(scripts?: ProviderScripts): string[] {
@@ -83,14 +78,6 @@ function toProviderListEntry(provider: ProviderModule): ProviderListEntry {
     base.cdpPorts = provider.cdpPorts || [];
   }
 
-  if (provider.category === 'acp') {
-    base.spawn = provider.spawn || null;
-    base.auth = provider.auth || null;
-    base.install = provider.install || null;
-    base.hasSettings = !!provider.settings;
-    base.settingsCount = provider.settings ? Object.keys(provider.settings).length : 0;
-  }
-
   if (provider.category === 'cli') {
     base.spawn = provider.spawn || null;
     base.install = provider.install || null;
@@ -112,11 +99,6 @@ export class DevServer implements DevServerContext {
   private watchScriptPath: string | null = null;
   private watchScriptName: string | null = null;
   private watchTimer: NodeJS.Timeout | null = null;
-
-  // Auto-implement state
-  public autoImplProcess: ChildProcess | null = null;
-  public autoImplSSEClients: http.ServerResponse[] = [];
-  public autoImplStatus: { running: boolean; type: string | null; progress: any[] } = { running: false, type: null, progress: [] };
 
   // CLI debug SSE
   private cliSSEClients: http.ServerResponse[] = [];
@@ -196,12 +178,8 @@ export class DevServer implements DevServerContext {
     { method: 'POST', pattern: /^\/api\/providers\/([^/]+)\/typeAndSendAt$/,         handler: (q, s, p) => this.handleTypeAndSendAt(p![0], q, s) },
     { method: 'GET',  pattern: /^\/api\/providers\/([^/]+)\/config$/,                handler: (q, s, p) => this.handleProviderConfig(p![0], q, s) },
     { method: 'POST', pattern: /^\/api\/providers\/([^/]+)\/dom-context$/,           handler: (q, s, p) => this.handleDomContext(p![0], q, s) },
-    { method: 'POST', pattern: /^\/api\/providers\/([^/]+)\/auto-implement$/,        handler: (q, s, p) => this.handleAutoImplement(p![0], q, s) },
-    { method: 'POST', pattern: /^\/api\/providers\/([^/]+)\/auto-implement\/cancel$/,handler: (q, s, p) => this.handleAutoImplCancel(p![0], q, s) },
-    { method: 'GET',  pattern: /^\/api\/providers\/([^/]+)\/auto-implement\/status$/,handler: (q, s, p) => this.handleAutoImplSSE(p![0], q, s) },
     { method: 'POST', pattern: /^\/api\/providers\/([^/]+)\/spawn-test$/,            handler: (q, s, p) => this.handleSpawnTest(p![0], q, s) },
     { method: 'POST', pattern: /^\/api\/providers\/([^/]+)\/validate$/,              handler: (q, s, p) => this.handleValidate(p![0], q, s) },
-    { method: 'POST', pattern: /^\/api\/providers\/([^/]+)\/acp-chat$/,              handler: (q, s, p) => this.handleAcpChat(p![0], q, s) },
     { method: 'GET',  pattern: /^\/api\/providers\/([^/]+)\/script-hints$/,          handler: (q, s, p) => this.handleScriptHints(p![0], q, s) },
   ];
 
@@ -248,10 +226,6 @@ export class DevServer implements DevServerContext {
         const route = this.matchRoute(req.method || 'GET', pathname);
         if (route) {
           await route.handler(req, res, route.params);
-        } else if (pathname.startsWith('/assets/') || pathname === '/favicon.ico') {
-          await this.serveStaticAsset(pathname, res);
-        } else if (pathname === '/' || pathname === '/console' || !pathname.startsWith('/api')) {
-          await this.serveConsole(req, res);
         } else {
           this.json(res, 404, { error: 'Not found', endpoints: this.getEndpointList() });
         }
@@ -531,73 +505,6 @@ export class DevServer implements DevServerContext {
     }
   }
 
-  // ─── DevConsole SPA ───
-
-  private getConsoleDistDir(): string | null {
-    // Try to find web-devconsole/dist (Vite build output)
-    const candidates = [
-      path.resolve(__dirname, '../../web-devconsole/dist'),
-      path.resolve(__dirname, '../../../web-devconsole/dist'),
-      path.join(process.cwd(), 'packages/web-devconsole/dist'),
-    ];
-    for (const dir of candidates) {
-      if (fs.existsSync(path.join(dir, 'index.html'))) return dir;
-    }
-    return null;
-  }
-
-  private async serveConsole(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const distDir = this.getConsoleDistDir();
-    if (!distDir) {
-      this.json(res, 500, { error: 'DevConsole not found. Run: npm run build -w packages/web-devconsole' });
-      return;
-    }
-    const htmlPath = path.join(distDir, 'index.html');
-    try {
-      const html = fs.readFileSync(htmlPath, 'utf-8');
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(html);
-    } catch (e: any) {
-      this.json(res, 500, { error: `Cannot read index.html: ${e.message}` });
-    }
-  }
-
-  // ─── Static Assets ───
-
-  private static MIME_MAP: Record<string, string> = {
-    '.css': 'text/css; charset=utf-8',
-    '.js': 'application/javascript; charset=utf-8',
-    '.png': 'image/png',
-    '.svg': 'image/svg+xml',
-    '.ico': 'image/x-icon',
-    '.woff': 'font/woff',
-    '.woff2': 'font/woff2',
-  };
-
-  private async serveStaticAsset(pathname: string, res: http.ServerResponse): Promise<void> {
-    const distDir = this.getConsoleDistDir();
-    if (!distDir) {
-      this.json(res, 404, { error: 'Not found' });
-      return;
-    }
-    // Prevent directory traversal
-    const safePath = path.normalize(pathname).replace(/^\.\.\//, '');
-    const filePath = path.join(distDir, safePath);
-    if (!filePath.startsWith(distDir)) {
-      this.json(res, 403, { error: 'Forbidden' });
-      return;
-    }
-    try {
-      const content = fs.readFileSync(filePath);
-      const ext = path.extname(filePath);
-      const contentType = DevServer.MIME_MAP[ext] || 'application/octet-stream';
-      res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': 'public, max-age=31536000, immutable' });
-      res.end(content);
-    } catch {
-      this.json(res, 404, { error: 'Not found' });
-    }
-  }
-
   // ─── Watch Mode (SSE) ───
 
   private handleSSE(_req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -855,58 +762,6 @@ export class DevServer implements DevServerContext {
     }
   }
 
-  // ─── ACP Chat Test ───
-  private async handleAcpChat(type: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readBody(req);
-    const { message, timeout = 30000 } = body;
-    if (!message) { this.json(res, 400, { error: 'message required' }); return; }
-    const provider = this.providerLoader.getMeta(type);
-    if (!provider) { this.json(res, 404, { error: `Provider not found: ${type}` }); return; }
-    const spawn = provider.spawn;
-    if (!spawn) { this.json(res, 400, { error: `Provider ${type} has no spawn config` }); return; }
-
-    const { spawn: spawnFn } = await import('child_process');
-    const start = Date.now();
-    try {
-      const args = [...(spawn.args || []), message];
-      const child = spawnFn(spawn.command, args, {
-        shell: spawn.shell ?? false,
-        windowsHide: true,
-        timeout: timeout,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, ...(spawn.env || {}) },
-      });
-
-      let stdout = '';
-      let stderr = '';
-      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => { child.kill(); resolve(); }, timeout);
-        child.on('exit', () => { clearTimeout(timer); resolve(); });
-      });
-
-      const elapsed = Date.now() - start;
-      this.json(res, 200, {
-        success: true,
-        message,
-        response: stdout.trim(),
-        stderr: stderr.trim(),
-        exitCode: child.exitCode,
-        elapsed,
-      });
-    } catch (e: any) {
-      this.json(res, 200, {
-        success: false,
-        message,
-        error: e.message,
-        elapsed: Date.now() - start,
-      });
-    }
-  }
-
-
   private async handleCdpTargets(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     return handleCdpTargets(this, _req, res);
   }
@@ -925,10 +780,10 @@ export class DevServer implements DevServerContext {
     let targetDir: string;
     targetDir = this.providerLoader.getUserProviderDir(category, type);
 
-    // v1 categories (cli/acp) write provider.v1.json; legacy categories
+    // the v1 category (cli) writes provider.v1.json; legacy categories
     // (ide/extension — still CDP-script-driven, engine still live) write
     // provider.json. Check whichever this category would actually produce.
-    const isV1Category = category === 'cli' || category === 'acp';
+    const isV1Category = category === 'cli';
     const manifestFileName = isV1Category ? 'provider.v1.json' : 'provider.json';
     const jsonPath = path.join(targetDir, manifestFileName);
     if (fs.existsSync(jsonPath)) {
@@ -951,11 +806,6 @@ export class DevServer implements DevServerContext {
         fs.mkdirSync(path.dirname(specFullPath), { recursive: true });
         fs.writeFileSync(specFullPath, JSON.stringify(scaffold.spec, null, 2) + '\n', 'utf-8');
         createdFiles.push(scaffold.specPath);
-      } else if (category === 'acp') {
-        // Declarative-only — single provider.v1.json, no FSM spec/scripts.
-        const scaffold = buildAcpProviderV1Scaffold({ type, name, binary });
-        fs.writeFileSync(jsonPath, JSON.stringify(scaffold.manifest, null, 2) + '\n', 'utf-8');
-        createdFiles.push(scaffold.manifestPath);
       } else {
         // ide/extension: legacy provider.json + scripts/<version>/*.js —
         // still the live engine for CDP-driven providers.
@@ -1027,45 +877,6 @@ export class DevServer implements DevServerContext {
     return handleDomContext(this, type, req, res);
   }
 
-  // ─── Phase 2: Auto-Implement Backend ───
-
-
-
-  public getLatestScriptVersionDir(scriptsDir: string): string | null {
-    if (!fs.existsSync(scriptsDir)) return null;
-
-    const versions = fs.readdirSync(scriptsDir)
-      .filter((d: string) => {
-        try { return fs.statSync(path.join(scriptsDir, d)).isDirectory(); } catch { return false; }
-      })
-      .sort((a: string, b: string) => b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' }));
-
-    if (versions.length === 0) return null;
-    return path.join(scriptsDir, versions[0]);
-  }
-
-
-
-  private async handleAutoImplement(type: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    return handleAutoImplement(this, type, req, res);
-  }
-
-  private handleAutoImplSSE(type: string, req: http.IncomingMessage, res: http.ServerResponse): void {
-    handleAutoImplSSE(this, type, req, res);
-  }
-
-  private async handleAutoImplCancel(_type: string, _req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    return handleAutoImplCancel(this, _type, _req, res);
-  }
-
-  public sendAutoImplSSE(msg: { event: string; data: any }): void {
-    this.autoImplStatus.progress.push(msg);
-    const payload = `event: ${msg.event}\ndata: ${JSON.stringify(msg.data)}\n\n`;
-    for (const client of this.autoImplSSEClients) {
-      try { client.write(payload); } catch { /* ignore */ }
-    }
-  }
-
   /**
    * Resolve a CDP manager for DevServer APIs.
    * - Pass full **managerKey** from `GET /api/cdp/targets` when multiple Cursor/VS Code windows are open
@@ -1113,7 +924,7 @@ export class DevServer implements DevServerContext {
 
   // ─── CLI Debug Handlers ──────────────────────────────
 
-  /** GET /api/cli/status — list all running CLI/ACP instances with state */
+  /** GET /api/cli/status — list all running CLI instances with state */
   private async handleCliStatus(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     return handleCliStatus(this, _req, res);
   }

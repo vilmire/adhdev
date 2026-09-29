@@ -1,7 +1,7 @@
 /**
  * blueprintGraphLayout — geometry for the Blueprint graph view.
  *
- * Each visible lane (mission / graph / chain / ad-hoc group) is laid out on
+ * Each visible lane (mission / chain / ad-hoc group) is laid out on
  * its own with ELK layered, left → right; lanes then stack top → bottom with a
  * labelled header band. Per-lane layout keeps every lane readable on its own
  * (a mission never interleaves with another one's columns) and keeps ELK's
@@ -17,7 +17,6 @@ import type { BlueprintGraphNode, BlueprintGraphViewResult } from './blueprintGr
 
 export const BLUEPRINT_GRAPH_SIZES = {
     task: { width: 232, height: 78 },
-    gate: { width: 176, height: 58 },
     fold: { width: 150, height: 44 },
 } as const
 

@@ -282,27 +282,6 @@ describe('CliProviderInstance — kimi end-to-end clean completion (flushComplet
     { role: 'assistant', content: FINAL_ANSWER, timestamp: TURN_START + 335_000 },
   ]
 
-  it('REGRESSION (fails pre-fix): emits turn_end evidence with the REAL final content on the envelope, not an empty bubble, even when the independent second read races empty; C-W5c: no legacy agent:generating_completed wire literal', () => {
-    const { instance, evidence, evidenceOpts } = makeKimiFlush({
-      provingMessages: PROVING_MESSAGES,
-      secondReadMessages: [], // the race: second read finds nothing in-turn yet
-    })
-
-    instance.flushCompletedDebounceIfFinalized()
-
-    const completions = evidence.filter((e) => e.kind === 'turn_end')
-    expect(completions).toHaveLength(1)
-    const idx = evidence.indexOf(completions[0])
-    expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe(FINAL_ANSWER)
-    expect(evidenceOpts[idx]?.envelope?.finalSummary).not.toBe('')
-    expect(completions[0].strength).toBe('genuine')
-    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata).toMatchObject({
-      finalAssistantPresent: true,
-      evidenceLevel: 'reported',
-    })
-    expect(instance.completedDebouncePending).toBeNull()
-  })
-
   it('a duplicate flush call after the pending was cleared does not re-emit (exactly-once completion preserved)', () => {
     const { instance, evidence } = makeKimiFlush({
       provingMessages: PROVING_MESSAGES,

@@ -5,7 +5,6 @@
 
 import { MESH_SESSION_CLEANUP_MODES, type NodeCapabilitySlot } from '@adhdev/mesh-shared';
 import {
-    type RepoMeshMagiSessionCleanupMode,
     DEFAULT_MESH_POLICY,
     type RepoMeshSpawnedSessionVisibility,
     type RepoMeshPolicy,
@@ -34,55 +33,6 @@ import { deriveAutoApproveModeRisk } from './providers/auto-approve-modes.js';
 
 const SESSION_CLEANUP_MODES: ReadonlySet<string> = new Set<string>(MESH_SESSION_CLEANUP_MODES);
 
-/**
- * Resolve a magiSessionCleanup policy value (string mode, boolean shorthand,
- * or unset) to a canonical mode. Unset → the default ('stop_and_delete', ON).
- * boolean true → 'stop_and_delete', false → 'preserve'. Any unrecognized string
- * falls back to the default so a typo can't silently disable auto-cleanup.
- */
-export function resolveMagiSessionCleanupMode(
-    value: RepoMeshMagiSessionCleanupMode | boolean | undefined | null,
-): RepoMeshMagiSessionCleanupMode {
-    if (value === undefined || value === null) return DEFAULT_MESH_POLICY.magiSessionCleanup as RepoMeshMagiSessionCleanupMode;
-    if (typeof value === 'boolean') return value ? 'stop_and_delete' : 'preserve';
-    return value === 'preserve' || value === 'stop_and_delete'
-        ? value
-        : (DEFAULT_MESH_POLICY.magiSessionCleanup as RepoMeshMagiSessionCleanupMode);
-}
-
-export type MagiCleanupGateReason =
-    | 'auto_launch_marker_match'
-    | 'auto_launch_marker_skip_coordinator_session'
-    | 'auto_launch_marker_absent_session_not_auto_launched'
-    | 'auto_launch_marker_mismatch';
-
-/**
- * Pure decision for the MAGI auto-cleanup marker gate. A session is eligible for
- * MAGI auto-cleanup ONLY when its session-host record was auto-launched FOR the
- * exact replica task the caller expects. This is the safety core: MAGI passes
- * explicit session_ids (which bypass the self-coordinator / shared-daemon guards),
- * so this marker check is the sole thing preventing a reused-idle, coordinator, or
- * re-assigned session from being stopped/deleted.
- *
- *  - coordinator session (meta.meshCoordinatorFor === meshId)          → skip
- *  - no expected task id supplied for this session id                  → skip
- *  - record carries no autoLaunchedForQueueTaskId marker (reused idle) → skip
- *  - marker present but points at a DIFFERENT task (re-assignment)     → skip
- *  - marker present and equals the expected task id                    → ALLOW
- */
-export function magiAutoLaunchedSessionCleanupDecision(args: {
-    recordMarker: string | undefined | null;
-    expectedTaskId: string | undefined | null;
-    isCoordinatorSession: boolean;
-}): { allow: boolean; reason: MagiCleanupGateReason } {
-    const marker = typeof args.recordMarker === 'string' ? args.recordMarker.trim() : '';
-    const expected = typeof args.expectedTaskId === 'string' ? args.expectedTaskId.trim() : '';
-    if (args.isCoordinatorSession) return { allow: false, reason: 'auto_launch_marker_skip_coordinator_session' };
-    if (!expected) return { allow: false, reason: 'auto_launch_marker_mismatch' };
-    if (!marker) return { allow: false, reason: 'auto_launch_marker_absent_session_not_auto_launched' };
-    if (marker !== expected) return { allow: false, reason: 'auto_launch_marker_mismatch' };
-    return { allow: true, reason: 'auto_launch_marker_match' };
-}
 const SPAWNED_SESSION_VISIBILITY_MODES = new Set<RepoMeshSpawnedSessionVisibility>([
     'visible', 'hidden',
 ]);
@@ -209,8 +159,8 @@ export function mergeAndNormalizePolicy(
     if (!SESSION_CLEANUP_MODES.has(policy.sessionCleanupOnNodeRemove as RepoMeshSessionCleanupMode)) {
         policy.sessionCleanupOnNodeRemove = 'preserve';
     }
-    // Canonicalize magiSessionCleanup (accepts boolean shorthand / unset → default ON).
-    policy.magiSessionCleanup = resolveMagiSessionCleanupMode(policy.magiSessionCleanup);
+    // Drop the retired MAGI session-cleanup key a stored policy may still carry.
+    delete (policy as unknown as Record<string, unknown>).magiSessionCleanup;
     // Canonicalize the delegate idle TTL to a clamped minute count (0 = disabled), so
     // the reaper and any policy reader can never disagree on what the TTL means.
     policy.delegatedSessionIdleTtlMinutes = resolveDelegatedSessionIdleTtlMinutes(
@@ -227,13 +177,6 @@ export function mergeAndNormalizePolicy(
         delete policy.schedulingStrategy;
     } else {
         policy.schedulingStrategy = normalizedStrategy;
-    }
-    // Convergence routing: strict opt-in (default false). Only persist when explicitly
-    // enabled so existing meshes.json stays byte-for-byte untouched.
-    if (policy.autoConvergeCodeChange === true) {
-        policy.autoConvergeCodeChange = true;
-    } else {
-        delete policy.autoConvergeCodeChange;
     }
     // Dangerous delegated-worker provider modes are fail-closed and only persist
     // when the mesh owner has explicitly opted in.
@@ -281,7 +224,7 @@ export function mergeAndNormalizePolicy(
  * with modes return a mode id, except a dangerous mode is downgraded to a
  * non-dangerous PTY mode unless mesh/node policy explicitly opts in.
  *
- * THREE EXPLICIT STAGES — do not collapse them; the ordering is a hard MAGI
+ * THREE EXPLICIT STAGES — do not collapse them; the ordering is a hard
  * invariant:
  *
  *   ① ENABLE gate (machine-local policy only): node boolean > mesh boolean.

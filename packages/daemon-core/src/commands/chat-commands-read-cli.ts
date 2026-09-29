@@ -1,5 +1,5 @@
 /**
- * Chat Commands — read side, live CLI/ACP adapter path of read_chat: parse the
+ * Chat Commands — read side, live CLI adapter path of read_chat: parse the
  * adapter snapshot, read + safety-check provider-native history, drive the
  * chat-source machine (plus the codex live-workspace probe and unsafe-native
  * daemon mirror fallbacks), reconcile the status, and build the result.
@@ -304,7 +304,7 @@ export function normalizeCliReadChatStatus(parsedStatus: unknown, activeModal: u
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// read_chat — live CLI/ACP adapter path, as a pipeline of named stages:
+// read_chat — live CLI adapter path, as a pipeline of named stages:
 //   readCliAdapterSnapshot → readCliNativeHistoryForReadChat
 //   → selectCliReadChatMessages → reconcileNativeFinalAssistantStatus
 //   → buildCliReadChatResult

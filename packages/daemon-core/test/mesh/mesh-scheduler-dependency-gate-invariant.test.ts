@@ -5,22 +5,17 @@ import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { tmpdir } from 'os';
 
-// GRAPH-ORCHESTRATION Phase A — scheduler dependency-gate INVARIANT characterization.
+// Scheduler dependency-gate INVARIANT characterization.
 //
-//   Design SoT: docs/design/2026-08-18-graph-orchestration-full.md
-//     :14-25   — taskDependenciesSatisfied is THE one predicate; semantics are exactly
-//                "all dependsOn statuses completed && !blockedReason".
-//     :71-97   — every scheduling surface must keep calling it, with no local
-//                reinterpretation (the DEPENDSON-GATE-SYMMETRY boundary).
-//     :779-786 — P3 invariant tests: enumerate claim / auto-launch / eager-push and
-//                spy/assert every surface calls the predicate; inlining dependency
-//                logic into any one surface must fail.
-//     :984-986 — forbidden: modifying/wrapping/bypassing the predicate, or adding
-//                run_if/gate/workspace/output/skip checks to the surfaces separately.
+//   - taskDependenciesSatisfied is THE one predicate; semantics are exactly
+//     "all dependsOn statuses completed".
+//   - every scheduling surface must keep calling it, with no local
+//     reinterpretation (the DEPENDSON-GATE-SYMMETRY boundary).
+//   - inlining dependency logic into any one surface must fail; so must adding
+//     condition/gate/workspace/skip checks to a surface.
 //
-//   This is a CHARACTERIZATION suite: it pins the invariant as it exists TODAY so
-//   that phases B–D go red the moment anyone forks, bypasses, or locally reinterprets
-//   the gate. Two layers per surface:
+//   This is a CHARACTERIZATION suite: it goes red the moment anyone forks,
+//   bypasses, or locally reinterprets the gate. Two layers per surface:
 //     (1) RUNTIME SPY — a wrapped taskDependenciesSatisfied records every evaluation;
 //         each surface is driven end-to-end and must be observed consulting it.
 //         Inlining the same semantics (or bypassing the gate) drops the spy count → red.
@@ -43,8 +38,6 @@ function spyOnPredicate() {
         count: () => spy.mock.calls.length,
         sawEntryWithDep: (depId: string) =>
             spy.mock.calls.some(([entry]: any[]) => Array.isArray(entry?.dependsOn) && entry.dependsOn.includes(depId)),
-        sawBlockedEntry: () =>
-            spy.mock.calls.some(([entry]: any[]) => typeof entry?.blockedReason === 'string' && entry.blockedReason.length > 0),
     };
 }
 
@@ -110,11 +103,11 @@ afterEach(() => {
 
 // ── 1. Predicate semantics pin (design :14-25, :357-359, :784-786) ───────────
 
-describe('taskDependenciesSatisfied semantics — exactly "all deps completed && !blockedReason"', () => {
+describe('taskDependenciesSatisfied semantics — exactly "all deps completed"', () => {
     const entry = (over: any = {}) => ({ dependsOn: ['a', 'b'], ...over });
     const status = (m: Record<string, string>) => new Map(Object.entries(m));
 
-    it('true when every dependsOn id is completed and there is no system block', () => {
+    it('true when every dependsOn id is completed', () => {
         expect(taskDependenciesSatisfied(entry(), status({ a: 'completed', b: 'completed' }))).toBe(true);
         expect(taskDependenciesSatisfied({ dependsOn: [] }, status({}))).toBe(true);
         expect(taskDependenciesSatisfied({}, status({}))).toBe(true);
@@ -130,17 +123,9 @@ describe('taskDependenciesSatisfied semantics — exactly "all deps completed &&
         expect(taskDependenciesSatisfied(entry(), status({ a: 'completed' }))).toBe(false);
     });
 
-    it('skipped does NOT satisfy a dependency (design :357-359)', () => {
-        // A conditionally skipped graph node is terminal for graph accounting but is
-        // deliberately NOT 'completed' for the queue predicate — the graph layer must
-        // rewrite the projection instead of teaching the scheduler a skip rule.
+    it('only the literal completed status satisfies a dependency', () => {
+        // Any other status word — including an unknown one — is not 'completed'.
         expect(taskDependenciesSatisfied(entry(), status({ a: 'completed', b: 'skipped' }))).toBe(false);
-    });
-
-    it('any blockedReason blocks, even with every dependency completed (design :16-25)', () => {
-        for (const block of ['graph_materialization_pending:n1', 'coordinator_gate:g1', 'policy_hold']) {
-            expect(taskDependenciesSatisfied(entry({ blockedReason: block }), status({ a: 'completed', b: 'completed' })), block).toBe(false);
-        }
     });
 
     it('tolerates a non-array dependsOn (legacy rows)', () => {
@@ -187,30 +172,6 @@ describe('SURFACE claim (claimNextQueueTask) routes through the predicate', () =
 
             expect(pred.count()).toBeGreaterThan(0);
             expect(claimed?.id).toBe(dependent.id);
-        } finally {
-            cleanup(id);
-        }
-    });
-
-    it('consults the predicate and refuses a system-blocked task even with deps completed', () => {
-        const id = meshId('claim_blocked');
-        try {
-            const dep = enqueueTask(id, 'prerequisite', { taskMode: 'code_change', difficulty: 'medium' });
-            const dependent = enqueueTask(id, 'dependent work', { taskMode: 'code_change', dependsOn: [dep.id], difficulty: 'medium' });
-            __writeTaskStatusForTests(id, dep.id, 'completed');
-            // A graph-owned system block (the shape B–D will use) must be refused by the
-            // UNCHANGED predicate — no new claim-side check may be added for it.
-            MeshRuntimeStore.getInstance().updateQueueEntry({
-                ...getQueue(id).find(t => t.id === dependent.id)!,
-                blockedReason: 'graph_materialization_pending:node-1',
-                updatedAt: new Date().toISOString(),
-            } as any);
-
-            const pred = spyOnPredicate();
-            const claimed = claimNextTask(id, NODE_ID, 'claim-sess-3');
-
-            expect(claimed).toBeNull();
-            expect(pred.sawBlockedEntry()).toBe(true);
         } finally {
             cleanup(id);
         }
@@ -303,8 +264,7 @@ describe('SURFACE auto-launch (maybeAutoLaunchOneQueueSession) routes through th
 // ── 4. Structural pins over BOTH scheduling surfaces ─────────────────────────
 //
 // Pins the STRUCTURE of every surface so that inlining the dependency logic
-// (design :783 mutation test) or bolting graph checks onto a surface (design
-// :984-986) fails this suite. The former third surface — the mcp-server's cloud
+// or bolting condition/gate/workspace checks onto a surface fails this suite. The former third surface — the mcp-server's cloud
 // eager P2P push in mesh-tools-queue.ts — was retired (rc.37 Finding B: it sent
 // still-`pending` rows straight to a remote session with no claim and no
 // attempt); a pin below keeps the enqueue tools from becoming a scheduling
@@ -322,7 +282,7 @@ interface SurfacePin {
     file: string;
     /** The exact gating call site(s) that must exist verbatim. */
     gateCalls: string[];
-    /** Files that must never grow graph-layer checks (design :92-96, :984-986). */
+    /** Files that must never grow condition/gate/workspace checks. */
     forbidGraphTokens: boolean;
 }
 
@@ -333,9 +293,7 @@ const SCHEDULER_SURFACES: SurfacePin[] = [
         // (self-delegate move). Only the path follows it.
         file: path.join(SRC_ROOT, 'mesh/mesh-runtime-store-claim.ts'),
         gateCalls: ['taskDependenciesSatisfied(candidate, depStatus)'],
-        // The runtime store legitimately hosts the phase-B graph store too, so only
-        // the gate call + no-inline-fork are pinned here, not token absence.
-        forbidGraphTokens: false,
+        forbidGraphTokens: true,
     },
     {
         name: 'auto-launch candidate filter (maybeAutoLaunchOneQueueSession)',
@@ -350,11 +308,11 @@ const SCHEDULER_SURFACES: SurfacePin[] = [
 // A forked gate looks like `depStatus.get(id) === 'completed'` beside a dependsOn
 // scan — dependency readiness computed WITHOUT the predicate.
 const INLINE_FORK_PATTERN = /\b(depStatus|statusById|dependencyStatusById)\s*\.get\([^)]*\)\s*={2,3}\s*'completed'/;
-// Graph-layer concerns that must never be checked by a scheduling surface itself
-// (design :984-986): conditions, gate state, workspace state, graph blocks.
+// Concerns that must never be checked by a scheduling surface itself: conditions,
+// gate state, workspace state (the retired graph layer's vocabulary).
 const GRAPH_TOKEN_PATTERN = /run_if|inputs_from|workspace_ref|coordinator_gate|graph_materialization_pending/;
 
-describe('structural pins: every scheduler surface gates through the one predicate (design :71-97)', () => {
+describe('structural pins: every scheduler surface gates through the one predicate', () => {
     it('enumerates exactly the two known scheduling surfaces', () => {
         expect(SCHEDULER_SURFACES.map(s => s.name)).toEqual([
             'queue claim (claimNextQueueTask)',
@@ -384,17 +342,17 @@ describe('structural pins: every scheduler surface gates through the one predica
                 expect(src).toContain('DEPENDSON-GATE-SYMMETRY');
             });
 
-            it('does NOT re-implement dependency readiness inline (mutation guard, design :783)', () => {
+            it('does NOT re-implement dependency readiness inline (mutation guard)', () => {
                 const src = fs.readFileSync(surface.file, 'utf8');
                 expect(INLINE_FORK_PATTERN.test(src),
                     `${path.basename(surface.file)} must not inline \`statusById.get(id) === 'completed'\` beside the predicate`).toBe(false);
             });
 
             if (surface.forbidGraphTokens) {
-                it('does NOT grow run_if/gate/workspace/graph checks of its own (design :984-986)', () => {
+                it('does NOT grow condition/gate/workspace checks of its own', () => {
                     const src = fs.readFileSync(surface.file, 'utf8');
                     expect(GRAPH_TOKEN_PATTERN.test(src),
-                        `${path.basename(surface.file)} must not evaluate graph/run_if/gate/workspace state — a not-ready task stays pending with a system block and the UNCHANGED predicate refuses it`).toBe(false);
+                        `${path.basename(surface.file)} must not evaluate run_if/gate/workspace state — readiness is the predicate alone`).toBe(false);
                 });
             }
         });
@@ -411,14 +369,14 @@ describe('structural pins: every scheduler surface gates through the one predica
         expect(src.includes('taskDependenciesSatisfied('), 'no gate call left to keep in sync — the claim path gates').toBe(false);
     });
 
-    it('the predicate itself is unchanged: no graph/run_if/gate/workspace/skip handling inside it', () => {
+    it('the predicate itself is unchanged: no run_if/gate/workspace/skip handling inside it', () => {
         // C-W9a: the predicate moved (verbatim) into the pure leaf mesh-task-predicates.ts.
         const src = fs.readFileSync(path.join(SRC_ROOT, 'mesh/mesh-task-predicates.ts'), 'utf8');
         const fnStart = src.indexOf('export function taskDependenciesSatisfied');
         expect(fnStart).toBeGreaterThan(-1);
         const fnBody = src.slice(fnStart, src.indexOf('\n}', fnStart) + 2);
-        // Exactly: block → false; every dep completed → true. Nothing else.
-        expect(fnBody).toContain('if (entry.blockedReason) return false;');
+        // Exactly: every dep completed → true. Nothing else.
+        expect(fnBody).not.toContain('blockedReason');
         expect(fnBody).toContain("statusById.get(depId) === 'completed'");
         expect(GRAPH_TOKEN_PATTERN.test(fnBody)).toBe(false);
         expect(fnBody).not.toContain('skipped');

@@ -2,7 +2,7 @@
  * RF-ROUTER MED family — mesh CRUD + node CRUD commands.
  *
  * This module holds the mesh-record commands (list/get/create/update/delete_mesh,
- * mesh host, repo mesh.json config, provider defaults, MAGI kind panels,
+ * mesh host, repo mesh.json config, provider defaults,
  * difficulty brains, quota routing); get_mesh hydrates direct git truth. The node
  * lifecycle (add/update/remove_mesh_node, cleanup_mesh_sessions) lives in
  * mesh-node-lifecycle.ts and clone / bootstrap retry in mesh-node-clone.ts; all
@@ -18,7 +18,7 @@ import { defineCommandSpecs } from '../command-registry.js';
 import { hydrateMeshNodesFromGitState } from '../high-family/mesh-status-node-state.js';
 import { meshNodeLifecycleHandlers } from './mesh-node-lifecycle.js';
 import { meshNodeCloneHandlers } from './mesh-node-clone.js';
-// Re-exported: tests and mesh-graph-workspace-ports import the clone sync helpers from here.
+// Re-exported: tests import the clone sync helpers from here.
 export { decideOssCloneSync, syncClonedWorktreeSubmodules, type OssCloneSyncAction } from './mesh-node-clone.js';
 
 const meshRecordHandlers: Record<string, MedFamilyHandler> = {
@@ -537,91 +537,6 @@ const meshRecordHandlers: Record<string, MedFamilyHandler> = {
             const { deleteMesh } = await import('../../config/mesh-config.js');
             const deleted = deleteMesh(meshId);
             return { success: true, deleted };
-        } catch (e: any) {
-            return { success: false, error: e.message };
-        }
-    },
-
-    // ─── MAGI kind → panel bindings (MAGI-KIND-PANEL, machine-local config) ───
-    // Per-task_kind slot lists stored PER MESH in ~/.adhdev/meshes.json
-    // (`meshes[].magiKindPanels`) — the SOLE MAGI panel-resolution surface (the former
-    // named-panel magi_panel_* handlers were removed). `meshId` is optional on all three
-    // so existing callers keep working: it resolves to the sole mesh on a single-mesh
-    // machine, and is REQUIRED (loud error, never a silent pick) when several meshes
-    // exist. Owner-only gating: intentionally NOT listed in
-    // canPeerUsePrivilegedShareCommand (daemon-cloud data-channel-router), so a peer
-    // holding ANY share permission hits its `default → false` branch — identical
-    // owner-only gating to create_mesh / update_mesh / list_meshes. A trusted peer (no
-    // permission = the owner) passes the top `!permission → true` guard. set/remove are
-    // WRITE commands; list is read-only. normalizeMagiSlots (inside setMagiKindPanel)
-    // surfaces invalid_magi_kind_panel: … messages verbatim for the editor, including
-    // a nodeId that is not a member of the target mesh.
-    magi_kind_panel_list: async (_ctx: MedFamilyContext, args: any) => {
-        const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
-        try {
-            const { listMagiKindPanels, resolveScopedMeshId } = await import('../../config/mesh-config-routing.js');
-            // Report WHICH mesh the panels were read from. The old flat
-            // scope: 'machine_local' hid that these are per-mesh bindings and was the
-            // reason the scope read as global.
-            const meshId = requestedMeshId || resolveScopedMeshId();
-            return {
-                success: true,
-                kindPanels: listMagiKindPanels(requestedMeshId || undefined),
-                scope: {
-                    kind: 'mesh',
-                    storage: 'machine_local',
-                    meshId: meshId ?? null,
-                    resolvedFrom: requestedMeshId ? 'explicit' : (meshId ? 'sole_mesh' : 'ambiguous'),
-                    ...(requestedMeshId || meshId ? {} : {
-                        note: 'Several meshes are configured and no meshId was given, so no panels could be read. Pass meshId.',
-                    }),
-                },
-            };
-        } catch (e: any) {
-            return { success: false, error: e.message };
-        }
-    },
-
-    magi_kind_panel_set: async (_ctx: MedFamilyContext, args: any) => {
-        const kind = typeof args?.kind === 'string' ? args.kind.trim() : '';
-        if (!kind) return { success: false, error: 'invalid_magi_kind_panel: task_kind is required' };
-        const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
-        try {
-            const { setMagiKindPanel, resolveScopedMeshId, collectIgnoredMagiSlotFields } = await import('../../config/mesh-config-routing.js');
-            // normalizeMagiTaskKindKey + normalizeMagiSlots (inside setMagiKindPanel)
-            // validate the kind and each slot (provider required; model optional;
-            // replica counts clamped; nodeId must belong to the target mesh).
-            // Structured errors flow back as `error`.
-            //
-            // Collect the dropped keys BEFORE the write: the normalizer silently ignores
-            // anything outside the MagiSlot schema (a deliberate reduction — see MagiSlot
-            // in mesh-shared), which used to mean an operator could set `thinkingLevel`
-            // here and get no effect and no warning. Reported, never thrown, so a payload
-            // carrying an unknown key still writes exactly as before.
-            const ignoredFields = collectIgnoredMagiSlotFields(args?.slots);
-            const slots = setMagiKindPanel(kind, args?.slots, requestedMeshId || undefined);
-            const meshId = requestedMeshId || resolveScopedMeshId();
-            return {
-                success: true,
-                kind,
-                slots,
-                meshId: meshId ?? null,
-                ...(ignoredFields.length ? { ignoredFields } : {}),
-            };
-        } catch (e: any) {
-            return { success: false, error: e.message };
-        }
-    },
-
-    magi_kind_panel_remove: async (_ctx: MedFamilyContext, args: any) => {
-        const kind = typeof args?.kind === 'string' ? args.kind.trim() : '';
-        if (!kind) return { success: false, error: 'invalid_magi_kind_panel: task_kind is required' };
-        const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
-        try {
-            const { removeMagiKindPanel, resolveScopedMeshId } = await import('../../config/mesh-config-routing.js');
-            const removed = removeMagiKindPanel(kind, requestedMeshId || undefined);
-            const meshId = requestedMeshId || resolveScopedMeshId();
-            return { success: true, removed, meshId: meshId ?? null };
         } catch (e: any) {
             return { success: false, error: e.message };
         }

@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import type { DaemonData } from '../../types'
 import type { ActiveConversation, CliConversationViewMode } from './types'
-import { isAcpConv, isCliConv } from './types'
+import { isCliConv } from './types'
 import DashboardHeader from './DashboardHeader'
 import DashboardMobileChatMode from './DashboardMobileChatMode'
 import DashboardPaneWorkspace from './DashboardPaneWorkspace'
@@ -136,7 +136,7 @@ interface DashboardMainViewProps {
     onLaunchMachineIde: (machineId: string, ideType: string, opts?: { workspacePath?: string | null }) => Promise<{ ok: boolean; error?: string }>
     onLaunchMachineProvider: (
         machineId: string,
-        kind: 'cli' | 'acp',
+        kind: 'cli',
         providerType: string,
         opts?: {
             workspaceId?: string | null
@@ -171,7 +171,7 @@ interface DashboardMainViewProps {
         providerSessionId: string
         providerType: string
         providerName: string
-        kind: 'cli' | 'acp'
+        kind: 'cli'
         title: string
         workspace?: string | null
         summaryMetadata?: DaemonData['summaryMetadata']
@@ -473,11 +473,11 @@ export default function DashboardMainView({
                 return
             }
             if (actionId === 'openHistoryForActiveTab') {
-                if (activeConv && !isAcpConv(activeConv)) onOpenHistory(activeConv)
+                if (activeConv) onOpenHistory(activeConv)
                 return
             }
             if (actionId === 'openRemoteForActiveTab') {
-                if (activeConv && !isCliConv(activeConv) && !isAcpConv(activeConv)) onOpenRemote(activeConv)
+                if (activeConv && !isCliConv(activeConv)) onOpenRemote(activeConv)
                 return
             }
             if (actionId === 'splitActiveTabRight') {
@@ -556,7 +556,7 @@ export default function DashboardMainView({
                 dockviewActionHandlersRef.current?.activateNextTabInGroup()
                 return
             }
-            if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return
+            if (!activeConv || !isCliConv(activeConv)) return
             if (actionId === 'toggleCliView') {
                 void onSetActiveCliViewMode(activeCliViewMode === 'chat' ? 'terminal' : 'chat')
             }
@@ -668,7 +668,7 @@ export default function DashboardMainView({
                     guideNudgeVisible={guideNudgeVisible}
                     actionShortcuts={actionShortcuts}
                     onOpenRemote={() => {
-                        if (!activeConv || isCliConv(activeConv) || isAcpConv(activeConv)) return
+                        if (!activeConv || isCliConv(activeConv)) return
                         onOpenRemote(activeConv)
                     }}
                     onStopCli={onStopCli}

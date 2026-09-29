@@ -136,7 +136,7 @@ export function handleListInstalledProviders(host: ProviderCatalogCommandHost, _
     const installRoot = host.getUpstreamInstallRoot();
     if (!fs.existsSync(installRoot)) return { success: true, providers: [] };
 
-    const CATEGORIES = ['cli', 'ide', 'extension', 'acp'] as const;
+    const CATEGORIES = ['cli', 'ide', 'extension'] as const;
     const items: Array<{
         type: string;
         category: string;

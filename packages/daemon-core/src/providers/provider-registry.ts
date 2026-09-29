@@ -57,7 +57,7 @@ export abstract class ProviderRegistry {
  * caller actually wants. Concretely: `extension/codex` declares `type: 'codex'`
  * while `cli/codex-cli` declares `aliases: ['codex']`, so unscoped
  * `resolveAlias('codex')` returns the IDE-webview provider. `adhdev launch`
- * only ever starts a cli/acp session, so it passes `['cli', 'acp']` and gets
+ * only ever starts a cli session, so it passes `['cli']` and gets
  * `codex-cli`. Within a scope the direct-match-first order still holds.
  */
   resolveAlias(input: string, categories?: readonly ProviderCategory[]): string {
@@ -86,14 +86,14 @@ export abstract class ProviderRegistry {
   }
 
  /**
- * Build CLI/ACP detection list (replaces cli-detector)
+ * Build CLI detection list (replaces cli-detector)
  * Dynamically generated from provider.js spawn.command.
  *
  * By default this only returns providers already enabled for this machine
  * (config.machineProviders[type].enabled === true) — that's the right scope
  * for `launch`, which must not spawn something the user never opted into.
  *
- * `includeDisabled: true` returns every cli/acp provider with a spawn
+ * `includeDisabled: true` returns every cli provider with a spawn
  * command regardless of the enabled flag, with `enabled` reporting the REAL
  * per-provider state instead of the hardcoded `true` the gated list implies.
  * This exists for first-run setup detection: a fresh machine's
@@ -105,7 +105,7 @@ export abstract class ProviderRegistry {
     const result: CliDetectionEntry[] = [];
     for (const p of this.providers.values()) {
       const enabled = this.isMachineProviderEnabled(p.type);
-      if ((p.category === 'cli' || p.category === 'acp') && p.spawn?.command && (enabled || options?.includeDisabled)) {
+      if ((p.category === 'cli') && p.spawn?.command && (enabled || options?.includeDisabled)) {
         const versionCommand = getPlatformVersionCommand(p.versionCommand);
         const command = this.getSpawnCommand(p.type, p.spawn.command);
         const args = this.getSpawnArgs(p.type, p.spawn.args || []);
@@ -429,7 +429,7 @@ export abstract class ProviderRegistry {
 
     if (replace) {
       for (const provider of this.providers.values()) {
-        if (provider.category === 'cli' || provider.category === 'acp') {
+        if (provider.category === 'cli') {
           const result = resultByType.get(provider.type);
           const installed = !!result?.installed;
           const detectedPath = result?.path || null;
@@ -448,13 +448,13 @@ export abstract class ProviderRegistry {
         installed: !!result.installed,
         detectedPath,
       });
-      if (provider && (provider.category === 'cli' || provider.category === 'acp') && this.isMachineProviderEnabled(providerType)) {
+      if (provider && (provider.category === 'cli') && this.isMachineProviderEnabled(providerType)) {
         this.stampLastDetection(provider, !!result.installed, detectedPath);
       }
     }
   }
 
-  /** Persist a CLI/ACP detection outcome as the provider's machine `lastDetection`. */
+  /** Persist a CLI detection outcome as the provider's machine `lastDetection`. */
   private stampLastDetection(provider: ProviderModule, installed: boolean, detectedPath: string | null): void {
     this.setMachineProviderConfig(provider.type, {
       lastDetection: {
@@ -490,9 +490,9 @@ export abstract class ProviderRegistry {
       const enabled = this.isMachineProviderEnabled(provider.type);
       const machineConfig = this.getMachineProviderConfig(provider.type);
       // ★MODEL-DISCOVERY OVERLAY. This is the single merge point: every model
-      // picker (new-session dialog, mesh slot editor, MAGI kind panel) reads
+      // picker (new-session dialog, mesh slot editor) reads
       // its list from this inventory via modelOptionsForProvider, so applying
-      // the overlay here fixes all three at once and none of them can drift.
+      // the overlay here fixes all of them at once and none of them can drift.
       //
       // `readModelCache` is a synchronous Map lookup that CANNOT fetch — this
       // runs on the inventory path, which is hot. Refreshes happen on the

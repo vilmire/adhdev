@@ -52,7 +52,7 @@
  * LAYOUT
  * -------
  * This module holds the error codes and the command registry; the per-command
- * contracts live in ./turn-ipc-{turn,mission,queue,graph}.ts (re-exported here)
+ * contracts live in ./turn-ipc-{turn,mission,queue,stats}.ts (re-exported here)
  * over the shared guard primitives in ./turn-ipc-guards.ts.
  */
 
@@ -63,7 +63,7 @@ export { TURN_IPC_PROTOCOL_VERSION } from './turn-ipc-guards';
 export * from './turn-ipc-turn';
 export * from './turn-ipc-mission';
 export * from './turn-ipc-queue';
-export * from './turn-ipc-graph';
+export * from './turn-ipc-stats';
 
 // ─── error codes ────────────────────────────────────────────────────────────
 
@@ -120,21 +120,15 @@ export const TURN_IPC_COMMANDS = [
     'record_local',
     'queue_query',
     'queue_enqueue',
-    'queue_enqueue_graph',
+    'queue_enqueue_batch',
     'queue_cancel',
     'queue_requeue',
     'direct_dispatch_record',
-    'graph_audit_record',
     'active_work_query',
     'recovery_context_query',
     // C-W9c additions (2026-09-24 19:00 stamp — the last mcp-server in-process
-    // daemon-core paths: graph gates/plan/patch, mission reads (MAGI), task/
-    // mission stats, orphaned-pin helpers, one prune audit):
-    'graph_gate_claim',
-    'graph_gate_release',
-    'graph_gate_abandon',
-    'graph_node_patch',
-    'graph_view_query',
+    // daemon-core paths: mission reads, task/mission stats, orphaned-pin
+    // helpers, one prune audit):
     'task_stats_query',
     'prune_stale_direct',
     'orphaned_pin_notify',

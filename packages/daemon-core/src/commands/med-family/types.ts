@@ -139,8 +139,7 @@ export interface MedFamilyContext {
         mode: RepoMeshSessionCleanupMode;
         sessionIds?: string[];
         dryRun?: boolean;
-        source?: 'mesh_cleanup_sessions' | 'mesh_remove_node' | 'magi_session_cleanup';
-        requireAutoLaunchedForTaskIds?: Record<string, string>;
+        source?: 'mesh_cleanup_sessions' | 'mesh_remove_node';
         /**
          * Opt-in orphan reclaim (default false). When true, a workspace-only live
          * session (no node binding) OR a session bound to a node that no longer

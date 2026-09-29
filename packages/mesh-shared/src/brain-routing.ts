@@ -5,10 +5,8 @@
  * per-difficulty "brain" preset resolves that into a concrete provider / model /
  * thinking-level for the launched session. The goal is token economy: an `easy`
  * task runs on a cheaper model at low reasoning effort; a `difficult` task gets a
- * stronger model at high effort. This is a separate axis from MAGI's review kinds
- * (rca/design/…) — MAGI fans out review replicas; this picks the single brain that
- * *executes* a task — but it reuses the same slot shape (provider/model) and the
- * same machine-local storage (`~/.adhdev/meshes.json`).
+ * stronger model at high effort. This picks the single brain that *executes* a
+ * task, stored machine-local (`~/.adhdev/meshes.json`).
  */
 
 /** The fixed difficulty axis the coordinator classifies a task into. */
@@ -33,8 +31,8 @@ export interface BrainSlot {
 
 /**
  * Per-difficulty brain bindings for ONE mesh, stored machine-local in
- * `~/.adhdev/meshes.json` under that mesh's entry (`meshes[].difficultyBrains`,
- * sibling of `magiKindPanels`). The scope is per mesh: two meshes on the same
+ * `~/.adhdev/meshes.json` under that mesh's entry (`meshes[].difficultyBrains`).
+ * The scope is per mesh: two meshes on the same
  * machine hold independent presets, so one can pin `difficult` to a cheaper model
  * without changing what any other mesh runs. (It formerly sat at the config root
  * keyed by difficulty alone — and since this map picks the MODEL a task runs on,
@@ -118,8 +116,8 @@ export function normalizeDifficultyBrainMap(raw: unknown): DifficultyBrainMap {
 // capability slots. Each slot bundles what used to be scattered across
 // providerPriority (order), a per-provider maxParallel cap, and the
 // the owning mesh's difficultyBrains (difficulty → model/thinking). Slot order =
-// preference. This single profile is the source of truth for task routing, MAGI
-// fan-out, and orchestrator-proposed edits.
+// preference. This single profile is the source of truth for task routing and
+// orchestrator-proposed edits.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**

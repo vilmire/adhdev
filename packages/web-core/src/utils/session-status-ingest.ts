@@ -47,7 +47,7 @@ export function normalizeIncomingSessionStatus<T extends string | undefined>(raw
 }
 
 // Re-exported for call sites that need the alias table itself (e.g. the
-// top-level CLI/ACP compact-expansion path in BaseDaemonContext.tsx, which
+// top-level CLI compact-expansion path in BaseDaemonContext.tsx, which
 // normalizes inline rather than through the helper above because it must
 // preserve its own '|| online' fallback semantics).
 export { SESSION_STATUS_ALIASES }

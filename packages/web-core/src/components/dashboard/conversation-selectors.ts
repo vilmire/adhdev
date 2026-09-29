@@ -4,7 +4,7 @@ import { normalizeTextContent } from '../../utils/text'
 import { classifyChatMessageForDisplay } from './chat-activity-visibility'
 import { getConversationLiveMessages } from './conversation-message-snapshot'
 import type { SessionChatSnapshot } from './session-chat-controller'
-import { isAcpConv, isCliConv, isCliTerminalConv, type ActiveConversation, type DashboardMessage } from './types'
+import { isCliConv, isCliTerminalConv, type ActiveConversation, type DashboardMessage } from './types'
 
 /**
  * (B2) The live keyed-chat snapshot the warm controller already holds for a
@@ -204,7 +204,7 @@ export function getConversationControlsContext(
 ) {
     const providerType = getConversationProviderType(conversation)
     const isNative = isNativeConversation(conversation)
-    const isCliLike = isCliConv(conversation) || isAcpConv(conversation)
+    const isCliLike = isCliConv(conversation)
     const displayLabel = isNative
         ? (isCliLike
             ? (getConversationProviderLabel(conversation)
@@ -218,7 +218,6 @@ export function getConversationControlsContext(
     return {
         isNativeConversation: isNative,
         isCli: isCliConv(conversation),
-        isAcp: isAcpConv(conversation),
         isCliTerminal: isCliTerminalConv(conversation),
         providerType,
         displayLabel,

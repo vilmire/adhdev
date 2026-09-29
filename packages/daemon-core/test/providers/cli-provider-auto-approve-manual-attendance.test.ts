@@ -17,7 +17,7 @@ import {
 //
 // Fix: a provider-common manual-attendance signal. While a human is attending
 // the session by hand (foreground tab select_session/open_panel, controlbar
-// invoke_provider_script/set_mode/change_model/set_thought_level, manual
+// invoke_provider_script/set_mode/change_model, manual
 // resolve_action, pty_input) auto-approve HOLDS — the modal stays visible — and
 // resumes once the user goes idle. A background mesh worker never receives any
 // of those commands, so it is never attended and its delegated auto-approve is
@@ -142,7 +142,7 @@ describe('manual-attendance command set — provider-common signal', () => {
   it('counts foreground + controlbar + manual-approval + terminal commands', () => {
     for (const cmd of [
       'select_session', 'open_panel', 'invoke_provider_script',
-      'set_mode', 'change_model', 'set_thought_level', 'resolve_action', 'pty_input',
+      'set_mode', 'change_model', 'resolve_action', 'pty_input',
     ]) {
       expect(MANUAL_ATTENDANCE_COMMANDS.has(cmd)).toBe(true)
     }

@@ -43,9 +43,8 @@ import {
 import {
     decodeActiveWorkQueryResponse,
     decodeDirectDispatchRecordResponse,
-    decodeGraphAuditRecordResponse,
     decodeQueueCancelResponse,
-    decodeQueueEnqueueGraphResponse,
+    decodeQueueEnqueueBatchResponse,
     decodeQueueEnqueueResponse,
     decodeQueueQueryResponse,
     decodeQueueRequeueResponse,
@@ -55,12 +54,10 @@ import {
     type ActiveWorkQueryResponse,
     type DirectDispatchRecordRequest,
     type DirectDispatchRecordResponse,
-    type GraphAuditRecordRequest,
-    type GraphAuditRecordResponse,
     type QueueCancelRequest,
     type QueueCancelResponse,
-    type QueueEnqueueGraphRequest,
-    type QueueEnqueueGraphResponse,
+    type QueueEnqueueBatchRequest,
+    type QueueEnqueueBatchResponse,
     type QueueEnqueueRequest,
     type QueueEnqueueResponse,
     type QueueQueryRequest,
@@ -71,24 +68,9 @@ import {
     type RecordLocalResponse,
     type RecoveryContextQueryRequest,
     type RecoveryContextQueryResponse,
-    decodeGraphGateAbandonResponse,
-    decodeGraphGateClaimResponse,
-    decodeGraphGateReleaseResponse,
-    decodeGraphNodePatchResponse,
-    decodeGraphViewQueryResponse,
     decodeOrphanedPinNotifyResponse,
     decodePruneStaleDirectResponse,
     decodeTaskStatsQueryResponse,
-    type GraphGateAbandonRequest,
-    type GraphGateAbandonResponse,
-    type GraphGateClaimRequest,
-    type GraphGateClaimResponse,
-    type GraphGateReleaseRequest,
-    type GraphGateReleaseResponse,
-    type GraphNodePatchRequest,
-    type GraphNodePatchResponse,
-    type GraphViewQueryRequest,
-    type GraphViewQueryResponse,
     type OrphanedPinNotifyRequest,
     type OrphanedPinNotifyResponse,
     type PruneStaleDirectRequest,
@@ -442,7 +424,7 @@ export async function missionListQuery(
  * Record one mesh event with its FULL payload kept locally on the daemon
  * (`meshRecord(..., { local: true })`): the topic leg is the content-free
  * projection, the local row keeps the nested/free-text payload (dispatch
- * records, MAGI question/synthesis, checkpoint messages, reconcile evidence).
+ * records, checkpoint messages, reconcile evidence).
  */
 export async function recordLocal(
     transport: CommandTransport,
@@ -481,7 +463,7 @@ export async function queueQuery(
     return dispatch(transport, 'queue_query', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeQueueQueryResponse);
 }
 
-/** Enqueue one task (+ its single-surface decision record) in the daemon. A daemon guard refusal throws with its message. */
+/** Enqueue one task in the daemon. A daemon guard refusal throws with its message. */
 export async function queueEnqueue(
     transport: CommandTransport,
     args: Omit<QueueEnqueueRequest, 'v'>,
@@ -489,12 +471,12 @@ export async function queueEnqueue(
     return dispatch(transport, 'queue_enqueue', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeQueueEnqueueResponse);
 }
 
-/** Atomic batch enqueue (compat or graph path) with its audit trail. A domain refusal is an `ok: false` RESULT. */
-export async function queueEnqueueGraph(
+/** Atomic multi-task enqueue (all or none). A domain refusal is an `ok: false` RESULT. */
+export async function queueEnqueueBatch(
     transport: CommandTransport,
-    args: Omit<QueueEnqueueGraphRequest, 'v'>,
-): Promise<QueueEnqueueGraphResponse> {
-    return dispatch(transport, 'queue_enqueue_graph', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeQueueEnqueueGraphResponse);
+    args: Omit<QueueEnqueueBatchRequest, 'v'>,
+): Promise<QueueEnqueueBatchResponse> {
+    return dispatch(transport, 'queue_enqueue_batch', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeQueueEnqueueBatchResponse);
 }
 
 /** Cancel a queue task; returns the row after and before the cancel. */
@@ -521,14 +503,6 @@ export async function directDispatchRecord(
     return dispatch(transport, 'direct_dispatch_record', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeDirectDispatchRecordResponse);
 }
 
-/** A graph gate / node-patch provenance record, written by the daemon's allow-listed recorder. */
-export async function graphAuditRecord(
-    transport: CommandTransport,
-    args: Omit<GraphAuditRecordRequest, 'v'>,
-): Promise<GraphAuditRecordResponse> {
-    return dispatch(transport, 'graph_audit_record', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphAuditRecordResponse);
-}
-
 /** Active work computed in the daemon (and/or the record + direct-dispatch inputs it reads). */
 export async function activeWorkQuery(
     transport: CommandTransport,
@@ -545,54 +519,11 @@ export async function recoveryContextQuery(
     return dispatch(transport, 'recovery_context_query', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeRecoveryContextQueryResponse);
 }
 
-// ─── C-W9c: graph gates/plan/patch, task/mission stats, prune audit, orphaned-pin notify ──
+// ─── C-W9c: task/mission stats, prune audit, orphaned-pin notify ──
 //
 // The last mcp-server call sites that reached daemon-core's MeshRuntimeStore-
-// backed graph/stats/active-work modules in-process (design's 2026-09-24
-// 19:00 stamp). Every one of these now runs in the daemon that owns the rows;
-// `graphAuditRecord` above is superseded for graph gate/patch provenance
-// (mesh-graph-ipc.ts writes its own audit record inline) but stays exported
-// in case another caller still uses the standalone command.
-
-/** Claim a graph gate's coordinator lease (`mesh_graph_gate` action=claim's core, now in the daemon). */
-export async function graphGateClaim(
-    transport: CommandTransport,
-    args: Omit<GraphGateClaimRequest, 'v'>,
-): Promise<GraphGateClaimResponse> {
-    return dispatch(transport, 'graph_gate_claim', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphGateClaimResponse);
-}
-
-/** Release a claimed graph gate. A domain refusal is a RESULT (`released: false` + `refusalCode`), not a thrown error. */
-export async function graphGateRelease(
-    transport: CommandTransport,
-    args: Omit<GraphGateReleaseRequest, 'v'>,
-): Promise<GraphGateReleaseResponse> {
-    return dispatch(transport, 'graph_gate_release', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphGateReleaseResponse);
-}
-
-/** Abandon (permanently deny) a graph gate — cancels every node it was holding. */
-export async function graphGateAbandon(
-    transport: CommandTransport,
-    args: Omit<GraphGateAbandonRequest, 'v'>,
-): Promise<GraphGateAbandonResponse> {
-    return dispatch(transport, 'graph_gate_abandon', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphGateAbandonResponse);
-}
-
-/** Patch a still-pending graph node's base spec and immediately re-settle it. A domain refusal is a RESULT (`patched: false` + `refusalCode`). */
-export async function graphNodePatch(
-    transport: CommandTransport,
-    args: Omit<GraphNodePatchRequest, 'v'>,
-): Promise<GraphNodePatchResponse> {
-    return dispatch(transport, 'graph_node_patch', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphNodePatchResponse);
-}
-
-/** The read-only graph projection (nodes, edges, gates, workspaces, next coordinator actions). */
-export async function graphViewQuery(
-    transport: CommandTransport,
-    args: Omit<GraphViewQueryRequest, 'v'>,
-): Promise<GraphViewQueryResponse> {
-    return dispatch(transport, 'graph_view_query', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphViewQueryResponse);
-}
+// backed stats/active-work modules in-process (design's 2026-09-24 19:00
+// stamp). Every one of these now runs in the daemon that owns the rows.
 
 /** Per-task (and optionally per-mission rollup) time/attempt stats, computed in the daemon. */
 export async function taskStatsQuery(

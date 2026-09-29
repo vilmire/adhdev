@@ -8,11 +8,11 @@
 // ---------------------------------------------------------------------------
 
 import { isMeshTaskPriority, type MeshTaskMode, type MeshTaskPriority, type MeshTaskStatus } from '@adhdev/mesh-shared';
-import { deriveDependencyFailures, type MeshDependencyFailure } from './mesh-graph-derived-failure.js';
+import { deriveDependencyFailures, type MeshDependencyFailure } from './mesh-dependency-failure.js';
 import type { MeshTaskInputEnvelope, MeshWorkQueueEntry } from './mesh-work-queue.js';
 
-/** G5: hard cap on tasks per atomic graph enqueue — a runaway backstop, not a tuning knob. */
-export const MESH_TASK_GRAPH_MAX_TASKS = 50;
+/** G5: hard cap on tasks per atomic multi-task enqueue — a runaway backstop, not a tuning knob. */
+export const MESH_TASK_BATCH_MAX_TASKS = 50;
 
 /** Content-free description of a persisted input envelope, for view/status surfaces. */
 export interface MeshTaskInputSummary {
@@ -67,8 +67,7 @@ export function isTaskReadonly(task: { readonly?: boolean; taskMode?: MeshTaskMo
 
 /**
  * M1: THE single dependency-gate predicate. A task is claimable from a
- * dependency standpoint iff it carries no system block (`blockedReason`) AND
- * every id in `dependsOn` has reached 'completed'.
+ * dependency standpoint iff every id in `dependsOn` has reached 'completed'.
  *
  * DEPENDSON-GATE-SYMMETRY: every scheduler surface that decides whether a
  * pending task may run MUST route through this one predicate — the queue claim
@@ -77,14 +76,13 @@ export function isTaskReadonly(task: { readonly?: boolean; taskMode?: MeshTaskMo
  * (enqueue-and-push). If any surface computes dependency readiness on its own,
  * the gate goes asymmetric and a task blocked from the pull path can still be
  * eager-pushed straight to an idle session, silently bypassing its
- * prerequisites. The semantics here (all deps completed && !blocked) are the
- * invariant — do not fork them.
+ * prerequisites. The semantics here (all deps completed) are the invariant —
+ * do not fork them.
  */
 export function taskDependenciesSatisfied(
-    entry: Pick<MeshWorkQueueEntry, 'dependsOn' | 'blockedReason'>,
+    entry: Pick<MeshWorkQueueEntry, 'dependsOn'>,
     statusById: Map<string, MeshTaskStatus | string>,
 ): boolean {
-    if (entry.blockedReason) return false;
     const deps = Array.isArray(entry.dependsOn) ? entry.dependsOn : [];
     return deps.every(depId => statusById.get(depId) === 'completed');
 }
@@ -97,9 +95,9 @@ export function taskDependenciesSatisfied(
  * scheduler gates can never disagree.
  */
 export function describeTaskDependencyState(
-    entry: Pick<MeshWorkQueueEntry, 'dependsOn' | 'blockedReason'>,
+    entry: Pick<MeshWorkQueueEntry, 'dependsOn'>,
     statusById: Map<string, MeshTaskStatus | string>,
-    depMetaById?: ReadonlyMap<string, Pick<MeshWorkQueueEntry, 'blockedReason' | 'cancelReason' | 'status'>>,
+    depMetaById?: ReadonlyMap<string, Pick<MeshWorkQueueEntry, 'cancelReason' | 'status'>>,
 ): { waitingOn: string[]; dependenciesSatisfied: boolean; dependencyFailures: MeshDependencyFailure[] } {
     const deps = Array.isArray(entry.dependsOn) ? entry.dependsOn : [];
     const waitingOn = deps.filter(depId => statusById.get(depId) !== 'completed');

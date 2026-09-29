@@ -3,7 +3,7 @@ import type { SetURLSearchParams } from 'react-router-dom'
 import { useLaunchCli } from '../context/LaunchCliContext'
 
 import type { ActiveConversation } from '../components/dashboard/types'
-import { isAcpConv, isCliConv } from '../components/dashboard/types'
+import { isCliConv } from '../components/dashboard/types'
 import type { SavedSessionHistoryEntry } from '../components/dashboard/HistoryModal'
 import { createSavedHistoryFilterState, type SavedHistoryFilterState } from '../utils/saved-history-filter-state'
 import { getProviderSummaryValue } from '../utils/daemon-utils'
@@ -57,7 +57,7 @@ export function useDashboardHistoryModalState({
     [activeConv, remoteDialogActiveConv, remoteDialogConv],
   )
 
-  const isSavedSessionHistoryTarget = !!historyTargetConv && isCliConv(historyTargetConv) && !isAcpConv(historyTargetConv)
+  const isSavedSessionHistoryTarget = !!historyTargetConv && isCliConv(historyTargetConv)
 
   const savedHistoryRefreshKey = useMemo(() => {
     if (!historyTargetConv || !isSavedSessionHistoryTarget) return null

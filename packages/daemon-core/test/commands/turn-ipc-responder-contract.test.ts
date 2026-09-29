@@ -79,9 +79,9 @@ describe('responder → client decoder contract (seeded data)', () => {
         const m = await call('mission_upsert', { v, meshId, title: 'Contract mission', goal: 'x'.repeat(400), status: 'active' });
         expect(m.success, m.error).toBe(true);
         const missionId = m.mission?.id ?? m.id;
-        const q = await call('queue_enqueue', { v, meshId, message: 'seeded work', options: { difficulty: 'easy', taskMode: 'general', missionId }, decision: { decision: { decision: 'single', single_reason: 'x' }, decisionMissing: true } });
+        const q = await call('queue_enqueue', { v, meshId, message: 'seeded work', options: { difficulty: 'easy', taskMode: 'general', missionId } });
         expect(q.success, q.error).toBe(true);
-        await call('record_local', { v, meshId, kind: 'magi_synthesis', payload: { consensusGroupId: 'g1', synthesis: { notes: ['t'] } } });
+        await call('record_local', { v, meshId, kind: 'checkpoint_created', payload: { checkpointId: 'c1', synthesis: { notes: ['t'] } } });
         return { missionId, taskId: q.entry.id };
     }
 

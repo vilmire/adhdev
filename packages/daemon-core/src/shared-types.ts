@@ -45,7 +45,6 @@ export type {
     ActiveChatData,
     IdeProviderState,
     CliProviderState,
-    AcpProviderState,
     ExtensionProviderState,
     ProviderEvent,
 } from './providers/provider-instance.js';
@@ -383,7 +382,7 @@ export type SubscribeRequest =
 export type UnsubscribeRequest =
     { [K in TransportTopic]: { type: 'unsubscribe'; topic: K; key: string } }[TransportTopic];
 
-export type SessionTransport = 'cdp-page' | 'cdp-webview' | 'pty' | 'acp';
+export type SessionTransport = 'cdp-page' | 'cdp-webview' | 'pty';
 
 export type SessionKind = 'workspace' | 'agent';
 
@@ -399,7 +398,6 @@ export type SessionCapability =
     | 'resize_terminal'
     | 'change_model'
     | 'set_mode'
-    | 'set_thought_level'
     | 'delete_notification'
     | 'mark_notification_unread';
 
@@ -633,21 +631,6 @@ export interface MachineProviderCheckResult {
     message?: string;
     command?: string;
     path?: string | null;
-}
-
-/** ACP config option (model/mode/thought_level selection) */
-export interface AcpConfigOption {
-    category: 'model' | 'mode' | 'thought_level' | 'other';
-    configId: string;
-    currentValue?: string;
-    options: { value: string; name: string; description?: string; group?: string }[];
-}
-
-/** ACP mode */
-export interface AcpMode {
-    id: string;
-    name: string;
-    description?: string;
 }
 
 // ─── Provider Controls Schema (daemon → frontend) ──────────────────

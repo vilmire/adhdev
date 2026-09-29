@@ -4,7 +4,7 @@ import { deriveAutoApproveModeRisk } from './auto-approve-modes.js'
 import { providerHasOpenPanelSupport } from './open-panel-support.js'
 
 const VALID_CAPABILITY_MEDIA_TYPES = new Set(['text', 'image', 'audio', 'video', 'resource'])
-const VALID_INPUT_STRATEGIES = new Set(['native', 'native_acp', 'resource_link', 'text_fallback', 'paste', 'upload'])
+const VALID_INPUT_STRATEGIES = new Set(['native', 'resource_link', 'text_fallback', 'paste', 'upload'])
 
 // Every property allowed by the v1 JSON schemas (sdk/v1/schemas/*/provider.schema.json)
 // must be listed here, or the loader warns "Unknown provider field" on
@@ -103,10 +103,6 @@ export const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'source',
   'tui',
   'scriptCallBudgetMs',
-  // ACP manifest fields (v1 ACP schema): declarative session-state
-  // protocol and trust tier. Every registry ACP manifest carries both.
-  'session',
-  'tier',
 ])
 
 const VALUE_CONTROL_TYPES = new Set<ProviderControlType>(['select', 'toggle', 'cycle', 'slider'])
@@ -130,7 +126,7 @@ export function validateProviderDefinition(raw: unknown): ProviderValidationResu
   if (!provider.name) errors.push('Missing required field: name')
   if (!provider.category) {
     errors.push('Missing required field: category')
-  } else if (!['ide', 'extension', 'cli', 'acp'].includes(String(provider.category))) {
+  } else if (!['ide', 'extension', 'cli'].includes(String(provider.category))) {
     errors.push(`Invalid category: ${String(provider.category)}`)
   }
 
@@ -146,7 +142,7 @@ export function validateProviderDefinition(raw: unknown): ProviderValidationResu
   const category = provider.category
   const typedProvider = provider as unknown as ProviderModule
   const controls = Array.isArray(provider.controls) ? provider.controls : []
-  if ((category === 'cli' || category === 'acp')) {
+  if ((category === 'cli')) {
     const spawn = provider.spawn
     const command = spawn && typeof spawn === 'object'
       ? (spawn as Record<string, unknown>).command
@@ -436,8 +432,8 @@ function validateMeshCoordinatorMcpConfig(mcpConfig: unknown, errors: string[]):
   }
 
   const format = config.format
-  if (format !== undefined && !['claude_mcp_json', 'hermes_config_yaml', 'opencode_json'].includes(String(format))) {
-    errors.push('meshCoordinator.mcpConfig.format must be one of: claude_mcp_json, hermes_config_yaml, opencode_json')
+  if (format !== undefined && !['claude_mcp_json', 'opencode_json'].includes(String(format))) {
+    errors.push('meshCoordinator.mcpConfig.format must be one of: claude_mcp_json, opencode_json')
   }
 
   for (const key of ['path', 'serverName', 'configPathCommand', 'instructions', 'template']) {

@@ -1,6 +1,6 @@
 /**
  * mesh_node_slots action=propose — detect a node's installed CLI providers and draft a
- * capability-slot / MAGI-panel profile from them.
+ * capability-slot profile from them.
  *
  * This closes the one gap between two pieces that already existed: per-node CLI
  * detection (the status snapshot's `availableProviders`) and slot application
@@ -26,7 +26,6 @@
  * derive from two lists.
  */
 import {
-    buildMagiPanelProposal,
     buildSlotProposal,
     normalizeNodeCapabilitySlots,
     type DetectedCliProvider,
@@ -40,7 +39,7 @@ import { readNodeRuntime } from './mesh-held-node-state.js';
  * the same provider-loader availability data the dashboard's provider list
  * reads — the coordinator's own, or the catalog a member pushed).
  *
- * Filters to `category === 'cli'` and `installed === true`. IDE/ACP are out of
+ * Filters to `category === 'cli'` and `installed === true`. IDE providers are out of
  * scope, and `extension` reports `installed: false` unconditionally, so neither
  * can leak in. `installed === undefined` is treated as
  * NOT installed — under-proposing is recoverable, over-proposing puts a slot on
@@ -73,16 +72,14 @@ export function extractInstalledCliProviders(raw: unknown): DetectedCliProvider[
 
 /**
  * Detect installed CLI providers on a node and return a proposed capability-slot
- * profile (and, optionally, a MAGI panel draft). READ-ONLY — apply via
- * `mesh_node_slots` action=set / `mesh_magi_kind_panel` action=set.
+ * profile. READ-ONLY — apply via `mesh_node_slots` action=set.
  */
 export async function meshNodeSlotsPropose(
     ctx: MeshContext,
-    args: { node_id?: string; nodeId?: string; include_magi?: boolean; includeMagi?: boolean } = {},
+    args: { node_id?: string; nodeId?: string } = {},
 ): Promise<string> {
     const nodeId = String(args.node_id || args.nodeId || '').trim();
     if (!nodeId) return JSON.stringify({ success: false, error: 'node_id required' });
-    const includeMagi = args.include_magi === true || args.includeMagi === true;
 
     try {
         const node = await findNodeWithRefresh(ctx, nodeId);
@@ -122,7 +119,6 @@ export async function meshNodeSlotsPropose(
         }
 
         const proposal = buildSlotProposal(detected, currentSlots);
-        const magiPanel = includeMagi ? buildMagiPanelProposal(detected, { nodeId: node.id }) : undefined;
 
         const warnings: string[] = [];
         if (proposal.destructive) {
@@ -167,19 +163,6 @@ export async function meshNodeSlotsPropose(
             droppedProviders: proposal.droppedProviders,
             destructive: proposal.destructive,
             ...(warnings.length ? { warnings } : {}),
-            ...(magiPanel
-                ? {
-                    magiPanelProposal: {
-                        slots: magiPanel,
-                        scope: 'ONE panel of the detected providers, pinned to this node. Not a per-kind assignment.',
-                        rationale: 'MAGI\'s value is cross-provider independence, and detection supports exactly that: '
-                            + 'one panel of distinct installed providers. Nothing in a provider manifest grades a provider '
-                            + 'for rca vs design vs claim_audit, so no per-kind split is proposed — you choose the task_kind '
-                            + 'to bind this to. Models are intentionally left unpinned.',
-                        nextAction: 'Bind with mesh_magi_kind_panel({ action: "set", task_kind, slots }) — dry-run first, then write=true after approval.',
-                    },
-                }
-                : {}),
             note: 'PROPOSAL ONLY — nothing was written. This tool never mutates node config.',
             nextAction: 'Present this diff to the user. On approval, apply with '
                 + 'mesh_node_slots({ action: "set", node_id, slots: proposedSlots, write: true }). '

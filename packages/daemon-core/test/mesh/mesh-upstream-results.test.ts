@@ -1,10 +1,9 @@
 /**
- * D4 — "Upstream results" dispatch appendix
- * (the 2026-09-25 graph orchestration simplification §1 D4).
+ * D4 — "Upstream results" dispatch appendix.
  *
- * Pinned: a task with predecessors (queue dependsOn OR graph `requires`) is
- * dispatched with each predecessor's accepted completion summary, in the
- * SAME untrusted-evidence framing inputs_from uses; ≤ 600 chars per summary,
+ * Pinned: a task with predecessors (queue dependsOn) is dispatched with each
+ * predecessor's accepted completion summary, in the untrusted-evidence
+ * framing (mesh-untrusted-evidence.ts); ≤ 600 chars per summary,
  * ≤ 4 KB total (oldest dropped, announced); oldest-first; "(no report)" for a
  * predecessor without one; body order message → Upstream results → Handoff
  * notes → footer; the authored task.message is never mutated.
@@ -21,7 +20,7 @@ import {
   UPSTREAM_RESULTS_HEADING,
   UPSTREAM_RESULTS_MAX_BYTES,
 } from '../../src/mesh/mesh-upstream-results'
-import { MESH_UPSTREAM_DATA_PREAMBLE } from '../../src/mesh/mesh-graph-input-binding'
+import { MESH_UPSTREAM_DATA_PREAMBLE } from '../../src/mesh/mesh-untrusted-evidence'
 import { storeHandoffNote } from '../../src/mesh/worker-handoff-notes'
 import { WORKER_HANDOFF_EVENT_KIND } from '../../src/mesh/worker-report'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
@@ -36,7 +35,7 @@ function seedOutput(taskId: string, summary: string | undefined, completedAtMs: 
     ...(summary !== undefined ? { final_summary: summary } : {}),
     completed_at: new Date(completedAtMs).toISOString(),
   })
-  MeshRuntimeStore.getInstance().graphStore().insertOutput({
+  MeshRuntimeStore.getInstance().insertTaskOutput({
     taskId, version: 1, meshId: MESH, attempt: 1, status: status as any,
     envelopeJson, digest: randomUUID(), createdAt: new Date(completedAtMs).toISOString(),
   })
@@ -116,29 +115,6 @@ describe('D4 upstream results appendix', () => {
     expect(appendix.split(`</mesh_upstream_data_${nonce}>`).length - 1).toBe(1)
     expect(appendix).not.toContain('</mesh_upstream_data_deadbeef>')
     expect(appendix).not.toContain('ghp_' + 'a'.repeat(36))
-  })
-
-  it('graph `requires` predecessors count even without a queue dependsOn', () => {
-    const gs = MeshRuntimeStore.getInstance().graphStore()
-    const graphId = randomUUID()
-    const now = new Date().toISOString()
-    gs.insertGraph({
-      graphId, meshId: MESH, batchId: randomUUID(), enqueueSurface: 'batch', schemaVersion: 2,
-      status: 'active', taskCount: 2, gateCount: 0, workspaceCount: 0, dependencyEdgeCount: 1,
-      policyJson: '{}', createdAt: now, updatedAt: now,
-    })
-    const [nA, nB] = [randomUUID(), randomUUID()]
-    for (const [nodeId, ref, taskId] of [[nA, 'a', 'g_up'], [nB, 'b', 'g_down']]) {
-      gs.insertNode({
-        graphId, nodeId, meshId: MESH, ref, kind: 'worker_task', queueTaskId: taskId, state: 'declared',
-        baseSpecJson: '{}', materializationVersion: 0, createdAt: now, updatedAt: now,
-      })
-    }
-    gs.insertEdge({ graphId, meshId: MESH, fromNodeId: nA, toNodeId: nB, kind: 'requires', omitOnSkip: false, createdAt: now })
-    seedOutput('g_up', 'GRAPH UPSTREAM DONE', Date.now())
-    const appendix = buildUpstreamResultsAppendix(MESH, { id: 'g_down' })!
-    expect(appendix).toContain('GRAPH UPSTREAM DONE')
-    expect(appendix).toContain('source_task_id="g_up"')
   })
 
   it('orders the body: message → Upstream results → Handoff notes → footer', () => {

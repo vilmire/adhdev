@@ -66,7 +66,6 @@ export const GIT_HEAVY_SUITES: string[] = [
   // exercise dirty / stash / ahead / diverged base states. The check reads LIVE git
   // state (including a real fetch), so it cannot be covered with a mocked status.
   'test/mesh/mesh-refine-accept-preflight.test.ts',
-  'test/mesh/mesh-graph-workspace-bootstrap.test.ts',
   'test/mesh/mesh-onboarding-plan.test.ts',
   'test/mesh/preview-freshness.test.ts',
   'test/mesh/submodule-default-branch.test.ts',

@@ -3,7 +3,7 @@ import type { CommandTransport } from '../transports/mode.js';
 export const STOP_SESSION_TOOL = {
   name: 'stop_session',
   description:
-    'Stop a running agent session. For CLI agents (hermes-cli, claude-cli, etc.) this sends a graceful stop signal. ' +
+    'Stop a running agent session. For CLI agents (claude-cli, codex-cli, etc.) this sends a graceful stop signal. ' +
     'Use list_sessions to find the session_id.',
   inputSchema: {
     type: 'object' as const,
@@ -15,7 +15,7 @@ export const STOP_SESSION_TOOL = {
       type: {
         type: 'string',
         description:
-          'Provider type (e.g. hermes-cli, claude-cli). Auto-resolved from session_id if omitted.',
+          'Provider type (e.g. claude-cli, codex-cli). Auto-resolved from session_id if omitted.',
       },
     },
     required: ['session_id'],

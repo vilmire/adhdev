@@ -13,7 +13,7 @@ describe('normalizeActiveChatData — `_src` never reaches the status payload', 
             title: 't',
             status: 'generating',
             messages: [
-                { role: 'user', content: 'q', _src: { cls: 'acp', id: 't1.m1' } },
+                { role: 'user', content: 'q', _src: { cls: 'rt', key: 't1.m1' } },
                 { role: 'assistant', content: 'a', _src: { cls: 'n', L: '0000abcd', addr: '1.0' }, messageId: 'n.0000abcd.1.0' },
             ],
             activeModal: null,

@@ -1,115 +1,36 @@
 /**
  * miniDagViewModel — pure model + layout for the on-demand mini plan DAG
- * (MeshMiniDag), the surviving graph rendering of the blueprint redesign.
+ * (MeshMiniDag) behind a blueprint list row: the task's connected component
+ * over the queue's `depends_on` edges, laid out by dependency depth
+ * (longest-path layering) — a few dozen nodes at most, which is exactly the
+ * size where a hand-rolled layered placement reads as well as ELK.
  *
- * The full-canvas blueprint laid EVERYTHING out with ELK. The list replaces
- * that; a graph drawing remains only where a graph actually exists — a row
- * whose task belongs to a persistent orchestration graph WITH edges, or a
- * task wired into the queue's dependsOn DAG. Both funnel into one small
- * normalized model here, laid out by dependency depth (longest-path
- * layering) — a few dozen nodes at most, which is exactly the size where a
- * hand-rolled layered placement reads as well as ELK without the engine.
- *
- * Builders return null when there is NOTHING to draw (no edges): the caller
- * must not render a plan affordance for an edgeless graph — a canvas with
- * disconnected boxes explains nothing a list row doesn't already say.
+ * The builder returns null when there is NOTHING to draw (no edges): the
+ * caller must not render a plan affordance for a lone task — a canvas with a
+ * disconnected box explains nothing a list row doesn't already say.
  */
-import type { MeshGraphView, RepoMeshQueueTask } from '@adhdev/daemon-core'
-import type { TaskDagData } from './taskDagViewModel'
-import {
-    buildNodeIdByEndpoint,
-    buildStateByNodeId,
-    deriveBlueprintEdgeState,
-    type BlueprintEdgeState,
-} from './blueprintViewModel'
+import type { TaskDagData, TaskDagEdgeState } from './taskDagViewModel'
 
 export interface MiniDagNode {
     id: string
-    kind: 'task' | 'gate' | 'plan'
-    /** Card headline: task message (stripped elsewhere), or the graph ref. */
+    /** Card headline: the task message (stripped elsewhere). */
     label: string
-    /** Display state: queue status / gate state / graph node state. */
+    /** Display state: the queue status. */
     state: string
-    /** Backing queue row, when one exists — makes the node openable. */
-    taskId?: string
-    /** True for a gate in a blocking state — the loud styling. */
-    blocking?: boolean
-    /** run_if-guarded step (features includes 'run_if'). */
-    conditional?: boolean
-    /** Gate node's graph-node id, for the gate detail panel. */
-    gateNodeId?: string
+    /** Backing queue row — makes the node openable. */
+    taskId: string
 }
 
 export interface MiniDagEdge {
     id: string
     source: string
     target: string
-    state: BlueprintEdgeState
+    state: TaskDagEdgeState
 }
 
 export interface MiniDagModel {
     nodes: MiniDagNode[]
     edges: MiniDagEdge[]
-    /** Owning persistent graph, when the model came from one. */
-    graphId?: string
-}
-
-/** Gate blocking predicate — kept in the view model the mini DAG consumes. */
-function isBlockingGateState(state: string): boolean {
-    return state === 'awaiting_coordinator' || state === 'claimed' || state === 'expired'
-}
-
-/**
- * A persistent orchestration graph, as a mini-DAG model. Returns null when
- * the graph has no edges — the property the list's plan affordance is pinned
- * to ("only graphs with edges get a mini DAG").
- */
-export function buildGraphMiniDag(
-    graph: MeshGraphView,
-    taskById?: ReadonlyMap<string, RepoMeshQueueTask>,
-): MiniDagModel | null {
-    const endpointMap = buildNodeIdByEndpoint(graph)
-    const stateByNodeId = buildStateByNodeId(graph)
-    const nodes: MiniDagNode[] = graph.nodes.map(node => {
-        if (node.kind === 'coordinator_gate') {
-            const gate = graph.gates.find(candidate => candidate.nodeId === node.nodeId)
-            const state = gate?.state ?? node.state
-            return {
-                id: node.nodeId,
-                kind: 'gate' as const,
-                label: node.ref || node.nodeId.slice(0, 8),
-                state,
-                blocking: isBlockingGateState(state),
-                gateNodeId: node.nodeId,
-            }
-        }
-        const task = node.taskId ? taskById?.get(node.taskId) : undefined
-        return {
-            id: node.nodeId,
-            kind: task ? 'task' as const : 'plan' as const,
-            label: node.ref || node.nodeId.slice(0, 8),
-            // The queue row's LIVE status wins over the plan-side state — the
-            // two genuinely diverge mid-flight (same rule the old ghost cards
-            // followed).
-            state: task?.status ?? node.taskStatus ?? node.state,
-            ...(node.taskId ? { taskId: node.taskId } : {}),
-            ...(node.features?.includes('run_if') ? { conditional: true } : {}),
-        }
-    })
-    const edges: MiniDagEdge[] = []
-    graph.edges.forEach((edge, index) => {
-        const source = endpointMap.get(edge.from) ?? edge.from
-        const target = endpointMap.get(edge.to) ?? edge.to
-        if (!stateByNodeId.has(source) || !stateByNodeId.has(target)) return
-        edges.push({
-            id: `ge:${graph.graphId}:${index}`,
-            source,
-            target,
-            state: deriveBlueprintEdgeState(edge, stateByNodeId, endpointMap),
-        })
-    })
-    if (edges.length === 0) return null
-    return { nodes, edges, graphId: graph.graphId }
 }
 
 /**
@@ -138,15 +59,12 @@ export function buildQueueMiniDag(taskId: string, dag: TaskDagData): MiniDagMode
         .filter(node => component.has(node.id))
         .map(node => ({
             id: node.id,
-            kind: 'task' as const,
             label: node.task.message ?? node.id.slice(0, 8),
             state: node.task.status,
             taskId: node.id,
         }))
     const edges: MiniDagEdge[] = dag.edges
         .filter(edge => component.has(edge.source) && component.has(edge.target))
-        // TaskDagEdgeState ('satisfied'|'waiting'|'failed') is a subset of
-        // BlueprintEdgeState by the same names — one edge vocabulary.
         .map(edge => ({ id: edge.id, source: edge.source, target: edge.target, state: edge.state }))
     if (edges.length === 0) return null
     return { nodes, edges }

@@ -20,7 +20,6 @@ import { readStringValue } from '../mesh/mesh-node-identity.js';
 import { checkWorktreeChangesPatchEquivalentInRef, MeshWorktreePatchContainmentSummary } from '../mesh/mesh-refine-gates.js';
 import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
 import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
-import { magiAutoLaunchedSessionCleanupDecision } from '../repo-mesh-types.js';
 
 /**
  * Legacy pre-home-dir worktree layout: `<repoParent>/.adhdev-worktrees/<meshName>/<branch>`.
@@ -869,7 +868,7 @@ export async function recordIntentionalMeshSessionStop(self: DaemonCommandRouter
         node: any;
         sessionId: string;
         mode: RepoMeshSessionCleanupMode;
-        source: 'mesh_cleanup_sessions' | 'mesh_remove_node' | 'magi_session_cleanup';
+        source: 'mesh_cleanup_sessions' | 'mesh_remove_node';
         action: 'stop_session' | 'delete_session_force';
     }): Promise<void> {
         try {
@@ -899,17 +898,7 @@ export async function cleanupMeshSessions(self: DaemonCommandRouter, args: {
         mode: RepoMeshSessionCleanupMode;
         sessionIds?: string[];
         dryRun?: boolean;
-        source?: 'mesh_cleanup_sessions' | 'mesh_remove_node' | 'magi_session_cleanup';
-        /**
-         * MAGI auto-cleanup safety gate: a map of sessionId → the queue task id that
-         * session must have been AUTO-LAUNCHED for (record meta autoLaunchedForQueueTaskId).
-         * When set, a matched explicit session is only acted on if its record carries that
-         * exact marker. A reused idle session (no marker), the coordinator session, a
-         * re-assigned session, or any session whose marker points at a DIFFERENT task is
-         * skipped (reason 'auto_launch_marker_mismatch') — so MAGI never kills a session it
-         * didn't itself spawn for this fan-out. Only consulted alongside explicit sessionIds.
-         */
-        requireAutoLaunchedForTaskIds?: Record<string, string>;
+        source?: 'mesh_cleanup_sessions' | 'mesh_remove_node';
         /**
          * Opt-in orphan reclaim (default false). See SESSION-ACCUMULATION-LEAK.
          * When true, a workspace-only live_runtime session (no node binding) OR a
@@ -955,7 +944,6 @@ export async function cleanupMeshSessions(self: DaemonCommandRouter, args: {
         const skippedLiveSessionIds: string[] = [];
         const skippedCoordinatorSessionIds: string[] = [];
         const skippedLiveSessionReasons: Array<{ sessionId: string; reason: string }> = [];
-        const skippedMarkerMismatchSessionIds: string[] = [];
         const actedLiveDelegateSessionIds: string[] = [];
         const deleteUnsupportedSessionIds: string[] = [];
         const recordsRemainSessionIds: string[] = [];
@@ -1007,28 +995,6 @@ export async function cleanupMeshSessions(self: DaemonCommandRouter, args: {
                 skippedSessionIds.push(sessionId);
                 skippedCoordinatorSessionIds.push(sessionId);
                 continue;
-            }
-            // MAGI auto-cleanup marker gate. When the caller supplied a per-session
-            // expected autoLaunchedForQueueTaskId, the session must (a) carry the marker
-            // on its record meta AND (b) have it equal the expected replica task id.
-            // This is the safety core for MAGI: explicit session_ids bypass the
-            // self-coordinator / shared-daemon guards (hasExplicitSessionIds=true), so the
-            // ONLY thing protecting a reused-idle / coordinator / re-assigned session here
-            // is this marker check. Always-skip the coordinator session even when its id is
-            // passed explicitly (it never carries an autoLaunchedForQueueTaskId marker, so
-            // the mismatch branch already covers it, but be explicit for clarity).
-            if (args.requireAutoLaunchedForTaskIds) {
-                const decision = magiAutoLaunchedSessionCleanupDecision({
-                    recordMarker: readStringValue(record?.meta?.autoLaunchedForQueueTaskId),
-                    expectedTaskId: args.requireAutoLaunchedForTaskIds[sessionId],
-                    isCoordinatorSession: coordinatorSession,
-                });
-                if (!decision.allow) {
-                    skippedSessionIds.push(sessionId);
-                    skippedMarkerMismatchSessionIds.push(sessionId);
-                    skippedLiveSessionReasons.push({ sessionId, reason: decision.reason });
-                    continue;
-                }
             }
             // Only the conservative shared-daemon guard for live sessions that are NOT a delegate
             // explicitly bound to this node. Delegate-bound live sessions fall through and are
@@ -1158,7 +1124,6 @@ export async function cleanupMeshSessions(self: DaemonCommandRouter, args: {
             skippedSessionIds,
             skippedLiveSessionIds,
             skippedCoordinatorSessionIds,
-            ...(skippedMarkerMismatchSessionIds.length ? { skippedMarkerMismatchSessionIds } : {}),
             ...(actedLiveDelegateSessionIds.length ? { actedLiveDelegateSessionIds } : {}),
             ...(reclaimedOrphanSessionIds.length ? { reclaimedOrphanSessionIds } : {}),
             ...(skippedLiveSessionReasons.length ? { skippedLiveSessionReasons } : {}),

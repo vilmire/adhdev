@@ -2,7 +2,7 @@
 
 Repo Mesh lets one **coordinator** agent orchestrate work across many **nodes**
 (daemons, worktrees, or remote machines) that share a repo. The coordinator is a
-normal CLI/ACP agent session given a set of `mesh_*` MCP tools and a generated
+normal CLI agent session given a set of `mesh_*` MCP tools and a generated
 system prompt; the nodes are worker sessions it dispatches tasks to. All of the
 persistence, queueing, ledgering, refinery (auto-convergence), and event delivery
 logic for that lives in OSS packages and is documented here.
@@ -100,9 +100,9 @@ session starts. `resolveMeshCoordinatorSetup()` returns one of `auto_import`
 
 `mesh-tools.ts` is now a **re-export barrel only** — implementations are split
 by domain across `mesh-tools-{status,queue,mission,session,git,refine,crud,
-graph,slots,magi,...}.ts`, with shared helpers/types/state in
+slots,...}.ts`, with shared helpers/types/state in
 `mesh-tools-internal.ts`. The authoritative tool list and count live in
-`mesh-tool-schemas.ts`'s `ALL_MESH_TOOLS` array — currently **48 tools**
+`mesh-tool-schemas.ts`'s `ALL_MESH_TOOLS` array — currently **42 tools**
 (kept in sync with the coordinator-prompt TOOLS table by a consistency test in
 `coordinator-prompt.test.ts`). Highlights:
 
@@ -137,7 +137,6 @@ Shared React surface used by both standalone and cloud dashboards:
 - `MeshDetailView` — single mesh: nodes, queue, host, graph
 - `MeshNodeList`, `MeshHostDaemonSection`, `MeshQueueSection`,
   `ReviewInboxSection` — sections within the detail view
-- `MeshHermesMcpConfig` — coordinator MCP-config helper UI
 - Hooks: `useMeshList`, `useMeshGraph`, `useMeshQueue`, `useMeshReviewInbox`,
   `useMeshNodeActions`
 - `types.ts` — UI-facing `MeshNode` / `MeshEntry` / `MeshQueueEntry` shapes

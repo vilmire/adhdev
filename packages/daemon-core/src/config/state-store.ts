@@ -49,7 +49,7 @@ export function deferredRestartScheduleKey(meshId: string, nodeId: string): stri
 }
 
 export interface DaemonState {
-    /** Unified recent activity across IDE / CLI / ACP launch flows */
+    /** Unified recent activity across IDE / CLI launch flows */
     recentActivity: RecentActivityEntry[];
     /** Persistent resume-capable provider sessions keyed by providerSessionId */
     savedProviderSessions: SavedProviderSessionEntry[];

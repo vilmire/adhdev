@@ -79,7 +79,6 @@ export interface CompletionFlushHost {
     armCancelledCompletionRecheck(pending: CompletedDebouncePending, reason: CancelledCompletionReason, delayMs?: number): void;
     clearCancelledCompletionRecheck(): void;
     emitGeneratingCompleted(opts: any): void;
-    markCurrentTurnStartupGraceCollapseSatisfied(): void;
     cleanCompletionFinalSummary(pending: CompletedDebouncePending): string | undefined;
     completionFinalSummary(parsedMessages: unknown, turnStartedAt?: number): string | undefined;
     cachedInTurnCompletionSummaryContent(turnStartedAt?: number): string;
@@ -230,7 +229,6 @@ export function flushCompletedDebounceIfFinalized(host: CompletionFlushHost): vo
         host.clearCancelledCompletionRecheck();
         host.generatingStartedAt = 0;
         host.lastApprovalEventFingerprint = '';
-        host.markCurrentTurnStartupGraceCollapseSatisfied();
         return;
     }
 
@@ -291,7 +289,6 @@ export function flushCompletedDebounceIfFinalized(host: CompletionFlushHost): vo
     host.clearCancelledCompletionRecheck();
     host.generatingStartedAt = 0;
     host.lastApprovalEventFingerprint = '';
-    host.markCurrentTurnStartupGraceCollapseSatisfied();
 }
 
 /** The narrow surface of CliProviderInstance the completion emit reads/writes. */
@@ -399,17 +396,16 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
             // which is the same information this host has access to, so
             // there is nothing this call site can add.
             //
-            // `workerResult`: the graph output envelope's structured pointer
-            // target (`envelope.worker_result`, `mesh-graph-transition-runner.ts`
+            // `workerResult`: the task output envelope's structured field
+            // (`envelope.worker_result`, `mesh-task-terminal.ts`
             // `applyTaskTerminalInTxn`, fed by `runtime-ledger.ts`'s
-            // `graphAdvance` from `ctx.envelope`). Parsed with the SAME
+            // `taskTerminal` from `ctx.envelope`). Parsed with the SAME
             // trailing-JSON-in-the-final-summary rule the ledger evidence
             // record has always used (`shared/worker-result-parse.ts`, moved
             // out of `mesh/mesh-ledger.ts` in C-W5c so this producers-side
             // call site can use it without a `providers -> mesh` boundary
             // violation) — without it `envelope.worker_result` is empty for
-            // every locally-completed task and documented pointers like
-            // `/worker_result/validationResults` resolve to nothing.
+            // every locally-completed task.
             envelope: {
                 ...(opts.finalSummary ? { finalSummary: opts.finalSummary } : {}),
                 ...(() => {

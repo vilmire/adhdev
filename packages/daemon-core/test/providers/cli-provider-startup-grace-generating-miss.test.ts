@@ -275,58 +275,6 @@ describe('CliProviderInstance — fresh-session startup-grace generating miss', 
   // benign idle boot, a queued-pending first turn that only runs after grace, or a turn still
   // mid-flight at the grace expiry.
 
-  it('FAST-COLLAPSE: starting → idle directly (no generating frame) with a finished turn emits started+completed', () => {
-    const { instance, events, evidence, evidenceOpts, setAdapterStatus, setAdapterWaiting } = makeInstance('starting')
-    // A turn STARTED and FINISHED inside the startup-grace window: onTurnStarted bound the
-    // taskId (persists past completion), and the turn is no longer in flight.
-    instance.adapter.currentTurnTaskId = 'task-grace-1'
-    setAdapterWaiting(false)
-    setAdapterStatus('idle')
-    instance.detectStatusTransition() // starting → idle directly — FSM never reached generating
-
-    // C-W5c: the completion signal is the port's turn_end evidence (the
-    // legacy agent:generating_completed wire literal is gone).
-    const completions = synthesizedCompletions(evidence)
-    expect(completions.length).toBe(1)
-    const idx = evidence.indexOf(completions[0])
-    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata?.diagnosticReason).toBe('startup_grace_fast_collapse')
-    // EARLYNOTIFY-GATEBYPASS (c): the fast-collapse never observed the turn's generating phase,
-    // so its synth is weak-by-default (strength:'weak') — a later genuine completion can
-    // still supersede it.
-    expect(completions[0].strength).toBe('weak')
-    // A well-formed started→completed pair (chat bubble + CANON-B dispatch ack).
-    expect(events.some((e) => e.event === 'agent:generating_started')).toBe(true)
-    // agent:ready is still emitted (preserved behavior).
-    expect(events.some((e) => e.event === 'agent:ready')).toBe(true)
-  })
-
-  // EARLYNOTIFY-GATEBYPASS (d): the fast-collapse synth is a completed-emit producer that bypasses
-  // the flush-gate — it must record a completion-gate trace so the bypass is never silent.
-  describe('fast-collapse records a completion-gate trace', () => {
-    beforeEach(() => {
-      // traceContent:true so the assertion can read the raw payload.path string (the secret-safe
-      // sanitizer otherwise summarizes every string value to `[N chars]`).
-      setDebugRuntimeConfig({ logLevel: 'debug', collectDebugTrace: true, traceContent: true, traceBufferSize: 200, traceCategories: [] })
-      configureDebugTraceStore(); clearDebugTrace()
-    })
-    afterEach(() => { clearDebugTrace(); resetDebugRuntimeConfig(); configureDebugTraceStore() })
-
-    it('records a completion-gate synth-fire trace for the fast-collapse (always-on category)', () => {
-      const { instance, setAdapterStatus, setAdapterWaiting } = makeInstance('starting')
-      instance.adapter.currentTurnTaskId = 'task-grace-1'
-      setAdapterWaiting(false)
-      setAdapterStatus('idle')
-      instance.detectStatusTransition() // starting → idle — fast-collapse synth fires
-
-      const traces = getRecentDebugTrace({ category: 'completion-gate' })
-        .filter((t) => t.stage === 'synth-fire' && t.payload?.path === 'startup_grace_fast_collapse')
-      expect(traces.length).toBeGreaterThanOrEqual(1)
-      expect(traces[0].sessionId).toBe('sess-grace-1')
-      // Content-free: no worker/screen text leaks.
-      expect(Object.keys(traces[0].payload ?? {})).not.toContain('finalSummary')
-    })
-  })
-
   it('GUARD: a genuine idle boot (starting → idle, no turn ever started) emits ready only, no completion', () => {
     const { instance, events, setAdapterStatus } = makeInstance('starting')
     // No turn started this boot: adapter.currentTurnTaskId stays undefined, nothing in flight.
@@ -362,39 +310,6 @@ describe('CliProviderInstance — fresh-session startup-grace generating miss', 
   // fast-collapse arm nor the idle→generating arm ever runs. The idle-stayed defense line
   // (gated on the startup-grace age window) catches it and synthesizes the started+completed pair.
 
-  it('IDLE-COLLAPSE: already-idle first turn that completes within grace (no status change) emits started+completed', () => {
-    const { instance, events, evidence, evidenceOpts, setAdapterStatus, setAdapterWaiting } = makeInstance('idle')
-    // A turn STARTED and FINISHED while status stayed 'idle' the whole time. onTurnStarted bound
-    // the taskId (persists past completion); the turn is no longer in flight; generating was
-    // never armed (generatingStartedAt 0, no debounce pending).
-    instance.adapter.currentTurnTaskId = 'task-grace-1'
-    setAdapterWaiting(false)
-    setAdapterStatus('idle')
-    instance.detectStatusTransition() // idle → idle — NO status change; idle-stayed arm fires
-
-    // C-W5c: the completion signal is the port's turn_end evidence (the
-    // legacy agent:generating_completed wire literal is gone).
-    const completions = synthesizedCompletions(evidence)
-    expect(completions.length).toBe(1)
-    const idx = evidence.indexOf(completions[0])
-    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata?.diagnosticReason).toBe('startup_grace_idle_turn_collapse')
-    // A well-formed started→completed pair (chat bubble + CANON-B dispatch ack).
-    expect(events.some((e) => e.event === 'agent:generating_started')).toBe(true)
-  })
-
-  it('IDLE-COLLAPSE IDEMPOTENT: re-polling the idle session does not re-emit the pair', () => {
-    const { instance, events, evidence, setAdapterStatus, setAdapterWaiting } = makeInstance('idle')
-    instance.adapter.currentTurnTaskId = 'task-grace-1'
-    setAdapterWaiting(false)
-    setAdapterStatus('idle')
-    instance.detectStatusTransition() // synthesize once
-    instance.detectStatusTransition() // re-poll — guarded by fastCollapseSynthesizedTaskId
-    instance.detectStatusTransition() // re-poll again
-
-    expect(synthesizedCompletions(evidence).length).toBe(1)
-    expect(events.filter((e) => e.event === 'agent:generating_started').length).toBe(1)
-  })
-
   // ── R4c GENERATING-BOUNDARY collapse-anchored window (the live R4b idle-stayed miss) ──
   //
   // The live failure R4b's idle-stayed path was MEANT to cover but didn't: the FSM spends the
@@ -404,34 +319,6 @@ describe('CliProviderInstance — fresh-session startup-grace generating miss', 
   // time the turn lands+completes, so the idle-stayed guard's window was closed and
   // maybeSynthesizeStartupGraceCollapse was never even called — 0 events emitted live. Anchoring
   // the window on the COLLAPSE moment (R4c) keeps it open for dispatch-delay + turn-duration.
-  it('R4c COLLAPSE-ANCHOR: a turn dispatched after the 8s starting-grace is spent still synthesizes (boot-anchored window would have missed it)', () => {
-    const { instance, events, evidence, evidenceOpts, setAdapterStatus, setAdapterWaiting } = makeInstance('starting')
-    // Boot was 13s ago — PAST the 12s boot-anchored window. The OLD R4b guard
-    // (now - startedAt < 12s) would be FALSE here and synthesize nothing (the live miss).
-    instance.startedAt = Date.now() - 13_000
-
-    // 1) The FSM finally collapses starting→idle after spending its 8s startup-grace in
-    //    'starting'. This stamps startupGraceCollapseAt = now (the collapse moment).
-    setAdapterStatus('idle')
-    instance.detectStatusTransition() // starting → idle (startup-grace collapse)
-    expect(instance.startupGraceCollapseAt).not.toBeNull()
-
-    // 2) The first turn arrives a few seconds AFTER the collapse, runs+completes while status
-    //    stays 'idle' the whole time (no generating frame observed) — the idle→idle no-change poll.
-    instance.adapter.currentTurnTaskId = 'task-grace-1'
-    setAdapterWaiting(false)
-    setAdapterStatus('idle')
-    instance.detectStatusTransition() // idle → idle — collapse-anchored window STILL open
-
-    // C-W5c: the completion signal is the port's turn_end evidence (the
-    // legacy agent:generating_completed wire literal is gone).
-    const completions = synthesizedCompletions(evidence)
-    expect(completions.length).toBe(1)
-    const idx = evidence.indexOf(completions[0])
-    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata?.diagnosticReason).toBe('startup_grace_idle_turn_collapse')
-    expect(events.some((e) => e.event === 'agent:generating_started')).toBe(true)
-  })
-
   // ── R4d GENERATING-BOUNDARY turn-start-anchored window (the live rc.405 Probe2 miss) ──
   //
   // R4c anchored the window on the collapse moment but measured its END against `now` (the
@@ -444,29 +331,6 @@ describe('CliProviderInstance — fresh-session startup-grace generating miss', 
   // coordinator's "Synthesized missing completion" fallback. R4d additionally anchors the window
   // on when the first turn STARTED (engine.currentTurnStartedAt), so a turn that STARTED within
   // the collapse window is attributed to the startup collapse no matter how long it then ran.
-  it('R4d TURN-START-ANCHOR: a delayed-dispatch first turn whose duration overruns the now-window still synthesizes', () => {
-    const { instance, events, evidence, evidenceOpts, setAdapterStatus, setAdapterWaiting } = makeInstance('idle')
-    // Collapse was 16.2s ago → the R4c now-anchored window ((now - collapse) < 12s) is CLOSED.
-    instance.startupGraceCollapseAt = Date.now() - 16_200
-    instance.adapter.currentTurnTaskId = 'task-grace-1'
-    // The turn STARTED 11s ago == collapse+5.2s — WITHIN 12s of the collapse. It has since
-    // finished (waiting false) without ever arming a 'generating' frame.
-    instance.adapter.currentTurnStartedAt = Date.now() - 11_000
-    setAdapterWaiting(false)
-    setAdapterStatus('idle')
-    instance.detectStatusTransition() // idle → idle; now-window closed but turn-start window open
-
-    // C-W5c: the completion signal is the port's turn_end evidence (the
-    // legacy agent:generating_completed wire literal is gone).
-    const completions = synthesizedCompletions(evidence)
-    // FIXED: the turn-start-anchored window keeps the synthesis honest while covering
-    // dispatch-delay + full turn-duration. (Before R4d this emitted 0 — the live Probe2 miss.)
-    expect(completions.length).toBe(1)
-    const idx = evidence.indexOf(completions[0])
-    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata?.diagnosticReason).toBe('startup_grace_idle_turn_collapse')
-    expect(events.some((e) => e.event === 'agent:generating_started')).toBe(true)
-  })
-
   it('GUARD: a turn that STARTED long after the collapse (turn-start window closed) is not synthesized', () => {
     const { instance, events, setAdapterStatus, setAdapterWaiting } = makeInstance('idle')
     // Both windows closed: collapse 60s ago (now-window closed) AND the turn started 55s after
@@ -642,29 +506,4 @@ describe('CliProviderInstance — AGY-BOOT-PHANTOM (hold-class startup-grace col
     expect(instance.fastCollapseSynthesizedTaskId).toBe(null)
   })
 
-  it('HOLD-THEN-EMIT: once the native transcript lands, the re-polled hold session emits a real completion', () => {
-    // First poll: transcript absent → held (no completion, unmarked).
-    const held = makeHoldInstance()
-    held.instance.adapter.currentTurnTaskId = 'task-agy-1'
-    held.setAdapterWaiting(false)
-    held.setAdapterStatus('idle')
-    held.instance.detectStatusTransition()
-    expect(synthesizedCompletions(held.evidence).length).toBe(0)
-
-    // Second scenario: the same collapse but the transcript's final assistant is now present.
-    const landed = makeHoldInstance({ finalSummary: 'Done — reviewed the module, no changes needed.' })
-    landed.instance.adapter.currentTurnTaskId = 'task-agy-1'
-    landed.setAdapterWaiting(false)
-    landed.setAdapterStatus('idle')
-    landed.instance.detectStatusTransition()
-
-    // C-W5c: the completion signal is the port's turn_end evidence (the
-    // legacy agent:generating_completed wire literal is gone).
-    const completions = synthesizedCompletions(landed.evidence)
-    expect(completions.length).toBe(1)
-    const idx = landed.evidence.indexOf(completions[0])
-    expect(landed.evidenceOpts[idx]?.envelope?.notice?.completionMetadata?.diagnosticReason).toBe('startup_grace_fast_collapse')
-    expect(landed.evidenceOpts[idx]?.envelope?.finalSummary).toBe('Done — reviewed the module, no changes needed.')
-    expect(landed.instance.fastCollapseSynthesizedTaskId).toBe('task-agy-1')
-  })
 })

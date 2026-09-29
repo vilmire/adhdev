@@ -16,7 +16,6 @@ export interface DaemonCoreOptions {
  /** Enable/disable specific detectors */
   enableIdeDetection?: boolean;
   enableCliDetection?: boolean;
-  enableAcpDetection?: boolean;
  /** Status report interval (ms) */
   statusInterval?: number;
 }

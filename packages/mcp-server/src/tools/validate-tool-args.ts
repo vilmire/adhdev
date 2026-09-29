@@ -197,9 +197,9 @@ export function nestedArrayItemEnumValueError(toolName: string, properties: Reco
  * re-runs the same unknown-key check against each array entry, using the item
  * schema's own properties as the allow-list.
  *
- * Scoped generically (not hardcoded to `tasks`/`workspaces`/`gates`) so it applies
- * to any tool whose schema declares an array-of-objects property — today that is
- * `mesh_enqueue_batch`'s three, but a future one gets the same coverage for free.
+ * Scoped generically (not hardcoded to `tasks`) so it applies to any tool whose
+ * schema declares an array-of-objects property — today that is
+ * `mesh_enqueue_batch`'s `tasks`, but a future one gets the same coverage for free.
  */
 export function nestedArrayItemArgsError(toolName: string, properties: Record<string, unknown> | undefined, args: Record<string, unknown>): string | null {
     if (!properties) return null;
@@ -226,11 +226,9 @@ export function nestedArrayItemArgsError(toolName: string, properties: Record<st
  * sent something that is neither an array nor a string (number, boolean, object).
  *
  * Why: the handlers read these with `Array.isArray(...)` and silently DROP any
- * other shape, so a mistyped field changed the submitted plan without an error
- * (measured live 2026-09-25: `gated_by: "g1"` produced a gate with no edge, and
- * the gate then had nothing downstream to auto-close). Strings are deliberately
- * NOT rejected here: several handlers coerce a single string into a one-element
- * list, and `gated_by` now does too (mesh-tools-graph.ts readGraphTaskFields).
+ * other shape, so a mistyped field changed the submitted plan without an error.
+ * Strings are deliberately NOT rejected here: several handlers coerce a single
+ * string into a one-element list.
  */
 export function nestedArrayItemArrayTypeError(toolName: string, properties: Record<string, unknown> | undefined, args: Record<string, unknown>): string | null {
     if (!properties) return null;
@@ -283,8 +281,7 @@ export const TOP_LEVEL_SCOPE = '';
 /**
  * Accepted-but-unpublished argument aliases: tool → scope → alias → canonical.
  * Scope {@link TOP_LEVEL_SCOPE} is the tool's own arguments; any other scope is the
- * name of an array-of-objects property whose ITEMS accept the aliases (`tasks`,
- * `workspaces`). Applied before every other check, so an alias is validated
+ * name of an array-of-objects property whose ITEMS accept the aliases (`tasks`). Applied before every other check, so an alias is validated
  * (enum values, required keys) exactly as its canonical key would be.
  */
 export const MESH_ACCEPTED_ARG_ALIASES: Readonly<Record<string, Readonly<Record<string, Readonly<Record<string, string>>>>>> = {
@@ -293,7 +290,6 @@ export const MESH_ACCEPTED_ARG_ALIASES: Readonly<Record<string, Readonly<Record<
             ...ENQUEUE_TASK_FIELD_ALIASES,
             blockDuplicate: 'block_duplicate',
             allowDuplicate: 'allow_duplicate',
-            orchestrationDecision: 'orchestration_decision',
         },
     },
     mesh_enqueue_batch: {
@@ -301,21 +297,9 @@ export const MESH_ACCEPTED_ARG_ALIASES: Readonly<Record<string, Readonly<Record<
             missionId: 'mission_id',
             blockDuplicate: 'block_duplicate',
             allowDuplicate: 'allow_duplicate',
-            batchId: 'batch_id',
-            orchestrationDecision: 'orchestration_decision',
-            onDependencyFailure: 'on_dependency_failure',
         },
         tasks: {
             ...ENQUEUE_TASK_FIELD_ALIASES,
-            inputsFrom: 'inputs_from',
-            workspaceRef: 'workspace_ref',
-            gatedBy: 'gated_by',
-        },
-        workspaces: {
-            sourceNodeId: 'source_node_id',
-            baseRevision: 'base_revision',
-            desiredPath: 'desired_path',
-            cleanupOnGraphFailure: 'cleanup_on_graph_failure',
         },
     },
     // ── Tools/list schema diet (2026-09-27) ────────────────────────────────
@@ -328,36 +312,6 @@ export const MESH_ACCEPTED_ARG_ALIASES: Readonly<Record<string, Readonly<Record<
         [TOP_LEVEL_SCOPE]: {
             requiredTags: 'required_tags',
             targetNodeId: 'target_node_id',
-        },
-    },
-    mesh_graph_gate: {
-        [TOP_LEVEL_SCOPE]: {
-            gateId: 'gate_id',
-            leaseSeconds: 'lease_seconds',
-            extendDeadlineSeconds: 'extend_deadline_seconds',
-            fencingToken: 'fencing_token',
-            leaseGeneration: 'lease_generation',
-            idempotencyKey: 'idempotency_key',
-            coordinatorSessionId: 'coordinator_session_id',
-        },
-        patches: {
-            nodeId: 'node_id',
-            baseSpecPatch: 'base_spec_patch',
-        },
-    },
-    mesh_graph_node_patch: {
-        [TOP_LEVEL_SCOPE]: {
-            nodeId: 'node_id',
-            graphId: 'graph_id',
-            baseSpecPatch: 'base_spec_patch',
-        },
-    },
-    mesh_graph_view: {
-        [TOP_LEVEL_SCOPE]: {
-            graphId: 'graph_id',
-            batchId: 'batch_id',
-            includeTerminal: 'include_terminal',
-            probeGateEvidence: 'probe_gate_evidence',
         },
     },
     mesh_queue_cancel: {
@@ -381,7 +335,6 @@ export const MESH_ACCEPTED_ARG_ALIASES: Readonly<Record<string, Readonly<Record<
             ownedPaths: 'owned_paths',
             missionId: 'mission_id',
             deliveryMode: 'delivery_mode',
-            orchestrationDecision: 'orchestration_decision',
             allowStaleNode: 'allow_stale_node',
             allowQuotaExhausted: 'allow_quota_exhausted',
         },
@@ -400,7 +353,6 @@ export const MESH_ACCEPTED_ARG_ALIASES: Readonly<Record<string, Readonly<Record<
     mesh_mission_list: {
         [TOP_LEVEL_SCOPE]: {
             includeStats: 'include_stats',
-            includeMagi: 'include_magi',
         },
     },
     mesh_note: {
@@ -409,45 +361,48 @@ export const MESH_ACCEPTED_ARG_ALIASES: Readonly<Record<string, Readonly<Record<
             noteId: 'note_id',
         },
     },
-    mesh_magi_review: {
-        [TOP_LEVEL_SCOPE]: {
-            taskKind: 'task_kind',
-            requireIndependentEvidence: 'require_independent_evidence',
-            includeStale: 'include_stale',
-            waitTimeoutMs: 'wait_timeout_ms',
-            autoCleanup: 'auto_cleanup',
-        },
-    },
-    mesh_magi_collect: {
-        [TOP_LEVEL_SCOPE]: {
-            consensusGroupId: 'consensus_group_id',
-            taskKind: 'task_kind',
-            requireIndependentEvidence: 'require_independent_evidence',
-            waitTimeoutMs: 'wait_timeout_ms',
-            autoCleanup: 'auto_cleanup',
-        },
-    },
     mesh_node_slots: {
         [TOP_LEVEL_SCOPE]: {
             nodeId: 'node_id',
-            includeMagi: 'include_magi',
         },
     },
 };
 
-const RETIRED_CONDITIONAL_KEYS = ['run_if', 'runIf', 'on_false', 'onFalse', 'on_upstream_skip', 'onUpstreamSkip'] as const;
-const RETIRED_CONDITIONAL_REASON = 'Conditional branching (run_if / on_false / on_upstream_skip) was retired from the enqueue surface. '
-    + 'Order steps with depends_on, and choose what happens to downstream work when a dependency fails with on_dependency_failure '
-    + '(block | cancel — mesh_enqueue_batch top level). If the next step depends on a result, enqueue it once that result is known '
-    + '(mesh_enqueue_task with depends_on) instead of declaring a branch up front.';
+/**
+ * Graph orchestration (gates, deferred workspaces, input bindings, conditions,
+ * batch idempotency keys) was retired in favour of plain queue tasks with
+ * `depends_on`. A caller on an old prompt is told what replaces each field.
+ */
+const RETIRED_GRAPH_TASK_KEYS = [
+    'run_if', 'runIf', 'on_false', 'onFalse', 'on_upstream_skip', 'onUpstreamSkip',
+    'inputs_from', 'inputsFrom', 'workspace_ref', 'workspaceRef', 'gated_by', 'gatedBy',
+] as const;
+const RETIRED_GRAPH_TOP_KEYS = [
+    'gates', 'workspaces', 'batch_id', 'batchId', 'on_dependency_failure', 'onDependencyFailure',
+] as const;
+const RETIRED_DECISION_KEYS = ['orchestration_decision', 'orchestrationDecision'] as const;
+const RETIRED_GRAPH_REASON = 'Graph orchestration (coordinator gates, deferred workspaces, inputs_from, run_if, batch_id) was retired: '
+    + 'tasks are plain queue tasks ordered with depends_on, and each one receives its predecessors\' completion summaries ("Upstream results"). '
+    + 'For a step that must wait on YOU (an approval, a landing, a deploy), enqueue it once that step is done instead of declaring a gate. '
+    + 'What happens to dependents when a dependency fails is the mesh policy onDependencyFailure (block | cancel), not a per-batch field. '
+    + 'For a worktree, clone one with mesh_clone_node and pin the task to it with target_node_id.';
+const RETIRED_DECISION_REASON = 'orchestration_decision was retired (it only measured graph-vs-direct adoption and is no longer recorded on any dispatch surface); drop it.';
 
 /**
  * Retired argument keys: tool → scope → { keys, reason }. Rejected before the
  * unknown-key gate so the caller learns the REPLACEMENT, not just "unknown".
  */
 export const MESH_RETIRED_ARGS: Readonly<Record<string, Readonly<Record<string, { keys: readonly string[]; reason: string }>>>> = {
-    mesh_enqueue_task: { [TOP_LEVEL_SCOPE]: { keys: RETIRED_CONDITIONAL_KEYS, reason: RETIRED_CONDITIONAL_REASON } },
-    mesh_enqueue_batch: { tasks: { keys: RETIRED_CONDITIONAL_KEYS, reason: RETIRED_CONDITIONAL_REASON } },
+    mesh_enqueue_task: {
+        [TOP_LEVEL_SCOPE]: { keys: [...RETIRED_GRAPH_TASK_KEYS, ...RETIRED_DECISION_KEYS], reason: `${RETIRED_GRAPH_REASON} ${RETIRED_DECISION_REASON}` },
+    },
+    mesh_enqueue_batch: {
+        [TOP_LEVEL_SCOPE]: { keys: [...RETIRED_GRAPH_TOP_KEYS, ...RETIRED_DECISION_KEYS], reason: `${RETIRED_GRAPH_REASON} ${RETIRED_DECISION_REASON}` },
+        tasks: { keys: RETIRED_GRAPH_TASK_KEYS, reason: RETIRED_GRAPH_REASON },
+    },
+    mesh_send_task: {
+        [TOP_LEVEL_SCOPE]: { keys: RETIRED_DECISION_KEYS, reason: RETIRED_DECISION_REASON },
+    },
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -538,8 +493,7 @@ export function canonicalizeEnqueueTaskEntry(entry: Record<string, unknown>): Re
  * of `mesh_enqueue_task` or `mesh_enqueue_batch` (their own arguments, not a
  * task entry inside `tasks[]`) — `missionId`/`mission_id` at the batch's own
  * level (mesh-tools-queue.ts `meshEnqueueBatch`'s `batchMissionId`), and the
- * `allowDuplicate`/`blockDuplicate`/`orchestrationDecision` flags both tools
- * read at their own top level.
+ * `allowDuplicate`/`blockDuplicate` flags both tools read at their own top level.
  */
 export function canonicalizeMeshTopLevelArgs(name: 'mesh_enqueue_task' | 'mesh_enqueue_batch', args: Record<string, unknown>): Record<string, unknown> {
     const table = MESH_ACCEPTED_ARG_ALIASES[name];
@@ -574,8 +528,8 @@ export function retiredMeshToolArgsError(name: string, args: Record<string, unkn
 //
 // Several tools were merged into one tool selected by a discriminator argument
 // (`action`, `kind` or `mode`). The published schema is the UNION of every
-// action's arguments, so the unknown-key gate alone would accept, say, an
-// `outcome` on a gate claim and the handler would silently ignore it — the
+// action's arguments, so the unknown-key gate alone would accept, say, a
+// `session_ids` on a prune and the handler would silently ignore it — the
 // exact silent-drop class this file exists to close (see the header incident).
 // This table narrows the union per action: an argument that belongs to a
 // different action is refused with the action(s) it belongs to, and each
@@ -596,38 +550,17 @@ interface MeshActionSpec {
     readonly actions: Readonly<Record<string, { readonly args: readonly string[]; readonly required?: readonly string[] }>>;
 }
 
-const GATE_ID = ['gate_id'] as const;
-const GATE_OWNER = ['coordinator_session_id'] as const;
 const NODE_ID = ['node_id'] as const;
 const SESSION_CLEANUP_ARGS = { args: ['node_id', 'session_ids', 'dry_run'], required: ['node_id'] } as const;
 const READ_ONLY_CONFIG_ARGS = { args: ['mode', 'node_id', 'config'], required: ['mode'] } as const;
 
 export const MESH_TOOL_ACTIONS: Readonly<Record<string, MeshActionSpec>> = {
-    mesh_graph_gate: {
-        key: 'action',
-        actions: {
-            claim: { args: [...GATE_ID, 'lease_seconds', 'extend_deadline_seconds', ...GATE_OWNER], required: ['gate_id'] },
-            release: {
-                args: [...GATE_ID, 'fencing_token', 'lease_generation', 'idempotency_key', 'outcome', 'result', 'evidence', 'patches'],
-                required: ['gate_id', 'fencing_token', 'lease_generation', 'idempotency_key', 'outcome'],
-            },
-            abandon: { args: [...GATE_ID, 'reason', 'force', ...GATE_OWNER], required: ['gate_id', 'reason'] },
-            extend: { args: [...GATE_ID, 'extend_seconds'], required: ['gate_id', 'extend_seconds'] },
-        },
-    },
     mesh_node_slots: {
         key: 'action',
         actions: {
             list: { args: [...NODE_ID], required: ['node_id'] },
-            propose: { args: [...NODE_ID, 'include_magi'], required: ['node_id'] },
+            propose: { args: [...NODE_ID], required: ['node_id'] },
             set: { args: [...NODE_ID, 'slots', 'reason', 'write'], required: ['node_id', 'slots'] },
-        },
-    },
-    mesh_magi_kind_panel: {
-        key: 'action',
-        actions: {
-            list: { args: ['task_kind'] },
-            set: { args: ['task_kind', 'slots', 'write'], required: ['task_kind', 'slots'] },
         },
     },
     mesh_coordinator_prompt_append: {
@@ -748,8 +681,7 @@ function resolveMeshTool(name: string): { schema: ToolSchemaLike; injected: read
 
 /**
  * Mesh-mode gate: error text when the call carries unknown arguments — at the
- * top level OR inside a declared array-of-objects field (`tasks[]`,
- * `workspaces[]`, `gates[]`) — else null. A retired (merged) tool name returns the
+ * top level OR inside a declared array-of-objects field (`tasks[]`) — else null. A retired (merged) tool name returns the
  * redirect error naming its replacement; any other unknown tool name returns null
  * and falls through to the dispatcher's existing "Unknown tool" response.
  */

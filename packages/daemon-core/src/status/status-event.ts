@@ -45,7 +45,7 @@ export type ResolveStatusEventHideMute = (sessionId: string) => StatusEventHideM
  * (`agent:generating_completed` / `agent:stopped`). These are the fields the
  * pre-C-W5c `provider_event` completion carried after each instance's
  * `pushEvent` enrichment (cli-provider-events.ts `pushEvent`,
- * acp/ide/extension-provider-instance.ts `pushEvent`): the provider type, the
+ * cli/ide/extension-provider-instance.ts `pushEvent`): the provider type, the
  * provider-native session id, and the instance's workspace. Identifiers only —
  * never chat content.
  */
@@ -145,7 +145,7 @@ export function createInstanceHideMuteResolver(
  *                          `providerType: this.type`)
  *   - providerSessionId ← `state.providerSessionId` (CLI `pushEvent` stamped
  *                          `host.providerSessionId`)
- *   - workspaceName     ← `state.workspace` (CLI/ACP `workingDir`, IDE
+ *   - workspaceName     ← `state.workspace` (CLI `workingDir`, IDE
  *                          `workspace`), or the parent IDE's workspace for an
  *                          extension session (extension `pushEvent` stamped
  *                          `parent.workspaceName`)

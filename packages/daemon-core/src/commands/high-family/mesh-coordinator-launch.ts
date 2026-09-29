@@ -15,7 +15,7 @@ import { LOG } from '../../logging/logger.js';
 import { resolveMeshHostStatus, buildMeshHostRequiredFailure } from '../../mesh/mesh-host-ownership.js';
 import { registerMeshCoordinator } from '../../mesh/coordinator-registry.js';
 import { partitionSessionHostRecords } from '../../session-host/runtime-surface.js';
-import { createHermesManualMeshCoordinatorSetup, inspectMeshCoordinatorMcpServerPaths, resolveMeshCoordinatorSetup } from '../mesh-coordinator.js';
+import { inspectMeshCoordinatorMcpServerPaths, resolveMeshCoordinatorSetup } from '../mesh-coordinator.js';
 import { normalizeMeshNodeId } from '@adhdev/mesh-shared';
 import { delegatedWorkerAutoApproveSettings } from '../../repo-mesh-types.js';
 import {
@@ -26,9 +26,6 @@ import {
     getMcpServersKey,
     parseMeshCoordinatorMcpConfig,
     serializeMeshCoordinatorMcpConfig,
-    loadHermesCoordinatorBaseConfig,
-    stripHermesCoordinatorTempModelProviderOverrides,
-    copyHermesCoordinatorCredentialFiles,
     isSupportedMeshCoordinatorConfigFormat,
     type MeshCoordinatorConfigFormat,
 } from '../router.js';
@@ -265,21 +262,6 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         } catch { return undefined; }
                     };
 
-                    // MAGI panels: load THIS mesh's kind-panel bindings so the
-                    // coordinator prompt auto-lists which cross-verification panels
-                    // (rca / design / claim_audit / freeform) are configured. Same
-                    // systematic pattern as the brain presets — read machine-local
-                    // config at launch. Scoped by meshId: a coordinator for mesh A must
-                    // never be told about mesh B's panels (their slots name mesh B's
-                    // nodes). Best-effort: a read failure or empty map just omits the
-                    // "## Configured MAGI panels" section.
-                    const loadMagiKindPanelsBestEffort = async (forMeshId: string) => {
-                        try {
-                            const { listMagiKindPanels } = await import('../../config/mesh-config-routing.js');
-                            return listMagiKindPanels(forMeshId);
-                        } catch { return undefined; }
-                    };
-
                     // Support inline mesh data from cloud (bypasses local meshes.json lookup)
                     let mesh: any;
                     if (args?.inlineMesh && typeof args.inlineMesh === 'object') {
@@ -373,10 +355,10 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     // COORD-ALIAS: canonicalize before the manifest gate. resolve()/getMeta()
                     // are exact-type lookups, so an alias ('claude' for 'claude-cli') would
                     // return no provider and misreport a coordinator-capable CLI as
-                    // mesh_coordinator_unsupported. Scope to cli/acp — coordinator sessions
+                    // mesh_coordinator_unsupported. Scope to cli — coordinator sessions
                     // are never IDE-webview providers, and the unscoped direct match would
                     // hit e.g. extension/codex (type 'codex') instead of cli/codex-cli.
-                    cliType = ctx.deps.providerLoader.resolveAlias?.(cliType, ['cli', 'acp']) || cliType;
+                    cliType = ctx.deps.providerLoader.resolveAlias?.(cliType, ['cli']) || cliType;
                     const providerMeta = ctx.deps.providerLoader.resolve?.(cliType) || ctx.deps.providerLoader.getMeta(cliType);
                     const coordinatorSetup = resolveMeshCoordinatorSetup({
                         provider: providerMeta,
@@ -436,7 +418,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         // Build coordinator prompt first — fail closed on errors.
                         let cliCmdSystemPrompt = '';
                         try {
-                            cliCmdSystemPrompt = buildCoordinatorSystemPrompt({ mesh: effectiveMesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildEffectiveOperatingNotes(mesh.id), magiKindPanels: await loadMagiKindPanelsBestEffort(meshId), repoRules: resolveRepoRulesBestEffort(effectiveMesh) });
+                            cliCmdSystemPrompt = buildCoordinatorSystemPrompt({ mesh: effectiveMesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildEffectiveOperatingNotes(mesh.id), repoRules: resolveRepoRulesBestEffort(effectiveMesh) });
                         } catch (error: any) {
                             const message = error?.message || String(error);
                             LOG.error('MeshCoordinator', `Failed to build coordinator prompt: ${message}`);
@@ -712,7 +694,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     // broken mesh state is visible instead of silently launching with weaker rules.
                     let systemPrompt = '';
                     try {
-                        systemPrompt = buildCoordinatorSystemPrompt({ mesh: effectiveMesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildEffectiveOperatingNotes(mesh.id), magiKindPanels: await loadMagiKindPanelsBestEffort(meshId), repoRules: resolveRepoRulesBestEffort(effectiveMesh) });
+                        systemPrompt = buildCoordinatorSystemPrompt({ mesh: effectiveMesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildEffectiveOperatingNotes(mesh.id), repoRules: resolveRepoRulesBestEffort(effectiveMesh) });
                     } catch (error: any) {
                         const message = error?.message || String(error);
                         LOG.error('MeshCoordinator', `Failed to build coordinator prompt: ${message}`);
@@ -730,29 +712,6 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     const { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync } = await import('fs');
                     const { dirname } = await import('path');
                     const mcpConfigPath = coordinatorSetup.configPath;
-                    const hermesManualFallback = cliType === 'hermes-cli' && configFormat === 'hermes_config_yaml'
-                        ? createHermesManualMeshCoordinatorSetup(meshId, workspace)
-                        : null;
-                    let hermesBaseConfig: { config: Record<string, any>; sourceHome: string; sourceConfigPath: string } | null = null;
-                    if (hermesManualFallback) {
-                        try {
-                            hermesBaseConfig = loadHermesCoordinatorBaseConfig(mcpConfigPath);
-                        } catch (error: any) {
-                            const message = `Failed to parse Hermes base config for automatic coordinator setup: ${error?.message || error}`;
-                            LOG.error('MeshCoordinator', message);
-                            return { success: false, code: 'mesh_coordinator_config_parse_failed', error: message, meshId, cliType, workspace };
-                        }
-                    }
-                    const returnManualFallback = (message: string) => ({
-                        success: false,
-                        code: 'mesh_coordinator_manual_mcp_setup_required',
-                        error: message,
-                        meshId,
-                        cliType,
-                        workspace,
-                        meshCoordinatorSetup: hermesManualFallback,
-                    });
-
                     // Merge ADHDev mesh server into existing config.
                     // Pass full mesh data as env var so the MCP server can bootstrap
                     // without depending on meshes.json or a running daemon.
@@ -779,23 +738,16 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     } catch (error: any) {
                         const message = `Could not prepare MCP config path for automatic setup: ${error?.message || error}`;
                         LOG.error('MeshCoordinator', message);
-                        if (hermesManualFallback) return returnManualFallback(message);
                         return { success: false, code: 'mesh_coordinator_config_write_failed', error: message, meshId, cliType, workspace };
                     }
 
                     // Backup existing MCP config if present.
                     const hadExistingMcpConfig = existsSync(mcpConfigPath);
-                    let existingMcpConfig: Record<string, any> = hermesBaseConfig?.config || {};
-                    if (hermesBaseConfig) {
-                        copyHermesCoordinatorCredentialFiles(hermesBaseConfig.sourceHome, dirname(mcpConfigPath));
-                    }
+                    let existingMcpConfig: Record<string, any> = {};
                     if (hadExistingMcpConfig) {
                         try {
                             const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(readFileSync(mcpConfigPath, 'utf-8'), configFormat);
-                            const existingCoordinatorConfig = hermesManualFallback
-                                ? stripHermesCoordinatorTempModelProviderOverrides(parsedExistingMcpConfig)
-                                : parsedExistingMcpConfig;
-                            existingMcpConfig = { ...existingMcpConfig, ...existingCoordinatorConfig };
+                            existingMcpConfig = { ...existingMcpConfig, ...parsedExistingMcpConfig };
                             copyFileSync(mcpConfigPath, mcpConfigPath + '.backup');
                         } catch (error: any) {
                             LOG.error('MeshCoordinator', `Failed to parse existing MCP config ${mcpConfigPath}: ${error?.message || error}`);
@@ -821,17 +773,12 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     } catch (error: any) {
                         const message = `Could not write MCP config for automatic setup: ${error?.message || error}`;
                         LOG.error('MeshCoordinator', message);
-                        if (hermesManualFallback) return returnManualFallback(message);
                         return { success: false, code: 'mesh_coordinator_config_write_failed', error: message, meshId, cliType, workspace };
                     }
                     LOG.info('MeshCoordinator', `Wrote ${mcpConfigPath} with ${coordinatorSetup.serverName} server`);
 
                     const cliArgs: string[] = [];
                     const launchEnv: Record<string, string> = {};
-                    if (configFormat === 'hermes_config_yaml') {
-                        launchEnv.HERMES_HOME = dirname(mcpConfigPath);
-                        launchEnv.HERMES_IGNORE_USER_CONFIG = '';
-                    }
                     let autoImportContextFilePath: string | undefined;
                     let autoImportContextFileOwned = false;
                     let autoImportAgentFilePath: string | undefined;
@@ -858,7 +805,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
 
                     // 3. Launch CLI session via existing cliManager.
                     // Provider-specific prompt injection remains fail-closed: Claude gets
-                    // explicit CLI args, while Hermes reads HERMES_EPHEMERAL_SYSTEM_PROMPT.
+                    // explicit CLI args.
                     const launchResult: any = await ctx.execute('launch_cli', {
                         cliType,
                         dir: workspace,

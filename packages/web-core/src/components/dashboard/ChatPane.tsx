@@ -1,6 +1,6 @@
 
 /**
- * ChatPane — Chat view for IDE, ACP, and CLI chat-mode sessions.
+ * ChatPane — Chat view for IDE and CLI chat-mode sessions.
  */
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -245,7 +245,7 @@ export default function ChatPane({
         [activeConv.hostIdeType, controlsContext.providerType, controlsContext.targetEntry?.providerControls],
     )
     const defaultVisibleLiveMessages = getDefaultVisibleLiveMessages({
-        isCliLike: controlsContext.isCli || controlsContext.isAcp,
+        isCliLike: controlsContext.isCli,
     })
     // The keyed chat lane is the pane's only live source; see
     // `buildChatPaneControllerOptions` for why panel visibility does not gate it.
@@ -377,7 +377,6 @@ export default function ChatPane({
         void loadDaemonMetadata(daemonId, { minFreshMs: 30_000 }).catch(() => {});
     }, [
         daemonId,
-        controlsContext.isAcp,
         controlsContext.targetEntry?.providerControls,
         controlsContext.targetEntry?.controlValues,
         loadDaemonMetadata,
@@ -740,7 +739,7 @@ export default function ChatPane({
                 actionLogs={visibleActionLogs}
                 agentName={getConversationProviderLabel(activeConv) || panelLabel || 'Agent'}
                 userName={userName}
-                isCliMode={controlsContext.isCli || controlsContext.isAcp}
+                isCliMode={controlsContext.isCli}
                 isWorking={firstViewState.showWorkingIndicator}
                 contextKey={activeConv.tabKey}
                 receivedAtMap={receivedAtMap}

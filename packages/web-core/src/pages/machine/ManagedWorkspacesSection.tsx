@@ -19,7 +19,7 @@ import { useDashboardMeshOverrides } from '../../context/DashboardMeshContext'
 import Card from '../../components/Card'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import { IconCheck, IconFolder, IconPencil, IconPlus, IconTrash, IconX } from '../../components/Icons'
-import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry } from './types'
+import type { MachineData, IdeSessionEntry, CliSessionEntry } from './types'
 import type { useMachineActions } from './useMachineActions'
 import WorkspaceBrowseDialog from '../../components/machine/WorkspaceBrowseDialog'
 import {
@@ -141,7 +141,6 @@ interface ManagedWorkspacesSectionProps {
     machine: MachineData
     ideSessions: IdeSessionEntry[]
     cliSessions: CliSessionEntry[]
-    acpSessions: AcpSessionEntry[]
     actions: ReturnType<typeof useMachineActions>
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
 }
@@ -151,7 +150,6 @@ export default function ManagedWorkspacesSection({
     machine,
     ideSessions,
     cliSessions,
-    acpSessions,
     actions,
     sendDaemonCommand,
 }: ManagedWorkspacesSectionProps) {
@@ -235,7 +233,6 @@ export default function ManagedWorkspacesSection({
         const activeWorkspacePaths = [
             ...ideSessions.map(session => session.workspace),
             ...cliSessions.map(session => session.workspace),
-            ...acpSessions.map(session => session.workspace),
         ]
         const initialPath = getDefaultBrowseStartPath(
             machine.platform,
@@ -246,7 +243,7 @@ export default function ManagedWorkspacesSection({
             ),
         )
         void loadBrowsePath(initialPath)
-    }, [acpSessions, cliSessions, ideSessions, loadBrowsePath, machine.defaultWorkspacePath, machine.platform, machine.workspaces])
+    }, [cliSessions, ideSessions, loadBrowsePath, machine.defaultWorkspacePath, machine.platform, machine.workspaces])
 
     return (
         <>

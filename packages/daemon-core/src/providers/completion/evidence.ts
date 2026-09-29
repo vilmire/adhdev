@@ -188,7 +188,6 @@ export interface EvidenceHost {
      * pre-existing behaviour.
      */
     nativeTurnTerminalMarker?(turnStartedAt?: number): NativeTurnTerminalMarker | null;
-    injectedTaskHasStartedGenerating(): boolean;
     publishTranscriptSignalObservation(messages: unknown[] | null, error?: boolean): void;
     spawnedEnvOverrides(): Record<string, string> | undefined;
     lastVisibleAssistantSummaryDetail(messages: unknown): { content: string; timestampMs?: number };
@@ -452,7 +451,7 @@ export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allo
     // null` guard blocked antigravity's completion transcript entirely, so its
     // final-assistant evidence was permanently 'unavailable' and the turn
     // completion never emitted → the mesh reconcile loop reclaimed the
-    // "delivered but no completion" task and re-dispatched the same MAGI prompt
+    // "delivered but no completion" task and re-dispatched the same prompt
     // (ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP, completion side).
     //
     // Prefer a concrete handle (providerSessionId, else the persisted pin). When
@@ -623,43 +622,18 @@ export function completionFinalAssistantEvidence(host: EvidenceHost, parsedMessa
 
     const externalMessages = host.readExternalCompletionMessages();
     if (externalMessages) {
-        // ANTIGRAVITY-PREMATURE-COMPLETION (recur): the external-native transcript is
-        // the WHOLE session's native-history, not turn-scoped by the provider. On a
-        // reused-idle antigravity session, a completion-gate poll can run AFTER a new
-        // task is injected but BEFORE that task's onTurnStarted fires. The transcript
-        // then still tails the PRIOR turn's final-assistant bubble; completionHasFinal‑
-        // AssistantMessage accepts it (turnStartedAt is 0/undefined pre-onTurnStarted →
-        // fails open, or the prior bubble post-dates the prior turn → passes) and a
-        // generating_completed fires for the NEW task BEFORE generating_started — the
-        // exact live 06:34→06:35 inversion. Gate external-native evidence on the current
-        // injected task having genuinely entered generating: if a task is attached but its
-        // turn has not started (turnStartedInjectedTask() === false), the tail is stale by
-        // construction, so this evidence must NOT satisfy the completion gate. Fail CLOSED
-        // (present=false) rather than open. This does NOT regress the rc.480/481 win: once
-        // the injected task's onTurnStarted fires, currentTurnStartedAt/currentTurnTaskId
-        // bind to it and a real final bubble still fires completion normally.
-        const injectedTaskGenerating = host.injectedTaskHasStartedGenerating();
-        // TX-FSM Stage 2.1 (KIMI-PARSED-RACE, trailing-tool-activity veto): mirrors the
-        // mesh coordinator's pollAssignedTaskTerminalEvidence guard (ledger 84594b15) on
-        // the WORKER's own local evidence. A native-source transcript that captures
-        // tool.call/tool.result as kind:'tool' bubbles (kimi's nativeHistory.records, after
-        // the provider-manifest fix) proves the last VISIBLE assistant bubble was narration
-        // ("Let me check the logs...") that fired a tool call, not the turn's genuine final
-        // answer. A provider whose native transcript never records tool activity (nothing to
-        // veto on) is unaffected — this can only ever turn a false present:true into false,
-        // never the reverse.
-        const trailingToolActivity = hasTrailingToolActivityAfterFinalAssistant(externalMessages as any);
-        const present = injectedTaskGenerating
-            && turnClosed
-            && !trailingToolActivity
-            && host.completionHasFinalAssistantMessage(externalMessages, turnStartedAt);
+        // The external-native transcript is the WHOLE session's native history and is
+        // not turn-scoped by the provider, so it can never satisfy the completion gate
+        // by itself (a stale tail from a prior turn would fire generating_completed
+        // for the wrong turn). Completion for these classes is proven by the turn
+        // ledger / transcript signal source, not by this evidence — `present` stays
+        // false and the messages are surfaced for display only.
         // Dashboard tail-repair cache: this runs on EVERY completion check
         // (mesh AND non-mesh — the non-mesh path suppresses the
         // generating_completed emit, so completionFinalSummary never runs there
         // and cannot cache). Cache whenever the external transcript's LAST
         // visible bubble is an assistant reply — this is a display value only, so
-        // it is intentionally looser than the strict `present` completion gate
-        // (which also requires turnClosed and turn-scoping): the dashboard should
+        // it is deliberately independent of the `present` completion gate: the dashboard should
         // show the answer as soon as native-history has it, even if the FSM has
         // not yet ratified the turn end. getState() replaces it on the next turn.
         const lastVisibleAssistant = host.lastVisibleAssistantSummaryDetail(externalMessages);
@@ -667,7 +641,7 @@ export function completionFinalAssistantEvidence(host: EvidenceHost, parsedMessa
             host.lastCompletionSummary = { content: lastVisibleAssistant.content, receivedAt: Date.now(), sourceTimestampMs: lastVisibleAssistant.timestampMs };
         }
         return {
-            present,
+            present: false,
             messages: externalMessages,
             source: 'external-native',
         };

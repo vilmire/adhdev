@@ -12,7 +12,7 @@
  * `check:boundaries` forbids `seqscribe/** -> mesh/**` so the replication
  * layer (topic policy, codec, replica store) stays producer/consumer-neutral.
  * This file is the opposite direction: it is CONSUMED by roster call sites
- * (mesh tools, MAGI, daemon reconcile — future units — and, via a type-only
+ * (mesh tools, daemon reconcile — future units — and, via a type-only
  * re-export, the web-core roster adapter), never imported BY `seqscribe/**`.
  *
  * ── §8 unit 5 scope ─────────────────────────────────────────────────────────
@@ -37,10 +37,9 @@
  * only because mcp-server is a separate process.
  *
  * ── §8 unit 8 scope ─────────────────────────────────────────────────────────
- * Roster ids 6-8 (`mcp_mesh_status_reconciliation`, `magi_approval_probe`,
- * `magi_result_collect`) are now enabled — the three mcp-server reads that
- * derive an IRREVERSIBLE decision (completion synthesis, approve click, final
- * MAGI verdict) rather than merely displaying. They route through
+ * Roster id 6 (`mcp_mesh_status_reconciliation`) is now enabled — the
+ * mcp-server read that derives an IRREVERSIBLE decision (completion synthesis)
+ * rather than merely displaying. They route through
  * `oss/packages/mcp-server/src/tools/mesh-transcript-semantic-read.ts`, which
  * adds §5.5's semantic admission gate (per-consumer coverage + freshness
  * budget) on top of the same IPC pair unit 6 uses, and hands back the same
@@ -77,9 +76,7 @@ export type TranscriptConsumerId =
     | 'mesh_read_chat_display'
     | 'daemon_worker_status_probe'
     | 'daemon_terminal_evidence'
-    | 'mcp_mesh_status_reconciliation'
-    | 'magi_approval_probe'
-    | 'magi_result_collect';
+    | 'mcp_mesh_status_reconciliation';
 
 /**
  * Closed fallback-reason union — design §4 "공통 라우터". Every roster
@@ -159,18 +156,6 @@ export const TRANSCRIPT_CONSUMER_ROSTER: Readonly<Record<TranscriptConsumerId, T
     mcp_mesh_status_reconciliation: {
         currentLocation: 'oss/packages/mcp-server/src/tools/mesh-tools-internal.ts (reconcileDirectDispatchesFromTranscriptEvidence)',
         note: 'Final-assistant completion synthesis; the replica feeds the SAME readFinalAssistantTranscriptEvidence + hasTrailingToolActivityAfterFinalAssistant parsers as the live read, so the activity-after-final veto and synthesis idempotency are unchanged. Needs activity kinds in order, so tail-only coverage declines.',
-        enabled: true,
-        unit: 8,
-    },
-    magi_approval_probe: {
-        currentLocation: 'oss/packages/mcp-server/src/tools/mesh-tools-magi.ts (nudgeWedgedReplica)',
-        note: 'Fresh status+activeModal only, for idempotent approve. Irreversible act, so admission requires a snapshot inside the freshness budget (design §5.5); resolve_action stays a live RPC.',
-        enabled: true,
-        unit: 8,
-    },
-    magi_result_collect: {
-        currentLocation: 'oss/packages/mcp-server/src/tools/mesh-tools-magi.ts (tryResolveReplica)',
-        note: 'Current-turn MAGI result/evidence collection; the replica runs the SAME parseFirstMagiCandidateForKind, and current-turn coverage is required so the FIX#1 cross-turn mis-attribution guard is not lost.',
         enabled: true,
         unit: 8,
     },

@@ -113,7 +113,7 @@ export async function bootProviders(s1: PlatformStage): Promise<ProvidersStage> 
     const refreshProviderAvailability = async (providerType?: string): Promise<void> => {
         const targetProvider = providerType ? providerLoader.getMeta(providerLoader.resolveAlias(providerType)) : null;
         const targetCategory = targetProvider?.category;
-        if (!providerType || targetCategory === 'cli' || targetCategory === 'acp') {
+        if (!providerType || targetCategory === 'cli') {
             if (providerType && targetProvider) {
                 const detected = await detectCLI(targetProvider.type, providerLoader, { includeVersion: false });
                 providerLoader.setCliDetectionResults([{

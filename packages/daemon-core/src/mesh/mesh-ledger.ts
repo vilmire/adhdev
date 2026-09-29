@@ -138,13 +138,6 @@ export type MeshLedgerKind =
     | 'mission_created'
     | 'mission_status_changed'
     | 'mission_goal_updated'
-    // MAGI (Multi-Agent Ground-truth Insight) cross-verification activity. Persisted
-    // so a wait=false fan-out and its later synthesis survive coordinator restarts and
-    // are foldable into mesh_status (keyed by consensusGroupId).
-    // magi_dispatched payload: { source:'magi', consensusGroupId, missionId?, panel?, question?, replicaCount }
-    // magi_synthesis  payload: { source:'magi', consensusGroupId, missionId?, panel?, question?, synthesis }
-    | 'magi_dispatched'
-    | 'magi_synthesis'
     // MESH-SEND-KEYS (feature 3): audit trail for coordinator PTY key injections
     // via mesh_send_keys. Records the key ENUMS, destructive flag and result —
     // NEVER the literal text body (may carry tokens / user data).
@@ -209,105 +202,13 @@ export type MeshLedgerKind =
     // payload: { taskId, sessionId, nodeId, workspace, gitDirty: false, changedFiles: 0,
     //            reason: 'no_side_effects' }
     | 'task_completion_no_side_effects'
-    // GRAPH-ORCHESTRATION Phase E — enqueue/graph provenance (design :733-757).
-    //
-    // ★ CONTENT BOUNDARY: these payloads carry IDENTIFIERS, COUNTS, ENUMS and
-    // DIGESTS only. Design :737-738 is explicit — "Message contents and bound
-    // output values are excluded; only sizes and digests are emitted." A task
-    // message, a bound upstream value, or a gate's free-text instructions must
-    // never be written into a graph ledger payload; a digest or a byte count is
-    // the correct way to make one auditable.
-    //
-    // graph_enqueue_committed payload:
-    //   { graphId, batchId, enqueueSurface, schemaVersion, planDigest, missionId?,
-    //     coordinatorSessionId?, taskCount, gateCount, workspaceCount,
-    //     dependencyEdgeCount, onDependencyFailure, orchestrationDecision?, replayed? }
-    // graph_enqueue_validation_failed payload: { code, batchId?, taskCount?, gateCount? }
-    // graph_enqueue_rolled_back payload: { batchId?, code, taskCount? }
-    //   ★ design :752-753 — a rollback record MUST be written in a FRESH
-    //   transaction after the failed graph transaction, otherwise the audit row
-    //   rolls back together with the data it exists to describe. The ledger is a
-    //   separate JSONL append, so this holds by construction here.
-    | 'graph_enqueue_committed'
-    | 'graph_enqueue_validation_failed'
-    | 'graph_enqueue_rolled_back'
-    // design :697-731 — the enqueue-decision record for the SINGLE-task surface.
-    //
-    // ★ Its own kind rather than a graph_enqueue_committed with empty graph fields:
-    // a single enqueue commits no graph, so it has no graphId, batchId or planDigest,
-    // and synthesizing them would corrupt every graph count that joins on those. The
-    // design's two adoption metrics are computed from the two kinds together —
-    // "declared eligible singles" is exactly the subset of THIS kind whose
-    // orchestrationDecision.known_graph_steps >= 2.
-    //
-    // Same content boundary as the graph kinds: identifiers, counts, enums. The task
-    // MESSAGE is never written here; taskId is the join key to the task rows.
-    // payload: { taskId, enqueueSurface: 'single', missionId?, coordinatorSessionId?,
-    //            orchestrationDecision, declaredEligibleSingle?, decisionMissing?,
-    //            batchCapabilityAvailable? }
-    | 'single_enqueue_decision'
-    // GRAPH-MEASUREMENT-DIRECT — the decision record for the DIRECT dispatch surface
-    // (`mesh_send_task`), the third and largest of the three dispatch surfaces.
-    //
-    // ★ WHY THIS KIND EXISTS. The graph-adoption investigation found 0 graphs across
-    // 206 dispatches and could not say whether that was a failure, because ~67% of
-    // those dispatches went out through `mesh_send_task` — a surface whose schema
-    // carried no decision field at all. `single_enqueue_decision` therefore measured
-    // only the enqueue minority, and its `decision_missing` count was silent about
-    // the direct majority rather than evidence concerning it.
-    //
-    // ★ Its own kind rather than a `single_enqueue_decision` with a different
-    // `enqueueSurface`, for the same reason that kind is separate from
-    // graph_enqueue_committed: a direct dispatch commits no graph AND enters no
-    // queue, so "declared eligible singles" (a metric over QUEUED singles) must not
-    // silently absorb direct rows. Readers that want the whole picture join the three
-    // kinds explicitly; readers that want one surface are not forced to filter.
-    //
-    // The `direct_reason` axis is distinct from `single_reason` on purpose. The
-    // question a single enqueue answers is "why one step and not a graph"; the
-    // question a direct dispatch answers is "why this session and not the queue" —
-    // and the coordinator prompt sanctions specific answers to the second
-    // (same-subject continuation, investigation→fix handoff, idle-session reuse,
-    // deliberate queue bypass). `new_subject` is a legal value that self-classifies
-    // as NOT sanctioned, which is what makes justified and lazy direct dispatches
-    // separable after the fact.
-    //
-    // Same content boundary as every kind above: identifiers, counts, enums. The task
-    // MESSAGE is never written here; taskId is the join key to the task rows.
-    // payload: { taskId, enqueueSurface: 'direct', via, nodeId?, sessionId?, missionId?,
-    //            coordinatorSessionId?, orchestrationDecision, decisionMissing?,
-    //            unsanctionedDirect?, batchCapabilityAvailable? }
-    | 'direct_dispatch_decision'
-    // Coordinator gate lifecycle (design :740-750). payload:
-    //   { graphId, gateId, ref?, action, outcome?, generation, ownerSessionId?,
-    //     releaseDigest?, materializedNodeIds?, policy?, ambiguousExternalOutcome? }
-    | 'graph_gate_claimed'
-    | 'graph_gate_released'
-    | 'graph_gate_expired'
-    // A coordinator gave up on a gate (design :399, the `-> cancelled` edge).
-    // Distinct from `graph_gate_released` ON PURPOSE: an abandon granted no
-    // passage and produced no outcome or evidence, so folding the two together
-    // would make "gave up" read as "approved" in the audit trail. payload:
-    //   { graphId, gateId, ref?, action, priorState, reason, coordinatorSessionId?,
-    //     force?, cancelledNodeIds?, graphStatus? }
-    | 'graph_gate_abandoned'
-    // A coordinator rewrote a still-pending node's spec and re-settled it
-    // (mesh_graph_node_patch) — the recovery path for a node blocked on a
-    // `materialization_error:*`. The base spec is otherwise the immutable plan,
-    // so this is the ONE way the instruction a worker finally receives can
-    // differ from the one the batch was accepted with, and it is audited as
-    // such. Only patched KEY NAMES are recorded, never the patch values.
-    // payload:
-    //   { graphId, nodeId, ref?, queueTaskId?, patchedKeys, priorBlockedReason?,
-    //     outcome, state, blockedReason?, materializationVersion, coordinatorSessionId? }
-    | 'graph_node_patched'
     // QUOTA-CLAIM-GATE-LEDGER: the quota claim gate in tryAssignQueueTask (evaluateProviderQuotaGate)
     // previously only LOGGED a block (logQuotaClaimBlockTransition, LOG.info only) — no ledger
-    // trace at all. That is a silent-forever risk specifically for MAGI: a kind-panel slot is
-    // pinned to a single (node, provider) via requiredTags, so when that provider is
+    // trace at all. That is a silent-forever risk for a task pinned to a single
+    // (node, provider) via requiredTags: when that provider is
     // quota-exhausted there is no fallback candidate to escape to (unlike the ordinary
     // multi-provider claim path, which can fall through to another provider on the same node —
-    // see logQuotaClaimFallbackSuccess). The replica just parks pending indefinitely with
+    // see logQuotaClaimFallbackSuccess). The task just parks pending indefinitely with
     // nothing in the ledger to diagnose why.
     //
     // Same transition-dedup discipline as claim_refused / worktree_bootstrap_stale_bypass above,
@@ -418,7 +319,7 @@ export interface MeshWorkerResultArtifact {
     nextAction?: string;
     requiresUserAction: boolean;
     // NOTIF Defect-2b: `parseable_answer` = the final summary held a parseable JSON
-    // ANSWER (e.g. a MAGI claim_audit / rca envelope) that is NOT worker-result-shaped
+    // ANSWER (e.g. a structured review envelope) that is NOT worker-result-shaped
     // (no status + changedFiles/errors/…). It is still concrete evidence that the worker
     // produced a real, parseable answer — so it must NOT be labelled evidenceLevel
     // 'insufficient' — but it is NOT a self-attributing worker result, so it is deliberately
@@ -565,7 +466,7 @@ function readStringArray(value: unknown): string[] {
 /**
  * Re-exported from `shared/worker-result-parse.ts` (moved there in
  * wiring-unification C-W5c so `providers/completion/completion-flush.ts` —
- * which must never import `mesh/**` — can compute the graph output
+ * which must never import `mesh/**` — can compute the task output
  * envelope's `workerResult` for a LOCAL completion the same way this ledger
  * evidence record always has, without a boundary violation). Kept as a
  * re-export here so this file's own existing callers are unaffected.
@@ -632,7 +533,7 @@ export function normalizeMeshWorkerResult(input?: Record<string, unknown>, sourc
 
 /**
  * NOTIF Defect-2b: does the summary contain ANY parseable JSON object answer (not just a
- * worker-result-shaped one)? Some providers (and every MAGI replica) emit a complete, valid
+ * worker-result-shaped one)? Some providers (and read-only reviewers) emit a complete, valid
  * answer as a JSON envelope that has no `status`/`changedFiles` worker-result fields, so
  * extractJsonObjectFromSummary returns undefined and the completion is mislabelled
  * source='default' → evidenceLevel='insufficient' even though a real answer was produced.
@@ -668,7 +569,7 @@ function resolveWorkerResult(opts: BuildTaskCompletionEvidenceOptions): MeshWork
         return normalizeMeshWorkerResult(parsed, 'final_summary_json');
     }
     // NOTIF Defect-2b: no worker-result-shaped JSON, but a parseable JSON answer IS present
-    // (the common MAGI / answer-only case). Treat it as concrete evidence so the completion is
+    // (the common answer-only case). Treat it as concrete evidence so the completion is
     // not labelled 'insufficient', while keeping the worker-result fields empty (status stays
     // 'unknown') — we only know an answer parsed, not its task outcome.
     if (summaryHasParseableJsonAnswer(opts.finalSummary)) {

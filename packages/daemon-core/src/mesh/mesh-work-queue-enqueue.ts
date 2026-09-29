@@ -1,4 +1,4 @@
-// Mesh work-queue writes that create rows: enqueueTask, the atomic task-graph
+// Mesh work-queue writes that create rows: enqueueTask, the atomic multi-task
 // enqueue (G5), and recordDirectDispatchTask (the assigned row a direct dispatch
 // materialises), with the dependency / difficulty validation they share. Split
 // out of mesh-work-queue.ts (re-exported there).
@@ -15,15 +15,15 @@ import type {
     MeshEnqueueTaskOptions,
     MeshQueueMutationOptions,
     MeshWorkQueueEntry,
-    MeshTaskGraphEntrySpec,
+    MeshTaskBatchEntrySpec,
 } from './mesh-work-queue-types.js';
 import { requireMeshHostQueueOwner } from './mesh-host-ownership.js';
 import { validateMeshTaskModeRequest, buildMeshTaskModeViolationError } from './mesh-task-mode-guardrail.js';
 import { randomUUID } from 'crypto';
-import { normalizeMeshTaskPriority, resolveNotBefore, MESH_TASK_GRAPH_MAX_TASKS } from './mesh-task-predicates.js';
+import { normalizeMeshTaskPriority, resolveNotBefore, MESH_TASK_BATCH_MAX_TASKS } from './mesh-task-predicates.js';
 import { getDifficultyBrains } from '../config/mesh-config-routing.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { normalizeMeshCapabilityTags, resolveConvergeRequiredTags } from './mesh-node-capability-tags.js';
+import { normalizeMeshCapabilityTags } from './mesh-node-capability-tags.js';
 
 function normalizeDependsOn(value: unknown): string[] {
     if (!Array.isArray(value)) return [];
@@ -180,17 +180,9 @@ export function enqueueTask(
         }
         assertNoDependencyCycle(meshId, id, dependsOn);
         const callerTags = normalizeMeshCapabilityTags(opts?.requiredTags);
-        // Convergence routing (opt-in): auto-inject converge=refine for code_change
-        // tasks so they hard-filter onto refine-capable worktree nodes. No-op unless
-        // the mesh opts in; explicit target_node_id / required_tags are preserved.
-        // Routing is otherwise governed solely by the caller's required_tags (hard
-        // filter through nodeSatisfiesRequiredTags) — no role/taskMode auto-routing.
-        const resolvedRequiredTags = resolveConvergeRequiredTags(
-            meshId,
-            modeValidation.taskMode,
-            callerTags,
-            { targetNodeId: opts?.targetNodeId },
-        );
+        // Routing is governed solely by the caller's required_tags (hard filter
+        // through nodeSatisfiesRequiredTags) — no role/taskMode auto-routing.
+        const resolvedRequiredTags = callerTags;
         const entry: MeshWorkQueueEntry = {
             id,
             meshId,
@@ -210,7 +202,6 @@ export function enqueueTask(
             // P3: explicit retry cap. Omitted → requeue path falls back to policy default.
             ...(maxRetries !== undefined ? { maxRetries } : {}),
             ...(typeof opts?.missionId === 'string' && opts.missionId.trim() ? { missionId: opts.missionId.trim() } : {}),
-            ...(typeof opts?.consensusGroupId === 'string' && opts.consensusGroupId.trim() ? { consensusGroupId: opts.consensusGroupId.trim() } : {}),
             ...(effectiveModel && modelSource ? { model: effectiveModel, modelSource } : {}),
             ...(effectiveThinkingLevel && thinkingLevelSource ? { thinkingLevel: effectiveThinkingLevel, thinkingLevelSource } : {}),
             difficulty: taskDifficulty,
@@ -232,12 +223,10 @@ export function enqueueTask(
     return result;
 }
 
-// G5: MESH_TASK_GRAPH_MAX_TASKS moved to the pure leaf ./mesh-task-predicates.ts (C-W9a); imported above.
-
 /**
  * G5: enqueue a dependency-wired set of tasks ATOMICALLY — either every task in
  * `specs` is inserted or none is. Closes the half-registered-chain failure mode of
- * building a graph via N sequential enqueueTask calls, where a mid-batch error
+ * building a dependency chain via N sequential enqueueTask calls, where a mid-batch error
  * (cycle, invalid difficulty, guardrail violation) left the earlier tasks live.
  *
  * Atomicity rides on the store transaction: the outer withQueueLock opens ONE
@@ -249,17 +238,17 @@ export function enqueueTask(
  * that same per-task assertNoDependencyCycle: ids are pre-generated, so by the time
  * the last member of a cycle inserts, every edge of the cycle is visible to its DFS.
  */
-export function enqueueTaskGraph(
+export function enqueueTaskBatch(
     meshId: string,
-    specs: MeshTaskGraphEntrySpec[],
+    specs: MeshTaskBatchEntrySpec[],
     opts?: MeshQueueMutationOptions,
 ): MeshWorkQueueEntry[] {
     requireMeshHostQueueOwner(opts);
     if (!Array.isArray(specs) || specs.length === 0) {
-        throw new Error('empty_task_graph: enqueueTaskGraph requires at least one task spec');
+        throw new Error('empty_task_batch: enqueueTaskBatch requires at least one task spec');
     }
-    if (specs.length > MESH_TASK_GRAPH_MAX_TASKS) {
-        throw new Error(`task_graph_too_large: ${specs.length} tasks exceeds the ${MESH_TASK_GRAPH_MAX_TASKS}-task cap for one atomic enqueue`);
+    if (specs.length > MESH_TASK_BATCH_MAX_TASKS) {
+        throw new Error(`task_batch_too_large: ${specs.length} tasks exceeds the ${MESH_TASK_BATCH_MAX_TASKS}-task cap for one atomic enqueue`);
     }
     // Pre-generate every task id up front so refs resolve regardless of array order.
     const ids = specs.map(() => randomUUID());

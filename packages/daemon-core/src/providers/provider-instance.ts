@@ -9,7 +9,7 @@
  */
 
 import type { ProviderModule, ProviderResumeCapability, ProviderCategory } from './contracts.js';
-import type { AcpConfigOption, AcpMode, ProviderControlSchema, ProviderSummaryMetadata, SessionCapability } from '../shared-types.js';
+import type { ProviderControlSchema, ProviderSummaryMetadata, SessionCapability } from '../shared-types.js';
 import type { MessageInputSupport } from './provider-input-support.js';
 import type { ChatMessage } from '../types.js';
 import type { InteractivePrompt } from './types/interactive-prompt.js';
@@ -56,7 +56,7 @@ export interface ActiveChatData {
 
 /** Standardized error reasons across all provider categories */
 export type ProviderErrorReason =
-    | 'not_installed'   // CLI/ACP binary not found
+    | 'not_installed'   // CLI binary not found
     | 'auth_failed'     // Authentication/API key error
     | 'billing_failed'  // Subscription/payment/account-entitlement error (NOT retryable — the account itself is the problem)
     | 'quota_exceeded'  // Usage window/quota exhausted while the account is otherwise fine — retryable once the window resets
@@ -129,16 +129,6 @@ export interface CliProviderState extends ProviderStateBase {
     pendingOutboundCount?: number;
 }
 
-/** ACP provider state */
-export interface AcpProviderState extends ProviderStateBase {
-    category: 'acp';
-    mode: 'chat';
- /** ACP config options (model/mode selection) */
-    acpConfigOptions?: AcpConfigOption[];
- /** ACP available modes */
-    acpModes?: AcpMode[];
-}
-
 /** Extension provider state */
 export interface ExtensionProviderState extends ProviderStateBase {
     category: 'extension';
@@ -146,7 +136,7 @@ export interface ExtensionProviderState extends ProviderStateBase {
 }
 
 /** Discriminated union — switch on `.category` */
-export type ProviderState = IdeProviderState | CliProviderState | AcpProviderState | ExtensionProviderState;
+export type ProviderState = IdeProviderState | CliProviderState | ExtensionProviderState;
 
 export interface ProviderEvent {
     event: string;

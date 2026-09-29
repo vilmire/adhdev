@@ -253,9 +253,8 @@ Common command types:
 | `resolve_action` | Approve or reject a pending action |
 | `change_model` | Change model when exposed by the provider |
 | `set_mode` | Change mode when exposed by the provider |
-| `set_thought_level` | Change ACP thought-level style controls |
-| `launch_cli` | Launch a CLI or ACP session |
-| `stop_cli` | Stop a CLI or ACP session |
+| `launch_cli` | Launch a CLI session |
+| `stop_cli` | Stop a CLI session |
 
 Session-host operator actions are also routed through the same command surface:
 

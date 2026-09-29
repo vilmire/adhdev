@@ -46,8 +46,7 @@ export const MESH_DELIVERY_MODES = ['when_idle', 'interrupt'] as const
 export type MeshDeliveryMode = typeof MESH_DELIVERY_MODES[number]
 
 /**
- * What to do with a node's sessions when the node is removed or a MAGI fan-out
- * settles. Declared here so daemon-core (`RepoMeshSessionCleanupMode`), the
+ * What to do with a node's sessions when the node is removed. Declared here so daemon-core (`RepoMeshSessionCleanupMode`), the
  * web dashboard picker and the MCP schemas all read one list.
  */
 export const MESH_SESSION_CLEANUP_MODES = ['preserve', 'stop', 'delete_stopped', 'stop_and_delete'] as const

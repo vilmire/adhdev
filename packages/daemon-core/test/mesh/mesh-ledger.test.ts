@@ -94,7 +94,7 @@ describe('mesh-ledger', () => {
 
         // FIX#2b — evidenceLevel was always 'insufficient' because resolveWorkerResult returned
         // source='default' whenever the finalSummary was not worker-result-shaped JSON — even when
-        // a complete, valid (e.g. MAGI) JSON answer WAS present. resolveWorkerResult now upgrades
+        // a complete, valid JSON answer WAS present. resolveWorkerResult now upgrades
         // that case to source='parseable_answer' so the evidenceLevel branch (which marks ONLY
         // 'default' insufficient) resolves it to 'sufficient'.
         it("keeps source='default' for a prose-only final summary (no parseable answer)", () => {
@@ -107,7 +107,7 @@ describe('mesh-ledger', () => {
         });
 
         it("upgrades to source='parseable_answer' when the final summary holds a parseable JSON answer that is NOT worker-result-shaped", () => {
-            const magiAnswer = JSON.stringify({
+            const reviewAnswer = JSON.stringify({
                 claims: [{ claim: 'X is the cause', stance: 'support', evidence: ['a.ts:1'], confidence: 0.9 }],
                 top_findings: ['found X'],
                 open_questions: [],
@@ -115,7 +115,7 @@ describe('mesh-ledger', () => {
             const evidence = buildTaskCompletionEvidence({
                 event: 'agent:generating_completed',
                 nodeId: 'n', sessionId: 's',
-                finalSummary: magiAnswer,
+                finalSummary: reviewAnswer,
             });
             // Not 'default' → the evidenceLevel branch will NOT mark it 'insufficient'.
             expect(evidence.workerResult.source).toBe('parseable_answer');

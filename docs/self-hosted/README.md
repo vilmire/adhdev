@@ -40,7 +40,7 @@ If you are running self-hosted as a serious local control plane, these are the t
 
 ## Current Standalone UX Defaults
 
-- ordinary CLI/ACP launches start fresh by default
+- ordinary CLI launches start fresh by default
 - use `Open saved history` when you want to continue the same provider conversation
 - use hosted runtime recovery only after interruptions; it is no longer mixed into the normal new-session flow
 - the local dashboard settings now also include standalone-only font overrides under `Appearance` → `Fonts`

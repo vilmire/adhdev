@@ -1,7 +1,7 @@
 import type { Dispatch, SetStateAction } from 'react'
 import type { ActiveConversation } from '../components/dashboard/types'
 import { getConversationDaemonRouteId, getConversationProviderType } from '../components/dashboard/conversation-selectors'
-import { isAcpConv, isCliConv } from '../components/dashboard/types'
+import { isCliConv } from '../components/dashboard/types'
 import type { Toast } from '../context/BaseDaemonContext'
 
 export type DashboardToastSetter = Dispatch<SetStateAction<Toast[]>>
@@ -13,7 +13,7 @@ export function getProviderArgs(conv: ActiveConversation | undefined) {
     if (conv.sessionId) {
         return targetSessionId
     }
-    if (isCliConv(conv) || isAcpConv(conv)) {
+    if (isCliConv(conv)) {
         return { agentType: getConversationProviderType(conv) }
     }
     if (conv.streamSource === 'agent-stream') {

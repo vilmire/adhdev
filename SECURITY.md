@@ -46,7 +46,6 @@ This policy covers the open-source packages in this repository:
 - `packages/mesh-shared` — shared mesh types/helpers
 - `packages/web-core` — shared UI components, hooks, types
 - `packages/web-standalone` — self-hosted dashboard
-- `packages/web-devconsole` — provider dev console
 - `packages/session-host-core` / `packages/session-host-daemon` — session host runtime
 - `packages/terminal-mux-*` / `packages/terminal-render-web` — terminal mux stack
 - `packages/ghostty-vt-node` — ghostty VT bindings

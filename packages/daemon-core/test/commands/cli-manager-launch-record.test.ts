@@ -43,7 +43,7 @@ describe('Phase E — launch record on every cli-manager launch path', () => {
 
   function setupLoader() {
     const testConfig: Record<string, any> = { machineProviders: {}, providerSettings: {} };
-    for (const [category, type] of [['cli', 'sample-cli'], ['acp', 'sample-acp']] as const) {
+    for (const [category, type] of [['cli', 'sample-cli']] as const) {
       const executable = join(providerRoot, 'bin', type);
       mkdirSync(join(providerRoot, 'bin'), { recursive: true });
       writeFileSync(executable, '#!/bin/sh\nexit 0\n', 'utf-8');
@@ -160,16 +160,6 @@ describe('Phase E — launch record on every cli-manager launch path', () => {
     });
     const meta = updateRuntimeMeta.mock.calls.map((call) => call[0]).find((m) => m.launchRecord);
     expect(meta?.launchRecord).toMatchObject({ sessionId: result.sessionId, launchedBy: 'dashboard', model: { source: 'user' } });
-  }, 15000);
-
-  it('ACP: a failed setConfigOption leaves launchValue absent but keeps the requested value + source', async () => {
-    const result = await createManager(setupLoader()).launchCli({
-      cliType: 'sample-acp', dir: workingDir, initialModel: 'sonnet', modelSource: 'user', launchedBy: 'dashboard',
-    });
-    const launch = registry.get(result.sessionId as string)?.launch;
-    expect(launch).toMatchObject({ providerType: 'sample-acp', launchedBy: 'dashboard' });
-    expect(launch?.model).toMatchObject({ requested: 'sonnet', source: 'user' });
-    expect(launch?.model).not.toHaveProperty('launchValue');
   }, 15000);
 
   it('restore: axis sources survive, launchedBy becomes restore', async () => {

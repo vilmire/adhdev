@@ -14,7 +14,7 @@
 // filter, so `ledger_query` is a sibling command, not a `turn_query` widening).
 // C-W9c: meshTaskHistory's M7 per-task stats now call `task_stats_query`
 // instead of the in-process `computeMeshTaskStats` — the REQUESTED EDIT this
-// section used to flag is closed (mesh-graph-ipc.ts, oss/packages/daemon-core).
+// section used to flag is closed (mesh-stats-ipc.ts, oss/packages/daemon-core).
 //
 // NOT migrated in this pass:
 //   - meshRecordNote / meshForgetNote: write/tombstone `coordinator_operating_note`
@@ -616,7 +616,7 @@ async function meshMissionUpsertBulk(
 
 // NOT migrated to `missionQuery` (see file-header migration-status note):
 // `missionQuery`'s landed response is `{missions: MeshMissionRecordWire[]}`
-// only — no `verbose`/`includeMagi`/`withStats`/`limit`/`truncated`/
+// only — no `verbose`/`withStats`/`limit`/`truncated`/
 // `overflowIds`/`historyFold`, all of which `listMeshMissionsForTool` (still a
 // live daemon-core export) computes today. Widening `missionQuery`'s wire
 // contract is a mesh-shared change outside a same-file swap and would touch
@@ -629,8 +629,6 @@ export async function meshMissionList(
     args: {
         status?: string | string[];
         verbose?: boolean;
-        include_magi?: boolean;
-        includeMagi?: boolean;
         include_stats?: boolean;
         includeStats?: boolean;
         limit?: number;
@@ -651,7 +649,6 @@ export async function meshMissionList(
             });
         }
         const statuses = rawStatuses.length > 0 ? (rawStatuses as any[]) : undefined;
-        const includeMagi = (args.include_magi ?? args.includeMagi) === true;
         const verbose = args.verbose === true;
         // stats are ledger-scanned per mission — off by default so a list view stays
         // bounded. verbose or explicit include_stats opts in. The `tasks` aggregate on
@@ -668,7 +665,6 @@ export async function meshMissionList(
             meshId: ctx.mesh.id,
             ...(statuses ? { statuses: statuses as any } : {}),
             verbose,
-            includeMagi,
             withStats,
             ...(limit !== undefined ? { limit } : {}),
         });
@@ -678,7 +674,6 @@ export async function meshMissionList(
             matched: result.matched,
             ...(result.truncated ? { truncated: true, overflowIds: result.overflowIds } : {}),
             ...(statuses ? { statusFilter: statuses } : {}),
-            ...(includeMagi ? { includeMagi: true } : { magiCompletedHidden: true }),
             ...(withStats ? {} : { statsHidden: true }),
             missions: result.missions,
             ...(result.historyFold ? { historyFold: result.historyFold } : {}),

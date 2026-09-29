@@ -273,22 +273,6 @@ export const BACKGROUND_TASK_HOLD_MAX_MS = 5 * 60_000;
 // DUPLICATE_DISPATCH_WINDOW_MS (mesh-tools) so the daemon's bubble-level guard
 // covers the same retry horizon as the MCP-level dispatch dedup.
 export const USER_INPUT_ACK_DEDUP_WINDOW_MS = 60_000;
-// GENERATING-BOUNDARY (R4c): window — measured from the startup-grace COLLAPSE moment
-// (startupGraceCollapseAt), not boot — inside which a "first turn that ran+completed
-// without the FSM ever observing a 'generating' frame" is attributed to the startup-grace
-// collapse and synthesized (reason 'startup_grace_idle_turn_collapse').
-// The spec's startup-grace exit is elapsed_ms=8000, so the FSM spends ~8s in 'starting'
-// before collapsing to idle; a turn can be dispatched a few seconds AFTER that collapse
-// (the live R4b miss: collapse at boot+8s, dispatch at boot+12.4s — already past a 12s
-// boot-anchored window before the turn even started). Anchoring on the collapse moment
-// covers dispatch-delay; R4d additionally anchors on the turn-START moment
-// (engine.currentTurnStartedAt) so a non-trivial turn-DURATION cannot push the completion
-// past a now-anchored window (the live rc.405 Probe2 miss). The strong discriminator is
-// generatingStartedAt===0 (generating was never observed) AND a started-but-finished turn
-// — the window only keeps the synthesized reason honest and scopes the synthesis to the
-// boot collapse, so a much-later unobservably-fast turn is not mislabelled a startup collapse.
-export const STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS = 12_000;
-
 /** Events that signal a dispatched mesh task has reached a terminal state.
  *  Detach the mesh assignment after emitting one of these so the worker's
  *  next unrelated turn doesn't impersonate another completion. */

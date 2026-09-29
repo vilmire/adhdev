@@ -5,7 +5,7 @@
  *   1. status dot + status word    — the 0.1-second read
  *   2. one-line title              — what the task is (truncated)
  *   3. time                        — small monospace, absolute + relative
- *   4. block/gate badges           — amber (human hold / dep wait), rose (failure hold)
+ *   4. block badges                — amber (human hold / dep wait), rose (failure hold)
  *   5. node · provider chips       — where and with what it ran
  *
  * Long bodies and final summaries stay OUT of the row — clicking it opens the
@@ -15,21 +15,13 @@
  * the scheduling popover, never on a row where it reads as an assignment.
  *
  * The "plan" disclosure appears only when the row can actually draw a plan
- * (a graph with edges, or queue dependency edges) — see useBlueprintGroups.
+ * (queue dependency edges) — see useBlueprintGroups.
  */
-import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { MeshGraphTheme } from './meshGraphTheme'
 import { formatTaskCardTime, taskCardTimeSource } from './taskDagViewModel'
 import { queueTaskDisplayText } from '../../utils/queue-task-label'
-import { elapsedMsSince, formatBlueprintAge } from './blueprintViewModel'
-import type { BlueprintGateRow, BlueprintTaskRow } from './useBlueprintGroups'
-
-export interface GateActionHandlers {
-    onRelease: (outcome: 'passed' | 'failed', evidence: string) => Promise<void>
-    onAbandon: (reason: string) => Promise<void>
-    onExtend: () => Promise<void>
-}
+import type { BlueprintTaskRow } from './useBlueprintGroups'
 
 /** Status word → dot tone + text tone, per section emphasis. */
 const ROW_DOT: Record<string, { dot: string; pulse?: boolean }> = {
@@ -39,12 +31,6 @@ const ROW_DOT: Record<string, { dot: string; pulse?: boolean }> = {
     completed: { dot: 'bg-status-online' },
     failed: { dot: 'bg-status-error' },
     cancelled: { dot: 'bg-status-offline' },
-}
-
-const GATE_DOT: Record<string, { dot: string; pulse?: boolean }> = {
-    awaiting_coordinator: { dot: 'bg-status-warning', pulse: true },
-    claimed: { dot: 'bg-accent', pulse: true },
-    expired: { dot: 'bg-status-error' },
 }
 
 // Row chips share one geometry (h-5, centred) so a mixed row stays on one
@@ -140,7 +126,7 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
                 {onTogglePlan && <PlanToggle expanded={planExpanded} onToggle={onTogglePlan} meshTheme={meshTheme} />}
             </div>
             {/* Badge row — only rendered when it has something to say. */}
-            {(row.awaitingApproval || row.awaitingChoice || row.blockedReason || row.dependencyFailureCount > 0
+            {(row.awaitingApproval || row.awaitingChoice || row.dependencyFailureCount > 0
                 || row.waitingOn.length > 0 || row.missingDeps.length > 0 || pinnedSlot || task.difficulty
                 || (task.priority && task.priority !== 'normal') || task.readonly || task.taskMode === 'live_debug_readonly'
                 || missionTitle || provider || nodeLabel) && (
@@ -153,11 +139,6 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
                     {row.awaitingChoice && (
                         <span className={amberChip()} title={row.sessionNote ?? undefined}>
                             {t('mesh.blueprint.list.choiceNeeded')}
-                        </span>
-                    )}
-                    {row.blockedReason && (
-                        <span className={roseChip()} title={row.blockedReason}>
-                            {t('mesh.taskDag.blocked')}
                         </span>
                     )}
                     {row.dependencyFailureCount > 0 && (
@@ -246,260 +227,6 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
                     </div>
                 )
             })()}
-            {/* "blocked by" one-liner (D5): names the gate holding this worker
-                task and how long, so a blocked task row doesn't just say
-                "blocked" — it says what to go release. Age is measured from
-                the gate's owning graph creation — the closest "since when has
-                this hold existed" the view exposes. */}
-            {row.blockedByGate && (() => {
-                const age = elapsedMsSince(row.blockedByGate.graph.createdAt, nowMs)
-                return (
-                    <div className="truncate pl-4 text-4xs text-status-warning" title={row.blockedByGate.gate.instructions ?? undefined}>
-                        {t('mesh.blueprint.list.blockedByGate', {
-                            ref: row.blockedByGate.ref,
-                            age: age != null ? formatBlueprintAge(age) : '—',
-                        })}
-                    </div>
-                )
-            })()}
-        </div>
-    )
-}
-
-/** Small pill button shared by the three gate actions — same visual weight,
- *  distinguished by tone (release=neutral/primary, abandon=danger, extend=info). */
-function GateActionButton({ label, tone, onClick, disabled }: {
-    label: string
-    tone: 'primary' | 'danger' | 'info'
-    onClick: () => void
-    disabled?: boolean
-    meshTheme: MeshGraphTheme
-}) {
-    // Primary = the app accent; danger = semantic red outline; info = neutral.
-    const toneClass = tone === 'danger'
-        ? 'border-status-error/40 bg-transparent text-status-error hover:bg-status-error/10'
-        : tone === 'info'
-            ? 'border-border-default bg-bg-glass text-text-primary hover:bg-bg-glass-hover'
-            : 'border-accent/50 bg-accent/10 text-accent hover:bg-accent/20'
-    return (
-        <button
-            type="button"
-            disabled={disabled}
-            onClick={event => { event.stopPropagation(); onClick() }}
-            className={`shrink-0 rounded-full border px-2 py-0.5 text-4xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${toneClass}`}
-        >
-            {label}
-        </button>
-    )
-}
-
-/**
- * Inline forms for the gate verbs that need more than a yes/no — Release
- * (outcome + optional evidence) and Abandon (reason). Extend needs no form
- * beyond a confirm, which the caller (MeshBlueprintList) handles with
- * useConfirmDialog before invoking onExtend.
- *
- * Local, uncontrolled-by-parent state: only one of {closed, release, abandon}
- * is open at a time, and closes itself on submit/cancel. Errors from a failed
- * command surface inline here rather than a toast, per D5's "surface command
- * errors inline".
- */
-export function GateActionsPanel({ radioGroupId, actions, meshTheme, busy }: {
-    /** Unique per gate — scopes the outcome radio group. */
-    radioGroupId: string
-    actions: GateActionHandlers
-    meshTheme: MeshGraphTheme
-    busy: boolean
-}) {
-    const { t } = useTranslation('common')
-    const [openForm, setOpenForm] = useState<'release' | 'abandon' | null>(null)
-    const [outcome, setOutcome] = useState<'passed' | 'failed'>('passed')
-    const [evidence, setEvidence] = useState('')
-    const [reason, setReason] = useState('')
-    const [error, setError] = useState<string | null>(null)
-
-    const stop = (event: { stopPropagation: () => void }) => event.stopPropagation()
-
-    const submitRelease = async () => {
-        setError(null)
-        try {
-            await actions.onRelease(outcome, evidence)
-            setOpenForm(null)
-            setEvidence('')
-        } catch (e: any) {
-            setError(e?.message || String(e))
-        }
-    }
-    const submitAbandon = async () => {
-        if (!reason.trim()) { setError(t('mesh.blueprint.gate.abandonReasonRequired')); return }
-        setError(null)
-        try {
-            await actions.onAbandon(reason)
-            setOpenForm(null)
-            setReason('')
-        } catch (e: any) {
-            setError(e?.message || String(e))
-        }
-    }
-    const runExtend = async () => {
-        setError(null)
-        try {
-            await actions.onExtend()
-        } catch (e: any) {
-            setError(e?.message || String(e))
-        }
-    }
-
-    return (
-        <div className="flex flex-col gap-1 pl-4" onClick={stop}>
-            <div className="flex flex-wrap items-center gap-1">
-                <GateActionButton
-                    label={t('mesh.blueprint.gate.release')}
-                    tone="primary"
-                    disabled={busy}
-                    meshTheme={meshTheme}
-                    onClick={() => { setError(null); setOpenForm(current => current === 'release' ? null : 'release') }}
-                />
-                <GateActionButton
-                    label={t('mesh.blueprint.gate.abandon')}
-                    tone="danger"
-                    disabled={busy}
-                    meshTheme={meshTheme}
-                    onClick={() => { setError(null); setOpenForm(current => current === 'abandon' ? null : 'abandon') }}
-                />
-                <GateActionButton
-                    label={t('mesh.blueprint.gate.extend24h')}
-                    tone="info"
-                    disabled={busy}
-                    meshTheme={meshTheme}
-                    onClick={() => void runExtend()}
-                />
-            </div>
-            {openForm === 'release' && (
-                <div className="flex flex-col gap-1.5 rounded-lg border border-border-default bg-bg-secondary p-2">
-                    <div className="flex items-center gap-2 text-4xs">
-                        <label className="flex items-center gap-1">
-                            <input type="radio" name={`release-outcome-${radioGroupId}`} checked={outcome === 'passed'} onChange={() => setOutcome('passed')} />
-                            {t('mesh.blueprint.gate.outcomePassed')}
-                        </label>
-                        <label className="flex items-center gap-1">
-                            <input type="radio" name={`release-outcome-${radioGroupId}`} checked={outcome === 'failed'} onChange={() => setOutcome('failed')} />
-                            {t('mesh.blueprint.gate.outcomeFailed')}
-                        </label>
-                    </div>
-                    <input
-                        type="text"
-                        value={evidence}
-                        onChange={event => setEvidence(event.target.value)}
-                        placeholder={t('mesh.blueprint.gate.evidencePlaceholder')}
-                        className="w-full rounded-md border border-border-default bg-surface-primary px-2 py-1 text-4xs text-text-primary placeholder:text-text-muted"
-                    />
-                    <div className="flex items-center justify-end gap-1.5">
-                        <button type="button" className="rounded-full px-2 py-0.5 text-4xs text-text-muted hover:underline" onClick={() => setOpenForm(null)} disabled={busy}>
-                            {t('common.cancel')}
-                        </button>
-                        <GateActionButton label={t('mesh.blueprint.gate.submitRelease')} tone="primary" meshTheme={meshTheme} disabled={busy} onClick={() => void submitRelease()} />
-                    </div>
-                </div>
-            )}
-            {openForm === 'abandon' && (
-                <div className="flex flex-col gap-1.5 rounded-lg border border-border-default bg-bg-secondary p-2">
-                    <input
-                        type="text"
-                        value={reason}
-                        onChange={event => setReason(event.target.value)}
-                        placeholder={t('mesh.blueprint.gate.reasonPlaceholder')}
-                        className="w-full rounded-md border border-border-default bg-surface-primary px-2 py-1 text-4xs text-text-primary placeholder:text-text-muted"
-                    />
-                    <div className="flex items-center justify-end gap-1.5">
-                        <button type="button" className="rounded-full px-2 py-0.5 text-4xs text-text-muted hover:underline" onClick={() => setOpenForm(null)} disabled={busy}>
-                            {t('common.cancel')}
-                        </button>
-                        <GateActionButton label={t('mesh.blueprint.gate.submitAbandon')} tone="danger" meshTheme={meshTheme} disabled={busy} onClick={() => void submitAbandon()} />
-                    </div>
-                </div>
-            )}
-            {error && (
-                <div className="truncate text-4xs text-status-error" title={error}>
-                    {error}
-                </div>
-            )}
-        </div>
-    )
-}
-
-export function MeshBlueprintGateRowView({ row, meshTheme, nowMs, onOpen, planExpanded, onTogglePlan, actions, actionsBusy }: {
-    row: BlueprintGateRow
-    meshTheme: MeshGraphTheme
-    /** Shared clock (same one task rows use) — drives the expired-age label. */
-    nowMs: number
-    onOpen: () => void
-    planExpanded: boolean
-    onTogglePlan?: () => void
-    /** Present only when the caller can send daemon commands (D5 gate verbs). */
-    actions?: GateActionHandlers
-    /** True while a command for THIS row is in flight — disables all three buttons. */
-    actionsBusy?: boolean
-}) {
-    const { t } = useTranslation('common')
-    const dot = GATE_DOT[row.state] ?? { dot: 'bg-status-warning', pulse: true }
-    const isExpired = row.state === 'expired'
-    const expiredAgeMs = isExpired ? elapsedMsSince(row.gate?.deadlineAt, nowMs) : undefined
-    return (
-        <div
-            role="button"
-            tabIndex={0}
-            onClick={onOpen}
-            onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } }}
-            className={`group flex w-full cursor-pointer flex-col gap-1 rounded-lg border bg-bg-card px-3 py-2 text-left transition-colors hover:bg-bg-glass-hover ${isExpired ? 'border-status-error/40' : 'border-status-warning/40'}`}
-        >
-            <div className="flex min-w-0 items-center gap-2">
-                <span className={`h-2 w-2 shrink-0 rounded-full ${dot.dot} ${dot.pulse ? 'motion-safe:animate-pulse' : ''}`} aria-hidden />
-                <span className={`shrink-0 text-3xs font-medium ${isExpired ? 'text-status-error' : 'text-status-warning'}`}>
-                    ⛩ {row.gate?.action ?? t('mesh.blueprint.gateFallback')} · {row.state}{row.gate?.leaseExpired ? ` · ${t('mesh.blueprint.leaseExpired')}` : ''}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-2xs text-text-primary" title={row.ref}>
-                    {row.ref}
-                </span>
-                {onTogglePlan && <PlanToggle expanded={planExpanded} onToggle={onTogglePlan} meshTheme={meshTheme} />}
-            </div>
-            <div className="flex min-w-0 flex-wrap items-center gap-1 pl-4">
-                {/* Expired gets its own distinct badge (rose, with age) instead
-                    of the generic amber "Needs you" — a gate that blew past
-                    its deadline is a different, more urgent state than one
-                    still comfortably inside it. */}
-                {isExpired ? (
-                    <span className={roseChip()} title={row.gate?.deadlineAt}>
-                        {t('mesh.blueprint.gate.expiredBadge', { age: expiredAgeMs != null ? formatBlueprintAge(expiredAgeMs) : '—' })}
-                    </span>
-                ) : (
-                    <span className={amberChip()}>{t('mesh.taskDag.gate.needsYou')}</span>
-                )}
-                {row.gate?.blocking?.length ? (
-                    <span className={amberChip()}>{t('mesh.taskDag.gate.holding', { count: row.gate.blocking.length })}</span>
-                ) : null}
-                {row.gate?.deadlineAt && (
-                    <span className={neutralChip()} title={row.gate.deadlineAt}>
-                        {t('mesh.taskDag.gate.deadline', {
-                            time: new Date(row.gate.deadlineAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
-                            onTimeout: row.gate.onTimeout,
-                        })}
-                    </span>
-                )}
-                {row.gate?.instructions && (
-                    <span className="min-w-0 truncate text-4xs text-text-secondary" title={row.gate.instructions}>
-                        {row.gate.instructions}
-                    </span>
-                )}
-            </div>
-            {/* Release / Abandon / Extend — D5 lifts the earlier "coordinator
-                only" call. Only rendered when the caller can actually send a
-                daemon command (cloud=P2P, standalone=REST — both funnel
-                through the same sendDaemonCommand prop the rest of this tab
-                already uses for fast-forward/route-preview). */}
-            {actions && row.gate && (
-                <GateActionsPanel radioGroupId={row.nodeId} actions={actions} meshTheme={meshTheme} busy={Boolean(actionsBusy)} />
-            )}
         </div>
     )
 }

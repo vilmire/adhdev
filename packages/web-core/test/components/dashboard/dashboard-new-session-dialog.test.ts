@@ -157,16 +157,11 @@ describe('DashboardNewSessionDialog', () => {
 
   it('lists every agent in one grouped radio list with the protocol as a small hint — no Category chip row', () => {
     const machine = createMachine()
-    machine.availableProviders = [
-      ...(machine.availableProviders || []),
-      { type: 'gemini-acp', name: 'Gemini', displayName: 'Gemini', icon: 'gemini', category: 'acp', installed: true, enabled: true, machineStatus: 'detected' } as any,
-    ]
     machine.detectedIdes = [{ type: 'cursor', name: 'Cursor', running: true } as any]
     const html = renderDialog([machine])
 
     expect(html).toContain('role="radiogroup" aria-label="Agent"')
     expect(html).toContain('data-launch-kind="cli"')
-    expect(html).toContain('data-launch-kind="acp"')
     expect(html).toContain('data-launch-kind="ide"')
     expect(html).not.toContain('>Category<')
     expect(readDialogSource()).not.toContain('LaunchCategorySelector')

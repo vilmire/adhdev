@@ -29,7 +29,7 @@ import { workingDirBasename } from '../working-dir.js';
 import { extractFinalSummaryFromMessages } from '../chat-message-normalization.js';
 import { resolveTranscriptAuthorityProfile } from '../transcript-evidence.js';
 import { traceMeshEventStage, traceMeshEventDrop } from '../../shared/mesh-event-trace.js';
-import { computeTurnAnchoredDurationMs, hasNonEmptyCliModalButtons } from '../cli-provider-status-helpers.js';
+import { hasNonEmptyCliModalButtons } from '../cli-provider-status-helpers.js';
 import { formatApprovalRequestMessage } from '../cli-provider-effect-format.js';
 import type {
     CompletedDebouncePending,
@@ -37,7 +37,6 @@ import type {
 } from '../cli-provider-instance-types.js';
 import {
     NATIVE_HISTORY_MESH_IDLE_SETTLE_MS,
-    STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS,
 } from '../cli-provider-instance-types.js';
 import { decideShortGenerationCompletion, resolveCompletionSettleDelayMs } from './completion-engine.js';
 import type { AdapterChangeCause } from '../../cli-adapter-types.js';
@@ -52,7 +51,6 @@ import {
 } from '../provider-event-port.js';
 import { emitTurnStarted, emitSessionError, emitSuspension, emitProcessExit, emitNoProgress, type TurnEvidencePort } from '../turn-evidence-port.js';
 import { SESSION_STATUSES, type TurnAttemptRef, type NoProgressObservedStatus } from '@adhdev/mesh-shared';
-import { adapterTurnStartedAt, adapterTurnTaskId } from '../adapter-turn-clock.js';
 
 /** Narrow a raw adapter status string to the closed no_progress vocabulary. */
 function toNoProgressObservedStatus(raw: string): NoProgressObservedStatus {
@@ -133,7 +131,6 @@ export interface StatusTransitionHost {
     suppressIdleHistoryReplay: boolean;
     lastApprovalEventFingerprint: string;
     lastInteractivePromptEventKey: string;
-    startupGraceCollapseAt: number | null;
     agentReadyEmitted: boolean;
     errorMessage: string | undefined;
     errorReason: ProviderErrorReason | undefined;
@@ -173,12 +170,6 @@ export interface StatusTransitionHost {
         evidenceLevel?: string;
         completionDiagnostic?: Record<string, unknown>;
     }): void;
-    markCurrentTurnStartupGraceCollapseSatisfied(): void;
-    maybeSynthesizeStartupGraceCollapse(
-        chatTitle: string,
-        now: number,
-        reason: 'startup_grace_fast_collapse' | 'startup_grace_idle_turn_collapse',
-    ): boolean;
     scheduleCompletedDebounceFlush(delayMs: number): void;
     emitAgentReadyOnce(chatTitle: string, now: number): void;
     applyProviderResponse(data: any, options: { phase: 'immediate' | 'turn_completed' }): void;
@@ -304,21 +295,11 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
     // generatingStartedAt, arms the debounce and emits turn_started evidence —
     // never runs, and that turn's completion has no evidence trail at all.
     //
-    // "No turn has EVER started this boot" is deliberately NOT read off
-    // generatingStartedAt (it also gets armed — and later reset back to 0 on
-    // completion — by non-turn busy phases such as the waiting_approval /
-    // waiting_choice arms below, which a startup consent modal itself enters; a
-    // guard keyed on generatingStartedAt would stop applying the moment THAT
-    // arm ran, then re-apply after it completes, re-opening the exact same hole
-    // one edge later). Instead reuse adapter.currentTurnTaskId — set ONLY by
-    // onTurnStarted (a genuine inject) and persisting past completion for the
-    // rest of the boot — the same persists-past-completion discriminator
-    // maybeSynthesizeStartupGraceCollapse already relies on below. That keeps
-    // the exemption live across the ENTIRE pre-first-turn sequence (however
-    // many masked waiting_approval/generating frames a startup modal produces)
-    // and turns off permanently, atomically, the instant a real turn starts.
-    const noTurnStartedThisBoot = !adapterTurnTaskId(host.adapter);
-    const startupMaskWithNoActiveTurn = noTurnStartedThisBoot && !host.hasAdapterPendingResponse();
+    // The startup-mask exemption applies while no turn is in flight: the adapter's
+    // pending-response flag is the only "a turn is running" signal (it is NOT read off
+    // generatingStartedAt, which non-turn busy phases such as a startup consent modal's
+    // waiting_approval arm also set).
+    const startupMaskWithNoActiveTurn = !host.hasAdapterPendingResponse();
     const newStatus = isQuestionPicker
         ? 'waiting_choice'
         : (autoApproveActive || autoApproveHoldIdle) && !startupMaskWithNoActiveTurn ? 'generating' : rawStatus;
@@ -580,20 +561,10 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
             // Still emit agent:generating_completed so mesh orchestration can record
             // task_completed for direct dispatches that complete faster than the debounce.
             if (host.generatingDebouncePending) {
-                // NOTIF Defect-2a: shortDurationMs is the REPORTED turn duration, so it must be
-                // measured from the IMMUTABLE turn start — not generatingStartedAt, which is
-                // reset to 0 on every mid-turn waiting_approval/idle blip (see :1864/1885/2397/
-                // 2503/2521) and re-armed on the next →generating, so a long turn that blipped
-                // would measure only the final 1.5-2.5s sliver. engine.currentTurnStartedAt is
-                // stamped once at onTurnStarted and persists past mid-turn blips until the next
-                // turn starts, so it captures the true turn length. generatingStartedAt remains
-                // the fallback (and the debounce itself stays a pure UI-suppression signal,
-                // decoupled from the reported duration).
-                const { durationMs: shortDurationMs, anchor: durationAnchor } = computeTurnAnchoredDurationMs(
-                    adapterTurnStartedAt(host.adapter),
-                    host.generatingStartedAt,
-                    now,
-                );
+                // shortDurationMs is the REPORTED turn duration, measured from generatingStartedAt
+                // (0 when the generating phase never armed).
+                const shortDurationMs = host.generatingStartedAt > 0 ? now - host.generatingStartedAt : 0;
+                const durationAnchor = host.generatingStartedAt > 0 ? 'generatingStartedAt' : 'none';
                 LOG.info('CLI', `[${host.type}] suppressed short generating (${shortDurationMs}ms, anchor=${durationAnchor})`);
                 if (host.generatingDebounceTimer) { clearTimeout(host.generatingDebounceTimer); host.generatingDebounceTimer = null; }
                 // Emit completion for mesh task association even though the UI generating
@@ -616,7 +587,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                 // before `generatingStartedAt` is reset below — the settle-arm path (mesh sessions,
                 // see the mesh branch further down) needs the same turn anchor the normal
                 // completedDebounce branch captures, and generatingStartedAt is the fallback for it.
-                const shortTurnStartedAt = adapterTurnStartedAt(host.adapter) || host.generatingStartedAt || 0;
+                const shortTurnStartedAt = host.generatingStartedAt || 0;
                 const shortTaskId = host.completingTurnTaskId();
                 host.generatingDebouncePending = null;
                 host.generatingStartedAt = 0;
@@ -716,11 +687,6 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                             finalAssistantEvidenceSource: shortEvidenceSource,
                         },
                     });
-                    // A genuine completion was emitted for this turn (and
-                    // generatingStartedAt was reset above) — stamp it as
-                    // satisfied for the startup-grace collapse synth so a
-                    // late idle-stayed poll cannot re-synthesize a weak pair.
-                    host.markCurrentTurnStartupGraceCollapseSatisfied();
                 }
             } else {
                 // Debounce completed, then require the rich transcript path that read_chat
@@ -732,17 +698,11 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                     firstObservedAt: now,
                     previousStatus: host.lastStatus,
                     // ARCH-REFACTOR R1: snapshot the completing turn's taskId NOW (sync),
-                    // before any follow-up task's flush can start a new turn and move
-                    // engine.currentTurnTaskId.
+                    // before any follow-up task's flush can start a new turn.
                     ...(host.completingTurnTaskId() ? { taskId: host.completingTurnTaskId() } : {}),
                     // NOTIF Defect-B: snapshot the producing turn's START instant NOW, for the
-                    // same reason as taskId — a follow-up turn moves engine.currentTurnStartedAt.
-                    // Prefer the engine's per-turn start (set at onTurnStarted, earliest reliable
-                    // anchor) and fall back to generatingStartedAt (when generating was observed).
-                    ...((() => {
-                        const turnStartedAt = adapterTurnStartedAt(host.adapter) || host.generatingStartedAt || 0;
-                        return turnStartedAt ? { turnStartedAt } : {};
-                    })()),
+                    // same reason as taskId — a follow-up turn moves generatingStartedAt.
+                    ...(host.generatingStartedAt ? { turnStartedAt: host.generatingStartedAt } : {}),
                     // FALSE-IDLE continuity: snapshot the busy epoch + raw PTY output
                     // clock at arm time so the flush guard can prove the session stayed
                     // continuously idle (no busy re-entry, no new PTY output) through the
@@ -803,33 +763,6 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
             if (adapterStatus.fsmReadySeen !== false) {
                 host.emitAgentReadyOnce(chatTitle, now);
             }
-            // GENERATING-BOUNDARY (R4c): stamp the collapse moment ONCE so the
-            // idle-stayed window below is anchored on the startup-grace collapse,
-            // not on boot. Set only the first time so a later starting re-entry
-            // cannot slide the window forward.
-            if (host.startupGraceCollapseAt === null) host.startupGraceCollapseAt = now;
-            // GENERATING-BOUNDARY fast-collapse (R4, win32 startup-grace first turn):
-            // a turn dispatched into the startup-grace window can START and FINISH while
-            // the FSM is still in 'starting'. On a daemon whose claude-cli spec has NOT yet
-            // synced the starting→busy edge (the primary cure lives in the spec's
-            // idle→busy.from), the FSM never reaches 'busy'/generating, so
-            // detectStatusTransition observes starting→idle DIRECTLY with no intervening
-            // 'generating' frame. The idle→generating arm — the only path that sets
-            // generatingStartedAt and arms the completion — never fired, so the completing
-            // turn's agent:generating_completed is never emitted and the mesh coordinator
-            // never learns the worker went idle. Synthesize the started+completed pair here.
-            //
-            // Discriminator (false-positive safe — must NOT fire on a benign boot):
-            //   adapter.currentTurnTaskId is set ONLY by onTurnStarted (a real turn STARTED
-            //   this boot) and persists past completion, so it cleanly separates the three
-            //   non-firing cases — a true idle boot (no turn → null), a queued-pending
-            //   first turn that only runs AFTER startup-grace drains the composer (onTurnStarted
-            //   not yet called → null; it completes normally later via idle→busy→idle), and a
-            //   turn STILL running at the 8s mark (hasAdapterPendingResponse() still true →
-            //   excluded so we don't fire a premature mid-turn completion; idle→busy self-
-            //   corrects once the FSM reaches idle). We fire only when a turn started AND has
-            //   already finished: started-this-boot && !still-in-flight.
-            host.maybeSynthesizeStartupGraceCollapse(chatTitle, now, 'startup_grace_fast_collapse');
         } else if (newStatus === 'error') {
             if (host.generatingDebounceTimer) { clearTimeout(host.generatingDebounceTimer); host.generatingDebounceTimer = null; }
             host.generatingDebouncePending = null;
@@ -967,55 +900,6 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
     } else if (!interactivePrompt && host.lastInteractivePromptEventKey) {
         // Prompt answered / gone — reset so the next AskUserQuestion re-fires.
         host.lastInteractivePromptEventKey = '';
-    }
-
-    // GENERATING-BOUNDARY idle-stayed collapse (R4b): the starting→idle
-    // fast-collapse arm above only fires when the FIRST turn itself drives the
-    // starting→idle transition. When the launch settle already drained
-    // starting→idle BEFORE the first turn arrives, the session is already 'idle'
-    // and a turn that runs+completes inside the startup-grace window — too fast
-    // for any poll to observe a 'generating' frame — produces NO status change
-    // at all (idle→idle). detectStatusTransition's change block above is skipped
-    // entirely, so neither the idle→generating arm nor the starting→idle
-    // fast-collapse arm ever runs, and the mesh coordinator never learns the
-    // worker went idle (the live rc.403 Probe1 miss). Catch it here: an
-    // already-idle poll (no status change), still inside the startup-grace
-    // window, where a turn started this boot and has already finished without
-    // ever arming generating. The same false-positive-safe discriminators apply
-    // (currentTurnTaskId set && !pending && generating never armed), plus a
-    // once-per-turn guard since this branch is re-polled while the session sits
-    // idle. Normal turns that DO reach 'busy' set generatingStartedAt and are
-    // excluded; a queued-pending first turn that only runs after grace falls
-    // outside the window and completes normally via idle→busy→idle.
-    //
-    // R4d (the live rc.405 Probe2 miss): R4c anchored the window on the collapse
-    // moment but still measured its END against `now` (the poll/completion time). The
-    // helper only fires once the turn has FINISHED (!hasAdapterPendingResponse()), so
-    // the first eligible poll happens at completion. When the first turn is dispatched
-    // a few seconds after the collapse AND runs for a non-trivial duration, that
-    // completion lands PAST the 12s now-anchored window even though the turn was a
-    // genuine startup-grace first turn (live: collapse→dispatch +5.2s, turn ~11s →
-    // completion at collapse+16.2s > 12s). Anchor the window on when the first turn
-    // STARTED (engine.currentTurnStartedAt, set by onTurnStarted) instead: a turn that
-    // STARTED within the collapse window is a startup-grace first turn no matter how
-    // long it then ran. The now-anchored check is retained as a union so a fast turn
-    // (dispatched+completed quickly within 12s of collapse) keeps firing too; both
-    // close for a much-later turn, preserving the "don't mislabel a late fast turn"
-    // honesty the window exists for.
-    const firstTurnStartedAt = adapterTurnStartedAt(host.adapter);
-    const collapsedAt = host.startupGraceCollapseAt;
-    const turnStartedWithinCollapseWindow = collapsedAt !== null
-        && firstTurnStartedAt > 0
-        && firstTurnStartedAt >= collapsedAt
-        && (firstTurnStartedAt - collapsedAt) < STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS;
-    const nowWithinCollapseWindow = collapsedAt !== null
-        && (now - collapsedAt) < STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS;
-    if (
-        newStatus === 'idle'
-        && previousStatus === 'idle'
-        && (turnStartedWithinCollapseWindow || nowWithinCollapseWindow)
-    ) {
-        host.maybeSynthesizeStartupGraceCollapse(chatTitle, now, 'startup_grace_idle_turn_collapse');
     }
 
     // Re-arm the queue-claim agent:ready on the FSM's first GENUINE ready.

@@ -20,7 +20,7 @@ import { heldMeshStatusFromResponder } from './helpers/held-node-state.js';
 // History: 25_000 -> 60_000 (aiming to zero-fold a synthetic 23-node worst case) ->
 // 25_000 (2026-09-12, reverted). The 60_000 raise was measured only against the
 // node array in isolation; it did not account for the FIXED top-level sections
-// (daemonQuotas, magiActivity claim text, asyncRefineJobs, pendingCoordinatorEvents,
+// (daemonQuotas, asyncRefineJobs, pendingCoordinatorEvents,
 // missions, …) that share the same output-token cap. Live proof it was too high:
 // the owner's real mesh_status (9 nodes, well under the "23-node worst case" this
 // was tuned for) measured ~59KB and was rejected by the MCP host's own output-token

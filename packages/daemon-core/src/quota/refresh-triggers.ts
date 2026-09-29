@@ -85,8 +85,8 @@ export interface QuotaEventRefreshOptions {
  * Every committed turn warrants an immediate re-read of the provider's quota —
  * whether it completed genuinely/weakly (the wire's `agent:generating_completed`)
  * or ended some other way, failed or cancelled (the wire's `agent:stopped`:
- * manual stop, PTY/ACP process exit, or a provider-reported error, all of
- * which route through the CLI/ACP FSMs into one `turn_end` / `process_exit`
+ * manual stop, PTY process exit, or a provider-reported error, all of
+ * which route through the CLI FSMs into one `turn_end` / `process_exit`
  * evidence kind before the reducer commits). `TurnOutcome` is the closed union
  * `'completed' | 'failed' | 'cancelled'`, so every `phase:'committed'` bus
  * event already qualifies — there is no separate filter to apply.

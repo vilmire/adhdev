@@ -34,7 +34,6 @@ const LEGACY_MESH_FORWARDABLE_SESSION_COMMANDS = [
     'cancel_queued_chat',
     'set_mode',
     'change_model',
-    'set_thought_level',
     'set_conversation_prefs',
     'agent_command',
     'read_terminal',
@@ -75,7 +74,6 @@ const LEGACY_SESSION_SCOPED_COMMANDS = [
     'switch_chat',
     'set_mode',
     'change_model',
-    'set_thought_level',
     'resolve_action',
     'select_session',
     'open_panel',
@@ -84,7 +82,7 @@ const LEGACY_SESSION_SCOPED_COMMANDS = [
     'invoke_provider_script',
 ];
 
-const LEGACY_CDP_COMMANDS = ['send_chat', 'read_chat', 'list_chats', 'new_chat', 'switch_chat', 'set_mode', 'change_model', 'set_thought_level', 'resolve_action'];
+const LEGACY_CDP_COMMANDS = ['send_chat', 'read_chat', 'list_chats', 'new_chat', 'switch_chat', 'set_mode', 'change_model', 'resolve_action'];
 
 /** handler.ts `isReadOrDebugCmd` — the inactive-history fallback. */
 const LEGACY_INACTIVE_HISTORY_COMMANDS = ['read_chat', 'get_chat_debug_bundle'];
@@ -163,7 +161,7 @@ function legacyCommandInvalidations(command: string): ReadonlySet<string> {
 /** handler.ts dispatch switch cases. */
 const LEGACY_HANDLER_COMMANDS = [
     'read_chat', 'expand_tool_block', 'get_chat_debug_bundle', 'chat_history', 'send_chat', 'cancel_queued_chat',
-    'list_chats', 'new_chat', 'switch_chat', 'set_mode', 'change_model', 'set_thought_level', 'resolve_action',
+    'list_chats', 'new_chat', 'switch_chat', 'set_mode', 'change_model', 'resolve_action',
     'cdp_eval', 'cdp_screenshot', 'screenshot', 'cdp_command_exec', 'cdp_batch', 'cdp_remote_action',
     'cdp_discover_agents', 'cdp_dom_dump', 'cdp_dom_query', 'cdp_dom_debug', 'file_read', 'file_write', 'file_list',
     'file_list_browse', 'workspace_list', 'workspace_add', 'workspace_remove', 'workspace_set_label',
@@ -173,7 +171,7 @@ const LEGACY_HANDLER_COMMANDS = [
     'remove_provider_source', 'list_provider_sources', 'set_active_provider_source', 'select_session', 'open_panel',
     'pty_input', 'pty_resize', 'read_terminal', 'send_keys', 'get_provider_settings', 'set_provider_setting',
     'get_provider_source_config', 'set_provider_source_config', 'get_ide_extensions', 'set_ide_extension',
-    'invoke_provider_script', 'provider_auto_fix', 'provider_auto_fix_cancel', 'provider_auto_fix_status',
+    'invoke_provider_script', 
     'provider_clone',
 ];
 
@@ -226,13 +224,12 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     // C-W9b / C-W9a: the store commands (mesh-store-ipc.ts) — records, queue
     // composites, missions list, active work, recovery hints. IPC-only too.
     'tool_call_record', 'ledger_query', 'mission_list_query', 'record_local', 'queue_query',
-    'queue_enqueue', 'queue_enqueue_graph', 'queue_cancel', 'queue_requeue', 'direct_dispatch_record',
-    'graph_audit_record', 'active_work_query', 'recovery_context_query',
-    // C-W9c: the graph/stats/prune commands (mesh-graph-ipc.ts) — the last
-    // mcp-server in-process daemon-core paths: graph gates/plan/patch, task/mission
-    // stats, one prune audit, orphaned-pin notify. IPC-only too.
-    'graph_gate_claim', 'graph_gate_release', 'graph_gate_abandon', 'graph_node_patch',
-    'graph_view_query', 'task_stats_query', 'prune_stale_direct', 'orphaned_pin_notify',
+    'queue_enqueue', 'queue_enqueue_batch', 'queue_cancel', 'queue_requeue', 'direct_dispatch_record',
+    'active_work_query', 'recovery_context_query',
+    // C-W9c: the stats/prune commands (mesh-stats-ipc.ts) — the last
+    // mcp-server in-process daemon-core paths: task/mission stats, one prune
+    // audit, orphaned-pin notify. IPC-only too.
+    'task_stats_query', 'prune_stale_direct', 'orphaned_pin_notify',
 ];
 
 /** The turn-ledger IPC commands: reachable ONLY over the local IPC source. */
@@ -242,11 +239,10 @@ const TURN_LEDGER_IPC_COMMANDS = [
     // C-W9b / C-W9a: the store commands (mesh-store-ipc.ts) — records, queue
     // composites, missions list, active work, recovery hints. IPC-only too.
     'tool_call_record', 'ledger_query', 'mission_list_query', 'record_local', 'queue_query',
-    'queue_enqueue', 'queue_enqueue_graph', 'queue_cancel', 'queue_requeue', 'direct_dispatch_record',
-    'graph_audit_record', 'active_work_query', 'recovery_context_query',
-    // C-W9c: the graph/stats/prune commands (mesh-graph-ipc.ts).
-    'graph_gate_claim', 'graph_gate_release', 'graph_gate_abandon', 'graph_node_patch',
-    'graph_view_query', 'task_stats_query', 'prune_stale_direct', 'orphaned_pin_notify',
+    'queue_enqueue', 'queue_enqueue_batch', 'queue_cancel', 'queue_requeue', 'direct_dispatch_record',
+    'active_work_query', 'recovery_context_query',
+    // C-W9c: the stats/prune commands (mesh-stats-ipc.ts).
+    'task_stats_query', 'prune_stale_direct', 'orphaned_pin_notify',
 ];
 
 /** med-family/index.ts medFamilyRegistry keys. */
@@ -255,7 +251,7 @@ const LEGACY_MED_FAMILY_COMMANDS = [
     'agent_command', 'list_saved_sessions', 'restart_session', 'stop_ide', 'restart_ide', 'launch_ide',
     'detect_provider', 'detect_ides', 'list_meshes', 'get_mesh', 'create_mesh', 'set_mesh_host', 'update_mesh',
     'export_mesh_json_config', 'write_mesh_json_config', 'read_mesh_json_config', 'set_mesh_provider_defaults',
-    'delete_mesh', 'magi_kind_panel_list', 'magi_kind_panel_set', 'magi_kind_panel_remove',
+    'delete_mesh',
     'difficulty_brains_get', 'difficulty_brains_set', 'mesh_quota_routing_get', 'mesh_quota_routing_set',
     'add_mesh_node', 'update_mesh_node', 'cleanup_mesh_sessions', 'remove_mesh_node', 'clone_mesh_node',
     'retry_mesh_node_bootstrap', 'get_mesh_host_pairing', 'configure_mesh_host_pairing',
@@ -263,17 +259,7 @@ const LEGACY_MED_FAMILY_COMMANDS = [
     'cancel_mesh_queue_task', 'requeue_mesh_queue_task', 'trigger_mesh_queue', 'mesh_init',
     'plan_mesh_refine_node', 'fast_forward_mesh_node', 'refine_mesh_node', 'batch_refine_mesh_nodes',
     'restart_daemon_node', 'plan_mesh_onboarding', 'cleanup_worktree_nodes', 'mesh_route_preview',
-    'mesh_task_output', 'mesh_graph_overview',
-    // mesh_gate_claim/release/abandon (G5 MVP, 9c00d805) were REMOVED 2026-09-25
-    // (graph-orchestration-simplification D3(c)), not renamed — they had no
-    // `sources` restriction and no caller anywhere in the monorepo (dashboard UI
-    // was deliberately OBSERVE-ONLY; the MCP coordinator tools were always named
-    // mesh_graph_gate_* and dispatch over IPC, never these command names). See
-    // mesh-graph-commands.ts's header for the full caller sweep. NOT a
-    // legacy-table migration — the dashboard-callable gate verbs below
-    // (med-family/mesh-graph-gate-commands.ts), sources ipc · standalone · p2p,
-    // are a fresh addition pinned in test/commands/mesh-graph-gate-commands.test.ts.
-    'mesh_graph_gate_claim', 'mesh_graph_gate_release', 'mesh_graph_gate_abandon', 'mesh_graph_gate_extend',
+    'mesh_task_output',
 ];
 
 /** high-family/index.ts highFamilyRegistry keys. */

@@ -123,13 +123,6 @@ export function resolveCompletingTaskId(history: MeshTaskAttachment[]): string |
     return history.length > 0 ? history[0].taskId : undefined;
 }
 
-/** The injectedAt anchor for the ANTIGRAVITY-PREMATURE-COMPLETION gate — the
- *  oldest (FIFO) entry's own inject time — or undefined when no attachment
- *  is pending. */
-export function resolvePendingInjectedAt(history: MeshTaskAttachment[]): number | undefined {
-    return history.length > 0 ? history[0].injectedAt : undefined;
-}
-
 /**
  * Merge a still-pending attachment's identity onto a settings object that has
  * just had its task-level mesh markers stripped (the `rest` produced by

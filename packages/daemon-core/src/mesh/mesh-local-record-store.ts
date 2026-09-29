@@ -15,7 +15,7 @@
 // rule `local-record-write`) besides schema.ts / migrate-v3.ts.
 //
 // CONTENT BOUNDARY: rows are local-only and may hold agent/user text (refine
-// validation output, MAGI synthesis, dispatch error strings). Nothing here is
+// validation output, dispatch error strings). Nothing here is
 // ever published to a topic or sent to the server; cross-machine readers use
 // the owner daemon's P2P `get_mesh_ledger_slice` or a `mesh.<id>.handoff` ref.
 // ---------------------------------------------------------------------------
@@ -229,5 +229,12 @@ export class LocalRecordStore {
     /** Remove every record of one mesh (mesh deletion / test cleanup). */
     clear(meshId: string): number {
         return this.stmt('DELETE FROM mesh_local_records WHERE mesh_id = ?').run(meshId).changes;
+    }
+
+    /** Remove every record of the given kinds, all meshes (a retired record kind). Returns rows deleted. */
+    purgeKinds(kinds: readonly string[]): number {
+        if (kinds.length === 0) return 0;
+        const placeholders = kinds.map(() => '?').join(', ');
+        return this.db.prepare(`DELETE FROM mesh_local_records WHERE kind IN (${placeholders})`).run(...kinds).changes;
     }
 }

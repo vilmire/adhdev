@@ -467,7 +467,7 @@ function commit(
     // no-op at the host (`applyTaskTerminalInTxn` finds no entry).
     if (isMeshScope(attempt) && attempt.meshId && attempt.taskId) {
         draft.effects.push({ kind: 'queue_status', meshId: attempt.meshId, taskId: attempt.taskId, status: outcome, reason });
-        draft.effects.push({ kind: 'graph_advance', meshId: attempt.meshId, taskId: attempt.taskId, outcome });
+        draft.effects.push({ kind: 'task_terminal', meshId: attempt.meshId, taskId: attempt.taskId, outcome });
     }
     draft.effects.push({ kind: 'bus', event: { kind: 'turn', phase: 'committed', sessionId: attempt.sessionId, attemptId: attempt.attemptId, generation: attempt.generation, outcome, strength } });
     notify(draft, outcome, { ...(summary ? { summary } : {}), ...(held.textEventId ? { textEventId: held.textEventId } : {}) });
@@ -515,7 +515,7 @@ export function isUnredeliveredDirectFailure(attempt: Pick<TurnAttempt, 'scope' 
  * one-active gate (live: two refused direct dispatches sat `accepted` g2 for
  * hours). So every reclaim trigger commits a direct attempt `failed` right
  * away, the reclaim cause as its terminal reason: commit releases every hold,
- * flips the row terminal (queue_status + graph_advance), sends the ONE
+ * flips the row terminal (queue_status + task_terminal), sends the ONE
  * coordinator notice and releases the attempt ref. The session is cut exactly
  * as a reclaim cuts g (cancel_dispatch + revokeBind, same already-cut skip), so
  * a prompt still queued in the worker cannot start late and the task token

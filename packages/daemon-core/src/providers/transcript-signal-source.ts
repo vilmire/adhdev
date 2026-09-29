@@ -59,7 +59,7 @@ export interface TranscriptSignalSourceOpts {
     label: string;
     /** The P0 choke-point profile for this provider. */
     profile: TranscriptAuthorityProfile;
-    /** Turn-boundary clock (adapter.currentTurnStartedAt) for turn-scoped
+    /** Turn-boundary clock (mesh task injection instant) for turn-scoped
      *  final-assistant detection; may yield undefined pre-turn. */
     turnStartedAt?: () => number | undefined;
     /** In-turn final-assistant predicate over the flattened messages — the

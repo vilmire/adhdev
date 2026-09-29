@@ -11,27 +11,6 @@ export type RepoMeshSessionCleanupMode = MeshSessionCleanupMode;
 export type RepoMeshSpawnedSessionVisibility = 'visible' | 'hidden';
 
 /**
- * What to do with the worker sessions a MAGI fan-out auto-launched, once the
- * review's responses have been collected (terminal). MAGI dispatches each replica
- * to an independent (node × provider); for a pinned target with no idle session
- * the queue AUTO-LAUNCHES a fresh worker session. Those auto-launched sessions
- * stay idle-LIVE after their turn (the CLI process is still running — `completed`
- * means the task finished, not that the runtime exited), so repeated reviews leave
- * a trail of idle live worker sessions cluttering the session list.
- *
- * 'stop_and_delete' (the default) force-stops AND deletes ONLY the sessions this
- * fan-out auto-launched (verified by the per-session autoLaunchedForQueueTaskId
- * marker — see cleanupMeshSessions). It is the only mode that covers the idle-LIVE
- * case: delete_stopped skips live runtimes by contract, so it would no-op on the
- * exact sessions we want gone. Reused idle sessions (no marker), the coordinator
- * session, and any other node's sessions are NEVER touched.
- *
- * 'preserve' disables auto-cleanup entirely (leave every auto-launched worker
- * session as-is for later inspection).
- */
-export type RepoMeshMagiSessionCleanupMode = 'preserve' | 'stop_and_delete';
-
-/**
  * Mesh-wide tie-break strategy for distributing untargeted queue work across
  * eligible nodes. This ONLY governs the final tie-break stage of the scheduler
  * pipeline (TAG hard-filter → MAX-ALLOC capacity gate → PRIORITY soft score →
@@ -113,32 +92,6 @@ export function resolveNodeSchedulingPriority(
     return Number.isFinite(raw) ? raw : 0;
 }
 
-/**
- * Synthetic capability tag advertised by every mesh node describing how it can land
- * its work onto the base branch:
- *   - converge=refine: a local worktree node (on any machine — refine_mesh_node
- *     forwards to the owning daemon) can run the Refinery merge → push → cleanup.
- *   - converge=fast_forward: a non-worktree node (the machine itself) can only
- *     fast-forward/push an already-converged branch.
- * Emitted by buildMeshNodeCapabilityTags and matched through the ordinary
- * required-tags filter.
- */
-export const MESH_CONVERGE_REFINE_TAG = 'converge=refine';
-export const MESH_CONVERGE_FAST_FORWARD_TAG = 'converge=fast_forward';
-
-/**
- * Resolve whether the load-balancing scheduler should auto-inject a
- * `converge=refine` required tag onto code_change tasks so they hard-filter onto
- * refine-capable (worktree) nodes only. Strict opt-in: defaults to false, so a mesh
- * that does not set it behaves exactly as before (code_change routes to any eligible
- * node, including a non-worktree machine node when no worktree exists).
- */
-export function resolveAutoConvergeCodeChange(
-    policy: Pick<RepoMeshPolicy, 'autoConvergeCodeChange'> | null | undefined,
-): boolean {
-    return policy?.autoConvergeCodeChange === true;
-}
-
 export interface RepoMeshAutoFastForwardPolicy {
     /** Defaults to true. Set false to disable daemon-initiated idle fast-forwards. */
     enabled: boolean;
@@ -191,16 +144,6 @@ export interface RepoMeshPolicy {
      */
     schedulingStrategy?: RepoMeshSchedulingStrategy;
     /**
-     * Convergence routing opt-in: when true, the scheduler auto-injects a
-     * `converge=refine` required tag onto every code_change task at enqueue time, so
-     * code_change work hard-filters onto refine-capable worktree nodes (on any
-     * machine — refine_mesh_node forwards to the owning daemon) and never lands on a
-     * non-worktree machine node. Explicit target_node_id routing and any
-     * caller-supplied required_tags are preserved (the tag is merged, not replaced).
-     * Defaults to false: code_change routing is unchanged unless opted in.
-     */
-    autoConvergeCodeChange?: boolean;
-    /**
      * Whether sessions spawned by mesh/coordinator policy should auto-open as visible
      * dashboard tabs or start hidden. Defaults to 'hidden' so the dashboard is not
      * flooded with mesh noise tabs; users can still surface or unmute any specific
@@ -238,17 +181,6 @@ export interface RepoMeshPolicy {
      */
     sessionCleanupOnNodeRemove?: RepoMeshSessionCleanupMode;
     /**
-     * What to do with the worker sessions a MAGI fan-out auto-launched, once the
-     * review responses are collected (terminal). Defaults to 'stop_and_delete' so
-     * repeated mesh_magi_review calls don't accumulate idle-LIVE worker sessions.
-     * Only sessions THIS fan-out auto-launched are affected (marker-verified);
-     * reused/coordinator/other-node sessions are never touched. Set 'preserve' to
-     * leave auto-launched worker sessions for later inspection. A per-call
-     * auto_cleanup override on mesh_magi_review / mesh_magi_collect beats this.
-     * Accepts a boolean for convenience (true → stop_and_delete, false → preserve).
-     */
-    magiSessionCleanup?: RepoMeshMagiSessionCleanupMode | boolean;
-    /**
      * Daemon-initiated fast-forward for idle clean nodes that are only behind
      * their tracked upstream. Defaults to enabled.
      */
@@ -274,10 +206,9 @@ export interface RepoMeshPolicy {
      * STOPS its CLI runtime (the session-host record is preserved, so the transcript
      * stays inspectable). Default 30.
      *
-     * Fills the gap left by the edge-triggered cleanups: sessionCleanupOnNodeRemove
-     * fires on node removal and magiSessionCleanup on a MAGI fan-out's terminal, so a
-     * one-off delegate on the BASE node (no node removal, no worktree, no MAGI marker)
-     * was never reclaimed and its CLI process leaked for the daemon's lifetime.
+     * Fills the gap left by the edge-triggered cleanup: sessionCleanupOnNodeRemove
+     * fires on node removal, so a one-off delegate on the BASE node (no node removal,
+     * no worktree) was never reclaimed and its CLI process leaked for the daemon's lifetime.
      *
      * Never applies to the coordinator session, to a session the owner opened directly
      * (no launchedByCoordinator marker), or to a session still holding a non-terminal
@@ -485,7 +416,7 @@ export interface RepoMeshRelatedRepo {
  * reporter round-trip.
  */
 export interface MeshReportedMemberState {
-    /** Reporter node's detected provider CLI/ACP versions (keyed by provider id). */
+    /** Reporter node's detected provider CLI versions (keyed by provider id). */
     providerVersions?: Record<string, string>;
     /** Reporter daemon's build version (getDaemonBuildInfo().version). */
     daemonBuildVersion?: string;
@@ -519,8 +450,8 @@ export interface RepoMeshNodePolicy {
     providerPriority?: string[];
     /**
      * Node capability slots (node capability slots design, 2026-07-09) — the ordered "Preferred
-     * AI tools" profile that is the single source of truth for task routing, MAGI
-     * fan-out, and orchestrator-proposed edits. Each slot bundles provider + model
+     * AI tools" profile that is the single source of truth for task routing
+     * and orchestrator-proposed edits. Each slot bundles provider + model
      * + thinkingLevel + difficulty range + capability tags + per-slot maxParallel.
      * Order = preference. When absent, the scheduler derives slots from the legacy
      * providerPriority/difficultyBrains (deriveSlotsFromLegacy) so existing nodes
@@ -627,11 +558,6 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     delegatedWorkerAutoApprove: true,
     delegatedWorkerDangerousModeAllow: false,
     sessionCleanupOnNodeRemove: 'preserve',
-    // MAGI auto-launches a worker session per pinned replica target with no idle
-    // session; those stay idle-LIVE after their turn. Default ON (stop_and_delete)
-    // so repeated reviews don't pile up idle worker sessions. Only marker-verified
-    // auto-launched sessions are cleaned — see RepoMeshMagiSessionCleanupMode.
-    magiSessionCleanup: 'stop_and_delete',
     autoFastForward: { enabled: true },
     maxTaskRetries: 1,
     // Nudge the coordinator when the mesh is fully idle but active missions linger,

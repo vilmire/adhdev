@@ -406,19 +406,6 @@ describe('SessionInputService — refusals are typed outcomes, never throws', ()
         expect(session.writes).toEqual([])
     })
 
-    it('ACP: delivered through sendAcp; a refused prompt is a typed refusal; interrupt is not implemented', async () => {
-        let accept = true
-        const acp: SessionInputTarget = {
-            getStatus: () => ({ status: 'idle' }),
-            sendMessage: async () => ({ status: 'delivered' }),
-            sendAcp: async () => (accept ? { success: true } : { success: false, error: 'prompt already in flight' }),
-        }
-        const svc = createSessionInputService({ resolveSession: () => acp })
-        expect(await svc.submit(msg({ messageId: 'msg_a' }))).toEqual({ kind: 'delivered', route: 'acp' })
-        accept = false
-        expect(await svc.submit(msg({ messageId: 'msg_b' }))).toMatchObject({ kind: 'refused', message: 'prompt already in flight' })
-        expect(await svc.submit(msg({ messageId: 'msg_c', policy: { mode: 'interrupt' } }))).toMatchObject({ kind: 'refused', reason: 'interrupt_not_implemented' })
-    })
 })
 
 // ─── 6. The turn.deliver port shares the funnel ─────────────────────────────

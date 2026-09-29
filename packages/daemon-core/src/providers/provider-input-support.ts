@@ -4,7 +4,6 @@ export type InputMediaType = 'text' | 'image' | 'audio' | 'video' | 'resource'
 
 export type InputAttachmentStrategy =
   | 'native'
-  | 'native_acp'
   | 'resource_link'
   | 'text_fallback'
   | 'paste'
@@ -25,7 +24,7 @@ export interface MessageInputSupport {
 }
 
 const VALID_INPUT_MEDIA_TYPES = new Set<InputMediaType>(['text', 'image', 'audio', 'video', 'resource'])
-const VALID_INPUT_STRATEGIES = new Set<InputAttachmentStrategy>(['native', 'native_acp', 'resource_link', 'text_fallback', 'paste', 'upload'])
+const VALID_INPUT_STRATEGIES = new Set<InputAttachmentStrategy>(['native', 'resource_link', 'text_fallback', 'paste', 'upload'])
 
 export const TEXT_ONLY_MESSAGE_INPUT_SUPPORT: MessageInputSupport = Object.freeze<MessageInputSupport>({
   text: true,
@@ -113,15 +112,6 @@ export function normalizeInputStrategyDescriptors(raw: unknown): InputMediaStrat
   return result
 }
 
-function promptCapabilityFlags(runtimeCapabilities?: Record<string, any> | null): { image: boolean; audio: boolean; embeddedContext: boolean } {
-  const prompt = runtimeCapabilities?.promptCapabilities || {}
-  return {
-    image: prompt.image === true,
-    audio: prompt.audio === true,
-    embeddedContext: prompt.embeddedContext === true,
-  }
-}
-
 function supportFromDeclared(provider?: Pick<ProviderModule, 'capabilities'> | null): MessageInputSupport {
   const declared = getDeclaredProviderInputSupport(provider)
   return {
@@ -133,49 +123,17 @@ function supportFromDeclared(provider?: Pick<ProviderModule, 'capabilities'> | n
 }
 
 export function getEffectiveMessageInputSupport(
-  provider?: Pick<ProviderModule, 'category' | 'capabilities'> | null,
-  runtimeCapabilities?: Record<string, any> | null,
+  provider?: Pick<ProviderModule, 'capabilities'> | null,
 ): MessageInputSupport {
-  if (provider?.category !== 'acp') {
-    const declared = supportFromDeclared(provider)
-    return {
-      ...declared,
-      mediaTypes: [...declared.mediaTypes],
-      strategies: declared.strategies.map((strategy) => ({
-        ...strategy,
-        strategies: [...strategy.strategies],
-        ...(strategy.degradation ? { degradation: [...strategy.degradation] } : {}),
-      })),
-    }
-  }
-
   const declared = supportFromDeclared(provider)
-  const caps = promptCapabilityFlags(runtimeCapabilities)
-  const mediaTypes = new Set<InputMediaType>(['text'])
-  const strategies: InputMediaStrategyDescriptor[] = []
-
-  if (declared.mediaTypes.includes('resource')) {
-    mediaTypes.add('resource')
-    strategies.push({ mediaType: 'resource', strategies: caps.embeddedContext ? ['native_acp', 'resource_link', 'text_fallback'] : ['resource_link', 'text_fallback'], native: caps.embeddedContext, degradation: ['resource_link', 'text_fallback'] })
-  }
-  if (declared.mediaTypes.includes('video')) {
-    mediaTypes.add('video')
-    strategies.push({ mediaType: 'video', strategies: ['resource_link', 'text_fallback'], native: false, degradation: ['resource_link', 'text_fallback'] })
-  }
-  if (declared.mediaTypes.includes('image')) {
-    mediaTypes.add('image')
-    strategies.push({ mediaType: 'image', strategies: caps.image ? ['native_acp', 'resource_link', 'text_fallback'] : ['resource_link', 'text_fallback'], native: caps.image, degradation: ['resource_link', 'text_fallback'] })
-  }
-  if (declared.mediaTypes.includes('audio')) {
-    mediaTypes.add('audio')
-    strategies.push({ mediaType: 'audio', strategies: caps.audio ? ['native_acp', 'resource_link', 'text_fallback'] : ['resource_link', 'text_fallback'], native: caps.audio, degradation: ['resource_link', 'text_fallback'] })
-  }
-
   return {
-    text: true,
-    multipart: declared.multipart && mediaTypes.size > 1,
-    mediaTypes: Array.from(mediaTypes),
-    strategies,
+    ...declared,
+    mediaTypes: [...declared.mediaTypes],
+    strategies: declared.strategies.map((strategy) => ({
+      ...strategy,
+      strategies: [...strategy.strategies],
+      ...(strategy.degradation ? { degradation: [...strategy.degradation] } : {}),
+    })),
   }
 }
 

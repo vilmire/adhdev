@@ -2,12 +2,9 @@
  * Blueprint GRAPH view model (blueprintGraphModel + blueprintGraphLayout) —
  * the pure rules behind MeshBlueprintGraph:
  *
- *  - one node vocabulary for queue depends_on chains AND persistent graphs
- *    (a materialized worker node and its queue row are ONE node)
+ *  - queue tasks as nodes, their depends_on as edges
  *  - dead-dependency propagation (direct + transitive) and the red edges
- *  - gate tones (awaiting / claimed / expired / released / abandoned) +
- *    deadline countdown
- *  - lanes: mission → graph → chain → ad-hoc; active-only; collapse; fold
+ *  - lanes: mission → chain → ad-hoc; active-only; collapse; fold
  *  - the structure key: stable across status-only polls
  *  - ELK lane layout: left → right, lanes stacked without overlap
  */
@@ -18,11 +15,9 @@ import {
     blueprintGraphStructureKey,
     buildBlueprintGraphModel,
     firstLineTitle,
-    gateDeadlineReading,
     snapshotHasStructure,
     taskHeldUntilMs,
     taskNodeTimeReading,
-    type BlueprintGraphGateNode,
     type BlueprintGraphTaskNode,
 } from '../../src/components/MeshGraph/blueprintGraphModel'
 import { layoutBlueprintGraph, narrowPaneViewport, BLUEPRINT_GRAPH_NARROW_MIN_ZOOM, BLUEPRINT_GRAPH_SIZES } from '../../src/components/MeshGraph/blueprintGraphLayout'
@@ -35,47 +30,19 @@ function task(id: string, status: string, over: Record<string, unknown> = {}): a
     return { id, meshId: 'm', message: `Task ${id}\nbody of ${id}`, status, createdAt: at, updatedAt: at, ...over }
 }
 
-function gateGraph(over: Record<string, unknown> = {}, gateOver: Record<string, unknown> = {}): any {
-    return {
-        graphId: 'G1',
-        batchId: 'B1',
-        status: 'waiting_gate',
-        enqueueSurface: 'mesh_enqueue_batch',
-        schemaVersion: 1,
-        createdAt: '2026-09-26T09:00:00Z',
-        onDependencyFailure: 'block',
-        counts: { tasks: 2, gates: 1, workspaces: 0, edges: 2 },
-        nodeStates: {},
-        nodes: [
-            { nodeId: 'n-build', ref: 'build', kind: 'worker_task', state: 'completed', taskId: 't-build', materializationVersion: 1 },
-            { nodeId: 'n-review', ref: 'review', kind: 'coordinator_gate', state: 'awaiting_coordinator', materializationVersion: 1 },
-            { nodeId: 'n-ship', ref: 'ship', kind: 'worker_task', state: 'blocked', taskId: 't-ship', blockedByGateId: 'gate-1', materializationVersion: 1 },
-        ],
-        edges: [
-            { from: 'build', to: 'review', kind: 'requires', omitOnSkip: false, active: true },
-            { from: 'review', to: 'ship', kind: 'gate', omitOnSkip: false, active: true },
-        ],
-        gates: [
-            { gateId: 'gate-1', nodeId: 'n-review', state: 'awaiting_coordinator', action: 'approval', onTimeout: 'hold', leaseGeneration: 0, deadlineAt: '2026-09-27T10:00:00Z', ...gateOver },
-        ],
-        workspaces: [],
-        ...over,
-    }
-}
-
 const byId = <T extends { id: string }>(items: T[]) => new Map(items.map(item => [item.id, item]))
 
 describe('buildBlueprintGraphModel — queue depends_on chains', () => {
-    it('projects a 3-task chain as task nodes + solid depends edges in one chain lane', () => {
+    it('projects a 3-task chain as task nodes + depends edges in one chain lane', () => {
         const model = buildBlueprintGraphModel([
             task('a', 'pending', { notBefore: '2099-01-01T00:00:00Z' }),
             task('b', 'pending', { dependsOn: ['a'] }),
             task('c', 'pending', { dependsOn: ['b'] }),
-        ], [])
+        ])
         expect(model.nodes.map(node => node.id)).toEqual(['task:a', 'task:b', 'task:c'])
-        expect(model.edges.map(edge => [edge.source, edge.target, edge.kind, edge.state])).toEqual([
-            ['task:a', 'task:b', 'depends', 'waiting'],
-            ['task:b', 'task:c', 'depends', 'waiting'],
+        expect(model.edges.map(edge => [edge.source, edge.target, edge.state])).toEqual([
+            ['task:a', 'task:b', 'waiting'],
+            ['task:b', 'task:c', 'waiting'],
         ])
         expect(model.groups).toHaveLength(1)
         expect(model.groups[0]).toMatchObject({ key: 'chain:a', kind: 'chain', anchorTaskId: 'a', title: 'Task a', live: true })
@@ -90,7 +57,7 @@ describe('buildBlueprintGraphModel — queue depends_on chains', () => {
             task('a', 'completed'),
             task('b', 'assigned', { dependsOn: ['a'], assignedProviderType: 'claude-cli', assignedNodeId: 'node-1' }),
             task('c', 'pending', { dependsOn: ['b'] }),
-        ], [])
+        ])
         const edges = byId(model.edges)
         expect(edges.get('e:task:a->task:b')).toMatchObject({ state: 'satisfied', animated: true })
         expect(edges.get('e:task:b->task:c')).toMatchObject({ state: 'waiting', animated: false })
@@ -106,7 +73,7 @@ describe('buildBlueprintGraphModel — dead dependencies', () => {
             task('child', 'pending', { dependsOn: ['root'] }),
             task('grandchild', 'pending', { dependsOn: ['child'] }),
             task('sibling', 'pending'),
-        ], [])
+        ])
         const nodes = byId(model.nodes) as Map<string, BlueprintGraphTaskNode>
         expect(nodes.get('task:child')).toMatchObject({ tone: 'dead', deadReason: 'direct' })
         expect(nodes.get('task:grandchild')).toMatchObject({ tone: 'dead', deadReason: 'transitive' })
@@ -123,7 +90,7 @@ describe('buildBlueprintGraphModel — dead dependencies', () => {
             task('ok', 'completed'),
             task('bad', 'failed'),
             task('x', 'pending', { dependsOn: ['ok', 'bad'] }),
-        ], [])
+        ])
         const x = model.nodes.find(node => node.id === 'task:x') as BlueprintGraphTaskNode
         expect(x.tone).toBe('dead')
         // Both edges into a node that can never start read red.
@@ -133,7 +100,7 @@ describe('buildBlueprintGraphModel — dead dependencies', () => {
     it('honours the daemon dependencyFailures projection even without an in-snapshot edge', () => {
         const model = buildBlueprintGraphModel([
             task('x', 'pending', { dependsOn: ['gone'], dependencyFailures: [{ taskId: 'gone', status: 'failed' }] }),
-        ], [])
+        ])
         const x = model.nodes[0] as BlueprintGraphTaskNode
         expect(x).toMatchObject({ tone: 'dead', deadReason: 'direct', missingDeps: ['gone'] })
     })
@@ -142,94 +109,23 @@ describe('buildBlueprintGraphModel — dead dependencies', () => {
         const model = buildBlueprintGraphModel([
             task('bad', 'failed'),
             task('run', 'assigned', { dependsOn: ['bad'] }),
-        ], [])
+        ])
         expect((model.nodes.find(node => node.id === 'task:run') as BlueprintGraphTaskNode).tone).toBe('running')
     })
 })
 
-describe('buildBlueprintGraphModel — persistent graphs + gates', () => {
-    it('merges materialized worker nodes with their queue rows and draws each edge once', () => {
-        const graph = gateGraph()
-        // The graph edge build→ship ALSO rides the queue as dependsOn — one edge, not two.
-        graph.edges.push({ from: 'build', to: 'ship', kind: 'requires', omitOnSkip: false, active: true })
-        const model = buildBlueprintGraphModel([
-            task('t-build', 'completed'),
-            task('t-ship', 'pending', { dependsOn: ['t-build'] }),
-        ], [graph])
-        expect(model.nodes.map(node => node.id).sort()).toEqual(['gate:G1:n-review', 'task:t-build', 'task:t-ship'])
-        const edges = model.edges.map(edge => `${edge.source}>${edge.target}:${edge.kind}`).sort()
-        expect(edges).toEqual([
-            'gate:G1:n-review>task:t-ship:gate',
-            'task:t-build>gate:G1:n-review:gate',
-            'task:t-build>task:t-ship:depends',
-        ])
-        const ship = model.nodes.find(node => node.id === 'task:t-ship') as BlueprintGraphTaskNode
-        expect(ship).toMatchObject({ graphId: 'G1', graphNodeId: 'n-ship', ref: 'ship', tone: 'pending' })
-        expect(model.groups).toHaveLength(1)
-        expect(model.groups[0]).toMatchObject({ key: 'graph:G1', kind: 'graph', live: true })
-        expect(model.groups[0].counts.gatesBlocking).toBe(1)
-    })
-
-    it('an unmaterialized worker node becomes a plan placeholder', () => {
-        const graph = gateGraph()
-        graph.nodes[2] = { nodeId: 'n-ship', ref: 'ship', kind: 'worker_task', state: 'declared', materializationVersion: 0 }
-        const model = buildBlueprintGraphModel([task('t-build', 'completed')], [graph])
-        const plan = model.nodes.find(node => node.id === 'plan:G1:n-ship') as BlueprintGraphTaskNode
-        expect(plan).toMatchObject({ kind: 'task', tone: 'plan', title: 'ship' })
-        expect(plan.taskId).toBeUndefined()
-    })
-
-    it.each([
-        ['declared', 'declared', false],
-        ['awaiting_coordinator', 'awaiting', true],
-        ['claimed', 'claimed', true],
-        ['expired', 'expired', true],
-        ['released', 'released', false],
-        ['cancelled', 'abandoned', false],
-    ])('gate state %s → tone %s (blocking=%s)', (state, tone, blocking) => {
-        const model = buildBlueprintGraphModel([], [gateGraph({}, { state })])
-        const gate = model.nodes.find(node => node.kind === 'gate') as BlueprintGraphGateNode
-        expect(gate).toMatchObject({ tone, blocking, ref: 'review' })
-    })
-
-    it('an abandoned gate (or a failed release) makes everything behind it dead', () => {
-        for (const gateOver of [{ state: 'cancelled' }, { state: 'released', releaseOutcome: 'failed' }]) {
-            const model = buildBlueprintGraphModel([task('t-build', 'completed'), task('t-ship', 'pending')], [gateGraph({}, gateOver)])
-            const ship = model.nodes.find(node => node.id === 'task:t-ship') as BlueprintGraphTaskNode
-            expect(ship.tone).toBe('dead')
-            expect(model.edges.find(edge => edge.target === 'task:t-ship')?.state).toBe('dead')
-        }
-        const passed = buildBlueprintGraphModel([task('t-build', 'completed'), task('t-ship', 'pending')], [gateGraph({}, { state: 'released', releaseOutcome: 'passed' })])
-        expect(passed.edges.find(edge => edge.target === 'task:t-ship')?.state).toBe('satisfied')
-    })
-
-    it('gate deadline countdown: remaining, overdue, and none once the gate is terminal', () => {
-        const now = Date.parse('2026-09-27T08:00:00Z')
-        const model = buildBlueprintGraphModel([], [gateGraph()])
-        const gate = model.nodes.find(node => node.kind === 'gate') as BlueprintGraphGateNode
-        expect(gateDeadlineReading(gate, now)).toEqual({ overdue: false, ms: 2 * 3_600_000 })
-        expect(gateDeadlineReading(gate, now + 3 * 3_600_000)).toEqual({ overdue: true, ms: 3_600_000 })
-        expect(gateDeadlineReading({ ...gate, tone: 'released' }, now)).toBeUndefined()
-        expect(gateDeadlineReading({ ...gate, gate: undefined }, now)).toBeUndefined()
-    })
-})
-
 describe('buildBlueprintGraphModel — lanes', () => {
-    it('groups by mission across BOTH systems, else graph, else chain, else ad-hoc', () => {
+    it('groups by mission, else chain, else ad-hoc', () => {
         const model = buildBlueprintGraphModel([
             task('m1', 'pending', { missionId: 'M' }),
             task('m2', 'pending', { dependsOn: ['m1'] }), // inherits M via its chain
-            task('t-build', 'completed'),
-            task('t-ship', 'pending'),
             task('solo', 'pending'),
             task('c1', 'completed'),
             task('c2', 'pending', { dependsOn: ['c1'] }),
-        ], [gateGraph({ missionId: 'M' })], null, { M: 'Mission Alpha' })
+        ], null, { M: 'Mission Alpha' })
         const groupOf = (id: string) => model.nodes.find(node => node.id === id)!.groupKey
         expect(groupOf('task:m1')).toBe('mission:M')
         expect(groupOf('task:m2')).toBe('mission:M')
-        expect(groupOf('task:t-ship')).toBe('mission:M')
-        expect(groupOf('gate:G1:n-review')).toBe('mission:M')
         expect(groupOf('task:c2')).toBe('chain:c1')
         expect(groupOf('task:solo')).toBe('adhoc')
         expect(model.groups.find(group => group.key === 'mission:M')?.title).toBe('Mission Alpha')
@@ -238,9 +134,8 @@ describe('buildBlueprintGraphModel — lanes', () => {
     })
 
     it('snapshotHasStructure / default view mode: graph only once there is something to draw', () => {
-        expect(snapshotHasStructure([{ dependsOn: [] }, {}], [])).toBe(false)
-        expect(snapshotHasStructure([{ dependsOn: ['x'] }], [])).toBe(true)
-        expect(snapshotHasStructure([], [{ edges: [], gates: [{} as any] }])).toBe(true)
+        expect(snapshotHasStructure([{ dependsOn: [] }, {}])).toBe(false)
+        expect(snapshotHasStructure([{ dependsOn: ['x'] }])).toBe(true)
         expect(resolveBlueprintViewMode(null, false)).toBe('list')
         expect(resolveBlueprintViewMode(null, true)).toBe('graph')
         expect(resolveBlueprintViewMode('list', true)).toBe('list')
@@ -274,22 +169,22 @@ describe('applyBlueprintGraphView — active-only, collapse, fold', () => {
     ]
 
     it('active-only hides fully finished lanes and counts them', () => {
-        const model = buildBlueprintGraphModel(snapshot(), [])
+        const model = buildBlueprintGraphModel(snapshot())
         const view = applyBlueprintGraphView(model, { activeOnly: true })
         expect(view.lanes.map(lane => lane.group.key)).toEqual(['mission:LIVE'])
         expect(view.hiddenLaneCount).toBe(1)
     })
 
     it('without active-only, a finished lane is visible but starts collapsed (no nodes)', () => {
-        const view = applyBlueprintGraphView(buildBlueprintGraphModel(snapshot(), []), { activeOnly: false })
+        const view = applyBlueprintGraphView(buildBlueprintGraphModel(snapshot()), { activeOnly: false })
         const done = view.lanes.find(lane => lane.group.key === 'mission:DONE')!
         expect(done).toMatchObject({ collapsed: true, nodeIds: [] })
-        const expanded = applyBlueprintGraphView(buildBlueprintGraphModel(snapshot(), []), { activeOnly: false, collapsed: { 'mission:DONE': false } })
+        const expanded = applyBlueprintGraphView(buildBlueprintGraphModel(snapshot()), { activeOnly: false, collapsed: { 'mission:DONE': false } })
         expect(expanded.lanes.find(lane => lane.group.key === 'mission:DONE')!.nodeIds).toEqual(['task:old1', 'task:old2'])
     })
 
     it('folds ≥3 completed tasks of a live lane into one chip and rewires + dedupes their edges', () => {
-        const view = applyBlueprintGraphView(buildBlueprintGraphModel(snapshot(), []), { activeOnly: true })
+        const view = applyBlueprintGraphView(buildBlueprintGraphModel(snapshot()), { activeOnly: true })
         const lane = view.lanes[0]
         expect(lane).toMatchObject({ folded: true, canFold: true })
         expect(lane.nodeIds).toEqual(['fold:mission:LIVE', 'task:next'])
@@ -297,7 +192,7 @@ describe('applyBlueprintGraphView — active-only, collapse, fold', () => {
         expect(fold).toMatchObject({ count: 3 })
         // d3→next and d1→next collapse into ONE fold→next edge; d1→d2, d2→d3 vanish.
         expect(view.edges.map(edge => `${edge.source}>${edge.target}`)).toEqual(['fold:mission:LIVE>task:next'])
-        const unfolded = applyBlueprintGraphView(buildBlueprintGraphModel(snapshot(), []), { activeOnly: true, folded: { 'mission:LIVE': false } })
+        const unfolded = applyBlueprintGraphView(buildBlueprintGraphModel(snapshot()), { activeOnly: true, folded: { 'mission:LIVE': false } })
         expect(unfolded.nodes.filter(node => node.kind === 'task')).toHaveLength(4)
         expect(unfolded.edges).toHaveLength(4)
     })
@@ -309,12 +204,12 @@ describe('blueprintGraphStructureKey — re-layout only on structure change', ()
         task('b', 'pending', { missionId: 'M', dependsOn: ['a'] }),
         task('c', 'pending', { missionId: 'M', dependsOn: ['b'] }),
     ]
-    const keyOf = (tasks: any[], graphs: any[] = []) => {
-        const view = applyBlueprintGraphView(buildBlueprintGraphModel(tasks, graphs), { activeOnly: true })
+    const keyOf = (tasks: any[]) => {
+        const view = applyBlueprintGraphView(buildBlueprintGraphModel(tasks), { activeOnly: true })
         return { structure: blueprintGraphStructureKey(view), lanes: blueprintGraphLaneKey(view) }
     }
 
-    it('is identical across status-only updates (pending → assigned → failed, gate state, provider, times)', () => {
+    it('is identical across status-only updates (pending → assigned → failed, provider, times)', () => {
         const first = base()
         const second = base().map((t, index) => ({
             ...first[index],
@@ -324,16 +219,15 @@ describe('blueprintGraphStructureKey — re-layout only on structure change', ()
         expect(keyOf(second)).toEqual(keyOf(first))
         // a failing turns b and c dead — colours change, geometry does not.
         expect(keyOf(third)).toEqual(keyOf(first))
-        expect(keyOf([], [gateGraph()])).toEqual(keyOf([], [gateGraph({}, { state: 'claimed' })]))
     })
 
     it('lane order does not follow activity: a status poll touching an older lane never reorders lanes', () => {
         const older = task('old', 'pending', { missionId: 'OLD' })
         const newer = task('new', 'pending', { missionId: 'NEW' })
-        const before = applyBlueprintGraphView(buildBlueprintGraphModel([older, newer], []), { activeOnly: true })
+        const before = applyBlueprintGraphView(buildBlueprintGraphModel([older, newer]), { activeOnly: true })
         const after = applyBlueprintGraphView(buildBlueprintGraphModel([
             { ...older, status: 'assigned', updatedAt: '2099-01-01T00:00:00Z' }, newer,
-        ], []), { activeOnly: true })
+        ]), { activeOnly: true })
         expect(before.lanes.map(lane => lane.group.key)).toEqual(['mission:NEW', 'mission:OLD'])
         expect(after.lanes.map(lane => lane.group.key)).toEqual(['mission:NEW', 'mission:OLD'])
         expect(blueprintGraphStructureKey(after)).toBe(blueprintGraphStructureKey(before))
@@ -359,14 +253,13 @@ describe('layoutBlueprintGraph (real ELK)', () => {
             task('c', 'pending', { missionId: 'M1', dependsOn: ['b'] }),
             task('s1', 'pending'),
             task('s2', 'pending'),
-        ], [gateGraph()])
+        ])
         const view = applyBlueprintGraphView(model, { activeOnly: false })
         const layout = await layoutBlueprintGraph(view)
         for (const node of view.nodes) expect(layout.positions.has(node.id), node.id).toBe(true)
         const x = (id: string) => layout.positions.get(id)!.x
         expect(x('task:a')).toBeLessThan(x('task:b'))
         expect(x('task:b')).toBeLessThan(x('task:c'))
-        expect(x('gate:G1:n-review')).toBeLessThan(x('task:t-ship'))
         // Lanes stack top → bottom, each node inside its own lane's rect.
         const rects = layout.lanes
         for (let i = 1; i < rects.length; i += 1) expect(rects[i].y).toBeGreaterThanOrEqual(rects[i - 1].y + rects[i - 1].height)
@@ -382,7 +275,7 @@ describe('layoutBlueprintGraph (real ELK)', () => {
         }
     })
 
-    it('handles ~200 tasks (chains + a gate graph) — model, fold and layout stay fast', async () => {
+    it('handles ~200 tasks (chains) — model, fold and layout stay fast', async () => {
         const tasks: any[] = []
         for (let chain = 0; chain < 40; chain += 1) {
             for (let step = 0; step < 5; step += 1) {
@@ -394,11 +287,11 @@ describe('layoutBlueprintGraph (real ELK)', () => {
             }
         }
         const started = performance.now()
-        const model = buildBlueprintGraphModel(tasks, [gateGraph()])
+        const model = buildBlueprintGraphModel(tasks)
         const view = applyBlueprintGraphView(model, { activeOnly: true })
         const modelMs = performance.now() - started
         const layout = await layoutBlueprintGraph(view)
-        expect(model.nodes.length).toBe(203)
+        expect(model.nodes.length).toBe(200)
         expect(layout.positions.size).toBe(view.nodes.length)
         expect(modelMs).toBeLessThan(250)
     })
@@ -413,7 +306,7 @@ describe('not_before holds', () => {
             task('bad', 'failed'),
             task('stuck', 'pending', { notBefore: '2099-01-01T00:00:00.000Z', dependsOn: ['bad'] }),
             task('run', 'assigned', { notBefore: '2099-01-01T00:00:00.000Z' }),
-        ], [])
+        ])
         const held = (id: string) => taskHeldUntilMs(model.nodes.find(node => node.id === `task:${id}`) as BlueprintGraphTaskNode, now)
         expect(held('future')).toBe(Date.parse('2099-01-01T00:00:00.000Z'))
         expect(held('past')).toBeUndefined()

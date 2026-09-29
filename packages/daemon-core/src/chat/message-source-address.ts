@@ -13,8 +13,6 @@
  *                 persisted state. `L` is a lineage token (hash of the history
  *                 session id — an identifier, never content).
  *   - `cls:'rt'`  a CLI runtime overlay row, keyed by its local dedup key.
- *   - `cls:'acp'` an ACP-instance-owned row, keyed by an instance-local id
- *                 (partial → final succession reuses the SAME id, §3.4).
  *
  * Messages without `_src` (PTY parse, IDE DOM, best-effort fallbacks) are
  * identified by the ledger's aligner instead.
@@ -32,8 +30,7 @@ import { createHash } from 'crypto';
 
 export type MessageSourceAddress =
     | { readonly cls: 'n'; readonly L: string; readonly addr: string }
-    | { readonly cls: 'rt'; readonly key: string }
-    | { readonly cls: 'acp'; readonly id: string };
+    | { readonly cls: 'rt'; readonly key: string };
 
 /** Script/sqlite-supplied native ids are normalized and capped to this length (§3.2). */
 export const NATIVE_ID_TOKEN_MAX_BYTES = 40;
@@ -99,18 +96,11 @@ export function runtimeSourceAddress(dedupKey: unknown): MessageSourceAddress | 
     return { cls: 'rt', key };
 }
 
-export function acpSourceAddress(localId: unknown): MessageSourceAddress | undefined {
-    const id = typeof localId === 'string' ? localId.trim() : '';
-    if (!id || id.length > LOCAL_KEY_MAX_LENGTH) return undefined;
-    return { cls: 'acp', id };
-}
-
 /** Ledger lookup key (`bySrc`, §3.3). Process-local; never on any wire. */
 export function messageSourceKey(src: MessageSourceAddress): string {
     switch (src.cls) {
         case 'n': return `n:${src.L}.${src.addr}`;
         case 'rt': return `rt:${src.key}`;
-        case 'acp': return `acp:${src.id}`;
     }
 }
 
@@ -137,8 +127,6 @@ export function readMessageSourceAddress(value: unknown): MessageSourceAddress |
         }
         case 'rt':
             return runtimeSourceAddress(record.key);
-        case 'acp':
-            return acpSourceAddress(record.id);
         default:
             return undefined;
     }

@@ -169,14 +169,14 @@ describe('conversation message authority snapshot', () => {
     })
 
     it('rescues the latest assistant answer when an activity flood + trailing user prompt bury it (ANTIGRAVITY-TAIL-USER-ONLY)', () => {
-        // A MAGI/antigravity coordinator turn: user prompt, the assistant ANSWER,
+        // An antigravity coordinator turn: user prompt, the assistant ANSWER,
         // then >50 non-substantive activity bubbles, then a trailing user dispatch
         // echo. The raw slice(-50) fills the window with activity + the trailing
         // user and pushes the answer into the hidden tail, so the pane would open
         // showing ONLY the user prompt until "Load older" is clicked.
         const liveMessages = [
-            { role: 'user' as const, content: 'MAGI 테스트. RCA로 현재 깃 상태 확인', id: 'user-prompt', kind: 'standard', receivedAt: 1000 },
-            { role: 'assistant' as const, content: 'MAGI RCA 완료 요약 (THE ANSWER)', id: 'assistant-answer', kind: 'standard', receivedAt: 2000 },
+            { role: 'user' as const, content: '리뷰 테스트. RCA로 현재 깃 상태 확인', id: 'user-prompt', kind: 'standard', receivedAt: 1000 },
+            { role: 'assistant' as const, content: 'RCA 완료 요약 (THE ANSWER)', id: 'assistant-answer', kind: 'standard', receivedAt: 2000 },
             ...Array.from({ length: 55 }, (_, index) => ({
                 role: (index % 3 === 2 ? 'system' : 'assistant') as 'system' | 'assistant',
                 content: `activity ${index}`,
@@ -184,7 +184,7 @@ describe('conversation message authority snapshot', () => {
                 kind: ['tool', 'thought', 'system'][index % 3],
                 receivedAt: 3000 + index,
             })),
-            { role: 'user' as const, content: 'Mission "MAGI: git status" dispatched', id: 'user-trailing', kind: 'standard', receivedAt: 4000 },
+            { role: 'user' as const, content: 'Mission "Review: git status" dispatched', id: 'user-trailing', kind: 'standard', receivedAt: 4000 },
         ]
 
         const visibleMessages = buildVisibleConversationMessages({
@@ -198,11 +198,11 @@ describe('conversation message authority snapshot', () => {
         // The buried answer is rescued to the front; the trailing user stays.
         expect(renderedRoles).toContain('assistant')
         expect(renderedRoles).toContain('user')
-        expect(rendered[0]?.content).toBe('MAGI RCA 완료 요약 (THE ANSWER)')
+        expect(rendered[0]?.content).toBe('RCA 완료 요약 (THE ANSWER)')
     })
 
     it('sorts a native-history assistant turn chronologically instead of clumping it after all live rows (CHAT-VISIBLE-CHRONO-ORDER)', () => {
-        // Antigravity/MAGI failure mode: the current turn's assistant answer lands
+        // Antigravity failure mode: the current turn's assistant answer lands
         // in historyMessages (native history) while the user's dispatch echo is a
         // live row. Positional concat renders [history..., live...], burying the
         // assistant answer above the initial window even though it is chronologically

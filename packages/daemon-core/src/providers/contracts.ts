@@ -345,7 +345,7 @@ export type ResolveActionResult = ResolveActionScriptClick | ResolveActionCoordi
 
 // ─── Provider Module type ────────────────────────
 
-export type ProviderCategory = 'cli' | 'ide' | 'extension' | 'acp';
+export type ProviderCategory = 'cli' | 'ide' | 'extension';
 
 /** Categories a user can launch a session for — webview extensions are attached, never launched. */
 export type LaunchableProviderCategory = Exclude<ProviderCategory, 'extension'>;
@@ -508,11 +508,11 @@ export interface ProviderModule {
     autoImpl?: ProviderAutoImplSpawnConfig;
   };
   /**
-   * MAGI-KIND-PANEL (model axis): template for expanding an `initialModel` selection
+   * Model axis: template for expanding an `initialModel` selection
    * into launch args for a CLI provider. `{{model}}` is substituted with the model
    * string; e.g. `['--model', '{{model}}']` for claude-cli → `--model opus`. Applied
    * at session launch when `initialModel` is passed AND this provider is a plain CLI
-   * (ACP providers instead route the model through setConfigOption). A CLI provider
+   * A CLI provider
    * with no template silently ignores `initialModel` at launch (best-effort; a model
    * request never fails a launch). Absent → no launch-time model selection for CLI.
    */
@@ -561,7 +561,7 @@ export interface ProviderModule {
    * `['-c', 'model_reasoning_effort={{level}}']`. Applied at session launch when
    * `initialThinkingLevel` is passed AND this provider is a plain CLI. A CLI provider
    * with no template silently ignores the thinking level (best-effort; never fails a
-   * launch). ACP providers instead route thinking through setConfigOption('thought_level').
+   * launch).
    */
   thinkingLaunchArgs?: string[];
   /**
@@ -694,20 +694,6 @@ export interface ProviderModule {
  /** Dynamic controls declared by provider — rendered in chat panel bar/header */
   controls?: ProviderControlDef[];
 
- // ─── ACP Static Config (for agents without config/* support) ───
- /** Static options used when agent does not provide configOptions */
-  staticConfigOptions?: Array<{
-    category: 'model' | 'mode' | 'thought_level' | 'other';
-    configId: string;
-    defaultValue?: string;
-    options: Array<{ value: string; name: string; description?: string; group?: string }>;
-  }>;
- /** Function to convert selected config values to spawn args (applied via process restart when config/* not supported) */
-  spawnArgBuilder?: (config: Record<string, string>) => string[];
-
- // ─── ACP Authentication (auth method definitions) ───
- /** ACP agent auth methods (multiple supported — in priority order) */
-  auth?: AcpAuthMethod[];
 
   /**
    * Repo Mesh coordinator capability and MCP ingestion behavior.
@@ -723,9 +709,9 @@ export interface ProviderModule {
       mediaTypes?: Array<'text' | 'image' | 'audio' | 'video' | 'resource'>;
       strategies?: Array<{
         mediaType: 'text' | 'image' | 'audio' | 'video' | 'resource';
-        strategies?: Array<'native' | 'native_acp' | 'resource_link' | 'text_fallback' | 'paste' | 'upload'>;
+        strategies?: Array<'native' | 'resource_link' | 'text_fallback' | 'paste' | 'upload'>;
         native?: boolean;
-        degradation?: Array<'native' | 'native_acp' | 'resource_link' | 'text_fallback' | 'paste' | 'upload'>;
+        degradation?: Array<'native' | 'resource_link' | 'text_fallback' | 'paste' | 'upload'>;
       }>;
     };
     output?: { richContent?: boolean; mediaTypes?: Array<'text' | 'image' | 'audio' | 'video' | 'resource'> };
@@ -910,43 +896,6 @@ export interface ProviderSessionProbe {
    * - 'iso': ISO 8601 string (YYYY-MM-DD HH:MM:SS)
    */
   timestampFormat?: 'unix_ms' | 'unix_s' | 'iso';
-}
-
-// ─── ACP Auth Types ─────────────────────────────────
-
-/** ACP auth method — based on ACP official spec */
-export type AcpAuthMethod = AcpAuthEnvVar | AcpAuthAgent | AcpAuthTerminal;
-
-/** Environment variable-based auth (API keys etc) */
-export interface AcpAuthEnvVar {
-  type: 'env_var';
-  id: string;
-  name: string;
-  vars: Array<{
-    name: string;
-    label?: string;
-    secret?: boolean;    // default true
-    optional?: boolean;  // default false
-  }>;
-  link?: string;  // Key issuance URL
-}
-
-/** Agent self-auth (OAuth, browser-based etc) */
-export interface AcpAuthAgent {
-  type: 'agent';
-  id: string;
-  name: string;
-  description?: string;
-}
-
-/** Terminal command-based auth (runs setup command) */
-export interface AcpAuthTerminal {
-  type: 'terminal';
-  id: string;
-  name: string;
-  description?: string;
-  args?: string[];
-  env?: Record<string, string>;
 }
 
 /**

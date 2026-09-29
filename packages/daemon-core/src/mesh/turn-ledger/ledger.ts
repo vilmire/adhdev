@@ -8,9 +8,9 @@
 //   ONE mesh-runtime.db transaction:
 //       attempt row + hold set + evidence row + derived turn_events rows
 //       (committed / notify / reclaim / cancel_dispatch / redeliver) +
-//       mesh_queue requeue / runner steps 2–8 (graph advance)
+//       mesh_queue requeue / task terminal (output version + row flip)
 //   → post-commit: executors (bus, cancel + worker-bind revoke, attempt-ref
-//       release, redeliver, probe, graph drain), re-evaluation of held
+//       release, redeliver, probe, task-terminal cleanup), re-evaluation of held
 //       evidence, and the PUBLISH of every `pending` row as a MeshTopicEntry.
 //
 // The two SQLite files (mesh-runtime.db, seqscribe.db) cannot share a txn, so
@@ -65,7 +65,7 @@ export interface TurnLedgerLog {
 }
 
 export interface TurnLedgerDeps {
-    /** The mesh-runtime.db handle — the txn covers turn tables AND mesh_queue/graph rows. */
+    /** The mesh-runtime.db handle — the txn covers turn tables AND mesh_queue/mesh_task_outputs rows. */
     db: DatabaseHandle;
     store?: TurnStore;
     /** This daemon's id: attempts it owns are reduced here, others forwarded. */
@@ -85,7 +85,7 @@ export interface ObserveOptions {
     owner?: { daemonId: string; meshId: string };
     /** `turn.ingest`: the topic coordinates of the entry that carried this evidence. */
     src?: { writer: string; seq: number };
-    /** Local-only completion envelope (worker_result etc.) for the graph's output version. */
+    /** Local-only completion envelope (worker_result etc.) for the task's output version. */
     envelope?: TurnCompletionEnvelope;
 }
 
@@ -244,7 +244,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
     interface Step { evidence: TurnEvidence; result: ReduceResult; host: TxnHostResult }
 
     /**
-     * R9t/R13t commit a report R17g recorded earlier: the graph's output version
+     * R9t/R13t commit a report R17g recorded earlier: the task's output version
      * takes the REPORT's local envelope (the primary evidence), not the idle
      * edge's / scheduler's that happened to trigger the commit.
      */

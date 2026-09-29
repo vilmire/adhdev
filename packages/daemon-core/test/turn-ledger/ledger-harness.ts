@@ -69,7 +69,7 @@ export function recordingHost(): TurnTxnHost & { calls: string[] } {
     return {
         calls,
         requeue: (e) => { calls.push(`requeue:${e.taskId}`); },
-        graphAdvance: (e) => { calls.push(`graph:${e.taskId}:${e.outcome}`); return { transitioned: true }; },
+        taskTerminal: (e) => { calls.push(`terminal:${e.taskId}:${e.outcome}`); return { transitioned: true }; },
     };
 }
 

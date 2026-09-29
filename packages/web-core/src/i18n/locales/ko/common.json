@@ -101,7 +101,6 @@
             "guideShort": "가이드",
             "openGitStatus": "Git 상태 열기",
             "meshGraph": "메시 그래프",
-            "stopAcpSession": "ACP 세션 중지",
             "stopCliProcess": "CLI 프로세스 중지",
             "chatHistory": "채팅 기록",
             "remoteControl": "원격 제어",
@@ -164,7 +163,7 @@
                 "whatLivesWhere": {
                     "title": "무엇이 어디에 있나요",
                     "tabsLabel": "탭:",
-                    "tabsText": "IDE, CLI, ACP 에이전트에 걸친 활성 세션입니다.",
+                    "tabsText": "IDE와 CLI 에이전트에 걸친 활성 세션입니다.",
                     "hiddenLabel": "숨긴 탭:",
                     "hiddenText": "메인 스트립에는 두고 싶지 않지만 계속 유지하고 싶은 세션을 보관합니다.",
                     "inboxLabel": "활동 수신함:",
@@ -193,7 +192,7 @@
             "quickstart": {
                 "desktop": {
                     "title": "데스크톱 빠른 시작",
-                    "step1": "먼저 머신 또는 워크스페이스 흐름에서 시작하세요. CLI나 ACP 세션을 실행하기 전에 워크스페이스를 선택하거나 저장하세요.",
+                    "step1": "먼저 머신 또는 워크스페이스 흐름에서 시작하세요. CLI 세션을 실행하기 전에 워크스페이스를 선택하거나 저장하세요.",
                     "step2": "메인 스트립은 활성 작업에 집중하고, 넘치는 것은 숨긴 탭으로 보내세요.",
                     "step3": "모든 탭을 훑어보는 대신, 승인이 필요하거나 완료된 세션은 수신함을 사용하세요.",
                     "step4": "병렬 읽기가 필요할 때만 분할하세요. 메인 레이아웃을 잃지 않고 탭을 분리하려면 플로팅하거나 팝아웃하세요."
@@ -201,7 +200,7 @@
                 "mobile": {
                     "title": "모바일 빠른 시작",
                     "step1": "검토와 답장은 채팅 모드를 유지하세요. 워크스페이스 모드는 주로 세션을 실행하거나 다시 열 때 사용하세요.",
-                    "step2": "머신 화면에서 시작해 워크스페이스를 선택한 다음, 거기서 IDE, CLI, ACP를 실행하세요.",
+                    "step2": "머신 화면에서 시작해 워크스페이스를 선택한 다음, 거기서 IDE 또는 CLI를 실행하세요.",
                     "step3": "모바일은 더 단순한 제어 화면으로 취급하세요. 분할 워크플로 없음, 적은 탭 조작, 빠른 세션 전환."
                 }
             },
@@ -421,8 +420,6 @@
         "startingCoordinator": "코디네이터 시작 중…",
         "startIde": "IDE 시작",
         "startingIde": "IDE 시작 중…",
-        "startAcpSession": "ACP 세션 시작",
-        "startingAcpSession": "ACP 세션 시작 중…",
         "startFresh": "새로 시작",
         "startingFresh": "새로 시작 중…",
         "resumeSavedHistory": "저장된 기록 재개",
@@ -677,25 +674,6 @@
                         "큐에 영속되므로 완료 신호는 결코 유실되지 않습니다."
                     ]
                 },
-                "magi": {
-                    "term": "MAGI",
-                    "summary": "교차 검증: 여러 독립 AI 에이전트가 같은 질문에 병렬로 답합니다.",
-                    "details": [
-                        "신뢰는 독립성에서 나옵니다 — 서로 다른 머신의 서로 다른 AI는 서로 다르게 실패합니다.",
-                        "에이전트들이 의견이 갈리면 그 불일치 자체가 재확인할 지점을 표시합니다.",
-                        "합성 결과는 합의 정도를 소스 간 결합도와 견주어 평가합니다."
-                    ]
-                },
-                "magiPanel": {
-                    "term": "MAGI 패널",
-                    "summary": "이름으로 호출하는, 저장·재사용 가능한 (머신 × AI) 멤버 팀.",
-                    "details": [
-                        "각 멤버는 하나의 프로바이더(AI)이며, 선택적으로 노드(머신)에 고정되고 복제 수를 가집니다.",
-                        "independent — 프로바이더 ≥2 AND 머신 ≥2에 걸쳐 합의가 실질적 신뢰를 더합니다.",
-                        "coupled — 하나의 AI 또는 머신으로 수렴; 반복 멤버는 같은 실수를 반복합니다.",
-                        "패널 탭에서 머신 로컬로 관리; ~/.adhdev/meshes.json에 정의됩니다."
-                    ]
-                },
                 "convergence": {
                     "term": "브랜치 수렴 상태",
                     "summary": "워크트리 작업 후 각 브랜치는 정확히 하나의 최종 상태로 분류됩니다.",
@@ -707,39 +685,13 @@
                         "not_mergeable — 머지 불가."
                     ]
                 },
-                "graph": {
-                    "term": "오케스트레이션 그래프",
-                    "summary": "의존성·조건·게이트를 함께 선언해 한 번에 등록한 태스크 묶음.",
-                    "details": [
-                        "mesh_enqueue_batch 로 생성되며, 미션 안의 실행 가능한 계획 하나에 해당합니다.",
-                        "종료된 그래프는 설계도면에서 칩 하나로 접히고, 클릭하면 그 자리에서 펼쳐집니다."
-                    ]
-                },
-                "gate": {
-                    "term": "코디네이터 게이트",
-                    "summary": "사람이 지시한 코디네이터가 처리할 때까지 그래프를 멈춰 두는 단계.",
-                    "details": [
-                        "상태: declared → awaiting_coordinator → claimed → released (또는 expired).",
-                        "대기 중인 게이트는 설계도면에서 카드 전체 폭으로, 지시문과 마감과 함께 표시됩니다.",
-                        "게이트 처리는 코디네이터에게 지시해서 합니다 — 대시보드는 읽기 전용입니다."
-                    ]
-                },
-                "condition": {
-                    "term": "조건 (run_if)",
-                    "summary": "계획된 단계를 실행할지 결정하는 선언적 술어.",
-                    "details": [
-                        "문법은 닫힌 집합입니다: exists, ==, !=, in 에 all / any / not 조합.",
-                        "설계도면에서는 엣지에 연결된 카드로 표시됩니다. 예: review.outcome == rejected.",
-                        "조건이 끝내 성립하지 않은 단계는 실패가 아니라 건너뜀 처리됩니다."
-                    ]
-                },
                 "blueprint": {
                     "term": "설계도면",
-                    "summary": "계획 화면 — 라이브 큐 작업, 그래프 게이트, 계획된 단계를 한 캔버스에 표시.",
+                    "summary": "계획 화면 — 라이브 큐 작업과 태스크 의존 관계를 한 캔버스에 표시.",
                     "details": [
                         "축은 하나입니다 — 좌에서 우로 의존성 깊이. 루트 태스크는 최신순입니다.",
                         "카드가 각자 시각을 표시하므로 위치가 시간을 나타낼 필요가 없습니다.",
-                        "종료된 그래프는 라이브 작업 아래에 접힌 아카이브로 놓입니다."
+                        "완료된 의존 체인은 접혀서 라이브 작업이 잘 보입니다."
                     ]
                 },
                 "routingPreview": {
@@ -773,50 +725,6 @@
             "medium": "보통",
             "difficult": "어려움",
             "freeform": "자유형"
-        },
-        "magiKind": {
-            "refresh": "새로고침",
-            "loading": "불러오는 중…",
-            "connectPrompt": "kind → 패널 바인딩을 관리하려면 코디네이터 데몬에 연결하세요.",
-            "errorLoad": "kind 패널을 불러오지 못했습니다",
-            "errorSave": "kind 바인딩을 저장하지 못했습니다",
-            "errorRemove": "kind 바인딩을 제거하지 못했습니다",
-            "errorSlotProvider": "슬롯 {{slot}}: 프로바이더가 필요합니다",
-            "errorSlotReplica": "슬롯 {{slot}}: 복제 수는 1 이상이어야 합니다",
-            "errorNoSlot": "kind 바인딩에는 최소 하나의 슬롯이 필요합니다",
-            "removeConfirm": "\"{{kind}}\"의 MAGI 패널 바인딩을 제거할까요?",
-            "kindRca": "근본 원인 분석",
-            "kindDesign": "설계 / 접근 검토",
-            "kindClaimAudit": "특정 주장 검증",
-            "kindFreeform": "자유형 검토",
-            "agentCount_one": "에이전트 {{count}}개",
-            "agentCount_other": "에이전트 {{count}}개",
-            "off": "꺼짐",
-            "noAgents": "아직 에이전트가 없습니다 — 하나 추가하여 이 검토 유형을 활성화하세요.",
-            "machine": "머신",
-            "machineTitle": "이 에이전트를 실행할 머신. \"any\"로 두면 코디네이터가 태그로 라우팅합니다.",
-            "anyMachine": "아무 머신",
-            "offlineSuffix": "{{label}} (오프라인)",
-            "worktreeSuffix": "{{label}} — 워크트리 ({{branch}})",
-            "worktreeUnknownBranch": "브랜치 알 수 없음",
-            "worktreeDisabledTitle": "일시적인 워크트리 노드는 MAGI 슬롯에 새로 배정할 수 없습니다 — 정리 시 사라질 수 있습니다. 기존 배정은 검토/해제할 수 있도록 여기에 계속 표시됩니다.",
-            "provider": "프로바이더",
-            "providerTitle": "이 슬롯이 실행하는 AI 에이전트.",
-            "selectProvider": "프로바이더 선택…",
-            "model": "모델",
-            "modelTitle": "선택적 모델 재정의(최선). 비워 두면 프로바이더 기본값을 사용합니다.",
-            "modelDefault": "기본값",
-            "modelCustom": "사용자 지정…",
-            "backToModelList": "← 모델 목록으로",
-            "copies": "복제 수",
-            "copiesTitle": "이 에이전트를 병렬로 몇 개 실행할지. 비우면 = 1.",
-            "removeAgent": "에이전트 제거",
-            "addAgent": "+ 에이전트 추가",
-            "save": "저장",
-            "saving": "저장 중…",
-            "removeBinding": "바인딩 제거",
-            "removeBindingTitle": "이 kind 바인딩 지우기",
-            "removeBindingDisabledTitle": "제거할 것이 없습니다 — 이 kind는 구성되지 않았습니다"
         },
         "panel": {
             "outOfSyncBadge": "미동기화",
@@ -893,12 +801,6 @@
                 "depsFailed_one": "선행 {{count}}건 실패",
                 "depsFailed_other": "선행 {{count}}건 실패"
             },
-            "gate": {
-                "holding_one": "{{count}}개 작업 대기중",
-                "holding_other": "{{count}}개 작업 대기중",
-                "deadline": "{{time}}까지 · 이후 {{onTimeout}}",
-                "needsYou": "확인 필요"
-            },
             "time": {
                 "now": "방금",
                 "minutes_one": "{{count}}분 전",
@@ -911,7 +813,6 @@
             "empty": "아직 작업 없음",
             "waitsOn_one": "{{count}}개 대기",
             "waitsOn_other": "{{count}}개 대기",
-            "blocked": "차단됨",
             "missingDeps_one": "미확인 의존성 {{count}}개",
             "missingDeps_other": "미확인 의존성 {{count}}개",
             "legend": {
@@ -1049,16 +950,12 @@
         },
         "blueprint": {
             "schedPrediction": "예측",
-            "gateActsViaCoordinatorHint": "이 게이트는 코디네이터가 처리합니다 — 코디네이터 채팅에서 요청하세요.",
-            "gateFallback": "게이트",
             "readonlyBadge": "읽기 전용",
             "schedObservedAt": "{{time}} 기준",
             "schedNoNodes": "라우팅 가능한 노드가 없습니다.",
             "schedQuotaButton": "쿼터",
             "schedQuotaButtonTitle": "기기별 플랜 쿼터 한눈에 보기",
             "schedNoWinner": "적합한 슬롯 없음",
-            "leaseExpired": "리스 만료",
-            "gateActsViaCoordinator": "코디네이터 관리",
             "schedNext": "다음 배정",
             "schedWaiting": "대기",
             "schedFull": "정원 참",
@@ -1076,21 +973,6 @@
             "schedUnpinnedTitle": "핀 없이 보낼 때의 가상 예측 — 노드가 핀 지정된 태스크는 카드에 별도 예측이 표시됩니다",
             "schedPointInTime": "확정된 배정이 아니라 현재 시점의 예측입니다 — 슬롯이 점유·해제되면 용량 정보는 즉시 낡을 수 있습니다",
             "schedulingShort": "스케줄링",
-            "gate": {
-                "release": "릴리즈",
-                "abandon": "포기",
-                "extend24h": "24시간 연장",
-                "outcomePassed": "통과",
-                "outcomeFailed": "실패",
-                "evidencePlaceholder": "증거 (선택)",
-                "reasonPlaceholder": "이 게이트를 포기하는 사유",
-                "abandonReasonRequired": "게이트를 포기하려면 사유가 필요합니다.",
-                "submitRelease": "릴리즈 제출",
-                "submitAbandon": "포기 제출",
-                "extendConfirmTitle": "\"{{ref}}\"를 24시간 연장할까요?",
-                "expiredBadge": "만료됨 · {{age}} 전",
-                "commandUnavailable": "이 명령을 보낼 데몬 연결이 없습니다."
-            },
             "list": {
                 "barActive": "실행 {{count}}",
                 "barBlocked": "차단 {{count}}",
@@ -1111,7 +993,6 @@
                 "loadMore_one": "{{count}}개 더 보기",
                 "loadMore_other": "{{count}}개 더 보기",
                 "emptyActive": "실행 중인 작업 없음",
-                "blockedByGate": "대기 원인: {{ref}}, {{age}}",
                 "waitingOn": "대기 중:",
                 "waitingOnMore": "외 {{count}}개",
                 "blockedByDeadDependency": "실패/취소된 선행 작업에 막힘:",
@@ -1128,7 +1009,6 @@
                 "emptyActive": "실행 중인 작업 없음",
                 "showFinished": "끝난 레인 보기",
                 "layoutFailed": "그래프 배치 실패: {{error}}",
-                "laneGraph": "그래프 {{id}}",
                 "laneAdhoc": "독립 작업",
                 "laneCollapse": "접기",
                 "laneExpand": "펼치기",
@@ -1138,8 +1018,6 @@
                 "foldNode_other": "완료 {{count}}개",
                 "countRunning_one": "실행 중 {{count}}",
                 "countRunning_other": "실행 중 {{count}}",
-                "countGates_one": "게이트 대기 {{count}}",
-                "countGates_other": "게이트 대기 {{count}}",
                 "countDead_one": "막힘 {{count}}",
                 "countDead_other": "막힘 {{count}}",
                 "countWaiting_one": "대기 {{count}}",
@@ -1151,21 +1029,15 @@
                 "timeRunning": "실행 {{age}}째",
                 "timeFinished": "종료 {{time}}",
                 "timeQueued": "대기 {{age}}",
-                "deadlineIn": "마감까지 {{age}}",
-                "deadlineOverdue": "마감 {{age}} 지남",
                 "tooltipTask": "태스크: {{id}}",
                 "tooltipMission": "미션: {{id}}",
-                "tooltipGraph": "그래프: {{id}} · {{ref}}",
-                "tooltipGate": "게이트: {{id}}",
                 "tooltipStatus": "상태: {{status}}",
                 "deadDirect": "선행 작업이 실패/취소되어 이 작업은 스스로 시작되지 않습니다.",
                 "deadTransitive": "상류 작업이 실패/취소되어 이 작업은 스스로 시작되지 않습니다.",
                 "legendDepends": "선행 의존",
-                "legendGate": "게이트",
                 "legendRunning": "실행 중",
                 "legendDead": "시작 불가",
                 "heldUntil": "{{time}}까지",
-                "gateDetails": "게이트 상세 열기",
                 "tone": {
                     "pending": "대기",
                     "running": "실행 중",
@@ -1175,14 +1047,6 @@
                     "dead": "막힘",
                     "plan": "계획됨",
                     "held": "보류"
-                },
-                "gateTone": {
-                    "declared": "선언됨",
-                    "awaiting": "대기 중",
-                    "claimed": "처리 중",
-                    "expired": "만료",
-                    "released": "해제됨",
-                    "abandoned": "포기됨"
                 }
             }
         },
@@ -1250,8 +1114,6 @@
             "visibilityHint": "숨김 = 수신함을 조용히 유지하고 알림을 음소거; 코디네이터 세션을 통해 상호작용합니다. 표시 = 스폰된 모든 워커를 각각의 대화로 표시합니다.",
             "visibilityHidden": "숨김",
             "visibilityVisible": "표시",
-            "magiTitle": "교차 검토 에이전트",
-            "magiDescription": "MAGI(Multi-Agent Ground-truth Insight)는 서로의 작업을 교차 검증하여 실측을 드러내는 AI 에이전트 패널을 실행합니다. 각 검토 유형을 처리할 에이전트를 선택하세요.",
             "coordinatorPromptTitle": "코디네이터 프롬프트",
             "thisMeshHint": "{{name}}의 코디네이터 세션에만 적용됩니다. 비워 두면 데몬 기본값을 유지합니다.",
             "overrideLabel": "재정의 (기본값 대체)",
@@ -1435,11 +1297,6 @@
             "info": "재정의가 비어 있을 때 코디네이터 세션이 받는 내용입니다.",
             "launchScopeNote": "미션·최근 활동·운영 노트는 런치 시 추가되며 여기에는 표시되지 않습니다."
         },
-        "hermesMcp": {
-            "title": "Hermes MCP 구성",
-            "description": "Hermes는 리포 로컬 .mcp.json을 자동 가져오지 않습니다. Hermes 구성의 mcp_servers 아래에 이 YAML을 추가한 뒤 새 Hermes 세션을 시작하세요.",
-            "fallbackProvider": "Hermes CLI"
-        },
         "providerAutoApprove": {
             "partialInventoryChip_other": "노드 {{count}}개 대기",
             "partialInventoryChip_one": "노드 {{count}}개 대기",
@@ -1491,15 +1348,6 @@
             "saved": ".adhdev/mesh.json에 저장됨",
             "saveError": "프로바이더 기본값 저장에 실패했습니다."
         },
-        "graphs": {
-            "shown_one": "그래프 {{count}}개 표시 중",
-            "shown_other": "그래프 {{count}}개 표시 중",
-            "loadMore_one": "그래프 {{count}}개 더 불러오기",
-            "loadMore_other": "그래프 {{count}}개 더 불러오기",
-            "serverLimitHidden_one": "이전 그래프 {{count}}개 미표시 · 최대 100개",
-            "serverLimitHidden_other": "이전 그래프 {{count}}개 미표시 · 최대 100개",
-            "serverLimitReached": "데몬은 최대 100개의 그래프를 반환합니다."
-        },
         "status": {
             "healthErrorChip": "오류",
             "offlineMachinesTitle": "보고 없음: {{machines}}",
@@ -1548,7 +1396,6 @@
             "tasksCount_one": "작업 {{count}}개",
             "sessionCount_other": "세션 {{count}}개",
             "sessionCount_one": "세션 {{count}}개",
-            "leaseExpired": "점유 만료",
             "providerUnknown": "프로바이더 알 수 없음",
             "truncated": "(생략됨)",
             "missionCard": "미션",
@@ -1595,10 +1442,6 @@
             "detailKickerLedger": "원장 항목",
             "detailKickerQueue": "큐 태스크",
             "detailKickerSession": "세션",
-            "detailKickerGate": "게이트",
-            "detailLabelGraph": "그래프",
-            "detailLabelRef": "스텝",
-            "detailLabelOutcome": "결과",
             "detailLabelMissionId": "미션 ID",
             "detailLabelCreated": "생성 시각",
             "detailLabelUpdated": "업데이트 시각",
@@ -1641,8 +1484,6 @@
             "routingSkippedMore": "외 {{count}}개",
             "pausedMissions": "일시정지된 미션",
             "ledgerAllTime": "전체 기간 누계",
-            "detailLabelGateAfter": "선행",
-            "detailLabelGateUnlocks": "해제 대상",
             "sessionTasksHeading": "이 세션의 태스크",
             "showOnCanvas": "캔버스에서 보기"
         }
@@ -1781,8 +1622,6 @@
         "startingFresh": "새로 시작 중…",
         "startIde": "IDE 시작",
         "startingIde": "IDE 시작 중…",
-        "startAcpSession": "ACP 세션 시작",
-        "startingAcpSession": "ACP 세션 시작 중…",
         "recoverHostedRuntime": "호스팅 런타임 복구",
         "hostedRuntimeRecoveryDescription": "중단 후 호스팅 런타임의 폴백 복구. 일반적인 연속성을 위해서는 저장된 기록을 여세요.",
         "openSavedHistory": "저장된 기록 열기",
@@ -1882,7 +1721,7 @@
             "installing": "설치 중…",
             "done": "완료",
             "installCount": "{{count}}개 설치",
-            "intro": "사용할 프로바이더를 선택하세요. 기본값은 공식 지원 CLI 프로바이더 4개입니다. 아래 탭에서 IDE, ACP, 익스텐션 프로바이더를 설치하거나 나중에 Machines → Providers에서 추가할 수 있습니다.",
+            "intro": "사용할 프로바이더를 선택하세요. 기본값은 공식 지원 CLI 프로바이더 3개입니다. 아래 탭에서 IDE 또는 익스텐션 프로바이더를 설치하거나 나중에 Machines → Providers에서 추가할 수 있습니다.",
             "loadingRegistry": "레지스트리 로드 중…",
             "loadError": "레지스트리 로드 실패: {{error}}",
             "noProviders": "이 카테고리에 프로바이더가 없습니다.",
@@ -1934,9 +1773,9 @@
                     "title": "멀티 IDE 지원",
                     "desc": "VS Code, Cursor, Windsurf 및 확장 기반 에이전트를 한곳에서 모니터링합니다."
                 },
-                "cliAcp": {
-                    "title": "CLI·ACP 커버리지",
-                    "desc": "독립 CLI 에이전트와 ACP 워크플로를 IDE 세션과 함께 추적합니다."
+                "cli": {
+                    "title": "CLI 커버리지",
+                    "desc": "독립 CLI 에이전트를 IDE 세션과 함께 추적합니다."
                 }
             },
             "extras": {
@@ -3331,7 +3170,6 @@
             "onMachine": "{{machine}}에서",
             "sectionIDEs": "IDEs",
             "sectionCLIs": "CLIs",
-            "sectionACPAgents": "ACP 에이전트",
             "cpu": "CPU",
             "mem": "MEM",
             "loading": "머신을 불러오는 중…",
@@ -3510,7 +3348,7 @@
             "stopFailed": "중지하지 못했습니다",
             "restartInitiated": "{{name}} 재시작을 시작했습니다",
             "restartFailed": "재시작하지 못했습니다",
-            "selectProviderFirst": "먼저 CLI 또는 ACP 프로바이더를 선택하세요",
+            "selectProviderFirst": "먼저 CLI 프로바이더를 선택하세요",
             "selectProvider": "프로바이더를 선택하세요",
             "workspaceRemoved": "워크스페이스가 제거되었습니다",
             "workspaceLabelUpdated": "워크스페이스 이름이 변경되었습니다",
@@ -3879,8 +3717,8 @@
             "monoDesc": "실제 프로덕션 레포는 서브모듈을 품고 있는데, 바로 거기서 단순한 자동 머지가 깨집니다. ADHDev는 이를 안전하게 다룹니다: main을 건드리기 전에 서브모듈 변경이 제대로 반영·연결됐는지 먼저 확인합니다. 이 프로젝트 자체가 서브모듈 2개를 가진 레포이고, 매일 이 방식으로 머지됩니다.",
             "crossHighlight": "두 번째 의견",
             "crossTitle": "단일 의견이 아닌 합의",
-            "crossSubtitle": "MAGI — Multi-Agent Ground-truth Insight",
-            "crossDesc": "같은 읽기 전용 질문을 여러 머신과 모델에 동시에 던지고, 어디서 일치하고 어디서 갈리는지 확인합니다(MAGI). 에이전트 하나의 답보다 신뢰할 수 있습니다.",
+            "crossSubtitle": "하나의 질문, 여러 독립 에이전트",
+            "crossDesc": "코디네이터가 같은 읽기 전용 질문을 여러 머신과 모델에 동시에 던지고, 어디서 일치하고 어디서 갈리는지 비교합니다. 에이전트 하나의 답보다 신뢰할 수 있습니다.",
             "tryMesh": "Repo Mesh 사용해보기 →",
             "seePlans": "요금제 보기",
             "availableOn": "머신을 연결하고 <strong>Repo Mesh</strong> 페이지에서 바로 시작하세요.",
@@ -3927,7 +3765,7 @@
             "rowCrossCheck": "답을 교차 검증",
             "rowCrossCheckLocalCli": "에이전트 하나의 판단, 두 번째 의견 없음",
             "rowCrossCheckDesktop": "병렬 작업, 단일 판정",
-            "rowCrossCheckAdhdev": "MAGI가 동일한 읽기 전용 질문을 독립적인 머신 × 프로바이더 에이전트에 분배하고 차이를 표시합니다",
+            "rowCrossCheckAdhdev": "코디네이터가 동일한 읽기 전용 질문을 서로 다른 머신 × 프로바이더 에이전트에 보내고 차이를 비교합니다",
             "footnote": "단일 머신, 단일 브랜치, 일회성 작업이라면 — 서브에이전트를 가진 로컬 CLI가 더 가볍고 잘 작동하며, 네이티브 데스크톱 오케스트레이터가 더 쾌적합니다. Repo Mesh는 작업이 여러 머신과 브랜치로 분산되고, 재시작 후에도 유지되어야 하며, 어디서든 제어하면서 자동으로 main에 착지해야 할 때 진가를 발휘합니다."
         },
         "what": {
@@ -3935,7 +3773,7 @@
             "sectionSubtitle": "설계부터 벤더 중립. Mac에서 Claude Code, Windows GPU 박스에서 Codex, 리뷰 패스에 Cursor CLI — 동일한 메시에서, 동일한 정책 아래. 플랫폼을 바꾸지 않고 벤더를 바꿉니다.",
             "cliHighlight": "CLI 에이전트",
             "cliTitle": "어떤 터미널 에이전트든 웹에서 구동",
-            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Grok, Hermes, Kimi, OpenCode — PTY 어댑터를 통해 머신에 연결되어 재개 및 재연결이 가능하며, 브라우저에서 구동됩니다. 즉시 프롬프트를 보내고 시각적 컨텍스트를 제공하세요(붙여넣기, 드래그 앤 드롭, 또는 한 번에 최대 5개 이미지/10MB 업로드). Aider, Goose 등 ACP 에이전트는 stdio로 연결됩니다.",
+            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Grok, Kimi, OpenCode — PTY 어댑터를 통해 머신에 연결되어 재개 및 재연결이 가능하며, 브라우저에서 구동됩니다. 즉시 프롬프트를 보내고 시각적 컨텍스트를 제공하세요(붙여넣기, 드래그 앤 드롭, 또는 한 번에 최대 5개 이미지/10MB 업로드).",
             "uiHighlight": "하나의 UI",
             "uiTitle": "같은 대시보드, 어떤 기기에서든",
             "uiDesc": "adhf.dev에 클라우드로 호스팅 — 책상에 있든 없든 노트북이나 폰에서 모든 에이전트를 구동합니다.",
@@ -3954,7 +3792,7 @@
         },
         "agents": {
             "sectionTitle": "지원 에이전트",
-            "sectionSubtitle": "{{ides}}개 내장 IDE 통합, {{clis}}개 내장 CLI 에이전트, {{extensions}}개 IDE 내장 익스텐션 에이전트, {{acp}}개 이상의 ACP(stdio MCP) 에이전트. 프로바이더 스크립트는 <code>adhdev-providers/</code>에 있으며 <code>~/.adhdev/providers/</code>에 직접 추가할 수 있습니다.",
+            "sectionSubtitle": "{{ides}}개 내장 IDE 통합, {{clis}}개 내장 CLI 에이전트, {{extensions}}개 IDE 내장 익스텐션 에이전트. 프로바이더 스크립트는 <code>adhdev-providers/</code>에 있으며 <code>~/.adhdev/providers/</code>에 직접 추가할 수 있습니다.",
             "tierTested": "Tested",
             "tierTestedDesc": "실제 앱·고정 버전에서 검증됨",
             "tierCommunity": "Community",
@@ -3964,8 +3802,7 @@
             "groupCli": "CLI 에이전트",
             "hintCli": "재개 및 재연결이 가능한 PTY 어댑터로 구동.",
             "groupExtensions": "IDE 내장 익스텐션 에이전트",
-            "hintExtensions": "다른 IDE 안에서 실행되는 에이전트를 위한 CDP 웹뷰 연결.",
-            "acpFootnote": "stdio(Agent Client Protocol)를 통한 {{count}}개 이상의 ACP 에이전트 추가 지원: Codex, Claude Agent, Goose, Cline, OpenHands 등."
+            "hintExtensions": "다른 IDE 안에서 실행되는 에이전트를 위한 CDP 웹뷰 연결."
         },
         "pricing": {
             "sectionTitle": "에이전트 규모에 맞는 단순한 요금제",
@@ -3981,7 +3818,7 @@
                     "features": {
                         "machine": "머신 하나, 명령어 하나로 페어링",
                         "p2p": "P2P 채팅, 명령어, 스크린샷, 원격 입력",
-                        "providers": "모든 프로바이더 — CLI, IDE, ACP 에이전트",
+                        "providers": "모든 프로바이더 — CLI, IDE 에이전트",
                         "push": "승인 및 완료 푸시 알림",
                         "share": "공유 세션 링크 하나"
                     }
@@ -4034,7 +3871,7 @@
                 },
                 "step3": {
                     "title": "에이전트 구동",
-                    "desc": "대시보드에서 Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Hermes, Kimi 등 에이전트를 실행하세요. 채팅 읽기, 프롬프트 전송, 시각적 컨텍스트 제공(붙여넣기, 드래그 앤 드롭, 또는 한 번에 여러 이미지 업로드), 액션 승인, 세션 전환."
+                    "desc": "대시보드에서 Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Kimi 등 에이전트를 실행하세요. 채팅 읽기, 프롬프트 전송, 시각적 컨텍스트 제공(붙여넣기, 드래그 앤 드롭, 또는 한 번에 여러 이미지 업로드), 액션 승인, 세션 전환."
                 }
             }
         },

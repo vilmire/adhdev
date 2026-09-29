@@ -4,12 +4,12 @@
  * adjustment, propose → approve).
  *
  * A node's capability slots (policy.slots) are the single source of truth for
- * task→node fitness routing and MAGI fan-out. Previously only the human operator
+ * task→node fitness routing. Previously only the human operator
  * could edit them (NodeSlotEditor). This lets the orchestrator, MID-RUN, suggest a
  * profile change — "add an opus slot to node X so difficult tasks route there" —
  * and apply it, but ONLY behind an explicit user-approval gate.
  *
- * The gate reuses the mesh_magi_kind_panel action=set precedent exactly: default to a
+ * The gate is the standard dry-run → approve → write pattern: default to a
  * dry-run (write=false) that returns the current-vs-proposed slot lists so the
  * coordinator can present the diff for approval, and only mutate on an explicit
  * write=true re-call. No new pending/approval storage is needed — the coordinator

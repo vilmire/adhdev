@@ -40,28 +40,16 @@ import {
     decodeQueueQueryResponse,
     decodeQueueEnqueueRequest,
     decodeQueueEnqueueResponse,
-    decodeQueueEnqueueGraphRequest,
-    decodeQueueEnqueueGraphResponse,
+    decodeQueueEnqueueBatchRequest,
+    decodeQueueEnqueueBatchResponse,
     decodeQueueCancelRequest,
     decodeQueueCancelResponse,
     decodeQueueRequeueRequest,
     decodeQueueRequeueResponse,
     decodeDirectDispatchRecordRequest,
     decodeDirectDispatchRecordResponse,
-    decodeGraphAuditRecordRequest,
-    decodeGraphAuditRecordResponse,
     decodeActiveWorkQueryRequest,
     decodeActiveWorkQueryResponse,
-    decodeGraphGateAbandonRequest,
-    decodeGraphGateAbandonResponse,
-    decodeGraphGateClaimRequest,
-    decodeGraphGateClaimResponse,
-    decodeGraphGateReleaseRequest,
-    decodeGraphGateReleaseResponse,
-    decodeGraphNodePatchRequest,
-    decodeGraphNodePatchResponse,
-    decodeGraphViewQueryRequest,
-    decodeGraphViewQueryResponse,
     decodeOrphanedPinNotifyRequest,
     decodeOrphanedPinNotifyResponse,
     decodePruneStaleDirectRequest,
@@ -104,24 +92,26 @@ describe('turn-ipc — command registry', () => {
     // store access (record appends, queue mutations/reads, active work, recovery
     // hints) moved behind ten more commands. Thirteen became twenty-three.
     // C-W9c (2026-09-24 19:00 stamp): the last mcp-server in-process daemon-core
-    // paths — graph gates/plan/patch, mission reads (MAGI), task/mission stats,
+    // paths — graph gates/plan/patch, mission reads, task/mission stats,
     // orphaned-pin helpers, one prune audit — moved behind eight more commands.
-    // Twenty-three became thirty-one.
-    it('declares exactly thirty-one commands', () => {
-        expect(TURN_IPC_COMMANDS).toHaveLength(31)
+    // Twenty-three became thirty-one. Graph orchestration retired (2026-09-30):
+    // graph_audit_record and the five graph_gate/node/view commands went with it,
+    // and queue_enqueue_graph became queue_enqueue_batch. Thirty-one became
+    // twenty-five.
+    it('declares exactly twenty-five commands', () => {
+        expect(TURN_IPC_COMMANDS).toHaveLength(25)
         expect([...TURN_IPC_COMMANDS].sort()).toEqual([
-            'active_work_query', 'direct_dispatch_record', 'graph_audit_record',
-            'graph_gate_abandon', 'graph_gate_claim', 'graph_gate_release', 'graph_node_patch', 'graph_view_query',
+            'active_work_query', 'direct_dispatch_record',
             'ledger_query', 'mesh_index_query', 'mesh_record', 'mission_list_query', 'mission_query', 'mission_upsert',
             'note_forget', 'note_upsert', 'operator_status', 'orphaned_pin_notify',
             'prune_stale_direct',
-            'queue_cancel', 'queue_enqueue', 'queue_enqueue_graph', 'queue_query', 'queue_requeue',
+            'queue_cancel', 'queue_enqueue', 'queue_enqueue_batch', 'queue_query', 'queue_requeue',
             'record_local', 'recovery_context_query', 'task_stats_query',
             'tool_call_record', 'turn_cancel', 'turn_observe', 'turn_query',
         ])
     })
 
-    it('isTurnIpcCommand accepts only the thirty-one names', () => {
+    it('isTurnIpcCommand accepts only the twenty-five names', () => {
         for (const name of TURN_IPC_COMMANDS) expect(isTurnIpcCommand(name)).toBe(true)
         expect(isTurnIpcCommand('mesh_status')).toBe(false)
         expect(isTurnIpcCommand('appendLedgerEntry')).toBe(false)
@@ -445,7 +435,7 @@ describe('mission_query', () => {
         const res = {
             missions: [
                 { id: 'mission-1', meshId: 'm1', title: 't1', goal: '', status: 'active' as const },
-                { id: 'mission-2', meshId: 'm1', title: 't2', goal: 'g2', status: 'completed' as const, source: 'magi' as const },
+                { id: 'mission-2', meshId: 'm1', title: 't2', goal: 'g2', status: 'completed' as const },
             ],
         }
         expect(decodeMissionQueryResponse(res)).toEqual(res)
@@ -516,7 +506,7 @@ describe('turn-ipc — ledger_query (C-W9b)', () => {
     it('decodes a response entry with an unbounded JSON payload (local IPC, not the mesh_record boundary)', () => {
         const res = {
             entries: [{
-                id: 'e1', meshId: 'm1', timestamp: '2026-09-24T00:00:00.000Z', kind: 'magi_synthesis',
+                id: 'e1', meshId: 'm1', timestamp: '2026-09-24T00:00:00.000Z', kind: 'refine_result',
                 payload: { nested: { deep: ['anything', 1, true, null] }, question: 'x'.repeat(500) },
             }],
         }
@@ -541,7 +531,7 @@ describe('turn-ipc — ledger_query (C-W9b)', () => {
 
 describe('turn-ipc — mission_list_query (C-W9b)', () => {
     it('decodes a request with every option', () => {
-        const req = { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', statuses: ['active'] as const, verbose: true, includeMagi: true, withStats: true, limit: 10, historyIdLimit: 5 }
+        const req = { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', statuses: ['active'] as const, verbose: true, withStats: true, limit: 10, historyIdLimit: 5 }
         expect(decodeMissionListQueryRequest(req)).toEqual(req)
     })
 
@@ -561,7 +551,7 @@ describe('turn-ipc — mission_list_query (C-W9b)', () => {
         const res = {
             missions: [{
                 id: 'mission-1', meshId: 'm1', title: 't', goalPreview: 'preview', goalTruncated: true,
-                status: 'completed' as const, source: 'magi' as const,
+                status: 'completed' as const,
                 tasks: { total: 2, pending: 0, assigned: 0, completed: 2, failed: 0, cancelled: 0, blocked: 0, lastActivityAt: '2026-09-24T00:00:00.000Z' },
                 stats: { missionId: 'mission-1', taskCount: 2, completed: 2, failed: 0, totalDurationMs: 1000, wallClockMs: 500, retries: 0, incompleteTaskIds: [] },
             }],
@@ -619,7 +609,7 @@ describe('turn-ipc — C-W9a record / queue / active-work commands', () => {
     const row = { id: 't-1', status: 'pending', message: 'free text is local IPC' }
 
     it('record_local: nested free-form payload accepted; kind must be an identifier; extra keys rejected', () => {
-        expect(decodeRecordLocalRequest({ v, meshId: 'm', kind: 'magi_synthesis', payload: { synthesis: { verdict: 'agree', notes: ['x y'] } } })).not.toBeNull()
+        expect(decodeRecordLocalRequest({ v, meshId: 'm', kind: 'refine_result', payload: { result: { verdict: 'agree', notes: ['x y'] } } })).not.toBeNull()
         expect(decodeRecordLocalRequest({ v, meshId: 'm', kind: 'has space', payload: {} })).toBeNull()
         expect(decodeRecordLocalRequest({ v, meshId: 'm', kind: 'k', payload: [] })).toBeNull()
         expect(decodeRecordLocalRequest({ v, meshId: 'm', kind: 'k', payload: {}, summary: 'x' })).toBeNull()
@@ -636,7 +626,8 @@ describe('turn-ipc — C-W9a record / queue / active-work commands', () => {
         expect(decodeQueueQueryRequest({ v, meshId: 'm', historicalOlderThanMs: -1 })).toBeNull()
         expect(decodeQueueQueryResponse({ entries: [row], counts: { completed: 3 }, oldHistoricalCount: 1, dependencyHeads: [{ id: 'd', status: 'failed', cancelReason: 'x' }] })).not.toBeNull()
         expect(decodeQueueQueryResponse({ entries: [row], dependencyHeads: [{ id: 'd' }] })).toBeNull()
-        expect(decodeQueueEnqueueRequest({ v, meshId: 'm', message: 'do it', options: { difficulty: 'easy' }, decision: { decision: { decision: 'single' } } })).not.toBeNull()
+        expect(decodeQueueEnqueueRequest({ v, meshId: 'm', message: 'do it', options: { difficulty: 'easy' } })).not.toBeNull()
+        expect(decodeQueueEnqueueRequest({ v, meshId: 'm', message: 'do it', options: {}, decision: { decision: 'single' } })).toBeNull()
         expect(decodeQueueEnqueueRequest({ v, meshId: 'm' })).toBeNull()
         expect(decodeQueueEnqueueResponse({ entry: row })).not.toBeNull()
         expect(decodeQueueCancelRequest({ v, meshId: 'm', taskId: 't-1', reason: 'no longer needed' })).not.toBeNull()
@@ -647,24 +638,22 @@ describe('turn-ipc — C-W9a record / queue / active-work commands', () => {
         expect(decodeQueueRequeueResponse({ task: null })).not.toBeNull()
     })
 
-    it('queue_enqueue_graph: mode picks exactly one of specs / plan; the response is ok|refusal', () => {
-        expect(decodeQueueEnqueueGraphRequest({ v, meshId: 'm', mode: 'compat', specs: [{ message: 'a' }] })).not.toBeNull()
-        expect(decodeQueueEnqueueGraphRequest({ v, meshId: 'm', mode: 'graph', plan: { tasks: [] }, audit: { batchId: 'b' } })).not.toBeNull()
-        expect(decodeQueueEnqueueGraphRequest({ v, meshId: 'm', mode: 'graph', specs: [] })).toBeNull()
-        expect(decodeQueueEnqueueGraphRequest({ v, meshId: 'm', mode: 'other', specs: [] })).toBeNull()
-        expect(decodeQueueEnqueueGraphResponse({ ok: true, tasks: [row], graph: { graphId: 'g' } })).not.toBeNull()
-        expect(decodeQueueEnqueueGraphResponse({ ok: false, refusalCode: 'task_graph_too_large', message: 'too big', extra: { limit: 50 } })).not.toBeNull()
-        expect(decodeQueueEnqueueGraphResponse({ ok: false })).toBeNull()
+    it('queue_enqueue_batch: specs only; the response is ok|refusal', () => {
+        expect(decodeQueueEnqueueBatchRequest({ v, meshId: 'm', specs: [{ message: 'a' }] })).not.toBeNull()
+        expect(decodeQueueEnqueueBatchRequest({ v, meshId: 'm', specs: [], mode: 'graph' })).toBeNull()
+        expect(decodeQueueEnqueueBatchRequest({ v, meshId: 'm', plan: { tasks: [] } })).toBeNull()
+        expect(decodeQueueEnqueueBatchResponse({ ok: true, tasks: [row] })).not.toBeNull()
+        expect(decodeQueueEnqueueBatchResponse({ ok: true, tasks: [row], graph: { graphId: 'g' } })).toBeNull()
+        expect(decodeQueueEnqueueBatchResponse({ ok: false, refusalCode: 'task_batch_too_large', message: 'too big', extra: { limit: 50 } })).not.toBeNull()
+        expect(decodeQueueEnqueueBatchResponse({ ok: false })).toBeNull()
         // `code` / `error` are the command ENVELOPE's keys — a refusal result must not reuse them.
-        expect(decodeQueueEnqueueGraphResponse({ ok: false, code: 'x', error: 'y' })).toBeNull()
+        expect(decodeQueueEnqueueBatchResponse({ ok: false, code: 'x', error: 'y' })).toBeNull()
     })
 
-    it('direct_dispatch_record / graph_audit_record', () => {
-        expect(decodeDirectDispatchRecordRequest({ v, meshId: 'm', taskId: 't', message: 'msg', task: { assignedNodeId: 'n' }, decision: { via: 'local_direct' } })).not.toBeNull()
-        expect(decodeDirectDispatchRecordResponse({ taskRecorded: true, decisionRecorded: false })).not.toBeNull()
-        expect(decodeGraphAuditRecordRequest({ v, meshId: 'm', event: 'gate_claimed', fields: { graphId: 'g' } })).not.toBeNull()
-        expect(decodeGraphAuditRecordRequest({ v, meshId: 'm', event: 'gate_exploded', fields: {} })).toBeNull()
-        expect(decodeGraphAuditRecordResponse({ recorded: true })).not.toBeNull()
+    it('direct_dispatch_record', () => {
+        expect(decodeDirectDispatchRecordRequest({ v, meshId: 'm', taskId: 't', message: 'msg', task: { assignedNodeId: 'n' } })).not.toBeNull()
+        expect(decodeDirectDispatchRecordRequest({ v, meshId: 'm', taskId: 't', message: 'msg', decision: { via: 'local_direct' } })).toBeNull()
+        expect(decodeDirectDispatchRecordResponse({ taskRecorded: true })).not.toBeNull()
     })
 
     it('active_work_query: the scheduling runtime may omit the mesh (the daemon reads its own); response parts are all optional records', () => {
@@ -693,56 +682,8 @@ describe('turn-ipc — C-W9a record / queue / active-work commands', () => {
     })
 })
 
-describe('turn-ipc — C-W9c graph gate/plan/patch/view, task stats, prune, orphaned-pin commands', () => {
+describe('turn-ipc — C-W9c task stats, prune, orphaned-pin commands', () => {
     const v = TURN_IPC_PROTOCOL_VERSION
-    const gateRow = { gateId: 'g-1', graphId: 'graph-1', state: 'claimed', action: 'approve' }
-
-    it('graph_gate_claim: coordinatorSessionId required; gate is a JSON passthrough', () => {
-        expect(decodeGraphGateClaimRequest({ v, meshId: 'm', gateId: 'g-1', coordinatorSessionId: 's-1', probeConvergenceEvidence: true })).not.toBeNull()
-        expect(decodeGraphGateClaimRequest({ v, meshId: 'm', gateId: 'g-1' })).toBeNull()
-        expect(decodeGraphGateClaimResponse({ claimed: false, reason: 'gate_lease_held', gate: gateRow })).not.toBeNull()
-        expect(decodeGraphGateClaimResponse({
-            claimed: true, gate: gateRow, leaseGeneration: 1, fencingToken: 'tok', leaseExpiresAt: 'T',
-            convergenceEvidence: { landed: false },
-        })).not.toBeNull()
-        expect(decodeGraphGateClaimResponse({ claimed: 'yes' })).toBeNull()
-    })
-
-    it('graph_gate_release: a thrown domain refusal is a RESULT, not an envelope error', () => {
-        expect(decodeGraphGateReleaseRequest({
-            v, meshId: 'm', gateId: 'g-1', fencingToken: 'tok', leaseGeneration: 1, idempotencyKey: 'k', outcome: 'passed',
-            patches: [{ node: 'n-1', baseSpecPatch: { run_if: true } }],
-        })).not.toBeNull()
-        expect(decodeGraphGateReleaseRequest({ v, meshId: 'm', gateId: 'g-1', fencingToken: '', leaseGeneration: 1, idempotencyKey: 'k', outcome: 'passed' })).toBeNull()
-        expect(decodeGraphGateReleaseResponse({ released: true, duplicate: false, gate: gateRow, materializedNodeIds: ['n-1'], downstreamNodeCount: 1, graphCompleted: false })).not.toBeNull()
-        expect(decodeGraphGateReleaseResponse({ released: false, refusalCode: 'gate_lease_expired', message: 'gate_lease_expired: stale' })).not.toBeNull()
-        // `code` / `error` are the command ENVELOPE's keys — a refusal result must not reuse them.
-        expect(decodeGraphGateReleaseResponse({ released: false, code: 'x', error: 'y' })).toBeNull()
-    })
-
-    it('graph_gate_abandon: reason required; a duplicate (already-abandoned) reply is still success', () => {
-        expect(decodeGraphGateAbandonRequest({ v, meshId: 'm', gateId: 'g-1', reason: 'cancelled upstream', force: true })).not.toBeNull()
-        expect(decodeGraphGateAbandonRequest({ v, meshId: 'm', gateId: 'g-1', reason: '' })).toBeNull()
-        expect(decodeGraphGateAbandonResponse({
-            abandoned: true, gate: gateRow, cancelledNodeIds: ['n-1'], cancelledTaskIds: ['t-1'], graphStatus: 'cancelled',
-        })).not.toBeNull()
-        expect(decodeGraphGateAbandonResponse({ abandoned: false, reason: 'gate_lease_held', cancelledNodeIds: [], cancelledTaskIds: [] })).not.toBeNull()
-    })
-
-    it('graph_node_patch: base_spec_patch must be non-empty; a thrown refusal is a RESULT', () => {
-        expect(decodeGraphNodePatchRequest({ v, meshId: 'm', node: 'n-1', graphId: 'g-1', baseSpecPatch: { run_if: false } })).not.toBeNull()
-        expect(decodeGraphNodePatchRequest({ v, meshId: 'm', node: 'n-1', baseSpecPatch: {} })).toBeNull()
-        expect(decodeGraphNodePatchResponse({
-            patched: true, graphId: 'g-1', nodeId: 'n-1', materializationVersion: 2, state: 'materialized', outcomeKind: 'materialized',
-        })).not.toBeNull()
-        expect(decodeGraphNodePatchResponse({ patched: false, refusalCode: 'node_patch_forbidden', message: 'node_patch_forbidden: x' })).not.toBeNull()
-    })
-
-    it('graph_view_query: graphs is a JSON-passthrough array', () => {
-        expect(decodeGraphViewQueryRequest({ v, meshId: 'm', activeOnly: false, probeGateEvidence: true, limit: 5 })).not.toBeNull()
-        expect(decodeGraphViewQueryResponse({ graphs: [{ graphId: 'g-1', gates: [gateRow] }] })).not.toBeNull()
-        expect(decodeGraphViewQueryResponse({ graphs: 'x' })).toBeNull()
-    })
 
     it('task_stats_query: rollup requires missionId; tasks/mission are JSON passthroughs', () => {
         expect(decodeTaskStatsQueryRequest({ v, meshId: 'm', taskIds: ['t-1', 't-2'] })).not.toBeNull()

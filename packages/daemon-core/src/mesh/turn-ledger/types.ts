@@ -167,8 +167,8 @@ export type TurnEffect =
     | { kind: 'release_attempt_ref'; attemptId: string; sessionId: string }
     /** `mesh_queue` row status — an effect of the ledger, never the reverse. */
     | { kind: 'queue_status'; meshId: string; taskId: string; status: TurnOutcome | 'pending'; reason: TurnReason }
-    /** Graph runner steps 2–5 (outputs, graph advance, wake) for a committed task. */
-    | { kind: 'graph_advance'; meshId: string; taskId: string; outcome: TurnOutcome }
+    /** The terminal choke point (output version + row flip) for a committed task. */
+    | { kind: 'task_terminal'; meshId: string; taskId: string; outcome: TurnOutcome }
     /** Scheduler must probe the session now (H4). */
     | { kind: 'probe'; attemptId: string; sessionId: string }
     /** Re-reduce held evidence (R16 hold expiry, H7). */

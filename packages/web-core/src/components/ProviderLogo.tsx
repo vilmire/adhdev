@@ -31,7 +31,6 @@ const BRAND: Record<string, BrandEntry> = {
     'antigravity-cli': { monogram: 'AG', hue: '#8B5CF6' },
     'cursor-cli': { monogram: 'CU', hue: '#64748B' },
     'opencode-cli': { monogram: 'OC', hue: '#CA8A04' },
-    'hermes-cli': { monogram: 'HM', hue: '#14B8A6' },
     'grok-cli': { monogram: 'GK', hue: '#475569' },
     // IDEs
     'antigravity': { monogram: 'AG', hue: '#8B5CF6' },
@@ -47,7 +46,7 @@ const BRAND: Record<string, BrandEntry> = {
     'roo-code': { monogram: 'RC', hue: '#F97316' },
 }
 
-/** Stable, readable hues for types outside the curated set (ACP agents etc.). */
+/** Stable, readable hues for types outside the curated set (other agents etc.). */
 const FALLBACK_HUES = [
     '#0EA5E9', '#8B5CF6', '#10B981', '#F59E0B', '#EF4444', '#14B8A6',
     '#6366F1', '#EC4899', '#84CC16', '#F97316', '#06B6D4', '#A855F7',

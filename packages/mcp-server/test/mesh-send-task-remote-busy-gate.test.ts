@@ -118,13 +118,13 @@ async function send(ctx: any, extra: Record<string, unknown> = {}) {
     } as any));
 }
 
-test('remote BUSY session (when_idle) → queued_delivery; body NOT sent over P2P; no dispatch_accepted attempt; decision recorded', async () => {
+test('remote BUSY session (when_idle) → queued_delivery; body NOT sent over P2P; no dispatch_accepted attempt', async () => {
     const meshId = `mesh-remote-busy-${randomUUID().slice(0, 8)}`;
     cleanupMesh(meshId);
     const h = createRemoteCtx(meshId, { status: 'generating' });
     try {
         await withLedger(async () => {
-            const res = await send(h.ctx, { orchestration_decision: { decision: 'direct', direct_reason: 'same_subject_continuation' } });
+            const res = await send(h.ctx);
             assert.equal(res.success, true, JSON.stringify(res));
             assert.equal(res.dispatched, false);
             assert.equal(res.decision, 'queued_delivery', 'same typed outcome the LOCAL branch returns');
@@ -136,10 +136,6 @@ test('remote BUSY session (when_idle) → queued_delivery; body NOT sent over P2
             assert.equal(row.status, 'pending');
             assert.equal(row.targetSessionId, SESSION);
             assert.equal(row.targetNodeId, NODE);
-            // (B) the caller's orchestration decision survives the queue exit.
-            const decisions = readLocalRecords(meshId, { kind: ['single_enqueue_decision'] } as any);
-            assert.equal(decisions.length, 1, 'the queued exit records the caller decision');
-            assert.equal((decisions[0] as any).payload?.taskId ?? (decisions[0] as any).taskId, res.taskId);
         });
     } finally {
         cleanupMesh(meshId);
@@ -223,7 +219,7 @@ test('worker-side session_busy_with_task refusal surfaces as a typed dispatch fa
     }
 });
 
-test('(B) untargeted mesh_send_task (queue pull) records the caller orchestration decision on the enqueue', async () => {
+test('(B) untargeted mesh_send_task (queue pull) enqueues and reports an omitted decision', async () => {
     const meshId = `mesh-untargeted-decision-${randomUUID().slice(0, 8)}`;
     cleanupMesh(meshId);
     const mesh = {
@@ -252,9 +248,7 @@ test('(B) untargeted mesh_send_task (queue pull) records the caller orchestratio
         } as any));
         assert.equal(res.success, true, JSON.stringify(res));
         assert.equal(res.source, 'queue');
-        assert.equal(res.orchestrationDecisionMissing, true, 'an omitted decision is reported, not silently dropped');
-        const decisions = readLocalRecords(meshId, { kind: ['single_enqueue_decision'] } as any);
-        assert.equal(decisions.length, 1, 'the untargeted queue exit records the decision');
+        assert.ok(getQueue(meshId).some(t => t.id === res.taskId), 'the untargeted exit enqueues a queue row');
     } finally {
         cleanupMesh(meshId);
     }

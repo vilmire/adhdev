@@ -823,7 +823,7 @@ async function resolveAutoLaunchPlan(
     const rawEffectiveModel = slotChoice.model;
     const demotionReason = slotChoice.demotionReason;
 
-    // CODEX-400 GUARD: the difficulty→brain presets (and MAGI slots) carry
+    // CODEX-400 GUARD: the difficulty→brain presets carry
     // provider-agnostic Anthropic model aliases (opus/sonnet/haiku). Now that
     // resolved.providerType is definitively known, drop the model if it is a
     // Claude model but the provider is NOT Anthropic-backed (codex-cli /
@@ -974,7 +974,7 @@ async function launchQueueTaskOnRemoteNode(
             cliType: effectiveProviderType,
             dir: node.workspace,
             settings: remoteSettings,
-            // MAGI-KIND-PANEL model axis: forward the task's model override so the
+            // Model axis: forward the task's model override so the
             // remote worker session launches with it (initialModel). Best-effort.
             // Slot-aware: task override wins, else the matched slot's model.
             ...(effectiveModel ? { initialModel: effectiveModel } : {}),
@@ -1061,7 +1061,7 @@ async function launchQueueTaskOnLocalNode(
         cliType: effectiveProviderType,
         dir: node.workspace,
         settings: launchSettings,
-        // MAGI-KIND-PANEL model axis: local launch forwards the effective model
+        // Model axis: local launch forwards the effective model
         // (task override, else matched slot) as initialModel (CLI → modelLaunchArgs; ACP → setConfigOption).
         ...(effectiveModel ? { initialModel: effectiveModel } : {}),
         // BRAIN-ROUTING thinking axis: forward the effective thinking level (initialThinkingLevel).

@@ -3,7 +3,7 @@
  * startedAt as the session-registry spawnedAtMs (the native-history floor), never
  * collapse it to 0 for co-located runtimes nor pin it to Date.now().
  *
- * The mesh coordinator + MAGI replicas attach with attachExisting=true. The old
+ * The mesh coordinator + co-located workers attach with attachExisting=true. The old
  * `spawnedAtMs: attachExisting ? 0 : Date.now()` disabled every co-located
  * antigravity session's per-session birth-floor, letting a replica claim the
  * coordinator's own conversation (coordinator chat regressed to pty-parser /

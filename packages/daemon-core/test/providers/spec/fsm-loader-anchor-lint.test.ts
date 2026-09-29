@@ -95,10 +95,10 @@ describe('built-in specs are lint-clean', () => {
     }
 
     it('covers every provider spec on disk (scan-target count guard)', () => {
-        // 8 built-in CLI providers ship v4 specs; the scan must not silently
+        // 7 built-in CLI providers ship v4 specs; the scan must not silently
         // shrink to zero (a wrong CLI_ROOT would make every case below vacuous).
         const providers = new Set(specFiles.map(f => path.basename(path.dirname(path.dirname(f)))));
-        expect(providers.size).toBeGreaterThanOrEqual(8);
+        expect(providers.size).toBeGreaterThanOrEqual(7);
         expect(specFiles.length).toBeGreaterThanOrEqual(providers.size);
     });
 

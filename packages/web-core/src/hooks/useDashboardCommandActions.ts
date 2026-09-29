@@ -15,7 +15,7 @@ import { rememberMeshNames } from '../utils/mesh-name-registry'
 
 interface DashboardLaunchTracker {
   machineId: string
-  kind: 'ide' | 'cli' | 'acp'
+  kind: 'ide' | 'cli'
   providerType?: string
   workspacePath?: string | null
   resumeSessionId?: string | null
@@ -169,7 +169,7 @@ export function useDashboardCommandActions({
 
   const handleLaunchMachineProvider = useCallback(async (
     machineId: string,
-    kind: 'cli' | 'acp',
+    kind: 'cli',
     providerType: string,
     opts?: LaunchProviderOptions,
   ): Promise<LaunchResult> => {

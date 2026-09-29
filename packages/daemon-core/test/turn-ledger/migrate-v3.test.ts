@@ -11,7 +11,7 @@ import type { Database as DatabaseHandle } from 'better-sqlite3';
 // synthetic legacy fixture — and, when ADHDEV_CW9A_LIVE_DB_COPY names a COPY of a
 // real preview mesh-runtime.db (made with `sqlite3 <live> ".backup <copy>"`, never
 // the live file), on that too — then the readers that replaced the ledger
-// (Stage 6, refine, MAGI, briefing summary, recovery context) run over it.
+// (Stage 6, refine, briefing summary, recovery context) run over it.
 
 const state = vi.hoisted(() => ({ configDir: '' }));
 vi.mock('../../src/config/config.js', () => ({
@@ -42,7 +42,6 @@ import {
     readRefineJobRecords,
 } from '../../src/mesh/mesh-local-records.js';
 import { buildMeshAsyncRefineJobs } from '../../src/mesh/mesh-refine-status.js';
-import { buildMeshMagiActivity } from '../../src/mesh/mesh-magi-status.js';
 import { buildMeshActiveWork } from '../../src/mesh/mesh-active-work.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -77,7 +76,7 @@ function postV2Db(): DatabaseHandle {
     // A legacy row with task_id only inside the payload (pre-column writer).
     put.run('dispatch-legacy', MESH, iso(NOW - 2 * DAY_MS), 'dispatch_failed', 'node-a', 's-1', 'claude-cli', null,
         JSON.stringify({ taskId: 't-legacy', error: 'CLI agent not running: kimi' }));
-    // MAGI synthesis with free text.
+    // A legacy record kind with free text (the retired MAGI synthesis).
     put.run('magi-synth', MESH, iso(NOW - DAY_MS), 'magi_synthesis', null, null, null, null,
         JSON.stringify({ source: 'magi', consensusGroupId: 'g-1', synthesis: { verdict: 'agree', notes: ['free text'] } }));
     // Past the 30-day window: exported, not folded.
@@ -190,8 +189,6 @@ function assertNoLegacyTableAndReadersWork(store: MeshRuntimeStore): void {
     for (const meshId of meshIds) {
         // Refine readers (status / resume / in-flight guard all fold these).
         expect(Array.isArray(buildMeshAsyncRefineJobs({ meshId, ledgerEntries: readRefineJobRecords(meshId) }))).toBe(true);
-        // MAGI readers.
-        expect(Array.isArray(buildMeshMagiActivity({ meshId, ledgerEntries: readLocalRecords(meshId, { kind: ['magi_dispatched', 'magi_synthesis'], tail: 200 }) }))).toBe(true);
         // Active work (idle reminder / notification line / mesh_status).
         const activeWork = buildMeshActiveWork({ meshId, queue: [], directDispatches: getActiveDirectDispatches(meshId), ledgerEntries: readActiveWorkRecords(meshId, ['task_dispatched', 'task_completed', 'task_failed']), nodes: [] });
         expect(activeWork.summary).toBeTypeOf('object');

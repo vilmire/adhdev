@@ -8,7 +8,7 @@ import { getQueue, upsertMeshMission } from '@adhdev/daemon-core';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
-// G5 — mesh_enqueue_batch: atomic multi-task graph submission.
+// G5 — mesh_enqueue_batch: atomic multi-task enqueue.
 //   The tool must (a) insert ALL tasks or NONE (a mid-batch cycle / unknown ref /
 //   invalid difficulty rolls the batch back), (b) resolve batch-local refs to the
 //   generated task ids with forward references allowed, and (c) on the cloud
@@ -221,7 +221,7 @@ test('empty and over-shaped input fail loudly without touching the queue', async
 
   const empty = JSON.parse(await meshEnqueueBatch(ctx, { tasks: [] } as any));
   assert.equal(empty.success, false);
-  assert.equal(empty.code, 'empty_task_graph');
+  assert.equal(empty.code, 'empty_task_batch');
 
   const missingMessage = JSON.parse(await meshEnqueueBatch(ctx, {
     tasks: [{ ref: 'x', difficulty: 'easy' }],

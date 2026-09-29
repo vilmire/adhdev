@@ -58,7 +58,7 @@ afterEach(() => {
 });
 
 describe('difficultyBrains — per-mesh scope (no cross-mesh overwrite)', () => {
-    // ★ THE CORE DEFECT, identical in shape to the MAGI kind-panel one: a top-level
+    // ★ THE CORE DEFECT: a top-level
     // map keyed by difficulty alone means a write in mesh B silently clobbers mesh
     // A's presets. This is the setting that decides which MODEL a task runs on, so
     // the clobber is a direct cost/behaviour issue.

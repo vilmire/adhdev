@@ -66,7 +66,7 @@ describe('commit path', () => {
         expect(ledger.observe(evd('worker_report', { outcome: 'completed', summary: SUMMARY, hasHandoffNotes: false }, { source: 'worker_tool' })).rule).toBe('R17g');
         expect(host.calls).toEqual([]);
         expect(ledger.observe(evd('turn_end', { strength: 'genuine' })).rule).toBe('R9t');
-        expect(host.calls).toEqual(['graph:t1:completed']);
+        expect(host.calls).toEqual(['terminal:t1:completed']);
         expect(ports.calls).toContain('after:m1/t1');
     });
 
@@ -75,9 +75,9 @@ describe('commit path', () => {
         const host = recordingHost();
         const ledger = ledgerOn(db, { host, publisher: fakePublisher() });
         driveToGenerating(ledger, { scope: 'mesh_queue' });
-        host.graphAdvance = () => { throw new Error('graph store exploded'); };
+        host.taskTerminal = () => { throw new Error('queue store exploded'); };
         const end = evd('turn_end', { strength: 'genuine' });
-        expect(() => ledger.observe(end)).toThrow(/graph store exploded/);
+        expect(() => ledger.observe(end)).toThrow(/queue store exploded/);
         expect(ledger.getAttempt('a1')?.state).toBe('generating');
         expect(ledger.store.hasEvent(end.eventId)).toBe(false);
         expect(rowsOf(db, 'committed')).toHaveLength(0);
@@ -380,7 +380,7 @@ describe('mesh_direct reclaim commits failed — nothing redelivers a direct dis
         now = T0 + awaitDeliveryMs(DEFAULT_TURN_POLICY);
         const [result] = ledger.sweepExpiredHolds();
         expect(result).toMatchObject({ rule: 'H1', attempt: { state: 'failed', generation: 0, terminal: { reason: 'assigned_stranded_dispatch_unconfirmed' } } });
-        expect(host.calls).toEqual(['graph:t1:failed']);
+        expect(host.calls).toEqual(['terminal:t1:failed']);
         expect(ledger.store.activeHolds('a1')).toEqual([]);
         expect(ledger.nextHoldDeadline()).toBeNull();
         expect(rowsOf(db, 'reclaim', 'a1')).toHaveLength(0);
@@ -400,6 +400,6 @@ describe('mesh_direct reclaim commits failed — nothing redelivers a direct dis
         driveToGenerating(ledger, { scope: 'mesh_direct' });
         const exit = ledger.observe(evd('process_exit', { exitCode: 137 }, { source: 'pty_exit' }));
         expect(exit).toMatchObject({ rule: 'R20', attempt: { state: 'failed', terminal: { reason: 'session_exit' } } });
-        expect(host.calls).toEqual(['graph:t1:failed']);
+        expect(host.calls).toEqual(['terminal:t1:failed']);
     });
 });

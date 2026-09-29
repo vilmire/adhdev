@@ -2,9 +2,9 @@
 // turn-ledger/runtime-ledger — the production wiring of createTurnLedger
 // ---------------------------------------------------------------------------
 // Binds the pure ledger (ledger.ts) to this daemon's MeshRuntimeStore handle,
-// the queue/graph effect host (mesh-work-queue + the graph transition runner),
+// the queue effect host (mesh-work-queue + the task terminal choke point),
 // the mesh publisher, and the default post-commit executors that live in
-// mesh/ (worker-bind revoke, graph drain). The session-side executors
+// mesh/ (worker-bind revoke, task-terminal cleanup). The session-side executors
 // (cancel/withdraw, attempt-ref release, redeliver, bus, probe) are host-owned
 // and passed in by the boot stage that constructs the ledger (C-W3/C-W5).
 //
@@ -13,7 +13,7 @@
 // ---------------------------------------------------------------------------
 
 import { MeshRuntimeStore } from '../mesh-runtime-store.js';
-import { applyTaskTerminalInTxn, afterTaskTerminalCommitted } from '../mesh-graph-transition-runner.js';
+import { applyTaskTerminalInTxn, afterTaskTerminalCommitted } from '../mesh-task-terminal.js';
 import { propagateLedgerDependencyFailure, requeueTaskForLedgerReclaim } from '../mesh-work-queue.js';
 import {
     findWorkerTaskTokenForSession,
@@ -26,12 +26,12 @@ import { resolveTurnPolicy, type TurnPolicy } from './policy.js';
 import { createTurnLedger, type TurnLedger, type TurnPublisherPort } from './ledger.js';
 import type { CancelDispatchRequest, TurnLedgerPorts, TurnTxnHost } from './effects.js';
 
-/** mesh_queue / graph writes inside the ledger txn (C2: queue status is an effect of a commit). */
+/** mesh_queue writes inside the ledger txn (C2: queue status is an effect of a commit). */
 export const meshRuntimeTxnHost: TurnTxnHost = {
     requeue(effect, ctx) {
         requeueTaskForLedgerReclaim(effect.meshId, effect.taskId, effect.reason, new Date(ctx.nowMs).toISOString());
     },
-    graphAdvance(effect, ctx) {
+    taskTerminal(effect, ctx) {
         const result = applyTaskTerminalInTxn({
             meshId: effect.meshId,
             taskId: effect.taskId,

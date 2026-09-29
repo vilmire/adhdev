@@ -38,7 +38,7 @@ function toHostedCliRuntimeDescriptor(record: any): HostedCliRuntimeDescriptor |
         // stamped on markStarted; fall back to createdAt (record creation). Threaded
         // through so an attach restores the native-history session-floor to the
         // runtime's actual birth instead of collapsing spawnedAtMs to 0 (which broke
-        // the antigravity per-session birth-floor for co-located MAGI runtimes).
+        // the antigravity per-session birth-floor for co-located runtimes).
         startedAtMs: typeof record.startedAt === 'number' && record.startedAt > 0
             ? record.startedAt
             : (typeof record.createdAt === 'number' && record.createdAt > 0 ? record.createdAt : undefined),

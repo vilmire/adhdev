@@ -101,7 +101,6 @@
             "guideShort": "Guía",
             "openGitStatus": "Abrir estado de git",
             "meshGraph": "Grafo de Mesh",
-            "stopAcpSession": "Detener sesión ACP",
             "stopCliProcess": "Detener proceso CLI",
             "chatHistory": "Historial de chat",
             "remoteControl": "Control remoto",
@@ -164,7 +163,7 @@
                 "whatLivesWhere": {
                     "title": "Qué hay en cada lugar",
                     "tabsLabel": "Pestañas:",
-                    "tabsText": "sesiones activas de agentes de IDE, CLI y ACP.",
+                    "tabsText": "sesiones activas de agentes de IDE y CLI.",
                     "hiddenLabel": "Pestañas ocultas:",
                     "hiddenText": "guarda sesiones que no quieres en la tira principal pero que aún deseas conservar.",
                     "inboxLabel": "Bandeja de actividad:",
@@ -193,7 +192,7 @@
             "quickstart": {
                 "desktop": {
                     "title": "Inicio rápido de escritorio",
-                    "step1": "Empieza primero por el flujo de máquina o espacio de trabajo. Elige o guarda un espacio de trabajo antes de lanzar sesiones CLI o ACP.",
+                    "step1": "Empieza primero por el flujo de máquina o espacio de trabajo. Elige o guarda un espacio de trabajo antes de lanzar sesiones CLI.",
                     "step2": "Mantén la tira principal centrada en el trabajo activo y envía el excedente a las pestañas ocultas.",
                     "step3": "Usa la bandeja para las sesiones que requieren aprobación o completadas en lugar de revisar cada pestaña.",
                     "step4": "Divide solo cuando necesites lectura en paralelo; haz flotar o abre una pestaña en ventana aparte cuando quieras separarla sin perder el diseño principal."
@@ -201,7 +200,7 @@
                 "mobile": {
                     "title": "Inicio rápido en móvil",
                     "step1": "Mantente en modo chat para revisar y responder; usa el modo espacio de trabajo principalmente para lanzar o reabrir sesiones.",
-                    "step2": "Empieza desde la pantalla de máquina, elige un espacio de trabajo y luego lanza IDE, CLI o ACP desde allí.",
+                    "step2": "Empieza desde la pantalla de máquina, elige un espacio de trabajo y luego lanza IDE o CLI desde allí.",
                     "step3": "Trata el móvil como la superficie de control más simple: sin flujo de división, menos mecánicas de pestañas, cambio de sesión más rápido."
                 }
             },
@@ -421,8 +420,6 @@
         "startingCoordinator": "Iniciando coordinador…",
         "startIde": "Iniciar IDE",
         "startingIde": "Iniciando IDE…",
-        "startAcpSession": "Iniciar sesión ACP",
-        "startingAcpSession": "Iniciando sesión ACP…",
         "startFresh": "Empezar de cero",
         "startingFresh": "Empezando de cero…",
         "resumeSavedHistory": "Reanudar historial guardado",
@@ -677,25 +674,6 @@
                         "Como se persiste en la cola, las señales de finalización nunca se pierden."
                     ]
                 },
-                "magi": {
-                    "term": "MAGI",
-                    "summary": "Verificación cruzada: varios agentes de IA independientes responden la misma pregunta en paralelo.",
-                    "details": [
-                        "La confianza proviene de la independencia: distintas IA en distintas máquinas fallan de distintas maneras.",
-                        "Cuando los agentes discrepan, la propia discrepancia señala qué conviene volver a comprobar.",
-                        "La síntesis pondera el acuerdo frente al acoplamiento de las fuentes."
-                    ]
-                },
-                "magiPanel": {
-                    "term": "Panel MAGI",
-                    "summary": "Un equipo guardado y reutilizable de miembros (máquina × IA) que invocas por nombre en distintas investigaciones.",
-                    "details": [
-                        "Cada miembro es un proveedor (IA), opcionalmente fijado a un nodo (máquina), con un número de réplicas.",
-                        "independent: abarca ≥2 proveedores Y ≥2 máquinas, por lo que el acuerdo añade confianza real.",
-                        "coupled: se reduce a una sola IA o una sola máquina; los miembros repetidos repiten los mismos errores.",
-                        "Se gestiona localmente por máquina desde la pestaña Panels; se define en ~/.adhdev/meshes.json."
-                    ]
-                },
                 "convergence": {
                     "term": "Estados de convergencia de rama",
                     "summary": "Tras el trabajo en worktree, cada rama se clasifica en exactamente un estado final.",
@@ -707,39 +685,13 @@
                         "not_mergeable: no se puede fusionar."
                     ]
                 },
-                "graph": {
-                    "term": "Grafo de orquestación",
-                    "summary": "Un lote de tareas encoladas con dependencias, condiciones y puertas declaradas.",
-                    "details": [
-                        "Creado por mesh_enqueue_batch; cada grafo es un plan ejecutable dentro de una misión.",
-                        "Los grafos finalizados se colapsan en una ficha del plano — haz clic para expandir en su sitio."
-                    ]
-                },
-                "gate": {
-                    "term": "Puerta de coordinador",
-                    "summary": "Un paso que retiene el grafo hasta que actúa un coordinador dirigido por una persona.",
-                    "details": [
-                        "Estados: declared → awaiting_coordinator → claimed → released (o expired).",
-                        "El plano dibuja una puerta en espera con el ancho completo, con sus instrucciones y fecha límite.",
-                        "Se actúa sobre una puerta instruyendo al coordinador; aquí el panel es de solo lectura."
-                    ]
-                },
-                "condition": {
-                    "term": "Condición (run_if)",
-                    "summary": "Un predicado declarativo que decide si un paso planificado llega a ejecutarse.",
-                    "details": [
-                        "La gramática es un conjunto cerrado: all / any / not sobre exists, ==, != e in.",
-                        "El plano la dibuja como una tarjeta conectada a la arista, p. ej. review.outcome == rejected.",
-                        "Un paso cuya condición nunca se cumple se omite, no falla."
-                    ]
-                },
                 "blueprint": {
                     "term": "Plano",
-                    "summary": "La vista de plan: trabajo en cola, puertas del grafo y pasos planificados en un lienzo.",
+                    "summary": "La vista de plan: trabajo en cola y sus dependencias entre tareas en un lienzo.",
                     "details": [
                         "Un solo eje: profundidad de dependencias, de izquierda a derecha. Las raíces van de más reciente a más antigua.",
                         "Cada tarjeta lleva su hora, así la posición no tiene que codificarla.",
-                        "Los grafos terminados quedan debajo como archivo colapsado."
+                        "Las cadenas de dependencias terminadas se pliegan para dejar visible el trabajo en curso."
                     ]
                 },
                 "routingPreview": {
@@ -773,50 +725,6 @@
             "medium": "Media",
             "difficult": "Difícil",
             "freeform": "Libre"
-        },
-        "magiKind": {
-            "refresh": "Actualizar",
-            "loading": "Cargando…",
-            "connectPrompt": "Conéctate a un daemon coordinador para gestionar los vínculos kind → panel.",
-            "errorLoad": "No se pudieron cargar los paneles de kind",
-            "errorSave": "No se pudo guardar el vínculo de kind",
-            "errorRemove": "No se pudo eliminar el vínculo de kind",
-            "errorSlotProvider": "Ranura {{slot}}: se requiere un proveedor",
-            "errorSlotReplica": "Ranura {{slot}}: el número de réplicas debe ser ≥ 1",
-            "errorNoSlot": "Un vínculo de kind necesita al menos una ranura",
-            "removeConfirm": "¿Eliminar el vínculo del panel MAGI para \"{{kind}}\"?",
-            "kindRca": "Análisis de causa raíz",
-            "kindDesign": "Revisión de diseño / enfoque",
-            "kindClaimAudit": "Verificar afirmaciones específicas",
-            "kindFreeform": "Revisión libre",
-            "agentCount_one": "{{count}} agente",
-            "agentCount_other": "{{count}} agentes",
-            "off": "desactivado",
-            "noAgents": "Aún no hay agentes — añade uno para habilitar este tipo de revisión.",
-            "machine": "Máquina",
-            "machineTitle": "Qué máquina ejecuta este agente. Déjalo en \"any\" para que el coordinador enrute por etiquetas.",
-            "anyMachine": "Cualquier máquina",
-            "offlineSuffix": "{{label}} (sin conexión)",
-            "worktreeSuffix": "{{label}} — worktree ({{branch}})",
-            "worktreeUnknownBranch": "rama desconocida",
-            "worktreeDisabledTitle": "Los nodos worktree efímeros no se pueden asignar de nuevo a un slot MAGI — pueden desaparecer al limpiar. Una asignación existente permanece visible aquí para poder revisarla o eliminarla.",
-            "provider": "Proveedor",
-            "providerTitle": "El agente de IA que ejecuta esta ranura.",
-            "selectProvider": "Seleccionar proveedor…",
-            "model": "Modelo",
-            "modelTitle": "Anulación de modelo opcional (con el mejor esfuerzo). En blanco usa el predeterminado del proveedor.",
-            "modelDefault": "predeterminado",
-            "modelCustom": "Personalizado…",
-            "backToModelList": "← Volver a la lista de modelos",
-            "copies": "Copias",
-            "copiesTitle": "Cuántas copias paralelas de este agente ejecutar. En blanco = 1.",
-            "removeAgent": "Eliminar agente",
-            "addAgent": "+ Añadir agente",
-            "save": "Guardar",
-            "saving": "Guardando…",
-            "removeBinding": "Eliminar vínculo",
-            "removeBindingTitle": "Borrar este vínculo de kind",
-            "removeBindingDisabledTitle": "Nada que eliminar — este kind no está configurado"
         },
         "panel": {
             "outOfSyncBadge": "Desincronizado",
@@ -893,12 +801,6 @@
                 "depsFailed_one": "{{count}} anterior(es) fallaron",
                 "depsFailed_other": "{{count}} anteriores fallaron"
             },
-            "gate": {
-                "holding_one": "reteniendo {{count}} paso",
-                "holding_other": "reteniendo {{count}} pasos",
-                "deadline": "hasta {{time}} · luego {{onTimeout}}",
-                "needsYou": "Requiere acción"
-            },
             "time": {
                 "now": "ahora mismo",
                 "minutes_one": "hace {{count}} min",
@@ -911,7 +813,6 @@
             "empty": "Aún no hay tareas",
             "waitsOn_one": "espera {{count}}",
             "waitsOn_other": "espera {{count}}",
-            "blocked": "bloqueada",
             "missingDeps_one": "{{count}} dependencia desconocida",
             "missingDeps_other": "{{count}} dependencias desconocidas",
             "legend": {
@@ -1052,16 +953,12 @@
         },
         "blueprint": {
             "schedPrediction": "Predicción",
-            "gateActsViaCoordinatorHint": "El coordinador gestiona este gate: pídeselo en el chat del coordinador.",
-            "gateFallback": "puerta",
             "readonlyBadge": "solo lectura",
             "schedObservedAt": "a las {{time}}",
             "schedNoNodes": "No hay nodos enrutables.",
             "schedQuotaButton": "Cuota",
             "schedQuotaButtonTitle": "Cuota del plan por máquina de un vistazo",
             "schedNoWinner": "sin slot elegible",
-            "leaseExpired": "lease vencido",
-            "gateActsViaCoordinator": "Gestionado por el coordinador",
             "schedNext": "Siguiente asignación",
             "schedWaiting": "Listo",
             "schedFull": "Sin capacidad",
@@ -1079,21 +976,6 @@
             "schedUnpinnedTitle": "Envío hipotético sin nodo fijado — las tareas fijadas a un nodo muestran su propia previsión en sus tarjetas",
             "schedPointInTime": "Predicción puntual, no una asignación definitiva: la capacidad de los slots puede quedar obsoleta en cuanto se ocupa o libera uno",
             "schedulingShort": "Scheduling",
-            "gate": {
-                "release": "Liberar",
-                "abandon": "Abandonar",
-                "extend24h": "Extender 24h",
-                "outcomePassed": "Aprobado",
-                "outcomeFailed": "Fallido",
-                "evidencePlaceholder": "Evidencia (opcional)",
-                "reasonPlaceholder": "Motivo para abandonar este gate",
-                "abandonReasonRequired": "Se requiere un motivo para abandonar un gate.",
-                "submitRelease": "Enviar liberación",
-                "submitAbandon": "Enviar abandono",
-                "extendConfirmTitle": "¿Extender \"{{ref}}\" 24 horas?",
-                "expiredBadge": "Vencido · hace {{age}}",
-                "commandUnavailable": "No hay conexión con el daemon para enviar este comando."
-            },
             "list": {
                 "barActive": "Activas {{count}}",
                 "barBlocked": "Bloqueadas {{count}}",
@@ -1114,7 +996,6 @@
                 "loadMore_one": "Mostrar {{count}} más",
                 "loadMore_other": "Mostrar {{count}} más",
                 "emptyActive": "Nada en ejecución",
-                "blockedByGate": "bloqueado por: {{ref}}, {{age}}",
                 "waitingOn": "esperando a:",
                 "waitingOnMore": "+{{count}} más",
                 "blockedByDeadDependency": "bloqueada por una dependencia fallida/cancelada:",
@@ -1131,7 +1012,6 @@
                 "emptyActive": "Nada en ejecución",
                 "showFinished": "Mostrar carriles terminados",
                 "layoutFailed": "Falló el diseño del grafo: {{error}}",
-                "laneGraph": "Grafo {{id}}",
                 "laneAdhoc": "Tareas independientes",
                 "laneCollapse": "Contraer",
                 "laneExpand": "Expandir",
@@ -1141,8 +1021,6 @@
                 "foldNode_other": "{{count}} completadas",
                 "countRunning_one": "{{count}} en ejecución",
                 "countRunning_other": "{{count}} en ejecución",
-                "countGates_one": "{{count}} puerta en espera",
-                "countGates_other": "{{count}} puertas en espera",
                 "countDead_one": "{{count}} atascada",
                 "countDead_other": "{{count}} atascadas",
                 "countWaiting_one": "{{count}} en espera",
@@ -1154,21 +1032,15 @@
                 "timeRunning": "en ejecución {{age}}",
                 "timeFinished": "terminó {{time}}",
                 "timeQueued": "en cola {{age}}",
-                "deadlineIn": "vence en {{age}}",
-                "deadlineOverdue": "vencida hace {{age}}",
                 "tooltipTask": "Tarea: {{id}}",
                 "tooltipMission": "Misión: {{id}}",
-                "tooltipGraph": "Grafo: {{id}} · {{ref}}",
-                "tooltipGate": "Puerta: {{id}}",
                 "tooltipStatus": "Estado: {{status}}",
                 "deadDirect": "Una dependencia falló o se canceló — esta tarea no empezará por sí sola.",
                 "deadTransitive": "Algo aguas arriba falló o se canceló — esta tarea no empezará por sí sola.",
                 "legendDepends": "depende de",
-                "legendGate": "puerta",
                 "legendRunning": "en ejecución",
                 "legendDead": "nunca podrá empezar",
                 "heldUntil": "hasta {{time}}",
-                "gateDetails": "Abrir detalles de la puerta",
                 "tone": {
                     "pending": "pendiente",
                     "running": "en ejecución",
@@ -1178,14 +1050,6 @@
                     "dead": "atascada",
                     "plan": "planificada",
                     "held": "retenida"
-                },
-                "gateTone": {
-                    "declared": "declarada",
-                    "awaiting": "en espera",
-                    "claimed": "reclamada",
-                    "expired": "vencida",
-                    "released": "liberada",
-                    "abandoned": "abandonada"
                 }
             }
         },
@@ -1253,8 +1117,6 @@
             "visibilityHint": "Ocultas = mantén la bandeja de entrada en silencio y silencia sus notificaciones; interactúas a través de la sesión del coordinador. Visibles = muestra cada sesión de trabajo generada como su propia conversación.",
             "visibilityHidden": "Oculto",
             "visibilityVisible": "Visible",
-            "magiTitle": "Revisores cruzados",
-            "magiDescription": "MAGI (Multi-Agent Ground-truth Insight) ejecuta un panel de agentes de IA que verifican mutuamente su trabajo para revelar la verdad de fondo. Elige qué agentes gestionan cada tipo de revisión.",
             "coordinatorPromptTitle": "Prompt del coordinador",
             "thisMeshHint": "Se aplica solo a las sesiones del coordinador de {{name}}. Déjalo vacío para mantener el valor predeterminado del daemon.",
             "overrideLabel": "Anulación (reemplaza el valor predeterminado)",
@@ -1438,11 +1300,6 @@
             "info": "Esto es lo que recibe una sesión de coordinador cuando Override está vacío.",
             "launchScopeNote": "La misión, la actividad reciente y las notas operativas se añaden al iniciar y no se muestran aquí."
         },
-        "hermesMcp": {
-            "title": "Configuración de Hermes MCP",
-            "description": "Hermes no importa automáticamente el .mcp.json local del repositorio. Añade este YAML bajo mcp_servers en la configuración de Hermes y luego inicia una nueva sesión de Hermes.",
-            "fallbackProvider": "Hermes CLI"
-        },
         "providerAutoApprove": {
             "partialInventoryChip_other": "{{count}} nodos pendientes",
             "partialInventoryChip_one": "{{count}} nodo pendiente",
@@ -1494,15 +1351,6 @@
             "saved": "Guardado en .adhdev/mesh.json",
             "saveError": "No se pudieron guardar los valores predeterminados."
         },
-        "graphs": {
-            "shown_one": "{{count}} grafo mostrado",
-            "shown_other": "{{count}} grafos mostrados",
-            "loadMore_one": "Cargar {{count}} grafo más",
-            "loadMore_other": "Cargar {{count}} grafos más",
-            "serverLimitHidden_one": "{{count}} grafo anterior oculto · máximo 100",
-            "serverLimitHidden_other": "{{count}} grafos anteriores ocultos · máximo 100",
-            "serverLimitReached": "El daemon devuelve como máximo 100 grafos."
-        },
         "status": {
             "healthErrorChip": "Error",
             "offlineMachinesTitle": "Sin reportar: {{machines}}",
@@ -1551,7 +1399,6 @@
             "tasksCount_one": "{{count}} tarea",
             "sessionCount_other": "{{count}} sesiones",
             "sessionCount_one": "{{count}} sesión",
-            "leaseExpired": "reserva caducada",
             "providerUnknown": "proveedor desconocido",
             "truncated": "(recortado)",
             "missionCard": "Misiones",
@@ -1598,10 +1445,6 @@
             "detailKickerLedger": "Entrada del registro",
             "detailKickerQueue": "Tarea en cola",
             "detailKickerSession": "Sesión",
-            "detailKickerGate": "Puerta",
-            "detailLabelGraph": "Grafo",
-            "detailLabelRef": "Paso",
-            "detailLabelOutcome": "Resultado",
             "detailLabelMissionId": "ID de misión",
             "detailLabelCreated": "Creada",
             "detailLabelUpdated": "Actualizada",
@@ -1644,8 +1487,6 @@
             "routingSkippedMore": "+{{count}} más",
             "pausedMissions": "Misiones en pausa",
             "ledgerAllTime": "totales históricos",
-            "detailLabelGateAfter": "Previos",
-            "detailLabelGateUnlocks": "Desbloquea",
             "sessionTasksHeading": "Tareas de esta sesión",
             "showOnCanvas": "Ver en el lienzo"
         }
@@ -1784,8 +1625,6 @@
         "startingFresh": "Empezando de cero…",
         "startIde": "Iniciar IDE",
         "startingIde": "Iniciando IDE…",
-        "startAcpSession": "Iniciar sesión ACP",
-        "startingAcpSession": "Iniciando sesión ACP…",
         "recoverHostedRuntime": "Recuperar el entorno de ejecución alojado",
         "hostedRuntimeRecoveryDescription": "Recuperación alternativa para entornos de ejecución alojados tras interrupciones. Para una continuidad normal, abre el historial guardado en su lugar.",
         "openSavedHistory": "Abrir el historial guardado",
@@ -1885,7 +1724,7 @@
             "installing": "Instalando…",
             "done": "Listo",
             "installCount": "Instalar {{count}}",
-            "intro": "Elige los proveedores que quieras usar. De forma predeterminada se seleccionan los cuatro proveedores CLI con soporte oficial; puedes instalar proveedores de IDE, ACP o extensiones desde las pestañas de abajo, o más tarde desde Machines → Providers.",
+            "intro": "Elige los proveedores que quieras usar. De forma predeterminada se seleccionan los tres proveedores CLI con soporte oficial; puedes instalar proveedores de IDE o extensiones desde las pestañas de abajo, o más tarde desde Machines → Providers.",
             "loadingRegistry": "Cargando registro…",
             "loadError": "Error al cargar el registro: {{error}}",
             "noProviders": "No hay proveedores en esta categoría.",
@@ -1937,9 +1776,9 @@
                     "title": "Soporte multi-IDE",
                     "desc": "Supervisa VS Code, Cursor, Windsurf y agentes de extensión en un solo lugar."
                 },
-                "cliAcp": {
-                    "title": "Cobertura CLI y ACP",
-                    "desc": "Sigue agentes CLI independientes y flujos ACP junto a las sesiones de IDE."
+                "cli": {
+                    "title": "Cobertura CLI",
+                    "desc": "Sigue agentes CLI independientes junto a las sesiones de IDE."
                 }
             },
             "extras": {
@@ -3334,7 +3173,6 @@
             "onMachine": "en {{machine}}",
             "sectionIDEs": "IDE",
             "sectionCLIs": "CLI",
-            "sectionACPAgents": "Agentes ACP",
             "cpu": "CPU",
             "mem": "MEM",
             "loading": "Cargando tus máquinas…",
@@ -3513,7 +3351,7 @@
             "stopFailed": "No se pudo detener",
             "restartInitiated": "Reinicio de {{name}} iniciado",
             "restartFailed": "No se pudo reiniciar",
-            "selectProviderFirst": "Selecciona primero un proveedor CLI o ACP",
+            "selectProviderFirst": "Selecciona primero un proveedor CLI",
             "selectProvider": "Selecciona un proveedor",
             "workspaceRemoved": "Workspace eliminado",
             "workspaceLabelUpdated": "Nombre del workspace actualizado",
@@ -3882,8 +3720,8 @@
             "monoDesc": "Los repositorios de producción reales anidan submódulos, y ahí es justo donde falla la fusión automática ingenua. Refinery reconoce los submódulos: condiciona la fusión a la accesibilidad de los commits de submódulos, juzga la equivalencia de parches y actualiza el puntero de forma atómica. Este proyecto es en sí mismo un monorepo con una raíz y dos submódulos, convergido de esta manera cada día.",
             "crossHighlight": "Verificación cruzada",
             "crossTitle": "Consenso por encima de una sola opinión",
-            "crossSubtitle": "MAGI — Multi-Agent Ground-truth Insight",
-            "crossDesc": "Distribuye la misma investigación de solo lectura a varias réplicas de máquina × proveedor y sintetiza dónde coinciden y dónde divergen (MAGI). Más fiable que la opinión de un solo agente.",
+            "crossSubtitle": "Una pregunta, varios agentes independientes",
+            "crossDesc": "El coordinador envía la misma pregunta de solo lectura a varias máquinas y modelos a la vez y compara dónde coinciden y dónde divergen. Más fiable que la opinión de un solo agente.",
             "tryMesh": "Probar Repo Mesh →",
             "seePlans": "Ver planes",
             "availableOn": "Conecta una máquina y abre la página de <strong>Repo Mesh</strong> para empezar.",
@@ -3930,7 +3768,7 @@
             "rowCrossCheck": "Verifica la respuesta de forma cruzada",
             "rowCrossCheckLocalCli": "La opinión de un solo agente, sin una segunda opinión",
             "rowCrossCheckDesktop": "Trabajo en paralelo, un único veredicto",
-            "rowCrossCheckAdhdev": "MAGI distribuye la misma pregunta de solo lectura a agentes independientes de máquina × proveedor y muestra dónde divergen",
+            "rowCrossCheckAdhdev": "El coordinador envía la misma pregunta de solo lectura a agentes de distintas máquinas × proveedores y compara dónde divergen",
             "footnote": "Para una sola máquina, una sola rama, una tarea puntual, una CLI local con subagentes es más ligera y funciona de maravilla, y un orquestador de escritorio nativo es un lugar más agradable para trabajar. Repo Mesh se gana su lugar cuando el trabajo se distribuye entre máquinas y ramas, necesita sobrevivir a reinicios y debe aterrizar en main automáticamente, controlado desde donde estés."
         },
         "what": {
@@ -3938,7 +3776,7 @@
             "sectionSubtitle": "Neutral respecto al proveedor por diseño. Ejecuta Claude Code en el Mac, Codex en la máquina GPU con Windows, Cursor CLI para las pasadas de revisión, en el mismo mesh y bajo las mismas políticas. Cambia de proveedor sin cambiar de plataforma.",
             "cliHighlight": "Agentes CLI",
             "cliTitle": "Controla cualquier agente de terminal desde la web",
-            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Grok, Hermes, Kimi y OpenCode: conectados en tu máquina mediante un adaptador PTY con reanudación y reconexión adecuadas, controlados desde tu navegador. Envía prompts y aporta contexto visual al instante (pega, arrastra y suelta, o sube varias imágenes a la vez, hasta 5 imágenes / 10MB cada una). Aider, Goose y otros agentes ACP se conectan por stdio.",
+            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Grok, Kimi y OpenCode: conectados en tu máquina mediante un adaptador PTY con reanudación y reconexión adecuadas, controlados desde tu navegador. Envía prompts y aporta contexto visual al instante (pega, arrastra y suelta, o sube varias imágenes a la vez, hasta 5 imágenes / 10MB cada una).",
             "uiHighlight": "Una sola UI",
             "uiTitle": "El mismo panel, cualquier dispositivo",
             "uiDesc": "Alojado en la nube en adhf.dev: controla cada agente desde una laptop o un teléfono, ya sea en tu escritorio o lejos de él.",
@@ -3957,7 +3795,7 @@
         },
         "agents": {
             "sectionTitle": "Agentes compatibles",
-            "sectionSubtitle": "{{ides}} integraciones de IDE incorporadas, {{clis}} agentes CLI incorporados, {{extensions}} agentes de extensión residentes en el IDE y {{acp}}+ agentes ACP (stdio MCP). Los scripts de proveedor están en <code>adhdev-providers/</code>: añade los tuyos en <code>~/.adhdev/providers/</code>.",
+            "sectionSubtitle": "{{ides}} integraciones de IDE incorporadas, {{clis}} agentes CLI incorporados y {{extensions}} agentes de extensión residentes en el IDE. Los scripts de proveedor están en <code>adhdev-providers/</code>: añade los tuyos en <code>~/.adhdev/providers/</code>.",
             "tierTested": "Probado",
             "tierTestedDesc": "validado contra una app + versión real",
             "tierCommunity": "Comunidad",
@@ -3967,8 +3805,7 @@
             "groupCli": "Agentes CLI",
             "hintCli": "Controlados a través de un adaptador PTY con reanudación y reconexión.",
             "groupExtensions": "Agentes de extensión dentro del IDE",
-            "hintExtensions": "Conexión de webview por CDP para agentes que viven dentro de otro IDE.",
-            "acpFootnote": "Además de {{count}}+ agentes ACP por stdio (Agent Client Protocol): Codex, Claude Agent, Goose, Cline, OpenHands y más."
+            "hintExtensions": "Conexión de webview por CDP para agentes que viven dentro de otro IDE."
         },
         "pricing": {
             "sectionTitle": "Precios sencillos a medida que crecen tus agentes",
@@ -3984,7 +3821,7 @@
                     "features": {
                         "machine": "Una máquina, emparejada con un solo comando",
                         "p2p": "Chat, comandos, capturas y entrada remota por P2P",
-                        "providers": "Todos los proveedores: agentes CLI, IDE y ACP",
+                        "providers": "Todos los proveedores: agentes CLI e IDE",
                         "push": "Notificaciones push para aprobaciones y finalizaciones",
                         "share": "Un enlace de sesión compartida"
                     }
@@ -4037,7 +3874,7 @@
                 },
                 "step3": {
                     "title": "Controla tus agentes",
-                    "desc": "Lanza Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Hermes, Kimi y otros agentes desde el panel. Lee el chat, envía prompts, aporta contexto visual (pega, arrastra y suelta, o sube varias imágenes a la vez), aprueba acciones y cambia de sesión."
+                    "desc": "Lanza Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Kimi y otros agentes desde el panel. Lee el chat, envía prompts, aporta contexto visual (pega, arrastra y suelta, o sube varias imágenes a la vez), aprueba acciones y cambia de sesión."
                 }
             }
         },

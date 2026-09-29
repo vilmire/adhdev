@@ -7,7 +7,7 @@
  *   1. TOPIC (always): the scalar projection on `mesh.<id>.events` — what every
  *      peer indexes into `mesh_topic_index` (the fleet view).
  *   2. LOCAL (`{ local }`): the FULL nested payload as a `mesh_local_records`
- *      row (mesh-local-record-store.ts) — refine results, MAGI synthesis,
+ *      row (mesh-local-record-store.ts) — refine results,
  *      dispatch error text — that the projection drops. Local-only by
  *      construction: never published, never sent to the server. Written
  *      synchronously and in-process, so it works in a process with no

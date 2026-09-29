@@ -3,8 +3,7 @@
  * Blueprint GRAPH view — production-shaped render (jsdom + react-dom/client).
  *
  * MeshBlueprintView is mounted exactly as the observability surface mounts it
- * (tasks + status + daemonId + sendDaemonCommand; graphs arrive through the
- * real mesh_graph_overview fetch). @xyflow/react is replaced by a thin DOM
+ * (tasks + status + daemonId + sendDaemonCommand). @xyflow/react is replaced by a thin DOM
  * stand-in that renders the registered nodeTypes and forwards clicks through
  * onNodeClick — the same seam MeshGraphView/MeshMiniDag tests stub — and the
  * ELK layout is a deterministic spy so re-layout counts are observable.
@@ -79,23 +78,10 @@ const task = (id: string, status: string, over: Record<string, unknown> = {}): a
     createdAt: '2026-09-26T10:00:00Z', updatedAt: '2026-09-26T10:05:00Z', ...over,
 })
 
-const gateGraph = (): any => ({
-    graphId: 'G1', batchId: 'B1', status: 'waiting_gate', enqueueSurface: 'mesh_enqueue_batch', schemaVersion: 1,
-    createdAt: '2026-09-26T09:00:00Z', onDependencyFailure: 'block', counts: { tasks: 1, gates: 1, workspaces: 0, edges: 1 },
-    nodeStates: {}, workspaces: [],
-    nodes: [
-        { nodeId: 'n-review', ref: 'review', kind: 'coordinator_gate', state: 'awaiting_coordinator', materializationVersion: 1 },
-        { nodeId: 'n-ship', ref: 'ship', kind: 'worker_task', state: 'blocked', taskId: 'ship', blockedByGateId: 'gate-1', materializationVersion: 1 },
-    ],
-    edges: [{ from: 'review', to: 'ship', kind: 'gate', omitOnSkip: false, active: true }],
-    gates: [{ gateId: 'gate-1', nodeId: 'n-review', state: 'awaiting_coordinator', action: 'approval', onTimeout: 'hold', leaseGeneration: 0, deadlineAt: '2099-01-01T00:00:00Z' }],
-})
-
 const status = (): any => ({ meshId: 'mesh-1', meshName: 'Mesh', repoIdentity: 'repo', refreshedAt: '2026-09-26T10:00:00Z', nodes: [], missions: [] })
 
-function commandMock(graphs: any[]) {
+function commandMock() {
     return vi.fn(async (_daemonId: string, type: string) => {
-        if (type === 'mesh_graph_overview') return { success: true, graphs, totalGraphCount: graphs.length }
         if (type === 'mesh_route_preview') return { success: true, preview: { nodes: [] } }
         return { success: true }
     })
@@ -134,11 +120,11 @@ async function flush() {
     }
 }
 
-async function mountView(props: { tasks: any[]; graphs?: any[] }) {
+async function mountView(props: { tasks: any[] }) {
     const container = document.createElement('div')
     document.body.appendChild(container)
     const root: Root = createRoot(container)
-    const sendDaemonCommand = commandMock(props.graphs ?? [])
+    const sendDaemonCommand = commandMock()
     await act(async () => {
         root.render(<MeshBlueprintView tasks={props.tasks} status={status()} daemonId="daemon-1" sendDaemonCommand={sendDaemonCommand} />)
     })
@@ -164,12 +150,6 @@ describe('Blueprint List / Graph switch', () => {
         expect(flat.container.querySelector('[data-testid="bp-graph"]')).toBeNull()
         expect(flat.container.querySelector('[data-testid="blueprint-view-list"]')?.getAttribute('aria-checked')).toBe('true')
         flat.unmount()
-    })
-
-    it('a graph-only gate (no queue deps) is structure too → Graph', async () => {
-        const view = await mountView({ tasks: [task('ship', 'pending')], graphs: [gateGraph()] })
-        expect(view.container.querySelector('[data-testid="bp-graph"]')).not.toBeNull()
-        view.unmount()
     })
 
     it('persists the viewer choice and restores it on the next mount', async () => {
@@ -204,7 +184,7 @@ describe('Blueprint List / Graph switch', () => {
     })
 })
 
-/* ── click-through + gate actions ─────────────────────────────────────── */
+/* ── click-through ────────────────────────────────────────────────────── */
 
 describe('Blueprint graph — interaction', () => {
     it('clicking a task node opens the same task detail the list rows open', async () => {
@@ -216,40 +196,19 @@ describe('Blueprint graph — interaction', () => {
         expect(document.body.textContent).toContain('Full body text for b')
         view.unmount()
     })
-
-    it('clicking a gate opens its panel with Release / Abandon / Extend 24h wired to the daemon commands', async () => {
-        const view = await mountView({ tasks: [task('ship', 'pending')], graphs: [gateGraph()] })
-        const gate = view.container.querySelector('[data-node-id="gate:G1:n-review"] [data-testid="bp-graph-gate"]')!
-        expect(gate.getAttribute('data-tone')).toBe('awaiting')
-        await click(gate)
-        const panel = view.container.querySelector('[data-testid="bp-graph-gate-panel"]')!
-        expect(panel.textContent).toContain('Release')
-        expect(panel.textContent).toContain('Abandon')
-        expect(panel.textContent).toContain('Extend 24h')
-
-        await click([...panel.querySelectorAll('button')].find(button => button.textContent === 'Release')!)
-        await click([...panel.querySelectorAll('button')].find(button => button.textContent === 'Submit release')!)
-        expect(view.sendDaemonCommand).toHaveBeenCalledWith('daemon-1', 'mesh_graph_gate_release', {
-            mesh_id: 'mesh-1', gate_id: 'gate-1', outcome: 'passed',
-        })
-        // …and the graph list is refetched afterwards (no optimistic UI).
-        const overviewCalls = view.sendDaemonCommand.mock.calls.filter(call => call[1] === 'mesh_graph_overview').length
-        expect(overviewCalls).toBeGreaterThanOrEqual(2)
-        view.unmount()
-    })
 })
 
 /* ── edges, layout and viewport discipline (graph component directly) ── */
 
 describe('Blueprint graph — edges and re-layout discipline', () => {
     const meshTheme = getMeshGraphTheme('dark')
-    async function mountGraph(tasks: any[], graphs: any[] = []) {
+    async function mountGraph(tasks: any[]) {
         const container = document.createElement('div')
         document.body.appendChild(container)
         const root = createRoot(container)
-        const render = async (nextTasks: any[], nextGraphs: any[] = graphs) => {
+        const render = async (nextTasks: any[]) => {
             await act(async () => {
-                root.render(<MeshBlueprintGraph tasks={nextTasks} status={status()} graphs={nextGraphs} meshTheme={meshTheme} onTaskOpen={() => {}} onGateOpen={() => {}} />)
+                root.render(<MeshBlueprintGraph tasks={nextTasks} status={status()} meshTheme={meshTheme} onTaskOpen={() => {}} />)
             })
             await flush()
         }
@@ -257,21 +216,19 @@ describe('Blueprint graph — edges and re-layout discipline', () => {
         return { container, render, unmount: () => act(() => root.unmount()) }
     }
 
-    it('draws dead edges red, gate edges dashed, and animates only edges into running tasks', async () => {
+    it('draws dead edges red and animates only edges into running tasks', async () => {
         const graph = await mountGraph([
             task('root', 'cancelled', { missionId: 'M' }),
             task('child', 'pending', { missionId: 'M', dependsOn: ['root'] }),
             task('done', 'completed', { missionId: 'M' }),
             task('run', 'assigned', { missionId: 'M', dependsOn: ['done'] }),
-            task('ship', 'pending'),
-        ], [gateGraph()])
+        ])
         const edge = (id: string) => graph.container.querySelector(`[data-edge-id="${id}"]`)!
         // Dead = the theme's semantic red token; every other reading stays neutral.
         expect(edge('e:task:root->task:child').getAttribute('data-stroke')).toBe('var(--status-error)')
-        expect(edge('e:gate:G1:n-review->task:ship').getAttribute('data-stroke')).not.toBe('var(--status-error)')
+        expect(edge('e:task:done->task:run').getAttribute('data-stroke')).not.toBe('var(--status-error)')
         expect(edge('e:task:done->task:run').getAttribute('data-animated')).toBe('true')
         expect(edge('e:task:root->task:child').getAttribute('data-animated')).toBe('false')
-        expect(edge('e:gate:G1:n-review->task:ship').getAttribute('data-dash')).toBe('7 5')
         expect(edge('e:task:done->task:run').getAttribute('data-dash')).toBe('')
         expect(graph.container.querySelector('[data-node-id="task:child"] [data-testid="bp-graph-task"]')?.getAttribute('data-tone')).toBe('dead')
         expect(graph.container.querySelector('[data-testid="bp-graph-legend"]')?.textContent).toContain('can never start')

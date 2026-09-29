@@ -23,6 +23,5 @@ export {
     handleSwitchChat,
     handleSetMode,
     handleChangeModel,
-    handleSetThoughtLevel,
     handleResolveAction,
 } from './chat-commands-write.js';

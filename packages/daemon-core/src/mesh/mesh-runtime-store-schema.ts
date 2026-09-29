@@ -18,8 +18,9 @@
  */
 
 import { LOG } from '../logging/logger.js';
-import { migrateMeshGraphSchema } from './mesh-graph-schema.js';
+import { migrateMeshTaskOutputs } from './mesh-task-outputs.js';
 import { ensureTurnLedgerSchema } from './turn-ledger/schema.js';
+import { LocalRecordStore } from './mesh-local-record-store.js';
 import { ensureMeshNodeGitStateSchema } from './mesh-node-git-state.js';
 import type { MeshRuntimeStore } from './mesh-runtime-store.js';
 
@@ -103,7 +104,6 @@ export function migrate(self: MeshRuntimeStore): void {
             title TEXT NOT NULL,
             goal TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'active',
-            source TEXT,
             -- G3: idempotency marker for the mission_close_candidate coordinator
             -- event. Set to the emit timestamp when all of a mission's tasks first
             -- become terminal (so the "consider closing this" nudge fires exactly
@@ -174,8 +174,9 @@ export function migrate(self: MeshRuntimeStore): void {
             ON mesh_handoff_note_text(recorded_at);
     `);
     migrateMeshIsolationColumns(self);
-    // GRAPH-ORCHESTRATION Phase A: additive graph tables (CREATE IF NOT EXISTS only). See mesh-graph-schema.ts.
-    migrateMeshGraphSchema(self.db);
+    // mesh_task_outputs + the one-way drop of the retired graph-orchestration
+    // tables (see mesh-task-outputs.ts).
+    migrateMeshTaskOutputs(self.db);
     // Wiring-unification C3: the turn-ledger tables (additive, idempotent). The
     // destructive fold of the legacy tables is migrate-v1 — run explicitly after
     // the store is open (MeshRuntimeStore.runTurnLedgerMigrationV1), never from
@@ -225,13 +226,20 @@ export function migrateMeshIsolationColumns(self: MeshRuntimeStore): void {
             `);
         }
 
-        // 3. mesh_missions.source: nullable provenance tag ('magi' | 'coordinator').
-        //    Pre-existing rows keep source NULL — listMeshMissionSummaries treats a
-        //    NULL/absent source as a coordinator mission (never auto-hidden), so the
-        //    completed-MAGI bounding only ever affects rows explicitly stamped 'magi'.
+        // 3. Retired MAGI cross-verification state. mesh_missions.source only ever
+        //    tagged MAGI-created missions (to hide them once completed); with MAGI gone
+        //    the column has no reader or writer, so it is dropped (SQLite >= 3.35 —
+        //    the bundled better-sqlite3 ships 3.5x). The missions themselves stay: they
+        //    are ordinary missions from here on. The MAGI dispatch/synthesis records
+        //    in mesh_local_records have no reader either and are deleted. Both steps
+        //    are idempotent — the column check and a DELETE of zero rows no-op on
+        //    every later boot, and a fresh store has neither.
         const missionCols = tableColumns(self, 'mesh_missions');
-        if (!missionCols.has('source')) {
-            self.db.exec(`ALTER TABLE mesh_missions ADD COLUMN source TEXT`);
+        if (missionCols.has('source')) {
+            self.db.exec(`ALTER TABLE mesh_missions DROP COLUMN source`);
+        }
+        if (tableColumns(self, 'mesh_local_records').has('kind')) {
+            new LocalRecordStore(self.db).purgeKinds(['magi_dispatched', 'magi_synthesis']);
         }
         // 3b. mesh_missions.close_candidate_emitted_at (G3): nullable idempotency
         //     marker for the mission_close_candidate coordinator nudge. Pre-existing

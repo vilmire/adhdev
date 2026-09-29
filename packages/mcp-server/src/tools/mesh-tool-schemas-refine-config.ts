@@ -1,7 +1,7 @@
 /**
- * MCP tool schemas — Refinery, MAGI and mesh configuration (mesh-tools-refine.ts /
- * mesh-tools-magi.ts / mesh-tools-config handlers): refine node / batch / plan, the
- * review inbox, MAGI review / collect / kind panels, node slots, config / init, the
+ * MCP tool schemas — Refinery and mesh configuration (mesh-tools-refine.ts /
+ * mesh-tools-config handlers): refine node / batch / plan, the
+ * review inbox, node slots, config / init, the
  * coordinator prompt append and worker notification. Pure data; ALL_MESH_TOOLS in
  * mesh-tool-schemas.ts is the registry.
  */
@@ -88,7 +88,7 @@ export const MESH_CONFIG_TOOL = {
 export const MESH_INIT_TOOL = {
     name: 'mesh_init',
     description: 'Mesh onboarding for a git project: detects installed CLI providers, suggests all three repo `.adhdev/*` config families — Refinery (.adhdev/refine.json), worktree bootstrap (.adhdev/worktree_bootstrap.json) AND change-impact (.adhdev/change-impact.json) — optionally writes them, and recommends a node providerPriority. '
-        + 'Also returns `currentConfig` (the saved config per domain: repo files + machine-local magiKindPanels) so you can present a current-vs-suggested diff. Suggestions never execute until saved; providerPriority is a recommendation, not auto-applied. Always dry-run unless write=true. Select with `mode`:\n'
+        + 'Also returns `currentConfig` (the saved config per domain: repo files) so you can present a current-vs-suggested diff. Suggestions never execute until saved; providerPriority is a recommendation, not auto-applied. Always dry-run unless write=true. Select with `mode`:\n'
         + '• mode="init" (default) — a fresh, never-onboarded repo. Never overwrites an existing config unless overwrite=true.\n'
         + '• mode="reinit" — re-onboard an ALREADY-initialized repo whose config needs refreshing: same suggest→validate→gated-write engine with overwrite defaulting to TRUE and a reinit contract in the response. '
         + 'Overwrite is a WHOLESALE replacement, so it must NOT silently drop operator hand-edits: the first call (write=false) is a DRY-RUN — present the per-section current-vs-suggested diff, get EXPLICIT per-section approval, then re-invoke with write=true.',
@@ -131,92 +131,12 @@ export const MESH_REVIEW_INBOX_TOOL = {
     },
 };
 
-// ─── MAGI — Multi-Agent Ground-truth Insight ──
-
-export const MESH_MAGI_REVIEW_TOOL = {
-    name: 'mesh_magi_review',
-    description: 'Cross-verify a read-only investigation across a standing panel of independent mesh agents (different machines/providers), instead of sending a SINGLE read-only worker. Drop-in for any read-only investigation — bug RCA, defect/regression measurement, "why does this code do X?", or doc/design/API review. Fans the SAME question out to N independent (node × provider) replicas, then synthesizes consensus/disagreement/unique evidence into a needs_verification list — NOT a majority vote (high agreement among coupled agents ≠ correct). Read-only is FORCED (no execute/write flag exists). COST: multiplies token spend by the total replica count (the call is the opt-in). PANEL RESOLUTION: the panel is resolved SOLELY from the USER-CONFIGURED kind-panel binding for the given `task_kind` (mesh settings → magiKindPanels: task_kind → (node × provider × model) slots). `task_kind` is REQUIRED — there is NO named-panel, inline-members, or automatic-preset path. A task_kind with no configured kind-panel errors `magi_kind_not_configured` (configure slots in mesh settings first). The binding must resolve to ≥2 (node, provider) targets; never silently degrades to N=1 (errors magi_insufficient_targets if the live mesh cannot supply the configured slots).',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            question: { type: 'string', description: 'The single investigation question every agent answers — e.g. "What is the root cause of this defect?", "Refute this RCA.", "Why does this code do X?". Not only "review this".' },
-            target: { type: 'string', description: 'What to investigate — file path(s), a bug symptom / error / stack trace, a code area / symbol, or omitted when the question is self-contained.' },
-            artifacts: { type: 'array', items: { type: 'string' }, description: 'Inline content when not file-backed: a doc/diff, a log/error dump, or a prior single-worker RCA to refute.' },
-            n: { type: 'number', description: 'Global replica override per slot (clamped by the total-replica guard cap, default 12).' },
-            task_kind: { type: 'string', enum: ['claim_audit', 'rca', 'design', 'freeform'], description: 'REQUIRED. Selects (1) the SINGLE output schema injected into each replica prompt and the strict parser used at collection (no schema-on-schema conflict), AND (2) the user-configured kind-panel binding that supplies the fan-out slots (mesh settings → magiKindPanels; errors magi_kind_not_configured if that kind has no configured slots — no named-panel/inline/preset fallback). claim_audit: {claims[],top_findings[],open_questions[]}. rca: {rootCause,failsAt,mechanism,evidence[],fixDirection,confidence}. design: {recommendation,rationale,alternatives[],tradeoffs[],risks[],evidence[],confidence}. freeform: no schema — natural-language answer, parsing/evidence checks waived, cross-verification is weak. Every kind except freeform requires non-empty evidence[]; an empty-evidence or schema-invalid answer triggers ONE delta re-request before being dropped as unparseable. Do NOT also embed an output-format schema in the question — it collides with this contract (a warning is surfaced if detected).' },
-            mode: { type: 'string', enum: ['rca', 'investigation', 'claim_audit', 'design_review', 'code_audit'], description: 'Synthesis emphasis hint — affects labels only, never the agent count or schema. Distinct from task_kind (which selects the output schema).' },
-            require_independent_evidence: { type: 'boolean', description: 'Default true — high-impact claims with no file:line/source evidence are routed to needs_verification.' },
-            include_stale: { type: 'boolean', description: 'Default false. By default, panel slots whose node HEAD commit differs from the coordinator reference commit are EXCLUDED (they would investigate different code). Set true to fan out to them anyway — results will be git-skewed and a warning is surfaced. If exclusion drops the panel below 2 independent targets the call errors rather than degrading to N=1; include_stale=true is one way to recover.' },
-            wait: { type: 'boolean', description: 'Default true — collect replica outputs and return the synthesis. Set false to dispatch async and return a consensusGroupId handle; collect later with mesh_magi_collect.' },
-            wait_timeout_ms: { type: 'number', description: 'Max time to wait for replica completion before returning a partial "missing K of N" synthesis. Default 8 min, max 20 min.' },
-            auto_cleanup: { type: 'boolean', description: 'Default = mesh policy magiSessionCleanup (ON / stop_and_delete unless overridden). Once all replicas are terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified) so repeated reviews don\'t accumulate idle worker sessions. Reused/coordinator/other sessions are never touched. Set false to preserve auto-launched worker sessions for inspection. No effect on a partial (non-terminal) collection.' },
-        },
-        required: ['question', 'task_kind'],
-    },
-};
-
-export const MESH_MAGI_COLLECT_TOOL = {
-    name: 'mesh_magi_collect',
-    description: 'Collect + synthesize a previously dispatched MAGI fan-out by its consensus group id — the async companion to mesh_magi_review({ wait:false }). Rediscovers the replica tasks from the queue and runs the SAME diversity-weighted synthesis (consensus/disagreement/unique-evidence → needs_verification list). Defaults to a SNAPSHOT (wait=false): returns whatever replicas are terminal right now, with a pending note if some are still generating; pass wait=true to block for the rest. Read-only. Drive off mission completion / pendingCoordinatorEvents rather than polling this in a tight loop.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            consensus_group_id: { type: 'string', description: 'The consensusGroupId returned by a wait=false mesh_magi_review.' },
-            task_kind: { type: 'string', enum: ['claim_audit', 'rca', 'design', 'freeform'], description: 'Optional override of the task_kind used to parse replica answers. Normally recovered automatically from the original dispatch — only set this if the dispatched ledger entry was pruned and auto-recovery falls back to claim_audit incorrectly.' },
-            require_independent_evidence: { type: 'boolean', description: 'Default true — high-impact claims with no file:line/source evidence are routed to needs_verification.' },
-            wait: { type: 'boolean', description: 'Default false (snapshot). Set true to block for outstanding replicas up to wait_timeout_ms before synthesizing.' },
-            wait_timeout_ms: { type: 'number', description: 'When wait=true, max time to wait for remaining replica completion. Default 8 min, max 20 min.' },
-            auto_cleanup: { type: 'boolean', description: 'Default = mesh policy magiSessionCleanup (ON / stop_and_delete). When the collection is terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified). Reused/coordinator/other sessions are never touched. Set false to preserve them. No effect on a partial (non-terminal) snapshot.' },
-            verbose: { type: 'boolean', description: 'Default false. When true, each synthesis.replicas[] entry also carries rawAnswer — the replica\'s raw end-user answer text (capped). Omitted by default to keep the payload small; the structured clusters already carry the parsed claims.' },
-        },
-        required: ['consensus_group_id'],
-    },
-};
-
-// 2026-09-26 tool consolidation: the MAGI kind-panel set/list pair as one tool.
-export const MESH_MAGI_KIND_PANEL_TOOL = {
-    name: 'mesh_magi_kind_panel',
-    description: 'Read or bind the MAGI kind→panel slot lists for THIS mesh (machine-local ~/.adhdev/meshes.json → `meshes[].magiKindPanels`). The binding is what `mesh_magi_review({ task_kind })` resolves to — the SOLE panel-resolution path. '
-        + 'Use it when mesh_magi_review fails with magi_kind_not_configured, or to confirm what a task_kind resolves to before a review. SCOPE: PER MESH, machine-local (NOT repo-committed); another mesh on this machine keeps its own bindings. Select with `action` (REQUIRED):\n'
-        + '• list — read-only: every configured kind binding, or just `task_kind`\'s. The response `scope` names the mesh.\n'
-        + '• set — bind `task_kind` to `slots`. WHOLESALE REPLACEMENT: the slots become the kind\'s COMPLETE set (prior slots dropped, not merged), so present the current-vs-new lists (the dry-run returns `currentSlots`) and get EXPLICIT user approval before write=true. Defaults to dry-run. '
-        + 'A slot\'s `nodeId`, when given, MUST name a node of this mesh — a foreign/unknown id is rejected (invalid_magi_kind_panel).',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            action: {
-                type: 'string',
-                enum: ['list', 'set'],
-                description: 'Which panel operation to run (required). Each action accepts only its own arguments — see the tool description.',
-            },
-            task_kind: { type: 'string', description: 'The task_kind key, e.g. claim_audit / rca / design / freeform. Required for set; list: optional filter (omit to list all).' },
-            slots: {
-                type: 'array',
-                description: 'set: the COMPLETE desired slot list for this kind (wholesale replacement). Each slot: { provider (REQUIRED), nodeId?, model?, capabilityTags?, n? }. Required for set.',
-                items: {
-                    type: 'object',
-                    properties: {
-                        provider: { type: 'string', description: 'REQUIRED — provider type, e.g. claude-cli / codex-cli / gemini-cli / hermes-cli.' },
-                        nodeId: { type: 'string', description: 'Optional — pin to a specific node OF THIS MESH (validated against the mesh node list; a node id from another mesh is rejected). Omit to let the fan-out pick any node offering the provider.' },
-                        model: { type: 'string', description: 'Optional — pin a specific model for this slot.' },
-                        capabilityTags: { type: 'array', items: { type: 'string' }, description: 'Optional routing tags (ANDed with the provider tag) when nodeId is absent.' },
-                        n: { type: 'number', description: 'Optional per-slot replica count (default 1).' },
-                    },
-                    required: ['provider'],
-                },
-            },
-            write: { type: 'boolean', description: 'set: when true, persist the slot list (wholesale replacement) to meshes.json. Defaults false (dry-run preview of the normalized slots + currentSlots).' },
-        },
-        required: ['action'],
-    },
-};
-
 // 2026-09-26 tool consolidation: set / list / propose on a node's capability
 // slots are one tool, selected by `action` (per-action argument sets enforced in
 // validate-tool-args.ts MESH_TOOL_ACTIONS).
 export const MESH_NODE_SLOTS_TOOL = {
     name: 'mesh_node_slots',
-    description: 'Read, draft, or change a mesh node\'s capability slots (policy.slots) — the provider/model/thinking + difficulty + capability-tag profile that task→node fitness routing and MAGI fan-out match against. '
+    description: 'Read, draft, or change a mesh node\'s capability slots (policy.slots) — the provider/model/thinking + difficulty + capability-tag profile that task→node fitness routing matches against. '
         + 'Use it when routing keeps landing work on a poor-fit node, when a node has no slots, or after CLI agents were installed on a node. Select with `action` (REQUIRED):\n'
         + '• list — read-only: the node\'s current slots.\n'
         + '• propose — read-only AUTO-DETECT: reads the node\'s installed CLI agents from the coordinator (its own provider catalog, or the one the node pushed — category=cli + installed=true), maps each through a seeded provider→(model/thinkingLevel/difficulty/maxParallel) table, and returns `proposedSlots` with per-slot rationale plus `droppedSlots` / `droppedProviders` / `destructive` '
@@ -237,7 +157,7 @@ export const MESH_NODE_SLOTS_TOOL = {
                 items: {
                     type: 'object',
                     properties: {
-                        provider: { type: 'string', description: 'REQUIRED — provider type, e.g. claude-cli / codex-cli / gemini-cli / hermes-cli.' },
+                        provider: { type: 'string', description: 'REQUIRED — provider type, e.g. claude-cli / codex-cli / antigravity-cli.' },
                         model: { type: 'string', description: 'Optional — model for this slot (best-effort at launch, e.g. opus / gpt-5-codex).' },
                         thinkingLevel: { type: 'string', description: 'Optional — provider-specific thinking level verbatim (e.g. low/medium/high/max, or codex minimal/xhigh).' },
                         difficulty: { type: 'array', items: { type: 'string' }, description: 'Optional — task difficulties this slot handles (easy/medium/difficult/freeform). Empty = all (general-purpose).' },
@@ -249,7 +169,6 @@ export const MESH_NODE_SLOTS_TOOL = {
             },
             reason: { type: 'string', description: 'set: optional short rationale, echoed in the dry-run so the user sees WHY the change is suggested.' },
             write: { type: 'boolean', description: 'set: when true, apply the slot list (wholesale replacement). Defaults false (dry-run preview of proposedSlots + currentSlots).' },
-            include_magi: { type: 'boolean', description: 'propose: also draft a MAGI panel (one slot per detected provider, pinned to this node, models unpinned) for binding via mesh_magi_kind_panel action "set". Defaults false. Deliberately NOT a per-task_kind assignment — provider manifests carry no rca/design/claim_audit suitability data.' },
         },
         required: ['action', 'node_id'],
     },

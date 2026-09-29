@@ -148,8 +148,8 @@ export class ProviderInstanceManager {
         for (const [id, instance] of this.instances) {
             try {
                 const state = instance.getState();
-                // Phase E: the registry-owned launch record rides the state (CLI / ACP only).
-                if (state.category === 'cli' || state.category === 'acp') {
+                // Phase E: the registry-owned launch record rides the state (CLI only).
+                if (state.category === 'cli') {
                     const launch = this.sessionEventPort?.launchRecord?.(state.instanceId);
                     if (launch) state.launch = launch;
                 }

@@ -5,13 +5,11 @@ import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { tmpdir } from 'os';
 
-// GRAPH-ORCHESTRATION Phase G — scheduler dependency-gate MUTATION suite.
+// Scheduler dependency-gate MUTATION suite.
 //
-//   Design SoT: docs/design/2026-08-18-graph-orchestration-full.md
-//     :14-25   — taskDependenciesSatisfied is THE one predicate; semantics are exactly
-//                "all dependsOn statuses completed && !blockedReason".
-//     :781-786 — P3 invariant tests: "Add a mutation test: changing any one surface
-//                to inline dependency logic must fail."
+//   taskDependenciesSatisfied is THE one predicate; semantics are exactly "all
+//   dependsOn statuses completed". Changing any one surface to inline dependency
+//   logic must fail.
 //
 //   The companion file mesh-scheduler-dependency-gate-invariant.test.ts is the
 //   CHARACTERIZATION suite (spy counts + static-regex guard). This file proves the
@@ -102,15 +100,11 @@ afterEach(() => {
 // ── The mutants: "inline dependency logic" replacements for the one predicate ──
 // Each one is a plausible way a surface could stop calling
 // `taskDependenciesSatisfied` and recompute readiness on its own — the fork the
-// DEPENDSON-GATE-SYMMETRY boundary forbids (design :984-986).
+// DEPENDSON-GATE-SYMMETRY boundary forbids.
 const MUTANTS = {
     /** No dependency check at all — the gate is simply bypassed. */
     alwaysTrue: () => true,
-    /** All deps completed, but the system-block half of the predicate is dropped. */
-    ignoresBlockedReason: (entry: any, statusById: Map<string, string>) =>
-        (Array.isArray(entry.dependsOn) ? entry.dependsOn : [])
-            .every((id: string) => statusById.get(id) === 'completed'),
-    /** Teaches the gate a skip rule the predicate deliberately does not have (:357-359). */
+    /** Teaches the gate a skip rule the predicate deliberately does not have. */
     skippedSatisfies: (entry: any, statusById: Map<string, string>) =>
         (Array.isArray(entry.dependsOn) ? entry.dependsOn : [])
             .every((id: string) => {
@@ -143,16 +137,7 @@ function claimScenarioUnmet(id: string): Scenario {
     return { dep, dependent };
 }
 
-/** Dependent pending with a system block; predecessor completed. */
-function claimScenarioBlocked(id: string): Scenario {
-    const dep = enqueueTask(id, 'prerequisite', { taskMode: 'code_change', difficulty: 'medium' });
-    const dependent = enqueueTask(id, 'dependent work', { taskMode: 'code_change', dependsOn: [dep.id], difficulty: 'medium' });
-    __writeTaskStatusForTests(id, dep.id, 'completed');
-    setEntry(getQueue(id).find(t => t.id === dependent.id)!, { blockedReason: 'graph_materialization_pending:node-1' });
-    return { dep, dependent };
-}
-
-/** Dependent pending; predecessor SKIPPED (terminal for graph accounting only). */
+/** Dependent pending; predecessor in a non-`completed` status word (`skipped`). */
 function claimScenarioSkipped(id: string): Scenario {
     const dep = enqueueTask(id, 'prerequisite', { taskMode: 'code_change', difficulty: 'medium' });
     const dependent = enqueueTask(id, 'dependent work', { taskMode: 'code_change', dependsOn: [dep.id], difficulty: 'medium' });
@@ -251,58 +236,6 @@ describe('runtime mutation: inlining dependency logic visibly breaks the gate (d
                 setMesh(restoredId);
                 const components = createComponents([]);
                 const { dependent } = claimScenarioUnmet(restoredId);
-                await triggerMeshQueue(components, restoredId);
-                expect(launchCliCalls(components)).toBe(0);
-                expect(getQueue(restoredId).find(t => t.id === dependent.id)!.autoLaunch?.reason).toBe('dependencies_unsatisfied');
-            } finally {
-                cleanup(restoredId);
-            }
-        });
-    });
-
-    describe('mutant: deps completed but blockedReason ignored', () => {
-        it('claim: a system-blocked dependent becomes claimable — then is refused again after restore', () => {
-            const mutatedId = meshId('rt_noblock_claim');
-            try {
-                const { dependent } = claimScenarioBlocked(mutatedId);
-                mutatePredicate(MUTANTS.ignoresBlockedReason);
-                // RED characterization: the invariant suite pins claimNextTask → null
-                // for a blockedReason-carrying task whose deps are all completed.
-                const claimed = claimNextTask(mutatedId, NODE_ID, 'mut-sess-3');
-                expect(claimed?.id).toBe(dependent.id);
-            } finally {
-                cleanup(mutatedId);
-            }
-
-            vi.restoreAllMocks();
-            const restoredId = meshId('rt_noblock_claim_restored');
-            try {
-                claimScenarioBlocked(restoredId);
-                expect(claimNextTask(restoredId, NODE_ID, 'mut-sess-4')).toBeNull();
-            } finally {
-                cleanup(restoredId);
-            }
-        });
-
-        it('auto-launch: spawns a session for a system-blocked dependent — then skips it after restore', async () => {
-            const mutatedId = meshId('rt_noblock_al');
-            try {
-                setMesh(mutatedId);
-                const components = createComponents([]);
-                claimScenarioBlocked(mutatedId);
-                mutatePredicate(MUTANTS.ignoresBlockedReason);
-                await triggerMeshQueue(components, mutatedId);
-                expect(launchCliCalls(components)).toBe(1);
-            } finally {
-                cleanup(mutatedId);
-            }
-
-            vi.restoreAllMocks();
-            const restoredId = meshId('rt_noblock_al_restored');
-            try {
-                setMesh(restoredId);
-                const components = createComponents([]);
-                const { dependent } = claimScenarioBlocked(restoredId);
                 await triggerMeshQueue(components, restoredId);
                 expect(launchCliCalls(components)).toBe(0);
                 expect(getQueue(restoredId).find(t => t.id === dependent.id)!.autoLaunch?.reason).toBe('dependencies_unsatisfied');
@@ -417,7 +350,7 @@ const SURFACES: SurfaceMutation[] = [
 
 /** The fork the DEPENDSON-GATE-SYMMETRY boundary forbids: the predicate's logic re-implemented inline. */
 function inlineDependencyLogic(entryVar: string, statusMap: string): string {
-    return `!${entryVar}.blockedReason && (Array.isArray(${entryVar}.dependsOn) ? ${entryVar}.dependsOn : [])`
+    return `(Array.isArray(${entryVar}.dependsOn) ? ${entryVar}.dependsOn : [])`
         + `.every(id => ${statusMap}.get(id) === 'completed')`;
 }
 

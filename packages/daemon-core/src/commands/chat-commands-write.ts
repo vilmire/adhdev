@@ -1,6 +1,6 @@
 /**
  * Chat Commands — write side: handleSendChat, handleListChats, handleNewChat,
- * handleSwitchChat, handleSetMode, handleChangeModel, handleSetThoughtLevel,
+ * handleSwitchChat, handleSetMode, handleChangeModel,
  * handleResolveAction and the send/mode/model helpers they use.
  */
 
@@ -96,7 +96,7 @@ async function verifyExtensionSendObserved(h: CommandHelpers, before: any): Prom
     return false;
 }
 
-// ─── CLI/ACP sends: one OutboundMessage into SessionInputService ─────────────
+// ─── CLI sends: one OutboundMessage into SessionInputService ─────────────
 
 /**
  * Handler-local fallback service for a command context built without the
@@ -167,7 +167,7 @@ function interruptFields(outcome: SubmitOutcome): Record<string, unknown> {
  * `submitted` is true only for a body written as a real turn; the agent-queue
  * split write is `queuedWithAgent` (in the CLI's queue, not answered yet).
  */
-export function sendChatResultFromOutcome(outcome: SubmitOutcome, messageId: string, transport: 'pty' | 'acp', targetAgent?: string): CommandResult {
+export function sendChatResultFromOutcome(outcome: SubmitOutcome, messageId: string, transport: 'pty', targetAgent?: string): CommandResult {
     switch (outcome.kind) {
         case 'delivered':
             if (outcome.route === 'agent_queue') {
@@ -176,10 +176,10 @@ export function sendChatResultFromOutcome(outcome: SubmitOutcome, messageId: str
             return {
                 success: true,
                 sent: true,
-                method: outcome.route === 'acp' ? 'acp-instance' : outcome.route === 'interrupt' ? 'pty-adapter-interrupt' : `${transport}-adapter`,
+                method: outcome.route === 'interrupt' ? 'pty-adapter-interrupt' : `${transport}-adapter`,
                 targetAgent,
                 messageId,
-                ...(outcome.route === 'acp' ? {} : { submitted: true }),
+                submitted: true,
                 ...interruptFields(outcome),
             };
         case 'queued':
@@ -198,10 +198,10 @@ export function sendChatResultFromOutcome(outcome: SubmitOutcome, messageId: str
     }
 }
 
-async function submitCliChat(h: CommandHelpers, args: any, input: InputEnvelope, provider: ProviderModule | undefined, transport: 'pty' | 'acp'): Promise<CommandResult> {
+async function submitCliChat(h: CommandHelpers, args: any, input: InputEnvelope, provider: ProviderModule | undefined, transport: 'pty'): Promise<CommandResult> {
     const sessionKey = resolveInputSessionKey(h, args, provider?.type);
     if (!sessionKey) {
-        return { success: false, error: `${transport === 'acp' ? 'ACP' : 'CLI'} instance not found for ${provider?.type || args?.agentType || 'unknown'}` };
+        return { success: false, error: `CLI instance not found for ${provider?.type || args?.agentType || 'unknown'}` };
     }
     const service = sessionInputFor(h);
     const policy = readSendPolicy(args, (flag) => LOG.debug('Command', `[send_chat] legacy '${flag}' flag mapped to policy (session ${sessionKey})`));
@@ -276,10 +276,10 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
         return { success: true, sent: true, method, targetAgent };
     };
 
-    // CLI/ACP: the one send funnel (wiring-unification D2). IDE/extension (CDP)
+    // CLI: the one send funnel (wiring-unification D2). IDE/extension (CDP)
     // sends below are a different mechanism (provider scripts in a browser page)
     // and are not part of it.
-    if (transport === 'pty' || transport === 'acp') {
+    if (transport === 'pty') {
         return submitCliChat(h, args, input, provider, transport);
     }
 
@@ -684,19 +684,7 @@ export async function handleSwitchChat(h: CommandHelpers, args: any): Promise<Co
 
 export async function handleSetMode(h: CommandHelpers, args: any): Promise<CommandResult> {
     const provider = h.getProvider(args?.agentType);
-    const transport = getTargetTransport(h, provider);
     const mode = args?.mode || 'agent';
-
-    // ACP transport
-    if (transport === 'acp') {
-        const adapter = getTargetedCliAdapter(h, args, provider?.type);
-        const acpInstance = adapter?._acpInstance;
-        if (acpInstance && typeof acpInstance.setMode === 'function') {
-                await acpInstance.setMode(mode);
-                return { success: true, mode };
-        }
-        return { success: false, error: 'ACP adapter not found' };
-    }
 
     // 1. webview setMode
     const webviewScript = h.getProviderScript('webviewSetMode', { MODE: JSON.stringify(mode) });
@@ -757,20 +745,6 @@ export async function handleChangeModel(h: CommandHelpers, args: any): Promise<C
 
     LOG.info('Command', `[change_model] model=${model} provider=${provider?.type} transport=${transport} manager=${getCurrentManagerKey(h)} providerType=${getCurrentProviderType(h)}`);
 
-    // ACP transport
-    if (transport === 'acp') {
-        const adapter = getTargetedCliAdapter(h, args, provider?.type);
-        LOG.info('Command', `[change_model] ACP adapter found: ${!!adapter}, type=${adapter?.cliType}, hasAcpInstance=${!!adapter?._acpInstance}`);
-        const acpInstance = adapter?._acpInstance;
-        if (acpInstance && typeof acpInstance.setConfigOption === 'function') {
-                await acpInstance.setConfigOption('model', model);
-                LOG.info('Command', `[change_model] Updated ACP model to ${model}`);
-                recordRuntimeAxisChange(h, args, 'model', model);
-                return { success: true, model };
-        }
-        return { success: false, error: 'ACP adapter not found' };
-    }
-
     // 1. webview setModel
     const webviewScript = h.getProviderScript('webviewSetModel', { MODEL: JSON.stringify(model) });
     if (webviewScript) {
@@ -811,35 +785,6 @@ export async function handleChangeModel(h: CommandHelpers, args: any): Promise<C
     }
 
     return { success: false, error: 'changeModel not supported by this IDE provider' };
-}
-
-export async function handleSetThoughtLevel(h: CommandHelpers, args: any): Promise<CommandResult> {
-    const configId = args?.configId;
-    const value = args?.value;
-    if (!configId || !value) return { success: false, error: 'configId and value required' };
-
-    const provider = h.getProvider(args?.agentType);
-    const transport = getTargetTransport(h, provider);
-    if (transport !== 'acp') {
-        return { success: false, error: 'set_thought_level only for ACP providers' };
-    }
-    const adapter = getTargetedCliAdapter(h, args, provider?.type);
-    const acpInstance = adapter?._acpInstance;
-    if (!acpInstance) return { success: false, error: 'ACP instance not found' };
-    if (typeof acpInstance.setConfigOption !== 'function') {
-        return { success: false, error: 'ACP setConfigOption not available' };
-    }
-
-    try {
-        await acpInstance.setConfigOption(configId, value);
-        LOG.info('Command', `[set_thought_level] ${configId}=${value} for ${provider?.type || 'unknown_acp'}`);
-        // `configId` is the ACP config CATEGORY (setConfigOption resolves the
-        // agent's own id); only the thinking-level category is the launch axis.
-        if (configId === 'thought_level') recordRuntimeAxisChange(h, args, 'thinkingLevel', value);
-        return { success: true, configId, value };
-    } catch (e: any) {
-        return { success: false, error: e?.message };
-    }
 }
 
 export async function handleResolveAction(h: CommandHelpers, args: any): Promise<CommandResult> {
@@ -1075,24 +1020,6 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
     if (isExtensionTransport(transport) && h.agentStream && h.getCdp() && h.currentSession?.sessionId) {
         const ok = await h.agentStream.resolveSessionAction(h.getCdp()!, h.currentSession.sessionId, action, button);
         return { success: ok };
-    }
-
-    // 1.5 ACP transport: resolve protocol permission request directly
-    if (transport === 'acp') {
-        const adapter = getTargetedCliAdapter(h, args, provider?.type);
-        const acpInstance = adapter?._acpInstance;
-        if (!acpInstance) return { success: false, error: 'ACP instance not found' };
-        if (typeof acpInstance.resolvePermission !== 'function') {
-            return { success: false, error: 'ACP resolvePermission not available' };
-        }
-
-        try {
-            await acpInstance.resolvePermission(action === 'approve' || action === 'accept' || action === 'always');
-            LOG.info('Command', `[resolveAction] ACP → ${action}`);
-            return { success: true, action };
-        } catch (e: any) {
-            return { success: false, error: e?.message || 'ACP resolve action failed' };
-        }
     }
 
     // 2. Webview Provider script

@@ -6,7 +6,7 @@ import { normalizePersistedSummaryMetadata } from '../providers/summary-metadata
 
 export interface SavedProviderSessionEntry {
     id: string;
-    kind: 'cli' | 'acp';
+    kind: 'cli';
     providerType: string;
     providerName: string;
     providerSessionId: string;

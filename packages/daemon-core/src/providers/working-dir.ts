@@ -1,6 +1,6 @@
 /**
  * working-dir — shared helpers for deriving display names from a session's
- * working directory. Used by CLI/ACP provider instances to build session/tab
+ * working directory. Used by CLI provider instances to build session/tab
  * titles.
  */
 

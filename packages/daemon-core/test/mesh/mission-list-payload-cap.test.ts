@@ -111,17 +111,6 @@ describe('mesh_mission_list payload cap (listMeshMissionsForTool)', () => {
         expect(result.matched).toBe(MESH_MISSION_LIST_STATUS_LIMIT + 5);
     });
 
-    it('hides completed MAGI missions by default, includes them with includeMagi', () => {
-        upsertMeshMission(meshId, { title: 'MAGI done', status: 'completed', source: 'magi' });
-        upsertMeshMission(meshId, { title: 'Coord done', status: 'completed' });
-
-        const hidden = listMeshMissionsForTool(meshId, { statuses: ['completed'] });
-        expect(hidden.missions.map(m => m.title)).toEqual(['Coord done']);
-
-        const shown = listMeshMissionsForTool(meshId, { statuses: ['completed'], includeMagi: true });
-        expect(shown.missions.map(m => m.title).sort()).toEqual(['Coord done', 'MAGI done']);
-    });
-
     it('compact (default) elides goal to a preview; verbose returns full goal', () => {
         const longGoal = 'x'.repeat(500);
         upsertMeshMission(meshId, { title: 'Live', goal: longGoal, status: 'active' });

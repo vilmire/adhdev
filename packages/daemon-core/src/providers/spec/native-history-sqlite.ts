@@ -7,11 +7,10 @@
  */
 import * as fs from 'node:fs';
 import { loadBetterSqlite3 } from '../../system/load-better-sqlite3.js';
-import type { NativeHistorySqliteSource, NativeHistoryMessageMap } from './types.js';
+import type { NativeHistorySqliteSource } from './types.js';
 import type { NativeHistoryInput, NativeHistoryResult, NativeHistoryMessage } from './native-history-types.js';
 import { expandPath, safeMtimeMs } from './native-history-paths.js';
-import { projectMessages, parseTimestamp } from './native-history-projection.js';
-import { jsonPathGet } from './native-history-jsonpath.js';
+import { projectMessages } from './native-history-projection.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // SQLite
@@ -35,65 +34,18 @@ export function executeSqlite(src: NativeHistorySqliteSource, input: NativeHisto
         // Resolve the session id the message query runs against. The `requested`
         // pin path is tried first, but a pinned id that has NO rows in the store
         // is not a real session — fall back to the newest-session `session_query`
-        // instead of returning empty. This is the hermes read_chat gap: hermes
-        // never surfaces its own provider session id to the daemon (the spec
-        // declares no session-id extraction and the adapter's screen-scrape is
-        // codex-only), so the read pipeline falls back to threading the mesh
-        // RUNTIME session id through as `providerSessionId`. That runtime id does
-        // not exist in ~/.hermes/state.db, so the old unconditional pin path ran
-        // `message_query WHERE session_id = '<runtime id>'` → 0 rows → null, and
-        // the answer (physically present under the real cli session) was never
-        // returned. Validating the pin by the spec's own `message_query` keeps
-        // this schema-agnostic and only rescues the mis-bound-id case: a genuine
-        // discovered pin (codex/claude use jsonl sources and never reach here;
-        // any real sqlite pin has rows) still short-circuits on its own rows.
-        // Expand an anchor session id to every session id in its logical
-        // cluster. When the spec declares `session_cluster_query` the anchor is
-        // run through it (bound `?`) and each returned row's FIRST column is a
-        // cluster member id — typically a WITH RECURSIVE walk up to the cluster
-        // root and back down through all descendants, so passing a root, middle,
-        // or leaf anchor all resolve the same complete set. The anchor is always
-        // included even if the query omits it (defensive) so a spec with no
-        // cluster query, or a query that returns nothing, still reads the anchor
-        // itself. Absent query → just the anchor (single-session behaviour).
-        const resolveClusterIds = (anchorId: string): string[] => {
-            const ids = new Set<string>();
-            if (anchorId) ids.add(anchorId);
-            if (src.session_cluster_query && anchorId) {
-                try {
-                    const rows: any[] = db.prepare(src.session_cluster_query).all(anchorId);
-                    for (const row of rows) {
-                        const idRaw = Object.values(row)[0];
-                        if (idRaw != null && String(idRaw)) ids.add(String(idRaw));
-                    }
-                } catch { /* fall back to anchor-only on a malformed cluster query */ }
-            }
-            return Array.from(ids);
-        };
-
-        // Read messages for an anchor's WHOLE cluster, merged and re-sorted by
-        // their mapped timestamp so bubbles from different sub-sessions interleave
-        // in true chronological order (the turn's final assistant — written into a
-        // descendant sub-session in the split-turn case — lands last). No per-session
-        // short-circuit: an anchor whose OWN row has zero messages (hermes writes a
-        // 0-message intermediate `sessions` row) still yields the cluster's rows,
-        // and the whole cluster is scanned rather than stopping at the first
-        // non-empty session. Returns null only when the ENTIRE cluster is empty,
-        // preserving the pin-validation contract below (a pin that resolves no rows
-        // anywhere is a mis-bound id and falls through to newest-session recovery).
-        const resolveMessagesFor = (anchorId: string): any[] | null => {
-            if (!anchorId) return null;
-            const clusterIds = resolveClusterIds(anchorId);
-            const merged: any[] = [];
-            for (const id of clusterIds) {
-                let rows: any[];
-                try { rows = db.prepare(src.message_query).all(id); }
-                catch { continue; }
-                if (rows && rows.length > 0) merged.push(...rows);
-            }
-            if (merged.length === 0) return null;
-            if (clusterIds.length > 1) sortRowsByMappedTimestamp(merged, src.message_map);
-            return merged;
+        // instead of returning empty (the mis-bound mesh RUNTIME-id case, where the
+        // read pipeline threads a runtime session id through as `providerSessionId`
+        // that does not exist in the provider's own store). Validating the pin by
+        // the spec's own `message_query` keeps this schema-agnostic: a genuine
+        // pin (any real sqlite session has rows) still short-circuits on its own
+        // rows.
+        const resolveMessagesFor = (sessionId: string): any[] | null => {
+            if (!sessionId) return null;
+            let rows: any[];
+            try { rows = db.prepare(src.message_query).all(sessionId); }
+            catch { return null; }
+            return rows && rows.length > 0 ? rows : null;
         };
 
         const resolveNewestSessionId = (): string => {
@@ -144,11 +96,9 @@ export function executeSqlite(src: NativeHistorySqliteSource, input: NativeHisto
         let messageRows: any[] | null;
         if (requested) {
             // Pin path: read the requested session directly and skip the
-            // newest-wins `session_query`. hermes ≥0.14 spawns a fresh
-            // `sessions` row per internal sub-session, so an unpinned
-            // `ORDER BY started_at DESC LIMIT 1` pick drifts to a different id
-            // on every read (re-bind churn + reading completion evidence from
-            // the wrong session). A pin that resolves rows is authoritative.
+            // newest-wins `session_query`, which can drift between reads when the
+            // store creates a fresh session row per internal sub-session. A pin
+            // that resolves rows is authoritative.
             messageRows = resolveMessagesFor(requested);
             if (messageRows) {
                 sessionId = requested;
@@ -192,30 +142,4 @@ export function executeSqlite(src: NativeHistorySqliteSource, input: NativeHisto
     } finally {
         try { db.close(); } catch { /* ignore */ }
     }
-}
-
-/**
- * Stable-sort merged cluster rows by their mapped timestamp so bubbles read
- * from different sub-sessions interleave in true chronological order. Uses the
- * same `message_map.timestamp_ms` jsonpath + `parseTimestamp` heuristic the
- * projection uses, so the sort key agrees with the receivedAt each row will be
- * given. Rows with no resolvable timestamp keep their pre-sort relative order
- * (stable), and equal timestamps preserve insertion order — both matter because
- * a turn's terminal bubbles can share a sub-second timestamp.
- */
-function sortRowsByMappedTimestamp(rows: any[], map: NativeHistoryMessageMap): void {
-    if (!map.timestamp_ms) return;
-    const keyed = rows.map((row, index) => {
-        const parsed = parseTimestamp(jsonPathGet(row, map.timestamp_ms as string));
-        return { row, index, ts: parsed == null ? Number.NaN : parsed };
-    });
-    keyed.sort((a, b) => {
-        const aHas = !Number.isNaN(a.ts);
-        const bHas = !Number.isNaN(b.ts);
-        if (aHas && bHas && a.ts !== b.ts) return a.ts - b.ts;
-        // Missing-timestamp rows and ties fall back to original insertion order
-        // so the sort stays stable.
-        return a.index - b.index;
-    });
-    for (let i = 0; i < keyed.length; i += 1) rows[i] = keyed[i].row;
 }

@@ -4,9 +4,9 @@
  * A coordinator-launched delegate session stays idle-LIVE after its task ends —
  * `completed` means the task finished, not that the CLI runtime exited. Existing
  * cleanup is entirely EDGE-triggered (node removal → sessionCleanupOnNodeRemove,
- * MAGI fan-out terminal → magiSessionCleanup, worktree convergence → PHASE 6.5),
+ * worktree convergence → PHASE 6.5),
  * so a one-off delegate launched on the BASE node — an investigation or docs task,
- * with no node removal, no worktree, and no MAGI marker — is never reclaimed by
+ * with no node removal and no worktree — is never reclaimed by
  * anything. Measured locally 2026-08-28: 27 live `claude` processes / 2.9GB RSS /
  * 27 session records with no TTL concept anywhere.
  *
@@ -19,8 +19,7 @@
  * evidence of what the delegate did. `mode: 'stop'` in cleanupMeshSessions keeps the
  * record; `delete_stopped` is a different contract and is deliberately NOT used here
  * (it also skips live runtimes by contract, so it would no-op on exactly the
- * idle-LIVE sessions this pass targets — the same trap documented on
- * RepoMeshMagiSessionCleanupMode).
+ * idle-LIVE sessions this pass targets).
  *
  * REUSES, rather than reinventing, three existing mechanisms:
  *  1. EXECUTION — `cleanupMeshSessions({ mode: 'stop', sessionIds })`

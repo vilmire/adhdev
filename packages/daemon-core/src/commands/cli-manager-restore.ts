@@ -106,7 +106,7 @@ export async function restoreHostedSessions(host: CliRestoreHost, records?: Host
                     // Thread the runtime's REAL past spawn time so the attach restores
                     // the per-session native-history birth-floor instead of collapsing
                     // to spawnedAtMs:0 (which disabled the antigravity per-session floor
-                    // and let MAGI replicas claim the coordinator's own conversation).
+                    // and let co-located workers claim the coordinator's own conversation).
                     // Undefined → registerCliInstance keeps the 0 fallback.
                     attachStartedAtMs: record.startedAtMs,
                     // Phase E: the provenance stored at spawn, launchedBy → 'restore'

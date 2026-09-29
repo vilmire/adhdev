@@ -89,7 +89,7 @@ describe('rc.44 run 12 — a report recorded before the idle edge commits on it,
             expect(holds.find((h) => h.reason === 'await_end')).toMatchObject({ until: T0 + 344 * S + P.awaitEndMs, onExpire: 'commit' });
             expect(holds.some((h) => h.reason === 'await_report')).toBe(false);
             expect(completionNotices(r)).toHaveLength(0);
-            expect(r.host.calls.filter((c) => c.startsWith('graph:'))).toEqual([]);
+            expect(r.host.calls.filter((c) => c.startsWith('terminal:'))).toEqual([]);
 
             // 15:12:47 — the idle end: committed from the report, NOT a second R9r.
             r.at(355 * S);
@@ -99,7 +99,7 @@ describe('rc.44 run 12 — a report recorded before the idle edge commits on it,
             expect(r.ledger.store.activeHolds('a1')).toEqual([]); // await_end released, no await_report opened
             expect(rowsOf(r.db, 'turn_end', 'a1').map((row) => row.rule)).toEqual(['R9r', 'R9t']);
             expect(rowsOf(r.db, 'committed', 'a1')).toHaveLength(1);
-            expect(r.host.calls.filter((c) => c.startsWith('graph:'))).toEqual(['graph:t1:completed']);
+            expect(r.host.calls.filter((c) => c.startsWith('terminal:'))).toEqual(['terminal:t1:completed']);
 
             // Exactly one completion notice, rendered from the REPORT's evidence row.
             const notices = completionNotices(r);

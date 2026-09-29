@@ -1,7 +1,7 @@
 /**
  * turn-ipc — local records, queue composites and active work (C-W9a):
- * record_local, queue_query, queue_enqueue, queue_enqueue_graph, queue_cancel,
- * queue_requeue, direct_dispatch_record, graph_audit_record, active_work_query,
+ * record_local, queue_query, queue_enqueue, queue_enqueue_batch, queue_cancel,
+ * queue_requeue, direct_dispatch_record, active_work_query,
  * recovery_context_query. Part of the turn-ipc wire contract (./turn-ipc.ts).
  */
 
@@ -16,7 +16,7 @@
 //
 // CONTENT BOUNDARY: like `mission_upsert`'s `goal`, `note_upsert`'s `text` and
 // `ledger_query`'s entry payloads, several fields here are free text or
-// unbounded JSON (a task message, a MAGI synthesis, a queue row with its
+// unbounded JSON (a task message, a queue row with its
 // message, an active-work record with its task summary). This is fine for the
 // same reason: local IPC between the mcp-server and the daemon on the
 // operator's own machine — never a cross-machine or server hop. Those fields
@@ -36,7 +36,6 @@ import {
     isOptionalRecord,
     isRecordArray,
     isOptionalString,
-    makeGuard,
 } from './turn-ipc-guards';
 
 /** A queue row as the daemon's `getQueue` returns it — a JSON passthrough (see the section note). */
@@ -51,7 +50,7 @@ function isQueueEntryWire(value: unknown): value is QueueEntryWire {
 // `meshRecord(meshId, kind, scalars, { local: true })` over IPC: the scalar
 // projection goes to `mesh.<id>.events` (content-free), the FULL payload lands
 // in the daemon's `mesh_local_records` (local-only). Replaces every mcp-server
-// `appendLedgerEntry` (dispatch / MAGI question+synthesis / checkpoint message /
+// `appendLedgerEntry` (dispatch / checkpoint message /
 // reconcile records). `payload` is free-form JSON (see the section note).
 
 export interface RecordLocalRequest {
@@ -116,7 +115,7 @@ export interface QueueQueryRequest {
     /** With `withCounts`: also count terminal rows whose `updated_at` is older than this age. */
     historicalOlderThanMs?: number
     /**
-     * Also return `dependencyHeads`: id/status/blockedReason/cancelReason of every
+     * Also return `dependencyHeads`: id/status/cancelReason of every
      * row the returned entries list in `dependsOn` that is not itself returned —
      * enough to annotate dependency state without reading the whole queue.
      */
@@ -127,7 +126,6 @@ export interface QueueQueryRequest {
 export interface QueueDependencyHeadWire {
     id: string
     status: string
-    blockedReason?: string
     cancelReason?: string
 }
 
@@ -155,9 +153,8 @@ export function decodeQueueQueryRequest(value: unknown): QueueQueryRequest | nul
 }
 
 function isQueueDependencyHeadWire(value: unknown): value is QueueDependencyHeadWire {
-    return isRecord(value) && hasOnlyKeys(value, ['id', 'status', 'blockedReason', 'cancelReason'])
+    return isRecord(value) && hasOnlyKeys(value, ['id', 'status', 'cancelReason'])
         && typeof value.id === 'string' && typeof value.status === 'string'
-        && (value.blockedReason === undefined || typeof value.blockedReason === 'string')
         && (value.cancelReason === undefined || typeof value.cancelReason === 'string')
 }
 
@@ -176,9 +173,8 @@ export function decodeQueueQueryResponse(value: unknown): QueueQueryResponse | n
 
 // ── queue_enqueue ──
 //
-// `enqueueTask(meshId, message, options)` + (when `decision` is given) the
-// single-surface `recordSingleEnqueueDecision` for the new task id, in the
-// daemon. `options` is `MeshEnqueueTaskOptions` (daemon-core) as a JSON
+// `enqueueTask(meshId, message, options)` in the daemon. `options` is
+// `MeshEnqueueTaskOptions` (daemon-core) as a JSON
 // passthrough; the daemon's enqueue guards (message, task-mode, difficulty,
 // dependency cycle) run unchanged and a refusal comes back as the error.
 
@@ -188,8 +184,6 @@ export interface QueueEnqueueRequest {
     /** Free text (the task message — see the section note). */
     message: string
     options?: Record<string, unknown>
-    /** `recordSingleEnqueueDecision` args minus `taskId` (the daemon fills it). */
-    decision?: Record<string, unknown>
 }
 
 export interface QueueEnqueueResponse {
@@ -197,10 +191,10 @@ export interface QueueEnqueueResponse {
 }
 
 function isQueueEnqueueRequest(value: unknown): value is QueueEnqueueRequest {
-    return isRecord(value) && hasOnlyKeys(value, ['v', 'meshId', 'message', 'options', 'decision'])
+    return isRecord(value) && hasOnlyKeys(value, ['v', 'meshId', 'message', 'options'])
         && value.v === TURN_IPC_PROTOCOL_VERSION && isEvidenceIdentifier(value.meshId)
         && typeof value.message === 'string'
-        && isOptionalRecord(value.options) && isOptionalRecord(value.decision)
+        && isOptionalRecord(value.options)
 }
 
 export function decodeQueueEnqueueRequest(value: unknown): QueueEnqueueRequest | null {
@@ -215,53 +209,41 @@ export function decodeQueueEnqueueResponse(value: unknown): QueueEnqueueResponse
     return isQueueEnqueueResponse(value) ? value : null
 }
 
-// ── queue_enqueue_graph ──
+// ── queue_enqueue_batch ──
 //
-// The atomic batch enqueue, both paths, with its audit trail — in the daemon:
-//   - `mode: 'compat'` → `enqueueTaskGraph(meshId, specs)`;
-//   - `mode: 'graph'`  → `commitMeshGraphPlan(plan)` + `recordGraphEnqueueCommitted`.
-// A failure records `recordGraphEnqueueRolledBack` (graph) or
-// `recordGraphEnqueueValidationFailed` (compat) from the catch — the daemon
-// writes the audit AFTER the failed transaction, exactly as design :752-753
-// requires — and answers `{ ok: false, refusalCode?, message, extra? }` (a
-// domain refusal is a RESULT here, not a transport error, so the caller keeps
-// its code/extra for the tool response). NOT `code`/`error`: those two keys
-// belong to the command envelope (`{ success, error, code }`) the client
-// unwraps, so a result must never reuse them.
+// The atomic multi-task enqueue in the daemon: `enqueueTaskBatch(meshId, specs)`
+// — every task inserts or none does. A refusal answers
+// `{ ok: false, refusalCode?, message, extra? }` (a domain refusal is a RESULT
+// here, not a transport error, so the caller keeps its code/extra for the tool
+// response). NOT `code`/`error`: those two keys belong to the command envelope
+// (`{ success, error, code }`) the client unwraps, so a result must never
+// reuse them.
 
-export interface QueueEnqueueGraphRequest {
+export interface QueueEnqueueBatchRequest {
     v: typeof TURN_IPC_PROTOCOL_VERSION
     meshId: string
-    mode: 'compat' | 'graph'
-    /** compat: `MeshTaskGraphEntrySpec[]` (JSON passthrough). */
-    specs?: readonly Record<string, unknown>[]
-    /** graph: `commitMeshGraphPlan` input minus `meshId` (JSON passthrough). */
-    plan?: Record<string, unknown>
-    /** Audit context: batchId / missionId / coordinatorSessionId / onDependencyFailure / orchestrationDecision / taskCount. */
-    audit?: Record<string, unknown>
+    /** `MeshTaskBatchEntrySpec[]` (daemon-core, JSON passthrough). */
+    specs: readonly Record<string, unknown>[]
 }
 
-export type QueueEnqueueGraphResponse =
-    | { ok: true; tasks: readonly QueueEntryWire[]; graph?: Record<string, unknown> }
+export type QueueEnqueueBatchResponse =
+    | { ok: true; tasks: readonly QueueEntryWire[] }
     | { ok: false; refusalCode?: string; message: string; extra?: Record<string, unknown> }
 
-function isQueueEnqueueGraphRequest(value: unknown): value is QueueEnqueueGraphRequest {
-    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'mode', 'specs', 'plan', 'audit'])) return false
-    if (value.v !== TURN_IPC_PROTOCOL_VERSION || !isEvidenceIdentifier(value.meshId)) return false
-    if (value.mode === 'compat') return isRecordArray(value.specs) && value.plan === undefined && isOptionalRecord(value.audit)
-    if (value.mode === 'graph') return isRecord(value.plan) && value.specs === undefined && isOptionalRecord(value.audit)
-    return false
+function isQueueEnqueueBatchRequest(value: unknown): value is QueueEnqueueBatchRequest {
+    return isRecord(value) && hasOnlyKeys(value, ['v', 'meshId', 'specs'])
+        && value.v === TURN_IPC_PROTOCOL_VERSION && isEvidenceIdentifier(value.meshId)
+        && isRecordArray(value.specs)
 }
 
-export function decodeQueueEnqueueGraphRequest(value: unknown): QueueEnqueueGraphRequest | null {
-    return isQueueEnqueueGraphRequest(value) ? value : null
+export function decodeQueueEnqueueBatchRequest(value: unknown): QueueEnqueueBatchRequest | null {
+    return isQueueEnqueueBatchRequest(value) ? value : null
 }
 
-function isQueueEnqueueGraphResponse(value: unknown): value is QueueEnqueueGraphResponse {
+function isQueueEnqueueBatchResponse(value: unknown): value is QueueEnqueueBatchResponse {
     if (!isRecord(value)) return false
     if (value.ok === true) {
-        return hasOnlyKeys(value, ['ok', 'tasks', 'graph']) && Array.isArray(value.tasks) && value.tasks.every(isQueueEntryWire)
-            && isOptionalRecord(value.graph)
+        return hasOnlyKeys(value, ['ok', 'tasks']) && Array.isArray(value.tasks) && value.tasks.every(isQueueEntryWire)
     }
     if (value.ok === false) {
         return hasOnlyKeys(value, ['ok', 'refusalCode', 'message', 'extra']) && typeof value.message === 'string'
@@ -270,8 +252,8 @@ function isQueueEnqueueGraphResponse(value: unknown): value is QueueEnqueueGraph
     return false
 }
 
-export function decodeQueueEnqueueGraphResponse(value: unknown): QueueEnqueueGraphResponse | null {
-    return isQueueEnqueueGraphResponse(value) ? value : null
+export function decodeQueueEnqueueBatchResponse(value: unknown): QueueEnqueueBatchResponse | null {
+    return isQueueEnqueueBatchResponse(value) ? value : null
 }
 
 // ── queue_cancel ──
@@ -347,9 +329,8 @@ export function decodeQueueRequeueResponse(value: unknown): QueueRequeueResponse
 //
 // The post-dispatch bookkeeping of `mesh_send_task`'s direct arms, in the
 // daemon: `recordDirectDispatchTask` (materialise the queue row, stamped with
-// the already-open `mesh_direct` attempt) and `recordDirectDispatchDecision`
-// (GRAPH-MEASUREMENT-DIRECT). Each step is best-effort and reported separately
-// — a dispatch that already happened must never fail on its bookkeeping.
+// the already-open `mesh_direct` attempt). Best-effort and reported — a
+// dispatch that already happened must never fail on its bookkeeping.
 
 export interface DirectDispatchRecordRequest {
     v: typeof TURN_IPC_PROTOCOL_VERSION
@@ -359,19 +340,16 @@ export interface DirectDispatchRecordRequest {
     message: string
     /** `recordDirectDispatchTask` options minus `id` (JSON passthrough). */
     task?: Record<string, unknown>
-    /** `recordDirectDispatchDecision` args minus `taskId` (JSON passthrough). */
-    decision?: Record<string, unknown>
 }
 
 export interface DirectDispatchRecordResponse {
     taskRecorded: boolean
-    decisionRecorded: boolean
 }
 
 function isDirectDispatchRecordRequest(value: unknown): value is DirectDispatchRecordRequest {
-    return isRecord(value) && hasOnlyKeys(value, ['v', 'meshId', 'taskId', 'message', 'task', 'decision'])
+    return isRecord(value) && hasOnlyKeys(value, ['v', 'meshId', 'taskId', 'message', 'task'])
         && value.v === TURN_IPC_PROTOCOL_VERSION && isEvidenceIdentifier(value.meshId) && isEvidenceIdentifier(value.taskId)
-        && typeof value.message === 'string' && isOptionalRecord(value.task) && isOptionalRecord(value.decision)
+        && typeof value.message === 'string' && isOptionalRecord(value.task)
 }
 
 export function decodeDirectDispatchRecordRequest(value: unknown): DirectDispatchRecordRequest | null {
@@ -379,52 +357,12 @@ export function decodeDirectDispatchRecordRequest(value: unknown): DirectDispatc
 }
 
 function isDirectDispatchRecordResponse(value: unknown): value is DirectDispatchRecordResponse {
-    return isRecord(value) && hasOnlyKeys(value, ['taskRecorded', 'decisionRecorded'])
-        && typeof value.taskRecorded === 'boolean' && typeof value.decisionRecorded === 'boolean'
+    return isRecord(value) && hasOnlyKeys(value, ['taskRecorded'])
+        && typeof value.taskRecorded === 'boolean'
 }
 
 export function decodeDirectDispatchRecordResponse(value: unknown): DirectDispatchRecordResponse | null {
     return isDirectDispatchRecordResponse(value) ? value : null
-}
-
-// ── graph_audit_record ──
-//
-// The coordinator-gate / node-patch provenance records the `mesh_graph_*`
-// tools write after a gate action (design :740-750), written by the daemon's
-// allow-listed recorders (mesh-graph-provenance.ts) — the mcp-server never
-// builds the record payload itself. `fields` is the recorder's argument object.
-
-export const GRAPH_AUDIT_EVENTS = ['gate_claimed', 'gate_released', 'gate_abandoned', 'node_patched'] as const
-export type GraphAuditEvent = typeof GRAPH_AUDIT_EVENTS[number]
-const isGraphAuditEvent = makeGuard(GRAPH_AUDIT_EVENTS)
-
-export interface GraphAuditRecordRequest {
-    v: typeof TURN_IPC_PROTOCOL_VERSION
-    meshId: string
-    event: GraphAuditEvent
-    fields: Record<string, unknown>
-}
-
-export interface GraphAuditRecordResponse {
-    recorded: boolean
-}
-
-function isGraphAuditRecordRequest(value: unknown): value is GraphAuditRecordRequest {
-    return isRecord(value) && hasOnlyKeys(value, ['v', 'meshId', 'event', 'fields'])
-        && value.v === TURN_IPC_PROTOCOL_VERSION && isEvidenceIdentifier(value.meshId)
-        && isGraphAuditEvent(value.event) && isRecord(value.fields)
-}
-
-export function decodeGraphAuditRecordRequest(value: unknown): GraphAuditRecordRequest | null {
-    return isGraphAuditRecordRequest(value) ? value : null
-}
-
-function isGraphAuditRecordResponse(value: unknown): value is GraphAuditRecordResponse {
-    return isRecord(value) && hasOnlyKeys(value, ['recorded']) && typeof value.recorded === 'boolean'
-}
-
-export function decodeGraphAuditRecordResponse(value: unknown): GraphAuditRecordResponse | null {
-    return isGraphAuditRecordResponse(value) ? value : null
 }
 
 // ── active_work_query ──

@@ -167,9 +167,8 @@ export type SendRefusal =
  *                   a turn is generating (`send_now`). Written, not yet answered;
  *   `interrupt`   — the turn in flight was stopped first, then this body was
  *                   written (or re-parked) as a new turn;
- *   `acp`         — handed to an ACP agent's `session/prompt`.
  */
-export type SubmitRoute = 'pty' | 'agent_queue' | 'interrupt' | 'acp'
+export type SubmitRoute = 'pty' | 'agent_queue' | 'interrupt'
 
 /** The stop key pressed by an `interrupt` submit (logs / operator display). */
 export interface SubmitInterruptDetail {

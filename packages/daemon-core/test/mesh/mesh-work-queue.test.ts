@@ -1042,7 +1042,7 @@ describe('buildMeshNodeCapabilityTags — no role= advertising (role affinity re
         expect(tags.some(t => t.startsWith('role='))).toBe(false);
     });
 
-    it('still advertises operator capability tags, os/arch/provider/converge tags', () => {
+    it('still advertises operator capability tags, os/arch/provider tags', () => {
         const tags = buildMeshNodeCapabilityTags(
             { capabilities: ['gpu', 'secrets'], policy: { providerPriority: ['claude-cli'] } },
             'claude-cli',
@@ -1050,7 +1050,6 @@ describe('buildMeshNodeCapabilityTags — no role= advertising (role affinity re
         expect(tags).toContain('gpu');
         expect(tags).toContain('secrets');
         expect(tags).toContain('provider=claude-cli');
-        expect(tags).toContain('converge=fast_forward');
         expect(tags.some(t => t.startsWith('role='))).toBe(false);
     });
 });

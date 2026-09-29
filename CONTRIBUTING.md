@@ -4,7 +4,7 @@ Thank you for your interest in contributing to ADHDev! 🦦
 
 ## 🔌 Adding a New Provider
 
-**Are you looking to add support for a new IDE, CLI, or ACP agent?**
+**Are you looking to add support for a new IDE or CLI agent?**
 
 Providers live in the external [vilmire/adhdev-providers](https://github.com/vilmire/adhdev-providers) repository. The daemon automatically downloads these providers on startup and mirrors the category-based structure in your local `~/.adhdev/providers/` directory.
 
@@ -16,7 +16,7 @@ For a deeper walkthrough, see the provider guide on [docs.adhf.dev](https://docs
 
 ## 🛠️ Contributing to ADHDev Core
 
-If you want to contribute to the core ADHDev engine (the daemon, the web dashboard, or the DevConsole), you are in the right place.
+If you want to contribute to the core ADHDev engine (the daemon or the web dashboard), you are in the right place.
 
 ### Development Setup
 
@@ -55,7 +55,6 @@ packages/
 ├── ghostty-vt-node/       # Ghostty VT bindings
 ├── web-core/              # Shared React components, pages, CSS design system
 ├── web-standalone/        # Standalone React dashboard (Vite + React)
-└── web-devconsole/        # DevConsole — provider debugging tools
 ```
 
 #### Key Source Files

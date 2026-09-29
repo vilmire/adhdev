@@ -20,34 +20,30 @@ export function getCliResumeSelectPlaceholder(t?: T): string {
   return t ? t('launch.startFresh') : 'Start fresh'
 }
 
-export type LaunchPrimaryActionKind = 'cli' | 'ide' | 'acp'
+export type LaunchPrimaryActionKind = 'cli' | 'ide'
 
 export function getLaunchPrimaryActionLabel(tOrKind: T | LaunchPrimaryActionKind, kindOrIsResume?: LaunchPrimaryActionKind | boolean, isResume = false): string {
   if (typeof tOrKind === 'function') {
     const kind = kindOrIsResume as LaunchPrimaryActionKind
     if (kind === 'cli') return getCliLaunchPrimaryActionLabel(tOrKind, isResume)
-    if (kind === 'ide') return tOrKind('launch.startIde')
-    return tOrKind('launch.startAcpSession')
+    return tOrKind('launch.startIde')
   }
   const kind = tOrKind
   const resume = kindOrIsResume as boolean | undefined
   if (kind === 'cli') return getCliLaunchPrimaryActionLabel(resume ?? false)
-  if (kind === 'ide') return 'Start IDE'
-  return 'Start ACP session'
+  return 'Start IDE'
 }
 
 export function getLaunchPrimaryBusyLabel(tOrKind: T | LaunchPrimaryActionKind, kindOrIsResume?: LaunchPrimaryActionKind | boolean, isResume = false): string {
   if (typeof tOrKind === 'function') {
     const kind = kindOrIsResume as LaunchPrimaryActionKind
     if (kind === 'cli') return getCliLaunchBusyLabel(tOrKind, isResume)
-    if (kind === 'ide') return tOrKind('launch.startingIde')
-    return tOrKind('launch.startingAcpSession')
+    return tOrKind('launch.startingIde')
   }
   const kind = tOrKind
   const resume = kindOrIsResume as boolean | undefined
   if (kind === 'cli') return getCliLaunchBusyLabel(resume ?? false)
-  if (kind === 'ide') return 'Starting IDE…'
-  return 'Starting ACP session…'
+  return 'Starting IDE…'
 }
 
 export function getHostedRuntimeReviewButtonLabel(t?: T): string {

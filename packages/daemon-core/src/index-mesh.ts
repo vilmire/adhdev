@@ -8,22 +8,9 @@
 
 // ── Mesh Config ──
 export { listMeshes, listMeshesReadOnly, getMesh, getMeshByRepo, createMesh, updateMesh, deleteMesh, addNode, removeNode, updateNode } from './config/mesh-config.js';
-export { listMagiKindPanels, listMagiKindPanelsReadOnly, getMagiKindPanel, setMagiKindPanel, removeMagiKindPanel, normalizeMagiSlots, collectIgnoredMagiSlotFields, resolveScopedMeshId } from './config/mesh-config-routing.js';
+export { resolveScopedMeshId } from './config/mesh-config-routing.js';
 export { normalizeRepoIdentity } from './config/mesh-config-store.js';
 export type { CreateMeshOptions, UpdateMeshOptions, AddNodeOptions } from './config/mesh-config.js';
-// MAGI panel / common-output / synthesis types (re-exported from the mesh-shared
-// leaf so the mcp-server — which depends only on @adhdev/daemon-core — can consume
-// them without taking a direct @adhdev/mesh-shared dependency).
-export type {
-  MagiMode, MagiTaskKind,
-  MagiSlot, MagiKindPanelMap,
-  MagiClaim, MagiClaimStance, MagiAgentResponse,
-  MagiResponseSource, MagiReplicaGitRef, MagiGitSkew, MagiSynthesizedResponse,
-  MagiClusterCategory, MagiClusterMember, MagiClaimCluster, MagiSynthesis,
-} from '@adhdev/mesh-shared';
-// Value re-export: per-replica raw-answer truncation cap (used by the mcp-server
-// collection path, which depends only on @adhdev/daemon-core).
-export { MAGI_RAW_ANSWER_CAP } from '@adhdev/mesh-shared';
 
 // ── Mesh shared daemon-id / node-id helpers (re-export so external tooling —
 //    e.g. the mcp-server, which depends only on @adhdev/daemon-core — can
@@ -126,16 +113,16 @@ export { fastForwardMeshNode } from './mesh/mesh-fast-forward.js';
 export type { MeshFastForwardNodeArgs, MeshFastForwardPlannedStep, MeshFastForwardResult } from './mesh/mesh-fast-forward.js';
 
 // ── Mesh Work Queue (GUPP) ──
-export { enqueueTask, enqueueTaskGraph, recordDirectDispatchTask, getQueue, claimNextTask, updateTaskStatus, __writeTaskStatusForTests, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, getActiveDirectDispatches, terminalizeSiblingDispatch, cancelDirectDispatchAttempts, recordMeshToolCall, assertNoDependencyCycle, hasPendingDependents, MESH_TASK_PRIORITIES } from './mesh/mesh-work-queue.js';
+export { enqueueTask, enqueueTaskBatch, recordDirectDispatchTask, getQueue, claimNextTask, updateTaskStatus, __writeTaskStatusForTests, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, getActiveDirectDispatches, terminalizeSiblingDispatch, cancelDirectDispatchAttempts, recordMeshToolCall, assertNoDependencyCycle, hasPendingDependents, MESH_TASK_PRIORITIES } from './mesh/mesh-work-queue.js';
 // C-W9a: the PURE queue helpers are exported from their leaf modules, so the
 // mcp-server can use them without value-importing the DB-backed queue module
-// (check:boundaries C8 forbids mesh-work-queue / mesh-ledger / mesh-graph-provenance there).
-export { summarizeQueueEntryInputForView, isTaskReadonly, describeTaskDependencyState, taskDependenciesSatisfied, MESH_TASK_GRAPH_MAX_TASKS, normalizeMeshTaskPriority, meshTaskPriorityRank, resolveNotBefore, meshTaskNotBeforeReady, NOT_BEFORE_RELATIVE_THRESHOLD_MS } from './mesh/mesh-task-predicates.js';
+// (check:boundaries C8 forbids mesh-work-queue / mesh-ledger there).
+export { summarizeQueueEntryInputForView, isTaskReadonly, describeTaskDependencyState, taskDependenciesSatisfied, MESH_TASK_BATCH_MAX_TASKS, normalizeMeshTaskPriority, meshTaskPriorityRank, resolveNotBefore, meshTaskNotBeforeReady, NOT_BEFORE_RELATIVE_THRESHOLD_MS } from './mesh/mesh-task-predicates.js';
 export type { MeshTaskInputSummary } from './mesh/mesh-task-predicates.js';
 export { normalizeMeshTaskMode, validateMeshTaskModeRequest, buildMeshTaskModeViolationError, formatMeshTaskModeViolations } from './mesh/mesh-task-mode-guardrail.js';
-export { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, resolveConvergeRequiredTags, providerPinsFromRequiredTags, filterProvidersByRequiredTags } from './mesh/mesh-node-capability-tags.js';
+export { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, providerPinsFromRequiredTags, filterProvidersByRequiredTags } from './mesh/mesh-node-capability-tags.js';
 export { parkTaskTargetPin, failRetentionExpiredParkedTask, getParkedTasks } from './mesh/mesh-work-queue.js';
-export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshTaskPriority, MeshWorkQueueStats, MeshQueueMutationOptions, MeshEnqueueTaskOptions, MeshTaskGraphEntrySpec, MeshTaskModeValidationResult, MeshTaskModeViolationDetail, DirectDispatchRecord, MeshToolCallRateResult, MeshTaskParking } from './mesh/mesh-work-queue.js';
+export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshTaskPriority, MeshWorkQueueStats, MeshQueueMutationOptions, MeshEnqueueTaskOptions, MeshTaskBatchEntrySpec, MeshTaskModeValidationResult, MeshTaskModeViolationDetail, DirectDispatchRecord, MeshToolCallRateResult, MeshTaskParking } from './mesh/mesh-work-queue.js';
 // PIN-PARKING: a stale target pin PARKS the task (held, still addressed, claimable by
 // nobody) instead of silently re-homing a context-bound delta onto another session.
 // The coordinator-facing exits are mesh_view_queue (parkedTasks), mesh_queue_requeue
@@ -143,123 +130,12 @@ export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshTaskPriority
 export { taskIsParked, parkedAgeMs, parkedTaskRetentionExpired, notifyCoordinatorOfParkedTaskDropped, PARKED_TASK_RETENTION_MS, PARKED_SKIP_REASON, PARK_REASON_PIN_EXPIRED, PARK_RETENTION_EXPIRED_REASON } from './mesh/mesh-task-parking.js';
 export {
     MESH_ON_DEPENDENCY_FAILURE_PUBLIC_TEXT,
-    parseOnDependencyFailurePolicy,
     resolveOnDependencyFailurePolicy,
-    projectGraphPublicPolicy,
     deriveDependencyFailures,
-    MeshGraphPolicyError,
-} from './mesh/mesh-graph-derived-failure.js';
-export type { MeshDependencyFailure, MeshGraphPolicy, MeshGraphPublicPolicyView } from './mesh/mesh-graph-derived-failure.js';
-export {
-    declareWorkspaceIntents,
-    setWorkspaceBaseRevision,
-    runWorkspaceSagaTick,
-    recoverExpiredWorkspaceSagas,
-    compensateWorkspaceIntent,
-} from './mesh/mesh-graph-workspace-saga.js';
-export {
-    classifyWorkspaceCompensationSafety,
-    WORKSPACE_DELETE_REFUSALS,
-} from './mesh/mesh-graph-workspace-safety.js';
-export {
-    deriveWorkspaceBranchIdentity,
-    deriveWorkspaceOwnerTag,
-    WORKSPACE_OWNER_GIT_CONFIG_KEY,
-    WORKSPACE_SAGA_LEASE_MS,
-} from './mesh/mesh-graph-workspace-identity.js';
-export { WorkspaceSagaPermanentError } from './mesh/mesh-graph-workspace-ports.js';
-// ── GRAPH-ORCHESTRATION Phase E: the coordinator-facing surface ──
-// C2 built claim/release/sweep but deliberately left MCP exposure to E; these are
-// the exports behind the mesh_graph_gate tool (claim / release actions).
-export {
-    claimMeshGraphGate,
-    releaseMeshGraphGate,
-    abandonMeshGraphGate,
-    sweepMeshGraphGateTimeouts,
-    coordinatorGateBlockReason,
-    coordinatorGateAbandonedReason,
-    MESH_GATE_DEFAULT_LEASE_SECONDS,
-    MESH_GATE_RELEASE_PATCH_KEYS,
-} from './mesh/mesh-graph-gates.js';
-// The coordinator node-patch + retry surface: the recovery path
-// `blockWithMaterializationError` has always promised for a node blocked on a
-// `materialization_error:*`. Exported so mesh_graph_node_patch can reach it —
-// before this, the only patch surface demanded a claimed gate.
-export { patchGraphNodeAndRetry, MESH_NODE_PATCH_KEYS } from './mesh/mesh-graph-node-patch.js';
-export type { PatchGraphNodeAndRetryInput, PatchGraphNodeAndRetryResult } from './mesh/mesh-graph-node-patch.js';
-// G4: read-only convergence evidence attached where a coordinator meets a gate
-// (claim result; opt-in graph-view augmentation). Never releases anything.
-export { collectGateConvergenceEvidence } from './mesh/mesh-graph-gate-evidence.js';
-export type { GateConvergenceEvidence, GateCommitEvidence } from './mesh/mesh-graph-gate-evidence.js';
-export type {
-    MeshGraphGateClaimInput,
-    MeshGraphGateClaimResult,
-    MeshGraphGateReleaseInput,
-    MeshGraphGateReleaseResult,
-    MeshGraphGateReleasePatch,
-    MeshGraphGateAbandonInput,
-    MeshGraphGateAbandonResult,
-    MeshGraphGateSweepResult,
-} from './mesh/mesh-graph-gates.js';
-export {
-    commitMeshGraphPlan,
-    computeMeshGraphPlanDigest,
-    isAdvancedGraphTask,
-    requestUsesGraphV2,
-    MeshGraphPlanError,
-} from './mesh/mesh-graph-plan.js';
-export type {
-    MeshGraphPlanRequest,
-    MeshGraphPlanResult,
-    MeshGraphGatePlanSpec,
-    MeshGraphTaskPlanSpec,
-} from './mesh/mesh-graph-plan.js';
-export { buildMeshGraphViews } from './mesh/mesh-graph-view.js';
-export type {
-    MeshGraphView,
-    MeshGraphNodeView,
-    MeshGraphEdgeView,
-    MeshEdgeConditionView,
-    MeshEdgeConditionClause,
-    MeshGraphGateView,
-    MeshGraphWorkspaceView,
-    BuildMeshGraphViewOptions,
-} from './mesh/mesh-graph-view.js';
-export {
-    recordGraphEnqueueCommitted,
-    recordGraphEnqueueValidationFailed,
-    recordGraphEnqueueRolledBack,
-    recordSingleEnqueueDecision,
-    // GRAPH-MEASUREMENT-DIRECT — the direct dispatch surface's decision record.
-    recordDirectDispatchDecision,
-    recordGraphGateClaimed,
-    recordGraphGateReleased,
-    recordGraphGateAbandoned,
-    recordGraphNodePatched,
-    recordGraphGateExpired,
-} from './mesh/mesh-graph-provenance.js';
-// C-W9a: the pure decision vocabulary from its leaf (see the queue-helper note above).
-export {
-    normalizeOrchestrationDecision,
-    MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
-    MESH_UNSANCTIONED_DIRECT_HINT,
-    MESH_VALID_SINGLE_REASONS,
-    MESH_SUPERSEDED_SINGLE_REASONS,
-    MESH_DIRECT_REASONS,
-    MESH_VALID_DIRECT_REASONS,
-    MESH_UNSANCTIONED_DIRECT_REASONS,
-} from './mesh/mesh-orchestration-decision.js';
-export type { GraphEnqueueProvenance } from './mesh/mesh-graph-provenance.js';
-export type {
-    NormalizedOrchestrationDecision,
-    OrchestrationDecisionNormalizeResult,
-} from './mesh/mesh-orchestration-decision.js';
-export type { MeshGraphGateRow, MeshTaskGraphNodeRow, MeshTaskGraphRow } from './mesh/mesh-graph-types.js';
-export type { GraphWorkspaceDeclaration, WorkspaceSagaTickResult, WorkspaceSagaStepResult } from './mesh/mesh-graph-workspace-saga.js';
-export type { WorkspaceDeleteRefusal, WorkspaceInspectReport, WorkspaceSafetySnapshot } from './mesh/mesh-graph-workspace-safety.js';
-export type { WorkspaceSagaPorts } from './mesh/mesh-graph-workspace-ports.js';
+} from './mesh/mesh-dependency-failure.js';
+export type { MeshDependencyFailure, MeshOnDependencyFailure } from './mesh/mesh-dependency-failure.js';
 // Shared node-health resolver + launch gate (single source of truth for the auto-launch
-// gate AND the MAGI fan-out planner — they must agree on what "launchable health" means).
+// gate and the other launch-readiness readers — they must agree on what "launchable health" means).
 export { deriveMeshNodeHealthFromGit, resolveEffectiveMeshNodeHealth, isMeshNodeHealthLaunchable, isMeshNodeFreshEnoughToLaunch } from './mesh/mesh-node-identity.js';
 export { applyInlineMeshBranchConvergence } from './mesh/mesh-branch-convergence.js';
 // GIT-GATE (owner-requested follow-up to H1, wiring-unification): the SAME dirty/stale
@@ -275,8 +151,6 @@ export type { MeshActiveWorkRecord, MeshActiveWorkStatus, MeshActiveWorkSummary,
 export { maybeInjectIdleActiveMissionReminder, shouldFireIdleReminder, buildIdleReminderMessage, missionSetHash, IDLE_REMINDER_DEBOUNCE_MS } from './mesh/mesh-idle-reminder.js';
 export { buildMeshAsyncRefineJobs, summarizeMeshAsyncRefineJobs, STALE_TERMINAL_REFINE_WINDOW_MS, RECENT_TERMINAL_REFINE_CAP } from './mesh/mesh-refine-status.js';
 export type { MeshAsyncRefineJobStatus, MeshAsyncRefineJobSummary, MeshAsyncRefineJobsSummary } from './mesh/mesh-refine-status.js';
-export { buildMeshMagiActivity, summarizeMeshMagiActivity, getMeshMagiActivityByGroup, STALE_MAGI_WINDOW_MS, RECENT_MAGI_CAP, MAGI_NEEDS_VERIFICATION_PREVIEW_CAP } from './mesh/mesh-magi-status.js';
-export type { MeshMagiActivityStatus, MeshMagiActivitySummary, MeshMagiActivitySummaryFold, MeshMagiNeedsVerificationItem } from './mesh/mesh-magi-status.js';
 
 // ── Mesh Scheduling Runtime (observability projection) ──
 export { buildMeshSchedulingRuntime } from './mesh/mesh-scheduling-runtime.js';

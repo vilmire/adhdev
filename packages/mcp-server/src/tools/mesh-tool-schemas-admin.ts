@@ -8,8 +8,8 @@ import { enumOf, MESH_SESSION_CLEANUP_MODES } from '@adhdev/mesh-shared';
 
 export const MESH_MISSION_UPSERT_TOOL = {
     name: 'mesh_mission_upsert',
-    description: 'Create or update a persistent mission record so the plan survives coordinator restarts. Optional — a mesh_enqueue_batch does not require a mission; use one when you want the plan tracked as a durable, named unit of work. '
-        + 'Recommended for multi-task work: create a mission first, then submit that plan as ONE mesh_enqueue_batch carrying the mission_id (a top-level mission_id applies to every entry; mesh_enqueue_task is the single-step fallback). A one-off graph with no need for that tracking can call mesh_enqueue_batch directly without a mission_id. Update status to completed/abandoned when the outcome is decided. Progress is derived from task statuses — there is no separate progress field. '
+    description: 'Create or update a persistent mission record so the plan survives coordinator restarts. Optional — tasks do not require a mission; use one when you want the plan tracked as a durable, named unit of work. '
+        + 'Recommended for multi-task work: create a mission first, then attach every task to it with mission_id (mesh_enqueue_task, or a top-level mission_id on mesh_enqueue_batch, which applies to every entry). Update status to completed/abandoned when the outcome is decided. Progress is derived from task statuses — there is no separate progress field. '
         + 'Single mission: pass title (and optionally mission_id to update an existing one). '
         + 'Bulk status transition (e.g. one-time stale cleanup): pass mission_ids (array) + status to apply that status to many missions at once; title/goal are ignored and a per-mission result array is returned. mission_ids takes precedence over mission_id when both are given.',
     inputSchema: {
@@ -51,8 +51,6 @@ export const MESH_MISSION_LIST_TOOL = {
         + 'keeps the payload bounded as a mesh accumulates hundreds of finished missions. To read finished missions in full, pass '
         + '`status` explicitly (e.g. ["completed"]); those are returned in detail but still capped by `limit` (default 50), with '
         + 'overflow reported as truncated=true + overflowIds. '
-        + 'Completed MAGI cross-verification missions (one auto-created per mesh_magi_review) are hidden by default to keep the list '
-        + 'coordinator-focused — in-progress MAGI missions still show; pass include_magi=true to list completed ones too. '
         + 'Per-mission stats (ledger-scanned durations/attempts) are OMITTED by default — the `tasks` aggregate carries progress; '
         + 'pass include_stats=true (or verbose=true) to attach them. '
         + 'Compact (default) elides the full goal to a capped preview; pass verbose=true for full goal text. Read-only.',
@@ -71,7 +69,6 @@ export const MESH_MISSION_LIST_TOOL = {
             },
             verbose: { type: 'boolean', description: 'Return full goal text instead of a capped preview (also attaches stats). Defaults to false (compact).' },
             include_stats: { type: 'boolean', description: 'Attach per-mission ledger stats (durations/attempts). Off by default; tasks aggregate is usually enough.' },
-            include_magi: { type: 'boolean', description: 'Include completed MAGI cross-verification missions (hidden by default). Defaults to false.' },
         },
     },
 };
@@ -212,7 +209,7 @@ export const MESH_CLONE_NODE_TOOL = {
     name: 'mesh_clone_node',
     description: 'Create a new worktree-based node from an existing node for isolated parallel work. '
         + 'Creates a git worktree on a new branch so multiple tasks can run on separate branches simultaneously. This writes a branch, worktree and mesh node: call mesh_create with mode="plan", operation=clone_worktree and obtain explicit user approval first; the implementation re-runs the clean/source preflight. '
-        + 'Call this directly when you need the worktree NOW and will target it right away. When the worktree only exists to host a plan you already know, that plan can be submitted as one mesh_enqueue_batch: declare the worktree in the top-level `workspaces` array and point its tasks at it with `workspace_ref`, so preparation happens as part of the graph instead of a manual clone followed by step-by-step enqueues.',
+        + 'Then pin the tasks that should run there with target_node_id (the new node id in the response).',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -303,7 +300,7 @@ export const MESH_LEDGER_QUERY_TOOL = {
     inputSchema: {
         type: 'object' as const,
         properties: {
-            kind: { type: 'string', description: 'Filter by entry kind. Accepts one kind, or a comma-separated list (e.g. "task_failed,task_stalled"). Valid kinds include: task_dispatched, task_completed, task_failed, task_stalled, task_approval_needed, session_launched, session_stopped, checkpoint_created, node_cloned, node_joined, node_removed, direct_fast_forward, ledger_reconciled, event_held, mission_created, mission_status_changed, mission_goal_updated, magi_dispatched, magi_synthesis.' },
+            kind: { type: 'string', description: 'Filter by entry kind. Accepts one kind, or a comma-separated list (e.g. "task_failed,task_stalled"). Valid kinds include: task_dispatched, task_completed, task_failed, task_stalled, task_approval_needed, session_launched, session_stopped, checkpoint_created, node_cloned, node_joined, node_removed, direct_fast_forward, ledger_reconciled, event_held, mission_created, mission_status_changed, mission_goal_updated.' },
             since: { type: 'string', description: 'Only return entries at/after this time. ISO-8601 string (e.g. "2026-07-05T00:00:00Z") or epoch-milliseconds. Omit for no lower bound.' },
             node: { type: 'string', description: 'Only return entries originating from this node (nodeId). Matched by daemon-id equivalence, so any identifier form (mach_X / daemon_mach_X) resolves.' },
             tail: { type: 'number', description: 'Return only the most recent N matching entries (default 50; clamped to 500).' },
@@ -315,7 +312,7 @@ export const MESH_LEDGER_QUERY_TOOL = {
 export const MESH_NOTE_TOOL = {
     name: 'mesh_note',
     description: 'Record or retract a durable operating note for this mesh — a runtime-accumulated lesson every future coordinator inherits. '
-        + 'Provider-neutral: it persists in the mesh ledger and is injected into every coordinator\'s system prompt at launch (codex, hermes, antigravity, claude alike). Select with `action` (REQUIRED):\n'
+        + 'Provider-neutral: it persists in the mesh ledger and is injected into every coordinator\'s system prompt at launch (codex, antigravity, claude alike). Select with `action` (REQUIRED):\n'
         + '• record — when you learn something durable (a provider quirk, a pattern to avoid, a recovery lesson), and before closing a mission that taught one. Keep each note to one concrete, reusable fact; not for transient task status (use missions/checkpoints).\n'
         + '• forget — when an injected note is stale or wrong. Appends a tombstone so the note(s) stop riding into future prompts; history is preserved (append-only). Target by note_id (exact) or by exact text; provide at least one.',
     inputSchema: {

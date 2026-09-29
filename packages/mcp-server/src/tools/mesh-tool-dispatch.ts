@@ -37,7 +37,6 @@ import type { MeshContext } from './mesh-tools.js';
 import {
     meshStatus, meshRoutePreview, meshListNodes, meshSendTask, meshReadChat,
     meshEnqueueTask, meshEnqueueBatch, meshViewQueue, meshQueueCancel, meshQueueRequeue,
-    meshGraphView, meshGraphGate, meshGraphNodePatch,
     meshReadDebug, meshReadTerminal, meshSendKeys,
     meshLaunchSession, meshGitStatus, meshReadNodeLogs, meshFastForwardNode, meshRestartDaemon,
     meshCheckpoint, meshApprove, meshAnswerQuestion, meshListPendingApprovals,
@@ -47,8 +46,7 @@ import {
     meshCleanupSessionsOrPrune, meshTaskHistory, meshLedgerQuery,
     meshNote, meshReconcileLedger,
     meshMissionUpsert, meshMissionList, meshReviewInbox,
-    meshMagiReview, meshMagiCollect,
-    meshMagiKindPanel, meshNodeSlots, meshCoordinatorPromptAppend,
+    meshNodeSlots, meshCoordinatorPromptAppend,
 } from './mesh-tools.js';
 
 /**
@@ -70,9 +68,6 @@ export const MESH_TOOL_DISPATCH: Readonly<Record<CanonicalMeshToolName, MeshTool
     mesh_enqueue_task: (ctx, a) => meshEnqueueTask(ctx, a as any),
     mesh_enqueue_batch: (ctx, a) => meshEnqueueBatch(ctx, a as any),
     mesh_view_queue: (ctx, a) => meshViewQueue(ctx, a as any),
-    mesh_graph_view: (ctx, a) => meshGraphView(ctx, a as any),
-    mesh_graph_gate: (ctx, a) => meshGraphGate(ctx, a),
-    mesh_graph_node_patch: (ctx, a) => meshGraphNodePatch(ctx, a as any),
     mesh_queue_cancel: (ctx, a) => meshQueueCancel(ctx, a as any),
     mesh_queue_requeue: (ctx, a) => meshQueueRequeue(ctx, a as any),
     mesh_send_task: (ctx, a) => meshSendTask(ctx, a as any),
@@ -107,9 +102,6 @@ export const MESH_TOOL_DISPATCH: Readonly<Record<CanonicalMeshToolName, MeshTool
     mesh_mission_upsert: (ctx, a) => meshMissionUpsert(ctx, a as any),
     mesh_mission_list: (ctx, a) => meshMissionList(ctx, a as any),
     mesh_review_inbox: (ctx, a) => meshReviewInbox(ctx, a as any),
-    mesh_magi_review: (ctx, a) => meshMagiReview(ctx, a as any),
-    mesh_magi_collect: (ctx, a) => meshMagiCollect(ctx, a as any),
-    mesh_magi_kind_panel: (ctx, a) => meshMagiKindPanel(ctx, a),
     mesh_node_slots: (ctx, a) => meshNodeSlots(ctx, a),
     mesh_coordinator_prompt_append: (ctx, a) => meshCoordinatorPromptAppend(ctx, a),
 };

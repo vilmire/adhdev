@@ -77,9 +77,9 @@ describe('command layer passes only REAL DaemonComponents to components-typed me
         }
       }
     }
-    // The known command-layer sites (trigger_mesh_queue ×2, mesh-graph-ipc, mesh_forward_event,
+    // The known command-layer sites (trigger_mesh_queue ×2, mesh_forward_event,
     // clone_mesh_node bootstrap emit, refine single + batch) — fewer means the scan broke.
-    expect(calls.length).toBeGreaterThanOrEqual(7)
+    expect(calls.length).toBeGreaterThanOrEqual(6)
     const offenders = calls.filter(c => !ALLOWED_FIRST_ARGS.has(c.arg))
     expect(offenders).toEqual([])
   })

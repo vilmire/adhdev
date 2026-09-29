@@ -26,7 +26,6 @@ import type {
     ProviderState,
     IdeProviderState,
     CliProviderState,
-    AcpProviderState,
 } from '../providers/provider-instance.js';
 
 // ─── Server WS content boundary ───────────────────────
@@ -321,10 +320,8 @@ export class DaemonStatusReporter {
         {
             let ideCount = 0;
             let cliCount = 0;
-            let acpCount = 0;
             const ideParts: string[] = [];
             const cliParts: string[] = [];
-            const acpParts: string[] = [];
             for (const s of allStates) {
                 if (s.category === 'ide') {
                     const ide = s as IdeProviderState;
@@ -334,13 +331,9 @@ export class DaemonStatusReporter {
                     const cli = s as CliProviderState;
                     cliCount++;
                     cliParts.push(`${cli.type}(${cli.status})`);
-                } else if (s.category === 'acp') {
-                    const acp = s as AcpProviderState;
-                    acpCount++;
-                    acpParts.push(`${acp.type}(${acp.status})`);
                 }
             }
-            const baseSummary = `IDE: ${ideCount} [${ideParts.join(', ')}] CLI: ${cliCount} [${cliParts.join(', ')}] ACP: ${acpCount} [${acpParts.join(', ')}]`;
+            const baseSummary = `IDE: ${ideCount} [${ideParts.join(', ')}] CLI: ${cliCount} [${cliParts.join(', ')}]`;
             if (baseSummary !== this.lastStatusSummary) {
                 this.lastStatusSummary = baseSummary;
                 LOG.info('StatusReport', `→Server ${baseSummary}`);

@@ -148,7 +148,6 @@ const CASES: Array<{
     files: [join('.grok', 'auth.json')],
   },
   { providerType: 'kimi', dirs: ['credentials', 'oauth', 'sessions'], files: ['config.toml'] },
-  { providerType: 'hermes-cli', dirs: ['sessions'], files: ['.env'] },
 ]
 
 function fakeRealHome(providerType: string, dirs: string[], files: string[]): { realHome: string; sourceBase: string } {

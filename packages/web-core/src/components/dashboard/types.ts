@@ -103,6 +103,3 @@ export const isCliTerminalConv = (
 ) =>
     isCliConv(conv) && getCliConversationViewMode(conv, override) === 'terminal';
 
-/** ACP detection: ACP transport */
-export const isAcpConv = (conv: { transport?: string }) =>
-    conv.transport === 'acp';

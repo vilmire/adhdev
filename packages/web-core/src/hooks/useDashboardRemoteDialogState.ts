@@ -4,7 +4,7 @@ import type { DaemonData } from '../types'
 import { getConversationRemoteTabKey } from '../components/dashboard/conversation-selectors'
 import type { ActiveConversation } from '../components/dashboard/types'
 import { getPreferredConversationForIde } from '../components/dashboard/conversation-sort'
-import { isAcpConv, isCliConv } from '../components/dashboard/types'
+import { isCliConv } from '../components/dashboard/types'
 
 interface UseDashboardRemoteDialogStateOptions {
     isMobile: boolean
@@ -33,7 +33,7 @@ export function useDashboardRemoteDialogState({
     const requestedRemoteConversation = useMemo(() => {
         if (isMobile || !requestedRemoteTabTarget) return null
         const target = resolveConversationByTarget(requestedRemoteTabTarget)
-        return target && !isCliConv(target) && !isAcpConv(target) ? target : null
+        return target && !isCliConv(target) ? target : null
     }, [isMobile, requestedRemoteTabTarget, resolveConversationByTarget])
 
     const remoteDialogConv = useMemo(() => {

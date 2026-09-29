@@ -7,8 +7,7 @@
 // auto-prune, unresolved-forward retry) are gone — the turn ledger's scheduler
 // (`turn-ledger/scheduler.ts`), the `turn.deliver` cursor and topic replication
 // replace them. What is left here holds NO turn or hold logic: config/cache
-// sync, graph gate timeouts / staleness / workspace-saga leases, the DS3
-// coordinator catch-up, disk + worktree retention and the idle-session reaper.
+// sync, the queue dependency stall sweep, the DS3 coordinator catch-up, disk + worktree retention and the idle-session reaper.
 // The queue claim (old PHASE 3) is exported for the scheduler's claim phase,
 // because a ledger reclaim returns a row to `pending` and the claim must run
 // in the same tick.
@@ -31,12 +30,7 @@ import { runWorktreeNodeRetentionTick, type WorktreeRetentionDeps } from './mesh
 import { runIdleSessionReapPass, type IdleSessionReaperDeps } from './mesh-idle-session-reaper.js';
 import { resolveWorktreeNodeRetentionGraceMs } from './mesh-retention-config.js';
 import { runPendingCoordinatorCatchupScan } from './mesh-auto-fast-forward.js';
-import { recoverExpiredWorkspaceSagas } from './mesh-graph-workspace-saga.js';
-import { createDefaultWorkspaceSagaPorts } from './mesh-graph-workspace-ports.js';
-import { sweepMeshGraphGateTimeouts } from './mesh-graph-gates.js';
-import { sweepMeshGraphStaleness } from './mesh-graph-staleness.js';
-import { sweepMeshGraphStalls } from './mesh-graph-stall.js';
-import { recordGraphGateExpired } from './mesh-graph-provenance.js';
+import { sweepQueueDependencyStalls } from './mesh-queue-dependency-notice.js';
 import { readText } from '@adhdev/mesh-shared';
 
 /** Disk/worktree retention: artifacts age in days and the fs/git walk is heavy — hourly. */
@@ -124,63 +118,15 @@ export async function runMeshHousekeepingTick(
     }
 
     if (store) {
-        // ── graph coordinator-gate deadline sweep ──
-        // Can only EXPIRE a gate, never release one: elapsed time is not
-        // completion evidence. A lapsed lease is reported, never acted on.
+        // ── queue dependency stall sweep ──
+        // A pending task whose depends_on names a failed/cancelled task can never
+        // start on its own: page the coordinator once per dead dependency (the
+        // eventId dedupes against the notice written when the dependency ended).
         for (const { mesh } of hosted) {
             try {
-                const gateStore = store.graphStore();
-                const preSweep = new Map(
-                    gateStore.listGatesByMesh(mesh.id, ['awaiting_coordinator', 'claimed'])
-                        .map(g => [g.gateId, { graphId: g.graphId, onTimeout: g.onTimeout, deadlineAt: g.deadlineAt }]),
-                );
-                const swept = sweepMeshGraphGateTimeouts(mesh.id);
-                for (const gateId of swept.expiredGateIds) {
-                    const meta = preSweep.get(gateId);
-                    recordGraphGateExpired(mesh.id, {
-                        gateId,
-                        graphId: meta?.graphId,
-                        policy: meta?.onTimeout ?? 'hold',
-                        deadlineAt: meta?.deadlineAt,
-                    });
-                }
+                sweepQueueDependencyStalls(mesh.id);
             } catch (e: any) {
-                LOG.warn('MeshHousekeeping', `Graph gate sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
-            }
-        }
-
-        // ── graph/gate staleness reminders (read-only visibility) ──
-        for (const { mesh } of hosted) {
-            try {
-                sweepMeshGraphStaleness(mesh.id);
-            } catch (e: any) {
-                LOG.warn('MeshHousekeeping', `Graph staleness sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
-            }
-            // N(c): an `active` graph where nothing can move pages once per stuck state.
-            try {
-                sweepMeshGraphStalls(mesh.id);
-            } catch (e: any) {
-                LOG.warn('MeshHousekeeping', `Graph stall sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
-            }
-        }
-
-        // ── workspace-saga lease recovery ──
-        const router = components.router;
-        const workspacePorts = createDefaultWorkspaceSagaPorts(router
-            ? {
-                registry: {
-                    getCachedInlineMesh: meshId => router.getCachedInlineMesh(meshId),
-                    updateInlineMeshNode: (meshId, m, node) => router.updateInlineMeshNode(meshId, m, node),
-                    removeInlineMeshNode: (meshId, m, nodeId) => router.removeInlineMeshNode(meshId, m, nodeId),
-                    invalidateAggregateMeshStatus: meshId => router.invalidateAggregateMeshStatus(meshId),
-                },
-            }
-            : {});
-        for (const { mesh } of hosted) {
-            try {
-                await recoverExpiredWorkspaceSagas(mesh.id, workspacePorts);
-            } catch (e: any) {
-                LOG.warn('MeshHousekeeping', `Workspace saga recover failed for mesh ${mesh.id}: ${e?.message || e}`);
+                LOG.warn('MeshHousekeeping', `Queue dependency stall sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
             }
         }
     }
@@ -196,8 +142,7 @@ export async function runMeshHousekeepingTick(
             LOG.warn('MeshHousekeeping', `Disk retention sweep failed: ${e?.message || e}`);
         }
         // mesh-runtime.db row retention (tool-call log, terminal queue rows,
-        // terminal session deliveries, terminal mesh turn attempts, graph
-        // control plane). Its hourly caller went with the retired reconcile
+        // terminal session deliveries, terminal mesh turn attempts). Its hourly caller went with the retired reconcile
         // loop (C-W3/C-W4, 2ddca06f) — re-homed here on the same cadence (C-W8).
         // Best-effort by construction (never throws).
         pruneMeshRuntimeRetention();

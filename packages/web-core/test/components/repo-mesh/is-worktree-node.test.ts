@@ -1,11 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { isWorktreeNode } from '../../../src/pages/repo-mesh/MeshNodeList'
 
-// isWorktreeNode is the SHARED guard behind two independent worktree-exclusion
-// sites: MeshNodeList filters worktree nodes out of the mesh settings list
-// entirely, and MagiKindPanelEditor disables them (rather than hiding them) as
-// MAGI slot machine options so an ephemeral worktree can't be newly assigned.
-// A regression here breaks both call sites identically.
+// isWorktreeNode is the guard MeshNodeList uses to filter worktree nodes out of
+// the mesh settings list entirely.
 describe('isWorktreeNode', () => {
     it('flags a node with isLocalWorktree true', () => {
         expect(isWorktreeNode({ isLocalWorktree: true })).toBe(true)

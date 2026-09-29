@@ -13,7 +13,6 @@ import { TranscriptSignalSource } from './transcript-signal-source.js';
 import { resolveBusyLeaseGate } from './busy-lease-gate.js';
 import type { SignalSnapshot } from './spec/signal-envelope.js';
 import { MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS } from './cli-provider-instance-types.js';
-import { adapterTurnStartedAt } from './adapter-turn-clock.js';
 import type { CliProviderInstance } from './cli-provider-instance.js';
 
 /** The CliProviderInstance members these functions read or call (compiler-checked; no cast). */
@@ -55,16 +54,8 @@ export function publishTranscriptSignalObservation(host: TranscriptSignalHost, m
                 // Choke point: class/timing come from the P0 profile
                 // resolver, never from raw predicates or provider names.
                 profile: resolveTranscriptAuthorityProfile(host.provider),
-                turnStartedAt: () => {
-                    const t = adapterTurnStartedAt(host.adapter);
-                    if (t > 0) return t;
-                    // Mesh fallback: for an emitsPtyTurnEvents=false worker
-                    // (idle→idle collapse) currentTurnStartedAt may never
-                    // bind; scope to the task injection instead — the SAME
-                    // boundary the stall-path rescue uses, so the signal and
-                    // the rescue's payload extraction agree on the turn.
-                    return host.meshTaskInjectedAt > 0 ? host.meshTaskInjectedAt : undefined;
-                },
+                // Scope to the mesh task injection instant (no adapter turn clock).
+                turnStartedAt: () => host.meshTaskInjectedAt > 0 ? host.meshTaskInjectedAt : undefined,
                 // Reuse the exact completion machinery (I1) for the
                 // final_assistant_present signal rather than duplicating
                 // the message scan.
@@ -189,42 +180,6 @@ export function nativeTurnTerminalSummary(host: TranscriptSignalHost, turnStarte
     const marker = host.nativeTurnTerminalMarker(turnStartedAt);
     const text = typeof marker?.summary === 'string' ? marker.summary.trim() : '';
     return text || undefined;
-}
-
-/**
- * COMPLETION-WEAK-REARM (fix1): the double-emit guard shared by the transcript
- * re-emit paths (flushMeshCompletionBeforeCleanup,
- * tryReconcileTranscriptCompletionForStall). Returns true when a re-emit for `taskId`
- * must be SUPPRESSED because this turn's completion already fired with strong evidence.
- *
- * The defect this replaces: the old guard short-circuited on ANY prior emit for the
- * taskId, regardless of its evidence. After a WEAK completion (CANON-C decoupled-immediate
- * missing_final_assistant, or a startup-grace fast-collapse synth), the same session
- * reaching a GENUINE idle later (final assistant present) was silently swallowed — the
- * worker never emitted the genuine completion and the coordinator held on the acked-death
- * deadline (8 min).
- *
- * New behavior:
- *   • no latch / taskId mismatch → NOT suppressed (the caller's own evidence gate runs).
- *   • prior emit was GENUINE (not weak) → SUPPRESSED (single-shot; a clean completion is
- *     never re-emitted).
- *   • prior emit was WEAK → re-arm ONE-SHOT, but only across a real generating→idle
- *     transition: require busyEpoch to have advanced past the weak emit's epoch, so a
- *     static idle screen cannot re-fire the same weak frame. The genuine re-emit passes
- *     evidenceLevel:'reported' (non-weak), overwriting the latch → any subsequent idle
- *     tick hits the now-genuine latch and is suppressed. Never a third emit.
- */
-export function shouldSuppressCompletionReEmit(host: TranscriptSignalHost, taskId: string | undefined): boolean {
-    const latch = host.lastEmittedCompletion;
-    if (!latch || latch.taskId !== (taskId ?? '')) return false;
-    // Prior emit was genuine → single-shot, never re-emit.
-    if (!latch.weak) return true;
-    // Prior emit was weak → allow the genuine re-emit ONLY once a real generating phase
-    // opened after the weak emit (busyEpoch advanced). Otherwise a static idle frame would
-    // re-fire the same weak completion. Bounded to a single re-arm by the latch overwrite
-    // the genuine re-emit performs (weak=false), so the next tick is suppressed above.
-    if (host.busyEpoch <= latch.emittedAtEpoch) return true;
-    return false;
 }
 
 /**

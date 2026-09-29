@@ -1,7 +1,7 @@
 /**
  * Provider Version Detection & Archiving
  *
- * Detects installed versions for all provider categories (IDE, CLI, ACP, Extension).
+ * Detects installed versions for all provider categories (IDE, CLI, Extension).
  * Archives version history to <configDir>/version-history.json for compatibility tracking.
  *
  * Usage:
@@ -300,8 +300,8 @@ export async function detectAllVersions(
         }
       }
 
-    } else if (provider.category === 'cli' || provider.category === 'acp') {
-      // CLI/ACP: check binary
+    } else if (provider.category === 'cli') {
+      // CLI: check binary
       const bin = provider.binary || provider.spawn?.command || provider.cli || provider.type;
       const binPath = findBinary(bin);
       info.installed = !!binPath;

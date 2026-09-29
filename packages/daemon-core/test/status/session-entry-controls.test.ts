@@ -32,16 +32,14 @@ describe('buildSessionEntries control schema output', () => {
         providerControls: undefined,
       } as any,
       {
-        category: 'acp',
-        type: 'codex-acp',
-        name: 'Codex ACP',
+        category: 'cli',
+        type: 'codex-cli',
+        name: 'Codex CLI',
         instanceId: 'acp-1',
         status: 'idle',
         workspace: '/repo',
         currentModel: 'gpt-5',
         currentPlan: 'plan',
-        acpConfigOptions: [{ category: 'model', configId: 'model', options: [{ value: 'gpt-5', name: 'GPT-5' }] }],
-        acpModes: [{ id: 'plan', name: 'Plan' }],
         activeChat: null,
         controlValues: {},
         providerControls: undefined,
@@ -60,8 +58,6 @@ describe('buildSessionEntries control schema output', () => {
     expect(acpSession?.providerControls).toBeUndefined()
     expect(acpSession).not.toHaveProperty('currentModel')
     expect(acpSession).not.toHaveProperty('currentPlan')
-    expect(acpSession).not.toHaveProperty('acpModes')
-    expect(acpSession).not.toHaveProperty('acpConfigOptions')
   })
 
   it('preserves explicit provider controls without synthesizing replacements', () => {
@@ -120,9 +116,9 @@ describe('buildSessionEntries control schema output', () => {
         ],
       } as any,
       {
-        category: 'acp',
-        type: 'claude-acp',
-        name: 'Claude ACP',
+        category: 'cli',
+        type: 'claude-cli',
+        name: 'Claude CLI',
         instanceId: 'acp-empty-controls',
         status: 'idle',
         workspace: '/repo',
@@ -142,9 +138,9 @@ describe('buildSessionEntries control schema output', () => {
   it('passes through flexible summary metadata without reintroducing top-level current fields', () => {
     const sessions = buildSessionEntries([
       {
-        category: 'acp',
-        type: 'codex-acp',
-        name: 'Codex ACP',
+        category: 'cli',
+        type: 'codex-cli',
+        name: 'Codex CLI',
         instanceId: 'acp-summary',
         status: 'idle',
         workspace: '/repo',

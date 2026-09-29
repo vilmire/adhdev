@@ -15,7 +15,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 
 import { meshEnqueueTask, meshSendTask } from '../src/tools/mesh-tools.js';
 import { MESH_SEND_TASK_TOOL } from '../src/tools/mesh-tool-schemas-session.js';
@@ -127,33 +126,6 @@ test('mesh_enqueue_task carries the supplied difficulty onto the queued task', a
   assert.equal(res.success, true);
   const [task] = getQueue(meshId);
   assert.equal(task.difficulty, 'difficult');
-});
-
-// ─── Stage 2: the MAGI decision ───────────────────────────────────────────────
-
-test('MAGI fan-out stamps the fixed freeform sentinel — it is not exempted from the guard', () => {
-  // The decision (see the rationale comment at the enqueueTask call in mesh-tools-magi.ts):
-  // MAGI routes on a DIFFERENT axis — each replica is hard-pinned to a (node, provider)
-  // slot by the kind-panel via requiredTags/targetNodeId, and its model comes from that
-  // slot. A difficulty would be inert at best and would fight the panel's slot selection
-  // at worst. But rather than carve a hole in the guard, MAGI passes 'freeform' — a real
-  // member of the axis meaning "no difficulty-based constraint".
-  //
-  // Pinned as source text because the fan-out needs a live multi-node panel to execute;
-  // what matters is that the call site supplies a difficulty AND that it is the sentinel,
-  // so a future edit cannot quietly reintroduce an unclassified MAGI enqueue.
-  const src = readFileSync(
-    new URL('../src/tools/mesh-tools-magi.ts', import.meta.url),
-    'utf8',
-  );
-  // C-W9a: the replica enqueue goes over IPC (`queueEnqueue`); its options object is
-  // built right before the call, so the pin reads that object literal.
-  const call = src.slice(src.indexOf('const replicaOptions = {'));
-  const body = call.slice(0, call.indexOf('};'));
-  assert.match(body, /difficulty: 'freeform'/, 'MAGI must stamp the freeform sentinel');
-  // And it must NOT be wired to a caller-supplied value — exposing a difficulty knob on
-  // mesh_magi_review would imply it influences replica placement, which it does not.
-  assert.ok(!/difficulty:\s*(args|readString)/.test(body), 'MAGI difficulty must not be caller-configurable');
 });
 
 test('mesh_send_task accepts every value on the fixed axis', async () => {

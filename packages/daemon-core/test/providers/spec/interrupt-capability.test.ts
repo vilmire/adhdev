@@ -45,12 +45,12 @@ describe('resolveInterruptCapability', () => {
     });
 
     // ── (b) no silent fallback ────────────────────────────────────────────
-    it('★ treats an EMPTY stop key as UNSUPPORTED (hermes-cli specs/4.0.json)', () => {
+    it('★ treats an EMPTY stop key as UNSUPPORTED', () => {
         // The live trap: FsmDriver.handleClickControl would call send_keys("")
         // — writing nothing — while invokeScript still returns ok:true. If this
         // ever resolves to supported, an interrupt silently does nothing and
         // reports success.
-        const cap = resolveInterruptCapability('hermes-cli', [stopControl('', ['busy'])]);
+        const cap = resolveInterruptCapability('empty-stop-cli', [stopControl('', ['busy'])]);
         expect(cap.supported).toBe(false);
         if (cap.supported) throw new Error('unreachable');
         expect(cap.reason).toBe('stop_keys_empty');
@@ -115,8 +115,6 @@ const EXPECTED_STOP_KEYS: Record<string, Record<string, string>> = {
     'codex-cli': { '0.137.json': CTRL_C, '4.0.json': CTRL_C },
     'cursor-cli': { '1.0.json': CTRL_C },
     'grok-cli': { '1.0.json': CTRL_C },
-    // hermes-cli 4.0 ships an EMPTY stop key — asserted explicitly below.
-    'hermes-cli': { '0.14.json': CTRL_C, '4.0.json': '' },
     kimi: { '1.0.json': CTRL_C },
     opencode: { '1.0.json': CTRL_C },
 };
@@ -130,13 +128,6 @@ describe.skipIf(!providersAvailable)('shipped provider stop controls', () => {
             it(`${provider}/${specFile} declares stop keys ${JSON.stringify(expectedKeys)}`, () => {
                 const raw = JSON.parse(fs.readFileSync(specPath, 'utf8'));
                 const cap = resolveInterruptCapability(provider, raw.control_bar);
-                if (expectedKeys === '') {
-                    // hermes-cli 4.0: declared but empty => must be unsupported.
-                    expect(cap.supported).toBe(false);
-                    if (cap.supported) throw new Error('unreachable');
-                    expect(cap.reason).toBe('stop_keys_empty');
-                    return;
-                }
                 expect(cap.supported).toBe(true);
                 if (!cap.supported) throw new Error('unreachable');
                 expect(cap.keys).toBe(expectedKeys);
@@ -164,7 +155,7 @@ describe.skipIf(!providersAvailable)('shipped provider stop controls', () => {
         expect(esc.length).toBeGreaterThan(0);
         expect(ctrlC.some(t => t.startsWith('antigravity-cli/'))).toBe(false);
         expect(ctrlC.length).toBeGreaterThan(0);
-        // The only known unsupported spec is hermes-cli 4.0's empty key.
-        expect(unsupported).toEqual(['hermes-cli/4.0.json']);
+        // No shipped spec declares an empty (unsupported) stop key.
+        expect(unsupported).toEqual([]);
     });
 });

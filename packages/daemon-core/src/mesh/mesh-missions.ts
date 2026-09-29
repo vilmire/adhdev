@@ -16,7 +16,7 @@ import { randomUUID } from 'crypto';
 import { LOG } from '../logging/logger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import type { MeshQueueFacts } from './mesh-runtime-store-queue-reads.js';
-import { deriveDependencyFailures } from './mesh-graph-derived-failure.js';
+import { deriveDependencyFailures } from './mesh-dependency-failure.js';
 import { computeMeshMissionStatsBatch, type MeshMissionStats } from './mesh-task-stats.js';
 import { meshRecord } from './mesh-record.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
@@ -38,28 +38,12 @@ export type MeshMissionStatus = 'active' | 'paused' | 'completed' | 'abandoned';
 
 export const MESH_MISSION_STATUSES: MeshMissionStatus[] = ['active', 'paused', 'completed', 'abandoned'];
 
-/**
- * Provenance of a mission. `magi` marks an inline mission auto-created by a
- * mesh_magi_review fan-out (one per cross-verification run). `coordinator` (the
- * default semantic for an unstamped/legacy mission) marks a coordinator- or
- * user-authored mission. Used to bound the accumulation of completed MAGI missions
- * out of the default mesh_mission_list surface — see listMeshMissionSummaries.
- */
-type MeshMissionSource = 'magi' | 'coordinator';
-
 export interface MeshMissionRecord {
     id: string;
     meshId: string;
     title: string;
     goal: string;
     status: MeshMissionStatus;
-    /**
-     * Optional provenance tag. Absent on missions created before this field existed
-     * and on coordinator/user missions that don't bother stamping it — both are
-     * treated as coordinator missions (never auto-hidden). Only explicit `magi`
-     * missions are bounded out of the default list once completed.
-     */
-    source?: MeshMissionSource;
     /**
      * G3: idempotency marker for the mission_close_candidate nudge. ISO timestamp of
      * the last emit; absent/undefined when the mission has not (or no longer) been in a
@@ -86,7 +70,7 @@ export interface MeshMissionTaskAggregate {
     completed: number;
     failed: number;
     cancelled: number;
-    /** Pending tasks held back by a dependency failure (explicit blockedReason or derived from predecessor statuses). */
+    /** Pending tasks held back by a dependency failure (derived from predecessor statuses). */
     blocked: number;
     /** Latest updatedAt across the mission's tasks, or null with no tasks. */
     lastActivityAt: string | null;
@@ -149,10 +133,6 @@ function normalizeMissionStatus(value: unknown): MeshMissionStatus {
         : 'active';
 }
 
-function normalizeMissionSource(value: unknown): MeshMissionSource | undefined {
-    return value === 'magi' || value === 'coordinator' ? value : undefined;
-}
-
 /** H2: parse a stored `brief_json` column value back into a `MissionBrief`. Never throws —
  *  a corrupt/legacy value degrades to "no brief" rather than breaking the read path. */
 function parseStoredMissionBrief(briefJson: string | undefined): MissionBrief | undefined {
@@ -172,7 +152,6 @@ export function upsertMeshMission(meshId: string, input: {
     title: string;
     goal?: string;
     status?: string;
-    source?: MeshMissionSource;
     /**
      * H2: raw caller input, normalized via `normalizeMissionBrief`. `undefined` = caller
      * did not touch the brief (preserve whatever the mission already has). A goal-less
@@ -220,10 +199,6 @@ export function upsertMeshMission(meshId: string, input: {
         title,
         goal: typeof input.goal === 'string' ? input.goal : existing?.goal ?? '',
         status: normalizeMissionStatus(input.status ?? existing?.status),
-        // source is write-once: only forwarded when the caller supplies one. The
-        // store COALESCEs it against the existing value, so a later status/goal
-        // upsert that omits source never clears a previously-stamped tag.
-        ...(input.source ? { source: input.source } : {}),
         briefJson,
     };
     store.upsertMission(record);
@@ -231,7 +206,6 @@ export function upsertMeshMission(meshId: string, input: {
     const result: MeshMissionRecord = {
         ...saved,
         status: normalizeMissionStatus(saved.status),
-        source: normalizeMissionSource(saved.source),
         brief: parseStoredMissionBrief(saved.briefJson),
     };
 
@@ -305,12 +279,12 @@ function appendMissionLedgerEntries(
 
 export function getMeshMissions(meshId: string, statuses?: MeshMissionStatus[]): MeshMissionRecord[] {
     return MeshRuntimeStore.getInstance().getMissions(meshId, statuses)
-        .map(m => ({ ...m, status: normalizeMissionStatus(m.status), source: normalizeMissionSource(m.source), brief: parseStoredMissionBrief(m.briefJson) }));
+        .map(m => ({ ...m, status: normalizeMissionStatus(m.status), brief: parseStoredMissionBrief(m.briefJson) }));
 }
 
 export function getMeshMission(meshId: string, missionId: string): MeshMissionRecord | null {
     const record = MeshRuntimeStore.getInstance().getMission(meshId, missionId);
-    return record ? { ...record, status: normalizeMissionStatus(record.status), source: normalizeMissionSource(record.source), brief: parseStoredMissionBrief(record.briefJson) } : null;
+    return record ? { ...record, status: normalizeMissionStatus(record.status), brief: parseStoredMissionBrief(record.briefJson) } : null;
 }
 
 function emptyMissionTaskAggregate(): MeshMissionTaskAggregate {
@@ -337,7 +311,7 @@ export function summarizeMissionTasksBatch(
     // Dependency status lookup spans the whole queue: a mission task may depend
     // on a task outside the mission.
     const statusById = new Map(facts.map(task => [task.id, task.status] as const));
-    const depMetaById = new Map(facts.map(task => [task.id, { blockedReason: task.blockedReason, cancelReason: task.cancelReason, status: task.status }] as const));
+    const depMetaById = new Map(facts.map(task => [task.id, { cancelReason: task.cancelReason, status: task.status }] as const));
     for (const task of facts) {
         if (!task.missionId || !wanted.has(task.missionId)) continue;
         accumulateMissionTask(out.get(task.missionId)!, task, statusById, depMetaById);
@@ -354,7 +328,7 @@ function accumulateMissionTask(
     aggregate: MeshMissionTaskAggregate,
     task: MeshQueueFacts,
     statusById: ReadonlyMap<string, string>,
-    depMetaById: ReadonlyMap<string, { blockedReason?: string; cancelReason?: string; status?: string }>,
+    depMetaById: ReadonlyMap<string, { cancelReason?: string; status?: string }>,
 ): void {
     aggregate.total += 1;
     if (task.status === 'pending') aggregate.pending += 1;
@@ -362,10 +336,9 @@ function accumulateMissionTask(
     else if (task.status === 'completed') aggregate.completed += 1;
     else if (task.status === 'failed') aggregate.failed += 1;
     else if (task.status === 'cancelled') aggregate.cancelled += 1;
-    // C3: 'block' no longer writes blockedReason — a failed/cancelled
-    // predecessor is derived at view time (design :522-533).
+    // A failed/cancelled predecessor is derived at view time.
     if (task.status === 'pending'
-        && (task.blockedReason || deriveDependencyFailures(task.dependsOn, statusById, depMetaById).length > 0)) {
+        && deriveDependencyFailures(task.dependsOn, statusById, depMetaById).length > 0) {
         aggregate.blocked += 1;
     }
     if (task.updatedAt && (!aggregate.lastActivityAt || task.updatedAt > aggregate.lastActivityAt)) {
@@ -633,28 +606,15 @@ export function getMeshStatusMissionsCompact(
  * coordinator can deliberately surface paused/abandoned/completed missions that
  * the live status view would hide or truncate.
  *
- * MAGI bounding: by default this EXCLUDES completed MAGI missions (source==='magi'
- * && status==='completed') — a mesh_magi_review fan-out auto-creates one inline
- * mission per run and auto-closes it on collection, so without this they accumulate
- * unbounded and drown out coordinator missions in the list. In-progress MAGI missions
- * (active/paused) are still shown so a running cross-verification stays visible. Pass
- * `includeMagi: true` to return every mission including completed MAGI ones. A mission
- * with no `source` (legacy / coordinator) is never affected.
- *
  * Compact (the default) elides each goal to a capped preview + goalTruncated
  * flag; verbose returns the full goal text. The stored goal is never mutated.
  */
 export function listMeshMissionSummaries(
     meshId: string,
-    options?: { statuses?: MeshMissionStatus[]; verbose?: boolean; includeMagi?: boolean },
+    options?: { statuses?: MeshMissionStatus[]; verbose?: boolean },
 ): MeshMissionSummary[] | MeshMissionSlimSummary[] {
     const statuses = options?.statuses && options.statuses.length > 0 ? options.statuses : undefined;
-    const includeMagi = options?.includeMagi === true;
     const missions = getMeshMissions(meshId, statuses)
-        // Bound completed-MAGI accumulation by default. Only a mission EXPLICITLY
-        // tagged source==='magi' AND completed is hidden — coordinator/legacy
-        // (source undefined) missions and in-progress MAGI missions always pass.
-        .filter(m => includeMagi || !(m.source === 'magi' && m.status === 'completed'))
         .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
     const full = summarizeMeshMissions(meshId, missions);
     return options?.verbose ? full : full.map(summary => slimMissionSummary(summary));
@@ -692,7 +652,7 @@ export interface MeshMissionListResult {
  * MESH_MISSION_LIST_STATUS_LIMIT). Overflow beyond `limit` is reported via
  * truncated:true + overflowIds rather than silently dropped.
  *
- * MAGI + verbose semantics match listMeshMissionSummaries. `withStats` opts each
+ * Verbose semantics match listMeshMissionSummaries. `withStats` opts each
  * detailed mission into the ledger-scanned stats rollup (off by default — the tasks
  * aggregate is enough for a list view).
  */
@@ -701,20 +661,17 @@ export function listMeshMissionsForTool(
     options?: {
         statuses?: MeshMissionStatus[];
         verbose?: boolean;
-        includeMagi?: boolean;
         withStats?: boolean;
         limit?: number;
         historyIdLimit?: number;
     },
 ): MeshMissionListResult {
     const explicitStatuses = options?.statuses && options.statuses.length > 0 ? options.statuses : undefined;
-    const includeMagi = options?.includeMagi === true;
     const verbose = options?.verbose === true;
     const withStats = options?.withStats === true;
     const limit = Math.max(1, options?.limit ?? MESH_MISSION_LIST_STATUS_LIMIT);
     const historyIdLimit = Math.max(0, options?.historyIdLimit ?? MESH_MISSION_LIST_HISTORY_ID_LIMIT);
 
-    const passesMagi = (m: MeshMissionRecord) => includeMagi || !(m.source === 'magi' && m.status === 'completed');
     const byUpdatedDesc = (a: MeshMissionRecord, b: MeshMissionRecord) => (b.updatedAt || '').localeCompare(a.updatedAt || '');
 
     // One queue read (and, withStats, one stats pass) for the whole shown set.
@@ -739,7 +696,6 @@ export function listMeshMissionsForTool(
     if (explicitStatuses) {
         // Explicit filter: return matching missions in detail, capped at `limit`.
         const matched = getMeshMissions(meshId, explicitStatuses)
-            .filter(passesMagi)
             .sort(byUpdatedDesc);
         const shown = matched.slice(0, limit);
         const overflow = matched.slice(limit);
@@ -753,7 +709,7 @@ export function listMeshMissionsForTool(
     }
 
     // Default: detail for non-terminal missions, fold terminal history.
-    const all = getMeshMissions(meshId).filter(passesMagi);
+    const all = getMeshMissions(meshId);
     const live = all
         .filter(m => m.status === 'active' || m.status === 'paused')
         .sort(byUpdatedDesc);

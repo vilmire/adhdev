@@ -76,9 +76,9 @@ export function logQuotaClaimBlockTransition(
     // QUOTA-CLAIM-GATE-LEDGER: record only the transition INTO a phase (or a changed block
     // reason/window while already in that phase), never a steady-state repeat — mirrors the log
     // fingerprint above exactly so the ledger and the log agree on what counts as "new".
-    // Without this, a provider pinned via requiredTags (the MAGI kind-panel case — no
-    // fallback candidate to escape to) that goes quota-exhausted leaves NO ledger trace at
-    // all while its replica parks pending indefinitely.
+    // Without this, a provider pinned via requiredTags (no fallback candidate to escape
+    // to) that goes quota-exhausted leaves NO ledger trace at all while its task parks
+    // pending indefinitely.
     try {
         const payload: Record<string, unknown> = {
             phase,

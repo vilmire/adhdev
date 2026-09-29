@@ -155,8 +155,6 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
             // Refuse unless force. A genuinely dead/stale session is not generating, so this
             // observation passes and a legitimate requeue proceeds. force=true (operator
             // override) bypasses BOTH this and the in-memory guard.
-            // MAGI-NOTE: a future consensus group fan-out (separate mission) will exempt
-            // group-tagged tasks from this guard; the exemption hook belongs here.
             if (args?.force !== true) {
                 const { isSessionActivelyGenerating } = await import('../../mesh/mesh-events.js');
                 const { isHeldRemoteSessionGenerating } = await import('../../mesh/mesh-candidacy-predicates.js');

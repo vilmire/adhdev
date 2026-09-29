@@ -149,7 +149,7 @@ function logStatusEntries(entries: DaemonData[]): void {
 
 /**
  * Convert a StatusResponse payload into DaemonData[] entries.
- * Returns: [daemonEntry, ...ideEntries, ...cliEntries, ...acpEntries]
+ * Returns: [daemonEntry, ...ideEntries, ...cliEntries]
  */
 export function statusPayloadToEntries(
     payload: StatusReportPayload,
@@ -173,9 +173,6 @@ export function statusPayloadToEntries(
     )
     const cliSessions = topLevel.filter((session) =>
         session.kind === 'agent' && session.transport === 'pty',
-    )
-    const acpSessions = topLevel.filter((session) =>
-        session.kind === 'agent' && session.transport === 'acp',
     )
 
     // ─── 1. Machine-level daemon entry ─────────────────
@@ -287,45 +284,6 @@ export function statusPayloadToEntries(
             ...pickDefined(mergedSession, CONTROL_KEYS),
             timestamp: ts,
             _isCli: true,
-        } as DaemonData)
-    }
-
-    // ─── 4. ACP entries ────────────────────────────────
-    for (const session of acpSessions) {
-        const existingEntry = existingSessionMap.get(session.id)
-        const mergedSession = mergeSessionEntrySummary(session, existingEntry)
-        entries.push({
-            id: `${daemonId}:acp:${session.id}`,
-            sessionId: session.id,
-            providerSessionId: session.providerSessionId ?? existingEntry?.providerSessionId,
-            parentSessionId: mergedSession.parentId,
-            sessionKind: mergedSession.kind,
-            transport: mergedSession.transport,
-            sessionCapabilities: mergedSession.capabilities,
-            type: mergedSession.providerType,
-            agentType: mergedSession.providerType,
-            status: normalizeIncomingSessionStatus(mergedSession.status) || 'generating',
-            daemonId,
-            instanceId: scopeSessionInstanceId(daemonId, session.id),
-            cliName: mergedSession.providerName || mergedSession.providerType,
-            mode: 'chat',
-            workspace: mergedSession.workspace || '',
-            ...ownerAttribution(session),
-            activeChat: mergedSession.activeChat,
-            ...(mergedSession.activeInteractivePrompt !== undefined && { activeInteractivePrompt: mergedSession.activeInteractivePrompt }),
-            ...pickDefined(mergedSession, RUNTIME_KEYS),
-            ...pickDefined(mergedSession, LAST_MESSAGE_KEYS),
-            lastUpdated: mergedSession.lastUpdated,
-            unread: mergedSession.unread,
-            lastSeenAt: mergedSession.lastSeenAt,
-            inboxBucket: mergedSession.inboxBucket,
-            completionMarker: mergedSession.completionMarker,
-            seenCompletionMarker: mergedSession.seenCompletionMarker,
-            surfaceHidden: mergedSession.surfaceHidden,
-            muted: mergedSession.muted,
-            ...pickDefined(mergedSession, CONTROL_KEYS),
-            timestamp: ts,
-            _isAcp: true,
         } as DaemonData)
     }
 

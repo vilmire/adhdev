@@ -124,7 +124,7 @@ Common end-user patterns:
 
 Current standalone launch behavior is intentionally split by job:
 
-- `Start fresh` is the default for ordinary CLI/ACP launches
+- `Start fresh` is the default for ordinary CLI launches
 - `Open saved history` is the continuity path when you want to re-enter the same provider conversation
 - hosted runtime recovery is the interruption fallback when a long-lived runtime survived but needs explicit recovery
 

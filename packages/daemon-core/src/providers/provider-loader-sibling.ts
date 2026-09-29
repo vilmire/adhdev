@@ -61,7 +61,7 @@ const siblingRefusalLogged = new Set<string>();
 function looksLikeProviderRoot(candidate: string): boolean {
   try {
     if (!fs.existsSync(candidate) || !fs.statSync(candidate).isDirectory()) return false;
-    return ['ide', 'extension', 'cli', 'acp'].some((category) =>
+    return ['ide', 'extension', 'cli'].some((category) =>
       fs.existsSync(path.join(candidate, category))
     );
   } catch {

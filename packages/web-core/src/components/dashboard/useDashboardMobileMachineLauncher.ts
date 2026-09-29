@@ -29,7 +29,6 @@ interface LaunchConfirmState {
 interface UseDashboardMobileMachineLauncherOptions {
     selectedMachineEntry: DaemonData
     cliProviders: LaunchProviderInfo[]
-    acpProviders: LaunchProviderInfo[]
     machineAction: MobileMachineActionState
     onBrowseDirectory: (path: string) => Promise<BrowseDirectoryResult>
     onListSavedSessions?: (providerType: string) => Promise<any[]>
@@ -38,15 +37,13 @@ interface UseDashboardMobileMachineLauncherOptions {
 function getDefaultLauncherKind(
     ideAvailable: boolean,
     cliCount: number,
-    acpCount: number,
 ): WorkspaceLaunchKind | null {
-    return ideAvailable ? 'ide' : cliCount > 0 ? 'cli' : acpCount > 0 ? 'acp' : null
+    return ideAvailable ? 'ide' : cliCount > 0 ? 'cli' : null
 }
 
 export function useDashboardMobileMachineLauncher({
     selectedMachineEntry,
     cliProviders,
-    acpProviders,
     machineAction,
     onBrowseDirectory,
     onListSavedSessions,
@@ -68,7 +65,7 @@ export function useDashboardMobileMachineLauncher({
     const [browseError, setBrowseError] = useState('')
     const [browseDialogOpen, setBrowseDialogOpen] = useState(false)
     const [activeLauncherKind, setActiveLauncherKind] = useState<WorkspaceLaunchKind | null>(
-        getDefaultLauncherKind(hasIdeOptions, cliProviders.length, acpProviders.length),
+        getDefaultLauncherKind(hasIdeOptions, cliProviders.length),
     )
 
     const launchConfirmActionRef = useRef<(() => Promise<void>) | null>(null)
@@ -300,9 +297,9 @@ export function useDashboardMobileMachineLauncher({
             setLaunchConfirmResumableOnly(createSavedHistoryFilterState().resumableOnly)
             setLaunchConfirmSortMode(createSavedHistoryFilterState().sortMode)
             lastSavedHistoryScopeRef.current = null
-            setActiveLauncherKind(getDefaultLauncherKind(hasIdeOptions, cliProviders.length, acpProviders.length))
+            setActiveLauncherKind(getDefaultLauncherKind(hasIdeOptions, cliProviders.length))
         }
-    }, [acpProviders.length, cliProviders.length, defaultWorkspaceId, hasIdeOptions, selectedMachineEntry.id, workspaceRows])
+    }, [cliProviders.length, defaultWorkspaceId, hasIdeOptions, selectedMachineEntry.id, workspaceRows])
 
     useEffect(() => {
         if (workspaceChoice === '__custom__') return
@@ -313,9 +310,8 @@ export function useDashboardMobileMachineLauncher({
     useEffect(() => {
         if (activeLauncherKind === 'ide' && hasIdeOptions) return
         if (activeLauncherKind === 'cli' && cliProviders.length > 0) return
-        if (activeLauncherKind === 'acp' && acpProviders.length > 0) return
-        setActiveLauncherKind(getDefaultLauncherKind(hasIdeOptions, cliProviders.length, acpProviders.length))
-    }, [activeLauncherKind, acpProviders.length, cliProviders.length, hasIdeOptions])
+        setActiveLauncherKind(getDefaultLauncherKind(hasIdeOptions, cliProviders.length))
+    }, [activeLauncherKind, cliProviders.length, hasIdeOptions])
 
     return {
         showAllRecent,

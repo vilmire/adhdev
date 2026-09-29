@@ -2,7 +2,7 @@
  * ADHDev — Machine Detail Page (v3 — Refactored)
  *
  * Orchestrator component that:
- * - Derives machine/IDE/CLI/ACP data from DaemonContext
+ * - Derives machine/IDE/CLI data from DaemonContext
  * - Renders header with tabs
  * - Delegates each tab to its own sub-component
  *
@@ -21,7 +21,7 @@ import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
 import { useDaemonMachineRuntimeSubscription } from '../hooks/useDaemonMachineRuntimeSubscription'
 import { useDaemonMachineRuntimeLoader } from '../hooks/useDaemonMachineRuntimeLoader'
 import type { DaemonData } from '../types'
-import { PLATFORM_LABELS, isCliEntry, isAcpEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel, getProviderSummaryLine, getProviderSummaryValue } from '../utils/daemon-utils'
+import { PLATFORM_LABELS, isCliEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel, getProviderSummaryLine } from '../utils/daemon-utils'
 import { getDashboardActiveTabHref, getDashboardActiveTabKeyForConversation } from '../utils/dashboard-route-paths'
 import { IconBarChart, IconMonitor, IconSettings } from '../components/Icons'
 import { SettingsTabBar, type SettingsTabBarItem } from '../components/ui/SettingsTabs'
@@ -30,7 +30,7 @@ import { eventManager, type ToastConfig } from '../managers/EventManager'
 import ToastContainer from '../components/dashboard/ToastContainer'
 
 // Machine sub-components
-import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry, MachineRecentLaunch, TabId, ProviderInfo } from './machine/types'
+import type { MachineData, IdeSessionEntry, CliSessionEntry, MachineRecentLaunch, TabId, ProviderInfo } from './machine/types'
 import { useMachineActions } from './machine/useMachineActions'
 import OverviewTab from './machine/OverviewTab'
 import ProvidersTab from './machine/ProvidersTab'
@@ -95,7 +95,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     // 2026-09-25: a number looked strange). The action lives next to each
     // provider as an inline "Update" button inside the tab.
     const [gitDialogTarget, setGitDialogTarget] = useState<{ daemonId: string; workspace: string } | null>(null)
-    const [, setWorkspaceCategoryHint] = useState<'ide' | 'cli' | 'acp'>('ide')
+    const [, setWorkspaceCategoryHint] = useState<'ide' | 'cli'>('ide')
     const recentLaunchActionRef = useRef<(() => Promise<void>) | null>(null)
     const [recentLaunchConfirm, setRecentLaunchConfirm] = useState<{
         title: string
@@ -222,7 +222,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
 
     const ideSessions: IdeSessionEntry[] = allIdes
         .filter(i => i.daemonId === machineId && i.type !== 'adhdev-daemon')
-        .filter(i => !isCliEntry(i) && !isAcpEntry(i))
+        .filter(i => !isCliEntry(i))
         .map(i => ({
             id: i.id, sessionId: i.sessionId, type: i.type, version: i.version || '',
             instanceId: i.instanceId || '', status: i.status,
@@ -263,23 +263,11 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             lastMessageAt: i.lastMessageAt,
         }))
 
-    const acpSessions: AcpSessionEntry[] = allIdes
-        .filter(i => i.daemonId === machineId && isAcpEntry(i))
-        .map(i => ({
-            id: i.id, sessionId: i.sessionId, type: i.type, acpName: i.cliName || i.type,
-            status: i.status,
-            workspace: i.workspace || '',
-            activeChat: i.activeChat || null,
-            providerSessionId: i.providerSessionId,
-            daemonId: machineId!,
-            lastMessageAt: i.lastMessageAt,
-        }))
-
     const displayName = machineEntry ? getMachineDisplayName(machineEntry, { fallbackId: machineId }) : ''
     const defaultTab: TabId = 'workspace'
     const locationState = (location.state as {
         initialMachineTab?: TabId
-        initialWorkspaceCategory?: 'ide' | 'cli' | 'acp'
+        initialWorkspaceCategory?: 'ide' | 'cli'
         initialWorkspaceId?: string | null
         initialWorkspacePath?: string | null
     } | null)
@@ -292,7 +280,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const initialDiagnostics = requestedMachineTab === 'session-host' ? 'hosted-runtimes' as const
         : requestedMachineTab === 'logs' ? 'logs' as const
             : null
-    const effectiveTab: TabId = requestedMachineTab === 'ides' || requestedMachineTab === 'clis' || requestedMachineTab === 'acps'
+    const effectiveTab: TabId = requestedMachineTab === 'ides' || requestedMachineTab === 'clis'
         ? 'workspace'
         : initialDiagnostics
             ? 'overview'
@@ -301,9 +289,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         ? 'ide'
         : requestedMachineTab === 'clis'
             ? 'cli'
-            : requestedMachineTab === 'acps'
-                ? 'acp'
-                : requestedWorkspaceCategory
+            : requestedWorkspaceCategory
     const fallbackRecentLaunches: MachineRecentLaunch[] = [
         ...ideSessions.map(session => ({
             id: `ide:${session.type}:${session.workspace || ''}`,
@@ -321,16 +307,6 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             providerType: session.type,
             providerSessionId: session.providerSessionId,
             subtitle: session.workspace || undefined,
-            workspace: session.workspace || undefined,
-            lastLaunchedAt: session.lastMessageAt || 0,
-        })),
-        ...acpSessions.map(session => ({
-            id: `acp:${session.type}:${session.workspace || ''}`,
-            label: session.activeChat?.title || session.acpName,
-            kind: 'acp' as const,
-            providerType: session.type,
-            providerSessionId: session.providerSessionId,
-            subtitle: getProviderSummaryLine(session.summaryMetadata) || session.workspace || undefined,
             workspace: session.workspace || undefined,
             lastLaunchedAt: session.lastMessageAt || 0,
         })),
@@ -401,14 +377,11 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                 )
                 return
             }
-            if ((session.kind === 'cli' || session.kind === 'acp') && session.providerType) {
+            if (session.kind === 'cli' && session.providerType) {
                 await actions.runLaunchCliCore({
                     cliType: session.providerType,
                     dir: workspaceId ? undefined : (workspacePath || ''),
                     workspaceId: workspaceId || undefined,
-                    model: session.kind === 'acp'
-                        ? (getProviderSummaryValue(session.summaryMetadata, 'model', { preferShortValue: true }) || undefined)
-                        : undefined,
                     resumeSessionId: session.providerSessionId,
                 })
                 return
@@ -494,7 +467,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const providerStaleness = machineEntry?.providerChannelStaleness ?? null
     const providerUpdatesAvailable = !!providerStaleness
         && (providerStaleness.staleTypes.length + providerStaleness.newTypes.length) > 0
-    const sessionCount = ideSessions.length + cliSessions.length + acpSessions.length
+    const sessionCount = ideSessions.length + cliSessions.length
     // Three tabs: Sessions / Providers / System. Hosted runtimes and Logs are
     // troubleshooting views, so they sit in System's "Diagnostics" disclosure.
     const TABS: SettingsTabBarItem[] = [
@@ -623,7 +596,6 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                     machineId={machineId!}
                                     ideSessions={ideSessions}
                                     cliSessions={cliSessions}
-                                    acpSessions={acpSessions}
                                     actions={actions}
                                     sendDaemonCommand={sendDaemonCommand}
                                 />
@@ -644,7 +616,6 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 machine={machine}
                                 ideSessions={ideSessions}
                                 cliSessions={cliSessions}
-                                acpSessions={acpSessions}
                                 daemonVersion={machineEntry?.version}
                                 initialDiagnostics={initialDiagnostics}
                                 renderHostedRuntimes={() => (

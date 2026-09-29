@@ -192,16 +192,6 @@ export default function MachinesPage() {
                 })
             }
         }
-        for (const acp of m.acpSessions) {
-            if (isManagedStatusWorking(acp.status)) {
-                allActiveAgents.push({
-                    name: acp.acpName, machine: m.nickname || m.hostname,
-                    machineId: m.machineId, status: 'generating', type: acp.acpType,
-                    targetSessionId: acp.sessionId || undefined, isCli: false,
-                    workspace: getWorkspaceDisplayLabel(acp.workspace || ''),
-                })
-            }
-        }
     }
 
     return (
@@ -287,7 +277,7 @@ export default function MachinesPage() {
                         const retryStatus = connectionRetryStatuses[machine.machineId]
                         const isBlocked = isOnline && !!retryStatus?.blocked
                         const isConnecting = isOnline && !isBlocked && (connState === 'new' || connState === 'connecting')
-                        const totalAgents = machine.ideSessions.length + machine.cliSessions.length + machine.acpSessions.length
+                        const totalAgents = machine.ideSessions.length + machine.cliSessions.length
                         // One status dot for the card. Connection detail (P2P peers,
                         // relay) lives in its tooltip instead of separate badges.
                         const machineStatus: MachineStatusTone = !isOnline
@@ -469,35 +459,6 @@ export default function MachinesPage() {
                                         </div>
                                     )}
 
-                                    {/* Compact Agent List — ACP Agents */}
-                                    {machine.acpSessions.length > 0 && (
-                                        <div className="mb-1.5">
-                                            <div className="text-4xs text-text-muted uppercase tracking-wide font-semibold mb-1">{t('machine.card.sectionACPAgents')}</div>
-                                            <div className="flex flex-col gap-0.5">
-                                                {machine.acpSessions.map(acp => {
-                                                    const active = isManagedStatusWorking(acp.status)
-                                                    const statusTone = active
-                                                        ? 'active'
-                                                        : normalizeManagedStatus(acp.status) === 'stopped'
-                                                            ? 'offline'
-                                                            : 'idle'
-                                                    return (
-                                                        <AgentRow
-                                                            key={acp.id}
-                                                            type={acp.acpType}
-                                                            name={acp.acpName}
-                                                            status={active ? t('machine.card.generating') : normalizeManagedStatus(acp.status)}
-                                                            statusTone={statusTone}
-                                                            workspace={getWorkspaceDisplayLabel(acp.workspace)}
-                                                            isActive={!!active}
-                                                            hidden={acp.surfaceHidden}
-                                                            onClick={() => openDashboardSession(acp.sessionId, machine.machineId)}
-                                                        />
-                                                    )
-                                                })}
-                                            </div>
-                                        </div>
-                                    )}
 
                                     {/* Nothing running */}
                                     {totalAgents === 0 && isOnline && (

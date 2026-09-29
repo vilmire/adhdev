@@ -9,9 +9,6 @@ import { InfoTip } from '../../components/ui/InfoTip'
 import { Switch } from '../../components/ui/Switch'
 import { SettingsTabs, type SettingsTab } from '../../components/ui/SettingsTabs'
 import { IconMesh, IconSettings, IconWrench } from '../../components/Icons'
-// The task_kind → panel binding editor (MagiKindPanelEditor) is the sole MAGI panel
-// surface — the named-panel CRUD (MagiPanelManager) was removed.
-import MagiKindPanelEditor from '../../components/MeshGraph/MagiKindPanelEditor'
 import { MeshNotesTab } from '../../components/MeshGraph/MeshObservabilitySurface/MeshNotesTab'
 import { MeshGraphThemeContext } from '../../components/MeshGraph/MeshObservabilitySurface/meshSurfaceTheme'
 import { getMeshGraphTheme } from '../../components/MeshGraph/meshGraphTheme'
@@ -28,7 +25,6 @@ import { COORDINATOR_PROMPT_PLACEHOLDERS } from './coordinator-prompt-placeholde
 import { MeshProviderAutoApproveSection } from './MeshProviderAutoApproveSection'
 import { MeshNodeList } from './MeshNodeList'
 import { MeshHostDaemonSection } from './MeshHostDaemonSection'
-import { RepoMeshHermesMcpConfig } from './MeshHermesMcpConfig'
 import { buildMeshGraphLaunchConversation } from './graph-launch'
 import {
     readMeshPolicy,
@@ -41,7 +37,6 @@ import {
     type MeshDistribution,
     type MeshQueueEntry,
     type MeshDetailViewFeatures,
-    type AvailableCliAgent,
     type NodeCapabilitySlot,
 } from './types'
 
@@ -52,7 +47,7 @@ interface Props {
     onBack: () => void
     onDelete: (meshId: string) => void
 
-    // Graph / live mesh status (drives the MAGI surfaces + the graph dialog launcher)
+    // Graph / live mesh status (drives the graph dialog launcher)
     displayedMeshStatus: RepoMeshStatus | null
     graphLoading: boolean
     graphError: string | null
@@ -129,8 +124,6 @@ interface Props {
     onAddNode: () => void
     onRemoveNode: (nodeId: string) => void
 
-    // Hermes
-    availableCliAgents: AvailableCliAgent[]
 
     features: MeshDetailViewFeatures
 
@@ -198,7 +191,6 @@ export function MeshDetailView({
     attachableDaemons,
     onAddNode,
     onRemoveNode,
-    availableCliAgents,
     features,
     sendCommand,
 }: Props) {
@@ -422,20 +414,6 @@ export function MeshDetailView({
                 />
             </Section>
 
-            {/* MAGI task_kind → panel binding editor. Intentionally NOT gated on
-                `displayedMeshStatus`: the editor talks to the daemon directly
-                (magi_kind_panel_*) and needs no mesh status to function; `meshId`
-                is passed explicitly so scoping survives status being null. */}
-            <Section title={t('mesh.detail.magiTitle')} collapsible defaultOpen={false} description={t('mesh.detail.magiDescription')}>
-                <MagiKindPanelEditor
-                    status={displayedMeshStatus}
-                    daemonId={activeDaemonId}
-                    meshId={selectedMesh.id}
-                    sendDaemonCommand={sendCommand}
-                    availableProviders={availableCliProviders}
-                />
-            </Section>
-
             {/* Safety & Git — every field saves on change. */}
             <Section title={t('mesh.detail.safetyTitle')} collapsible defaultOpen={false} description={t('mesh.detail.safetyDescription')}>
                 <div className="grid gap-4 sm:grid-cols-2">
@@ -565,9 +543,6 @@ export function MeshDetailView({
             </Section>
 
             {/* Integrations */}
-            {features.hermesMcpConfig && (
-                <RepoMeshHermesMcpConfig meshId={selectedMesh.id} availableCliAgents={availableCliAgents} />
-            )}
             {features.meshHostDaemonSection && (
                 <Section title={t('mesh.detail.useFromCli')} collapsible defaultOpen={false} description={t('mesh.detail.mcpDescription')}>
                     <code className="block overflow-x-auto rounded-lg bg-bg-secondary px-3 py-2 text-xs">adhdev mcp --repo-mesh {selectedMesh.id}</code>

@@ -1,21 +1,19 @@
 /**
- * D4 — "Upstream results" dispatch appendix
- * (the 2026-09-25 graph orchestration simplification §1 D4).
+ * D4 — "Upstream results" dispatch appendix.
  *
- * A task with predecessors — queue-level `dependsOn`, or graph `requires` edges
- * from worker nodes — receives, at dispatch, each predecessor's accepted
+ * A task with predecessors (queue-level `dependsOn`) receives, at dispatch, each predecessor's accepted
  * completion summary (the `final_summary` of its latest `completed` output
  * version in mesh_task_outputs, i.e. what `report_completion` delivered). Before
  * this, a `depends_on` chain carried ordering only: the downstream worker had to
  * be told by the coordinator what upstream found, which is why coordinators
- * reached for `inputs_from` or re-stated results by hand.
+ * re-stated results by hand.
  *
  * Body order is fixed by the caller (worker-handoff-dispatch.ts):
  *   authored message → Upstream results → Handoff notes → worker protocol footer.
  *
- * ★ Security posture = `inputs_from`'s: summaries are worker-authored and
- * therefore UNTRUSTED. They are rendered through the one shared envelope
- * renderer (`renderUntrustedEvidenceEnvelopes`, mesh-graph-input-binding.ts):
+ * ★ Security posture: summaries are worker-authored and therefore UNTRUSTED.
+ * They are rendered through the one shared envelope renderer
+ * (`renderUntrustedEvidenceEnvelopes`, mesh-untrusted-evidence.ts):
  * fixed preamble, `trust="untrusted"` envelopes, secret redaction, envelope
  * defanging. The text lands ONLY in this appendix of the DISPATCHED body — it is
  * never persisted onto the queue row and never touches any other task field.
@@ -27,7 +25,7 @@
  */
 
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { renderUntrustedEvidenceEnvelopes, type MeshUntrustedEvidenceBlock } from './mesh-graph-input-binding.js';
+import { renderUntrustedEvidenceEnvelopes, type MeshUntrustedEvidenceBlock } from './mesh-untrusted-evidence.js';
 import { sha256Hex } from '../system/hash.js';
 
 /** Per-predecessor summary cap (characters, before envelope framing). */
@@ -57,22 +55,9 @@ function readIds(value: unknown): string[] {
     return value.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map(v => v.trim());
 }
 
-/** Queue `dependsOn` ∪ graph `requires` edges from worker nodes, deduped. */
-export function collectPredecessorTaskIds(meshId: string, task: UpstreamResultsTask): string[] {
+/** Queue `dependsOn`, deduped (the task itself excluded). */
+export function collectPredecessorTaskIds(task: UpstreamResultsTask): string[] {
     const ids = new Set(readIds(task.dependsOn));
-    try {
-        const graphStore = MeshRuntimeStore.getInstance().graphStore();
-        const node = graphStore.findNodeByQueueTaskId(meshId, task.id);
-        if (node) {
-            const nodes = new Map(graphStore.listNodes(node.graphId).map(n => [n.nodeId, n]));
-            for (const edge of graphStore.listEdges(node.graphId)) {
-                // eslint-disable-next-line no-restricted-syntax -- GRAPH node UUIDs from the same graph store (mesh_task_graph_nodes.nodeId), single canonical form — not mesh machine/daemon ids
-                if (edge.toNodeId !== node.nodeId || edge.kind !== 'requires') continue;
-                const source = nodes.get(edge.fromNodeId);
-                if (source?.kind === 'worker_task' && source.queueTaskId) ids.add(source.queueTaskId);
-            }
-        }
-    } catch { /* graph lookup is an enhancement — queue dependsOn still applies */ }
     ids.delete(task.id);
     return [...ids];
 }
@@ -86,7 +71,7 @@ function loadPredecessor(meshId: string, taskId: string): PredecessorResult {
         if (Number.isFinite(created)) atMs = created;
     } catch { /* ordering falls back to "newest" */ }
     try {
-        const output = store.graphStore().getLatestOutput(taskId);
+        const output = store.getLatestTaskOutput(taskId);
         if (output) {
             // Any terminal output orders the predecessor by when it settled; only
             // an accepted (`completed`) one contributes its summary.
@@ -153,7 +138,7 @@ function render(taskId: string, items: readonly PredecessorResult[], omitted: nu
  * past its own lookups (a store fault degrades to "(no report)" lines).
  */
 export function buildUpstreamResultsAppendix(meshId: string, task: UpstreamResultsTask): string | null {
-    const predecessorIds = collectPredecessorTaskIds(meshId, task);
+    const predecessorIds = collectPredecessorTaskIds(task);
     if (predecessorIds.length === 0) return null;
     const all = predecessorIds.map(id => loadPredecessor(meshId, id))
         .sort((a, b) => a.atMs - b.atMs || a.taskId.localeCompare(b.taskId));

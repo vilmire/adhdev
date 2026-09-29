@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { IdeProviderInstance } from '../../src/providers/ide-provider-instance.js'
 import { ExtensionProviderInstance } from '../../src/providers/extension-provider-instance.js'
-import { AcpProviderInstance } from '../../src/providers/acp-provider-instance.js'
 import { ProviderInstanceManager } from '../../src/providers/provider-instance-manager.js'
 import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js'
-import { createSessionEventPort, type SessionEventPort } from '../../src/sessions/session-port.js'
+import { createSessionEventPort } from '../../src/sessions/session-port.js'
 import type { BusEvent } from '../../src/sessions/lifecycle-events.js'
 
-// Wiring-unification B2: IDE / extension / ACP instances publish provider
+// Wiring-unification B2: IDE / extension instances publish provider
 // events and status edges through the lifecycle port AT THE TRANSITION —
 // no collectAllStates() drain is needed for a subscriber to see them. The
 // per-instance event buffer (pendingEvents / events / flushEvents) that used
@@ -76,31 +75,6 @@ describe('Extension poll → immediate port emission', () => {
     expect(seen.filter((e) => e.kind === 'status')).toEqual([
       expect.objectContaining({ sessionId: extId, prev: 'idle', next: 'generating', cause: 'ide_poll', providerType: 'cline' }),
     ])
-  })
-})
-
-describe('ACP update → immediate port emission', () => {
-  it('a status transition emits its provider event and the edge immediately', () => {
-    const calls: Array<[string, ...unknown[]]> = []
-    const port: SessionEventPort = {
-      status: (...a) => { calls.push(['status', ...a]) },
-      modal: () => {},
-      prompt: () => {},
-      signal: () => {},
-      providerEvent: (...a) => { calls.push(['providerEvent', ...a]) },
-      exited: () => {},
-    }
-    const acp = new AcpProviderInstance(provider('gemini-acp', 'acp'), '/repo') as any
-    acp.setSessionEventPort(port)
-    const id = acp.getInstanceId()
-    acp.lastStatus = 'idle'
-    acp.currentStatus = 'generating'
-    acp.detectStatusTransition()
-
-    expect(calls.map((c) => c[0])).toEqual(['providerEvent', 'status'])
-    expect(calls[0][1]).toBe(id)
-    expect(calls[0][2]).toEqual(expect.objectContaining({ event: 'agent:generating_started', providerType: 'gemini-acp', targetSessionId: id, workspaceName: '/repo' }))
-    expect(calls[1]).toEqual(['status', id, 'idle', 'generating', 'acp_update', 'gemini-acp'])
   })
 })
 

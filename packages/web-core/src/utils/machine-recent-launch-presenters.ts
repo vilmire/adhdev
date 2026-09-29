@@ -4,8 +4,7 @@ import { formatRelativeTime } from './time'
 
 export function getMachineRecentLaunchKindLabel(kind: MachineRecentLaunch['kind']): string {
   if (kind === 'ide') return 'IDE'
-  if (kind === 'cli') return 'CLI'
-  return 'ACP'
+  return 'CLI'
 }
 
 export function getMachineRecentLaunchMetaText(launch: Pick<MachineRecentLaunch, 'kind' | 'subtitle' | 'providerSessionId'>, t?: TFunction): string {

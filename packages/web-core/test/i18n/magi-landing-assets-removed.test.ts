@@ -1,12 +1,11 @@
-// The standalone MAGI landing section was removed from Landing.tsx in
-// commit d8292be1f (2026-07-22, "MAGI 독립 섹션 제거(mesh 카드로 유지)") — the
-// concept lives on inside the mesh card (`landing.mesh.crossSubtitle`)
-// instead. That removal left the `landing.magi.*` (9 keys) and
-// `landing.nav.magi` i18n entries, two /public images, and their CSS rules
-// orphaned. Owner decision (2026-09, O9): delete the dead assets.
-//
-// `mesh.help.sections.magi` and `landing.mesh.crossSubtitle` are a
-// SEPARATE, live namespace (the Repo Mesh MAGI cross-verification feature) and must never be touched by this cleanup.
+// MAGI (the multi-agent cross-verification engine) was retired in favour of a
+// coordinator prompt recipe (send the same question to several workers with
+// mesh_send_task and synthesize the answers). Its landing section had already
+// been removed (commit d8292be1f, 2026-07-22, plus the dead assets in O9); with the
+// engine gone, the dashboard editor keys, the glossary entries and the landing
+// copy that named it went too. The capability the landing copy describes — asking
+// several machines and models the same question — is still offered, by name only
+// no longer.
 import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -18,31 +17,28 @@ async function loadCommon(locale: string): Promise<any> {
     return (await import(`../../src/i18n/locales/${locale}/common.json`)).default
 }
 
-describe('MAGI landing section stays removed (O9)', () => {
+function localePath(locale: string): string {
+    return fileURLToPath(new URL(`../../src/i18n/locales/${locale}/common.json`, import.meta.url))
+}
+
+describe('MAGI is gone from every locale', () => {
     for (const locale of LOCALES) {
-        it(`${locale}: no landing.magi.* keys`, async () => {
-            const common = await loadCommon(locale)
-            expect(common.landing.magi).toBeUndefined()
+        it(`${locale}: no MAGI key or text anywhere`, () => {
+            const text = readFileSync(localePath(locale), 'utf-8')
+            expect(text).not.toMatch(/MAGI|"magi/)
         })
 
-        it(`${locale}: no landing.nav.magi key`, async () => {
+        it(`${locale}: the cross-check landing copy survives, reworded`, async () => {
             const common = await loadCommon(locale)
-            expect(common.landing.nav.magi).toBeUndefined()
-        })
-
-        it(`${locale}: the live Repo Mesh MAGI glossary entry is untouched`, async () => {
-            const common = await loadCommon(locale)
-            expect(common.mesh.help.sections.magi).toBeDefined()
-            expect(common.mesh.help.sections.magi.term).toBe('MAGI')
-        })
-
-        it(`${locale}: the live mesh-card MAGI mention is untouched`, async () => {
-            const common = await loadCommon(locale)
-            expect(common.landing.mesh.crossSubtitle).toContain('MAGI')
+            expect(common.landing.mesh.crossSubtitle).toBeTruthy()
+            expect(common.landing.mesh.crossDesc).toBeTruthy()
+            expect(common.landing.compare.rowCrossCheckAdhdev).toBeTruthy()
+            expect(common.mesh.magiKind).toBeUndefined()
+            expect(common.mesh.help.sections.magi).toBeUndefined()
         })
     }
 
-    it('the two dead /public MAGI images are gone', () => {
+    it('the two dead /public MAGI images stay gone', () => {
         const diagram = fileURLToPath(
             new URL('../../../../../packages/web-cloud/public/landing-magi-diagram.svg', import.meta.url),
         )
@@ -53,22 +49,10 @@ describe('MAGI landing section stays removed (O9)', () => {
         expect(existsSync(synthesis)).toBe(false)
     })
 
-    it('the OSS README synthesis screenshot (a different, live file) is untouched', () => {
-        // Same basename as the deleted web-cloud asset but a distinct binary,
-        // embedded in oss/README.md and oss/README.ko.md — must survive.
-        const readmeImage = fileURLToPath(
-            new URL('../../../../docs/assets/readme/landing-magi-synthesis.jpg', import.meta.url),
-        )
-        expect(existsSync(readmeImage)).toBe(true)
-    })
-
     it('landing.css no longer defines .magi-media rules', () => {
         // packages/web-cloud is the proprietary root package and does not
         // exist in the oss-only (vilmire/adhdev) checkout that runs this
-        // suite in CI. Whether the file exists at all is out of scope here
-        // (that's the root/cloud test suite's job) — this check only
-        // asserts the *content* invariant, and only when the file happens
-        // to be present (e.g. a root monorepo checkout).
+        // suite in CI, so the content invariant is only checked when present.
         const css = fileURLToPath(
             new URL('../../../../../packages/web-cloud/src/landing.css', import.meta.url),
         )

@@ -20,7 +20,7 @@
 //      evidence row's envelope, or rides `mesh.<id>.handoff` when the attempt
 //      is owned by another daemon.
 //   2. NOTICES for the non-turn events (worktree bootstrap, refine, mission
-//      close candidate, graph gates) through the coordinator notifier.
+//      close candidate) through the coordinator notifier.
 //   3. QUEUE EDGES the reducer does not own: a worker going idle registers as a
 //      claim candidate and pulls its next queued task; a worktree bootstrap
 //      terminal state is stamped onto the coordinator's mesh view and re-fires
@@ -46,8 +46,6 @@ import { resolveMeshHostStatus } from './mesh-host-ownership.js';
 import { traceMeshEventStage, traceMeshEventDrop } from '../shared/mesh-event-trace.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { maybeInjectIdleActiveMissionReminder } from './mesh-idle-reminder.js';
-import { registerMeshGraphQueueWakeHandler, registerMeshGraphGateNotifyHandler, registerMeshGraphStopNotifyHandler } from './mesh-graph-outbox.js';
-import { renderGraphStopNotice } from './mesh-graph-stop-notice.js';
 import { readMeshNodeDaemonId } from './mesh-node-identity.js';
 import {
     getMeshWithCache,
@@ -713,7 +711,7 @@ function mirrorToDashboard(components: DaemonComponents, meshId: string, nodeId:
 }
 
 // ---------------------------------------------------------------------------
-// Setup: bus subscriber + graph seams
+// Setup: bus subscriber
 // ---------------------------------------------------------------------------
 
 function onCoordinatorIdleEdge(components: DaemonComponents, instanceId: string): boolean {
@@ -748,81 +746,6 @@ function onCoordinatorIdleEdge(components: DaemonComponents, instanceId: string)
 }
 
 export function setupMeshEventForwarding(components: DaemonComponents): () => void {
-    // GRAPH-ORCHESTRATION: the graph outbox's queue_wake rides the ordinary
-    // triggerMeshQueue (the graph engine never dispatches directly).
-    registerMeshGraphQueueWakeHandler((wakeMeshId) => {
-        setImmediate(() => {
-            triggerMeshQueue(components, wakeMeshId).catch((e: any) => {
-                LOG.warn('MeshQueue', `Graph queue-wake trigger failed (mesh ${wakeMeshId}): ${e?.message || e}`);
-            });
-        });
-    });
-    // GRAPH-GATE-NOTIFY: an opened / lease-lapsed coordinator gate pages the
-    // coordinator as a notice (gateId anchors the dedupe id).
-    registerMeshGraphGateNotifyHandler((notification) => {
-        const gateLabel = notification.ref || notification.gateId;
-        const actionLabel = notification.action ? ` (${notification.action})` : '';
-        const ageLabel = typeof notification.ageMs === 'number'
-            ? ` after ${Math.max(1, Math.round(notification.ageMs / 3_600_000))}h`
-            : '';
-        const coordinatorMessage = notification.kind === 'graph_gate_awaiting'
-            ? `Coordinator gate '${gateLabel}'${actionLabel} is awaiting you (graph ${notification.graphId}). `
-              + `${notification.instructions ? `Instructions: ${notification.instructions} ` : ''}`
-              + `Claim it with mesh_graph_gate (action: "claim", gate_id: ${notification.gateId}), perform the action, then call it again with action "release" (or "abandon"). `
-              + 'Downstream tasks stay blocked until the gate is released.'
-            : notification.kind === 'graph_gate_deadline_expired'
-                // D3(b): elapsed time is NOT completion evidence — the gate was
-                // expired (policy applied), never released.
-                ? `Coordinator gate '${gateLabel}'${actionLabel} passed its deadline${ageLabel} without release and is now expired `
-                  + `(graph ${notification.graphId}, gateId: ${notification.gateId}, policy: ${notification.policy ?? 'hold'}). `
-                  + (notification.policy === 'hold' || !notification.policy
-                      ? 'Downstream stays blocked. Extend it (mesh_graph_gate action "extend" with extend_seconds), reclaim and release it with evidence (actions "claim" then "release"), or abandon it (action "abandon") if the work is obsolete.'
-                      : 'The timeout policy already settled its downstream; nothing is waiting on this gate.')
-                : `Coordinator gate '${gateLabel}'${actionLabel} lease expired without release (graph ${notification.graphId}, gateId: ${notification.gateId}). `
-                  + 'If the external action already happened, reconcile its evidence and release; otherwise reclaim the gate before retrying.';
-        notifyMeshCoordinator({
-            event: `mesh:${notification.kind}`,
-            meshId: notification.meshId,
-            nodeLabel: gateLabel,
-            // A deadline expiry is keyed per deadline so an extended/reclaimed
-            // gate that expires AGAIN pages again; the same expiry never twice.
-            eventId: notification.kind === 'graph_gate_deadline_expired'
-                ? `gate:${notification.kind}:${notification.gateId}:${notification.deadlineAt ?? ''}`
-                : `gate:${notification.kind}:${notification.gateId}`,
-            metadataEvent: {
-                source: 'mesh_graph_outbox',
-                taskId: notification.gateId,
-                gateId: notification.gateId,
-                graphId: notification.graphId,
-                ...(notification.ref ? { ref: notification.ref } : {}),
-                ...(notification.action ? { action: notification.action } : {}),
-                ...(notification.deadlineAt ? { deadlineAt: notification.deadlineAt } : {}),
-                // graph node id — NOT a mesh node id, hence the distinct key.
-                ...(notification.nodeId ? { gateNodeId: notification.nodeId } : {}),
-                ...(notification.policy ? { policy: notification.policy } : {}),
-                ...(typeof notification.ageMs === 'number' ? { ageMs: notification.ageMs } : {}),
-            },
-            coordinatorMessage,
-        });
-    });
-
-    // N(a)/N(b): stopped downstream work (a failure that blocked or cancelled
-    // downstream steps) pages the coordinator once — the eventId is graph +
-    // root node + the root task's output version. notifyMeshCoordinator serves a
-    // PTY-hosted coordinator (injection) and an MCP-only one (pendingCoordinatorEvents)
-    // from the same notice row.
-    registerMeshGraphStopNotifyHandler((notice) => {
-        const rendered = renderGraphStopNotice(notice);
-        notifyMeshCoordinator({
-            event: rendered.event,
-            meshId: notice.meshId,
-            nodeLabel: rendered.nodeLabel,
-            eventId: rendered.eventId,
-            metadataEvent: rendered.metadataEvent,
-            coordinatorMessage: rendered.coordinatorMessage,
-        });
-    });
-
     const onProviderEvent = (event: any) => {
         const eventName = readText(event?.event);
         const instanceId = readText(event?.instanceId);

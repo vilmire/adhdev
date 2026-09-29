@@ -87,22 +87,6 @@ describe('DaemonCliManager provider activation', () => {
     );
   });
 
-  it('rejects a direct ACP runtime launch when the provider is not machine-enabled', async () => {
-    writeProvider(providerRoot, 'acp', 'sample-acp', {
-      type: 'sample-acp',
-      name: 'Sample ACP',
-      displayName: 'Sample ACP',
-      category: 'acp',
-      spawn: { command: 'sample-acp-definitely-missing', args: ['--stdio'] },
-    });
-    const loader = new TestProviderLoader(providerRoot, testConfig);
-    loader.loadAll();
-
-    await expect(createManager(loader).startSession('sample-acp', workingDir)).rejects.toThrow(
-      /Sample ACP is disabled/i,
-    );
-  });
-
   it('passes persisted provider settings into enabled CLI runtime instances', async () => {
     const executable = join(providerRoot, 'bin', 'sample-cli');
     mkdirSync(join(providerRoot, 'bin'), { recursive: true });
@@ -142,37 +126,4 @@ describe('DaemonCliManager provider activation', () => {
     expect(context.settings).toMatchObject({ autoApprove: true });
   }, 15000);
 
-  it('uses machine executable and argv overrides for enabled ACP runtime launches', async () => {
-    const executable = join(providerRoot, 'bin', 'sample-acp');
-    mkdirSync(join(providerRoot, 'bin'), { recursive: true });
-    writeFileSync(executable, '#!/bin/sh\nexit 0\n', 'utf-8');
-    chmodSync(executable, 0o755);
-
-    writeProvider(providerRoot, 'acp', 'sample-acp', {
-      type: 'sample-acp',
-      name: 'Sample ACP',
-      displayName: 'Sample ACP',
-      category: 'acp',
-      spawn: { command: 'sample-acp-definitely-missing', args: ['--stdio'] },
-    });
-    testConfig.machineProviders['sample-acp'] = {
-      enabled: true,
-      executable,
-      args: ['agent', '--profile', 'work tree'],
-    };
-    const loader = new TestProviderLoader(providerRoot, testConfig);
-    loader.loadAll();
-
-    const addInstance = vi.fn();
-    const removeInstance = vi.fn();
-    await createManager(loader, {
-      getInstanceManager: () => ({ addInstance, removeInstance }),
-      getSessionRegistry: () => ({ register: vi.fn() }),
-    }).startSession('sample-acp', workingDir);
-
-    expect(addInstance).toHaveBeenCalledTimes(1);
-    const acpInstance = addInstance.mock.calls[0][1] as any;
-    expect(acpInstance.provider.spawn.command).toBe(executable);
-    expect(acpInstance.provider.spawn.args).toEqual(['agent', '--profile', 'work tree']);
-  });
 });

@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 // C4 (C-W4): the reconcile loop's NON-turn half. It keeps config/cache sync,
-// graph gate timeouts / staleness / workspace-saga leases, the DS3 catch-up,
+// the queue dependency stall sweep, the DS3 catch-up,
 // disk + worktree retention and the idle reaper — and holds no turn or hold
 // logic. The queue claim is exported for the turn scheduler's claim phase.
 
@@ -14,10 +14,7 @@ const mocks = vi.hoisted(() => ({
     disk: vi.fn(),
     orphan: vi.fn(async () => {}),
     reap: vi.fn(async () => {}),
-    gates: vi.fn(() => ({ expiredGateIds: [] as string[] })),
-    staleness: vi.fn(),
     stalls: vi.fn(),
-    saga: vi.fn(async () => {}),
     trigger: vi.fn(async () => ({})),
     pendingCount: vi.fn(() => 0),
     runtimeRetention: vi.fn(),
@@ -30,18 +27,12 @@ vi.mock('../../src/mesh/mesh-disk-retention.js', () => ({ runDiskRetentionSweep:
 vi.mock('../../src/mesh/mesh-worktree-retention.js', () => ({ runWorktreeNodeRetentionTick: vi.fn(async () => {}) }));
 vi.mock('../../src/mesh/mesh-idle-session-reaper.js', () => ({ runIdleSessionReapPass: mocks.reap }));
 vi.mock('../../src/mesh/mesh-retention-config.js', () => ({ resolveWorktreeNodeRetentionGraceMs: () => 0 }));
-vi.mock('../../src/mesh/mesh-graph-gates.js', () => ({ sweepMeshGraphGateTimeouts: mocks.gates }));
-vi.mock('../../src/mesh/mesh-graph-staleness.js', () => ({ sweepMeshGraphStaleness: mocks.staleness }));
-vi.mock('../../src/mesh/mesh-graph-stall.js', () => ({ sweepMeshGraphStalls: mocks.stalls }));
-vi.mock('../../src/mesh/mesh-graph-workspace-saga.js', () => ({ recoverExpiredWorkspaceSagas: mocks.saga }));
-vi.mock('../../src/mesh/mesh-graph-workspace-ports.js', () => ({ createDefaultWorkspaceSagaPorts: () => ({}) }));
-vi.mock('../../src/mesh/mesh-graph-provenance.js', () => ({ recordGraphGateExpired: vi.fn() }));
+vi.mock('../../src/mesh/mesh-queue-dependency-notice.js', () => ({ sweepQueueDependencyStalls: mocks.stalls }));
 vi.mock('../../src/mesh/mesh-events-coordinator.js', () => ({ triggerMeshQueue: mocks.trigger }));
 vi.mock('../../src/mesh/mesh-runtime-store.js', () => ({
     pruneMeshRuntimeRetention: mocks.runtimeRetention,
     MeshRuntimeStore: {
         getInstance: () => ({
-            graphStore: () => ({ listGatesByMesh: () => [] }),
             pendingQueueTaskCount: mocks.pendingCount,
         }),
     },
@@ -80,13 +71,9 @@ describe('mesh housekeeping tick', () => {
         expect(mocks.listMeshes).toHaveBeenCalledTimes(1);
         expect(mocks.catchup).toHaveBeenCalledTimes(1);
         expect((mocks.catchup.mock.calls[0] as any[])[1]).toMatchObject({ id: 'mesh-hosted' });
-        expect(mocks.gates).toHaveBeenCalledWith('mesh-hosted');
-        expect(mocks.staleness).toHaveBeenCalledWith('mesh-hosted');
-        // N(c): the stall sweep (graph active but nothing can move) runs on the same tick.
+        // The queue dependency stall sweep (a dead depends_on nobody announced) runs on the same tick.
         expect(mocks.stalls).toHaveBeenCalledWith('mesh-hosted');
         expect(mocks.stalls).not.toHaveBeenCalledWith('mesh-foreign');
-        expect(mocks.saga).toHaveBeenCalledWith('mesh-hosted', expect.anything());
-        expect(mocks.gates).not.toHaveBeenCalledWith('mesh-foreign');
     });
 
     it('never claims the queue itself (the turn scheduler owns the claim phase)', async () => {
@@ -122,10 +109,10 @@ describe('mesh housekeeping tick', () => {
 
     it('a failing phase is isolated — the rest of the tick still runs', async () => {
         mocks.catchup.mockRejectedValueOnce(new Error('boom'));
-        mocks.gates.mockImplementationOnce(() => { throw new Error('gate boom'); });
         await expect(runMeshHousekeepingTick(components(), {}, 1_000)).resolves.toBeUndefined();
-        expect(mocks.staleness).toHaveBeenCalled();
-        expect(mocks.saga).toHaveBeenCalled();
+        expect(mocks.stalls).toHaveBeenCalled();
+        mocks.stalls.mockImplementationOnce(() => { throw new Error('sweep boom'); });
+        await expect(runMeshHousekeepingTick(components(), {}, 2_000)).resolves.toBeUndefined();
     });
 
     it('holds NO turn or hold logic: no turn-ledger / legacy ledger / hold module in its imports', () => {

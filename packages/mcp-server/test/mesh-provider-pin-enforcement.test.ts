@@ -5,7 +5,7 @@ import { existsSync, unlinkSync, readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
 import { meshEnqueueTask } from '../src/tools/mesh-tools.js';
-import { ipcDispatchToRemoteAgent } from '../src/tools/mesh-remote-dispatch.js';
+import { dispatchToRemoteNode } from './helpers/remote-dispatch.js';
 import { IpcTransport } from '../src/transports/ipc.js';
 import {
   getLedgerDir,
@@ -20,7 +20,7 @@ import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 // ★PROVIDER-PIN-BYPASS (D2) — `required_tags: ["provider=X"]` was silently bypassed on
 // the enqueue-and-push (`via: p2p_direct`) path. (That push is retired since rc.37
-// Finding B — enqueue now delivers only through a claim — but ipcDispatchToRemoteAgent's
+// Finding B — enqueue now delivers only through a claim — but dispatchToRemoteNode's
 // provider resolution, which the fix hardened, is exercised directly below.)
 //
 // LIVE REPRO (2026-09-21, task 1c225a59, node Jupiter). Three consecutive ledger entries:
@@ -38,7 +38,7 @@ import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answer
 //      "could some provider here satisfy the pin?".
 //   2. selectEagerPushReceiver used exactly that node-level predicate to pick a
 //      receiver — also correct, that IS the question it needs answered.
-//   3. ipcDispatchToRemoteAgent then chose the concrete provider on its own, from
+//   3. dispatchToRemoteNode then chose the concrete provider on its own, from
 //      `providerPriority[0]` — with no knowledge a pin existed. Jupiter's priority[0]
 //      is claude-cli. Nothing compared the answer back against the pin.
 //
@@ -122,12 +122,12 @@ function makeCtx(meshId: string, transport: any, nodes: any[]) {
 
 /**
  * rc.37 Finding B retired the enqueue-and-push, so `meshEnqueueTask` no longer
- * reaches ipcDispatchToRemoteAgent at all. The provider-resolution half of the pin
+ * reaches dispatchToRemoteNode at all. The provider-resolution half of the pin
  * fix still lives there (it resolves the concrete provider for every remote send),
  * so these tests drive it directly with the task's requiredTags.
  */
 async function dispatchWithTags(ctx: any, node: any, message: string, requiredTags: string[]) {
-  return ipcDispatchToRemoteAgent(ctx, node, {
+  return dispatchToRemoteNode(ctx, node, {
     message,
     ...(requiredTags.length ? { requiredTags } : {}),
     meshContext: { meshId: ctx.mesh.id, nodeId: node.id, taskId: `t_${randomUUID().slice(0, 8)}` },
@@ -168,7 +168,7 @@ test('PREMISE: the node-level tag predicate says YES to a pin the node may not h
 
 test('providerPinsFromRequiredTags extracts ONLY the provider= axis', () => {
   assert.deepEqual(providerPinsFromRequiredTags(['provider=antigravity-cli']), ['antigravity-cli']);
-  // os=/arch=/worktree=/converge= are node properties, not provider choices — they must
+  // os=/arch=/worktree= are node properties, not provider choices — they must
   // never be read as a provider constraint or every tagged task becomes unroutable.
   assert.deepEqual(providerPinsFromRequiredTags(['os=win32', 'arch=x64', 'converge=refine']), []);
   assert.deepEqual(providerPinsFromRequiredTags(['os=win32', 'provider=codex-cli']), ['codex-cli']);

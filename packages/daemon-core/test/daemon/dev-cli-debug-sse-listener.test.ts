@@ -66,10 +66,6 @@ function buildCtx(onEventListeners: Array<(event: any) => void>, cliSSEClients: 
     json: () => {},
     readBody: async () => ({}),
     log: () => {},
-    autoImplSSEClients: [],
-    sendAutoImplSSE: () => {},
-    autoImplStatus: { running: false, type: null, progress: [] },
-    autoImplProcess: null,
     sendCliSSE: (data: any) => {
       const msg = `data: ${JSON.stringify(data)}\n\n`
       for (const client of cliSSEClients) {
@@ -78,7 +74,6 @@ function buildCtx(onEventListeners: Array<(event: any) => void>, cliSSEClients: 
     },
     handleRunScript: async () => {},
     findProviderDir: () => null,
-    getLatestScriptVersionDir: () => null,
   }
 }
 

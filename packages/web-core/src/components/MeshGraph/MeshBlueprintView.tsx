@@ -5,23 +5,15 @@
  *
  * Composition (P1 list redesign, owner-approved 2026-09-16 — the fused ELK
  * canvas is retired):
- *  - data plane: the live work queue plus every persistent graph from
- *    mesh_graph_overview (this component still owns both fetches)
+ *  - data plane: the live work queue from the mesh status (tasks carry their
+ *    `depends_on`, mission and derived dependency failures)
  *  - MeshBlueprintList: sectioned rows (Running / Blocked / Recent / History)
- *    with scope chips and a status bar; graph gates surface as Blocked rows.
- *    Gate VERBS (Release / Abandon / Extend 24h) ARE exposed here as of D5
- *    (the 2026-09-25 graph orchestration simplification) — this
- *    supersedes the 2026-08-24 "coordinator-only" decision. They call the
- *    same mesh_graph_gate_release/abandon/extend daemon commands the MCP
- *    tools wrap, through the same sendDaemonCommand path every other
- *    Blueprint action (fast-forward, route preview) already uses.
+ *    with scope chips and a status bar.
  *  - List / Graph switch (2026-09-26): MeshBlueprintGraph draws the same
- *    data as a laned task graph (queue depends_on chains + graph DAGs +
- *    gates). The choice is remembered per viewer (blueprintViewMode); both
- *    views share one open-task / open-gate path and the same gate verbs.
- *  - on-demand mini DAG: a row backed by a graph WITH edges (or queue
- *    dependency edges) can expand a small React Flow plan (MeshMiniDag) —
- *    the only graph drawing left on this tab.
+ *    tasks as a laned dependency graph. The choice is remembered per viewer
+ *    (blueprintViewMode); both views share one open-task path.
+ *  - on-demand mini DAG: a row with queue dependency edges can expand a small
+ *    React Flow plan (MeshMiniDag).
  *  - scheduling preview: mesh_route_preview (read-only) behind one compact
  *    chip + popover. The generic forecast is explicitly UNPINNED; a task
  *    pinned to a node (targetNodeId) gets its own pinned preview, rendered
@@ -29,7 +21,7 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
+import type { RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
 import { unwrapDaemonCommandBody } from '../../utils/daemon-command-envelope'
 import { IconRefresh } from '../Icons'
 import { useTheme } from '../../hooks/useTheme'
@@ -43,17 +35,12 @@ import { snapshotHasStructure } from './blueprintGraphModel'
 import { readBlueprintViewMode, resolveBlueprintViewMode, writeBlueprintViewMode, type BlueprintViewMode } from './blueprintViewMode'
 import { useDetailStack } from './MeshOverviewCards';
 import { MeshOverviewDetailModal } from './MeshOverviewDetails';
-import { InfoTip, Tooltip } from '../ui/InfoTip'
+import { InfoTip } from '../ui/InfoTip'
 import {
-    BLUEPRINT_GRAPH_INITIAL_LIMIT,
-    BLUEPRINT_GRAPH_LOAD_MORE_STEP,
     ROUTE_PREVIEW_COMPACT_DIFFICULTY,
     ROUTE_PREVIEW_DIFFICULTIES,
-    buildBlueprintGraphOverviewArgs,
     buildPinnedSlotLabels,
     buildRoutePreviewRequests,
-    getBlueprintGraphPagination,
-    nextBlueprintGraphLimit,
     resolveCompactRoutePreviewLabel,
     routePreviewKey,
     routePreviewNextSlotLabel,
@@ -103,7 +90,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     daemonId?: string | null
     sendDaemonCommand?: ((id: string, type: string, data?: Record<string, unknown>) => Promise<any>) | null
     emptyMessage?: string
-    /** Bumped by the host's single Refresh control — reloads the graphs too. */
+    /** Bumped by the host's single Refresh control — reruns the route preview. */
     refreshToken?: number
 }) {
     const { t } = useTranslation('common')
@@ -111,13 +98,8 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     const meshId = status.meshId
 
-    const [graphs, setGraphs] = useState<MeshGraphView[]>([])
-    const [totalGraphCount, setTotalGraphCount] = useState(0)
-    const [graphsError, setGraphsError] = useState('')
-    const [graphsLoading, setGraphsLoading] = useState(false)
-    const [graphLimit, setGraphLimit] = useState(BLUEPRINT_GRAPH_INITIAL_LIMIT)
-    /** Shared overview detail modal — task rows and gate rows both open here. */
-    const { detail, canGoBack, open: setDetail, back: backDetail, close: closeDetail, filter: filterDetail } = useDetailStack()
+    /** Shared overview detail modal — task rows open here. */
+    const { detail, canGoBack, open: setDetail, back: backDetail, close: closeDetail } = useDetailStack()
 
 
     const [schedDetailOpen, setSchedDetailOpen] = useState(false)
@@ -152,7 +134,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     /* List / Graph switch — stored per viewer; otherwise Graph once the
      * snapshot has structure (latched, so a poll never flips it back). */
     const [storedViewMode, setStoredViewMode] = useState<BlueprintViewMode | null>(() => readBlueprintViewMode())
-    const hasStructure = useMemo(() => snapshotHasStructure(tasks, graphs), [tasks, graphs])
+    const hasStructure = useMemo(() => snapshotHasStructure(tasks), [tasks])
     const [structureSeen, setStructureSeen] = useState(hasStructure)
     useEffect(() => { if (hasStructure) setStructureSeen(true) }, [hasStructure])
     const viewMode = resolveBlueprintViewMode(storedViewMode, structureSeen || hasStructure)
@@ -194,11 +176,8 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
         return map
     }, [status])
 
-    /** Shared by List rows and Graph nodes — one open-task / open-gate behaviour. */
+    /** Shared by List rows and Graph nodes — one open-task behaviour. */
     const openQueueTask = useCallback((task: RepoMeshQueueTask) => setDetail({ kind: 'queue', task }), [setDetail])
-    const openGate = useCallback((graph: MeshGraphView, nodeId: string, gate?: MeshGraphGateView) => {
-        setDetail({ kind: 'gate', graph, nodeId, gate: gate ?? null })
-    }, [setDetail])
 
     const openMission = useCallback((missionId: string) => {
         const mission = ((status as RepoMeshStatus).missions ?? []).find(candidate => candidate.id === missionId)
@@ -213,45 +192,6 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
         }
         return map
     }, [status])
-
-    // Terminal graphs are always requested (the old checkbox default): the
-    // list renders them as rows only under the History scope, so the cost of
-    // having them is a chip count, not a canvas — while their mini DAGs stay
-    // one tap away on Recent/History rows.
-    const refreshGraphs = useCallback(async () => {
-        if (!canCommand) return
-        setGraphsLoading(true)
-        setGraphsError('')
-        try {
-            const raw = await sendDaemonCommand!(
-                daemonId!,
-                'mesh_graph_overview',
-                buildBlueprintGraphOverviewArgs(meshId, true, graphLimit),
-            )
-            const body = unwrapDaemonCommandBody<{ success?: boolean; error?: string; graphs?: MeshGraphView[]; totalGraphCount?: number }>(raw)
-            if (!body || body.success === false) throw new Error(body?.error || 'graph overview failed')
-            const nextGraphs = Array.isArray(body.graphs) ? body.graphs : []
-            setGraphs(nextGraphs)
-            setTotalGraphCount(typeof body.totalGraphCount === 'number' ? body.totalGraphCount : nextGraphs.length)
-        } catch (e: any) {
-            setGraphsError(e?.message || String(e))
-        } finally {
-            setGraphsLoading(false)
-        }
-    }, [canCommand, daemonId, graphLimit, meshId, sendDaemonCommand])
-
-    useEffect(() => { void refreshGraphs() }, [refreshGraphs])
-    // The dialog header owns the one Refresh control; follow its token.
-    const lastRefreshToken = useRef(refreshToken)
-    useEffect(() => {
-        if (refreshToken === undefined || refreshToken === lastRefreshToken.current) return
-        lastRefreshToken.current = refreshToken
-        void refreshGraphs()
-    }, [refreshGraphs, refreshToken])
-    // Drop a gate detail whose graph left the list (e.g. pagination change).
-    useEffect(() => {
-        filterDetail(current => !(current.kind === 'gate' && !graphs.some(g => g.graphId === current.graph.graphId)))
-    }, [filterDetail, graphs])
 
     // Load the full difficulty matrix in one sweep — the point of the panel is
     // "which slot matches next, per difficulty, at a glance", so it must not
@@ -297,6 +237,13 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     }, [canCommand, daemonId, meshId, schedReadonly, sendDaemonCommand])
 
     useEffect(() => { void runRoutePreview() }, [runRoutePreview, previewRequestsKey])
+    // The dialog header owns the one Refresh control; follow its token.
+    const lastRefreshToken = useRef(refreshToken)
+    useEffect(() => {
+        if (refreshToken === undefined || refreshToken === lastRefreshToken.current) return
+        lastRefreshToken.current = refreshToken
+        void runRoutePreview()
+    }, [runRoutePreview, refreshToken])
 
     // difficulty → next-match slot label. This is the GENERIC forecast — a
     // hypothetical dispatch with NO pin; it lives in the scheduling chip +
@@ -326,10 +273,8 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
         return buildPinnedSlotLabels(tasks, schedMatrix, previewNodeSuffix)
     }, [schedMatrix, tasks, previewNodeSuffix])
 
-    const graphPagination = getBlueprintGraphPagination(graphs.length, totalGraphCount, graphLimit)
-
-    /** Caller chrome on the list's status-bar row: scheduling chip, graph
-     *  pagination, refresh. Wrap-flex — on a phone it drops to its own line. */
+    /** Caller chrome on the list's status-bar row: view switch and the
+     *  scheduling chip. Wrap-flex — on a phone it drops to its own line. */
     const headerExtras = (
         <>
             <BlueprintViewSwitch mode={viewMode} onChange={chooseViewMode} meshTheme={meshTheme} />
@@ -347,34 +292,11 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                     <span className="text-text-primary">→ {compactPredictedSlot ?? t('mesh.blueprint.schedNoWinner')}</span>
                 </button>
             )}
-            {!graphsLoading && (
-                <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-3xs text-text-muted">
-                    <Tooltip content={[
-                        t('mesh.graphs.shown', { count: graphs.length }),
-                        graphPagination.atServerLimit ? t('mesh.graphs.serverLimitHidden', { count: graphPagination.hiddenCount }) : null,
-                        graphPagination.atServerLimit ? t('mesh.graphs.serverLimitReached') : null,
-                    ].filter(Boolean).join('\n')}>
-                        <span className="tabular-nums">{graphs.length}{graphPagination.atServerLimit ? '+' : ''}</span>
-                    </Tooltip>
-                    {graphPagination.canLoadMore && (
-                        <button
-                            type="button"
-                            onClick={() => setGraphLimit(nextBlueprintGraphLimit)}
-                            className={meshToggleChipClass(false)}
-                        >
-                            {t('mesh.graphs.loadMore', {
-                                count: Math.min(BLUEPRINT_GRAPH_LOAD_MORE_STEP, graphPagination.hiddenCount),
-                            })}
-                        </button>
-                    )}
-                </div>
-            )}
         </>
     )
 
     return (
         <div className="flex min-h-0 flex-1 flex-col gap-1.5 p-1.5">
-            {graphsError && <div className="rounded-lg border border-status-error/35 px-3 py-2 text-xs text-status-error">{graphsError}</div>}
 
             {/* ── Body — the drafting-paper shell keeps the blueprint identity;
                 the LIST inside scrolls vertically (no pan/zoom canvas left at
@@ -387,38 +309,26 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                         <MeshBlueprintGraph
                             tasks={tasks}
                             status={status}
-                            graphs={graphs}
                             meshTheme={meshTheme}
                             nodeLabels={nodeLabels}
                             missionTitles={missionTitles}
                             emptyMessage={emptyMessage}
                             onTaskOpen={openQueueTask}
-                            onGateOpen={openGate}
                             onMissionOpen={openMission}
                             headerExtras={headerExtras}
-                            daemonId={daemonId}
-                            meshId={meshId}
-                            sendDaemonCommand={sendDaemonCommand}
-                            onGatesChanged={refreshGraphs}
                         />
                     ) : (
                         <MeshBlueprintList
                             tasks={tasks}
                             status={status}
-                            graphs={graphs}
                             meshTheme={meshTheme}
                             nodeLabels={nodeLabels}
                             missionTitles={missionTitles}
                             pinnedSlots={pinnedSlots}
                             emptyMessage={emptyMessage}
                             onTaskOpen={openQueueTask}
-                            onGateOpen={openGate}
                             onMissionOpen={openMission}
                             headerExtras={headerExtras}
-                            daemonId={daemonId}
-                            meshId={meshId}
-                            sendDaemonCommand={sendDaemonCommand}
-                            onGatesChanged={refreshGraphs}
                         />
                     )}
                 </div>

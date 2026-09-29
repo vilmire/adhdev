@@ -1,5 +1,5 @@
 /**
- * Saved workspaces — shared by IDE launch, CLI, ACP (daemon-local).
+ * Saved workspaces — shared by IDE launch, CLI (daemon-local).
  */
 
 import * as fs from 'fs';
@@ -73,7 +73,7 @@ export type ResolveLaunchDirectoryResult =
     | { ok: false; code: 'WORKSPACE_LAUNCH_CONTEXT_REQUIRED'; message: string };
 
 /**
- * Resolve cwd for CLI/ACP. No implicit default workspace or home — caller must pass
+ * Resolve cwd for CLI. No implicit default workspace or home — caller must pass
  * useDefaultWorkspace or useHome (or an explicit dir / workspaceId).
  */
 export function resolveLaunchDirectory(
@@ -160,7 +160,7 @@ export function resolveIdeWorkspaceFromArgs(
 }
 
 /**
- * IDE launch folder — same saved workspaces + default as CLI/ACP.
+ * IDE launch folder — same saved workspaces + default as CLI.
  * After explicit `workspace` / `workspaceId` / `useDefaultWorkspace: true`, falls back to
  * config default workspace when set. Pass `useDefaultWorkspace: false` to open IDE without that folder.
  */

@@ -89,7 +89,7 @@ describe('H-rule expiry → the effect the reducer table names (one tick)', () =
         await r.scheduler.tick();
         const attempt = r.ledger.getAttempt('a1')!;
         expect(attempt.terminal).toMatchObject({ outcome: 'failed', reason: 'hard_ceiling' });
-        expect(r.host.calls).toContain('graph:t1:failed');
+        expect(r.host.calls).toContain('terminal:t1:failed');
         expect(rowsOf(r.db, 'committed', 'a1')).toHaveLength(1);
     });
 
@@ -278,7 +278,7 @@ describe('probeDue — the probe produces evidence, never a verdict', () => {
         // Shape evidence only → the reducer's admission says weak → finalizing.
         expect(r.ledger.getAttempt('a1')!.state).toBe('finalizing');
         expect(r.ledger.getAttempt('a1')!.terminal).toBeNull();
-        expect(r.host.calls.filter((c) => c.startsWith('graph:'))).toEqual([]);
+        expect(r.host.calls.filter((c) => c.startsWith('terminal:'))).toEqual([]);
         // …and the attempt is stamped probed.
         const row = r.db.prepare('SELECT last_probe_at FROM turn_attempts WHERE attempt_id = ?').get('a1') as { last_probe_at: number };
         expect(row.last_probe_at).toBe(r.now);
@@ -397,7 +397,7 @@ describe('report gate — the rc.40 false-idle sequence commits once, on the rep
         r.advance(P.awaitReportMs + 1);
         await r.scheduler.tick();
         expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' });
-        expect(r.host.calls).toContain('graph:t1:completed');
+        expect(r.host.calls).toContain('terminal:t1:completed');
     });
 });
 

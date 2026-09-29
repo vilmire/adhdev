@@ -1,7 +1,7 @@
 /**
  * Single source of truth for provider-category color coding.
  *
- * `ide` / `cli` / `acp` / `extension` are a classification axis (which kind
+ * `ide` / `cli` / `extension` are a classification axis (which kind
  * of provider this is) and must render as the same color everywhere they
  * appear, or the color stops carrying meaning. Every hue here is chosen to
  * stay clear of TrustBadge's violet/green/emerald/sky/amber palette (they
@@ -30,10 +30,6 @@ export const PROVIDER_CATEGORY_COLOR: Record<ProviderCategory, ProviderCategoryC
     cli: {
         badge: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/20',
         accent: 'border-indigo-500/[0.12]',
-    },
-    acp: {
-        badge: 'bg-fuchsia-500/10 text-fuchsia-300 border-fuchsia-500/20',
-        accent: 'border-fuchsia-500/[0.12]',
     },
     extension: {
         badge: 'bg-teal-500/10 text-teal-300 border-teal-500/20',

@@ -1,7 +1,7 @@
 /**
- * §8 unit 8 — mcp SEMANTIC transcript consumers (design §4 roster ids 6, 7, 8).
+ * §8 unit 8 — mcp SEMANTIC transcript consumer (design §4 roster id 6).
  *
- * These three consumers differ from unit 6's display cutover in that each one
+ * This consumer differs from unit 6's display cutover in that it
  * derives an IRREVERSIBLE decision from the transcript. So beyond "does the
  * replica answer", this suite pins the ADMISSION GATE — the per-consumer
  * coverage and freshness requirements from §4's roster table and §5.5's
@@ -87,15 +87,15 @@ const BASE = { ownerDaemonId: 'daemon-remote', rawSessionId: 'sess-remote', nowM
 
 // ── the roster is the switch (design §4: "roster 밖 코드는 replica를 읽을 수 없다") ──
 
-test('this unit owns roster ids 6-8, and the shipped roster has them enabled', () => {
+test('this unit owns roster id 6, and the shipped roster has it enabled', () => {
   // ★ Scoped to THIS unit's ids, derived from the roster's own ownership field
   // rather than hardcoded — so a future unit enabling ITS id does not touch
-  // this suite. The complete enabled set (all 8) is asserted once, by
+  // this suite. The complete enabled set is asserted once, by
   // daemon-core's test/mesh/transcript-read-model-consumers.test.ts, which also
   // enforces that no per-unit suite asserts a foreign id. See the roster
   // module header's "Test authority" note.
   const owned = rosterIdsForUnit(UNIT);
-  assert.deepEqual([...owned], ['mcp_mesh_status_reconciliation', 'magi_approval_probe', 'magi_result_collect']);
+  assert.deepEqual([...owned], ['mcp_mesh_status_reconciliation']);
   for (const id of owned) {
     assert.equal(TRANSCRIPT_CONSUMER_ROSTER[id].enabled, true, `roster id ${id}`);
   }
@@ -111,10 +111,10 @@ test('a disabled roster id declines BEFORE any IPC — the cutover is fully iner
   const t = transportFor();
   const outcome = await readTranscriptReplicaForSemanticConsumer(t, {
     ...BASE,
-    consumerId: 'magi_result_collect',
+    consumerId: 'mcp_mesh_status_reconciliation',
     acceptCoverage: ['full', 'tail', 'current-turn'],
     requireFresh: false,
-    roster: withRosterEntryDisabled('magi_result_collect'),
+    roster: withRosterEntryDisabled('mcp_mesh_status_reconciliation'),
   });
   assert.equal(outcome.payload, null);
   assert.equal(outcome.fallbackReason, 'consumer_not_enabled');
@@ -139,21 +139,21 @@ test('roster id 6 (status reconciliation) serves a read_chat-shaped payload the 
   assert.equal(outcome.payload!.messages[1].content, 'REPLICA_ANSWER');
 });
 
-test('roster id 7 (approval probe) carries status + activeModal for the wedge predicate', async () => {
+test('a fresh-only read carries status + activeModal through the projection', async () => {
   const modal = { message: 'Allow git read?', buttons: ['Yes', 'No'] };
   const outcome = await readTranscriptReplicaForSemanticConsumer(
     transportFor({ snap: snapshot({ status: 'waiting_approval', activeModal: modal }) }),
-    { ...BASE, consumerId: 'magi_approval_probe', acceptCoverage: ['full', 'tail', 'current-turn'], requireFresh: true },
+    { ...BASE, consumerId: 'mcp_mesh_status_reconciliation', acceptCoverage: ['full', 'tail', 'current-turn'], requireFresh: true },
   );
   assert.ok(outcome.payload);
   assert.equal(outcome.payload!.status, 'waiting_approval');
   assert.deepEqual(outcome.payload!.activeModal, modal);
 });
 
-test('roster id 8 (result collect) preserves the assistant content the kind parser needs', async () => {
+test('a current-turn read preserves the assistant content the evidence parser needs', async () => {
   const outcome = await readTranscriptReplicaForSemanticConsumer(transportFor(), {
     ...BASE,
-    consumerId: 'magi_result_collect',
+    consumerId: 'mcp_mesh_status_reconciliation',
     acceptCoverage: ['current-turn'],
     requireFresh: true,
   });
@@ -163,10 +163,10 @@ test('roster id 8 (result collect) preserves the assistant content the kind pars
 
 // ── the admission gate: coverage (§4 "coverage가 tail뿐이면 legacy") ─────────
 
-test('roster id 8 REFUSES tail-only coverage — the FIX#1 cross-turn guard must not be lost', async () => {
+test('a current-turn consumer REFUSES tail-only coverage — a cross-turn answer must not be read', async () => {
   const outcome = await readTranscriptReplicaForSemanticConsumer(
     transportFor({ snap: snapshot({ coverage: { mode: 'tail', totalMessageCount: 9, returnedMessageCount: 2, omittedBefore: true } }) }),
-    { ...BASE, consumerId: 'magi_result_collect', acceptCoverage: ['current-turn'], requireFresh: true },
+    { ...BASE, consumerId: 'mcp_mesh_status_reconciliation', acceptCoverage: ['current-turn'], requireFresh: true },
   );
   assert.equal(outcome.payload, null);
   assert.equal(outcome.fallbackReason, 'coverage_insufficient');
@@ -181,10 +181,10 @@ test('roster id 6 REFUSES tail coverage — the trailing-activity veto needs the
   assert.equal(outcome.fallbackReason, 'coverage_insufficient');
 });
 
-test('roster id 7 ACCEPTS tail coverage — status/activeModal are session-level, not window-derived', async () => {
+test('a consumer that accepts tail coverage gets it — status/activeModal are session-level, not window-derived', async () => {
   const outcome = await readTranscriptReplicaForSemanticConsumer(
     transportFor({ snap: snapshot({ status: 'waiting_approval', coverage: { mode: 'tail', totalMessageCount: 9, returnedMessageCount: 1, omittedBefore: true } }) }),
-    { ...BASE, consumerId: 'magi_approval_probe', acceptCoverage: ['full', 'tail', 'current-turn'], requireFresh: true },
+    { ...BASE, consumerId: 'mcp_mesh_status_reconciliation', acceptCoverage: ['full', 'tail', 'current-turn'], requireFresh: true },
   );
   assert.equal(outcome.fallbackReason, null);
   assert.equal(outcome.payload!.status, 'waiting_approval');
@@ -196,7 +196,7 @@ test('a snapshot older than the freshness budget declines with stale_active_sess
   const stale = snapshot({ observedAt: new Date(NOW - SEMANTIC_TRANSCRIPT_FRESHNESS_BUDGET_MS - 1).toISOString() });
   const outcome = await readTranscriptReplicaForSemanticConsumer(transportFor({ snap: stale }), {
     ...BASE,
-    consumerId: 'magi_approval_probe',
+    consumerId: 'mcp_mesh_status_reconciliation',
     acceptCoverage: ['full', 'tail', 'current-turn'],
     requireFresh: true,
   });
@@ -208,7 +208,7 @@ test('a snapshot just inside the budget is admitted — the gate is a budget, no
   const edge = snapshot({ observedAt: new Date(NOW - SEMANTIC_TRANSCRIPT_FRESHNESS_BUDGET_MS + 1_000).toISOString() });
   const outcome = await readTranscriptReplicaForSemanticConsumer(transportFor({ snap: edge }), {
     ...BASE,
-    consumerId: 'magi_approval_probe',
+    consumerId: 'mcp_mesh_status_reconciliation',
     acceptCoverage: ['full', 'tail', 'current-turn'],
     requireFresh: true,
   });
@@ -219,7 +219,7 @@ test('a snapshot just inside the budget is admitted — the gate is a budget, no
 test('an unparseable observedAt fails CLOSED — treated as stale, never as fresh enough', async () => {
   const outcome = await readTranscriptReplicaForSemanticConsumer(
     transportFor({ snap: snapshot({ observedAt: 'not-a-timestamp' }) }),
-    { ...BASE, consumerId: 'magi_result_collect', acceptCoverage: ['current-turn'], requireFresh: true },
+    { ...BASE, consumerId: 'mcp_mesh_status_reconciliation', acceptCoverage: ['current-turn'], requireFresh: true },
   );
   assert.equal(outcome.payload, null);
   assert.equal(outcome.fallbackReason, 'stale_active_session');
@@ -242,7 +242,7 @@ test('a projection regression (messages dropped) falls back rather than synthesi
 test('a malformed activeModal is refused — the approve click never reads a half-typed modal', async () => {
   const outcome = await readTranscriptReplicaForSemanticConsumer(
     transportFor({ snap: snapshot({ activeModal: { message: 'ok', buttons: 'Yes' } }) }),
-    { ...BASE, consumerId: 'magi_approval_probe', acceptCoverage: ['full', 'tail', 'current-turn'], requireFresh: true },
+    { ...BASE, consumerId: 'mcp_mesh_status_reconciliation', acceptCoverage: ['full', 'tail', 'current-turn'], requireFresh: true },
   );
   assert.equal(outcome.payload, null);
   assert.equal(outcome.fallbackReason, 'revision_invalid');
@@ -251,14 +251,14 @@ test('a malformed activeModal is refused — the approve click never reads a hal
 test('an unavailable replica reports the ensure reason, and a throwing IPC is never fatal', async () => {
   const notReady = await readTranscriptReplicaForSemanticConsumer(
     transportFor({ ready: false, available: false, reason: 'ipc_unavailable' }),
-    { ...BASE, consumerId: 'magi_result_collect', acceptCoverage: ['current-turn'], requireFresh: true },
+    { ...BASE, consumerId: 'mcp_mesh_status_reconciliation', acceptCoverage: ['current-turn'], requireFresh: true },
   );
   assert.equal(notReady.payload, null);
   assert.equal(notReady.fallbackReason, 'ipc_unavailable');
 
   const throwing = await readTranscriptReplicaForSemanticConsumer(
     { async command() { throw new Error('ipc down'); } },
-    { ...BASE, consumerId: 'magi_result_collect', acceptCoverage: ['current-turn'], requireFresh: true },
+    { ...BASE, consumerId: 'mcp_mesh_status_reconciliation', acceptCoverage: ['current-turn'], requireFresh: true },
   );
   assert.equal(throwing.payload, null);
   assert.equal(throwing.fallbackReason, 'ipc_unavailable');
@@ -269,7 +269,7 @@ test('an off-union reason from the daemon is narrowed, never passed through', as
   // vocabulary from across the process boundary (design §4).
   const outcome = await readTranscriptReplicaForSemanticConsumer(
     transportFor({ ready: false, available: false, reason: 'something_invented' }),
-    { ...BASE, consumerId: 'magi_result_collect', acceptCoverage: ['current-turn'], requireFresh: true },
+    { ...BASE, consumerId: 'mcp_mesh_status_reconciliation', acceptCoverage: ['current-turn'], requireFresh: true },
   );
   assert.equal(outcome.fallbackReason, 'ipc_unavailable');
 });
@@ -277,7 +277,7 @@ test('an off-union reason from the daemon is narrowed, never passed through', as
 test('both key parts are required', async () => {
   const outcome = await readTranscriptReplicaForSemanticConsumer(
     { async command() { throw new Error('must not be called'); } },
-    { consumerId: 'magi_result_collect', ownerDaemonId: '', rawSessionId: 's', acceptCoverage: ['current-turn'], requireFresh: true },
+    { consumerId: 'mcp_mesh_status_reconciliation', ownerDaemonId: '', rawSessionId: 's', acceptCoverage: ['current-turn'], requireFresh: true },
   );
   assert.equal(outcome.payload, null);
   assert.equal(outcome.fallbackReason, 'no_node');

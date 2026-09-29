@@ -4,7 +4,7 @@
  * tab after the canvas → list redesign.
  *
  * Ported from the retired MeshTaskDagView: the edge-state colour vocabulary,
- * the gate/task node reading, and the HONEST legend (it names only the edge
+ * the task node reading, and the HONEST legend (it names only the edge
  * states actually drawn — a fixed key describing colours that are not on
  * screen is worse than none). Layout is layered by dependency depth
  * (miniDagViewModel.layoutMiniDag) — no ELK: a plan small enough to open
@@ -20,7 +20,7 @@ import { Handle, MarkerType, Position, ReactFlow, type Edge, type Node, type Nod
 import './meshGraph.css'
 import type { MeshGraphTheme } from './meshGraphTheme'
 import { layoutMiniDag, MINI_DAG_LAYOUT, type MiniDagModel, type MiniDagNode } from './miniDagViewModel'
-import type { BlueprintEdgeState } from './blueprintViewModel'
+import type { TaskDagEdgeState } from './taskDagViewModel'
 import { queueTaskDisplayText } from '../../utils/queue-task-label'
 
 /** Edge palette — the same vocabulary the full canvas used. */
@@ -32,20 +32,13 @@ const MINI_EDGE_COLORS: Record<'satisfied' | 'waiting' | 'failed', { color: stri
     failed: { color: 'var(--status-error)', dash: '3 4' },
 }
 
-/** Node state → dot tone. Union of queue statuses, gate states, graph states. */
+/** Queue status → dot tone. */
 const MINI_DOT_TONES: Record<string, { dot: string; pulse?: boolean }> = {
     pending: { dot: 'bg-text-muted' },
-    declared: { dot: 'bg-text-muted' },
     assigned: { dot: 'bg-accent', pulse: true },
-    running: { dot: 'bg-accent', pulse: true },
-    claimed: { dot: 'bg-accent', pulse: true },
-    awaiting_coordinator: { dot: 'bg-status-warning', pulse: true },
-    expired: { dot: 'bg-status-error' },
     completed: { dot: 'bg-status-online' },
-    released: { dot: 'bg-status-online' },
     failed: { dot: 'bg-status-error' },
     cancelled: { dot: 'bg-status-offline' },
-    skipped: { dot: 'bg-status-offline' },
 }
 
 type MiniFlowNode = Node<Record<string, unknown> & { node: MiniDagNode; theme: MeshGraphTheme }, 'miniNode'>
@@ -53,20 +46,10 @@ type MiniFlowNode = Node<Record<string, unknown> & { node: MiniDagNode; theme: M
 function MiniNodeCard({ data }: NodeProps<MiniFlowNode>) {
     const { node } = data
     const tone = MINI_DOT_TONES[node.state] ?? MINI_DOT_TONES.pending
-    const gate = node.kind === 'gate'
-    const ghost = node.kind === 'plan'
-    // Neutral card surface; a blocking gate gets a thin amber border only.
-    const shell = gate
-        ? (node.blocking
-            ? 'border-solid border-status-warning/45 text-text-primary'
-            : 'border-dashed border-border-default text-text-secondary')
-        : ghost
-            ? 'border-dashed border-border-default text-text-secondary'
-            : 'border-solid border-border-default text-text-primary'
-    const label = node.kind === 'task' ? queueTaskDisplayText(node.label) : node.label
+    const label = queueTaskDisplayText(node.label)
     return (
         <div
-            className={`rounded-lg border bg-surface-primary px-2.5 py-1.5 ${shell} ${node.taskId || node.gateNodeId ? 'cursor-pointer' : ''}`}
+            className="cursor-pointer rounded-lg border border-solid border-border-default bg-surface-primary px-2.5 py-1.5 text-text-primary"
             style={{ width: MINI_DAG_LAYOUT.nodeWidth, minHeight: MINI_DAG_LAYOUT.nodeHeight }}
         >
             <Handle type="target" position={Position.Left} className="!h-1.5 !w-1.5 !border-0 !bg-transparent" />
@@ -74,7 +57,7 @@ function MiniNodeCard({ data }: NodeProps<MiniFlowNode>) {
             <div className="flex items-center gap-1.5">
                 <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${tone.dot} ${tone.pulse ? 'motion-safe:animate-pulse' : ''}`} aria-hidden />
                 <span className="truncate text-4xs font-medium text-text-muted">
-                    {gate ? '⛩ ' : ''}{node.state}{node.conditional ? ' · if' : ''}
+                    {node.state}
                 </span>
             </div>
             <div className="mt-0.5 truncate text-3xs font-medium" title={label}>{label}</div>
@@ -84,13 +67,11 @@ function MiniNodeCard({ data }: NodeProps<MiniFlowNode>) {
 
 const miniNodeTypes: NodeTypes = { miniNode: MiniNodeCard }
 
-export default function MeshMiniDag({ model, meshTheme, onOpenTask, onOpenGate }: {
+export default function MeshMiniDag({ model, meshTheme, onOpenTask }: {
     model: MiniDagModel
     meshTheme: MeshGraphTheme
-    /** Clicking a node with a backing queue row opens that task's detail. */
+    /** Clicking a node opens that task's detail. */
     onOpenTask?: (taskId: string) => void
-    /** Clicking a gate node opens the read-only gate panel. */
-    onOpenGate?: (graphId: string, gateNodeId: string) => void
 }) {
     const { t } = useTranslation('common')
     const positions = useMemo(() => layoutMiniDag(model), [model])
@@ -103,22 +84,19 @@ export default function MeshMiniDag({ model, meshTheme, onOpenTask, onOpenGate }
             position: positions.get(node.id)!,
             data: { node, theme: meshTheme },
             draggable: false,
-            selectable: Boolean(node.taskId || node.gateNodeId),
+            selectable: true,
         })), [model, positions, meshTheme])
 
     const edges = useMemo<Edge[]>(() => model.edges.map(edge => {
-        const drawable = edge.state === 'satisfied' || edge.state === 'waiting' || edge.state === 'failed'
-        const stroke = drawable
-            ? MINI_EDGE_COLORS[edge.state as 'satisfied' | 'waiting' | 'failed'].color
-            : 'var(--border-default)'
-        const dash = drawable ? MINI_EDGE_COLORS[edge.state as 'satisfied' | 'waiting' | 'failed'].dash : '2 5'
+        const stroke = MINI_EDGE_COLORS[edge.state].color
+        const dash = MINI_EDGE_COLORS[edge.state].dash
         return {
             id: edge.id,
             source: edge.source,
             target: edge.target,
             type: 'smoothstep' as const,
             animated: false,
-            style: { stroke, strokeWidth: 1.25, ...(dash ? { strokeDasharray: dash } : {}), ...(edge.state === 'inactive' ? { opacity: 0.5 } : {}) },
+            style: { stroke, strokeWidth: 1.25, ...(dash ? { strokeDasharray: dash } : {}) },
             markerEnd: { type: MarkerType.ArrowClosed, color: stroke, width: 12, height: 12 },
         }
     }), [model])
@@ -126,7 +104,7 @@ export default function MeshMiniDag({ model, meshTheme, onOpenTask, onOpenGate }
     /* Honest legend: only the states actually drawn, in a fixed order so the
      * key never reshuffles as data arrives; hides entirely with no edges. */
     const legendStates = useMemo<Array<'satisfied' | 'waiting' | 'failed'>>(() => {
-        const present = new Set<BlueprintEdgeState>()
+        const present = new Set<TaskDagEdgeState>()
         for (const edge of model.edges) present.add(edge.state)
         return (['satisfied', 'waiting', 'failed'] as const).filter(state => present.has(state))
     }, [model])
@@ -139,9 +117,7 @@ export default function MeshMiniDag({ model, meshTheme, onOpenTask, onOpenGate }
                 edges={edges}
                 nodeTypes={miniNodeTypes}
                 onNodeClick={(_event, node) => {
-                    const mini = (node as MiniFlowNode).data.node
-                    if (mini.gateNodeId && model.graphId) onOpenGate?.(model.graphId, mini.gateNodeId)
-                    else if (mini.taskId) onOpenTask?.(mini.taskId)
+                    onOpenTask?.((node as MiniFlowNode).data.node.taskId)
                 }}
                 fitView
                 fitViewOptions={{ padding: 0.15, maxZoom: 1 }}

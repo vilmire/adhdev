@@ -104,7 +104,7 @@ export interface GitCommandServices {
   getRemoteUrl?: (params: { workspace: string; remote?: string }) => Promise<{ remoteUrl: string; remote: string }>;
   push?: (params: { workspace: string; remote?: string; branch?: string; setUpstream?: boolean }) => Promise<GitPushResult>;
   /**
-   * Best-effort, non-blocking source of this daemon's detected provider CLI/ACP
+   * Best-effort, non-blocking source of this daemon's detected provider CLI
    * versions (keyed by provider id) + its build version, folded onto the git_status
    * envelope so a mesh coordinator can self-heal each node's providerVersions the
    * same way it does platform/arch. Wired at daemon boot from the cached CLI

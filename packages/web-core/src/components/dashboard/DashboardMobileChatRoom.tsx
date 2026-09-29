@@ -19,7 +19,6 @@ import { getInteractivePromptScopeId } from './ApprovalBanner'
 
 interface DashboardMobileChatRoomProps {
     selectedConversation: ActiveConversation
-    isAcp: boolean
     isStandalone: boolean
     selectedIdeEntry?: DaemonData
     actionLogs: { routeId: string; text: string; timestamp: number }[]
@@ -39,7 +38,6 @@ interface DashboardMobileChatRoomProps {
 
 export default function DashboardMobileChatRoom({
     selectedConversation,
-    isAcp,
     isStandalone,
     selectedIdeEntry,
     actionLogs,
@@ -61,7 +59,7 @@ export default function DashboardMobileChatRoom({
     // desktop Dockview group selection. Scope the modal to that same local
     // conversation id used by PaneGroupContent's ApprovalBanner.
     const interactivePrompt = useInteractivePrompt(getInteractivePromptScopeId(selectedConversation))
-    const isCli = isCliConv(selectedConversation) && !isAcp
+    const isCli = isCliConv(selectedConversation)
     const isCliTerminal = isCli && cliViewMode === 'terminal'
     const headerPaddingClass = isStandalone
         ? 'px-4 pt-3.5 pb-2.5'

@@ -52,8 +52,7 @@ import { fastForwardSpecs } from './med-family/fast-forward.js';
 import { meshRestartSpecs } from './med-family/mesh-restart.js';
 import { meshOnboardingSpecs } from './med-family/mesh-onboarding.js';
 import { meshWorktreeRetentionSpecs } from './med-family/mesh-worktree-retention.js';
-import { meshGraphCommandSpecs } from './med-family/mesh-graph-commands.js';
-import { meshGraphGateCommandSpecs } from './med-family/mesh-graph-gate-commands.js';
+import { meshTaskViewCommandSpecs } from './med-family/mesh-task-view-commands.js';
 import { meshEventsSpecs } from './high-family/mesh-events.js';
 import { meshCoordinatorLaunchSpecs } from './high-family/mesh-coordinator-launch.js';
 import { meshStatusSpecs } from './high-family/mesh-status.js';
@@ -316,8 +315,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...meshRestartSpecs,
             ...meshOnboardingSpecs,
             ...meshWorktreeRetentionSpecs,
-            ...meshGraphCommandSpecs,
-            ...meshGraphGateCommandSpecs,
+            ...meshTaskViewCommandSpecs,
             ...meshEventsSpecs,
             ...meshCoordinatorLaunchSpecs,
             ...meshStatusSpecs,
@@ -782,7 +780,7 @@ export class DaemonCommandRouter {
         node: any;
         sessionId: string;
         mode: RepoMeshSessionCleanupMode;
-        source: 'mesh_cleanup_sessions' | 'mesh_remove_node' | 'magi_session_cleanup';
+        source: 'mesh_cleanup_sessions' | 'mesh_remove_node';
         action: 'stop_session' | 'delete_session_force';
     }): Promise<void> {
         return recordIntentionalMeshSessionStop(this, args);
@@ -795,8 +793,7 @@ export class DaemonCommandRouter {
         mode: RepoMeshSessionCleanupMode;
         sessionIds?: string[];
         dryRun?: boolean;
-        source?: 'mesh_cleanup_sessions' | 'mesh_remove_node' | 'magi_session_cleanup';
-        requireAutoLaunchedForTaskIds?: Record<string, string>;
+        source?: 'mesh_cleanup_sessions' | 'mesh_remove_node';
         reclaimOrphans?: boolean;
         liveMeshNodeIds?: string[];
     }): Promise<{ success: boolean; [key: string]: unknown }> {

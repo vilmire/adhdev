@@ -19,8 +19,7 @@ import type {
     RepoMeshDaemonRole,
     MeshReportedMemberState,
 } from '../repo-mesh-types.js';
-import type { MagiSlot, MagiTaskKind } from '@adhdev/mesh-shared';
-import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
 import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 import { withMeshConfigWriteLock, loadMeshConfig, normalizeCapabilityTags, saveMeshConfig, normalizeRepoIdentity } from './mesh-config-store.js';
@@ -284,9 +283,6 @@ function removeNodeUnlocked(meshId: string, nodeId: string): boolean {
     if (idx === -1) return false;
 
     mesh.nodes.splice(idx, 1);
-    // Panels are mesh-scoped, so a departing node's slots are now prunable — leaving
-    // them would keep a binding pointing at a node the mesh no longer has.
-    pruneMagiKindPanelsForRemovedNode(mesh, nodeId);
     mesh.updatedAt = new Date().toISOString();
     saveMeshConfig(config);
     return true;
@@ -322,7 +318,7 @@ function updateNodeUnlocked(
          *  git_status envelope. Persisted so the friendly label survives across
          *  coordinator restarts (mirrors reportedPlatform/reportedArch). */
         reportedMachineNickname?: string;
-        /** Owning daemon's self-reported provider CLI/ACP versions + build version,
+        /** Owning daemon's self-reported provider CLI versions + build version,
          *  carried on the git_status envelope. Persisted distinctly from userOverrides
          *  (auto-detected observability, not operator intent), mirroring the
          *  reportedPlatform/reportedArch self-heal so the value survives restarts and
@@ -390,30 +386,3 @@ function updateNodeUnlocked(
     return node;
 }
 
-/**
- * Drop every kind-panel slot pinned to `nodeId`, in place, and remove any kind left
- * with no slots. Called when a node leaves the mesh so a binding cannot keep naming a
- * node that no longer exists — the dangling-reference cleanup that only became
- * possible once panels were mesh-scoped and had a node list to be checked against.
- *
- * An emptied kind is deleted rather than stored as `[]`: an empty slot list is not a
- * legal binding, and mesh_magi_review reports the kind unconfigured (a clear
- * "configure this" error) instead of a silently under-quorum panel.
- *
- * Returns true when anything was pruned (caller persists).
- */
-function pruneMagiKindPanelsForRemovedNode(mesh: LocalMeshEntry, nodeId: string): boolean {
-    const panels = mesh.magiKindPanels;
-    if (!panels) return false;
-    let changed = false;
-    for (const [kind, slots] of Object.entries(panels) as Array<[MagiTaskKind, MagiSlot[] | undefined]>) {
-        if (!Array.isArray(slots)) continue;
-        const kept = slots.filter(slot => !meshNodeIdMatches({ nodeId: slot.nodeId }, nodeId));
-        if (kept.length === slots.length) continue;
-        changed = true;
-        if (kept.length === 0) delete panels[kind];
-        else panels[kind] = kept;
-    }
-    if (changed && Object.keys(panels).length === 0) delete mesh.magiKindPanels;
-    return changed;
-}

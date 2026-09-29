@@ -16,20 +16,16 @@ import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answer
  * Preview rc.37 found `mesh_enqueue_task`'s `owned_paths` declared in the schema but
  * dropped by the handler before that tool's own fix landed. The same audit found
  * `mesh_enqueue_batch` never copying a per-task `owned_paths`/`ownedPaths` onto the
- * `specs.push({...})` object in mesh-tools-queue.ts (~684-701) — on EITHER the
- * compat path (`enqueueTaskGraph`, mesh-work-queue.ts spreads `...taskOpts`) or the
- * graph path (`mesh-graph-plan.ts`'s `queueSpecs` spreads `...queueSpec`, which is
- * `t` minus only the 6 named graph-only keys — `ownedPaths` was never one of those,
- * so once `specs` (the array `buildGraphPlanShape` starts from) carries it, both
- * paths persist it identically).
+ * `specs.push({...})` object in mesh-tools-queue.ts (`enqueueTaskBatch`,
+ * mesh-work-queue-enqueue.ts spreads `...taskOpts`).
  *
  * A schema/gate-only test (mesh-schema-handler-parity.test.ts) cannot catch this
  * class — the args PASS the gate and LOOK accepted; the bug is the value never
  * reaching the daemon-core queue row a claim later reads for the H1 overlap check
  * (mesh-runtime-store.ts `ownedPathsConflictFor` reads `candidate.ownedPaths` off
- * the persisted `MeshWorkQueueEntry`, not off any graph-node baseSpec). So this test
- * reads the REAL row back out of the real daemon-core store (same
- * `meshStoreIpcHandlers.queue_enqueue` / `queue_enqueue_graph` handlers a live
+ * the persisted `MeshWorkQueueEntry`). So this test reads the REAL row back out of
+ * the real daemon-core store (same `meshStoreIpcHandlers.queue_enqueue` /
+ * `queue_enqueue_batch` handlers a live
  * daemon runs, wired through the shared turn-ledger-ipc test helper) rather than
  * only inspecting the tool's JSON response.
  */
@@ -91,7 +87,7 @@ test('rc.37#1 (single-task, control): mesh_enqueue_task owned_paths reaches the 
   assert.deepEqual(ownedPathStrings(row), ['src/single.ts']);
 });
 
-test('rc.37#1 (batch compat path): per-task owned_paths/ownedPaths reaches the persisted queue row', async () => {
+test('rc.37#1 (batch): per-task owned_paths/ownedPaths reaches the persisted queue row', async () => {
   const meshId = nextMeshId();
   const ctx = makeCtx(meshId);
   const res = JSON.parse(await meshEnqueueBatch(ctx, {
@@ -101,42 +97,21 @@ test('rc.37#1 (batch compat path): per-task owned_paths/ownedPaths reaches the p
     ],
   } as any));
   assert.equal(res.success, true, JSON.stringify(res));
-  assert.equal(res.graphId, undefined, 'a plain owned_paths-only batch must take the compat path (no graph)');
   const rowA = getQueue(meshId).find((t: any) => t.id === res.tasks[0].taskId);
   const rowB = getQueue(meshId).find((t: any) => t.id === res.tasks[1].taskId);
   assert.ok(rowA, 'row a must exist');
   assert.ok(rowB, 'row b must exist');
-  assert.deepEqual(ownedPathStrings(rowA), ['src/a.ts'], 'snake_case owned_paths must reach the compat-path row');
-  assert.deepEqual(ownedPathStrings(rowB), ['src/b.ts'], 'camelCase ownedPaths must reach the compat-path row');
-});
-
-test('rc.37#1 (batch GRAPH path): per-task owned_paths reaches the persisted queue row when the batch also uses a v2 graph feature', async () => {
-  const meshId = nextMeshId();
-  const ctx = makeCtx(meshId);
-  // `batch_id` alone forces the graph path (buildGraphPlanShape's hasExplicitBatchId),
-  // exercising the SAME queueSpecs-stripping code in mesh-graph-plan.ts a run_if/
-  // inputs_from/workspace_ref batch would, without needing a second task to bind from.
-  const res = JSON.parse(await meshEnqueueBatch(ctx, {
-    batch_id: `bid_${randomUUID().slice(0, 8)}`,
-    tasks: [
-      { ref: 'g1', message: 'graph task with owned paths', difficulty: 'medium', task_mode: 'code_change', owned_paths: ['src/graph.ts'] },
-    ],
-  } as any));
-  assert.equal(res.success, true, JSON.stringify(res));
-  assert.ok(res.graphId, 'a batch_id must take the graph path');
-  const row = getQueue(meshId).find((t: any) => t.id === res.tasks[0].taskId);
-  assert.ok(row, 'graph-path row must exist');
-  assert.deepEqual(ownedPathStrings(row), ['src/graph.ts'], 'owned_paths must survive the graph path\'s queueSpecs projection');
+  assert.deepEqual(ownedPathStrings(rowA), ['src/a.ts'], 'snake_case owned_paths must reach the row');
+  assert.deepEqual(ownedPathStrings(rowB), ['src/b.ts'], 'camelCase ownedPaths must reach the row');
 });
 
 test('rc.37#1 BREAK-ONCE (verified, not re-executed here): reverting the ownedPaths copy in specs.push reproduces the drop', () => {
   // Manually verified against this exact test file: commenting out
   // `...(v.ownedPaths ? { ownedPaths: v.ownedPaths } : {})` in mesh-tools-queue.ts's
-  // specs.push({...}) turned the two tests above ("batch compat path" and "batch
-  // GRAPH path") red — both `rowA?.ownedPaths` / `rowB?.ownedPaths` / the
-  // graph-path `row?.ownedPaths` came back `undefined` — while the single-task
+  // specs.push({...}) turned the batch test above red — `rowA?.ownedPaths` /
+  // `rowB?.ownedPaths` came back `undefined` — while the single-task
   // control test stayed green (it does not go through specs.push at all). Restoring
-  // the line turned both back green. Left as a static assertion rather than
+  // the line turned it back green. Left as a static assertion rather than
   // re-toggling the source at runtime here, which would be more fragile than the
   // value it proves.
   assert.ok(true);

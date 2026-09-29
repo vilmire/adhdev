@@ -37,7 +37,6 @@ import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveCoordinatorRules, splitRulesLayer, type CoordinatorRulesResolution } from './coordinator-rules.js';
 import { isNoteExpired, OPERATING_NOTE_CATEGORY_TTL_DAYS } from './mesh-operating-notes.js';
 import { MESH_TASK_DIFFICULTIES, renderCoordinatorWorkerSection } from '@adhdev/mesh-shared';
-import type { MagiKindPanelMap, MagiSlot, MagiTaskKind } from '@adhdev/mesh-shared';
 
 /**
  * Cheap, locally-derived "what just happened" snapshot for the coordinator
@@ -148,16 +147,6 @@ export interface CoordinatorPromptContext {
      * section.
      */
     operatingNotes?: CoordinatorOperatingNote[];
-    /**
-     * THIS mesh's MAGI kind-panel bindings (`~/.adhdev/meshes.json` →
-     * `meshes[].magiKindPanels`), read live at launch and scoped by meshId — a
-     * coordinator must never be shown another mesh's panels, whose slots name that
-     * mesh's nodes. Omitted / empty / all-empty → no "## Configured MAGI panels"
-     * section, so a mesh with no MAGI configured renders identically to before.
-     * Threaded in the same systematic way as the brain presets: read machine-local
-     * config at launch, render a pure section.
-     */
-    magiKindPanels?: MagiKindPanelMap;
     /**
      * Repo-read operating-rules layer (design 2026-08-24-coordinator-rules-
      * repo-read): resolved at launch from the mesh base workspace's
@@ -377,10 +366,8 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
     // ── Brain presets (difficulty → model/thinking) ──
     sections.push(buildBrainPresetsSection());
 
-    // ── Configured MAGI panels (machine-local magiKindPanels) — only present
-    //     when at least one task_kind has a non-empty slot list. ──
-    const magiSection = buildMagiKindPanelsSection(ctx.magiKindPanels);
-    if (magiSection) sections.push(magiSection);
+    // ── Multi-perspective review recipe ──
+    sections.push(MULTI_PERSPECTIVE_REVIEW_SECTION);
 
     // ── Tools ──
     sections.push(TOOLS_SECTION);
@@ -975,7 +962,7 @@ function buildBrainPresetsSection(): string {
     const lines = [
         '## Task difficulty',
         '',
-        'Pass `difficulty` on `mesh_enqueue_task` (the default), or on every worker entry in `mesh_enqueue_batch` for a settled multi-step plan. The values (`easy` / `medium` / `difficult` / `freeform`) describe how hard the work is. It is a ROUTING HINT: it is matched against each node\'s capability slots, so a task goes to a slot configured for that difficulty.',
+        'Pass `difficulty` on `mesh_enqueue_task` (the default), or on every entry of `mesh_enqueue_batch`. The values (`easy` / `medium` / `difficult` / `freeform`) describe how hard the work is. It is a ROUTING HINT: it is matched against each node\'s capability slots, so a task goes to a slot configured for that difficulty.',
         '',
         '**The slot decides the model and thinking level — not the difficulty.** `difficulty: "difficult"` does not mean "use opus"; it means "route to a slot that handles difficult work", and that slot\'s own model/thinking is what launches. So classify honestly by how hard the task is, and change what a difficulty RUNS ON by editing the node\'s slots (`mesh_node_slots` action "set"), never by picking a different difficulty. Passing an explicit `model`/`thinkingLevel` still overrides everything for one task.',
     ];
@@ -1002,56 +989,13 @@ function buildBrainPresetsSection(): string {
 }
 
 /**
- * Render the machine-local MAGI kind-panel bindings so the coordinator KNOWS
- * which cross-verification panels (rca / design / claim_audit / freeform) are
- * actually configured on this machine. Without this the coordinator only sees
- * the `mesh_magi_*` tools in the static table and has no idea MAGI is set up.
- *
- * Pure — takes the panels map (read live at launch, mirroring how brain presets
- * read getDifficultyBrains). Returns null (section OMITTED) when nothing usable
- * is configured: undefined/null map, or every kind maps to an empty slot list.
- * That keeps a MAGI-less mesh's prompt byte-identical to before.
+ * How to get several independent opinions on one question. There is no review
+ * engine behind this — the coordinator fans the question out with the ordinary
+ * send tool and does the synthesis itself.
  */
-export function buildMagiKindPanelsSection(panels: MagiKindPanelMap | undefined | null): string | null {
-    if (!panels) return null;
-    // Keep only kinds with a non-empty slot list; drop empty/undefined bindings.
-    const configured = (Object.entries(panels) as Array<[MagiTaskKind, MagiSlot[] | undefined]>)
-        .filter(([, slots]) => Array.isArray(slots) && slots.length > 0) as Array<[MagiTaskKind, MagiSlot[]]>;
-    if (configured.length === 0) return null;
+const MULTI_PERSPECTIVE_REVIEW_SECTION = `## Multi-perspective review
 
-    const lines = [
-        '## Configured MAGI panels',
-        '',
-        'These machine-local MAGI kind-panels are configured on this mesh — read-only cross-verification quorums:',
-        '',
-    ];
-
-    for (const [kind, slots] of configured) {
-        const replicaCount = slots.reduce((sum, s) => sum + (s.n && s.n > 0 ? s.n : 1), 0);
-        const label = replicaCount === slots.length
-            ? `${slots.length} ${slots.length === 1 ? 'slot' : 'slots'}`
-            : `${replicaCount} replicas`;
-        const rendered = slots.map(renderMagiSlot).join(', ');
-        lines.push(`- **${kind}** (${label}): ${rendered}`);
-    }
-
-    lines.push('');
-    lines.push('Use these via `mesh_magi_review` (the `task_kind` is REQUIRED — it selects BOTH the output schema and the panel). The live authoritative slot list is `mesh_magi_kind_panel` (action "list"). MAGI worker replicas are read-only and typically do NOT have mesh MCP tools exposed, so for live timing / tool-behavior claims you MUST gather the primary evidence yourself and use MAGI only for independent source-level corroboration.');
-
-    return lines.join('\n');
-}
-
-/** Render one MAGI slot as `provider[@nodeId][ (model, tags…, xN)]`. */
-function renderMagiSlot(slot: MagiSlot): string {
-    let s = slot.provider;
-    if (slot.nodeId) s += `@${slot.nodeId}`;
-    const extra: string[] = [];
-    if (slot.model) extra.push(`model: ${slot.model}`);
-    if (slot.capabilityTags && slot.capabilityTags.length) extra.push(`tags: ${slot.capabilityTags.join('+')}`);
-    if (slot.n && slot.n > 1) extra.push(`×${slot.n}`);
-    if (extra.length) s += ` (${extra.join(', ')})`;
-    return s;
-}
+For a multi-perspective review (a design check, a root-cause cross-check, a claim audit), send the same question to 2–3 workers via \`mesh_send_task\`, each on a different provider (use \`task_mode: "live_debug_readonly"\`), wait for their \`report_completion\`, then synthesize yourself: what they agree on, where they disagree, and which claims only one worker made — verify those before acting on them.`;
 
 function buildPolicySection(policy: RepoMeshPolicy): string {
     const rules: string[] = [];
@@ -1092,12 +1036,9 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_status\` | Nodes' health, git state, sessions, branch convergence |
 | \`mesh_route_preview\` | Explain a hypothetical difficulty/tags/readonly/node route from the current point-in-time capacity + quota-facts snapshot (read-only, fetch-free) |
 | \`mesh_list_nodes\` | List nodes with workspace paths |
-| \`mesh_enqueue_batch\` | For a **settled plan of three or more steps** that needs a coordinator gate or a deferred worktree (\`workspace_ref\`) — not the everyday enqueue path. Atomically enqueues a dependency-wired task set; \`depends_on\` may name batch-local \`ref\`s (forward refs OK). Carries the full graph surface: \`inputs_from\`, \`gates\` + \`gated_by\`, \`workspaces\` + \`workspace_ref\` (\`run_if\` retired) |
-| \`mesh_enqueue_task\` | **DEFAULT enqueue surface.** One task; chain a known follow-up onto it with \`depends_on\` as it becomes known — the graph grows append-only. A task with \`depends_on\` automatically receives an "Upstream results" appendix summarizing its predecessors' completions. Idle nodes auto-claim |
-| \`mesh_view_queue\` | Queue status — pending/assigned/completed/failed/cancelled |
-| \`mesh_graph_view\` | Inspect orchestration graphs — node states, gates awaiting you, workspace sagas, why something is blocked |
-| \`mesh_graph_gate\` | **When a gate notice arrives, or a gate blocks downstream work in \`mesh_graph_view\`.** \`action\`: \`claim\` (take the lease; returns the fencing token + generation release needs) → do the gated action yourself → \`release\` (the ONLY way through a gate — no timeout ever passes one); \`extend\` (push the deadline, no lease); \`abandon\` (give up on a gate that can never open so its graph can go terminal — **not a pass**: it CANCELS everything the gate held and produces no outcome; use it when you cancelled the work behind the gate). **A gate and its dependents are one unit**: a gate earns its keep only when some task names it in \`gated_by\`, because releasing it is what dispatches that task — a gate nothing depends on is pure claim/release overhead, so declare the follower in the same batch or skip the gate |
-| \`mesh_graph_node_patch\` | **When a graph node is blocked on \`materialization_error:*\` (a bad \`inputs_from\`/\`run_if\`).** Repair a node the graph could NOT materialize (task blocked on \`materialization_error:*\`) and retry it in one call. A \`inputs_from\`/\`run_if\` spec is baked in at enqueue but only resolved once every predecessor COMPLETES, so the failure strands the one step meant to consume all that finished work — and the automatic retry re-reads the same spec, so it can never self-heal. Patches only \`run_if\`/\`on_false\`/\`inputs_from\`/\`workspace_ref\`; message/routing/mode/model stay immutable and a claimed task cannot be patched. Not a re-tasking tool |
+| \`mesh_enqueue_task\` | **DEFAULT enqueue surface.** One task; chain a known follow-up onto it with \`depends_on\` as it becomes known. A dependent waits until every \`depends_on\` task has COMPLETED, then automatically receives an "Upstream results" appendix summarizing its predecessors' completions. If a dependency fails or is cancelled you get a \`queue_dependency_blocked\` notice (retry it with \`mesh_queue_requeue\`, or cancel the waiters). A step that must wait on YOU (an approval, a landing, a deploy) is simply enqueued once you have done that. Idle nodes auto-claim |
+| \`mesh_enqueue_batch\` | Several \`mesh_enqueue_task\` tasks at once, atomically (all insert or none); \`depends_on\` may name batch-local \`ref\`s (forward refs OK). Only for steps that are already known — never invent steps to fill a batch |
+| \`mesh_view_queue\` | Queue status — pending/assigned/completed/failed/cancelled, and which pending tasks are blocked by a failed dependency |
 | \`mesh_queue_cancel\` | Cancel a queue task (audit history kept) |
 | \`mesh_queue_requeue\` | Return a task to pending for retry |
 | \`mesh_send_task\` | Push a task straight to a specific node/session |
@@ -1133,9 +1074,6 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_cleanup_worktree_nodes\` | Plan/execute safe removal of CONVERGED worktree nodes (dry-run default) |
 | \`mesh_cleanup_sessions\` | **When a node is cluttered with finished/stuck worker sessions, or \`mesh_status\` keeps listing stale direct dispatches.** \`mode\`: preserve / stop / delete_stopped / stop_and_delete (a node's session records) or \`prune_stale_direct\` (mesh-wide orphaned direct-dispatch records; dry-run unless \`execute=true\`) |
 | \`mesh_init\` | **When the user asks to onboard (or re-configure) this repo for Repo Mesh.** \`mode\`: \`init\` (default; fresh repo, existing config wins) or \`reinit\` (onboarded repo; overwrite semantics — present the per-section diff and get approval before \`write=true\`). Dry-run unless \`write=true\` |
-| \`mesh_magi_review\` | Cross-verify a read-only investigation across an independent agent panel |
-| \`mesh_magi_collect\` | Collect + synthesize a dispatched MAGI fan-out by consensus group id |
-| \`mesh_magi_kind_panel\` | **When \`mesh_magi_review\` fails with \`magi_kind_not_configured\`, or before a review to confirm what a task_kind resolves to.** \`action\`: \`list\` (read-only) or \`set\` (bind task_kind → panel slots; machine-local, wholesale replace — approve the diff first) |
 | \`mesh_node_slots\` | **When routing keeps landing work on a poor-fit node, a node has no slots, or CLI agents were installed on a node.** \`action\`: \`list\` (provider/model/thinking + difficulty + tags), \`propose\` (auto-detect installed CLIs and draft a profile; read-only, reports droppedSlots) or \`set\` (dry-run, then apply with \`write=true\` — wholesale replace, approve the diff first) |
 | \`mesh_coordinator_prompt_append\` | **Only when the user asks for a standing instruction on every coordinator this machine runs.** \`action\`: \`get\` (read this daemon's per-machine APPEND for a CLI type) or \`set\` (write/clear it; append-only — the base prompt is not replaceable) |`;
 
@@ -1164,11 +1102,7 @@ const OWNERSHIP_AND_BRIEF_SECTION = [
     '- Attach a `brief` (`goal`, `constraints`, `doneCriteria`, `handoffNotes`, `ownedPaths`) to a mission via `mesh_mission_upsert` whenever that mission is meant to outlive this coordinator session — a long multi-task plan, or one a differently-scoped coordinator (fresh session, different machine) may pick up later. The brief is rendered into every task dispatched under that mission\'s worker protocol footer, so a worker sees it without a separate lookup; `mesh_mission_list` / a mission upsert response both echo the stored `brief` back to you. A mission you expect to finish within this session does not need one.',
 ].join('\n');
 
-// GRAPH-ORCHESTRATION Phase F (design "Required tool-discovery instruction").
-// D1 (the 2026-09-25 graph orchestration simplification) retired the
-// batch-discovery mandate that used to open this section: incremental enqueue via
-// mesh_enqueue_task is now the default, so there is no eligibility check to gate
-// tool loading on. What remains is the tool-availability check below, kept FIRST
+// The tool-availability check below is kept FIRST
 // in this section (ahead of the Orchestration Workflow) because a stale/missing
 // mesh_* tool manifest must be caught before any workflow reasoning runs.
 const TOOL_EXPOSURE_PREFLIGHT_SECTION = `## Tool Exposure Preflight
@@ -1188,15 +1122,15 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
 
 **Save scopes — label every draft with its scope before asking for approval:**
 - **repo-file (commit target)** — \`.adhdev/refine.json\`, \`.adhdev/worktree_bootstrap.json\`, \`.adhdev/change-impact.json\`, \`.adhdev/mesh.json\`. These are committed to the repository and shared with every machine/contributor.
-- **machine-local** — MAGI kind→panel bindings, node providerPriority (\`~/.adhdev/meshes.json\`). These stay on this machine and are NOT committed.
+- **machine-local** — node providerPriority (\`~/.adhdev/meshes.json\`). These stay on this machine and are NOT committed.
 
 **Guided sequence:**
-1. **Scan (dry-run)** — Call \`mesh_init\` (write=false, the default). It returns per-domain suggested configs for refine / worktree_bootstrap / change-impact, a recommended providerPriority, AND \`currentConfig\` — the currently-saved config per domain (repo files + machine-local \`magiKindPanels\`). Nothing is written.
+1. **Scan (dry-run)** — Call \`mesh_init\` (write=false, the default). It returns per-domain suggested configs for refine / worktree_bootstrap / change-impact, a recommended providerPriority, AND \`currentConfig\` — the currently-saved config per domain (repo files). Nothing is written.
 2. **Present drafts** — For each domain, show the user the suggested config with its **save scope label** (repo-file vs machine-local). When \`currentConfig\` already has a saved value for a domain (init on a partially-onboarded repo, or any reinit), present a **current-vs-suggested diff**, not just the suggestion.
 3. **Approve → gated write** — Only after the user approves, call the matching gated-write tool:
    - repo \`.adhdev/*\` config files → \`mesh_init\` with \`write=true\` (and \`overwrite=true\` ONLY for domains the user approved replacing).
    - \`.adhdev/mesh.json\` (coordinator prompt / operating notes) → \`mesh_config\` with \`kind="mesh_json"\` (write=true, overwrite only if approved).
-   - machine-local MAGI kind→panel slots → \`mesh_magi_kind_panel\` with \`action="set"\` (write=true). NOTE: a kind binding is a **wholesale replacement** of that kind's slot list — present the current-vs-new slots first. providerPriority → apply via node policy update.
+   - providerPriority → apply via node policy update.
 
 **init vs reinit:**
 - **\`mesh_init\`** (\`mode="init"\`, the default) — for a fresh, never-onboarded repo. Existing config files are kept (existing-wins) unless the user explicitly approves overwrite. Use for first-time setup.

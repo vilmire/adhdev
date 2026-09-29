@@ -65,12 +65,6 @@ export type DetailSelection =
     | { kind: 'ledger'; entry: RepoMeshLedgerEntryStatus }
     | { kind: 'queue'; task: RepoMeshQueueTask }
     | { kind: 'session'; node: RepoMeshNodeStatus; session: MeshGraphSessionDetail }
-    // Coordinator gate detail modal — read-only (inspection only). D5
-    // (the 2026-09-25 graph orchestration simplification) added
-    // Release/Abandon/Extend buttons to the Blocked-section ROW itself
-    // (MeshBlueprintRow's MeshBlueprintGateRowView); this modal stays a
-    // detail view and does not duplicate those actions.
-    | { kind: 'gate'; graph: import('@adhdev/daemon-core').MeshGraphView; nodeId: string; gate: import('@adhdev/daemon-core').MeshGraphGateView | null }
 
 /**
  * Detail navigation as a stack: opening a related item from inside the detail
@@ -81,11 +75,7 @@ export function useDetailStack() {
     const open = useCallback((selection: DetailSelection) => setStack(current => [...current, selection]), [])
     const back = useCallback(() => setStack(current => current.slice(0, -1)), [])
     const close = useCallback(() => setStack([]), [])
-    const filter = useCallback((keep: (selection: DetailSelection) => boolean) => setStack(current => {
-        const next = current.filter(keep)
-        return next.length === current.length ? current : next
-    }), [])
-    return { detail: stack[stack.length - 1] ?? null, canGoBack: stack.length > 1, open, back, close, filter }
+    return { detail: stack[stack.length - 1] ?? null, canGoBack: stack.length > 1, open, back, close }
 }
 
 /** Command seam used to fetch the verbose (full-goal) mission payload on demand. */

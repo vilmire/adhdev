@@ -72,8 +72,7 @@ export async function handleOpenPanel(h: CommandHelpers, args: any): Promise<Com
     const currentTransport = h.currentSession?.transport;
     const shouldUseAgentStream = !!h.agentStream
         && currentTransport !== 'cdp-page'
-        && currentTransport !== 'pty'
-        && currentTransport !== 'acp';
+        && currentTransport !== 'pty';
     if (shouldUseAgentStream) {
         const ok = await h.agentStream.openSessionPanel(cdp, sessionId);
         return { success: ok };

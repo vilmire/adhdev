@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DaemonCommandRouter } from '../../src/commands/router';
 
 // [Z] Session-scoped commands (controlbar Model/Mode → invoke_provider_script, modal
-// approval → resolve_action, set_mode/change_model/set_thought_level) issued from the
+// approval → resolve_action, set_mode/change_model) issued from the
 // dashboard against a REMOTE mesh worker session must be forwarded to the owning worker
 // daemon. The coordinator does not host the remote worker's live instance, so without
 // the forward the command dies as "Live session not found" and the controlbar appears
@@ -69,7 +69,7 @@ describe('session-scoped command — remote mesh worker forward ([Z])', () => {
     // must be in MESH_FORWARDABLE_SESSION_COMMANDS so a read/inject/answer against a REMOTE
     // worker reaches the owning daemon (which holds the live viewport / PTY / activeInteractive
     // Prompt) instead of returning 'Session not found' / 'No running instance'.
-    for (const cmd of ['invoke_provider_script', 'resolve_action', 'set_mode', 'change_model', 'set_thought_level', 'set_conversation_prefs', 'read_terminal', 'send_keys', 'interactive_prompt_response']) {
+    for (const cmd of ['invoke_provider_script', 'resolve_action', 'set_mode', 'change_model', 'set_conversation_prefs', 'read_terminal', 'send_keys', 'interactive_prompt_response']) {
         it(`forwards ${cmd} for a remote worker session to the owning worker daemon`, async () => {
             const dispatch = vi.fn(async () => ({ success: true, forwarded: true }));
             const router = createRouter({ statusInstanceId: 'daemon-coordinator', dispatchMeshCommand: dispatch });

@@ -7,7 +7,7 @@ import { tmpdir } from 'os';
 // The production ledger (runtime-ledger.ts) over a real MeshRuntimeStore: a
 // commit flips mesh_queue + persists the graph output version in the SAME txn
 // as the turn rows, with NO legacy reducer call (the C2 choke point replaces
-// commitTaskTerminalAndAdvanceGraph's step 1, it does not wrap it); a reclaim
+// commitTaskTerminal's replay fence, it does not wrap it); a reclaim
 // requeues the row.
 
 const testTmpDir = path.join(tmpdir(), `adhdev-turn-ledger-rt-${randomUUID().slice(0, 8)}`);
@@ -76,7 +76,7 @@ describe('runtime ledger over mesh-runtime.db', () => {
             const result = ledger.observe(evd('turn_end', { strength: 'genuine' }, { ...ref, source: 'completion_flush_genuine' }), { envelope: { finalSummary: 'scraped text' } });
             expect(result).toMatchObject({ rule: 'R9t', attempt: { state: 'completed', terminal: { strength: 'tool_report', reason: 'worker_reported' } } });
             expect(store.findQueueEntryById(mesh, task.id)?.status).toBe('completed');
-            const output = store.graphStore().getLatestOutput(task.id);
+            const output = store.getLatestTaskOutput(task.id);
             expect(output).toMatchObject({ version: 1, attempt: 1, status: 'completed' });
             expect(JSON.parse(output!.envelopeJson)).toMatchObject({ worker_result: { decision: 'ok' } });
             expect(store.turnStore().listEvents(ref.attemptRef.attemptId).filter((e) => e.kind === 'committed')).toHaveLength(1);
@@ -107,10 +107,10 @@ describe('runtime ledger over mesh-runtime.db', () => {
         try {
             const { task, store, ledger, ref } = setup(mesh);
             ledger.observe(evd('turn_end', { strength: 'genuine' }, ref));
-            expect(store.graphStore().getLatestOutput(task.id)?.version).toBe(1);
+            expect(store.getLatestTaskOutput(task.id)?.version).toBe(1);
             // A legacy writer flips nothing new; a second (recorded) scrape cannot re-advance.
             ledger.observe(evd('turn_end', { strength: 'genuine' }, ref));
-            expect(store.graphStore().getLatestOutput(task.id)?.version).toBe(1);
+            expect(store.getLatestTaskOutput(task.id)?.version).toBe(1);
         } finally {
             __clearMeshQueueForTests(mesh);
         }
@@ -120,7 +120,7 @@ describe('runtime ledger over mesh-runtime.db', () => {
 describe('mesh_direct commit flips its materialised queue row (rc.37 Finding C)', () => {
     // mesh_send_task opens a `mesh_direct` attempt (dispatch_accepted, no
     // attemptRef, eventId = taskId) and recordDirectDispatchTask materialises a
-    // pre-assigned row. The reducer used to emit queue_status/graph_advance for
+    // pre-assigned row. The reducer used to emit queue_status/task_terminal for
     // `mesh_queue` only, so the row stayed `assigned` after the ledger committed
     // (live: 2cb0ab79 committed by the scheduler, row still assigned).
     function openDirect(mesh: string) {

@@ -174,7 +174,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             `, meshId),
         ];
 
-        // M1: a task with unmet dependencies (or a system blockedReason) is not claimable.
+        // M1: a task with unmet dependencies is not claimable.
         // Resolve dependency statuses in one query over the union of referenced ids.
         const depIds = [...new Set(candidates.flatMap(c => Array.isArray(c.dependsOn) ? c.dependsOn : []))];
         const depStatus = new Map<string, string>();
